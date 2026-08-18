@@ -39,6 +39,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -58,6 +60,8 @@ data class ManagerUiState(
     val inventoryFindings: List<InventoryFindingDto> = emptyList(),
     val inventoryRentalItems: List<RentalItemDto> = emptyList(),
     val inventoryEditor: InventoryEditorState? = null,
+    /** One-shot process-death navigation target restored with the durable inventory draft. */
+    val inventoryResumeRoute: String? = null,
     val returns: List<LogisticsDocumentDto> = emptyList(),
     val selectedReturn: LogisticsDocumentDto? = null,
     val returnPhotoUris: Map<String, List<String>> = emptyMap(),
@@ -76,6 +80,7 @@ data class ManagerUiState(
     val logisticsAssetLabels: Map<String, String> = emptyMap(),
     val estimates: List<EstimateDto> = emptyList(),
     val repairs: List<RepairDto> = emptyList(),
+    val capitalRepairs: List<RepairDto> = emptyList(),
     val repairTaskBoards: List<TaskBoardSnapshotDto> = emptyList(),
     val acceptanceRepairs: List<RepairDto> = emptyList(),
     val acceptanceEditor: MaintenanceAcceptanceEditorState? = null,
@@ -169,6 +174,8 @@ data class MaintenanceEditorState(
     val readyMedia: List<MediaReferenceDto>,
     val readyPhotoUris: Map<String, String> = emptyMap(),
     val priority: Int,
+    /** Explicit operator choice; catalog policy may independently force the same outcome. */
+    val forceCapitalRepair: Boolean = false,
     /** Delivery to repair and automatic removal after completion are owned by logistics. */
     val movementToRepair: Boolean = false,
     val logisticsPlanningMode: String? = null,
@@ -240,6 +247,8 @@ data class InventoryEditorState(
     val findingId: String,
     val number: String,
     val outcome: String,
+    /** True while a saved inspection is being traversed without mutable controls. */
+    val readOnly: Boolean = false,
     val finding: InventoryFindingDto? = null,
     val creationOptions: RentalItemCreationOptionsDto? = null,
     val creationOrigin: String? = null,
@@ -271,6 +280,7 @@ data class InventoryEditorState(
     val planLines: List<MaintenanceLineEditorState> = emptyList(),
     val planStages: List<MaintenanceStageEditorState> = emptyList(),
     val planPriority: Int = DEFAULT_MAINTENANCE_PRIORITY,
+    val planForceCapitalRepair: Boolean = false,
     val planMovementToRepair: Boolean = false,
     val planLogisticsPlanningMode: String? = null,
     val planLogisticsScheduledDate: String? = null,
@@ -303,6 +313,7 @@ class ManagerViewModel(
     private val preference = WarehousePreference(application)
     private val maintenanceCatalogCache = MaintenanceCatalogCache(application)
     private val managerReadCache = ManagerReadCache(application)
+    private val inventoryDraftStore = InventoryDraftStore(application)
     /* Remote media is not needed for the signed-out screen. Avoid creating Retrofit merely to
      * construct a downloader during the first composition. */
     private val mediaDownloader by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
@@ -364,6 +375,7 @@ class ManagerViewModel(
         managerReadCache = managerReadCache,
         catalogAccess = maintenanceCatalogCoordinator,
         media = mediaCoordinator,
+        draftStore = inventoryDraftStore,
     )
     private val shipmentCoordinator = ManagerShipmentCoordinator(
         runtime = commandRuntime,
@@ -404,6 +416,21 @@ class ManagerViewModel(
                 mutableState.update { it.copy(authState = authState) }
                 workspaceCoordinator.onAuthState(authState)
             }
+        }
+        viewModelScope.launch {
+            state.map { current ->
+                if (current.authState == ManagerAuthState.SignedIn) {
+                    val accountId = current.currentUser?.id
+                    val warehouseId = current.selectedWarehouseId
+                    if (accountId != null && warehouseId != null) {
+                        InventoryDraftScope(accountId, warehouseId)
+                    } else {
+                        null
+                    }
+                } else {
+                    null
+                }
+            }.distinctUntilChanged().collectLatest(inventoryCoordinator::activateDraftScope)
         }
     }
 
@@ -459,6 +486,9 @@ class ManagerViewModel(
         onReady: () -> Unit,
     ) = inventoryCoordinator.openInventoryFinding(finding, mode, onReady)
 
+    /** Enables a retained saved inspection without changing the current navigation step. */
+    fun beginInventorySupplement() = inventoryCoordinator.beginInventorySupplement()
+
     fun resolveInventoryConflict(
         finding: InventoryFindingDto,
         strategy: String,
@@ -503,6 +533,12 @@ class ManagerViewModel(
 
     fun selectInventoryCoverPhoto(uri: String) =
         inventoryCoordinator.selectInventoryCoverPhoto(uri)
+
+    fun recordInventoryRoute(route: String) =
+        inventoryCoordinator.recordInventoryRoute(route)
+
+    fun consumeInventoryResumeRoute() =
+        inventoryCoordinator.consumeInventoryResumeRoute()
 
     fun closeInventoryEditor() = inventoryCoordinator.closeInventoryEditor()
 

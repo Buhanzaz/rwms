@@ -34,8 +34,22 @@ class MaintenanceJpaValidationIntegrationTest {
   @Test
   void latestFlywayPassesHibernateValidationForEveryBusinessProjection() {
     assertThat(entityManagerFactory.isOpen()).isTrue();
-    assertThat(jdbc.queryForObject(
-        "select count(*) from flyway_schema_history where success", Integer.class)).isEqualTo(42);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from flyway_schema_history where version='44' and success",
+                Integer.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from information_schema.columns
+                where table_schema='public'
+                  and table_name in ('maintenance_estimate','estimate_revision','maintenance_repair')
+                  and column_name='force_capital_repair'
+                  and is_nullable='NO'
+                """,
+                Integer.class))
+        .isEqualTo(3);
     assertThat(jdbc.queryForObject(
         """
         select count(*) from information_schema.columns

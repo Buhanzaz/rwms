@@ -248,6 +248,7 @@ public class MaintenanceRepairUseCases {
         request.warehouseId(), request.rentalItemId(), rentalItem.getAggregateVersion(), null,
         RepairOrigin.DIRECT_REPAIR,
         request.dispatchDate(), request.sourceParty(), commandSupport.actorJson());
+    draft.selectForceCapitalRepair(request.forceCapitalRepair());
     draft.replaceCoverMediaId(request.coverMediaId());
     MaintenanceRepair repair = repairs.saveAndFlush(draft);
     List<EstimateLineResponse> canonicalLines =
@@ -325,7 +326,8 @@ public class MaintenanceRepairUseCases {
         estimateSupport.canonicalRepairLines(repair.getWarehouseId(), request.lines());
     mediaSupport.validateUpdatedRepairLineMediaReferences(repair, canonicalLines);
     RepairComplexitySnapshot updatedComplexity =
-        repairModelSupport.repairComplexityForLines(repair.getWarehouseId(), canonicalLines);
+        repairModelSupport.repairComplexityForLines(
+            repair.getWarehouseId(), canonicalLines, request.forceCapitalRepair());
     boolean reclassifyingCapital =
         repair.getExecutionState() == RepairExecutionState.QUEUED
             && updatedComplexity.type() == RepairComplexity.CAPITAL;
@@ -334,6 +336,7 @@ public class MaintenanceRepairUseCases {
     } else {
       repair.touchPlan();
     }
+    repair.selectForceCapitalRepair(request.forceCapitalRepair());
     if (reclassifyingCapital) {
       repair.markReclassifyingCapital();
     }
@@ -532,7 +535,7 @@ public class MaintenanceRepairUseCases {
           eventPayloadSupport.repairSnapshot(sourceSaved));
       stages = repairStages.findAllByRepairIdOrderByStageNo(id);
       RepairComplexitySnapshot complexity =
-          repairModelSupport.repairComplexityFromStoredStages(repair.getWarehouseId(), repair.getId());
+          repairModelSupport.repairComplexityFromStoredStages(repair);
       taskBoardSupport.prepareStagesForQueue(stages, complexity.type() == RepairComplexity.CAPITAL);
       repairStages.saveAllAndFlush(stages);
       repair.selectPriority(request.priority());

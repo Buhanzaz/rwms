@@ -175,7 +175,7 @@ final class MaintenanceRepairModelSupport {
             source.getPlanFingerprint(), source.getSourceFingerprint()))
         .orElse(null);
     List<MediaReferenceInput> aggregateMedia = mediaSupport.repairMedia(value);
-    RepairComplexitySnapshot complexity = repairComplexity(value.getWarehouseId(), stages);
+    RepairComplexitySnapshot complexity = repairComplexity(value, stages);
     return new RepairResponse(
         value.getId(), commandSupport.rootId(value), value.getSourceRepairId(), value.getEstimateId(),
         value.getWarehouseId(), value.getRentalItemId(), value.getOrigin(), value.getKind(),
@@ -193,7 +193,16 @@ final class MaintenanceRepairModelSupport {
         value.getLogisticsPlanningMode(),
         value.getLogisticsScheduledDate(),
         value.getCreatedAt(), value.getUpdatedAt(),
-        commandSupport.actor(value.getActorRef()));
+        commandSupport.actor(value.getActorRef()), value.isForceCapitalRepair());
+  }
+
+  /** Classifies a repair response from its plan plus its persisted explicit capital override. */
+  protected RepairComplexitySnapshot repairComplexity(
+      MaintenanceRepair repair, List<RepairStageResponse> stages) {
+    return repairComplexityForLines(
+        repair.getWarehouseId(),
+        stages.stream().flatMap(stage -> stage.workLines().stream()).toList(),
+        repair.isForceCapitalRepair());
   }
 
   protected RepairComplexitySnapshot repairComplexity(
@@ -205,25 +214,47 @@ final class MaintenanceRepairModelSupport {
 
   protected RepairComplexitySnapshot repairComplexityFromStoredStages(
       UUID warehouseId, UUID repairId) {
+    return repairComplexityFromStoredStages(warehouseId, requireRepair(repairId));
+  }
+
+  protected RepairComplexitySnapshot repairComplexityFromStoredStages(
+      MaintenanceRepair repair) {
+    return repairComplexityFromStoredStages(repair.getWarehouseId(), repair);
+  }
+
+  /**
+   * Rebuilds complexity from immutable stage evidence while retaining the repair's explicit
+   * capital override; {@code warehouseId} may differ during a prepared warehouse transfer.
+   */
+  protected RepairComplexitySnapshot repairComplexityFromStoredStages(
+      UUID warehouseId, MaintenanceRepair repair) {
     List<EstimateLineResponse> lines =
-        repairStages.findAllByRepairIdOrderByStageNo(repairId).stream()
+        repairStages.findAllByRepairIdOrderByStageNo(repair.getId()).stream()
             .flatMap(
                 stage ->
                     commandSupport.readList(stage.getWorkLines(), EstimateLineResponse.class).stream())
             .toList();
-    return repairComplexityForLines(warehouseId, lines);
+    return repairComplexityForLines(
+        warehouseId, lines, repair.isForceCapitalRepair());
   }
 
   protected RepairComplexitySnapshot repairComplexityForLines(
       UUID warehouseId, List<EstimateLineResponse> lines) {
+    return repairComplexityForLines(warehouseId, lines, false);
+  }
+
+  /** Classifies the current plan from the explicit override or capital-forcing WORK snapshots. */
+  protected RepairComplexitySnapshot repairComplexityForLines(
+      UUID warehouseId, List<EstimateLineResponse> lines, boolean forceCapitalRepair) {
     BigDecimal plannedMinutes = BigDecimal.ZERO;
-    boolean forcedCapital = false;
+    boolean forcedCapital = forceCapitalRepair;
     for (EstimateLineResponse line : lines) {
       plannedMinutes =
           plannedMinutes.add(
               new BigDecimal(line.quantity())
                   .multiply(BigDecimal.valueOf(line.normativeMinutes())));
-      if (line.catalogSnapshot() != null
+      if (line.lineType() == EstimateLineType.WORK
+          && line.catalogSnapshot() != null
           && line.catalogSnapshot().forcesCapitalRepair()) {
         forcedCapital = true;
       }

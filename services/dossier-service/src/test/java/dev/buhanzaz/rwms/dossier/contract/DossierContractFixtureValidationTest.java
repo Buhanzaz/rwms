@@ -67,7 +67,7 @@ class DossierContractFixtureValidationTest {
                     "ESTIMATE",
                     0,
                     """
-                    {"estimateId":"%s","warehouseId":"%s","rentalItemId":"%s","lifecycle":"DRAFT","revision":1,"dispatchDate":"2026-07-18","lineCount":0,"completionKind":"NOT_COMPLETED","repairId":null}
+                    {"estimateId":"%s","warehouseId":"%s","rentalItemId":"%s","lifecycle":"DRAFT","revision":1,"dispatchDate":"2026-07-18","lineCount":0,"completionKind":"NOT_COMPLETED","repairId":null,"forceCapitalRepair":false}
                     """
                         .formatted(AGGREGATE_ID, WAREHOUSE_ID, CABIN_ID))),
             Map.entry(
@@ -78,7 +78,7 @@ class DossierContractFixtureValidationTest {
                     "REPAIR",
                     0,
                     """
-                    {"repairId":"%s","rootRepairId":"%s","sourceRepairId":null,"estimateId":null,"warehouseId":"%s","rentalItemId":"%s","origin":"DIRECT_REPAIR","kind":"PRIMARY","executionState":"DRAFT","acceptanceState":"NOT_READY","dispatchDate":"2026-07-18","priority":3,"stages":[]}
+                    {"repairId":"%s","rootRepairId":"%s","sourceRepairId":null,"estimateId":null,"warehouseId":"%s","rentalItemId":"%s","origin":"DIRECT_REPAIR","kind":"PRIMARY","executionState":"DRAFT","acceptanceState":"NOT_READY","dispatchDate":"2026-07-18","priority":3,"stages":[],"forceCapitalRepair":false}
                     """
                         .formatted(AGGREGATE_ID, AGGREGATE_ID, WAREHOUSE_ID, CABIN_ID))),
             Map.entry(

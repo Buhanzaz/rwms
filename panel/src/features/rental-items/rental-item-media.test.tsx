@@ -112,6 +112,7 @@ function Harness() {
             state: "READY",
           },
         ],
+        taskEvidencePhotos: [],
       },
     ],
     actorDisplays: new Map([
@@ -230,6 +231,7 @@ function ActivityAssociationHarness() {
             state: "READY",
           },
         ],
+        taskEvidencePhotos: [],
       },
       {
         activityId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
@@ -257,6 +259,7 @@ function ActivityAssociationHarness() {
             state: "READY",
           },
         ],
+        taskEvidencePhotos: [],
       },
     ],
     actorDisplays: new Map([

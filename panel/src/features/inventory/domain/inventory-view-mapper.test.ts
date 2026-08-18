@@ -94,6 +94,7 @@ const finding: InventoryFinding = {
   frozenPlan: {
     mode: "MANUAL",
     movementToRepair: false,
+    forceCapitalRepair: true,
     logisticsPlanningMode: null,
     logisticsScheduledDate: null,
     catalogVersionId: "00000000-0000-4000-8000-000000000205",
@@ -105,6 +106,9 @@ const finding: InventoryFinding = {
         lineType: "WORK",
         catalogVersionId: "00000000-0000-4000-8000-000000000205",
         catalogNodeId: "00000000-0000-4000-8000-000000000207",
+        routingQueueId: "00000000-0000-4000-8000-000000000209",
+        routingQueueName: "Ремонт",
+        routingQueueType: "REPAIR",
         description: "Замена двери",
         normalizedDescription: "замена двери",
         unit: "шт",
@@ -281,13 +285,90 @@ describe("inventory service view mapper", () => {
       frozenPlan: {
         ...finding.frozenPlan!,
         movementToRepair: true,
+        forceCapitalRepair: false,
         logisticsPlanningMode: "AUTO",
       },
     })
 
     expect(result).toMatchObject({
       movementToRepair: true,
+      forceCapitalRepair: false,
       logisticsPlanningMode: "AUTO",
+    })
+  })
+
+  it("allocates repeated catalog works and materials to exactly one frozen stage", () => {
+    const firstLine = finding.frozenPlan!.lines[0]!
+    const secondLine = {
+      ...firstLine,
+      id: "00000000-0000-4000-8000-000000000260",
+      groupComment: "Второй проход",
+    }
+    const materialLine = {
+      ...firstLine,
+      id: "00000000-0000-4000-8000-000000000261",
+      sourceKind: "MANUAL" as const,
+      lineType: "MATERIAL" as const,
+      catalogVersionId: null,
+      catalogNodeId: null,
+      description: "Крепёж",
+      normalizedDescription: "крепёж",
+      groupComment: null,
+      mediaReferences: [],
+    }
+    const secondStage = {
+      ...finding.frozenPlan!.stages[0]!,
+      id: "00000000-0000-4000-8000-000000000262",
+      order: 1,
+    }
+
+    const result = toInventoryFindingView({
+      ...finding,
+      frozenPlan: {
+        ...finding.frozenPlan!,
+        lines: [firstLine, secondLine, materialLine],
+        stages: [finding.frozenPlan!.stages[0]!, secondStage],
+      },
+    })
+
+    expect(result.repairPlans.map((plan) => plan.includedLineIds)).toEqual([
+      [firstLine.id],
+      [secondLine.id, materialLine.id],
+    ])
+    expect(result.repairPlans.flatMap((plan) => plan.includedLineIds)).toEqual([
+      firstLine.id,
+      secondLine.id,
+      materialLine.id,
+    ])
+  })
+
+  it("restores the selected queue for a manual work line", () => {
+    const manualWork = {
+      ...finding.frozenPlan!.lines[0]!,
+      id: "00000000-0000-4000-8000-000000000263",
+      sourceKind: "MANUAL" as const,
+      catalogVersionId: null,
+      catalogNodeId: null,
+      description: "Пользовательская работа",
+      normalizedDescription: "пользовательская работа",
+    }
+    const result = toInventoryFindingView({
+      ...finding,
+      frozenPlan: {
+        ...finding.frozenPlan!,
+        lines: [manualWork],
+      },
+    })
+
+    expect(result.lines[0]?.customQueueBinding).toEqual({
+      queueId: manualWork.routingQueueId,
+      queueName: manualWork.routingQueueName,
+      queueKind: manualWork.routingQueueType,
+    })
+    expect(result.repairPlans[0]).toMatchObject({
+      includedLineIds: [manualWork.id],
+      primaryLineId: manualWork.id,
+      routingCatalogNodeId: finding.frozenPlan!.stages[0]!.catalogNodeId,
     })
   })
 

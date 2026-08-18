@@ -58,6 +58,7 @@ import {
 } from "@/components/ui/select"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type { InventoryFindingDto } from "@/features/inventory/model/inventory"
+import { ForceCapitalRepairField } from "@/features/repair-estimates/force-capital-repair-field"
 import type {
   InventoryCollisionCandidate,
   InventoryFinalPlan,
@@ -236,6 +237,9 @@ function CandidateSummary({
       <CardContent className="flex flex-wrap gap-2">
         {candidate.priority ? (
           <Badge variant="secondary">Приоритет {candidate.priority}</Badge>
+        ) : null}
+        {candidate.forceCapitalRepair ? (
+          <Badge variant="destructive">Капитальный ремонт</Badge>
         ) : null}
         <Badge variant="secondary">
           Работ: {candidate.planSummary.workLineCount}
@@ -416,7 +420,7 @@ function SortablePlanEntry({
               <Checkbox
                 id={`inventory-plan-movement-${entry.findingId}`}
                 checked={entry.movementToRepair}
-                disabled={pending}
+                disabled={pending || entry.forceCapitalRepair}
                 onCheckedChange={(value) =>
                   onChange({
                     movementToRepair: value === true,
@@ -432,6 +436,12 @@ function SortablePlanEntry({
                 Нужна доставка бытовки в ремонт
               </FieldLabel>
             </Field>
+
+            <ForceCapitalRepairField
+              id={`inventory-plan-force-capital-${entry.findingId}`}
+              checked={entry.forceCapitalRepair}
+              disabled
+            />
 
             {movementScheduleMode === "MANUAL" && entry.movementToRepair ? (
               <Field data-invalid={!entry.movementScheduledDate || undefined}>

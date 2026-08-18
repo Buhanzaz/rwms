@@ -80,6 +80,7 @@ function planLine(
 export function buildInventoryPlanSelection(input: {
   completionMode: RepairEstimateCompletionMode
   movementToRepair: boolean
+  forceCapitalRepair?: boolean
   logisticsPlanningMode: LogisticsPlanningMode | null
   logisticsScheduledDate: string | null
   priority: RepairPriority
@@ -87,6 +88,11 @@ export function buildInventoryPlanSelection(input: {
   taskPlans: RepairEstimateTaskPlanDto[]
   lines: RepairEstimateLineDto[]
 }): Exclude<InventoryPlanSelection, null> {
+  if (input.movementToRepair && input.forceCapitalRepair === true) {
+    throw new Error(
+      "Перемещение на ремонт и капитальный ремонт нельзя выбрать одновременно"
+    )
+  }
   if (!input.movementToRepair) {
     if (
       input.logisticsPlanningMode !== null ||
@@ -142,6 +148,7 @@ export function buildInventoryPlanSelection(input: {
       priority: input.priority,
       coverMediaId: input.coverMediaId,
       movementToRepair: input.movementToRepair,
+      forceCapitalRepair: input.forceCapitalRepair === true,
       logisticsPlanningMode: input.logisticsPlanningMode,
       logisticsScheduledDate: input.logisticsScheduledDate,
       lines: catalogLines,
@@ -162,9 +169,10 @@ export function buildInventoryPlanSelection(input: {
         ? lineById.get(plan.primaryLineId)
         : undefined
     const catalogNodeId =
-      primary?.lineType === "WORK"
+      plan.routingCatalogNodeId?.trim() ||
+      (primary?.lineType === "WORK"
         ? primary.catalogSnapshot?.nodeId.trim()
-        : undefined
+        : undefined)
     if (!catalogNodeId) {
       throw new Error(
         "Для ручного этапа выберите основной вид работ из каталога"
@@ -196,6 +204,7 @@ export function buildInventoryPlanSelection(input: {
     priority: input.priority,
     coverMediaId: input.coverMediaId,
     movementToRepair: input.movementToRepair,
+    forceCapitalRepair: input.forceCapitalRepair === true,
     logisticsPlanningMode: input.logisticsPlanningMode,
     logisticsScheduledDate: input.logisticsScheduledDate,
     lines,

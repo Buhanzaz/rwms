@@ -35,6 +35,18 @@ class MainActivityVolumeShutterTest {
                 KeyEvent(0L, 0L, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_VOLUME_UP, 0),
             ),
         ).isTrue()
-        assertThat(shutterCount).isEqualTo(1)
+        assertThat(
+            activity.onKeyDown(
+                KeyEvent.KEYCODE_VOLUME_DOWN,
+                KeyEvent(0L, 0L, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_VOLUME_DOWN, 0),
+            ),
+        ).isTrue()
+        assertThat(
+            activity.onKeyUp(
+                KeyEvent.KEYCODE_VOLUME_DOWN,
+                KeyEvent(0L, 0L, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_VOLUME_DOWN, 0),
+            ),
+        ).isTrue()
+        assertThat(shutterCount).isEqualTo(2)
     }
 }

@@ -575,7 +575,8 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
     FindingPlanSnapshot frozenPlan =
         activePlanSnapshot(finding)
             .orElseThrow(() -> InventoryException.conflict("Frozen maintenance plan is missing"));
-    if (!entry.getPlanFingerprintSha256().equals(frozenPlan.getFingerprint())) {
+    if (!entry.getPlanFingerprintSha256().equals(frozenPlan.getFingerprint())
+        || entry.isForceCapitalRepair() != frozenPlan.isForceCapitalRepair()) {
       throw InventoryException.conflict("Publication frozen maintenance plan is stale");
     }
     FinalPlanReconciliationDecision decision =
@@ -593,6 +594,7 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
     request.put("snapshotSchemaVersion", frozenPlan.getSnapshotSchemaVersion());
     request.put("priority", entry.getPriority());
     request.put("movementToRepair", entry.isMovementToRepair());
+    request.put("forceCapitalRepair", entry.isForceCapitalRepair());
     if (entry.getMovementScheduledDate() == null) request.putNull("movementScheduledDate");
     else request.put("movementScheduledDate", entry.getMovementScheduledDate().toString());
     request.put("repairScheduledDate", entry.getRepairScheduledDate().toString());

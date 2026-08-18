@@ -46,6 +46,7 @@ import {
   type RepairEstimateCatalogPager,
 } from "@/features/repair-estimates/repair-estimate-catalog-picker"
 import { RepairEstimateCompletionDialog } from "@/features/repair-estimates/repair-estimate-completion-dialog"
+import { ForceCapitalRepairField } from "@/features/repair-estimates/force-capital-repair-field"
 import { RepairEstimateCompletedWorkspace } from "@/features/repair-estimates/repair-estimate-completed-workspace"
 import { RepairEstimateLinesEditor } from "@/features/repair-estimates/repair-estimate-lines-editor"
 import { RepairEstimateWorkspaceLayout } from "@/features/repair-estimates/repair-estimate-workspace-layout"
@@ -434,6 +435,14 @@ function RepairEstimateEditorContent({
         }
         onCommentChange={(comment) =>
           setDraft((current) => ({ ...current, comment }))
+        }
+      />
+      <ForceCapitalRepairField
+        id="estimate-force-capital-repair"
+        checked={draft.forceCapitalRepair}
+        disabled={interactionDisabled}
+        onCheckedChange={(forceCapitalRepair) =>
+          setDraft((current) => ({ ...current, forceCapitalRepair }))
         }
       />
       {accessToken && draft.rentalItemId ? (

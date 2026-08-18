@@ -119,6 +119,8 @@ export type RepairEstimateTaskPlanDto = {
   groupComment: string
   /** Canonical task-board queue id carried by the maintenance routing snapshot. */
   queueId?: string | null
+  /** Inventory-only technical catalog node that freezes the same queue route. */
+  routingCatalogNodeId?: string | null
   queueName: string | null
   routeQueueKind: RepairEstimateCatalogRouteQueueKind | null
   sortOrder: number
@@ -153,6 +155,7 @@ export type RepairEstimateDto = {
   deliveryState?: "PENDING" | "RETRY_PENDING" | "DELIVERED" | "QUARANTINED"
   completionMode: RepairEstimateCompletionMode | null
   movementToRepair: boolean | null
+  forceCapitalRepair: boolean
   taskPlans: RepairEstimateTaskPlanDto[]
   createdAt: string
   updatedAt: string
@@ -188,6 +191,7 @@ export type RepairEstimateDraftCommand = {
   media: RepairEstimateMediaRefDto[]
   maintenanceMediaReferences?: MaintenanceMediaReferenceDto[]
   coverMediaId?: string | null
+  forceCapitalRepair?: boolean
 }
 
 export type CompleteRepairEstimateCommand = RepairEstimateDraftCommand & {
@@ -259,6 +263,7 @@ export type RepairEstimateEditorDraft = {
   media: RepairEstimateMediaRefDto[]
   maintenanceMediaReferences?: MaintenanceMediaReferenceDto[]
   coverMediaId?: string | null
+  forceCapitalRepair: boolean
   pendingUploads: PendingEstimateMediaUpload[]
 }
 

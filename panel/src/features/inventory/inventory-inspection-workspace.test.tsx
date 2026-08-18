@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event"
 import { useEffect } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/repair-estimate"
+
 const catalogPicker = vi.hoisted(() => ({
   canGoBack: true,
   canGoForward: true,
@@ -63,9 +65,23 @@ vi.mock("@/features/repair-estimates/repair-estimate-lines-snapshot", () => ({
 
 import { InventoryInspectionWorkspace } from "@/features/inventory/inventory-inspection-workspace"
 
+const inspectionLine: RepairEstimateLineDto = {
+  id: "33333333-3333-4333-8333-333333333333",
+  sourceLineKey: "inspection-work",
+  lineType: "WORK",
+  description: "Осмотр корпуса",
+  lineComment: "",
+  unit: "шт.",
+  quantity: 1,
+  unitPrice: "100.00",
+  lineTotal: "100.00",
+  catalogSnapshot: null,
+}
+
 function renderWorkspace(
   readOnly = false,
-  media: Array<{ mediaId: string; generation: number }> = []
+  media: Array<{ mediaId: string; generation: number }> = [],
+  lines: RepairEstimateLineDto[] = []
 ) {
   return render(
     <InventoryInspectionWorkspace
@@ -83,7 +99,7 @@ function renderWorkspace(
       passportOptionsLoading={false}
       passportOptionsError={null}
       equipmentObservation={{ presence: "ABSENT", value: null }}
-      lines={[]}
+      lines={lines}
       media={media}
       repairCompletionMode={null}
       movementToRepair={false}
@@ -111,6 +127,16 @@ afterEach(() => {
 })
 
 describe("InventoryInspectionWorkspace catalog pager", () => {
+  it("keeps the capital-repair choice out of the information block", () => {
+    renderWorkspace(false, [], [inspectionLine])
+
+    expect(
+      screen.queryByRole("checkbox", {
+        name: "Направить на капитальный ремонт",
+      })
+    ).toBeNull()
+  })
+
   it("passes only accepted finding media to the photo workspace", () => {
     const media = [
       {

@@ -139,10 +139,42 @@ all warehouse IDs retained by its command or media before any side effect.
 Ownerless legacy state remains quarantined and is never adopted by the current
 session.
 
+For a manager request rejected with `401`, the client submits the rejected
+access token to one mutex-serialized refresh. A valid newer token persisted by
+a concurrent request is reused; a transient refresh exception remains a
+connectivity failure and does not reach session invalidation as a false
+terminal `401`. Missing or terminally rejected refresh authority still fails
+closed.
+
+During an active inventory session, ManagerApp loads the authoritative finding
+and warehouse-cabin populations, then filters the visible cards locally by
+canonical-number prefix. It exposes “add cabin” only when no loaded cabin
+number has that prefix. The local draft advances through passport, photos,
+furniture, work catalog, inspection details, and confirmation; only the final
+public command changes owner state. Before each visible photo/video attachment
+is adopted, its source is copied into the scoped app-private draft directory;
+encrypted draft metadata and the current route then restore the exact step
+after process death or an emergency close. A newly attached catalog-work media
+item is previewed in that draft before submission, while the media and
+inventory services remain authoritative after upload/save. Immediately before a
+queued first inspection command, the worker rereads the active finding and then
+the session revision, and persists its current finding revision only while it
+remains `NOT_INSPECTED` and in an idle/save-ready source state. One `409
+INVENTORY_VERSION_CONFLICT` with detail `Inventory revision is stale` triggers
+a new read/rebase/save cycle; a saved/repeated or departed finding is not rebased over server data.
+
 Evidence:
 [`ManagerWorkspaceCoordinator`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/coordinator/ManagerWorkspaceCoordinator.kt),
 [`BackgroundUploadWorker`](../../app/src/main/java/dev/buhanzaz/rwms/manager/uploads/BackgroundUploadWorker.kt),
-[`MaintenanceCatalogCache`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/MaintenanceCatalogCache.kt).
+[`MaintenanceCatalogCache`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/MaintenanceCatalogCache.kt),
+[`ManagerAuth`](../../app/src/main/java/dev/buhanzaz/rwms/manager/auth/ManagerAuth.kt),
+[`manager bearer transport`](../../app/src/main/java/dev/buhanzaz/rwms/manager/network/Backend.kt),
+[`inventory UI`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/screens/InventoryScreens.kt),
+[`inventory coordinator`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/coordinator/ManagerInventoryCoordinator.kt),
+[`inventory draft store`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/InventoryDraftStore.kt),
+[`inventory upload revision policy`](../../app/src/main/java/dev/buhanzaz/rwms/manager/uploads/InventoryUploadRevisionPolicy.kt),
+and
+[`maintenance work-photo UI`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/screens/MaintenanceScreen.kt).
 
 ### Client failure and retry sequence
 
@@ -722,19 +754,29 @@ and
    public gateway.
 2. The service validates the authenticated warehouse and a service-owned proof
    that the referenced domain entity may own media.
-3. The client uploads bytes to the narrow media content route. Object storage
-   remains private; clients never receive MinIO administration access.
+3. The client uploads bytes to the narrow media content route. Panel and
+   ManagerApp may run at most four independent transfers concurrently, preserve
+   selection order and release a transfer permit before READY polling. Object
+   storage remains private; clients never receive MinIO administration access.
+   The panel immediately renders the selected local original, shows byte
+   progress under that preview and enables cover/delete only after the scoped
+   server item is ready. This disposable blob URL is never a media fact.
 4. Finalization records immutable media metadata and processing work.
-5. A fenced worker claims at most four processing attempts in one cycle. A
+5. Image processing produces the declared image variants. An accepted video
+   retains its exact original and produces an MP4 `PLAYBACK` derivative through
+   startup-resolved ffmpeg and ffprobe executables, bounded duration and
+   output-byte budget.
+   Clients play only a scoped READY URL and never an object-store key.
+6. A fenced worker claims at most four processing attempts in one cycle. A
    transient dependency failure is scheduled after 1s/2s/4s; the fourth
    failure is terminal. If a worker dies during that fourth attempt, the
    expired lease is reclaimed only to record
    `PROCESSING_ATTEMPT_EXHAUSTED`, never to invoke the processor a fifth time.
-6. Database completion and inbox outcome precede Kafka offset acknowledgement.
+7. Database completion and inbox outcome precede Kafka offset acknowledgement.
    Persistence retry is bounded to four attempts and commit retry to three
    deadline-bound attempts; exhaustion releases the rebalance and returns an
    error so supervisor restart/redelivery can use the durable inbox result.
-7. Media facts notify owning domains and projections. A generation/revision
+8. Media facts notify owning domains and projections. A generation/revision
    prevents clients from retaining a stale transformed URL after replacement.
 
 Terminal evidence and operator review receipts are append-only and contain no
@@ -757,6 +799,12 @@ Evidence:
 [`media-events.yaml`](../../contracts/events/media-events.yaml),
 [`media-processing-dlt-v1.schema.json`](../../contracts/events/media/media-processing-dlt-v1.schema.json),
 [`consumer.go`](../../services/media-service/internal/worker/consumer.go),
+[`video_transcoder.go`](../../services/media-service/internal/media/video_transcoder.go),
+[`video_probe.go`](../../services/media-service/internal/media/video_probe.go),
+[`media-service startup`](../../services/media-service/cmd/media-service/main.go),
+[`media upload queue`](../../panel/src/features/media/media-upload-queue.ts),
+[`Manager media uploader`](../../app/src/main/java/dev/buhanzaz/rwms/manager/media/MediaUploader.kt),
+[`V12__video_playback_variant.sql`](../../services/media-service/db/migration/V12__video_playback_variant.sql),
 [`processing_metrics.go`](../../services/media-service/internal/observability/processing_metrics.go),
 [`metrics_runtime.go`](../../services/media-service/cmd/media-service/metrics_runtime.go),
 [`V11__bounded_media_processing_recovery.sql`](../../services/media-service/db/migration/V11__bounded_media_processing_recovery.sql),

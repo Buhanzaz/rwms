@@ -50,6 +50,12 @@ class ManagerReadCacheTest {
                     totalElements = 0,
                 ),
                 repairsEtag = "W/\"repair-a\"",
+                capitalRepairs = RepairPageDto(
+                    items = emptyList(),
+                    page = 0,
+                    size = 200,
+                    totalElements = 0,
+                ),
                 assetLabels = mapOf("asset-a" to "A-001"),
             )
             val second = CachedMaintenanceRead(

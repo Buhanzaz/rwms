@@ -48,6 +48,34 @@ class ManagerAuthConfigurationTest {
         assertThat(second.nonce).isNotEqualTo(first.nonce)
     }
 
+    @Test
+    fun `forced refresh reuses a valid token already rotated by another request`() {
+        assertThat(
+            reusableManagerAccessToken(
+                accessToken = "new-token",
+                needsTokenRefresh = false,
+                forceRefresh = true,
+                rejectedAccessToken = "old-token",
+            ),
+        ).isEqualTo("new-token")
+        assertThat(
+            reusableManagerAccessToken(
+                accessToken = "old-token",
+                needsTokenRefresh = false,
+                forceRefresh = true,
+                rejectedAccessToken = "old-token",
+            ),
+        ).isNull()
+        assertThat(
+            reusableManagerAccessToken(
+                accessToken = "expired-token",
+                needsTokenRefresh = true,
+                forceRefresh = false,
+                rejectedAccessToken = null,
+            ),
+        ).isNull()
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun `rejects a non https origin`() {
         ManagerAuthConfiguration(Uri.parse("http://example.org"))

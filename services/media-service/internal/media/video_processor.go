@@ -13,7 +13,7 @@ import (
 )
 
 // VideoProcessRequest names one immutable video ingress object and generation
-// to validate and copy as an original-only media asset.
+// to validate, retain exactly, and derive a compressed playback representation.
 type VideoProcessRequest struct {
 	MediaID string
 	// SourceObjectKey is the immutable ingress original.
@@ -23,28 +23,34 @@ type VideoProcessRequest struct {
 	Generation      int
 }
 
-// VideoProcessResult contains the validated, version-pinned original video.
+// VideoProcessResult contains the pinned source and compressed MP4 playback
+// objects that together make one READY video generation.
 type VideoProcessResult struct {
 	Original ProcessedVariant
+	Playback ProcessedVariant
 }
 
-// VideoProcessor validates an immutable ingress object with a VideoProbe and
-// copies the accepted original without producing image-style derivatives.
+// VideoProcessor validates one immutable ingress object, preserves its exact
+// bytes as ORIGINAL, and delegates compressed playback creation to an injected
+// transcoder.
 type VideoProcessor struct {
-	Store         ObjectStore
-	Probe         VideoProbe
-	AllowedCodecs map[string]struct{}
-	MaxDuration   time.Duration
-	Limits        ProcessingLimits
+	Store          ObjectStore
+	Probe          VideoProbe
+	Transcoder     VideoTranscoder
+	AllowedCodecs  map[string]struct{}
+	MaxDuration    time.Duration
+	MaxOutputBytes int64
+	Limits         ProcessingLimits
 }
 
-// Process validates the configured video duration, codec, and container before
-// copying its exact content to an immutable generation original.
+// Process validates the source duration, codec, and container, creates and
+// validates an H.264 MP4 derivative, then writes both immutable generation
+// objects. The source is downloaded once and ORIGINAL bytes are never rewritten.
 func (processor VideoProcessor) Process(ctx context.Context, request VideoProcessRequest) (VideoProcessResult, error) {
-	if processor.Store == nil || processor.Probe == nil {
+	if processor.Store == nil || processor.Probe == nil || processor.Transcoder == nil {
 		return VideoProcessResult{}, fmt.Errorf("video processor is not configured")
 	}
-	if !processor.Limits.Valid() {
+	if !processor.Limits.Valid() || processor.MaxOutputBytes <= 0 {
 		return VideoProcessResult{}, fmt.Errorf("video processor limits are required")
 	}
 	if len(processor.AllowedCodecs) == 0 || processor.MaxDuration <= 0 {
@@ -62,71 +68,113 @@ func (processor VideoProcessor) Process(ctx context.Context, request VideoProces
 	if err != nil {
 		return VideoProcessResult{}, err
 	}
-	if err := processor.validateSource(ctx, request, extension); err != nil {
+
+	directory, err := os.MkdirTemp("", "rwms-media-video-*")
+	if err != nil {
+		return VideoProcessResult{}, fmt.Errorf("create video processing workspace: %w", err)
+	}
+	defer os.RemoveAll(directory)
+	sourcePath := filepath.Join(directory, "source"+extension)
+	if err := processor.downloadToFile(ctx, request.SourceObjectKey, request.SourceVersionID, sourcePath); err != nil {
+		return VideoProcessResult{}, err
+	}
+	sourceMetadata, err := processor.validateVideoFile(ctx, sourcePath, extension)
+	if err != nil {
+		return VideoProcessResult{}, err
+	}
+	playbackPath := filepath.Join(directory, "playback.mp4")
+	transcodeContext, cancel := context.WithTimeout(ctx, processor.Limits.Timeout)
+	err = processor.Transcoder.Transcode(transcodeContext, VideoTranscodeRequest{
+		SourcePath: sourcePath, DestinationPath: playbackPath, MaxOutputBytes: processor.MaxOutputBytes,
+	})
+	cancel()
+	if err != nil {
+		return VideoProcessResult{}, err
+	}
+	if err := processor.validatePlayback(ctx, playbackPath, sourceMetadata); err != nil {
 		return VideoProcessResult{}, err
 	}
 
-	return processor.copyOriginal(ctx, request, extension)
-}
-
-func (processor VideoProcessor) validateSource(ctx context.Context, request VideoProcessRequest, extension string) error {
-	directory, err := os.MkdirTemp("", "rwms-media-probe-*")
+	original, err := processor.writeFileVariant(ctx, sourcePath, newProcessedVariant(
+		VariantOriginal, OriginalObjectKey(request.MediaID, request.Generation, extension),
+		request.ContentType, 0, 0, 0, "",
+	))
 	if err != nil {
-		return fmt.Errorf("create video probe workspace: %w", err)
+		return VideoProcessResult{}, fmt.Errorf("write video original: %w", err)
 	}
-	defer os.RemoveAll(directory)
-	path := filepath.Join(directory, "source"+extension)
-	if err := processor.downloadToFile(ctx, request.SourceObjectKey, request.SourceVersionID, path); err != nil {
-		return err
+	playback, err := processor.writeFileVariant(ctx, playbackPath, newProcessedVariant(
+		VariantPlayback, VideoPlaybackObjectKey(request.MediaID, request.Generation),
+		"video/mp4", 0, 0, 0, "",
+	))
+	if err != nil {
+		return VideoProcessResult{}, fmt.Errorf("write video playback: %w", err)
 	}
-	return processor.validateVideoFile(ctx, path, extension)
+	return VideoProcessResult{Original: original, Playback: playback}, nil
 }
 
-func (processor VideoProcessor) validateVideoFile(ctx context.Context, path, extension string) error {
+func (processor VideoProcessor) validateVideoFile(ctx context.Context, path, extension string) (VideoMetadata, error) {
 	probeContext, cancel := context.WithTimeout(ctx, processor.Limits.Timeout)
 	defer cancel()
 	metadata, err := processor.Probe.Probe(probeContext, path)
 	if err != nil {
-		return fmt.Errorf("validate video container")
+		return VideoMetadata{}, fmt.Errorf("validate video container")
 	}
 	if metadata.Duration <= 0 || metadata.Duration > processor.MaxDuration {
-		return fmt.Errorf("video duration is outside configured limits")
+		return VideoMetadata{}, fmt.Errorf("video duration is outside configured limits")
 	}
 	if _, allowed := processor.AllowedCodecs[metadata.Codec]; !allowed {
-		return fmt.Errorf("video codec is not allowed")
+		return VideoMetadata{}, fmt.Errorf("video codec is not allowed")
 	}
 	if !containerMatches(extension, metadata.Container) {
-		return fmt.Errorf("video container does not match declared type")
+		return VideoMetadata{}, fmt.Errorf("video container does not match declared type")
+	}
+	return metadata, nil
+}
+
+func (processor VideoProcessor) validatePlayback(ctx context.Context, path string, source VideoMetadata) error {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > processor.MaxOutputBytes {
+		return fmt.Errorf("video playback exceeds configured output limit")
+	}
+	probeContext, cancel := context.WithTimeout(ctx, processor.Limits.Timeout)
+	defer cancel()
+	metadata, err := processor.Probe.Probe(probeContext, path)
+	if err != nil || metadata.Codec != "h264" || !containerMatches(".mp4", metadata.Container) {
+		return fmt.Errorf("video playback is invalid")
+	}
+	tolerance := source.Duration / 100
+	if tolerance < time.Second {
+		tolerance = time.Second
+	}
+	if metadata.Duration < source.Duration-tolerance || metadata.Duration > source.Duration+tolerance {
+		return fmt.Errorf("video playback duration does not match source")
 	}
 	return nil
 }
 
-func (processor VideoProcessor) copyOriginal(ctx context.Context, request VideoProcessRequest, extension string) (VideoProcessResult, error) {
-	source, metadata, err := getObject(ctx, processor.Store, request.SourceObjectKey, request.SourceVersionID)
+func (processor VideoProcessor) writeFileVariant(
+	ctx context.Context,
+	path string,
+	result ProcessedVariant,
+) (ProcessedVariant, error) {
+	file, err := os.Open(path)
 	if err != nil {
-		return VideoProcessResult{}, fmt.Errorf("read video source: %w", err)
+		return ProcessedVariant{}, err
 	}
-	defer source.Close()
-	if metadata.SizeBytes <= 0 || metadata.SizeBytes > processor.Limits.MaxVideoBytes {
-		return VideoProcessResult{}, fmt.Errorf("video source size exceeds configured limit")
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
+		return ProcessedVariant{}, fmt.Errorf("video output is not a regular non-empty file")
 	}
+	result.SizeBytes = info.Size()
 	hash := sha256.New()
-	result := newProcessedVariant(
-		VariantOriginal,
-		OriginalObjectKey(request.MediaID, request.Generation, extension),
-		request.ContentType,
-		metadata.SizeBytes,
-		0,
-		0,
-		"",
-	)
-	metadata, err = putObject(ctx, processor.Store, result.ObjectKey, io.TeeReader(source, hash), result.SizeBytes, result.ContentType)
+	metadata, err := putObject(ctx, processor.Store, result.ObjectKey, io.TeeReader(file, hash), result.SizeBytes, result.ContentType)
 	if err != nil {
-		return VideoProcessResult{}, fmt.Errorf("write video original: %w", err)
+		return ProcessedVariant{}, err
 	}
 	result.ObjectVersionID = metadata.VersionID
 	result.ChecksumSHA256 = hex.EncodeToString(hash.Sum(nil))
-	return VideoProcessResult{Original: result}, nil
+	return result, nil
 }
 
 func (processor VideoProcessor) downloadToFile(ctx context.Context, objectKey, versionID, destination string) error {

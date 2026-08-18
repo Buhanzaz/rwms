@@ -22,6 +22,7 @@ import dev.buhanzaz.rwms.manager.ui.LOGISTICS_PLANNING_MODE_AUTO
 import dev.buhanzaz.rwms.manager.ui.LOGISTICS_PLANNING_MODE_FIXED_DATE
 import dev.buhanzaz.rwms.manager.ui.MaintenanceEditorState
 import dev.buhanzaz.rwms.manager.ui.logisticsPlanningValidationError
+import dev.buhanzaz.rwms.manager.ui.withForceCapitalRepair
 import dev.buhanzaz.rwms.manager.ui.withLogisticsPlanningMode
 import dev.buhanzaz.rwms.manager.ui.withLogisticsScheduledDate
 import dev.buhanzaz.rwms.manager.ui.withMovementToRepair
@@ -68,6 +69,42 @@ internal fun LogisticsTaskPriorityOptions(
                     label = { Text(priority.toString()) },
                 )
             }
+        }
+    }
+}
+
+/**
+ * Captures the manager's explicit capital-repair choice. Catalog WORK policy remains an
+ * independent server-side reason to classify the repair as capital.
+ */
+@Composable
+internal fun ForceCapitalRepairOption(
+    editor: MaintenanceEditorState,
+    enabled: Boolean,
+    onEdit: ((MaintenanceEditorState) -> MaintenanceEditorState) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(
+            checked = editor.forceCapitalRepair,
+            onCheckedChange = { forceCapitalRepair ->
+                onEdit { current -> current.withForceCapitalRepair(forceCapitalRepair) }
+            },
+            enabled = enabled,
+        )
+        Column(modifier = Modifier.padding(start = 4.dp)) {
+            Text(
+                "Направить на капитальный ремонт",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                "Сервер направит работу в существующий цикл капитального ремонта. " +
+                    "Каталог также может потребовать его независимо от этого выбора.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

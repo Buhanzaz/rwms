@@ -17,6 +17,8 @@ import (
 type Config struct {
 	RuntimeProfile                string
 	HTTPAddress                   string
+	HTTPReadTimeout               time.Duration
+	HTTPWriteTimeout              time.Duration
 	ManagementAddress             string
 	DatabaseURL                   string
 	Issuer                        string
@@ -33,7 +35,10 @@ type Config struct {
 	MaxDecodedPixels              int64
 	MaxImageOutputBytes           int64
 	MaxVideoDuration              time.Duration
+	MaxVideoOutputBytes           int64
 	AllowedVideoCodecs            map[string]struct{}
+	FFmpegExecutable              string
+	FFprobeExecutable             string
 	ProcessingTimeout             time.Duration
 	KafkaBrokers                  []string
 	MediaTopic                    string
@@ -82,10 +87,20 @@ func Load() (Config, error) {
 			"MEDIA_KAFKA_TASK_BOARD_ENTRY_OWNER_PROOF_TOPIC", "rwms.task-board.entry-owner-proof.v1"),
 		TaskBoardEntryOwnerProofGroup: value(
 			"MEDIA_KAFKA_TASK_BOARD_ENTRY_OWNER_PROOF_GROUP", "media-service-task-board-entry-owner-proof-v1"),
-		InstanceID: os.Getenv("MEDIA_INSTANCE_ID"),
+		InstanceID:        os.Getenv("MEDIA_INSTANCE_ID"),
+		FFmpegExecutable:  value("MEDIA_FFMPEG_EXECUTABLE", "ffmpeg"),
+		FFprobeExecutable: value("MEDIA_FFPROBE_EXECUTABLE", "ffprobe"),
 	}
 
 	var err error
+	if configuration.HTTPReadTimeout, err = positiveDuration(
+		"MEDIA_HTTP_READ_TIMEOUT", "5m"); err != nil {
+		return Config{}, err
+	}
+	if configuration.HTTPWriteTimeout, err = positiveDuration(
+		"MEDIA_HTTP_WRITE_TIMEOUT", "5m"); err != nil {
+		return Config{}, err
+	}
 	if configuration.MinIOUseSSL, err = requiredBool("MEDIA_MINIO_USE_SSL"); err != nil {
 		return Config{}, err
 	}
@@ -115,9 +130,21 @@ func Load() (Config, error) {
 		if configuration.MaxVideoDuration, err = requiredPositiveDuration("MEDIA_MAX_VIDEO_DURATION"); err != nil {
 			return Config{}, err
 		}
+		if configuration.MaxVideoOutputBytes, err = requiredPositiveInt64("MEDIA_MAX_VIDEO_OUTPUT_BYTES"); err != nil {
+			return Config{}, err
+		}
+		if configuration.MaxVideoOutputBytes > configuration.MaxUploadBytes {
+			return Config{}, fmt.Errorf("MEDIA_MAX_VIDEO_OUTPUT_BYTES must not exceed MEDIA_MAX_UPLOAD_BYTES")
+		}
 		configuration.AllowedVideoCodecs, err = allowedVideoCodecs(os.Getenv("MEDIA_ALLOWED_VIDEO_CODECS"))
 		if err != nil {
 			return Config{}, err
+		}
+		if strings.TrimSpace(configuration.FFmpegExecutable) == "" || strings.ContainsRune(configuration.FFmpegExecutable, '\x00') {
+			return Config{}, fmt.Errorf("MEDIA_FFMPEG_EXECUTABLE must name an executable")
+		}
+		if strings.TrimSpace(configuration.FFprobeExecutable) == "" || strings.ContainsRune(configuration.FFprobeExecutable, '\x00') {
+			return Config{}, fmt.Errorf("MEDIA_FFPROBE_EXECUTABLE must name an executable")
 		}
 	} else {
 		configuration.AllowedVideoCodecs = map[string]struct{}{}
@@ -221,6 +248,14 @@ func requiredPositiveDuration(name string) (time.Duration, error) {
 	parsed, err := time.ParseDuration(strings.TrimSpace(os.Getenv(name)))
 	if err != nil || parsed <= 0 {
 		return 0, fmt.Errorf("%s must be an explicit positive duration", name)
+	}
+	return parsed, nil
+}
+
+func positiveDuration(name, fallback string) (time.Duration, error) {
+	parsed, err := time.ParseDuration(value(name, fallback))
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("%s must be a positive duration", name)
 	}
 	return parsed, nil
 }

@@ -62,8 +62,32 @@ public final class MaintenanceEventPayloads {
       LocalDate dispatchDate,
       int lineCount,
       CompletionKind completionKind,
-      UUID repairId)
+      UUID repairId,
+      boolean forceCapitalRepair)
       implements MaintenanceIntegrationFact {
+    public EstimateFact(
+        UUID estimateId,
+        UUID warehouseId,
+        UUID rentalItemId,
+        EstimateState lifecycle,
+        int revision,
+        LocalDate dispatchDate,
+        int lineCount,
+        CompletionKind completionKind,
+        UUID repairId) {
+      this(
+          estimateId,
+          warehouseId,
+          rentalItemId,
+          lifecycle,
+          revision,
+          dispatchDate,
+          lineCount,
+          completionKind,
+          repairId,
+          false);
+    }
+
     public EstimateFact {
       Objects.requireNonNull(estimateId, "estimateId is required");
       Objects.requireNonNull(warehouseId, "warehouseId is required");
@@ -152,8 +176,40 @@ public final class MaintenanceEventPayloads {
       RepairAcceptanceState acceptanceState,
       LocalDate dispatchDate,
       int priority,
-      List<RepairStageFact> stages)
+      List<RepairStageFact> stages,
+      boolean forceCapitalRepair)
       implements MaintenanceIntegrationFact {
+    public RepairFact(
+        UUID repairId,
+        UUID rootRepairId,
+        UUID sourceRepairId,
+        UUID estimateId,
+        UUID warehouseId,
+        UUID rentalItemId,
+        RepairOrigin origin,
+        RepairKind kind,
+        RepairExecutionState executionState,
+        RepairAcceptanceState acceptanceState,
+        LocalDate dispatchDate,
+        int priority,
+        List<RepairStageFact> stages) {
+      this(
+          repairId,
+          rootRepairId,
+          sourceRepairId,
+          estimateId,
+          warehouseId,
+          rentalItemId,
+          origin,
+          kind,
+          executionState,
+          acceptanceState,
+          dispatchDate,
+          priority,
+          stages,
+          false);
+    }
+
     public RepairFact {
       Objects.requireNonNull(repairId, "repairId is required");
       Objects.requireNonNull(rootRepairId, "rootRepairId is required");

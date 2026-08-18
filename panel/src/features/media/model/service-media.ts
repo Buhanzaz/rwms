@@ -214,10 +214,21 @@ export type MediaKind = "IMAGE" | "VIDEO"
 export type ServiceMediaStatus =
   "UPLOADING" | "PROCESSING" | "READY" | "FAILED" | "DELETED"
 export type DerivedMediaVariantKind = "SMALL" | "MEDIUM" | "LARGE"
+export type PlaybackMediaVariantKind = "PLAYBACK"
+export type MediaVariantKind =
+  DerivedMediaVariantKind | PlaybackMediaVariantKind
 export type MediaRotationDegrees = 0 | 90 | 180 | 270
 
 export type MediaVariant = Readonly<{
   kind: DerivedMediaVariantKind
+  contentType: string
+  contentPath: string
+  width: number | null
+  height: number | null
+}>
+
+export type PlaybackMediaVariant = Readonly<{
+  kind: PlaybackMediaVariantKind
   contentType: string
   contentPath: string
   width: number | null
@@ -238,6 +249,7 @@ export type MediaAsset = Readonly<{
   sizeBytes: number | null
   createdAt: string
   variants: readonly MediaVariant[]
+  playbackVariant?: PlaybackMediaVariant
 }>
 
 export type ReadyMediaReference = Readonly<{

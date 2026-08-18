@@ -150,7 +150,9 @@ components:
       name: maintenance.estimate.fact.v1
       description: >-
         DomainEventEnvelopeV2 estimate fact with eventVersion 1 and aggregateId
-        as the Kafka record key.
+        as the Kafka record key. New producers always emit forceCapitalRepair to
+        retain the manager's explicit choice. Consumers accept its omission in
+        historical v1 facts with the compatibility meaning false.
       correlationId:
         location: $message.payload#/correlation/correlationId
       payload:
@@ -169,7 +171,9 @@ components:
       name: maintenance.repair.fact.v1
       description: >-
         DomainEventEnvelopeV2 repair fact with eventVersion 1 and aggregateId
-        as the Kafka record key.
+        as the Kafka record key. New producers always emit forceCapitalRepair to
+        retain the manager's explicit choice. Consumers accept its omission in
+        historical v1 facts with the compatibility meaning false.
       correlationId:
         location: $message.payload#/correlation/correlationId
       payload:

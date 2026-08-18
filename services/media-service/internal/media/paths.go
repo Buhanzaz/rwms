@@ -24,6 +24,12 @@ func ImageVariantObjectKey(mediaID string, generation int, variant Variant) stri
 	return fmt.Sprintf("media/%s/generations/%d/%s.webp", mediaID, generation, lowerVariant(variant))
 }
 
+// VideoPlaybackObjectKey returns the opaque key for the compressed MP4
+// presentation derivative of one immutable video generation.
+func VideoPlaybackObjectKey(mediaID string, generation int) string {
+	return fmt.Sprintf("media/%s/generations/%d/playback.mp4", mediaID, generation)
+}
+
 func lowerVariant(variant Variant) string {
 	switch variant {
 	case VariantSmall:

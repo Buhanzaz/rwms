@@ -107,7 +107,8 @@ final class InventoryPublicationPreflightProjection {
               estimate.getPriority(),
               estimate.getSourceParty(),
               source == null ? null : source.getPlanFingerprintSha256(),
-              summary));
+              summary,
+              estimate.isForceCapitalRepair()));
     }
     for (MaintenanceRepair repair : repairs.findAllByRentalItemIdOrderByCreatedAtAscIdAsc(assetId)) {
       if (!warehouseId.equals(repair.getWarehouseId())) continue;
@@ -128,7 +129,8 @@ final class InventoryPublicationPreflightProjection {
               repair.getPriority(),
               repair.getSourceParty(),
               fingerprint,
-              summary));
+              summary,
+              repair.isForceCapitalRepair()));
     }
     result.sort(
         Comparator.comparing((InventoryPublicationCandidate value) -> value.targetKind().name())

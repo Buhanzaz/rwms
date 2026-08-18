@@ -911,6 +911,10 @@ components:
             priority: { type: integer, minimum: 1, maximum: 5 }
             coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
             movementToRepair: { type: boolean }
+            forceCapitalRepair:
+              description: Explicit manager choice independent of catalog WORK flags; omitted means false.
+              type: boolean
+              default: false
             logisticsPlanningMode:
               oneOf: [{ $ref: '#/components/schemas/LogisticsPlanningMode' }, { type: 'null' }]
             logisticsScheduledDate:
@@ -939,6 +943,11 @@ components:
                     movementToRepair: { const: true }
                     logisticsPlanningMode: { const: FIXED_DATE }
                     logisticsScheduledDate: { type: string, format: date }
+            - not:
+                required: [movementToRepair, forceCapitalRepair]
+                properties:
+                  movementToRepair: { const: true }
+                  forceCapitalRepair: { const: true }
         - type: object
           additionalProperties: false
           required: [mode, priority, coverMediaId, movementToRepair, logisticsPlanningMode, logisticsScheduledDate, lines, stages]
@@ -947,6 +956,10 @@ components:
             priority: { type: integer, minimum: 1, maximum: 5 }
             coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
             movementToRepair: { type: boolean }
+            forceCapitalRepair:
+              description: Explicit manager choice independent of catalog WORK flags; omitted means false.
+              type: boolean
+              default: false
             logisticsPlanningMode:
               oneOf: [{ $ref: '#/components/schemas/LogisticsPlanningMode' }, { type: 'null' }]
             logisticsScheduledDate:
@@ -976,6 +989,11 @@ components:
                     movementToRepair: { const: true }
                     logisticsPlanningMode: { const: FIXED_DATE }
                     logisticsScheduledDate: { type: string, format: date }
+            - not:
+                required: [movementToRepair, forceCapitalRepair]
+                properties:
+                  movementToRepair: { const: true }
+                  forceCapitalRepair: { const: true }
     SaveInspectionRequest:
       oneOf:
         - type: object
@@ -1206,7 +1224,7 @@ components:
     FinalPlanCandidate:
       type: object
       additionalProperties: false
-      required: [targetKind, targetId, estimateId, repairId, version, state, started, active, priority, sourceParty, planFingerprintSha256, planSummary]
+      required: [targetKind, targetId, estimateId, repairId, version, state, started, active, priority, sourceParty, planFingerprintSha256, planSummary, forceCapitalRepair]
       properties:
         targetKind: { $ref: '#/components/schemas/FinalPlanTargetKind' }
         targetId: { type: string, format: uuid }
@@ -1220,10 +1238,11 @@ components:
         sourceParty: { type: [string, 'null'], maxLength: 128 }
         planFingerprintSha256: { oneOf: [{ $ref: '#/components/schemas/Sha256' }, { type: 'null' }] }
         planSummary: { $ref: '#/components/schemas/FinalPlanSummary' }
+        forceCapitalRepair: { type: boolean }
     FinalPlanEntry:
       type: object
       additionalProperties: false
-      required: [findingId, findingRevision, planFingerprintSha256, hasWork, targetKind, order, priority, movementToRepair, movementScheduledDate, repairScheduledDate, collisionCandidates, reconciliationDecision]
+      required: [findingId, findingRevision, planFingerprintSha256, hasWork, targetKind, order, priority, movementToRepair, movementScheduledDate, repairScheduledDate, collisionCandidates, reconciliationDecision, forceCapitalRepair]
       properties:
         findingId: { type: string, format: uuid }
         findingRevision: { type: integer, format: int64, minimum: 0 }
@@ -1238,6 +1257,7 @@ components:
         collisionCandidates: { type: array, items: { $ref: '#/components/schemas/FinalPlanCandidate' } }
         reconciliationDecision:
           oneOf: [{ $ref: '#/components/schemas/FinalPlanReconciliationDecision' }, { type: 'null' }]
+        forceCapitalRepair: { type: boolean }
     FinalPlan:
       type: object
       additionalProperties: false
@@ -1558,7 +1578,7 @@ components:
     FrozenPlan:
       type: object
       additionalProperties: false
-      required: [mode, catalogVersionId, fingerprintSha256, priority, coverMediaId, movementToRepair, logisticsPlanningMode, logisticsScheduledDate, lines, stages]
+      required: [mode, catalogVersionId, fingerprintSha256, priority, coverMediaId, movementToRepair, logisticsPlanningMode, logisticsScheduledDate, lines, stages, forceCapitalRepair]
       properties:
         mode: { type: string, enum: [AUTO, MANUAL] }
         catalogVersionId: { type: string, format: uuid }
@@ -1569,6 +1589,7 @@ components:
           maximum: 5
         coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
         movementToRepair: { type: boolean }
+        forceCapitalRepair: { type: boolean }
         logisticsPlanningMode:
           oneOf: [{ $ref: '#/components/schemas/LogisticsPlanningMode' }, { type: 'null' }]
         logisticsScheduledDate:
@@ -1590,16 +1611,30 @@ components:
                 movementToRepair: { const: true }
                 logisticsPlanningMode: { const: FIXED_DATE }
                 logisticsScheduledDate: { type: string, format: date }
+        - not:
+            required: [movementToRepair, forceCapitalRepair]
+            properties:
+              movementToRepair: { const: true }
+              forceCapitalRepair: { const: true }
     FrozenPlanLine:
       type: object
       additionalProperties: false
-      required: [id, sourceKind, lineType, catalogVersionId, catalogNodeId, description, normalizedDescription, unit, quantity, unitPriceMinor, normativeMinutes, groupComment, mediaReferences]
+      required: [id, sourceKind, lineType, catalogVersionId, catalogNodeId, routingQueueId, routingQueueName, routingQueueType, description, normalizedDescription, unit, quantity, unitPriceMinor, normativeMinutes, groupComment, mediaReferences]
       properties:
         id: { type: string, format: uuid }
         sourceKind: { type: string, enum: [CATALOG, MANUAL] }
         lineType: { type: string, enum: [WORK, MATERIAL] }
         catalogVersionId: { $ref: '#/components/schemas/NullableUuid' }
         catalogNodeId: { $ref: '#/components/schemas/NullableUuid' }
+        routingQueueId:
+          $ref: '#/components/schemas/NullableUuid'
+          description: Frozen global queue identity for this exact line; null only for legacy snapshots without line routing evidence.
+        routingQueueName:
+          type: [string, 'null']
+          maxLength: 255
+        routingQueueType:
+          type: [string, 'null']
+          maxLength: 64
         description: { type: string, minLength: 1, maxLength: 1000 }
         normalizedDescription: { oneOf: [{ type: string, minLength: 1, maxLength: 1000 }, { type: 'null' }] }
         unit: { type: string, minLength: 1, maxLength: 32 }

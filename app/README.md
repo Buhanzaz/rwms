@@ -17,6 +17,11 @@ Russian version: [README.ru.md](README.ru.md).
 - OAuth client `rwms-manager-android` uses Authorization Code with PKCE S256
   and refresh-token rotation. Session material is encrypted with a
   non-exportable Android Keystore key; a password is not retained by the app.
+- A gateway `401` gets one serialized refresh attempt. A concurrent request
+  reuses an already-rotated access token, while a transient refresh transport
+  failure keeps the encrypted session and is shown as a connectivity failure.
+  Only a missing/revoked refresh token or terminal `invalid_grant`/
+  `access_denied` response makes the session unusable.
 - The redirect is the public-gateway HTTPS endpoint `/auth/manager/callback`
   and is consumed inside `NativeManagerLoginClient`. Neither the production nor
   Robolectric test manifest exposes AppAuth's custom-scheme
@@ -51,11 +56,75 @@ repairs, acceptance, and camera/media steps. A screen never owns a durable
 business transition: it sends the public command and then observes or refreshes
 the server result.
 
+The active inventory screen filters its existing cabin cards by canonical
+number prefix as the manager types; it does not render a separate autocomplete
+list. The add action appears only when no loaded warehouse cabin number starts
+with the input. An inspection proceeds through passport, photos, furniture,
+work catalog, late inspection details, and confirmation. Characteristics,
+linoleum, sanitary counters, and inspection comment belong to that late details
+step rather than the passport. A saved inspection opens the same steps in
+read-only mode. Every step offers “Edit inspection”: supplementing enables the
+retained data on the current step, while replacing returns to the passport with
+a clean inspection revision. A non-empty inspection, estimate, or primary
+repair plan can also retain an explicit “send to capital repair” choice; the
+inventory editor places it after “create movement to repair”, and choosing one
+destination clears the other. Custom work/material stages retain their selected
+repair-board route; a frozen-plan read uses the line routing snapshot to assign
+every line to one stage exactly once, even when catalog work IDs repeat. The
+maintenance service remains responsible for the resulting calculated CAPITAL
+classification and its existing logistics/acceptance cycle. See
+[`InventoryScreens.kt`](src/main/java/dev/buhanzaz/rwms/manager/ui/screens/InventoryScreens.kt)
+and
+[`ManagerNavGraph.kt`](src/main/java/dev/buhanzaz/rwms/manager/navigation/ManagerNavGraph.kt).
+
+The repair-cycle menu places “Capital repairs” immediately after “Repairs”. It
+reads the maintenance-owned active-capital endpoint; calculated CAPITAL rows
+are excluded from the ordinary repair table. Each capital card can expand the
+authoritative ordered repair stages, naming their queues and showing works and
+materials in separate columns with the exact quantity and unit. Expansion is
+read-only presentation and does not create or advance a logistics task. See
+[`MaintenanceScreen.kt`](src/main/java/dev/buhanzaz/rwms/manager/ui/screens/MaintenanceScreen.kt).
+
+When a work is first added from the maintenance catalog, newly captured,
+gallery-picked, and reused condition photos are rendered immediately as
+removable thumbnails, matching the edit flow. The work-photo block has three
+direct actions: the full-width “Add photo” action opens the in-app CameraX
+screen, while “From taken” and “From gallery” share the row below it. “From
+taken” includes both local and already loaded photos from the preceding
+condition step; selecting one moves it to the work without a duplicate upload.
+“From gallery” opens the Android document picker without a preceding
+source-choice prompt. In the camera either volume key triggers the shutter once per press and
+is consumed by the active activity or the owning dialog window, including when
+the task camera is hosted in a full-screen dialog. Ordinary `PHOTO` capture uses the
+low-latency CameraX policy, automatic resolution near 12 MP, and defaults HDR
+off; Night, explicitly selected full resolution, and explicitly enabled HDR
+retain their quality-oriented processing. An upgrade turns the legacy automatic
+HDR preference off once, after which the manager may enable HDR again. See
+[`MaintenanceScreen.kt`](src/main/java/dev/buhanzaz/rwms/manager/ui/screens/MaintenanceScreen.kt),
+[`MainActivity.kt`](src/main/java/dev/buhanzaz/rwms/manager/MainActivity.kt), and
+[`ManagerCameraScreen.kt`](src/main/java/dev/buhanzaz/rwms/manager/ui/components/ManagerCameraScreen.kt).
+
+The same CameraX surface records MP4 video with optional microphone audio.
+Inventory, estimate, repair, and work evidence pickers accept JPEG, PNG, WebP,
+MP4, and WebM; local and owner-authorized downloaded videos play with explicit
+Media3 controls and never become an image cover. The app requests the
+compressed `PLAYBACK` representation for READY videos while retaining the
+server-authorized `ORIGINAL` path only as a compatibility fallback for older
+video generations. See
+[`ManagerPhotos.kt`](src/main/java/dev/buhanzaz/rwms/manager/ui/components/ManagerPhotos.kt)
+and
+[`ManagerMediaCoordinator.kt`](src/main/java/dev/buhanzaz/rwms/manager/ui/coordinator/ManagerMediaCoordinator.kt).
+
 Local persistence is deliberately limited:
 
 - encrypted OAuth state and the selected warehouse preference;
 - account-scoped, server-verified read snapshots in `ManagerReadCache` for
   maintenance, repair queue, and inventory recovery after process death;
+- one AES-GCM-authenticated inventory editor snapshot per verified account and
+  warehouse, including its current navigation step and app-private copies of
+  selected image/video originals; it is removed only after explicit close or
+  durable enqueue, so process death resumes the same inspection instead of
+  assigning a draft to another account or warehouse;
 - an account-and-workspace-warehouse-scoped background-upload document,
   app-private original media files, and WorkManager identity so an
   already-created upload can resume only for its immutable owner;
@@ -84,7 +153,7 @@ The internal coordinators are split by independently changing responsibility:
 | --- | --- |
 | `ManagerCommandRuntime` | Shared state reduction, coroutine scope, Problem Details mapping and session invalidation mechanics only |
 | `ManagerWorkspaceCoordinator` | Authentication/workspace, connectivity and background lifecycle |
-| `ManagerInventoryCoordinator` | Inventory reads, editor state, scoped cache and upload outbox |
+| `ManagerInventoryCoordinator` | Inventory reads, crash-safe editor state, scoped cache and upload outbox |
 | `ManagerShipmentCoordinator` | Shipment list, detail, scheduling, furniture-task readiness and confirmation |
 | `ManagerReturnCoordinator` | Return inspection evidence, undamaged acceptance and estimate-start flow |
 | `ManagerTransferCoordinator` | Transfer creation, departure, arrival evidence, reconciliation and cancellation |
@@ -109,9 +178,23 @@ package.
 Media and command effects use the public media/API flow and stable operation
 identifiers. The upload queue records progress and failure for explicit retry;
 it does not invent a successful command while offline. Problem Details are
-mapped to user-visible errors by the shared backend client. Authentication
-failure clears the unusable session, and a `409 Conflict` requires the screen
-to refresh/rebase the server version before retrying.
+mapped to user-visible errors by the shared backend client. A terminal
+authentication failure clears the unusable session; a temporary refresh outage
+does not. A `409 Conflict` requires the screen to refresh/rebase the server
+version before retrying. Before a durable first inventory inspection is sent,
+the worker rereads its active finding, then its session fence, and persists a
+newer finding revision when a live asset-status/snapshot update advanced it
+during media upload. If that preflight still receives the inventory service's
+`409 INVENTORY_VERSION_CONFLICT` with detail `Inventory revision is stale`, it
+performs one more read/rebase/save cycle. Both passes are allowed only for
+`NOT_INSPECTED` findings in `IDLE` or `SOURCE_CREATED`; a departed finding, in-flight source
+creation, or saved/repeated inspection stays fail-closed and cannot be
+overwritten by a queued retry.
+
+The manager starts at most four byte-heavy media uploads at once and preserves
+their source order. Once a create/upload/finalize sequence is accepted, its
+server-side READY polling no longer occupies an upload permit, so later files
+can use the uplink while media-service processes earlier images or videos.
 
 The workspace resolves authoritative `/me`, eligible role, live warehouse
 grants, and the selected warehouse before it exposes or resumes durable work.

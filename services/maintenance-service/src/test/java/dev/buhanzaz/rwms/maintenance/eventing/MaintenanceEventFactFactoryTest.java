@@ -61,10 +61,12 @@ class MaintenanceEventFactFactoryTest {
     when(estimate.getRevision()).thenReturn(2);
     when(estimate.getDispatchDate()).thenReturn(LocalDate.of(2026, 7, 17));
     when(estimate.getRepairId()).thenReturn(MaintenanceEventContractFixtures.REPAIR_ID);
+    when(estimate.isForceCapitalRepair()).thenReturn(true);
 
     assertThat(factory.estimatePayload(MaintenanceEventType.ESTIMATE_AMENDED, estimate, 3))
         .containsEntry("completionKind", "NON_EMPTY")
         .containsEntry("repairId", MaintenanceEventContractFixtures.REPAIR_ID.toString())
+        .containsEntry("forceCapitalRepair", true)
         .doesNotContainKeys("sourceParty", "comment", "catalogVersionId", "version");
   }
 
@@ -83,6 +85,7 @@ class MaintenanceEventFactFactoryTest {
     when(repair.getAcceptanceState()).thenReturn(RepairAcceptanceState.NOT_READY);
     when(repair.getDispatchDate()).thenReturn(LocalDate.of(2026, 7, 17));
     when(repair.getPriority()).thenReturn(1);
+    when(repair.isForceCapitalRepair()).thenReturn(true);
     when(repair.getExternalTaskId()).thenReturn(MaintenanceEventContractFixtures.EXTERNAL_TASK_ID);
     RepairStage later = stage(2, "00000000-0000-0000-0000-000000000612");
     RepairStage first = stage(0, "00000000-0000-0000-0000-000000000611");
@@ -104,8 +107,10 @@ class MaintenanceEventFactFactoryTest {
             "acceptanceState",
             "dispatchDate",
             "priority",
-            "stages")
+            "stages",
+            "forceCapitalRepair")
         .containsEntry("priority", 1)
+        .containsEntry("forceCapitalRepair", true)
         .doesNotContainKeys(
             "sourceParty", "reworkReason", "decisionReason", "leaseId", "objectPath");
     @SuppressWarnings("unchecked")

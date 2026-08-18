@@ -201,7 +201,7 @@ final class MaintenanceTransferSupport {
           "Prepared transfer no longer has an active repair");
     }
     RepairComplexity targetComplexity =
-        repairModelSupport.repairComplexityFromStoredStages(targetWarehouseId, active.getId()).type();
+        repairModelSupport.repairComplexityFromStoredStages(targetWarehouseId, active).type();
     List<TransferTaskPlan> tasks =
         chain.stream()
             .filter(repair -> repair.getTaskBoardVersion() != null)

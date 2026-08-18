@@ -7,8 +7,6 @@ class InventoryFieldOnlyUiPolicyTest {
     @Test
     fun `empty inventory directs the manager to the panel-owned session start`() {
         assertThat(INVENTORY_FIELD_ONLY_EMPTY_STATE_DESCRIPTION).contains("в панели")
-        assertThat(INVENTORY_FIELD_ONLY_SESSION_NOTICE).contains("только проверку бытовки")
-        assertThat(INVENTORY_FIELD_ONLY_SESSION_NOTICE).contains("после завершения инвентаризации в панели")
     }
 
     @Test

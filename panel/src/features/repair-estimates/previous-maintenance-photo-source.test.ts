@@ -32,6 +32,7 @@ function estimate(
         total: "0.00",
         reason: null,
         recordedAt,
+        forceCapitalRepair: false,
       },
     ],
     repairId: null,
@@ -45,6 +46,7 @@ function estimate(
       actorId: "33333333-3333-4333-8333-333333333333",
       actorType: "USER",
     },
+    forceCapitalRepair: false,
   }
 }
 
@@ -87,6 +89,7 @@ function repair(
       forcedCapital: false,
     },
     movementToRepair: false,
+    forceCapitalRepair: false,
     logisticsPlanningMode: "AUTO",
     logisticsScheduledDate: null,
     createdAt: updatedAt,

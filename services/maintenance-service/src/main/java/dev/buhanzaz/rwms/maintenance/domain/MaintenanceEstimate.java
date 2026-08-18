@@ -62,6 +62,10 @@ public class MaintenanceEstimate {
   @Column(name = "movement_to_repair", nullable = false)
   private boolean movementToRepair;
 
+  /** Manager-owned override that classifies the eventual repair as capital. */
+  @Column(name = "force_capital_repair", nullable = false)
+  private boolean forceCapitalRepair;
+
   @Column(name = "movement_scheduled_date")
   private LocalDate movementScheduledDate;
 
@@ -148,9 +152,25 @@ public class MaintenanceEstimate {
     updatedAt = MaintenanceTime.now();
   }
 
+  /** Replaces the explicit capital-repair choice while this estimate is an active draft. */
+  public void selectForceCapitalRepair(boolean forceCapitalRepair) {
+    requireDraft();
+    this.forceCapitalRepair = forceCapitalRepair;
+    updatedAt = MaintenanceTime.now();
+  }
+
   /** Stores the final manager choices captured with immutable inventory evidence. */
   public void selectInventoryPublication(
       int priority, boolean movementToRepair, LocalDate movementScheduledDate) {
+    selectInventoryPublication(priority, movementToRepair, movementScheduledDate, false);
+  }
+
+  /** Stores inventory publication choices, including the explicit capital-repair override. */
+  public void selectInventoryPublication(
+      int priority,
+      boolean movementToRepair,
+      LocalDate movementScheduledDate,
+      boolean forceCapitalRepair) {
     requireDraft();
     if (priority < 1 || priority > 5) {
       throw new IllegalArgumentException("Estimate priority must be between 1 and 5");
@@ -162,6 +182,7 @@ public class MaintenanceEstimate {
     this.priority = priority;
     this.movementToRepair = movementToRepair;
     this.movementScheduledDate = movementScheduledDate;
+    this.forceCapitalRepair = forceCapitalRepair;
     updatedAt = MaintenanceTime.now();
   }
 
@@ -195,12 +216,24 @@ public class MaintenanceEstimate {
 
   public void replaceCompletedMetadata(
       LocalDate dispatchDate, String sourceParty, String comment, UUID repairId) {
+    replaceCompletedMetadata(
+        dispatchDate, sourceParty, comment, repairId, forceCapitalRepair);
+  }
+
+  /** Appends an immutable completed revision with its explicit capital-repair choice. */
+  public void replaceCompletedMetadata(
+      LocalDate dispatchDate,
+      String sourceParty,
+      String comment,
+      UUID repairId,
+      boolean forceCapitalRepair) {
     if (state != EstimateState.COMPLETED) {
       throw new IllegalStateException("Only a completed estimate can be amended");
     }
     this.dispatchDate = dispatchDate;
     this.sourceParty = optional(sourceParty, 512);
     this.comment = optional(comment, 4000);
+    this.forceCapitalRepair = forceCapitalRepair;
     amend(repairId);
   }
 
@@ -246,6 +279,7 @@ public class MaintenanceEstimate {
   public LocalDate getDispatchDate() { return dispatchDate; }
   public int getPriority() { return priority; }
   public boolean isMovementToRepair() { return movementToRepair; }
+  public boolean isForceCapitalRepair() { return forceCapitalRepair; }
   public LocalDate getMovementScheduledDate() { return movementScheduledDate; }
   public String getSourceParty() { return sourceParty; }
   public String getComment() { return comment; }

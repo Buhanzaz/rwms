@@ -75,15 +75,17 @@ func TestBoundedProcessingRecoveryMigrationTreatsAmbiguousDLTAsLegacyIntegration
 		pool.Close()
 		t.Fatalf("read V11 ambiguous recovery state: %v", err)
 	}
-	pool.Close()
 	if terminalCount != 1 || attemptInCycle != 4 || terminalAttempt != 4 ||
 		failureCode != "LEGACY_TERMINAL" || eventID != nil || bodySHA != nil {
 		t.Fatalf("V11 terminal count=%d cycle=%d code=%s attempt=%d event=%v hash=%v",
 			terminalCount, attemptInCycle, failureCode, terminalAttempt, eventID, bodySHA)
 	}
+	applyResidualMigration(t, ctx, pool, 14, "12", "video playback variant",
+		"V12__video_playback_variant.sql", mediamigration.V12)
+	pool.Close()
 	database, err := Open(ctx, databaseURL)
 	if err != nil {
-		t.Fatalf("open upgraded V11 ambiguous database: %v", err)
+		t.Fatalf("open upgraded V12 ambiguous database: %v", err)
 	}
 	database.Close()
 }

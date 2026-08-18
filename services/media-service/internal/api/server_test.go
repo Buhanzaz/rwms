@@ -254,7 +254,7 @@ func TestUserTaskBoardSourceContentForwardsPinnedGeneration(t *testing.T) {
 	body := []byte("task-board-source")
 	asset := persistence.AssetRecord{
 		ID: sourceMediaID, WarehouseID: warehouseID, FileName: "source.jpg",
-		Status: media.StatusReady, Generation: 1,
+		Kind: media.KindImage, Status: media.StatusReady, Generation: 1,
 	}
 	original := &persistence.VariantRecord{
 		Variant: media.VariantOriginal, ObjectKey: "private/source-original", ObjectVersionID: "source-original-v1",
@@ -320,7 +320,7 @@ func TestUserTaskBoardListUsesPinnedSourceGeneration(t *testing.T) {
 		{
 			Asset: persistence.AssetRecord{
 				ID: resultID, OwnerType: persistence.OwnerTypeTaskBoardEntry, OwnerID: entryID.String(),
-				WarehouseID: warehouseID, Status: media.StatusReady, Generation: 1,
+				WarehouseID: warehouseID, Kind: media.KindImage, Status: media.StatusReady, Generation: 1,
 			},
 			Variants: []persistence.VariantRecord{{
 				Variant: media.VariantSmall, ObjectVersionID: "result-small-v1", ContentType: "image/webp",
@@ -331,7 +331,7 @@ func TestUserTaskBoardListUsesPinnedSourceGeneration(t *testing.T) {
 			// public URLs must nevertheless remain in the task-board entry scope.
 			Asset: persistence.AssetRecord{
 				ID: sourceID, OwnerType: persistence.OwnerTypeInventoryFinding, OwnerID: uuid.NewString(),
-				WarehouseID: warehouseID, Status: media.StatusReady, Generation: 1,
+				WarehouseID: warehouseID, Kind: media.KindImage, Status: media.StatusReady, Generation: 1,
 			},
 			Variants: []persistence.VariantRecord{{
 				Variant: media.VariantSmall, ObjectVersionID: "source-small-v1", ContentType: "image/webp",
@@ -986,7 +986,7 @@ func TestSafeVariantContentPathKeepsTheCanonicalOwnerContext(t *testing.T) {
 		{ownerType: persistence.OwnerTypeCabin, context: persistence.ViewerContextWarehouse},
 	} {
 		record := persistence.AssetWithVariants{
-			Asset: persistence.AssetRecord{ID: uuid.New(), Status: media.StatusReady, Generation: 1},
+			Asset: persistence.AssetRecord{ID: uuid.New(), Kind: media.KindImage, Status: media.StatusReady, Generation: 1},
 			Variants: []persistence.VariantRecord{{
 				Variant: media.VariantSmall, ObjectVersionID: "version-1", ContentType: "image/webp",
 			}},
@@ -1006,7 +1006,7 @@ func TestSafeVariantContentPathKeepsTheCanonicalOwnerContext(t *testing.T) {
 func TestLogisticsVariantContentPathUsesStructuredIdentityOnly(t *testing.T) {
 	documentID, lineID, warehouseID := uuid.New(), uuid.New(), uuid.New()
 	record := persistence.AssetWithVariants{
-		Asset: persistence.AssetRecord{ID: uuid.New(), Status: media.StatusReady, Generation: 2},
+		Asset: persistence.AssetRecord{ID: uuid.New(), Kind: media.KindImage, Status: media.StatusReady, Generation: 2},
 		Variants: []persistence.VariantRecord{{
 			Variant: media.VariantMedium, ObjectVersionID: "version-2", ContentType: "image/webp",
 		}},
@@ -1028,6 +1028,67 @@ func TestLogisticsVariantContentPathUsesStructuredIdentityOnly(t *testing.T) {
 	if strings.Contains(contentPath, "ownerId=") || strings.Contains(contentPath,
 		persistence.LogisticsOwnerID(documentID, lineID)) {
 		t.Fatalf("structured content path exposed composite identity: %q", contentPath)
+	}
+}
+
+func TestReadyVideoExposesOnlyCompressedPlaybackVariant(t *testing.T) {
+	warehouseID, ownerID, mediaID := uuid.New(), uuid.New(), uuid.New()
+	record := persistence.AssetWithVariants{
+		Asset: persistence.AssetRecord{
+			ID: mediaID, Kind: media.KindVideo, Status: media.StatusReady, Generation: 4,
+		},
+		Variants: []persistence.VariantRecord{
+			{Variant: media.VariantPlayback, ObjectVersionID: "playback-v4", ContentType: "video/mp4"},
+			{Variant: media.VariantSmall, ObjectVersionID: "invalid-image-v4", ContentType: "image/webp"},
+		},
+	}
+	variants := safeVariants(record, persistence.OwnerTypeInventoryFinding, ownerID.String(), warehouseID)
+	if len(variants) != 1 {
+		t.Fatalf("video variants = %#v, want one PLAYBACK", variants)
+	}
+	response := variants[0].(map[string]any)
+	if response["kind"] != media.VariantPlayback || response["contentType"] != "video/mp4" {
+		t.Fatalf("video variant response = %#v", response)
+	}
+	path, _ := response["contentPath"].(string)
+	if !strings.Contains(path, "/assets/"+mediaID.String()+"/variants/PLAYBACK/content?") ||
+		!strings.Contains(path, "generation=4") {
+		t.Fatalf("video playback path = %q", path)
+	}
+	if parsed, ok := publicDerivedVariant("PLAYBACK"); !ok || parsed != media.VariantPlayback {
+		t.Fatalf("publicDerivedVariant(PLAYBACK) = %q, %v", parsed, ok)
+	}
+}
+
+func TestVideoPlaybackContentStreamsThroughOwnerScopedVariantPath(t *testing.T) {
+	warehouseID, ownerID, mediaID, subjectID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	body := []byte("compressed-mp4")
+	asset := persistence.AssetRecord{
+		ID: mediaID, WarehouseID: warehouseID, FileName: "evidence.webm",
+		Kind: media.KindVideo, Status: media.StatusReady, Generation: 2,
+	}
+	playback := &persistence.VariantRecord{
+		Variant: media.VariantPlayback, ObjectKey: "private/playback.mp4", ObjectVersionID: "playback-v2",
+		ContentType: "video/mp4", SizeBytes: int64(len(body)),
+	}
+	repository := &repositoryStub{currentAsset: asset, currentVariant: playback}
+	principal := auth.Principal{
+		SubjectID: subjectID, Scopes: map[string]struct{}{"rwms.read": {}},
+		Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.View}},
+	}
+	store := &storeStub{objectBody: body, statMetadata: media.ObjectMetadata{
+		VersionID: playback.ObjectVersionID, SizeBytes: int64(len(body)), ContentType: playback.ContentType,
+	}}
+	server := newTestServer(t, repository, validatorStub{principal: principal}, store)
+	path := ownerScopedPath("/api/media/v1/assets/"+mediaID.String()+"/variants/PLAYBACK/content", ownerID, warehouseID) + "&generation=2"
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request.Header.Set("Authorization", "Bearer test")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), body) ||
+		response.Header().Get("Content-Type") != "video/mp4" ||
+		repository.currentReadVariant != media.VariantPlayback {
+		t.Fatalf("playback response=%d headers=%#v scope=%#v", response.Code, response.Header(), repository)
 	}
 }
 

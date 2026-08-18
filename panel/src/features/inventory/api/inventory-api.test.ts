@@ -570,6 +570,7 @@ describe("inventory API", () => {
       repairPlans: [],
       repairCompletionMode: "AUTO",
       movementToRepair: true,
+      forceCapitalRepair: false,
       logisticsPlanningMode: "FIXED_DATE",
       logisticsScheduledDate: "2026-08-12",
       priority: 1,
@@ -583,6 +584,7 @@ describe("inventory API", () => {
         planSelection: expect.objectContaining({
           priority: 1,
           movementToRepair: true,
+          forceCapitalRepair: false,
           logisticsPlanningMode: "FIXED_DATE",
           logisticsScheduledDate: "2026-08-12",
           stages: [],

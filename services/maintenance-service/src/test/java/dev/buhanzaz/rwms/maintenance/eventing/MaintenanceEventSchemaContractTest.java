@@ -80,12 +80,23 @@ class MaintenanceEventSchemaContractTest {
 
     assertThat(valid.required("actorRef").isNull()).isTrue();
     assertThat(valid.required("payload").required("repairId").isNull()).isTrue();
+    assertThat(valid.required("payload").required("forceCapitalRepair").booleanValue()).isFalse();
     assertThat(schema().validate(valid)).isEmpty();
 
     var missingNullable = valid.deepCopy();
     ((com.fasterxml.jackson.databind.node.ObjectNode) missingNullable.required("payload"))
         .remove("repairId");
     assertThat(schema().validate(missingNullable)).isNotEmpty();
+
+    var missingCapitalChoice = valid.deepCopy();
+    ((com.fasterxml.jackson.databind.node.ObjectNode) missingCapitalChoice.required("payload"))
+        .remove("forceCapitalRepair");
+    assertThat(schema().validate(missingCapitalChoice)).isEmpty();
+
+    var nullCapitalChoice = valid.deepCopy();
+    ((com.fasterxml.jackson.databind.node.ObjectNode) nullCapitalChoice.required("payload"))
+        .putNull("forceCapitalRepair");
+    assertThat(schema().validate(nullCapitalChoice)).isNotEmpty();
 
     var missingActor = valid.deepCopy();
     ((com.fasterxml.jackson.databind.node.ObjectNode) missingActor).remove("actorRef");

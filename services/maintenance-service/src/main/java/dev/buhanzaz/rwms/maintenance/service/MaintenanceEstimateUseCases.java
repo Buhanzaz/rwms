@@ -134,6 +134,7 @@ public class MaintenanceEstimateUseCases {
     MaintenanceEstimate draft = MaintenanceEstimate.create(
         request.warehouseId(), request.rentalItemId(), rentalItem.getAggregateVersion(),
         catalog.getId(), request.dispatchDate(), request.sourceParty(), null, commandSupport.actorJson());
+    draft.selectForceCapitalRepair(request.forceCapitalRepair());
     draft.replaceCoverMediaId(request.coverMediaId());
     MaintenanceEstimate estimate = estimates.saveAndFlush(draft);
     estimateRevisionSupport.replaceEstimateRevision(estimate, request.lines(), request.plan(), null);
@@ -244,6 +245,7 @@ public class MaintenanceEstimateUseCases {
     estimateSupport.validateEstimatePlan(request.lines(), request.plan());
     mediaSupport.validateCoverMediaSelection(request.mediaReferences(), request.coverMediaId());
     estimate.replaceMetadata(request.dispatchDate(), request.sourceParty(), estimate.getComment());
+    estimate.selectForceCapitalRepair(request.forceCapitalRepair());
     estimate.replaceCoverMediaId(request.coverMediaId());
     estimate.touchDraft();
     estimateRevisionSupport.replaceEstimateRevision(estimate, request.lines(), request.plan(), null);
@@ -446,11 +448,13 @@ public class MaintenanceEstimateUseCases {
       List<EstimateLineResponse> canonicalLines =
           estimateSupport.canonicalEstimateLines(estimate, request.lines());
       RepairComplexitySnapshot amendedComplexity =
-          repairModelSupport.repairComplexityForLines(repair.getWarehouseId(), canonicalLines);
+          repairModelSupport.repairComplexityForLines(
+              repair.getWarehouseId(), canonicalLines, request.forceCapitalRepair());
       boolean reclassifyingCapital =
           repair.getExecutionState() == RepairExecutionState.QUEUED
               && amendedComplexity.type() == RepairComplexity.CAPITAL;
       repair.amendPreStartPlan();
+      repair.selectForceCapitalRepair(request.forceCapitalRepair());
       if (reclassifyingCapital) {
         repair.markReclassifyingCapital();
       }
@@ -491,7 +495,8 @@ public class MaintenanceEstimateUseCases {
     }
     UUID linkedRepairId = linkedRepair == null ? null : linkedRepair.getId();
     estimate.replaceCompletedMetadata(
-        request.dispatchDate(), request.sourceParty(), estimate.getComment(), linkedRepairId);
+        request.dispatchDate(), request.sourceParty(), estimate.getComment(), linkedRepairId,
+        request.forceCapitalRepair());
     estimate.replaceCoverMediaId(request.coverMediaId());
     estimateRevisionSupport.replaceEstimateRevision(estimate, request.lines(), request.plan(), request.reason());
     if (linkedRepair == null) {

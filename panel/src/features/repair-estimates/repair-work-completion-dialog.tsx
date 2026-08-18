@@ -32,6 +32,7 @@ import type {
   RepairPriority,
 } from "@/features/repair-estimates/model/repair-estimate"
 import { RepairEstimateLinesSnapshot } from "@/features/repair-estimates/repair-estimate-lines-snapshot"
+import { ForceCapitalRepairField } from "@/features/repair-estimates/force-capital-repair-field"
 import {
   getWarehouseQueueCapabilities,
   warehouseQueueCapabilitiesQueryKey,
@@ -40,6 +41,7 @@ import {
 export type RepairWorkCompletionResult = {
   completionMode: RepairEstimateCompletionMode
   movementToRepair: boolean
+  forceCapitalRepair: boolean
   logisticsPlanningMode: LogisticsPlanningMode
   logisticsScheduledDate: string | null
   taskPlans: RepairEstimateTaskPlanDto[]
@@ -79,6 +81,7 @@ type RepairWorkCompletionDialogProps = {
   emptyDescription?: string
   emptyCompleteLabel?: string
   initialMovementToRepair?: boolean
+  initialForceCapitalRepair?: boolean
   initialLogisticsPlanningMode?: LogisticsPlanningMode
   initialLogisticsScheduledDate?: string | null
   initialPriority?: RepairPriority
@@ -87,6 +90,7 @@ type RepairWorkCompletionDialogProps = {
   movementRouteAvailable?: boolean
   logisticsSelectionAvailable?: boolean
   selectPriority?: boolean
+  showForceCapitalRepair?: boolean
   onOpenChange: (open: boolean) => void
   onComplete: (result: RepairWorkCompletionResult) => void
 }
@@ -108,6 +112,7 @@ export function RepairWorkCompletionDialog({
   emptyDescription = "Пустая смета завершит осмотр, переведёт бытовку в статус «Свободная» и не создаст задание или перемещение.",
   emptyCompleteLabel = "Завершить и освободить",
   initialMovementToRepair,
+  initialForceCapitalRepair = false,
   initialLogisticsPlanningMode = "AUTO",
   initialLogisticsScheduledDate = null,
   initialPriority = 3,
@@ -116,6 +121,7 @@ export function RepairWorkCompletionDialog({
   movementRouteAvailable = true,
   logisticsSelectionAvailable = true,
   selectPriority = true,
+  showForceCapitalRepair = false,
   onOpenChange,
   onComplete,
 }: RepairWorkCompletionDialogProps) {
@@ -189,7 +195,7 @@ export function RepairWorkCompletionDialog({
           </p>
         ) : (
           <RepairWorkCompletionForm
-            key={`${movementAvailable && initialMovementToRepair ? "movement" : "no-movement"}:${initialLogisticsPlanningMode}:${initialLogisticsScheduledDate ?? "auto"}:${previewQuery.data.taskPlans.map((plan) => `${plan.id}:${plan.sortOrder}`).join(":")}`}
+            key={`${movementAvailable && initialMovementToRepair ? "movement" : "no-movement"}:${initialForceCapitalRepair ? "capital" : "ordinary"}:${initialLogisticsPlanningMode}:${initialLogisticsScheduledDate ?? "auto"}:${previewQuery.data.taskPlans.map((plan) => `${plan.id}:${plan.sortOrder}`).join(":")}`}
             lines={lines}
             initialPlans={previewQuery.data.taskPlans}
             autoIssues={previewQuery.data.issues}
@@ -201,6 +207,7 @@ export function RepairWorkCompletionDialog({
             pendingLabel={pendingLabel}
             emptyCompleteLabel={emptyCompleteLabel}
             initialMovementToRepair={initialMovementToRepair}
+            initialForceCapitalRepair={initialForceCapitalRepair}
             initialLogisticsPlanningMode={initialLogisticsPlanningMode}
             initialLogisticsScheduledDate={initialLogisticsScheduledDate}
             initialPriority={initialPriority}
@@ -208,6 +215,7 @@ export function RepairWorkCompletionDialog({
             movementAvailable={movementAvailable}
             logisticsSelectionAvailable={logisticsSelectionAvailable}
             selectPriority={selectPriority}
+            showForceCapitalRepair={showForceCapitalRepair}
             onCancel={() => onOpenChange(false)}
             onComplete={onComplete}
           />
@@ -229,6 +237,7 @@ function RepairWorkCompletionForm({
   pendingLabel,
   emptyCompleteLabel,
   initialMovementToRepair: initialMovementToRepairInput,
+  initialForceCapitalRepair,
   initialLogisticsPlanningMode,
   initialLogisticsScheduledDate,
   initialPriority,
@@ -236,6 +245,7 @@ function RepairWorkCompletionForm({
   movementAvailable,
   logisticsSelectionAvailable,
   selectPriority,
+  showForceCapitalRepair,
   onCancel,
   onComplete,
 }: {
@@ -250,6 +260,7 @@ function RepairWorkCompletionForm({
   pendingLabel: string
   emptyCompleteLabel: string
   initialMovementToRepair?: boolean
+  initialForceCapitalRepair: boolean
   initialLogisticsPlanningMode: LogisticsPlanningMode
   initialLogisticsScheduledDate: string | null
   initialPriority: RepairPriority
@@ -257,14 +268,16 @@ function RepairWorkCompletionForm({
   movementAvailable: boolean
   logisticsSelectionAvailable: boolean
   selectPriority: boolean
+  showForceCapitalRepair: boolean
   onCancel: () => void
   onComplete: (result: RepairWorkCompletionResult) => void
 }) {
   const empty = allowEmpty && lines.length === 0
+  const initialCapitalRepair = !empty && initialForceCapitalRepair
   const initialMovementToRepair =
     empty || (logisticsSelectionAvailable && !movementAvailable)
       ? false
-      : (initialMovementToRepairInput ?? false)
+      : !initialCapitalRepair && (initialMovementToRepairInput ?? false)
   const initialFixedDate =
     initialMovementToRepair &&
     initialLogisticsPlanningMode === "FIXED_DATE" &&
@@ -272,6 +285,8 @@ function RepairWorkCompletionForm({
   const [movementToRepair, setMovementToRepair] = useState(
     initialMovementToRepair
   )
+  const [forceCapitalRepair, setForceCapitalRepair] =
+    useState(initialCapitalRepair)
   const [logisticsPlanningMode, setLogisticsPlanningMode] =
     useState<LogisticsPlanningMode>(initialFixedDate ? "FIXED_DATE" : "AUTO")
   const [logisticsScheduledDate, setLogisticsScheduledDate] = useState(
@@ -352,6 +367,7 @@ function RepairWorkCompletionForm({
                   onCheckedChange={(checked) => {
                     const required = checked === true
                     setMovementToRepair(required)
+                    if (required) setForceCapitalRepair(false)
                     if (!required) {
                       setLogisticsPlanningMode("AUTO")
                       setLogisticsScheduledDate("")
@@ -369,6 +385,21 @@ function RepairWorkCompletionForm({
                   </FieldDescription>
                 </div>
               </Field>
+
+              {showForceCapitalRepair ? (
+                <ForceCapitalRepairField
+                  id="repair-work-force-capital-repair"
+                  checked={forceCapitalRepair}
+                  disabled={pending}
+                  onCheckedChange={(checked) => {
+                    setForceCapitalRepair(checked)
+                    if (!checked) return
+                    setMovementToRepair(false)
+                    setLogisticsPlanningMode("AUTO")
+                    setLogisticsScheduledDate("")
+                  }}
+                />
+              ) : null}
 
               {movementToRepair ? (
                 <Field>
@@ -427,6 +458,14 @@ function RepairWorkCompletionForm({
               ) : null}
             </>
           ) : null}
+          {!movementAvailable && showForceCapitalRepair ? (
+            <ForceCapitalRepairField
+              id="repair-work-force-capital-repair"
+              checked={forceCapitalRepair}
+              disabled={pending}
+              onCheckedChange={setForceCapitalRepair}
+            />
+          ) : null}
         </div>
       )}
 
@@ -471,6 +510,7 @@ function RepairWorkCompletionForm({
             const result: RepairWorkCompletionResult = {
               completionMode: empty ? "MANUAL" : completionMode,
               movementToRepair: empty ? false : movementToRepair,
+              forceCapitalRepair: empty ? false : forceCapitalRepair,
               logisticsPlanningMode:
                 empty || !movementToRepair ? "AUTO" : logisticsPlanningMode,
               logisticsScheduledDate:

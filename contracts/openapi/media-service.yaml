@@ -519,7 +519,7 @@ paths:
           schema: { type: string, minLength: 1, maxLength: 64 }
       responses:
         '200':
-          description: Images first, then videos. ORIGINAL content is never returned by this list.
+          description: Images first, then videos. READY videos expose PLAYBACK; ORIGINAL content is never returned by this list.
           headers:
             Cache-Control: { schema: { const: no-store } }
           content:
@@ -621,6 +621,7 @@ paths:
             X-Content-Type-Options: { schema: { const: nosniff } }
           content:
             image/webp: { schema: { type: string, format: binary } }
+            video/mp4: { schema: { type: string, format: binary } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -735,7 +736,8 @@ components:
       name: variant
       in: path
       required: true
-      schema: { enum: [SMALL, MEDIUM, LARGE] }
+      description: Image presentation size or the compressed MP4 video representation.
+      schema: { enum: [SMALL, MEDIUM, LARGE, PLAYBACK] }
     CabinPresentationVariant:
       name: variant
       in: path
@@ -1280,7 +1282,7 @@ components:
         sizeBytes: { oneOf: [{ type: integer, minimum: 1 }, { type: 'null' }] }
         createdAt: { type: string, format: date-time }
         variants:
-          description: List responses contain SMALL/MEDIUM/LARGE only; ORIGINAL uses the lazy endpoint.
+          description: READY IMAGE responses contain SMALL/MEDIUM/LARGE; READY VIDEO responses contain PLAYBACK; ORIGINAL uses the lazy endpoint.
           type: array
           items: { $ref: '#/components/schemas/SafeVariant' }
     SafeVariant:
@@ -1288,12 +1290,12 @@ components:
       additionalProperties: false
       required: [kind, contentType, contentPath, width, height]
       properties:
-        kind: { enum: [SMALL, MEDIUM, LARGE] }
+        kind: { enum: [SMALL, MEDIUM, LARGE, PLAYBACK] }
         contentType: { type: string }
         contentPath:
           description: Relative same-origin API path; never an object-store URL or key.
           type: string
-          pattern: '^/api/media/v1/assets/[0-9a-f-]{36}/variants/(SMALL|MEDIUM|LARGE)/content\?'
+          pattern: '^/api/media/v1/assets/[0-9a-f-]{36}/variants/(SMALL|MEDIUM|LARGE|PLAYBACK)/content\?'
         width: { oneOf: [{ type: integer, minimum: 1 }, { type: 'null' }] }
         height: { oneOf: [{ type: integer, minimum: 1 }, { type: 'null' }] }
     Problem:

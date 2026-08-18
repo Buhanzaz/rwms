@@ -117,6 +117,18 @@ function viewLine(line: InventoryFrozenPlanLine): RepairEstimateLineDto {
           characteristic: null,
         }
       : null,
+    customQueueBinding:
+      line.sourceKind === "MANUAL" &&
+      line.routingQueueId &&
+      line.routingQueueName &&
+      (line.routingQueueType === "REPAIR" ||
+        line.routingQueueType === "HOLDING")
+        ? {
+            queueId: line.routingQueueId,
+            queueName: line.routingQueueName,
+            queueKind: line.routingQueueType,
+          }
+        : null,
     maintenanceMediaReferences:
       line.lineType === "WORK"
         ? line.mediaReferences.map((reference) => ({ ...reference }))
@@ -145,21 +157,100 @@ function viewPlans(
   lines: RepairEstimateLineDto[]
 ): InventoryRepairPlanSnapshotDto[] {
   if (!finding.frozenPlan) return []
-  const repairStages = finding.frozenPlan.stages.filter(
-    (stage) => stage.kind === "REPAIR_WORK"
-  )
-  return finding.frozenPlan.stages.map((stage, index) => {
-    const matchedLines = lines.filter(
-      (line) => line.catalogSnapshot?.nodeId === stage.catalogNodeId
+  const sourceLines = finding.frozenPlan.lines
+  const allocations = finding.frozenPlan.stages
+    .filter((stage) => stage.kind === "REPAIR_WORK")
+    .slice()
+    .sort((left, right) => left.order - right.order)
+    .map((stage) => ({ stage, lineIndexes: [] as number[] }))
+  const allocated = new Set<number>()
+  const routeMatches = (
+    line: InventoryFrozenPlanLine,
+    stage: (typeof allocations)[number]["stage"]
+  ) =>
+    Boolean(line.routingQueueId && line.routingQueueId === stage.routingQueueId)
+  const catalogMatches = (
+    line: InventoryFrozenPlanLine,
+    stage: (typeof allocations)[number]["stage"]
+  ) => Boolean(line.catalogNodeId && line.catalogNodeId === stage.catalogNodeId)
+  const firstAvailable = (
+    predicate: (line: InventoryFrozenPlanLine) => boolean
+  ) =>
+    sourceLines.findIndex(
+      (line, index) => !allocated.has(index) && predicate(line)
     )
-    const includedLines =
-      stage.kind !== "REPAIR_WORK"
-        ? []
-        : matchedLines.length > 0
-          ? matchedLines
-          : repairStages[0]?.id === stage.id
-            ? lines
-            : []
+  const assign = (
+    allocation: (typeof allocations)[number],
+    lineIndex: number
+  ) => {
+    if (lineIndex < 0) return false
+    allocation.lineIndexes.push(lineIndex)
+    allocated.add(lineIndex)
+    return true
+  }
+  const lastSourceIndex = (allocation: (typeof allocations)[number]) =>
+    allocation.lineIndexes.at(-1) ?? -1
+  const routeAllocation = (
+    line: InventoryFrozenPlanLine,
+    lineIndex: number
+  ) => {
+    const matching = allocations.filter(({ stage }) =>
+      routeMatches(line, stage)
+    )
+    if (matching.length === 0) return null
+    return (
+      matching
+        .filter((allocation) => lastSourceIndex(allocation) < lineIndex)
+        .sort(
+          (left, right) => lastSourceIndex(right) - lastSourceIndex(left)
+        )[0] ?? matching[0]!
+    )
+  }
+
+  for (const allocation of allocations) {
+    const primaryWork = firstAvailable(
+      (line) =>
+        line.lineType === "WORK" && catalogMatches(line, allocation.stage)
+    )
+    if (assign(allocation, primaryWork)) continue
+    const primaryCatalogLine = firstAvailable((line) =>
+      catalogMatches(line, allocation.stage)
+    )
+    if (assign(allocation, primaryCatalogLine)) continue
+    assign(
+      allocation,
+      firstAvailable(
+        (line) =>
+          line.lineType === "WORK" && routeMatches(line, allocation.stage)
+      )
+    )
+  }
+
+  sourceLines.forEach((line, lineIndex) => {
+    if (line.lineType !== "WORK" || allocated.has(lineIndex)) return
+    const allocation = routeAllocation(line, lineIndex)
+    if (!allocation) {
+      throw new Error("Сервис вернул работу без выбранного маршрута")
+    }
+    assign(allocation, lineIndex)
+  })
+  sourceLines.forEach((line, lineIndex) => {
+    if (line.lineType !== "MATERIAL" || allocated.has(lineIndex)) return
+    const allocation =
+      allocations.find(
+        ({ stage }) => catalogMatches(line, stage) && routeMatches(line, stage)
+      ) ?? routeAllocation(line, lineIndex)
+    if (!allocation) {
+      throw new Error("Сервис вернул материал без выбранного маршрута")
+    }
+    assign(allocation, lineIndex)
+  })
+  if (allocated.size !== sourceLines.length) {
+    throw new Error("Сервис вернул неоднозначный план ремонтных работ")
+  }
+
+  return allocations.map(({ stage, lineIndexes }, index) => {
+    const includedLines = lineIndexes.map((lineIndex) => lines[lineIndex]!)
     return {
       id: stage.id,
       kind: stage.kind,
@@ -175,6 +266,7 @@ function viewPlans(
         )
       ).join("; "),
       queueId: stage.routingQueueId,
+      routingCatalogNodeId: stage.catalogNodeId,
       queueName: stage.routingQueueName,
       routeQueueKind:
         stage.routingQueueType === "REPAIR" ||
@@ -252,6 +344,7 @@ export function toInventoryFindingView(
     repairCompletionMode: finding.frozenPlan?.mode ?? null,
     repairPriority: finding.frozenPlan?.priority ?? 3,
     movementToRepair: finding.frozenPlan?.movementToRepair ?? false,
+    forceCapitalRepair: finding.frozenPlan?.forceCapitalRepair ?? false,
     logisticsPlanningMode: finding.frozenPlan?.logisticsPlanningMode ?? "AUTO",
     logisticsScheduledDate: finding.frozenPlan?.logisticsScheduledDate ?? null,
     repairPlans: viewPlans(finding, lines),

@@ -58,6 +58,28 @@ contexts and screens are usable.
   `Бытовка забронирована` with a `К заказам` action to the existing `/orders`
   flow. Generic queue failures keep their normal error and do not show this
   replacement hint. See the [repair task editor](src/features/repair-tasks/repair-task-editor-workspace.tsx).
+- Inventory inspection/final-plan, estimate, and primary-repair editors carry
+  the explicit `forceCapitalRepair` choice through their canonical commands and
+  show the server value read-only after the relevant plan is no longer
+  editable. In an inventory plan this control is rendered directly after the
+  repair-movement choice, and the two destinations are mutually exclusive.
+  Custom work or material selects its explicit repair/holding board queue; the
+  frozen line routing snapshot then reconstructs every line in exactly one
+  stage, including repeated catalog work IDs. A new rework inherits the capital
+  choice because its create contract does not authorize replacing it.
+  Calculated CAPITAL repairs continue to use the existing separate
+  capital-repair and acceptance surfaces rather than the ordinary repair table.
+  Their driver-board cards load the authoritative repair plan only when
+  expanded and render its ordered queues as separate work and material columns
+  with exact quantities and units.
+- Shared owner-media surfaces show READY images first and READY videos through
+  their compressed MP4 `PLAYBACK` variant with native controls. JPEG, PNG,
+  WebP, MP4, and WebM can be added. A selected local original is shown
+  immediately while its same-origin upload continues in the background, with
+  byte progress directly below that preview; cover/delete actions appear only
+  after the server item is ready. Only an image can be selected as the cover,
+  and protected blob URLs are released when their generation or owner scope
+  changes. See the [media feature](src/features/media/).
 - The panel may combine independent public reads for a screen, but it must not
   orchestrate cross-service business workflows in the browser.
 
@@ -237,6 +259,13 @@ Problem Details conversion. `401` remains an authentication-renewal/login
 signal, `403` requires refreshed grants or user action, and `409` requires an
 authoritative refetch/conflict path. A malformed Problem Details body still
 returns a status-bearing `ApiError` with a safe fallback message.
+
+Media additions use a bounded four-worker upload queue with stable idempotency
+keys and ordered results. A first failure prevents new jobs from starting,
+waits for already-started transfers to settle, and reports that original
+failure instead of fabricating a partial success. Browser byte progress uses
+the same authenticated, same-origin content route and does not alter the media
+contract or make the local preview authoritative.
 
 For mutable operations, use the fencing mechanism specified by the canonical
 OpenAPI operation (`expectedVersion`, ETag, or equivalent) and show a consistent

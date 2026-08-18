@@ -43,7 +43,8 @@ public class MaintenanceEventPayloadPolicy {
       "dispatchDate",
       "lineCount",
       "completionKind",
-      "repairId");
+      "repairId",
+      "forceCapitalRepair");
   private static final Set<String> REPAIR_FIELDS = Set.of(
       "repairId",
       "rootRepairId",
@@ -57,7 +58,8 @@ public class MaintenanceEventPayloadPolicy {
       "acceptanceState",
       "dispatchDate",
       "priority",
-      "stages");
+      "stages",
+      "forceCapitalRepair");
   private static final Set<String> REPAIR_STAGE_FIELDS = Set.of(
       "stageId", "kind", "order", "state", "queueId", "taskSync");
   private static final Set<String> TASK_SYNC_FIELDS = Set.of(

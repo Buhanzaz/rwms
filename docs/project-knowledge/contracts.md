@@ -168,6 +168,41 @@ Evidence: [`media-service.yaml`](../../contracts/openapi/media-service.yaml),
 [`ManagerPhotos.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/components/ManagerPhotos.kt),
 [`image_processor.go`](../../services/media-service/internal/media/image_processor.go).
 
+### Media Video Playback
+
+The media OpenAPI accepts the declared MP4/WebM upload content types and
+exposes `PLAYBACK` as the owner-scoped video read variant. A READY video has an
+immutable original plus a generated MP4 playback object; image-only variants
+remain invalid for video and a video remains invalid as an image cover. The
+service contract exposes neither MinIO keys nor an ffmpeg command surface.
+
+Evidence: [`media-service.yaml`](../../contracts/openapi/media-service.yaml),
+[`video_transcoder.go`](../../services/media-service/internal/media/video_transcoder.go),
+and [`V12__video_playback_variant.sql`](../../services/media-service/db/migration/V12__video_playback_variant.sql).
+
+### Manual Capital-Repair Choice
+
+Maintenance estimate and repair commands accept an optional
+`forceCapitalRepair` boolean whose omitted value is `false`; an explicit JSON
+`null` is rejected. Estimate, revision and repair responses, inventory frozen
+and final plans always emit the boolean, as do newly produced maintenance
+ESTIMATE/REPAIR v1 facts. Event consumers accept omission in historical v1
+facts with the compatibility meaning `false`, while rejecting an explicit
+non-boolean value. The additive field preserves the choice across inventory
+publication and repair replacement; effective capital complexity is still
+calculated by maintenance as explicit choice OR catalog-enforced capital work.
+Inventory plan and maintenance freeze/snapshot schemas reject the combination
+of `movementToRepair: true` and `forceCapitalRepair: true`. Each public
+inventory frozen line also carries the nullable all-or-none routing queue ID,
+name and type copied from its immutable maintenance source snapshot. These
+fields let active clients reproduce the maintenance-owned one-line-to-one-stage
+allocation without changing persistence ownership or inventing a route.
+
+Evidence: [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml),
+[`inventory-service.yaml`](../../contracts/openapi/inventory-service.yaml),
+[`maintenance-events.yaml`](../../contracts/events/maintenance-events.yaml),
+and [`maintenance-events-v1.schema.json`](../../contracts/events/maintenance/maintenance-events-v1.schema.json).
+
 ### Media Processing Terminal DLT
 
 The sanitized processing DLT contract in

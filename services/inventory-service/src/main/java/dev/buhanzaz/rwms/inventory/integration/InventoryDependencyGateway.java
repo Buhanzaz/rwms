@@ -200,7 +200,27 @@ public interface InventoryDependencyGateway {
       String kind,
       String executionState,
       String acceptanceState,
-      String planFingerprintSha256) {}
+      String planFingerprintSha256,
+      boolean forceCapitalRepair) {
+    public RepairRegistryFact(
+        UUID repairId,
+        UUID rootRepairId,
+        String origin,
+        String kind,
+        String executionState,
+        String acceptanceState,
+        String planFingerprintSha256) {
+      this(
+          repairId,
+          rootRepairId,
+          origin,
+          kind,
+          executionState,
+          acceptanceState,
+          planFingerprintSha256,
+          false);
+    }
+  }
 
   record RepairAssetSnapshot(UUID assetId, List<RepairRegistryFact> repairs) {}
 

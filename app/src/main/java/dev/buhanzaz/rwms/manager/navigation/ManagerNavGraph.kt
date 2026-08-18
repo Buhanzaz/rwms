@@ -14,7 +14,9 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -32,6 +34,7 @@ import dev.buhanzaz.rwms.manager.auth.ManagerAuthState
 import dev.buhanzaz.rwms.manager.ui.MaintenanceEditorMode
 import dev.buhanzaz.rwms.manager.ui.ManagerUiState
 import dev.buhanzaz.rwms.manager.ui.ManagerViewModel
+import dev.buhanzaz.rwms.manager.ui.InventoryReinspectionMode
 import dev.buhanzaz.rwms.manager.ui.inventoryFurnitureCatalog
 import dev.buhanzaz.rwms.manager.ui.components.BusyOverlay
 import dev.buhanzaz.rwms.manager.ui.components.EmptyState
@@ -43,7 +46,9 @@ import dev.buhanzaz.rwms.manager.ui.screens.InventoryDashboardScreen
 import dev.buhanzaz.rwms.manager.ui.screens.InventoryEditorScreen
 import dev.buhanzaz.rwms.manager.ui.screens.InventoryFurnitureDecisionScreen
 import dev.buhanzaz.rwms.manager.ui.screens.InventoryFurnitureScreen
+import dev.buhanzaz.rwms.manager.ui.screens.InventoryInspectionDetailsScreen
 import dev.buhanzaz.rwms.manager.ui.screens.InventoryPhotosScreen
+import dev.buhanzaz.rwms.manager.ui.screens.InventoryReinspectionDialog
 import dev.buhanzaz.rwms.manager.ui.screens.INVENTORY_PHOTOS_TITLE
 import dev.buhanzaz.rwms.manager.ui.screens.InventoryConfirmationScreen
 import dev.buhanzaz.rwms.manager.ui.screens.InventoryCatalogScreen
@@ -52,6 +57,7 @@ import dev.buhanzaz.rwms.manager.ui.screens.MaintenanceEditorScreen
 import dev.buhanzaz.rwms.manager.ui.screens.MaintenanceFurnitureScreen
 import dev.buhanzaz.rwms.manager.ui.screens.MaintenanceMenuScreen
 import dev.buhanzaz.rwms.manager.ui.screens.MaintenanceAcceptanceScreen
+import dev.buhanzaz.rwms.manager.ui.screens.CapitalRepairsListScreen
 import dev.buhanzaz.rwms.manager.ui.screens.ManagerLoginScreen
 import dev.buhanzaz.rwms.manager.ui.screens.ManagerMainMenuScreen
 import dev.buhanzaz.rwms.manager.ui.screens.EstimatesListScreen
@@ -158,6 +164,57 @@ private fun AuthenticatedManagerNavGraph(
     viewModel: ManagerViewModel,
 ) {
     val uploadOperations by viewModel.uploadOperations.collectAsStateWithLifecycle()
+    var inventoryReinspectionDialogVisible by remember(uiState.inventoryEditor?.findingId) {
+        mutableStateOf(false)
+    }
+    LaunchedEffect(
+        navController,
+        uiState.inventoryResumeRoute,
+        uiState.inventoryEditor?.findingId,
+    ) {
+        val resumeRoute = uiState.inventoryResumeRoute ?: return@LaunchedEffect
+        if (uiState.inventoryEditor == null) {
+            viewModel.consumeInventoryResumeRoute()
+            return@LaunchedEffect
+        }
+        val backStack = managerInventoryResumeBackStack(resumeRoute)
+        navController.navigate(ManagerRoute.Inventory.route) {
+            popUpTo(ManagerRoute.Home.route) { inclusive = false }
+            launchSingleTop = true
+        }
+        backStack.drop(1).forEach { route ->
+            navController.navigate(route) { launchSingleTop = true }
+        }
+        viewModel.consumeInventoryResumeRoute()
+    }
+    LaunchedEffect(navController, uiState.inventoryEditor?.findingId) {
+        navController.currentBackStackEntryFlow.collect { entry ->
+            if (uiState.inventoryEditor == null) return@collect
+            val route = when (entry.destination.route) {
+                ManagerRoute.InventoryEditor.route,
+                ManagerRoute.InventoryPhotos.route,
+                ManagerRoute.InventoryFurnitureDecision.route,
+                ManagerRoute.InventoryFurniture.route,
+                ManagerRoute.InventoryCatalog.route,
+                ManagerRoute.InventoryInspectionDetails.route,
+                ManagerRoute.InventoryConfirmation.route,
+                -> entry.destination.route
+
+                ManagerRoute.PhotoCapture.route -> {
+                    if (entry.arguments?.getString("target") ==
+                        ManagerRoute.PhotoCapture.TARGET_INVENTORY
+                    ) {
+                        ManagerRoute.InventoryPhotos.route
+                    } else {
+                        null
+                    }
+                }
+
+                else -> null
+            }
+            route?.let(viewModel::recordInventoryRoute)
+        }
+    }
     CompositionLocalProvider(
         LocalManagerHeaderState provides ManagerHeaderState(
             warehouses = uiState.warehouses,
@@ -358,6 +415,7 @@ private fun AuthenticatedManagerNavGraph(
                 onOpenPhotos = {
                     navController.navigate(ManagerRoute.InventoryPhotos.route)
                 },
+                onRequestEdit = { inventoryReinspectionDialogVisible = true },
             )
         }
         composable(ManagerRoute.InventoryPhotos.route) {
@@ -374,6 +432,7 @@ private fun AuthenticatedManagerNavGraph(
                 onAddFurniture = {
                     navController.navigate(ManagerRoute.InventoryFurnitureDecision.route)
                 },
+                onRequestEdit = { inventoryReinspectionDialogVisible = true },
             )
         }
         composable(ManagerRoute.InventoryFurnitureDecision.route) {
@@ -399,6 +458,17 @@ private fun AuthenticatedManagerNavGraph(
                     }
                     navController.navigate(ManagerRoute.InventoryFurniture.route)
                 },
+                onReviewContinue = {
+                    val nextRoute = if (
+                        uiState.inventoryEditor?.equipmentObservationRequested == true
+                    ) {
+                        ManagerRoute.InventoryFurniture.route
+                    } else {
+                        ManagerRoute.InventoryCatalog.route
+                    }
+                    navController.navigate(nextRoute) { launchSingleTop = true }
+                },
+                onRequestEdit = { inventoryReinspectionDialogVisible = true },
             )
         }
         composable(ManagerRoute.InventoryFurniture.route) {
@@ -412,6 +482,7 @@ private fun AuthenticatedManagerNavGraph(
                         launchSingleTop = true
                     }
                 },
+                onRequestEdit = { inventoryReinspectionDialogVisible = true },
             )
         }
         composable(ManagerRoute.InventoryCatalog.route) {
@@ -423,10 +494,25 @@ private fun AuthenticatedManagerNavGraph(
                 onRefreshCatalog = viewModel::refreshMaintenanceCatalog,
                 onEditPlan = viewModel::editInventoryPlan,
                 onContinue = {
+                    navController.navigate(ManagerRoute.InventoryInspectionDetails.route) {
+                        launchSingleTop = true
+                    }
+                },
+                onRequestEdit = { inventoryReinspectionDialogVisible = true },
+            )
+        }
+        composable(ManagerRoute.InventoryInspectionDetails.route) {
+            InventoryInspectionDetailsScreen(
+                editor = uiState.inventoryEditor,
+                busy = uiState.busy,
+                onBack = navController::popManagerBackStack,
+                onEdit = viewModel::editInventory,
+                onContinue = {
                     navController.navigate(ManagerRoute.InventoryConfirmation.route) {
                         launchSingleTop = true
                     }
                 },
+                onRequestEdit = { inventoryReinspectionDialogVisible = true },
             )
         }
         composable(ManagerRoute.InventoryConfirmation.route) {
@@ -443,6 +529,14 @@ private fun AuthenticatedManagerNavGraph(
                         }
                     }
                 },
+                onCloseReview = {
+                    viewModel.closeInventoryEditor()
+                    navController.navigate(ManagerRoute.Inventory.route) {
+                        popUpTo(ManagerRoute.Inventory.route) { inclusive = false }
+                        launchSingleTop = true
+                    }
+                },
+                onRequestEdit = { inventoryReinspectionDialogVisible = true },
             )
         }
         composable(ManagerRoute.Maintenance.route) {
@@ -453,6 +547,11 @@ private fun AuthenticatedManagerNavGraph(
                 },
                 onOpenRepairs = {
                     navController.navigate(ManagerRoute.Repairs.route) {
+                        launchSingleTop = true
+                    }
+                },
+                onOpenCapitalRepairs = {
+                    navController.navigate(ManagerRoute.CapitalRepairs.route) {
                         launchSingleTop = true
                     }
                 },
@@ -501,6 +600,20 @@ private fun AuthenticatedManagerNavGraph(
                         }
                     }
                 },
+                onOpenRepair = { repairId ->
+                    viewModel.openRepairEditor(repairId) {
+                        navController.navigate(ManagerRoute.MaintenanceEditor.route) {
+                            launchSingleTop = true
+                        }
+                    }
+                },
+            )
+        }
+        composable(ManagerRoute.CapitalRepairs.route) {
+            CapitalRepairsListScreen(
+                uiState = uiState,
+                onBack = navController::popManagerBackStack,
+                onLoadMaintenance = viewModel::loadMaintenance,
                 onOpenRepair = { repairId ->
                     viewModel.openRepairEditor(repairId) {
                         navController.navigate(ManagerRoute.MaintenanceEditor.route) {
@@ -701,6 +814,35 @@ private fun AuthenticatedManagerNavGraph(
                 else -> ManagerMissingPhotoTarget(onBack)
             }
         }
+    }
+    val reviewEditor = uiState.inventoryEditor
+    val reviewFinding = reviewEditor?.finding
+    if (
+        inventoryReinspectionDialogVisible &&
+        reviewEditor?.readOnly == true &&
+        reviewFinding != null
+    ) {
+        InventoryReinspectionDialog(
+            finding = reviewFinding,
+            busy = uiState.busy,
+            onDismiss = { inventoryReinspectionDialogVisible = false },
+            onSupplement = {
+                inventoryReinspectionDialogVisible = false
+                viewModel.beginInventorySupplement()
+            },
+            onReplace = {
+                inventoryReinspectionDialogVisible = false
+                viewModel.openInventoryFinding(
+                    reviewFinding,
+                    InventoryReinspectionMode.REPLACE,
+                ) {
+                    navController.navigate(ManagerRoute.InventoryEditor.route) {
+                        popUpTo(ManagerRoute.InventoryEditor.route) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                }
+            },
+        )
     }
     }
 }

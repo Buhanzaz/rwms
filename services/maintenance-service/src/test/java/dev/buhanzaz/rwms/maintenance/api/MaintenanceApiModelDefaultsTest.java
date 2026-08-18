@@ -214,11 +214,38 @@ class MaintenanceApiModelDefaultsTest {
     assertThat(request.logisticsPlanningMode()).isNull();
     assertThat(request.logisticsScheduledDate()).isNull();
     assertThat(request.coverMediaId()).isNull();
+    assertThat(request.forceCapitalRepair()).isFalse();
     assertThat(snapshot.priority()).isEqualTo(3);
     assertThat(snapshot.movementToRepair()).isFalse();
     assertThat(snapshot.logisticsPlanningMode()).isNull();
     assertThat(snapshot.logisticsScheduledDate()).isNull();
     assertThat(snapshot.coverMediaId()).isNull();
+    assertThat(snapshot.forceCapitalRepair()).isFalse();
+
+    FreezeInventoryPlanRequest explicit =
+        mapper.readValue(
+            mapper.writeValueAsString(request).replace(
+                "\"forceCapitalRepair\":false", "\"forceCapitalRepair\":true"),
+            FreezeInventoryPlanRequest.class);
+
+    assertThat(explicit.forceCapitalRepair()).isTrue();
+    FreezeInventoryPlanRequest ambiguous =
+        mapper.readValue(
+            mapper
+                .writeValueAsString(explicit)
+                .replace("\"movementToRepair\":false", "\"movementToRepair\":true")
+                .replace(
+                    "\"logisticsPlanningMode\":null",
+                    "\"logisticsPlanningMode\":\"AUTO\""),
+            FreezeInventoryPlanRequest.class);
+    assertThat(ambiguous.isRepairDestinationChoiceValid()).isFalse();
+    assertThatThrownBy(
+            () ->
+                mapper.readValue(
+                    mapper.writeValueAsString(request).replace(
+                        "\"forceCapitalRepair\":false", "\"forceCapitalRepair\":null"),
+                    FreezeInventoryPlanRequest.class))
+        .isInstanceOf(JacksonException.class);
   }
 
   private static String requiredNodeJson(String extra) {

@@ -7,6 +7,8 @@ import dev.buhanzaz.rwms.manager.network.CatalogNodeSnapshotDto
 import dev.buhanzaz.rwms.manager.network.EquipmentCatalogItemDto
 import dev.buhanzaz.rwms.manager.network.EstimateLineDto
 import dev.buhanzaz.rwms.manager.network.EstimateLineInputDto
+import dev.buhanzaz.rwms.manager.network.InventoryFrozenPlanLineDto
+import dev.buhanzaz.rwms.manager.network.InventoryFrozenPlanStageDto
 import dev.buhanzaz.rwms.manager.network.InventoryPlanLineInputDto
 import dev.buhanzaz.rwms.manager.network.InventoryPlanSelectionDto
 import dev.buhanzaz.rwms.manager.network.InventoryPlanStageSelectionDto
@@ -201,6 +203,86 @@ internal fun inventoryManualLineRoutingCatalogNodeIds(
     }
     inventoryStageCatalogNodeId(catalogNodes, routing)
         ?: throw IllegalArgumentException("Для пользовательской строки не найден маршрут каталога")
+}
+
+/**
+ * Replays the maintenance-owned frozen-plan allocation when an inventory finding is reopened.
+ * Every source line index is returned under exactly one stage id, including repeated catalog
+ * works and manual lines whose only identity is their frozen queue route.
+ */
+internal fun inventoryFrozenPlanLineIndexesByStage(
+    lines: List<InventoryFrozenPlanLineDto>,
+    stages: List<InventoryFrozenPlanStageDto>,
+): Map<String, List<Int>> {
+    val orderedStages = stages
+        .filter { stage -> stage.kind == "REPAIR_WORK" }
+        .sortedBy(InventoryFrozenPlanStageDto::order)
+    require(orderedStages.map(InventoryFrozenPlanStageDto::id).distinct().size == orderedStages.size) {
+        "Сервис вернул повторяющийся этап инвентаризации"
+    }
+    val allocations = orderedStages.map { stage -> stage to mutableListOf<Int>() }
+    val allocated = mutableSetOf<Int>()
+
+    fun routeMatches(line: InventoryFrozenPlanLineDto, stage: InventoryFrozenPlanStageDto): Boolean =
+        line.routingQueueId != null && line.routingQueueId == stage.routingQueueId
+
+    fun catalogMatches(line: InventoryFrozenPlanLineDto, stage: InventoryFrozenPlanStageDto): Boolean =
+        line.catalogNodeId != null && line.catalogNodeId == stage.catalogNodeId
+
+    fun firstAvailable(predicate: (InventoryFrozenPlanLineDto) -> Boolean): Int? =
+        lines.indices.firstOrNull { index -> index !in allocated && predicate(lines[index]) }
+
+    fun assign(allocation: Pair<InventoryFrozenPlanStageDto, MutableList<Int>>, index: Int?): Boolean {
+        if (index == null) return false
+        allocation.second += index
+        allocated += index
+        return true
+    }
+
+    fun routeAllocation(
+        line: InventoryFrozenPlanLineDto,
+        lineIndex: Int,
+    ): Pair<InventoryFrozenPlanStageDto, MutableList<Int>>? {
+        val matching = allocations.filter { allocation -> routeMatches(line, allocation.first) }
+        if (matching.isEmpty()) return null
+        return matching
+            .filter { allocation -> (allocation.second.lastOrNull() ?: -1) < lineIndex }
+            .maxByOrNull { allocation -> allocation.second.lastOrNull() ?: -1 }
+            ?: matching.first()
+    }
+
+    allocations.forEach { allocation ->
+        val stage = allocation.first
+        if (assign(allocation, firstAvailable { line ->
+                line.lineType == "WORK" && catalogMatches(line, stage)
+            })) {
+            return@forEach
+        }
+        if (assign(allocation, firstAvailable { line -> catalogMatches(line, stage) })) {
+            return@forEach
+        }
+        assign(allocation, firstAvailable { line ->
+            line.lineType == "WORK" && routeMatches(line, stage)
+        })
+    }
+    lines.forEachIndexed { lineIndex, line ->
+        if (line.lineType != "WORK" || lineIndex in allocated) return@forEachIndexed
+        val allocation = routeAllocation(line, lineIndex)
+            ?: throw IllegalArgumentException("Сервис вернул работу без выбранного маршрута")
+        assign(allocation, lineIndex)
+    }
+    lines.forEachIndexed { lineIndex, line ->
+        if (line.lineType != "MATERIAL" || lineIndex in allocated) return@forEachIndexed
+        val allocation = allocations.firstOrNull { allocation ->
+            catalogMatches(line, allocation.first) && routeMatches(line, allocation.first)
+        } ?: routeAllocation(line, lineIndex)
+            ?: throw IllegalArgumentException("Сервис вернул материал без выбранного маршрута")
+        assign(allocation, lineIndex)
+    }
+    require(allocated.size == lines.size) {
+        "Сервис вернул неоднозначный план ремонтных работ"
+    }
+    return allocations.associate { (stage, indexes) -> stage.id to indexes.toList() }
 }
 
 internal fun effectiveCatalogNodeRouting(
@@ -502,19 +584,25 @@ internal fun MaintenanceEditorState.toggleReworkCandidate(
     )
 }
 
-internal fun InventoryEditorState.toMaintenancePlanEditor(): MaintenanceEditorState =
-    MaintenanceEditorState(
+internal fun InventoryEditorState.toMaintenancePlanEditor(): MaintenanceEditorState {
+    val readyPhotoMedia = (persistedPhotoMedia + uploadedPhotoMedia)
+        .filterKeys(photoUris::contains)
+    return MaintenanceEditorState(
         mode = MaintenanceEditorMode.REPAIR,
         entityId = findingId,
         expectedVersion = finding?.findingRevision,
-        readOnly = false,
+        readOnly = readOnly,
         selectedAsset = null,
         dispatchDate = LocalDate.now().toString(),
         sourceParty = "Инвентаризация",
         lines = planLines,
-        photoUris = emptyList(),
-        readyMedia = emptyList(),
+        photoUris = photoUris.filterNot(readyPhotoMedia::containsKey),
+        readyMedia = readyPhotoMedia.values.distinctBy(MediaReferenceDto::mediaId),
+        readyPhotoUris = readyPhotoMedia.entries.associate { (uri, reference) ->
+            reference.mediaId to uri
+        },
         priority = planPriority,
+        forceCapitalRepair = planForceCapitalRepair && planLines.isNotEmpty(),
         movementToRepair = planMovementToRepair,
         logisticsPlanningMode = planLogisticsPlanningMode,
         logisticsScheduledDate = planLogisticsScheduledDate,
@@ -522,17 +610,36 @@ internal fun InventoryEditorState.toMaintenancePlanEditor(): MaintenanceEditorSt
         stages = planStages,
         repairKind = "PRIMARY",
     )
+}
 
 internal fun InventoryEditorState.withMaintenancePlanEditor(
     editor: MaintenanceEditorState,
-): InventoryEditorState = copy(
-    planLines = editor.lines,
-    planStages = editor.stages,
-    planPriority = editor.priority,
-    planMovementToRepair = editor.movementToRepair,
-    planLogisticsPlanningMode = editor.logisticsPlanningMode,
-    planLogisticsScheduledDate = editor.logisticsScheduledDate,
-)
+): InventoryEditorState {
+    val remainingReadyMediaIds = editor.readyMedia.mapTo(linkedSetOf(), MediaReferenceDto::mediaId)
+    val remainingPhotoUris = buildSet {
+        addAll(editor.photoUris)
+        editor.readyMedia.mapNotNullTo(this) { reference ->
+            editor.readyPhotoUris[reference.mediaId]
+        }
+    }
+    return copy(
+        photoUris = photoUris.filter(remainingPhotoUris::contains),
+        coverPhotoUri = coverPhotoUri?.takeIf(remainingPhotoUris::contains),
+        persistedPhotoMedia = persistedPhotoMedia.filterValues { reference ->
+            reference.mediaId in remainingReadyMediaIds
+        },
+        uploadedPhotoMedia = uploadedPhotoMedia.filterValues { reference ->
+            reference.mediaId in remainingReadyMediaIds
+        },
+        planLines = editor.lines,
+        planStages = editor.stages,
+        planPriority = editor.priority,
+        planForceCapitalRepair = editor.forceCapitalRepair && editor.lines.isNotEmpty(),
+        planMovementToRepair = editor.movementToRepair,
+        planLogisticsPlanningMode = editor.logisticsPlanningMode,
+        planLogisticsScheduledDate = editor.logisticsScheduledDate,
+    )
+}
 
 internal fun normalizeReworkEditorLines(
     editor: MaintenanceEditorState,
@@ -870,6 +977,7 @@ internal fun buildInventoryPlanSelection(
         priority = maintenanceEditor.priority,
         coverMediaId = coverMediaId,
         movementToRepair = maintenanceEditor.movementToRepair,
+        forceCapitalRepair = maintenanceEditor.forceCapitalRepair,
         logisticsPlanningMode = maintenanceEditor.logisticsPlanningMode,
         logisticsScheduledDate = maintenanceEditor.logisticsScheduledDate,
         lines = lines,
@@ -990,7 +1098,14 @@ internal fun normalizeMaintenanceEditor(
     catalogNodesById: Map<String, CatalogNodeDto>,
     catalogLinks: List<CatalogLinkDto>,
 ): MaintenanceEditorState {
-    val normalized = editor.normalizedLogisticsPlanning().copy(
+    val exclusiveDestination = if (editor.forceCapitalRepair) {
+        editor.withForceCapitalRepair(true)
+    } else {
+        editor
+    }
+    val normalized = exclusiveDestination.normalizedLogisticsPlanning().copy(
+        forceCapitalRepair = editor.forceCapitalRepair &&
+            (editor.lines.isNotEmpty() || editor.repairKind == "REWORK"),
         lines = editor.lines.map(MaintenanceLineEditorState::normalizedMaintenanceAnnotations),
     )
     val rebuiltStages = runCatching {

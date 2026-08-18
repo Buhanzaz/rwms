@@ -3,10 +3,11 @@ package dev.buhanzaz.rwms.manager.ui
 import dev.buhanzaz.rwms.manager.network.InventoryFindingDto
 
 /**
- * The existing save-inspection command replaces the active finding revision.  The mode only
- * decides which parts of that revision are offered as the starting point to the inspector.
+ * Selects a local inspection presentation or editing seed without changing server semantics.
+ * Review is read-only, supplement retains prior input, and replacement starts a clean revision.
  */
 enum class InventoryReinspectionMode {
+    REVIEW,
     SUPPLEMENT,
     REPLACE,
 }
@@ -23,9 +24,18 @@ internal data class InventoryReinspectionSeed(
 internal fun InventoryFindingDto.requiresInventoryReinspectionChoice(): Boolean =
     inspection != "NOT_INSPECTED"
 
+/** Selects review only when the finding already contains a saved inspection. */
+internal fun InventoryFindingDto.inventoryReinspectionOpenMode(): InventoryReinspectionMode =
+    if (requiresInventoryReinspectionChoice()) {
+        InventoryReinspectionMode.REVIEW
+    } else {
+        InventoryReinspectionMode.SUPPLEMENT
+    }
+
 internal fun InventoryFindingDto.inventoryReinspectionSeed(
     mode: InventoryReinspectionMode,
 ): InventoryReinspectionSeed = when (mode) {
+    InventoryReinspectionMode.REVIEW,
     InventoryReinspectionMode.SUPPLEMENT -> InventoryReinspectionSeed(
         passport = inspectionPassport(),
         comment = comment,
@@ -52,3 +62,7 @@ internal fun InventoryFindingDto.inventoryReinspectionRemovedMediaIds(
 } else {
     emptySet()
 }
+
+/** Leaves the retained review draft on its current screen and enables local editing. */
+internal fun InventoryEditorState.beginInventorySupplement(): InventoryEditorState =
+    copy(readOnly = false)

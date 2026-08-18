@@ -46,7 +46,7 @@ internal data class ManagerCameraSettings(
     val gridEnabled: Boolean = false,
     val aspectRatio: ManagerCameraAspectRatio = ManagerCameraAspectRatio.FourThree,
     val requestedMegapixels: Int? = null,
-    val ultraHdrEnabled: Boolean = true,
+    val ultraHdrEnabled: Boolean = false,
     val videoHdrEnabled: Boolean = false,
     val motionCaptureEnabled: Boolean = false,
     val exposureEvTenths: Int = 0,
@@ -55,7 +55,8 @@ internal data class ManagerCameraSettings(
 )
 
 /**
- * Defines manager UI or local cache state; it does not own a server-side business transition.
+ * Stores non-authoritative camera preferences and applies the one-time fast-photo default. Users
+ * can explicitly enable HDR again when its slower multi-frame processing is appropriate.
  */
 internal class ManagerCameraPreferences(context: Context) {
     private val preferences = context.applicationContext.getSharedPreferences(
@@ -63,22 +64,36 @@ internal class ManagerCameraPreferences(context: Context) {
         Context.MODE_PRIVATE,
     )
 
-    fun load(): ManagerCameraSettings = normalizeManagerCameraSettings(
-        ManagerCameraSettings(
-            gridEnabled = preferences.getBoolean(KEY_GRID, false),
-            aspectRatio = preferences.enumValue(
-                KEY_ASPECT_RATIO,
-                ManagerCameraAspectRatio.FourThree,
+    fun load(): ManagerCameraSettings {
+        val defaultsVersion = preferences.getInt(KEY_CAPTURE_DEFAULTS_VERSION, 0)
+        val migrateToFastPhoto = defaultsVersion < FAST_PHOTO_DEFAULTS_VERSION
+        if (migrateToFastPhoto) {
+            preferences.edit {
+                putBoolean(KEY_ULTRA_HDR, false)
+                putInt(KEY_CAPTURE_DEFAULTS_VERSION, FAST_PHOTO_DEFAULTS_VERSION)
+            }
+        }
+        return normalizeManagerCameraSettings(
+            ManagerCameraSettings(
+                gridEnabled = preferences.getBoolean(KEY_GRID, false),
+                aspectRatio = preferences.enumValue(
+                    KEY_ASPECT_RATIO,
+                    ManagerCameraAspectRatio.FourThree,
+                ),
+                requestedMegapixels = preferences.getInt(KEY_MEGAPIXELS, 0)
+                    .takeIf { it > 0 },
+                ultraHdrEnabled = preferences.getBoolean(KEY_ULTRA_HDR, false),
+                videoHdrEnabled = preferences.getBoolean(KEY_VIDEO_HDR, false),
+                motionCaptureEnabled = preferences.getBoolean(KEY_MOTION, false),
+                exposureEvTenths = preferences.getInt(KEY_EXPOSURE, 0),
+                videoQuality = preferences.enumValue(
+                    KEY_VIDEO_QUALITY,
+                    ManagerVideoQuality.Fhd,
+                ),
+                videoFramesPerSecond = preferences.getInt(KEY_VIDEO_FPS, 30),
             ),
-            requestedMegapixels = preferences.getInt(KEY_MEGAPIXELS, 0).takeIf { it > 0 },
-            ultraHdrEnabled = preferences.getBoolean(KEY_ULTRA_HDR, true),
-            videoHdrEnabled = preferences.getBoolean(KEY_VIDEO_HDR, false),
-            motionCaptureEnabled = preferences.getBoolean(KEY_MOTION, false),
-            exposureEvTenths = preferences.getInt(KEY_EXPOSURE, 0),
-            videoQuality = preferences.enumValue(KEY_VIDEO_QUALITY, ManagerVideoQuality.Fhd),
-            videoFramesPerSecond = preferences.getInt(KEY_VIDEO_FPS, 30),
-        ),
-    )
+        )
+    }
 
     fun save(settings: ManagerCameraSettings) {
         val normalized = normalizeManagerCameraSettings(settings)
@@ -92,6 +107,7 @@ internal class ManagerCameraPreferences(context: Context) {
             putInt(KEY_EXPOSURE, normalized.exposureEvTenths)
             putString(KEY_VIDEO_QUALITY, normalized.videoQuality.name)
             putInt(KEY_VIDEO_FPS, normalized.videoFramesPerSecond)
+            putInt(KEY_CAPTURE_DEFAULTS_VERSION, FAST_PHOTO_DEFAULTS_VERSION)
         }
     }
 
@@ -113,6 +129,8 @@ internal class ManagerCameraPreferences(context: Context) {
         const val KEY_EXPOSURE = "exposure-ev-tenths"
         const val KEY_VIDEO_QUALITY = "video-quality"
         const val KEY_VIDEO_FPS = "video-fps"
+        const val KEY_CAPTURE_DEFAULTS_VERSION = "capture-defaults-version"
+        const val FAST_PHOTO_DEFAULTS_VERSION = 1
     }
 }
 
@@ -123,6 +141,10 @@ internal fun normalizeManagerCameraSettings(
     exposureEvTenths = settings.exposureEvTenths.coerceIn(-20, 20),
     videoFramesPerSecond = settings.videoFramesPerSecond.takeIf { it == 60 } ?: 30,
 )
+
+/** Uses a capture-efficient sensor size unless the manager explicitly selects another size. */
+internal fun managerEffectivePhotoMegapixels(requestedMegapixels: Int?): Int =
+    requestedMegapixels ?: 12
 
 internal fun <T> managerPhysicalLensOutputs(
     physicalOutputs: List<T>,

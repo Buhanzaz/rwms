@@ -20,11 +20,16 @@ import dev.buhanzaz.rwms.manager.uploads.PendingBackgroundPhoto
 import dev.buhanzaz.rwms.manager.uploads.readyOwnerMediaReferencesById
 import dev.buhanzaz.rwms.manager.uploads.rebaseRetainedInventoryMediaReferences
 import dev.buhanzaz.rwms.manager.uploads.rebaseRetainedWorkLineMedia
+import dev.buhanzaz.rwms.manager.ui.components.isManagerVideoUri
 import java.math.BigDecimal
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import retrofit2.HttpException
 
 /**
@@ -46,6 +51,7 @@ internal class ManagerInventoryCoordinator(
     private val managerReadCache: ManagerReadCache,
     private val catalogAccess: ManagerMaintenanceCatalogAccess,
     private val media: ManagerMediaPort,
+    private val draftStore: InventoryDraftStore,
 ) {
     private val mutableState
         get() = runtime.mutableState
@@ -63,9 +69,121 @@ internal class ManagerInventoryCoordinator(
         mutableState.value.readCacheScope(warehouseId)
 
     private val inventoryReadMutex = Mutex()
+    private val draftWriteMutex = Mutex()
+    private var activeDraftScope: InventoryDraftScope? = null
+    private var activeDraftRoute: String = inventoryDraftRouteOrDefault("")
+
+    /** Restores only the draft owned by the newly verified account-and-warehouse pair. */
+    suspend fun activateDraftScope(scope: InventoryDraftScope?) {
+        if (activeDraftScope == scope) return
+        draftWriteMutex.withLock {
+            if (activeDraftScope == scope) return@withLock
+            activeDraftScope = scope
+            activeDraftRoute = inventoryDraftRouteOrDefault("")
+            if (scope == null) {
+                mutableState.update { current ->
+                    current.copy(inventoryEditor = null, inventoryResumeRoute = null)
+                }
+                return@withLock
+            }
+            val restored = draftStore.read(scope)
+            if (activeDraftScope != scope ||
+                mutableState.value.currentUser?.id != scope.ownerAccountId ||
+                mutableState.value.selectedWarehouseId != scope.warehouseId
+            ) {
+                return@withLock
+            }
+            activeDraftRoute = restored?.route ?: inventoryDraftRouteOrDefault("")
+            mutableState.update { current ->
+                current.copy(
+                    inventorySession = restored?.inventorySession ?: current.inventorySession,
+                    inventoryEditor = restored?.editor,
+                    inventoryResumeRoute = restored?.route,
+                )
+            }
+        }
+    }
+
+    /** Persists the current inventory step together with the latest editor snapshot. */
+    fun recordInventoryRoute(route: String) {
+        val normalized = inventoryDraftRouteOrDefault(route)
+        if (activeDraftRoute == normalized && mutableState.value.inventoryResumeRoute == null) {
+            return
+        }
+        activeDraftRoute = normalized
+        mutableState.update { current -> current.copy(inventoryResumeRoute = null) }
+        persistCurrentDraft()
+    }
+
+    /** Marks the restored route as consumed; the route itself remains in the crash-safe draft. */
+    fun consumeInventoryResumeRoute() {
+        mutableState.update { current -> current.copy(inventoryResumeRoute = null) }
+    }
 
     fun loadInventory() = command {
         refreshInventory()
+    }
+
+    private fun persistCurrentDraft() {
+        runtime.scope.launch {
+            try {
+                draftWriteMutex.withLock { writeCurrentDraftLocked() }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                runtime.handleFailure(failure)
+            }
+        }
+    }
+
+    private suspend fun writeCurrentDraftLocked(): InventoryDraftSnapshot? {
+        val scope = activeDraftScope ?: return null
+        val current = mutableState.value
+        if (current.currentUser?.id != scope.ownerAccountId ||
+            current.selectedWarehouseId != scope.warehouseId
+        ) {
+            return null
+        }
+        val editor = current.inventoryEditor ?: return null
+        val session = current.inventorySession ?: return null
+        val durable = draftStore.write(
+            scope,
+            InventoryDraftSnapshot(
+                editor = editor,
+                inventorySession = session,
+                route = activeDraftRoute,
+            ),
+        )
+        if (activeDraftScope == scope) {
+            mutableState.update { latest ->
+                if (latest.inventoryEditor?.findingId == editor.findingId) {
+                    latest.copy(inventoryEditor = durable.editor)
+                } else {
+                    latest
+                }
+            }
+        }
+        return durable
+    }
+
+    private suspend fun durableDraftEditor(
+        editor: InventoryEditorState,
+        session: dev.buhanzaz.rwms.manager.network.InventorySessionDto,
+        route: String,
+    ): InventoryEditorState {
+        val scope = activeDraftScope ?: return editor
+        if (scope.ownerAccountId != mutableState.value.currentUser?.id ||
+            scope.warehouseId != session.warehouseId
+        ) {
+            return editor
+        }
+        activeDraftRoute = inventoryDraftRouteOrDefault(route)
+        return draftWriteMutex.withLock {
+            draftStore.write(
+                scope,
+                InventoryDraftSnapshot(editor, session, activeDraftRoute),
+            ).editor
+        }
     }
 
     fun resolveInventoryNumber(
@@ -112,51 +230,53 @@ internal class ManagerInventoryCoordinator(
             passport["characteristics"],
         )
         val planContent = finding.inventoryPlanEditorContent()
-        mutableState.update {
-            it.copy(
-                inventoryEditor = InventoryEditorState(
-                    findingId = finding?.id ?: UUID.randomUUID().toString(),
-                    number = resolution.displayCanonicalNumber,
-                    outcome = resolution.outcome,
-                    finding = finding,
-                    creationOptions = creationOptions,
-                    rentalType = passport.text("rentalType"),
-                    dimensions = passport.text("dimensions"),
-                    finishing = passport.text("finishing"),
-                    category = passport.text("category"),
-                    characteristics = if (resolution.outcome == "NOT_FOUND") {
-                        // The canonical asset contract deliberately has no browser/app default
-                        // characteristics. A new passport starts empty until the operator picks
-                        // values from the service-provided catalog.
-                        emptyList<String>()
-                    } else {
-                        parsedCharacteristics.selected
-                    },
-                    sanitaryToilets = parsedCharacteristics.toilets,
-                    sanitarySinks = parsedCharacteristics.sinks,
-                    sanitaryShowers = parsedCharacteristics.showers,
-                    linoleum = passport["linoleum"] as? Boolean,
-                    comment = finding?.comment.orEmpty(),
-                    equipmentCatalog = equipmentCatalog,
-                    equipmentQuantities = finding
-                        ?.inventoryFurnitureInitialQuantities(equipmentCatalog)
-                        .orEmpty(),
-                    planLines = planContent.lines,
-                    planStages = planContent.stages,
-                    planPriority = finding?.frozenPlan?.priority
-                        ?: DEFAULT_MAINTENANCE_PRIORITY,
-                    planMovementToRepair = finding?.frozenPlan?.movementToRepair ?: false,
-                    planLogisticsPlanningMode = if (
-                        finding?.frozenPlan?.movementToRepair == true
-                    ) {
-                        LOGISTICS_PLANNING_MODE_AUTO
-                    } else {
-                        null
-                    },
-                    planLogisticsScheduledDate = null,
-                ),
-            )
-        }
+        val editor = durableDraftEditor(
+            editor = InventoryEditorState(
+                findingId = finding?.id ?: UUID.randomUUID().toString(),
+                number = resolution.displayCanonicalNumber,
+                outcome = resolution.outcome,
+                finding = finding,
+                creationOptions = creationOptions,
+                rentalType = passport.text("rentalType"),
+                dimensions = passport.text("dimensions"),
+                finishing = passport.text("finishing"),
+                category = passport.text("category"),
+                characteristics = if (resolution.outcome == "NOT_FOUND") {
+                    // The canonical asset contract deliberately has no browser/app default
+                    // characteristics. A new passport starts empty until the operator picks
+                    // values from the service-provided catalog.
+                    emptyList<String>()
+                } else {
+                    parsedCharacteristics.selected
+                },
+                sanitaryToilets = parsedCharacteristics.toilets,
+                sanitarySinks = parsedCharacteristics.sinks,
+                sanitaryShowers = parsedCharacteristics.showers,
+                linoleum = passport["linoleum"] as? Boolean,
+                comment = finding?.comment.orEmpty(),
+                equipmentCatalog = equipmentCatalog,
+                equipmentQuantities = finding
+                    ?.inventoryFurnitureInitialQuantities(equipmentCatalog)
+                    .orEmpty(),
+                planLines = planContent.lines,
+                planStages = planContent.stages,
+                planPriority = finding?.frozenPlan?.priority
+                    ?: DEFAULT_MAINTENANCE_PRIORITY,
+                planForceCapitalRepair = finding?.frozenPlan?.forceCapitalRepair ?: false,
+                planMovementToRepair = finding?.frozenPlan?.movementToRepair ?: false,
+                planLogisticsPlanningMode = if (
+                    finding?.frozenPlan?.movementToRepair == true
+                ) {
+                    LOGISTICS_PLANNING_MODE_AUTO
+                } else {
+                    null
+                },
+                planLogisticsScheduledDate = null,
+            ),
+            session = session,
+            route = "manager-inventory-editor",
+        )
+        mutableState.update { current -> current.copy(inventoryEditor = editor) }
         commandKeys.complete(signature)
         onReady()
     }
@@ -221,47 +341,57 @@ internal class ManagerInventoryCoordinator(
             RepairEditorContent(emptyList(), emptyList())
         }
         val previousPlan = latest.frozenPlan.takeIf { seed.retainPreviousInspection }
-        mutableState.update {
-            it.copy(
-                inventoryEditor = InventoryEditorState(
-                    findingId = latest.id,
-                    number = latest.displayCanonicalNumber,
-                    outcome = "MATCHED",
-                    finding = latest,
-                    creationOptions = creationOptions,
-                    rentalType = passport.text("rentalType"),
-                    dimensions = passport.text("dimensions"),
-                    finishing = passport.text("finishing"),
-                    category = passport.text("category"),
-                    characteristics = parsedCharacteristics.selected,
-                    sanitaryToilets = parsedCharacteristics.toilets,
-                    sanitarySinks = parsedCharacteristics.sinks,
-                    sanitaryShowers = parsedCharacteristics.showers,
-                    linoleum = passport["linoleum"] as? Boolean,
-                    comment = seed.comment,
-                    photoUris = persistedPhotos.map(ScopedMediaResult::uri),
-                    coverPhotoUri = persistedPhotos
-                        .firstOrNull { photo -> photo.reference.mediaId == latest.coverMediaId }
-                        ?.uri,
-                    persistedPhotoMedia = persistedPhotoMedia,
-                    removedPersistedMediaIds = latest.inventoryReinspectionRemovedMediaIds(mode),
-                    equipmentCatalog = equipmentCatalog,
-                    equipmentObservationRequested = furnitureSeed.observationRequested,
-                    equipmentQuantities = furnitureSeed.quantities,
-                    planLines = planContent.lines,
-                    planStages = planContent.stages,
-                    planPriority = previousPlan?.priority ?: DEFAULT_MAINTENANCE_PRIORITY,
-                    planMovementToRepair = previousPlan?.movementToRepair ?: false,
-                    planLogisticsPlanningMode = if (previousPlan?.movementToRepair == true) {
-                        LOGISTICS_PLANNING_MODE_AUTO
-                    } else {
-                        null
-                    },
-                    planLogisticsScheduledDate = null,
-                ),
-            )
-        }
+        val session = mutableState.value.inventorySession
+            ?: throw IllegalStateException("Активная инвентаризация не найдена")
+        val editor = durableDraftEditor(
+            editor = InventoryEditorState(
+                findingId = latest.id,
+                number = latest.displayCanonicalNumber,
+                outcome = "MATCHED",
+                readOnly = mode == InventoryReinspectionMode.REVIEW,
+                finding = latest,
+                creationOptions = creationOptions,
+                rentalType = passport.text("rentalType"),
+                dimensions = passport.text("dimensions"),
+                finishing = passport.text("finishing"),
+                category = passport.text("category"),
+                characteristics = parsedCharacteristics.selected,
+                sanitaryToilets = parsedCharacteristics.toilets,
+                sanitarySinks = parsedCharacteristics.sinks,
+                sanitaryShowers = parsedCharacteristics.showers,
+                linoleum = passport["linoleum"] as? Boolean,
+                comment = seed.comment,
+                photoUris = persistedPhotos.map(ScopedMediaResult::uri),
+                coverPhotoUri = persistedPhotos
+                    .firstOrNull { photo -> photo.reference.mediaId == latest.coverMediaId }
+                    ?.uri,
+                persistedPhotoMedia = persistedPhotoMedia,
+                removedPersistedMediaIds = latest.inventoryReinspectionRemovedMediaIds(mode),
+                equipmentCatalog = equipmentCatalog,
+                equipmentObservationRequested = furnitureSeed.observationRequested,
+                equipmentQuantities = furnitureSeed.quantities,
+                planLines = planContent.lines,
+                planStages = planContent.stages,
+                planPriority = previousPlan?.priority ?: DEFAULT_MAINTENANCE_PRIORITY,
+                planForceCapitalRepair = previousPlan?.forceCapitalRepair ?: false,
+                planMovementToRepair = previousPlan?.movementToRepair ?: false,
+                planLogisticsPlanningMode = if (previousPlan?.movementToRepair == true) {
+                    LOGISTICS_PLANNING_MODE_AUTO
+                } else {
+                    null
+                },
+                planLogisticsScheduledDate = null,
+            ),
+            session = session,
+            route = "manager-inventory-editor",
+        )
+        mutableState.update { current -> current.copy(inventoryEditor = editor) }
         onReady()
+    }
+
+    /** Enables the retained review editor in place so navigation stays on the requested step. */
+    fun beginInventorySupplement() {
+        editInventory(InventoryEditorState::beginInventorySupplement)
     }
 
     fun resolveInventoryConflict(
@@ -330,6 +460,7 @@ internal class ManagerInventoryCoordinator(
         mutableState.update { current ->
             current.copy(inventoryEditor = current.inventoryEditor?.let(update))
         }
+        persistCurrentDraft()
     }
 
     fun editInventoryPlan(
@@ -415,9 +546,41 @@ internal class ManagerInventoryCoordinator(
     }
 
     fun addInventoryPhoto(uri: String) {
-        editInventory { editor ->
-            if (uri in editor.photoUris) editor
-            else editor.copy(photoUris = editor.photoUris + uri)
+        runtime.scope.launch {
+            try {
+                draftWriteMutex.withLock {
+                    val scope = activeDraftScope
+                        ?: throw IllegalStateException("Хранилище черновика ещё не готово")
+                    val current = mutableState.value
+                    val editor = current.inventoryEditor
+                        ?: throw IllegalStateException("Бытовка не выбрана")
+                    val session = current.inventorySession
+                        ?: throw IllegalStateException("Активная инвентаризация не найдена")
+                    val durableUri = draftStore.importMedia(scope, uri)
+                    val updatedEditor = if (durableUri in editor.photoUris) {
+                        editor
+                    } else {
+                        editor.copy(photoUris = editor.photoUris + durableUri)
+                    }
+                    val durable = draftStore.write(
+                        scope,
+                        InventoryDraftSnapshot(updatedEditor, session, activeDraftRoute),
+                    )
+                    mutableState.update { latest ->
+                        if (activeDraftScope == scope &&
+                            latest.inventoryEditor?.findingId == editor.findingId
+                        ) {
+                            latest.copy(inventoryEditor = durable.editor)
+                        } else {
+                            latest
+                        }
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                runtime.handleFailure(failure)
+            }
         }
     }
 
@@ -426,14 +589,36 @@ internal class ManagerInventoryCoordinator(
     }
 
     fun selectInventoryCoverPhoto(uri: String) {
+        if (isManagerVideoUri(uri)) {
+            message("Обложкой может быть только фотография")
+            return
+        }
+        if (uri !in mutableState.value.inventoryEditor?.photoUris.orEmpty()) {
+            message("Выбранная фотография не найдена")
+            return
+        }
         editInventory { editor ->
-            require(uri in editor.photoUris) { "Выбранная фотография не найдена" }
             editor.copy(coverPhotoUri = uri)
         }
     }
 
     fun closeInventoryEditor() {
-        mutableState.update { it.copy(inventoryEditor = null) }
+        mutableState.update {
+            it.copy(inventoryEditor = null, inventoryResumeRoute = null)
+        }
+        runtime.scope.launch {
+            try {
+                draftWriteMutex.withLock {
+                    if (mutableState.value.inventoryEditor == null) {
+                        activeDraftScope?.let { scope -> draftStore.clear(scope) }
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                runtime.handleFailure(failure)
+            }
+        }
     }
 
     fun saveInventoryInspection(onSaved: () -> Unit) = command {
@@ -612,7 +797,18 @@ internal class ManagerInventoryCoordinator(
                 inventoryEditor = current.inventoryEditor?.takeUnless {
                     it.findingId == editor.findingId
                 },
+                inventoryResumeRoute = null,
             )
+        }
+        val completedDraftScope = activeDraftScope
+        if (completedDraftScope != null) {
+            withContext(NonCancellable) {
+                draftWriteMutex.withLock {
+                    if (activeDraftScope == completedDraftScope) {
+                        draftStore.clear(completedDraftScope)
+                    }
+                }
+            }
         }
         message("Проверка добавлена в фоновые загрузки")
         onSaved()
@@ -627,6 +823,25 @@ internal class ManagerInventoryCoordinator(
     private fun InventoryFindingDto?.inventoryPlanEditorContent(): RepairEditorContent {
         val plan = this?.frozenPlan ?: return RepairEditorContent(emptyList(), emptyList())
         val lines = plan.lines.map { line ->
+            val frozenRouting = if (
+                line.routingQueueId == null &&
+                line.routingQueueName == null &&
+                line.routingQueueType == null
+            ) {
+                null
+            } else {
+                RoutingSnapshotDto(
+                    queueId = requireNotNull(line.routingQueueId) {
+                        "Сервис вернул неполный маршрут строки инвентаризации"
+                    },
+                    queueName = requireNotNull(line.routingQueueName) {
+                        "Сервис вернул неполный маршрут строки инвентаризации"
+                    },
+                    queueType = requireNotNull(line.routingQueueType) {
+                        "Сервис вернул неполный маршрут строки инвентаризации"
+                    },
+                )
+            }
             MaintenanceLineEditorState(
                 id = line.id,
                 catalogNodeId = line.catalogNodeId,
@@ -648,42 +863,44 @@ internal class ManagerInventoryCoordinator(
                 }.orEmpty(),
                 catalogSnapshot = line.catalogNodeId?.let(catalogAccess.nodesById::get)
                     ?.toCatalogSnapshot(),
+                customRouting = frozenRouting.takeIf { line.catalogNodeId == null },
                 mediaReferences = line.mediaReferences.takeIf {
                     line.lineType == "WORK"
                 }.orEmpty(),
             ).normalizedMaintenanceAnnotations()
         }
-        val remainingLinesByCatalogNode = lines
-            .filter { it.catalogNodeId != null }
-            .groupBy { requireNotNull(it.catalogNodeId) }
-            .mapValues { (_, matchingLines) -> matchingLines.toMutableList() }
-        val stages = plan.stages
+        val repairStages = plan.stages
             .asSequence()
             .filter { stage -> stage.kind == "REPAIR_WORK" }
             .sortedBy { it.order }
-            .map { stage ->
-                val primary = remainingLinesByCatalogNode[stage.catalogNodeId]
-                    ?.let { matchingLines ->
-                        if (matchingLines.isEmpty()) null else matchingLines.removeAt(0)
-                    }
-                    ?: throw IllegalArgumentException(
-                        "Сервис вернул этап инвентаризации без соответствующей строки каталога",
-                    )
-                MaintenanceStageEditorState(
-                    id = stage.id,
-                    kind = stage.kind,
-                    routing = RoutingSnapshotDto(
-                        queueId = stage.routingQueueId,
-                        queueName = stage.routingQueueName,
-                        queueType = stage.routingQueueType,
-                    ),
-                    includedLineIds = listOf(primary.id),
-                    primaryLineId = primary.id.takeIf { primary.lineType == "WORK" },
-                    groupComment = primary.comment,
-                    originalOrder = stage.order,
-                )
-            }
             .toList()
+        val lineIndexesByStageId = inventoryFrozenPlanLineIndexesByStage(
+            lines = plan.lines,
+            stages = repairStages,
+        )
+        val stages = repairStages.map { stage ->
+            val includedLines = lineIndexesByStageId.getValue(stage.id).map(lines::get)
+            val primary = includedLines.firstOrNull { line -> line.lineType == "WORK" }
+            MaintenanceStageEditorState(
+                id = stage.id,
+                kind = stage.kind,
+                routing = RoutingSnapshotDto(
+                    queueId = stage.routingQueueId,
+                    queueName = stage.routingQueueName,
+                    queueType = stage.routingQueueType,
+                ),
+                includedLineIds = includedLines.map(MaintenanceLineEditorState::id),
+                primaryLineId = primary?.id,
+                groupComment = includedLines
+                    .asSequence()
+                    .filter { line -> line.lineType == "WORK" }
+                    .map(MaintenanceLineEditorState::comment)
+                    .filter(String::isNotBlank)
+                    .distinct()
+                    .joinToString("; "),
+                originalOrder = stage.order,
+            )
+        }
         return RepairEditorContent(lines, stages)
     }
 

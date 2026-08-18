@@ -85,6 +85,19 @@ abstract class InventoryTechnicalRuntimeSupport {
     return result.booleanValue();
   }
 
+  /** Reads an additive persisted boolean while treating its legacy absence as the supplied value. */
+  protected boolean booleanOrDefault(
+      JsonNode value, String field, String name, boolean defaultValue) {
+    JsonNode result = value.get(field);
+    if (result == null || result.isNull()) {
+      return defaultValue;
+    }
+    if (!result.isBoolean()) {
+      throw new IllegalStateException("Persisted " + name + " is invalid");
+    }
+    return result.booleanValue();
+  }
+
   protected String requiredText(JsonNode value, String field, String name) {
     String result = value.path(field).asText();
     if (result.isBlank()) {

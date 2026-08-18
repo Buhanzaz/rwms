@@ -37,6 +37,7 @@ import dev.buhanzaz.rwms.maintenance.repository.RentalItemFactProjectionReposito
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceConflictException;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceDependencyException;
+import dev.buhanzaz.rwms.maintenance.service.FurnitureEquipmentLinkProcessor;
 import dev.buhanzaz.rwms.maintenance.service.FurnitureEquipmentLinkReviewService;
 import dev.buhanzaz.rwms.maintenance.service.FurnitureEquipmentLinkStore;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceIdempotencyStore;
@@ -132,6 +133,7 @@ class MaintenanceCorePostgresIntegrationTest {
   @Autowired WarehouseLifecycleOperations warehouseLifecycle;
   @Autowired WarehouseReadinessFenceStore warehouseReadinessFences;
   @Autowired FurnitureEquipmentLinkStore furnitureEquipmentLinks;
+  @Autowired FurnitureEquipmentLinkProcessor furnitureEquipmentLinkProcessor;
   @Autowired FurnitureEquipmentLinkReviewService furnitureEquipmentLinkReviews;
   @Autowired
   dev.buhanzaz.rwms.maintenance.service.RepairComplexitySettingsService
@@ -4451,6 +4453,64 @@ class MaintenanceCorePostgresIntegrationTest {
         new ChangeCatalogRequest(changed.version(), nodes, List.of()));
     assertThat(lateReplay.version()).isEqualTo(changed.version());
     verifyNoMoreInteractions(dependencies);
+  }
+
+  @Test
+  void recoveredLegacyFurnitureIntentMakesCatalogSettingsReadableAfterAssetReturnsSameBinding() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID catalogId = insertDraftCatalog(warehouseId, "f".repeat(64));
+    UUID categoryId = UUID.randomUUID();
+    UUID materialId = UUID.randomUUID();
+    UUID legacyEquipmentId = UUID.randomUUID();
+    jdbc.update("""
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,node_type,name,active,parent_node_id,
+          furniture_category,furniture_equipment_id,furniture_equipment_name,unit,price_minor,
+          duration_minutes,include_in_estimate,common_item,show_in_main_menu)
+        values (?,?,?,'CATEGORY','Furniture',true,null,false,null,null,null,null,0,false,false,false),
+               (?,?,?,'MATERIAL','Chair',true,?,false,?,?,'piece',10000,0,true,false,false)
+        """,
+        UUID.randomUUID(),
+        categoryId,
+        catalogId,
+        UUID.randomUUID(),
+        materialId,
+        catalogId,
+        categoryId,
+        legacyEquipmentId,
+        "Chair");
+    jdbc.update("update catalog_version set node_count=2 where id=?", catalogId);
+    jdbc.update("""
+        insert into furniture_equipment_link_intent(
+          node_id,warehouse_id,source_catalog_version_id,source_catalog_expected_version,
+          requested_name,requested_equipment_version,requested_maximum_per_cabin,state,
+          attempt_count,next_attempt_at,review_version,created_at,updated_at)
+        values (?,?,?,?,?,null,null,'PENDING',0,clock_timestamp(),0,clock_timestamp(),clock_timestamp())
+        """,
+        materialId,
+        warehouseId,
+        catalogId,
+        0L,
+        "Chair");
+    when(dependencies.ensureFurnitureEquipment(materialId, "Chair"))
+        .thenReturn(new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
+            legacyEquipmentId, "Chair"));
+    when(dependencies.furnitureEquipmentSnapshots(List.of(materialId)))
+        .thenReturn(List.of(new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
+            materialId, legacyEquipmentId, "Chair", 9, 4)));
+
+    assertThat(furnitureEquipmentLinkProcessor.processExact(materialId)).isTrue();
+
+    assertThat(service.catalogNodes(catalogId))
+        .filteredOn(node -> node.id().equals(materialId))
+        .singleElement()
+        .satisfies(node -> {
+          assertThat(node.furnitureEquipment().equipmentId()).isEqualTo(legacyEquipmentId);
+          assertThat(node.furnitureEquipment().equipmentVersion()).isEqualTo(9);
+          assertThat(node.furnitureEquipment().maximumPerCabin()).isEqualTo(4);
+        });
+    verify(dependencies).ensureFurnitureEquipment(materialId, "Chair");
+    verify(dependencies).furnitureEquipmentSnapshots(List.of(materialId));
   }
 
   @Test

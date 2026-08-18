@@ -12,4 +12,7 @@ func TestObjectKeysAreOpaqueAndGenerationScoped(t *testing.T) {
 	if got, want := ImageVariantObjectKey("a-1", 3, VariantMedium), "media/a-1/generations/3/medium.webp"; got != want {
 		t.Fatalf("variant key = %q, want %q", got, want)
 	}
+	if got, want := VideoPlaybackObjectKey("a-1", 3), "media/a-1/generations/3/playback.mp4"; got != want {
+		t.Fatalf("playback key = %q, want %q", got, want)
+	}
 }

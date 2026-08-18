@@ -187,6 +187,7 @@ final class MaintenanceEstimateRevisionSupport {
     if (furnitureAccountingMode == FurnitureAccountingMode.UNACCOUNTED_CABIN_CONTENTS) {
       newRepair.useUnaccountedFurnitureAccounting();
     }
+    newRepair.selectForceCapitalRepair(estimate.isForceCapitalRepair());
     newRepair.selectPriority(priority);
     newRepair.selectMovementToRepair(
         movementToRepair,
@@ -302,14 +303,15 @@ final class MaintenanceEstimateRevisionSupport {
     if (revisionHeader == null) {
       estimateRevisions.saveAndFlush(new EstimateRevision(
           estimate.getId(), revision, estimate.getDispatchDate(), estimate.getSourceParty(),
-          amendmentReason, totalMinor, commandSupport.actorJson()));
+          amendmentReason, totalMinor, estimate.isForceCapitalRepair(), commandSupport.actorJson()));
     } else {
       if (estimate.getState() != EstimateState.DRAFT) {
         throw new MaintenanceConflictException(
             "MAINTENANCE_STATE_CONFLICT", "Completed estimate revisions are immutable");
       }
       revisionHeader.replaceDraft(
-          estimate.getDispatchDate(), estimate.getSourceParty(), totalMinor, commandSupport.actorJson());
+          estimate.getDispatchDate(), estimate.getSourceParty(), totalMinor,
+          estimate.isForceCapitalRepair(), commandSupport.actorJson());
       estimateRevisions.saveAndFlush(revisionHeader);
     }
   }

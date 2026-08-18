@@ -25,6 +25,7 @@ import {
   type RepairEstimateCatalogPager,
 } from "@/features/repair-estimates/repair-estimate-catalog-picker"
 import { RepairEstimateLinesEditor } from "@/features/repair-estimates/repair-estimate-lines-editor"
+import { ForceCapitalRepairField } from "@/features/repair-estimates/force-capital-repair-field"
 import { RepairEstimateWorkspaceLayout } from "@/features/repair-estimates/repair-estimate-workspace-layout"
 import { PreviousMaintenancePhotos } from "@/features/repair-estimates/previous-maintenance-photos"
 import {
@@ -238,6 +239,10 @@ function RepairTaskEditorContent({
             seed
           ),
           rentalItemId: seed?.rentalItemId ?? initialRentalItemId ?? "",
+          forceCapitalRepair:
+            seed && sourceTask
+              ? sourceTask.forceCapitalRepair === true
+              : (seed?.forceCapitalRepair ?? false),
         }
   )
   const planSource = task ?? sourceTask ?? null
@@ -497,6 +502,7 @@ function RepairTaskEditorContent({
         media: draft.media,
         maintenanceMediaReferences: draft.maintenanceMediaReferences,
         coverMediaId: draft.coverMediaId,
+        forceCapitalRepair: draft.forceCapitalRepair,
         pendingUploads: draft.pendingUploads,
         writeOffReason: writeOffDecision.reason,
         contentsPlan: writeOffDecision.contentsPlan,
@@ -633,6 +639,15 @@ function RepairTaskEditorContent({
         }
         onCommentChange={(comment) =>
           setDraft((current) => ({ ...current, comment }))
+        }
+      />
+      <ForceCapitalRepairField
+        id="repair-task-force-capital-repair"
+        checked={draft.forceCapitalRepair}
+        disabled={interactionDisabled || draft.kind === "REWORK"}
+        inherited={draft.kind === "REWORK"}
+        onCheckedChange={(forceCapitalRepair) =>
+          setDraft((current) => ({ ...current, forceCapitalRepair }))
         }
       />
       {accessToken && draft.rentalItemId ? (

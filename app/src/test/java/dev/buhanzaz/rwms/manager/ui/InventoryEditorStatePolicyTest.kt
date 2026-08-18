@@ -4,9 +4,11 @@ import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.manager.network.CabinCatalogValueDto
 import dev.buhanzaz.rwms.manager.network.CabinTypeDimensionDto
 import dev.buhanzaz.rwms.manager.network.EquipmentCatalogItemDto
+import dev.buhanzaz.rwms.manager.network.InventoryFindingDto
+import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
+import dev.buhanzaz.rwms.manager.network.ObservationDto
 import dev.buhanzaz.rwms.manager.network.RentalItemCreationOptionsDto
 import dev.buhanzaz.rwms.manager.network.RentalItemDto
-import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.uploads.rebaseRetainedInventoryMediaReferences
 import org.junit.Test
 
@@ -325,18 +327,28 @@ class InventoryEditorStatePolicyTest {
     }
 
     @Test
-    fun `inventory suggestions match cabins and exact comparison ignores case`() {
+    fun `inventory number filtering uses canonical prefixes and exact comparison ignores case`() {
         val items = listOf(
             rentalItem("1", "БЫТ-001"),
             rentalItem("2", "БЫТ-010"),
             rentalItem("3", "МСК-100"),
         )
 
-        assertThat(inventoryRentalItemSuggestions(items, "быт-0").map { it.number })
-            .containsExactly("БЫТ-001", "БЫТ-010")
-            .inOrder()
-        assertThat(hasExactInventoryRentalItemNumber(items, " быт-001 ")).isTrue()
-        assertThat(hasExactInventoryRentalItemNumber(items, "БЫТ")).isFalse()
+        assertThat(hasInventoryRentalItemNumberPrefix(items, "быт-0")).isTrue()
+        assertThat(hasInventoryRentalItemNumberPrefix(items, "ыт-0")).isFalse()
+        assertThat(findExactInventoryRentalItem(items, " быт-001 ")?.number)
+            .isEqualTo("БЫТ-001")
+        assertThat(findExactInventoryRentalItem(items, "БЫТ")).isNull()
+    }
+
+    @Test
+    fun `inventory cards match only a canonical number prefix`() {
+        val finding = inventoryFinding("240101")
+
+        assertThat(finding.matchesInventoryNumberPrefix("24")).isTrue()
+        assertThat(finding.matchesInventoryNumberPrefix("0101")).isFalse()
+        assertThat(finding.matchesInventoryNumberPrefix(" 2401 ")).isTrue()
+        assertThat(finding.matchesInventoryNumberPrefix(" ")).isTrue()
     }
 
     @Test
@@ -403,6 +415,21 @@ class InventoryEditorStatePolicyTest {
         warehouseId = "warehouse-1",
         number = number,
         status = "AVAILABLE",
+    )
+
+    private fun inventoryFinding(number: String) = InventoryFindingDto(
+        id = "finding-1",
+        inventoryId = "inventory-1",
+        findingRevision = 1,
+        origin = "EXPECTED",
+        inspection = "PENDING",
+        reconciliation = "PENDING",
+        displayCanonicalNumber = number,
+        identityMatchKey = number,
+        passportObservation = ObservationDto("ABSENT"),
+        equipmentObservation = ObservationDto("ABSENT"),
+        mutationState = "IDLE",
+        comment = "",
     )
 
     private fun equipmentCatalog() = listOf(

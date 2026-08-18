@@ -195,6 +195,7 @@ async function toEstimateDto(
     repairId: estimate.repairId,
     completionMode: null,
     movementToRepair,
+    forceCapitalRepair: estimate.forceCapitalRepair,
     taskPlans: revision.plan
       .map(toEstimatePlan)
       .sort((left, right) => left.sortOrder - right.sortOrder),
@@ -440,6 +441,7 @@ async function serviceWrite(
     })),
     mediaReferences: maintenanceMediaReferences,
     coverMediaId: command.coverMediaId ?? null,
+    forceCapitalRepair: command.forceCapitalRepair === true,
   }
 }
 
@@ -473,9 +475,17 @@ export class HttpMaintenanceRepairEstimatesAdapter implements RepairEstimatesCli
   async getById(id: string, warehouseId: string) {
     const accessToken = await this.tokenProvider()
     try {
-      const estimate = await getMaintenanceEstimate(accessToken, warehouseId, id)
+      const estimate = await getMaintenanceEstimate(
+        accessToken,
+        warehouseId,
+        id
+      )
       const repair = estimate.repairId
-        ? await getMaintenanceRepair(accessToken, warehouseId, estimate.repairId)
+        ? await getMaintenanceRepair(
+            accessToken,
+            warehouseId,
+            estimate.repairId
+          )
         : null
       return await toEstimateDto(
         estimate,

@@ -105,6 +105,7 @@ function estimate(
         total: "15.00",
         reason: null,
         recordedAt: "2026-07-18T10:00:00Z",
+        forceCapitalRepair: true,
       },
     ],
     repairId: null,
@@ -112,6 +113,7 @@ function estimate(
     createdAt: "2026-07-18T09:00:00Z",
     completedAt: lifecycleState === "COMPLETED" ? "2026-07-18T10:00:00Z" : null,
     actor: { actorId: "user-1", actorType: "USER" },
+    forceCapitalRepair: true,
   }
 }
 
@@ -148,6 +150,7 @@ const draft: RepairEstimateDraftCommand = {
     },
   ],
   media: [],
+  forceCapitalRepair: true,
 }
 
 const completeCommand: CompleteRepairEstimateCommand = {
@@ -205,12 +208,14 @@ describe("maintenance repair estimates adapter", () => {
       quantity: 1.5,
       lineType: "WORK",
     })
+    expect(saved.forceCapitalRepair).toBe(true)
     expect(lifecycle.create).toHaveBeenCalledWith(
       "token",
       expect.any(String),
       expect.objectContaining({
         warehouseId,
         rentalItemId,
+        forceCapitalRepair: true,
         lines: [
           expect.objectContaining({
             quantity: "1.5",
@@ -220,6 +225,22 @@ describe("maintenance repair estimates adapter", () => {
           }),
         ],
       })
+    )
+  })
+
+  it("normalizes an omitted capital-repair command to the contract default", async () => {
+    lifecycle.create.mockResolvedValue(estimate("DRAFT", 0))
+    const adapter = new HttpMaintenanceRepairEstimatesAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    await adapter.saveDraft({ ...draft, forceCapitalRepair: undefined })
+
+    expect(lifecycle.create).toHaveBeenCalledWith(
+      "token",
+      expect.any(String),
+      expect.objectContaining({ forceCapitalRepair: false })
     )
   })
 

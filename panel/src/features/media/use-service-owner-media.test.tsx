@@ -35,6 +35,7 @@ import { useServiceOwnerMedia } from "@/features/media/use-service-owner-media"
 const WAREHOUSE_ID = "11111111-1111-4111-8111-111111111111"
 const OWNER_ID = "22222222-2222-4222-8222-222222222222"
 const MEDIA_ID = "33333333-3333-4333-8333-333333333333"
+const VIDEO_ID = "77777777-7777-4777-8777-777777777777"
 const FOLDER_ID = "44444444-4444-4444-8444-444444444444"
 const owner = {
   ownerType: "MAINTENANCE_ESTIMATE",
@@ -67,6 +68,31 @@ const readyAsset = {
   ],
 } as const
 
+function readyVideoAsset(generation: number) {
+  return {
+    id: VIDEO_ID,
+    folderId: FOLDER_ID,
+    fileName: "repair.mp4",
+    contentType: "video/mp4",
+    kind: "VIDEO",
+    status: "READY",
+    version: generation + 1,
+    generation,
+    rotationDegrees: 0,
+    sortOrder: 1,
+    sizeBytes: 64,
+    createdAt: "2026-08-17T10:00:00Z",
+    variants: [],
+    playbackVariant: {
+      kind: "PLAYBACK",
+      contentType: "video/mp4",
+      contentPath: "/api/media/v1/assets/playback",
+      width: 1280,
+      height: 720,
+    },
+  } as const
+}
+
 function MediaHarness({
   onReferences,
   onUpload,
@@ -98,6 +124,9 @@ function MediaHarness({
       <span data-testid="preview">
         {media.photos.map((photo) => photo.url).join(",")}
       </span>
+      <span data-testid="video-playback">
+        {media.videos.map((video) => video.url).join(",")}
+      </span>
       <button
         type="button"
         onClick={() =>
@@ -122,6 +151,9 @@ function MediaHarness({
       </button>
       <button type="button" onClick={() => void media.remove(readyAsset)}>
         Delete
+      </button>
+      <button type="button" onClick={() => void media.query.refetch()}>
+        Refetch
       </button>
     </div>
   )
@@ -237,6 +269,48 @@ describe("useServiceOwnerMedia", () => {
     )
     fireEvent.click(screen.getByRole("button", { name: "Upload" }))
     await waitFor(() => expect(onUpload).toHaveBeenCalledWith([readyAsset]))
+  })
+
+  it("loads PLAYBACK for video and disposes object URLs on generation changes and unmount", async () => {
+    const firstDispose = vi.fn()
+    const secondDispose = vi.fn()
+    mediaClient.listOwnerMedia
+      .mockResolvedValueOnce({ items: [readyVideoAsset(4)], next: null })
+      .mockResolvedValueOnce({ items: [readyVideoAsset(5)], next: null })
+    mediaClient.createVariantObjectUrl
+      .mockResolvedValueOnce({
+        url: "blob:video-generation-4",
+        dispose: firstDispose,
+      })
+      .mockResolvedValueOnce({
+        url: "blob:video-generation-5",
+        dispose: secondDispose,
+      })
+
+    const view = renderMediaHarness()
+
+    await waitFor(() =>
+      expect(screen.getByTestId("video-playback").textContent).toBe(
+        "blob:video-generation-4"
+      )
+    )
+    expect(mediaClient.createVariantObjectUrl.mock.calls[0]?.[2]).toMatchObject(
+      { kind: "PLAYBACK" }
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Refetch" }))
+    await waitFor(() => expect(firstDispose).toHaveBeenCalledOnce())
+    await waitFor(() =>
+      expect(screen.getByTestId("video-playback").textContent).toBe(
+        "blob:video-generation-5"
+      )
+    )
+    expect(mediaClient.createVariantObjectUrl.mock.calls[1]?.[2]).toMatchObject(
+      { kind: "PLAYBACK" }
+    )
+
+    view.unmount()
+    expect(secondDispose).toHaveBeenCalledOnce()
   })
 
   it("retries deletion with the same command key while owner proof propagates", async () => {

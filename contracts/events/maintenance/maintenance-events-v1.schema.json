@@ -275,7 +275,8 @@
         "dispatchDate": {"type": "string", "format": "date"},
         "lineCount": {"type": "integer", "minimum": 0},
         "completionKind": {"enum": ["NOT_COMPLETED", "EMPTY", "NON_EMPTY"]},
-        "repairId": {"$ref": "#/$defs/nullableUuid"}
+        "repairId": {"$ref": "#/$defs/nullableUuid"},
+        "forceCapitalRepair": {"type": "boolean"}
       }
     },
     "taskSyncFact": {
@@ -346,6 +347,7 @@
         },
         "dispatchDate": {"type": "string", "format": "date"},
         "priority": {"type": "integer", "minimum": 1, "maximum": 5},
+        "forceCapitalRepair": {"type": "boolean"},
         "stages": {
           "type": "array",
           "maxItems": 1000,

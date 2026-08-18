@@ -154,6 +154,7 @@ function repair(
       forcedCapital: false,
     },
     movementToRepair: false,
+    forceCapitalRepair: true,
     logisticsPlanningMode: "AUTO",
     logisticsScheduledDate: null,
     createdAt: "2026-07-18T08:00:00Z",
@@ -391,6 +392,7 @@ const writeCommand: RepairTaskWriteCommand = {
   media: [],
   maintenanceMediaReferences: [],
   coverMediaId: null,
+  forceCapitalRepair: true,
   priority: 2,
   movementToRepair: false,
   logisticsPlanningMode: "AUTO",
@@ -566,6 +568,7 @@ describe("maintenance repair tasks adapter", () => {
     const task = await adapter.getById(repairId, warehouseId)
 
     expect(task?.awaitingMovement).toBe(false)
+    expect(task?.forceCapitalRepair).toBe(true)
   })
 
   it("uses the maintenance category normative when the board entry is no longer visible", async () => {
@@ -621,6 +624,7 @@ describe("maintenance repair tasks adapter", () => {
       rentalItemId,
       dispatchDate: "2026-07-18",
       sourceParty: "WMS-панель",
+      forceCapitalRepair: true,
     })
     expect(request.lines).toHaveLength(2)
     expect(
@@ -669,6 +673,24 @@ describe("maintenance repair tasks adapter", () => {
         groupComment: "Монтажная группа",
       }),
     ])
+  })
+
+  it("normalizes an omitted capital-repair command to the contract default", async () => {
+    lifecycle.createDirect.mockResolvedValue(repair())
+    const command = {
+      ...structuredClone(writeCommand),
+      forceCapitalRepair: undefined,
+    }
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    await adapter.saveDraft(command)
+
+    expect(lifecycle.createDirect.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({ forceCapitalRepair: false })
+    )
   })
 
   it("serializes a custom work line without a catalog snapshot", async () => {
@@ -915,6 +937,31 @@ describe("maintenance repair tasks adapter", () => {
     ])
   })
 
+  it("keeps calculated capital repairs out of the ordinary repairs list", async () => {
+    const capitalRepair = {
+      ...repair(),
+      id: "00000000-0000-4000-8000-000000000014",
+      complexity: {
+        type: "CAPITAL" as const,
+        name: "Капитальный ремонт" as const,
+        color: "#DC2626",
+        plannedMinutes: "30",
+        forcedCapital: true,
+      },
+    }
+    lifecycle.listRepairs.mockResolvedValue({
+      items: [repair(), capitalRepair],
+    })
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const tasks = await adapter.list(warehouseId)
+
+    expect(tasks.map((task) => task.id)).toEqual([repairId])
+  })
+
   it("fails the repair projection when task-board enrichment is unavailable", async () => {
     lifecycle.listRepairs.mockResolvedValue({ items: [repair()] })
     getBoard.mockRejectedValue(new Error("task-board unavailable"))
@@ -1045,7 +1092,8 @@ describe("maintenance repair tasks adapter", () => {
       expect.any(Array),
       expect.any(Array),
       [],
-      null
+      null,
+      true
     )
     expect(lifecycle.queue).toHaveBeenLastCalledWith(
       "token",
@@ -1320,7 +1368,8 @@ describe("maintenance repair tasks adapter", () => {
       expect.any(Array),
       expect.any(Array),
       [],
-      null
+      null,
+      true
     )
     expect(lifecycle.queue).toHaveBeenLastCalledWith(
       "token",
@@ -1363,7 +1412,8 @@ describe("maintenance repair tasks adapter", () => {
       expect.any(Array),
       expect.any(Array),
       mediaReferences,
-      rentalItemId
+      rentalItemId,
+      true
     )
   })
 
@@ -1407,7 +1457,8 @@ describe("maintenance repair tasks adapter", () => {
         }),
       ],
       mediaReferences,
-      null
+      null,
+      true
     )
   })
 

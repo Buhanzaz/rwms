@@ -247,6 +247,7 @@ data class MaintenanceUploadCommand(
     val stages: List<PlanStageInputDto>,
     val existingMedia: List<MediaReferenceDto> = emptyList(),
     val existingCoverMediaId: String? = null,
+    val forceCapitalRepair: Boolean = false,
     val replaceKind: MaintenanceReplaceKind,
     val expectedLinkedRepairVersion: Long? = null,
     val amendmentIdempotencyKey: String? = null,

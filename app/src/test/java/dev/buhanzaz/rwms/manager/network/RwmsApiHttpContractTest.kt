@@ -73,6 +73,29 @@ class RwmsApiHttpContractTest {
     }
 
     @Test
+    fun `active capital repairs use the separate public maintenance endpoint`() = runTest {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""{"items":[],"page":0,"size":200,"totalElements":0}"""),
+        )
+
+        val page = api.activeCapitalRepairs(
+            warehouseId = "11111111-1111-1111-1111-111111111111",
+            size = 200,
+        )
+
+        assertThat(page.items).isEmpty()
+        val request = checkNotNull(server.takeRequest(5, TimeUnit.SECONDS))
+        assertThat(request.method).isEqualTo("GET")
+        assertThat(request.path).isEqualTo(
+            "/api/maintenance/v1/repairs/capital?warehouseId=" +
+                "11111111-1111-1111-1111-111111111111&page=0&size=200",
+        )
+    }
+
+    @Test
     fun `inventory field commands use public paths and preserve canonical request fields`() = runTest {
         val inventoryId = "11111111-1111-1111-1111-111111111111"
         val findingId = "22222222-2222-2222-2222-222222222222"
@@ -190,8 +213,9 @@ class RwmsApiHttpContractTest {
                             mode = "MANUAL",
                             priority = 2,
                             coverMediaId = mediaId,
-                            movementToRepair = true,
-                            logisticsPlanningMode = "AUTO",
+                            movementToRepair = false,
+                            forceCapitalRepair = true,
+                            logisticsPlanningMode = null,
                             logisticsScheduledDate = null,
                             lines = listOf(
                                 InventoryPlanLineInputDto(
@@ -224,7 +248,7 @@ class RwmsApiHttpContractTest {
                 method = "PUT",
                 path = "/api/inventory/v1/sessions/$inventoryId/findings/$findingId/inspection",
                 idempotencyKey = null,
-                body = """{"expectedSessionRevision":4,"expectedFindingRevision":2,"inspection":"WORK_STAGED","comment":"Требуется ремонт","passportObservation":{"presence":"ABSENT","value":null},"equipmentObservation":{"presence":"ABSENT","value":null},"media":[{"mediaId":"$mediaId","generation":1}],"coverMediaId":"$mediaId","planSelection":{"mode":"MANUAL","priority":2,"coverMediaId":"$mediaId","movementToRepair":true,"logisticsPlanningMode":"AUTO","logisticsScheduledDate":null,"lines":[{"aggregationKind":"CATALOG","catalogNodeId":"$workNodeId","routingCatalogNodeId":null,"description":null,"type":null,"unit":null,"quantity":"1","unitPriceMinor":null,"normativeMinutes":null,"groupComment":"Каркас","mediaReferences":[{"mediaId":"$mediaId","generation":1}]}],"stages":[{"catalogNodeId":"$workNodeId","kind":"REPAIR_WORK","order":0}]}}""",
+                body = """{"expectedSessionRevision":4,"expectedFindingRevision":2,"inspection":"WORK_STAGED","comment":"Требуется ремонт","passportObservation":{"presence":"ABSENT","value":null},"equipmentObservation":{"presence":"ABSENT","value":null},"media":[{"mediaId":"$mediaId","generation":1}],"coverMediaId":"$mediaId","planSelection":{"mode":"MANUAL","priority":2,"coverMediaId":"$mediaId","movementToRepair":false,"forceCapitalRepair":true,"logisticsPlanningMode":null,"logisticsScheduledDate":null,"lines":[{"aggregationKind":"CATALOG","catalogNodeId":"$workNodeId","routingCatalogNodeId":null,"description":null,"type":null,"unit":null,"quantity":"1","unitPriceMinor":null,"normativeMinutes":null,"groupComment":"Каркас","mediaReferences":[{"mediaId":"$mediaId","generation":1}]}],"stages":[{"catalogNodeId":"$workNodeId","kind":"REPAIR_WORK","order":0}]}}""",
             )
         }
 
@@ -293,7 +317,7 @@ class RwmsApiHttpContractTest {
             method = "PUT",
             path = "/api/inventory/v1/sessions/$inventoryId/findings/$findingId/inspection",
             idempotencyKey = null,
-            body = """{"expectedSessionRevision":6,"expectedFindingRevision":3,"inspection":"WORK_STAGED","comment":"Ручные позиции","passportObservation":{"presence":"ABSENT","value":null},"equipmentObservation":{"presence":"ABSENT","value":null},"media":[],"coverMediaId":null,"planSelection":{"mode":"MANUAL","priority":3,"coverMediaId":null,"movementToRepair":false,"logisticsPlanningMode":null,"logisticsScheduledDate":null,"lines":[{"aggregationKind":"MANUAL","catalogNodeId":null,"routingCatalogNodeId":"$routingNodeId","description":"Ручная работа","type":"WORK","unit":"ч","quantity":"1","unitPriceMinor":12500,"normativeMinutes":"30","groupComment":"Каркас","mediaReferences":[]},{"aggregationKind":"MANUAL","catalogNodeId":null,"routingCatalogNodeId":"$routingNodeId","description":"Ручной материал","type":"MATERIAL","unit":"шт.","quantity":"2","unitPriceMinor":3500,"normativeMinutes":"0","groupComment":null,"mediaReferences":[]}],"stages":[{"catalogNodeId":"$routingNodeId","kind":"REPAIR_WORK","order":0}]}}""",
+            body = """{"expectedSessionRevision":6,"expectedFindingRevision":3,"inspection":"WORK_STAGED","comment":"Ручные позиции","passportObservation":{"presence":"ABSENT","value":null},"equipmentObservation":{"presence":"ABSENT","value":null},"media":[],"coverMediaId":null,"planSelection":{"mode":"MANUAL","priority":3,"coverMediaId":null,"movementToRepair":false,"forceCapitalRepair":false,"logisticsPlanningMode":null,"logisticsScheduledDate":null,"lines":[{"aggregationKind":"MANUAL","catalogNodeId":null,"routingCatalogNodeId":"$routingNodeId","description":"Ручная работа","type":"WORK","unit":"ч","quantity":"1","unitPriceMinor":12500,"normativeMinutes":"30","groupComment":"Каркас","mediaReferences":[]},{"aggregationKind":"MANUAL","catalogNodeId":null,"routingCatalogNodeId":"$routingNodeId","description":"Ручной материал","type":"MATERIAL","unit":"шт.","quantity":"2","unitPriceMinor":3500,"normativeMinutes":"0","groupComment":null,"mediaReferences":[]}],"stages":[{"catalogNodeId":"$routingNodeId","kind":"REPAIR_WORK","order":0}]}}""",
         )
     }
 
@@ -423,6 +447,7 @@ class RwmsApiHttpContractTest {
                     lines = listOf(line),
                     plan = listOf(plan),
                     mediaReferences = listOf(MediaReferenceDto(mediaId, 2)),
+                    forceCapitalRepair = true,
                 ),
             )
         }
@@ -454,6 +479,7 @@ class RwmsApiHttpContractTest {
                     lines = listOf(line),
                     plan = listOf(plan),
                     mediaReferences = listOf(MediaReferenceDto(mediaId, 2)),
+                    forceCapitalRepair = true,
                 ),
             )
         }
@@ -462,7 +488,7 @@ class RwmsApiHttpContractTest {
             method = "PUT",
             path = "/api/maintenance/v1/estimates/$estimateId?warehouseId=$warehouseId",
             idempotencyKey = null,
-            body = """{"expectedVersion":7,"dispatchDate":"2026-07-27","sourceParty":null,"lines":[{"id":"$lineId","catalogSnapshot":{"catalogVersionId":"$catalogVersionId","nodeId":"$catalogNodeId","nodeType":"WORK","name":"Repair work","unit":"hour","unitPrice":"120.00","durationMinutes":30,"routing":{"queueId":"$queueId","queueName":"Ремонт","queueType":"REPAIR"},"furnitureEquipment":null},"lineType":"WORK","description":"Repair work","unit":"hour","quantity":"1.5","unitPrice":"120.00","normativeMinutes":30,"comment":null,"mediaReferences":[{"mediaId":"$mediaId","generation":2}]}],"plan":[{"id":"$stageId","kind":"REPAIR_WORK","order":0,"routing":{"queueId":"$queueId","queueName":"Ремонт","queueType":"REPAIR"},"includedLineIds":["$lineId"],"primaryLineId":"$lineId","groupComment":"","taskDeadline":null}],"mediaReferences":[{"mediaId":"$mediaId","generation":2}],"coverMediaId":null}""",
+            body = """{"expectedVersion":7,"dispatchDate":"2026-07-27","sourceParty":null,"lines":[{"id":"$lineId","catalogSnapshot":{"catalogVersionId":"$catalogVersionId","nodeId":"$catalogNodeId","nodeType":"WORK","name":"Repair work","unit":"hour","unitPrice":"120.00","durationMinutes":30,"routing":{"queueId":"$queueId","queueName":"Ремонт","queueType":"REPAIR"},"furnitureEquipment":null},"lineType":"WORK","description":"Repair work","unit":"hour","quantity":"1.5","unitPrice":"120.00","normativeMinutes":30,"comment":null,"mediaReferences":[{"mediaId":"$mediaId","generation":2}]}],"plan":[{"id":"$stageId","kind":"REPAIR_WORK","order":0,"routing":{"queueId":"$queueId","queueName":"Ремонт","queueType":"REPAIR"},"includedLineIds":["$lineId"],"primaryLineId":"$lineId","groupComment":"","taskDeadline":null}],"mediaReferences":[{"mediaId":"$mediaId","generation":2}],"coverMediaId":null,"forceCapitalRepair":true}""",
         )
         complete.assertJsonCommand(
             method = "POST",
@@ -474,7 +500,7 @@ class RwmsApiHttpContractTest {
             method = "POST",
             path = "/api/maintenance/v1/estimates/$estimateId/amendments?warehouseId=$warehouseId",
             idempotencyKey = "estimate-amend-1",
-            body = """{"expectedVersion":9,"expectedLinkedRepairVersion":4,"dispatchDate":"2026-07-27","reason":"Изменение работ до начала ремонта","sourceParty":null,"lines":[{"id":"$lineId","catalogSnapshot":{"catalogVersionId":"$catalogVersionId","nodeId":"$catalogNodeId","nodeType":"WORK","name":"Repair work","unit":"hour","unitPrice":"120.00","durationMinutes":30,"routing":{"queueId":"$queueId","queueName":"Ремонт","queueType":"REPAIR"},"furnitureEquipment":null},"lineType":"WORK","description":"Repair work","unit":"hour","quantity":"1.5","unitPrice":"120.00","normativeMinutes":30,"comment":null,"mediaReferences":[{"mediaId":"$mediaId","generation":2}]}],"plan":[{"id":"$stageId","kind":"REPAIR_WORK","order":0,"routing":{"queueId":"$queueId","queueName":"Ремонт","queueType":"REPAIR"},"includedLineIds":["$lineId"],"primaryLineId":"$lineId","groupComment":"","taskDeadline":null}],"mediaReferences":[{"mediaId":"$mediaId","generation":2}],"coverMediaId":null}""",
+            body = """{"expectedVersion":9,"expectedLinkedRepairVersion":4,"dispatchDate":"2026-07-27","reason":"Изменение работ до начала ремонта","sourceParty":null,"lines":[{"id":"$lineId","catalogSnapshot":{"catalogVersionId":"$catalogVersionId","nodeId":"$catalogNodeId","nodeType":"WORK","name":"Repair work","unit":"hour","unitPrice":"120.00","durationMinutes":30,"routing":{"queueId":"$queueId","queueName":"Ремонт","queueType":"REPAIR"},"furnitureEquipment":null},"lineType":"WORK","description":"Repair work","unit":"hour","quantity":"1.5","unitPrice":"120.00","normativeMinutes":30,"comment":null,"mediaReferences":[{"mediaId":"$mediaId","generation":2}]}],"plan":[{"id":"$stageId","kind":"REPAIR_WORK","order":0,"routing":{"queueId":"$queueId","queueName":"Ремонт","queueType":"REPAIR"},"includedLineIds":["$lineId"],"primaryLineId":"$lineId","groupComment":"","taskDeadline":null}],"mediaReferences":[{"mediaId":"$mediaId","generation":2}],"coverMediaId":null,"forceCapitalRepair":true}""",
         )
     }
 
@@ -533,6 +559,7 @@ class RwmsApiHttpContractTest {
                     lines = listOf(line),
                     plan = listOf(plan),
                     mediaReferences = emptyList(),
+                    forceCapitalRepair = true,
                 ),
             )
         }
@@ -555,7 +582,7 @@ class RwmsApiHttpContractTest {
             method = "POST",
             path = "/api/maintenance/v1/repairs/direct",
             idempotencyKey = "direct-repair-create-1",
-            body = """{"warehouseId":"$warehouseId","rentalItemId":"$rentalItemId","dispatchDate":"2026-07-27","sourceParty":null,"lines":[{"id":"$lineId","catalogSnapshot":{"catalogVersionId":"$catalogVersionId","nodeId":"$catalogNodeId","nodeType":"WORK","name":"Direct repair work","unit":null,"unitPrice":null,"durationMinutes":45,"routing":null,"furnitureEquipment":null},"lineType":"WORK","description":"Direct repair work","unit":null,"quantity":"1","unitPrice":"0.00","normativeMinutes":45,"comment":null,"mediaReferences":[]}],"plan":[{"id":"$stageId","kind":"REPAIR_WORK","order":0,"routing":{"queueId":"$queueId","queueName":"Ремонт","queueType":"REPAIR"},"includedLineIds":["$lineId"],"primaryLineId":"$lineId","groupComment":"","taskDeadline":null}],"mediaReferences":[],"coverMediaId":null}""",
+            body = """{"warehouseId":"$warehouseId","rentalItemId":"$rentalItemId","dispatchDate":"2026-07-27","sourceParty":null,"lines":[{"id":"$lineId","catalogSnapshot":{"catalogVersionId":"$catalogVersionId","nodeId":"$catalogNodeId","nodeType":"WORK","name":"Direct repair work","unit":null,"unitPrice":null,"durationMinutes":45,"routing":null,"furnitureEquipment":null},"lineType":"WORK","description":"Direct repair work","unit":null,"quantity":"1","unitPrice":"0.00","normativeMinutes":45,"comment":null,"mediaReferences":[]}],"plan":[{"id":"$stageId","kind":"REPAIR_WORK","order":0,"routing":{"queueId":"$queueId","queueName":"Ремонт","queueType":"REPAIR"},"includedLineIds":["$lineId"],"primaryLineId":"$lineId","groupComment":"","taskDeadline":null}],"mediaReferences":[],"coverMediaId":null,"forceCapitalRepair":true}""",
         )
         queue.assertJsonCommand(
             method = "POST",
@@ -764,7 +791,7 @@ class RwmsApiHttpContractTest {
             method = "POST",
             path = "/api/maintenance/v1/estimates",
             idempotencyKey = "custom-material-1",
-            body = """{"warehouseId":"$warehouseId","rentalItemId":"$rentalItemId","dispatchDate":"2026-07-27","sourceParty":"Контрагент","lines":[{"id":"$lineId","catalogSnapshot":null,"lineType":"MATERIAL","description":"Пользовательский крепёж","unit":"шт.","quantity":"2","unitPrice":"15.50","normativeMinutes":0,"comment":null,"mediaReferences":[]}],"plan":[],"mediaReferences":[],"coverMediaId":null}""",
+            body = """{"warehouseId":"$warehouseId","rentalItemId":"$rentalItemId","dispatchDate":"2026-07-27","sourceParty":"Контрагент","lines":[{"id":"$lineId","catalogSnapshot":null,"lineType":"MATERIAL","description":"Пользовательский крепёж","unit":"шт.","quantity":"2","unitPrice":"15.50","normativeMinutes":0,"comment":null,"mediaReferences":[]}],"plan":[],"mediaReferences":[],"coverMediaId":null,"forceCapitalRepair":false}""",
         )
     }
 

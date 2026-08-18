@@ -14,7 +14,7 @@ type Kind string
 const (
 	// KindImage is still-image media with canonical and WebP derivatives.
 	KindImage Kind = "IMAGE"
-	// KindVideo is video media whose validated original is retained as-is.
+	// KindVideo is video media with an exact original and compressed playback.
 	KindVideo Kind = "VIDEO"
 )
 
@@ -42,7 +42,7 @@ const (
 	ProcessingInitial ProcessingKind = "INITIAL"
 )
 
-// Variant identifies an original object or an image derivative.
+// Variant identifies an immutable original object or a presentation derivative.
 type Variant string
 
 const (
@@ -52,6 +52,8 @@ const (
 	VariantMedium Variant = "MEDIUM"
 	// VariantLarge is the largest presentation WebP derivative.
 	VariantLarge Variant = "LARGE"
+	// VariantPlayback is the compressed H.264/AAC MP4 video derivative.
+	VariantPlayback Variant = "PLAYBACK"
 	// VariantOriginal is the immutable canonical source-generation object.
 	VariantOriginal Variant = "ORIGINAL"
 )

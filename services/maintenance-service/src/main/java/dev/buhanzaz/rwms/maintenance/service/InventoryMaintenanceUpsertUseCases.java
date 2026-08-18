@@ -166,6 +166,7 @@ final class InventoryMaintenanceUpsertUseCases {
     MaintenanceRepair draft = MaintenanceRepair.primary(
         request.warehouseId(), request.rentalItemId(), request.rentalItemVersion(), null,
         RepairOrigin.INVENTORY, request.dispatchDate(), "Инвентаризация", inventoryActorJson());
+    draft.selectForceCapitalRepair(request.snapshot().forceCapitalRepair());
     draft.selectPriority(request.snapshot().priority());
     draft.selectMovementToRepair(
         request.snapshot().movementToRepair(),

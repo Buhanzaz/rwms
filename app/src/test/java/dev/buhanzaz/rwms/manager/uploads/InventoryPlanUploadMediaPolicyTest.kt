@@ -12,9 +12,10 @@ class InventoryPlanUploadMediaPolicyTest {
         val plan = InventoryPlanSelectionDto(
             mode = "MANUAL",
             priority = 5,
-            movementToRepair = true,
-            logisticsPlanningMode = "FIXED_DATE",
-            logisticsScheduledDate = "2026-08-05",
+            movementToRepair = false,
+            forceCapitalRepair = true,
+            logisticsPlanningMode = null,
+            logisticsScheduledDate = null,
             lines = listOf(
                 line(media = listOf(MediaReferenceDto("old-work", 1))),
                 line(media = listOf(MediaReferenceDto("stale-material", 1))),
@@ -37,9 +38,10 @@ class InventoryPlanUploadMediaPolicyTest {
             .inOrder()
         assertThat(result.lines[1].mediaReferences).isEmpty()
         assertThat(result.priority).isEqualTo(5)
-        assertThat(result.movementToRepair).isTrue()
-        assertThat(result.logisticsPlanningMode).isEqualTo("FIXED_DATE")
-        assertThat(result.logisticsScheduledDate).isEqualTo("2026-08-05")
+        assertThat(result.forceCapitalRepair).isTrue()
+        assertThat(result.movementToRepair).isFalse()
+        assertThat(result.logisticsPlanningMode).isNull()
+        assertThat(result.logisticsScheduledDate).isNull()
     }
 
     private fun line(

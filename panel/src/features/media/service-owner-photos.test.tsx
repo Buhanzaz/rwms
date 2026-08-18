@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -46,12 +47,17 @@ function mediaValue(overrides: Record<string, unknown> = {}) {
   return {
     assets: [],
     photos: [],
+    videos: [],
     logicalPhotoCount: 0,
+    logicalMediaCount: 0,
     readyReferences: [],
     query: { isError: false, isLoading: false, isSuccess: true },
     requestFullscreen: vi.fn(),
+    retryPreviews: vi.fn(),
     upload: vi.fn(),
     remove: vi.fn(),
+    uploadPending: false,
+    deletePending: false,
     pending: false,
     error: null,
     previewUnavailable: false,
@@ -63,10 +69,13 @@ beforeEach(() => {
   mediaState.value = mediaValue()
 })
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+})
 
 describe("ServiceOwnerPhotos", () => {
-  it("distinguishes an empty owner from an unavailable photo service", () => {
+  it("distinguishes an empty owner from an unavailable media service", () => {
     const view = render(
       <ServiceOwnerPhotos
         accessToken="token"
@@ -76,7 +85,7 @@ describe("ServiceOwnerPhotos", () => {
       />
     )
 
-    expect(screen.getByText("Нет фото")).toBeTruthy()
+    expect(screen.getByText("Нет медиа")).toBeTruthy()
 
     mediaState.value = mediaValue({
       query: { isError: true, isLoading: false, isSuccess: false },
@@ -90,8 +99,8 @@ describe("ServiceOwnerPhotos", () => {
       />
     )
 
-    expect(screen.getByText("Сервис фото недоступен")).toBeTruthy()
-    expect(screen.queryByText("Нет фото")).toBeNull()
+    expect(screen.getByText("Сервис медиа недоступен")).toBeTruthy()
+    expect(screen.queryByText("Нет медиа")).toBeNull()
   })
 
   it("keeps an ordinary authorization error visible", () => {
@@ -114,13 +123,14 @@ describe("ServiceOwnerPhotos", () => {
     )
 
     expect(screen.getByText("Нет доступа к фотографиям")).toBeTruthy()
-    expect(screen.queryByText("Сервис фото недоступен")).toBeNull()
+    expect(screen.queryByText("Сервис медиа недоступен")).toBeNull()
   })
 
   it("reports each logical READY asset once regardless of derived variants", () => {
     const onReadyReferencesChange = vi.fn()
     mediaState.value = mediaValue({
       logicalPhotoCount: 1,
+      logicalMediaCount: 1,
       readyReferences: [
         {
           mediaId: "33333333-3333-4333-8333-333333333333",
@@ -162,6 +172,7 @@ describe("ServiceOwnerPhotos", () => {
         { id: retryOrphanMediaId, url: "blob:orphan" },
       ],
       logicalPhotoCount: 2,
+      logicalMediaCount: 2,
       readyReferences: [
         { mediaId: acceptedMediaId, generation: 1 },
         { mediaId: retryOrphanMediaId, generation: 1 },
@@ -211,7 +222,7 @@ describe("ServiceOwnerPhotos", () => {
     )
 
     fireEvent.click(screen.getByRole("button", { name: "Добавить" }))
-    fireEvent.change(screen.getByLabelText("Выбрать фотографии"), {
+    fireEvent.change(screen.getByLabelText("Выбрать медиафайлы"), {
       target: {
         files: [
           new File([new Uint8Array([1])], "new-photo.jpg", {
@@ -232,6 +243,7 @@ describe("ServiceOwnerPhotos", () => {
         { id: retryOrphanMediaId, url: "blob:orphan" },
       ],
       logicalPhotoCount: 2,
+      logicalMediaCount: 2,
       readyReferences: [
         { mediaId: uploadedMediaId, generation: 1 },
         { mediaId: retryOrphanMediaId, generation: 1 },
@@ -254,6 +266,113 @@ describe("ServiceOwnerPhotos", () => {
     )
     expect(screen.getByText(uploadedMediaId)).toBeTruthy()
     expect(screen.queryByText(retryOrphanMediaId)).toBeNull()
+  })
+
+  it("shows the selected original and byte progress before enabling actions", async () => {
+    let resolveUpload!: (value: Array<Record<string, unknown>>) => void
+    const uploadResult = new Promise<Array<Record<string, unknown>>>(
+      (resolve) => {
+        resolveUpload = resolve
+      }
+    )
+    const upload = vi.fn(
+      (jobs: Array<{ onProgress: (percentage: number) => void }>) => {
+        expect(jobs).toHaveLength(1)
+        return uploadResult
+      }
+    )
+    mediaState.value = mediaValue({ upload, pending: true })
+    const createObjectUrl = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValue("blob:selected-original")
+    const revokeObjectUrl = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined)
+    const uploadedMediaId = "77777777-7777-4777-8777-777777777777"
+
+    const view = render(
+      <ServiceOwnerPhotos
+        accessToken="token"
+        owner={owner}
+        readOnly={false}
+        requireCover
+      />
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Добавить" }))
+    const file = new File([new Uint8Array([1, 2, 3])], "original.jpg", {
+      type: "image/jpeg",
+    })
+    fireEvent.change(screen.getByLabelText("Выбрать медиафайлы"), {
+      target: { files: [file] },
+    })
+
+    expect(createObjectUrl).toHaveBeenCalledWith(file)
+    expect(
+      screen.getByAltText("Предпросмотр original.jpg").getAttribute("src")
+    ).toBe("blob:selected-original")
+    const jobs = upload.mock.calls[0]![0]
+    act(() => jobs[0]!.onProgress(42))
+    expect(
+      screen
+        .getByRole("progressbar", { name: "Загрузка original.jpg" })
+        .getAttribute("aria-valuenow")
+    ).toBe("42")
+    expect(
+      screen.queryByRole("button", { name: "Удалить original.jpg" })
+    ).toBeNull()
+
+    await act(async () => {
+      resolveUpload([{ id: uploadedMediaId }])
+      await uploadResult
+    })
+    mediaState.value = mediaValue({
+      assets: [
+        {
+          id: uploadedMediaId,
+          fileName: "original.jpg",
+          kind: "IMAGE",
+          status: "READY",
+          sortOrder: 0,
+          rotationDegrees: 0,
+        },
+      ],
+      photos: [{ id: uploadedMediaId, url: "blob:server-preview" }],
+      logicalPhotoCount: 1,
+      logicalMediaCount: 1,
+      readyReferences: [{ mediaId: uploadedMediaId, generation: 1 }],
+    })
+    view.rerender(
+      <ServiceOwnerPhotos
+        accessToken="token"
+        owner={owner}
+        readOnly={false}
+        requireCover
+      />
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Выбрать титульным" })
+      ).toBeTruthy()
+    )
+    expect(
+      screen.getByRole("button", { name: "Удалить original.jpg" })
+    ).toBeTruthy()
+    expect(revokeObjectUrl).toHaveBeenCalledWith("blob:selected-original")
+
+    mediaState.value = mediaValue()
+    view.rerender(
+      <ServiceOwnerPhotos
+        accessToken="token"
+        owner={owner}
+        readOnly={false}
+        requireCover
+      />
+    )
+    expect(screen.queryByAltText("Предпросмотр original.jpg")).toBeNull()
+    expect(
+      screen.queryByRole("progressbar", { name: "Загрузка original.jpg" })
+    ).toBeNull()
   })
 
   it("renders an adjacent action and limits a read-only comparison gallery", () => {
@@ -281,6 +400,7 @@ describe("ServiceOwnerPhotos", () => {
         },
       ],
       logicalPhotoCount: 2,
+      logicalMediaCount: 2,
     })
 
     render(
@@ -343,5 +463,107 @@ describe("ServiceOwnerPhotos", () => {
       },
     ])
     expect(onReadyStateChange).toHaveBeenLastCalledWith(true)
+  })
+
+  it("renders READY videos after images and reports their references", () => {
+    const imageId = "33333333-3333-4333-8333-333333333333"
+    const videoId = "44444444-4444-4444-8444-444444444444"
+    const onReadyReferencesChange = vi.fn()
+    mediaState.value = mediaValue({
+      assets: [
+        {
+          id: imageId,
+          fileName: "before.jpg",
+          kind: "IMAGE",
+          status: "READY",
+          sortOrder: 0,
+        },
+        {
+          id: videoId,
+          fileName: "work.mp4",
+          kind: "VIDEO",
+          status: "READY",
+          sortOrder: 1,
+        },
+      ],
+      photos: [{ id: imageId, url: "blob:image" }],
+      videos: [
+        {
+          id: videoId,
+          fileName: "work.mp4",
+          url: "blob:playback",
+          contentType: "video/mp4",
+          createdAt: "2026-08-17T00:00:00Z",
+        },
+      ],
+      logicalPhotoCount: 1,
+      logicalMediaCount: 2,
+      readyReferences: [
+        { mediaId: imageId, generation: 2 },
+        { mediaId: videoId, generation: 3 },
+      ],
+    })
+
+    render(
+      <ServiceOwnerPhotos
+        accessToken="token"
+        owner={owner}
+        readOnly
+        title="Медиа работ"
+        onReadyReferencesChange={onReadyReferencesChange}
+      />
+    )
+
+    expect(screen.getByText("2 из 20")).toBeTruthy()
+    expect(screen.getByText(imageId)).toBeTruthy()
+    const video = screen.getByLabelText("Видео work.mp4")
+    expect(video.tagName).toBe("VIDEO")
+    expect((video as HTMLVideoElement).src).toContain("blob:playback")
+    expect((video as HTMLVideoElement).controls).toBe(true)
+    expect((video as HTMLVideoElement).preload).toBe("metadata")
+    expect(onReadyReferencesChange).toHaveBeenCalledWith([
+      { mediaId: imageId, generation: 2 },
+      { mediaId: videoId, generation: 3 },
+    ])
+  })
+
+  it("clears a video id supplied as a cabin cover", async () => {
+    const videoId = "44444444-4444-4444-8444-444444444444"
+    const onCoverMediaIdChange = vi.fn()
+    mediaState.value = mediaValue({
+      assets: [
+        {
+          id: videoId,
+          fileName: "work.mp4",
+          kind: "VIDEO",
+          status: "READY",
+          sortOrder: 0,
+        },
+      ],
+      videos: [
+        {
+          id: videoId,
+          fileName: "work.mp4",
+          url: "blob:playback",
+          contentType: "video/mp4",
+          createdAt: "2026-08-17T00:00:00Z",
+        },
+      ],
+      logicalMediaCount: 1,
+      readyReferences: [{ mediaId: videoId, generation: 1 }],
+    })
+
+    render(
+      <ServiceOwnerPhotos
+        accessToken="token"
+        owner={owner}
+        readOnly={false}
+        requireCover
+        coverMediaId={videoId}
+        onCoverMediaIdChange={onCoverMediaIdChange}
+      />
+    )
+
+    await waitFor(() => expect(onCoverMediaIdChange).toHaveBeenCalledWith(null))
   })
 })

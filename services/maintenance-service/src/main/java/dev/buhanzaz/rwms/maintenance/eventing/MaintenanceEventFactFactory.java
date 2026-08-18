@@ -60,7 +60,8 @@ public class MaintenanceEventFactFactory {
         value.getDispatchDate(),
         lineCount,
         completionKind,
-        value.getRepairId());
+        value.getRepairId(),
+        value.isForceCapitalRepair());
   }
 
   public RepairFact repair(MaintenanceRepair value, List<RepairStage> stages) {
@@ -90,7 +91,8 @@ public class MaintenanceEventFactFactory {
         value.getAcceptanceState(),
         value.getDispatchDate(),
         value.getPriority(),
-        stageFacts);
+        stageFacts,
+        value.isForceCapitalRepair());
   }
 
   public Map<String, Object> catalogPayload(

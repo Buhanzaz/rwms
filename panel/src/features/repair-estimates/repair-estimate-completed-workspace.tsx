@@ -31,6 +31,7 @@ import {
   type RepairEstimateCatalogPager,
 } from "@/features/repair-estimates/repair-estimate-catalog-picker"
 import { RepairEstimateCompletionDialog } from "@/features/repair-estimates/repair-estimate-completion-dialog"
+import { ForceCapitalRepairField } from "@/features/repair-estimates/force-capital-repair-field"
 import { RepairEstimateLinesEditor } from "@/features/repair-estimates/repair-estimate-lines-editor"
 import { RepairEstimateLinesSnapshot } from "@/features/repair-estimates/repair-estimate-lines-snapshot"
 import {
@@ -205,7 +206,7 @@ export function RepairEstimateCompletedWorkspace({
     setDraft(toEstimateEditorDraft(estimate))
     setExpectedTaskVersion(linkedTask?.version ?? null)
     setAmendmentMovementToRepair(
-      linkedTask?.movementToRepair ?? (estimate.movementToRepair ?? false)
+      linkedTask?.movementToRepair ?? estimate.movementToRepair ?? false
     )
     setError(null)
     setAmendmentReason("")
@@ -290,17 +291,24 @@ export function RepairEstimateCompletedWorkspace({
           />
         }
         information={
-          <RepairWorkInformationSnapshot
-            cabinNumber={estimate.cabinNumber}
-            contextLabel="От кого"
-            contextValue={estimate.sourceParty}
-            dispatchDate={estimate.dispatchDate}
-            comment={estimate.comment}
-            authorName={authorDisplayName}
-            authorLabel="Автор"
-            showComment={false}
-            status={<Badge variant="secondary">Завершена</Badge>}
-          />
+          <div className="flex flex-col gap-4">
+            <RepairWorkInformationSnapshot
+              cabinNumber={estimate.cabinNumber}
+              contextLabel="От кого"
+              contextValue={estimate.sourceParty}
+              dispatchDate={estimate.dispatchDate}
+              comment={estimate.comment}
+              authorName={authorDisplayName}
+              authorLabel="Автор"
+              showComment={false}
+              status={<Badge variant="secondary">Завершена</Badge>}
+            />
+            <ForceCapitalRepairField
+              id="completed-estimate-force-capital-repair"
+              checked={estimate.forceCapitalRepair}
+              disabled
+            />
+          </div>
         }
         informationDescription="Сохранённые сведения завершённой сметы."
         informationAction={taskLink}
@@ -320,28 +328,38 @@ export function RepairEstimateCompletedWorkspace({
 
   const mutationPending = mutation.isPending
   const information = (
-    <RepairWorkInformationFields
-      warehouseId={warehouseId}
-      rentalItemId={draft.rentalItemId}
-      rentalItemNumber={estimate.cabinNumber}
-      contextLabel="От кого"
-      contextValue={draft.sourceParty}
-      dispatchDate={draft.dispatchDate}
-      comment={draft.comment}
-      showComment={false}
-      disabled={mutationPending}
-      readOnly
-      onRentalItemChange={() => undefined}
-      onContextChange={(sourceParty) =>
-        setDraft((current) => ({ ...current, sourceParty }))
-      }
-      onDispatchDateChange={(dispatchDate) =>
-        setDraft((current) => ({ ...current, dispatchDate }))
-      }
-      onCommentChange={(comment) =>
-        setDraft((current) => ({ ...current, comment }))
-      }
-    />
+    <div className="flex flex-col gap-4">
+      <RepairWorkInformationFields
+        warehouseId={warehouseId}
+        rentalItemId={draft.rentalItemId}
+        rentalItemNumber={estimate.cabinNumber}
+        contextLabel="От кого"
+        contextValue={draft.sourceParty}
+        dispatchDate={draft.dispatchDate}
+        comment={draft.comment}
+        showComment={false}
+        disabled={mutationPending}
+        readOnly
+        onRentalItemChange={() => undefined}
+        onContextChange={(sourceParty) =>
+          setDraft((current) => ({ ...current, sourceParty }))
+        }
+        onDispatchDateChange={(dispatchDate) =>
+          setDraft((current) => ({ ...current, dispatchDate }))
+        }
+        onCommentChange={(comment) =>
+          setDraft((current) => ({ ...current, comment }))
+        }
+      />
+      <ForceCapitalRepairField
+        id="amended-estimate-force-capital-repair"
+        checked={draft.forceCapitalRepair}
+        disabled={mutationPending}
+        onCheckedChange={(forceCapitalRepair) =>
+          setDraft((current) => ({ ...current, forceCapitalRepair }))
+        }
+      />
+    </div>
   )
   const estimateLines = (
     <div className="flex h-full min-h-0 flex-col gap-3">

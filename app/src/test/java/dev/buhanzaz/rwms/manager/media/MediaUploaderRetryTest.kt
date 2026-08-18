@@ -21,7 +21,7 @@ import retrofit2.Response
 @OptIn(ExperimentalCoroutinesApi::class)
 class MediaUploaderRetryTest {
     @Test
-    fun `parallel owner batches share one three-upload transport limit`() = runTest {
+    fun `parallel owner batches share one bounded upload transport limit`() = runTest {
         val permits = Semaphore(MEDIA_UPLOAD_PARALLELISM)
         val release = CompletableDeferred<Unit>()
         var activeUploads = 0
@@ -59,7 +59,7 @@ class MediaUploaderRetryTest {
     }
 
     @Test
-    fun `bounded uploads run three at a time but publish ready items in source order`() = runTest {
+    fun `bounded uploads publish ready items in source order`() = runTest {
         val releaseFirstBatch = CompletableDeferred<Unit>()
         val started = mutableListOf<Int>()
         val callbacks = mutableListOf<Int>()
@@ -68,7 +68,7 @@ class MediaUploaderRetryTest {
 
         val results = async {
             uploadBoundedParallelOrdered(
-                inputs = (0..3).toList(),
+                inputs = (0..MEDIA_UPLOAD_PARALLELISM).toList(),
                 upload = { index ->
                     started += index
                     activeUploads += 1
@@ -87,20 +87,56 @@ class MediaUploaderRetryTest {
         }
         runCurrent()
 
-        assertThat(started).containsExactly(0, 1, 2).inOrder()
+        assertThat(started)
+            .containsExactlyElementsIn((0 until MEDIA_UPLOAD_PARALLELISM).toList())
+            .inOrder()
         assertThat(activeUploads).isEqualTo(MEDIA_UPLOAD_PARALLELISM)
         assertThat(maximumActiveUploads).isEqualTo(MEDIA_UPLOAD_PARALLELISM)
 
         releaseFirstBatch.complete(Unit)
         advanceUntilIdle()
 
-        assertThat(results.await()).containsExactly(
-            "media-0",
-            "media-1",
-            "media-2",
-            "media-3",
-        ).inOrder()
-        assertThat(callbacks).containsExactly(0, 1, 2, 3).inOrder()
+        assertThat(results.await())
+            .containsExactlyElementsIn(
+                (0..MEDIA_UPLOAD_PARALLELISM).map { index -> "media-$index" },
+            ).inOrder()
+        assertThat(callbacks)
+            .containsExactlyElementsIn((0..MEDIA_UPLOAD_PARALLELISM).toList())
+            .inOrder()
+    }
+
+    @Test
+    fun `server processing wait releases upload permit for later bytes`() = runTest {
+        val processingRelease = CompletableDeferred<Unit>()
+        val accepted = mutableListOf<Int>()
+        val processing = mutableListOf<Int>()
+
+        val result = async {
+            uploadAcceptedBoundedParallelOrdered(
+                inputs = (0..MEDIA_UPLOAD_PARALLELISM).toList(),
+                accept = { index ->
+                    accepted += index
+                    "media-$index"
+                },
+                complete = { index, mediaId ->
+                    processing += index
+                    processingRelease.await()
+                    mediaId
+                },
+                onReady = { _, _ -> },
+            )
+        }
+        runCurrent()
+
+        assertThat(accepted).containsExactlyElementsIn((0..MEDIA_UPLOAD_PARALLELISM).toList())
+        assertThat(processing).containsExactlyElementsIn((0..MEDIA_UPLOAD_PARALLELISM).toList())
+
+        processingRelease.complete(Unit)
+        advanceUntilIdle()
+        assertThat(result.await())
+            .containsExactlyElementsIn(
+                (0..MEDIA_UPLOAD_PARALLELISM).map { index -> "media-$index" },
+            ).inOrder()
     }
 
     @Test

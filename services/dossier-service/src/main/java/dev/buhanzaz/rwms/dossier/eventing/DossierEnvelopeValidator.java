@@ -231,13 +231,13 @@ public final class DossierEnvelopeValidator {
     add(result, "rwms.asset.rental-item.v1", "RENTAL_ITEM", SubjectKind.ASSET, note, note,
         "rentalItemId", "CABIN_MANUAL_NOTE_ADDED", "asset.rental-item.manual-note-added.v1");
 
-    Set<String> estimate = Set.of("estimateId", "warehouseId", "rentalItemId", "lifecycle", "revision", "dispatchDate", "lineCount", "completionKind", "repairId");
+    Set<String> estimate = Set.of("estimateId", "warehouseId", "rentalItemId", "lifecycle", "revision", "dispatchDate", "lineCount", "completionKind", "repairId", "forceCapitalRepair");
     addMaintenance(result, "ESTIMATE", estimate, "estimateId", Map.of(
         "maintenance.estimate.created.v1", "ESTIMATE_CREATED",
         "maintenance.estimate.draft-changed.v1", "ESTIMATE_DRAFT_CHANGED",
         "maintenance.estimate.completed.v1", "ESTIMATE_COMPLETED",
         "maintenance.estimate.amended.v1", "ESTIMATE_AMENDED"));
-    Set<String> repair = Set.of("repairId", "rootRepairId", "sourceRepairId", "estimateId", "warehouseId", "rentalItemId", "origin", "kind", "executionState", "acceptanceState", "dispatchDate", "priority", "stages");
+    Set<String> repair = Set.of("repairId", "rootRepairId", "sourceRepairId", "estimateId", "warehouseId", "rentalItemId", "origin", "kind", "executionState", "acceptanceState", "dispatchDate", "priority", "stages", "forceCapitalRepair");
     addMaintenance(result, "REPAIR", repair, "repairId", Map.ofEntries(
         Map.entry("maintenance.repair.created.v1", "REPAIR_CREATED"),
         Map.entry("maintenance.repair.plan-changed.v1", "REPAIR_PLAN_CHANGED"),
@@ -314,9 +314,33 @@ public final class DossierEnvelopeValidator {
     };
   }
 
-  private static void addMaintenance(Map<String, EventPolicy> result, String aggregate, Set<String> fields, String identity, Map<String, String> codes) {
+  /**
+   * Registers strict maintenance v1 policies while accepting facts created before the additive
+   * manual capital-repair choice. New producers still include {@code forceCapitalRepair}; omission
+   * in a historical fact has the compatibility meaning {@code false}.
+   */
+  private static void addMaintenance(
+      Map<String, EventPolicy> result,
+      String aggregate,
+      Set<String> fields,
+      String identity,
+      Map<String, String> codes) {
     String topic = "rwms.maintenance." + aggregate.toLowerCase(java.util.Locale.ROOT) + ".v1";
-    codes.forEach((event, code) -> add(result, topic, aggregate, SubjectKind.MAINTENANCE, fields, fields, identity, code, event));
+    Set<String> required = new HashSet<>(fields);
+    required.remove("forceCapitalRepair");
+    Set<String> immutableRequired = Set.copyOf(required);
+    codes.forEach(
+        (event, code) ->
+            add(
+                result,
+                topic,
+                aggregate,
+                SubjectKind.MAINTENANCE,
+                fields,
+                immutableRequired,
+                identity,
+                code,
+                event));
   }
 
   private static void add(Map<String, EventPolicy> result, String topic, String aggregate, SubjectKind subject, Set<String> fields, Set<String> required, String identity, String code, String event) {

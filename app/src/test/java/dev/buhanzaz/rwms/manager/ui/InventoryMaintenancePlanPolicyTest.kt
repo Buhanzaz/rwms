@@ -1,12 +1,14 @@
 package dev.buhanzaz.rwms.manager.ui
 
 import com.google.common.truth.Truth.assertThat
+import dev.buhanzaz.rwms.manager.network.InventoryFrozenPlanLineDto
+import dev.buhanzaz.rwms.manager.network.InventoryFrozenPlanStageDto
 import dev.buhanzaz.rwms.manager.network.RoutingSnapshotDto
 import org.junit.Test
 
 class InventoryMaintenancePlanPolicyTest {
     @Test
-    fun `inventory plan keeps only priority and repair delivery intent`() {
+    fun `inventory plan keeps priority and the selected capital repair route`() {
         val line = MaintenanceLineEditorState(
             id = "line-1",
             catalogNodeId = "node-1",
@@ -33,29 +35,48 @@ class InventoryMaintenancePlanPolicyTest {
             planLines = listOf(line),
             planStages = listOf(stage),
             planPriority = 2,
-            planMovementToRepair = true,
-            planLogisticsPlanningMode = LOGISTICS_PLANNING_MODE_AUTO,
+            planForceCapitalRepair = true,
+            planMovementToRepair = false,
+            planLogisticsPlanningMode = null,
             planLogisticsScheduledDate = null,
         )
 
         val maintenance = inventory.toMaintenancePlanEditor()
         val changed = inventory.withMaintenancePlanEditor(
-            maintenance.copy(priority = 5),
+            maintenance.copy(priority = 5, forceCapitalRepair = false),
         )
 
         assertThat(maintenance.sourceParty).isEqualTo("Инвентаризация")
         assertThat(maintenance.lines).containsExactly(line)
         assertThat(maintenance.stages).containsExactly(stage)
-        assertThat(maintenance.movementToRepair).isTrue()
-        assertThat(maintenance.logisticsPlanningMode)
-            .isEqualTo(LOGISTICS_PLANNING_MODE_AUTO)
+        assertThat(maintenance.forceCapitalRepair).isTrue()
+        assertThat(maintenance.movementToRepair).isFalse()
+        assertThat(maintenance.logisticsPlanningMode).isNull()
         assertThat(maintenance.logisticsScheduledDate).isNull()
         assertThat(changed.planPriority).isEqualTo(5)
+        assertThat(changed.planForceCapitalRepair).isFalse()
         assertThat(changed.planLines).containsExactly(line)
-        assertThat(changed.planMovementToRepair).isTrue()
-        assertThat(changed.planLogisticsPlanningMode)
-            .isEqualTo(LOGISTICS_PLANNING_MODE_AUTO)
+        assertThat(changed.planMovementToRepair).isFalse()
+        assertThat(changed.planLogisticsPlanningMode).isNull()
         assertThat(changed.planLogisticsScheduledDate).isNull()
+    }
+
+    @Test
+    fun `empty inventory plan clears hidden capital repair choice`() {
+        val inventory = InventoryEditorState(
+            findingId = "finding-1",
+            number = "БЫТ-001",
+            outcome = "MATCHED",
+            planForceCapitalRepair = true,
+        )
+
+        val maintenance = inventory.toMaintenancePlanEditor()
+        val roundTripped = inventory.withMaintenancePlanEditor(
+            maintenance.copy(forceCapitalRepair = true),
+        )
+
+        assertThat(maintenance.forceCapitalRepair).isFalse()
+        assertThat(roundTripped.planForceCapitalRepair).isFalse()
     }
 
     @Test
@@ -107,6 +128,41 @@ class InventoryMaintenancePlanPolicyTest {
         assertThat(roundTripped.planStages).containsExactly(firstStage, secondStage).inOrder()
     }
 
+    @Test
+    fun `frozen inventory allocation consumes repeated and manual lines exactly once`() {
+        val routeId = "queue-1"
+        val catalogNodeId = "catalog-work"
+        val lines = listOf(
+            frozenLine("work-1", "CATALOG", "WORK", catalogNodeId, routeId),
+            frozenLine("work-2", "CATALOG", "WORK", catalogNodeId, routeId),
+            frozenLine("custom-work", "MANUAL", "WORK", null, routeId),
+            frozenLine("custom-material", "MANUAL", "MATERIAL", null, routeId),
+        )
+        val stages = (0..2).map { order ->
+            InventoryFrozenPlanStageDto(
+                id = "stage-$order",
+                order = order,
+                catalogNodeId = catalogNodeId,
+                catalogNodeName = "Замена ДВП",
+                kind = "REPAIR_WORK",
+                routingQueueId = routeId,
+                routingQueueName = "Ремонт",
+                routingQueueType = "REPAIR",
+                photoRequired = false,
+                normativeDurationMinutes = 45,
+            )
+        }
+
+        val result = inventoryFrozenPlanLineIndexesByStage(lines, stages)
+
+        assertThat(result).containsExactly(
+            "stage-0", listOf(0),
+            "stage-1", listOf(1),
+            "stage-2", listOf(2, 3),
+        ).inOrder()
+        assertThat(result.values.flatten()).containsExactly(0, 1, 2, 3).inOrder()
+    }
+
     private fun planLine(id: String, comment: String) = MaintenanceLineEditorState(
         id = id,
         catalogNodeId = "catalog-work",
@@ -117,5 +173,27 @@ class InventoryMaintenancePlanPolicyTest {
         unitPrice = "1500.00",
         normativeMinutes = 45,
         comment = comment,
+    )
+
+    private fun frozenLine(
+        id: String,
+        sourceKind: String,
+        lineType: String,
+        catalogNodeId: String?,
+        routingQueueId: String,
+    ) = InventoryFrozenPlanLineDto(
+        id = id,
+        sourceKind = sourceKind,
+        lineType = lineType,
+        catalogNodeId = catalogNodeId,
+        routingQueueId = routingQueueId,
+        routingQueueName = "Ремонт",
+        routingQueueType = "REPAIR",
+        description = id,
+        normalizedDescription = id,
+        unit = "шт.",
+        quantity = "1",
+        unitPriceMinor = 100L,
+        normativeMinutes = "1",
     )
 }

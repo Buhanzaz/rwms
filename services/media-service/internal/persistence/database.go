@@ -72,7 +72,7 @@ func (database *Database) Ready(ctx context.Context) error {
 }
 
 // VerifyMigrations checks Flyway versions, descriptions, SQL type, success,
-// and checksums against the approved V1–V11 sequence.
+// and checksums against the approved V1–V12 sequence.
 func (database *Database) VerifyMigrations(ctx context.Context) error {
 	var historyTable *string
 	if err := database.Pool.QueryRow(ctx, "select to_regclass('public.flyway_schema_history')::text").Scan(&historyTable); err != nil {
@@ -118,9 +118,10 @@ func verifyMigrationHistory(history []migrationHistoryRow) error {
 		{"9", "asset import worker", "V9__asset_import_worker.sql", mediamigration.V9},
 		{"10", "canonical cabin photo library", "V10__canonical_cabin_photo_library.sql", mediamigration.V10},
 		{"11", "bounded media processing recovery", "V11__bounded_media_processing_recovery.sql", mediamigration.V11},
+		{"12", "video playback variant", "V12__video_playback_variant.sql", mediamigration.V12},
 	}
 	if len(history) != len(expected) {
-		return fmt.Errorf("%w: expected the exact approved V1 through V11 history, found %d versioned rows", ErrSchemaNotReady, len(history))
+		return fmt.Errorf("%w: expected the exact approved V1 through V12 history, found %d versioned rows", ErrSchemaNotReady, len(history))
 	}
 	expectedByVersion := make(map[string]approvedMigration, len(expected))
 	for _, migration := range expected {

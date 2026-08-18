@@ -1,5 +1,8 @@
 package dev.buhanzaz.rwms.manager.ui.components
 
+import android.view.KeyEvent
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.resolutionselector.ResolutionSelector
 import com.google.common.truth.Truth.assertThat
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -8,10 +11,84 @@ import org.junit.runners.JUnit4
 @RunWith(JUnit4::class)
 class ManagerCameraPolicyTest {
     @Test
+    fun `dialog camera consumes volume keys and triggers once per press`() {
+        var shutterCount = 0
+
+        assertThat(
+            managerHandleVolumeShutterKey(
+                keyCode = KeyEvent.KEYCODE_VOLUME_UP,
+                action = KeyEvent.ACTION_DOWN,
+                repeatCount = 0,
+            ) { shutterCount += 1 },
+        ).isTrue()
+        assertThat(
+            managerHandleVolumeShutterKey(
+                keyCode = KeyEvent.KEYCODE_VOLUME_UP,
+                action = KeyEvent.ACTION_DOWN,
+                repeatCount = 1,
+            ) { shutterCount += 1 },
+        ).isTrue()
+        assertThat(
+            managerHandleVolumeShutterKey(
+                keyCode = KeyEvent.KEYCODE_VOLUME_UP,
+                action = KeyEvent.ACTION_UP,
+                repeatCount = 0,
+            ) { shutterCount += 1 },
+        ).isTrue()
+        assertThat(
+            managerHandleVolumeShutterKey(
+                keyCode = KeyEvent.KEYCODE_VOLUME_DOWN,
+                action = KeyEvent.ACTION_DOWN,
+                repeatCount = 0,
+            ) { shutterCount += 1 },
+        ).isTrue()
+        assertThat(
+            managerHandleVolumeShutterKey(
+                keyCode = KeyEvent.KEYCODE_BACK,
+                action = KeyEvent.ACTION_DOWN,
+                repeatCount = 0,
+            ) { shutterCount += 1 },
+        ).isFalse()
+        assertThat(shutterCount).isEqualTo(2)
+    }
+
+    @Test
     fun `camera exposes only the requested modes`() {
         assertThat(ManagerCameraMode.entries.map(ManagerCameraMode::label))
             .containsExactly("НОЧЬ", "ФОТО", "ВИДЕО")
             .inOrder()
+    }
+
+    @Test
+    fun `ordinary photos minimize latency while night and explicit hdr preserve quality`() {
+        assertThat(
+            managerStillCaptureMode(
+                mode = ManagerCameraMode.Photo,
+                photoHdrExtensionActive = false,
+            ),
+        ).isEqualTo(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+        assertThat(
+            managerStillCaptureMode(
+                mode = ManagerCameraMode.Photo,
+                photoHdrExtensionActive = true,
+            ),
+        ).isEqualTo(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+        assertThat(
+            managerStillCaptureMode(
+                mode = ManagerCameraMode.Night,
+                photoHdrExtensionActive = false,
+            ),
+        ).isEqualTo(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+    }
+
+    @Test
+    fun `automatic photo quality targets fast twelve megapixel capture`() {
+        assertThat(managerEffectivePhotoMegapixels(null)).isEqualTo(12)
+        assertThat(managerEffectivePhotoMegapixels(50)).isEqualTo(50)
+        assertThat(managerPhotoAllowedResolutionMode(null))
+            .isEqualTo(ResolutionSelector.PREFER_CAPTURE_RATE_OVER_HIGHER_RESOLUTION)
+        assertThat(managerPhotoAllowedResolutionMode(50))
+            .isEqualTo(ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE)
     }
 
     @Test
@@ -129,7 +206,7 @@ class ManagerCameraPolicyTest {
         assertThat(normalized.requestedMegapixels).isNull()
         assertThat(normalized.exposureEvTenths).isEqualTo(20)
         assertThat(normalized.videoFramesPerSecond).isEqualTo(30)
-        assertThat(normalized.ultraHdrEnabled).isTrue()
+        assertThat(normalized.ultraHdrEnabled).isFalse()
         assertThat(normalized.videoHdrEnabled).isFalse()
     }
 

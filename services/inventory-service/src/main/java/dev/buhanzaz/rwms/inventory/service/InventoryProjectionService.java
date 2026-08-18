@@ -605,6 +605,9 @@ final class InventoryProjectionService extends InventoryProjectionWorkflowSuppor
     JsonNode source = read(snapshot.getSourceSnapshot());
     boolean sourceMovementToRepair =
         requiredBoolean(source, "movementToRepair", "frozen plan movement to repair");
+    boolean sourceForceCapitalRepair =
+        booleanOrDefault(
+            source, "forceCapitalRepair", "frozen plan capital-repair choice", false);
     LogisticsPlanningMode sourceLogisticsPlanningMode =
         nullableLogisticsPlanningMode(
             source, "logisticsPlanningMode", "frozen plan logistics planning mode");
@@ -613,7 +616,9 @@ final class InventoryProjectionService extends InventoryProjectionWorkflowSuppor
             source, "logisticsScheduledDate", "frozen plan logistics scheduled date");
     if (!LogisticsPlanningMode.validInboundPlanning(
             sourceMovementToRepair, sourceLogisticsPlanningMode, sourceLogisticsScheduledDate)
+        || (sourceMovementToRepair && sourceForceCapitalRepair)
         || sourceMovementToRepair != snapshot.isMovementToRepair()
+        || sourceForceCapitalRepair != snapshot.isForceCapitalRepair()
         || sourceLogisticsPlanningMode != snapshot.getLogisticsPlanningMode()
         || !java.util.Objects.equals(
             sourceLogisticsScheduledDate, snapshot.getLogisticsScheduledDate())) {
@@ -634,6 +639,22 @@ final class InventoryProjectionService extends InventoryProjectionWorkflowSuppor
             .map(
                 line -> {
                   JsonNode sourceLine = sourceLines.path(line.getLineNo());
+                  JsonNode sourceRouting = sourceLine.path("routing");
+                  UUID routingQueueId =
+                      sourceRouting.isObject() && sourceRouting.hasNonNull("queueId")
+                          ? requiredUuid(
+                              sourceRouting, "queueId", "frozen plan line routing queue id")
+                          : null;
+                  String routingQueueName = nullableText(sourceRouting.get("queueName"));
+                  String routingQueueType = nullableText(sourceRouting.get("queueType"));
+                  boolean incompleteRouting =
+                      (routingQueueId == null)
+                          != (routingQueueName == null && routingQueueType == null);
+                  if (incompleteRouting
+                      || (routingQueueName == null) != (routingQueueType == null)) {
+                    throw new IllegalStateException(
+                        "Persisted frozen plan line routing snapshot is incomplete");
+                  }
                   return
                     new FrozenPlanLineView(
                         line.getId(),
@@ -641,6 +662,9 @@ final class InventoryProjectionService extends InventoryProjectionWorkflowSuppor
                         line.getLineType(),
                         line.getCatalogVersionId(),
                         line.getCatalogNodeId(),
+                        routingQueueId,
+                        routingQueueName,
+                        routingQueueType,
                         line.getDescription(),
                         line.getNormalizedDescription(),
                         line.getUnit(),
@@ -680,7 +704,8 @@ final class InventoryProjectionService extends InventoryProjectionWorkflowSuppor
         snapshot.getLogisticsPlanningMode(),
         snapshot.getLogisticsScheduledDate(),
         lineViews,
-        stageViews);
+        stageViews,
+        snapshot.isForceCapitalRepair());
   }
 
   List<MediaReference> frozenPlanLineMediaReferences(JsonNode sourceLine) {

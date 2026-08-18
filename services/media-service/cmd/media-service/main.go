@@ -63,6 +63,20 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	var videoTranscoder media.VideoTranscoder
+	var videoProbe media.VideoProbe
+	if configuration.MaxVideoDuration > 0 {
+		ffmpeg, transcodeErr := media.NewFFmpegTranscoder(configuration.FFmpegExecutable)
+		if transcodeErr != nil {
+			return transcodeErr
+		}
+		ffprobe, probeErr := media.NewFFprobe(configuration.FFprobeExecutable)
+		if probeErr != nil {
+			return probeErr
+		}
+		videoTranscoder = ffmpeg
+		videoProbe = ffprobe
+	}
 	startupContext, startupCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer startupCancel()
 	database, err := persistence.Open(startupContext, configuration.DatabaseURL)
@@ -141,8 +155,11 @@ func run(logger *slog.Logger) error {
 	}
 	processingConsumer := worker.NewConsumer(repository, consumerClient, worker.Processor{
 		Image: media.ImageProcessor{Store: objectStore, Limits: limits},
-		Video: media.VideoProcessor{Store: objectStore, Probe: media.FFprobe{},
-			AllowedCodecs: configuration.AllowedVideoCodecs, MaxDuration: configuration.MaxVideoDuration, Limits: limits},
+		Video: media.VideoProcessor{
+			Store: objectStore, Probe: videoProbe, Transcoder: videoTranscoder,
+			AllowedCodecs: configuration.AllowedVideoCodecs, MaxDuration: configuration.MaxVideoDuration,
+			MaxOutputBytes: configuration.MaxVideoOutputBytes, Limits: limits,
+		},
 	}, configuration.InstanceID+":worker", configuration.ProcessingTimeout, logger)
 	ownerConsumer := worker.NewInventoryOwnerConsumer(repository, ownerConsumerClient, logger)
 	cabinOwnerConsumer := worker.NewCabinOwnerConsumer(repository, cabinOwnerConsumerClient, logger)
@@ -174,8 +191,8 @@ func run(logger *slog.Logger) error {
 	processingConsumer.AddRecoveryObserver(processingMetrics)
 	httpServer := &http.Server{
 		Addr: configuration.HTTPAddress, Handler: apiServer.Handler(),
-		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
-		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: configuration.HTTPReadTimeout,
+		WriteTimeout: configuration.HTTPWriteTimeout, IdleTimeout: 60 * time.Second,
 		MaxHeaderBytes: 32 << 10, ErrorLog: log.New(io.Discard, "", 0),
 	}
 	logger.Info("media service started", "address", configuration.HTTPAddress,

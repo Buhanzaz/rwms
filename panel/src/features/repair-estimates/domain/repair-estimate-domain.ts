@@ -292,6 +292,7 @@ export function createNewEstimateDraft(): RepairEstimateEditorDraft {
     media: [],
     maintenanceMediaReferences: [],
     coverMediaId: null,
+    forceCapitalRepair: false,
     pendingUploads: [],
   }
 }
@@ -338,6 +339,7 @@ export function toEstimateEditorDraft(
       ...(estimate.maintenanceMediaReferences ?? []),
     ],
     coverMediaId: estimate.coverMediaId ?? null,
+    forceCapitalRepair: estimate.forceCapitalRepair,
     pendingUploads: [],
   }
 }
@@ -640,6 +642,24 @@ export function buildRepairEstimateTaskPlans(
 
   return groups.map((group, index) => {
     const primaryLine = group.lines.find((line) => line.lineType === "WORK")
+    const routingCatalogNodeId = primaryLine?.catalogSnapshot
+      ? null
+      : (group.lines.find((line) => line.catalogSnapshot)?.catalogSnapshot
+          ?.nodeId ??
+        catalog.operationalEstimateNodes
+          .filter(
+            (node) => node.nodeType === "WORK" || node.nodeType === "MATERIAL"
+          )
+          .filter((node) => {
+            const binding = catalog.getEffectiveQueueBinding(node.id)
+            return (
+              binding?.queueId === group.queueId &&
+              binding.queueKind === group.routeQueueKind
+            )
+          })
+          .map((node) => node.id)
+          .sort()[0] ??
+        null)
     return {
       id: createOpaqueId("task-plan"),
       kind: "REPAIR_WORK",
@@ -647,6 +667,7 @@ export function buildRepairEstimateTaskPlans(
       primaryLineId: primaryLine?.id ?? null,
       groupComment: commentsForLines(group.lines),
       queueId: group.queueId,
+      ...(routingCatalogNodeId ? { routingCatalogNodeId } : {}),
       queueName: group.queueName,
       routeQueueKind: group.routeQueueKind,
       sortOrder: (index + 1) * 10,

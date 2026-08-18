@@ -243,6 +243,10 @@ describe("catalog estimate additions", () => {
 })
 
 describe("estimate return selection", () => {
+  it("starts with the optional capital-repair choice disabled", () => {
+    expect(createNewEstimateDraft().forceCapitalRepair).toBe(false)
+  })
+
   it("replaces the estimate source fields with return metadata", () => {
     const draft = {
       ...createNewEstimateDraft(),

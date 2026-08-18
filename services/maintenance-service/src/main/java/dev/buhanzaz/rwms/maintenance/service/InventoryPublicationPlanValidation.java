@@ -66,6 +66,10 @@ final class InventoryPublicationPlanValidation {
     FrozenInventoryPlanSnapshot snapshot = adaptSnapshot(
         finding.snapshotSchemaVersion(), finding.snapshot());
     validateSnapshot(snapshot);
+    if (snapshot.forceCapitalRepair() != finding.forceCapitalRepair()) {
+      throw conflict(
+          "Inventory publication capital-repair choice differs from the frozen snapshot");
+    }
     List<MediaReferenceInput> sourceMedia = sourceMedia(snapshot);
     if (sourceMedia.size() > 100 || !sourceMedia.equals(finding.media())) {
       throw conflict("Inventory publication media must equal the deterministic frozen plan media union");

@@ -42,7 +42,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsTheAuthoritativeMaintenanceSchema() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(42);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(44);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -361,7 +361,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     throughV34.validate();
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(8);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(10);
     upgraded.validate();
     assertThat(constraintDefinition("event_stream_head", "ck_maintenance_stream_type"))
         .contains("PROPERTY_DISPOSITION");
@@ -372,6 +372,112 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "warehouse_readiness_fence");
     assertThat(triggerDefinition("furniture_equipment_link_review_audit_immutable"))
         .contains("reject_furniture_link_review_audit_mutation");
+  }
+
+  @Test
+  void appliedV42BackfillsOneCanonicalLegacyFurnitureLinkAcrossCatalogVersions() {
+    Flyway throughV42 = Flyway.configure()
+        .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+        .locations(MIGRATIONS)
+        .target("42")
+        .baselineOnMigrate(false)
+        .cleanDisabled(true)
+        .validateOnMigrate(true)
+        .validateMigrationNaming(true)
+        .outOfOrder(false)
+        .load();
+    assertThat(throughV42.migrate().migrationsExecuted).isEqualTo(42);
+
+    UUID warehouseId = UUID.randomUUID();
+    UUID supersededCatalogId = UUID.randomUUID();
+    UUID activeCatalogId = UUID.randomUUID();
+    UUID furnitureMaterialId = UUID.randomUUID();
+    UUID ordinaryMaterialId = UUID.randomUUID();
+    UUID equipmentId = UUID.randomUUID();
+    insertCatalogVersion(supersededCatalogId, warehouseId, "e".repeat(64));
+    insertCatalogVersion(activeCatalogId, warehouseId, "f".repeat(64));
+    jdbc.update(
+        """
+        update catalog_version
+           set state='SUPERSEDED',version=6,node_count=1,
+               activated_at=clock_timestamp()-interval '1 day',updated_at=clock_timestamp()-interval '1 day'
+         where id=?
+        """,
+        supersededCatalogId);
+    jdbc.update(
+        """
+        update catalog_version
+           set state='ACTIVE',version=7,node_count=2,
+               activated_at=clock_timestamp(),updated_at=clock_timestamp()
+         where id=?
+        """,
+        activeCatalogId);
+    jdbc.update(
+        """
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,node_type,name,active,furniture_category,
+          furniture_equipment_id,furniture_equipment_name,duration_minutes,
+          include_in_estimate,common_item,show_in_main_menu,forces_capital_repair)
+        values (?,?,?,'MATERIAL','Chair material',true,false,?,'Chair',0,true,false,false,false)
+        """,
+        UUID.randomUUID(),
+        furnitureMaterialId,
+        supersededCatalogId,
+        equipmentId);
+    jdbc.update(
+        """
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,node_type,name,active,furniture_category,
+          furniture_equipment_id,furniture_equipment_name,duration_minutes,
+          include_in_estimate,common_item,show_in_main_menu,forces_capital_repair)
+        values (?,?,?,'MATERIAL','Chair material',true,false,?,'Chair',0,true,false,false,false)
+        """,
+        UUID.randomUUID(),
+        furnitureMaterialId,
+        activeCatalogId,
+        equipmentId);
+    jdbc.update(
+        """
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,node_type,name,active,furniture_category,
+          duration_minutes,include_in_estimate,common_item,show_in_main_menu,
+          forces_capital_repair)
+        values (?,?,?,'MATERIAL','Plywood',true,false,0,true,false,false,false)
+        """,
+        UUID.randomUUID(),
+        ordinaryMaterialId,
+        activeCatalogId);
+
+    Flyway upgraded = flyway(MIGRATIONS);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(2);
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select warehouse_id,source_catalog_version_id,source_catalog_expected_version,
+                       requested_name,state,attempt_count,equipment_id,equipment_name,
+                       requested_equipment_version,requested_maximum_per_cabin
+                from furniture_equipment_link_intent where node_id=?
+                """,
+                furnitureMaterialId))
+        .containsEntry("warehouse_id", warehouseId)
+        .containsEntry("source_catalog_version_id", activeCatalogId)
+        .containsEntry("source_catalog_expected_version", 7L)
+        .containsEntry("requested_name", "Chair")
+        .containsEntry("state", "PENDING")
+        .containsEntry("attempt_count", 0)
+        .containsEntry("equipment_id", null)
+        .containsEntry("equipment_name", null)
+        .containsEntry("requested_equipment_version", null)
+        .containsEntry("requested_maximum_per_cabin", null);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from furniture_equipment_link_intent where node_id=?",
+                Integer.class,
+                ordinaryMaterialId))
+        .isZero();
+    assertThat(upgraded.migrate().migrationsExecuted).isZero();
   }
 
   @Test
@@ -588,7 +694,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         catalogId.toString(),
         "0".repeat(64));
 
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(18);
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(20);
 
     assertThat(jdbc.queryForObject(
         "select count(*) from catalog_node where catalog_version_id=? and node_type='WORK'",
@@ -969,7 +1075,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "0".repeat(64));
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(19);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(21);
     upgraded.validate();
 
     assertThat(
@@ -1132,7 +1238,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     insertLegacyEstimateStage(estimateId, UUID.randomUUID(), 2, "MOVE_FROM_REPAIR");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(16);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(18);
     upgraded.validate();
 
     assertThat(jdbc.queryForMap(
@@ -1314,7 +1420,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         repairStageId);
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(15);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(17);
     upgraded.validate();
 
     assertThat(
@@ -1427,7 +1533,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "0".repeat(64));
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(14);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(16);
     upgraded.validate();
 
     assertThat(jdbc.queryForMap(
@@ -1527,7 +1633,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     insertV20CatalogStreamArtifacts(otherCatalogId, otherNodeId, "ACTIVE");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(22);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(24);
     upgraded.validate();
 
     assertThat(jdbc.queryForObject(

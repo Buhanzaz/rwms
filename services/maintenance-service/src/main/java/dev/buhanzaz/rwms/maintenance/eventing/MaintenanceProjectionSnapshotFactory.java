@@ -181,6 +181,7 @@ public class MaintenanceProjectionSnapshotFactory {
     result.put("dispatchDate", text(value.getDispatchDate()));
     result.put("priority", value.getPriority());
     result.put("movementToRepair", value.isMovementToRepair());
+    result.put("forceCapitalRepair", value.isForceCapitalRepair());
     result.put("movementScheduledDate", text(value.getMovementScheduledDate()));
     result.put("sourceParty", value.getSourceParty());
     result.put("comment", value.getComment());
@@ -199,6 +200,7 @@ public class MaintenanceProjectionSnapshotFactory {
           item.put("sourceParty", revision.getSourceParty());
           item.put("reason", revision.getAmendmentReason());
           item.put("totalMinor", revision.getTotalMinor());
+          item.put("forceCapitalRepair", revision.isForceCapitalRepair());
           item.put("actor", json(revision.getActorRef()));
           item.put("recordedAt", text(revision.getRecordedAt()));
           item.put("lines", lines.findAllByEstimateIdAndEstimateRevisionOrderByLineNo(
@@ -259,6 +261,7 @@ public class MaintenanceProjectionSnapshotFactory {
     result.put("coverMediaId", text(value.getCoverMediaId()));
     result.put(
         "movementToRepair", value.isMovementToRepair());
+    result.put("forceCapitalRepair", value.isForceCapitalRepair());
     result.put(
         "logisticsPlanningMode",
         value.getLogisticsPlanningMode() == null

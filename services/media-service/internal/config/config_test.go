@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadRequiresExplicitResourceAndUploadLimits(t *testing.T) {
@@ -38,6 +39,7 @@ func TestLoadAcceptsCompleteFailClosedConfiguration(t *testing.T) {
 		"MEDIA_MAX_DECODED_PIXELS":     "1000000",
 		"MEDIA_MAX_IMAGE_OUTPUT_BYTES": "1048576",
 		"MEDIA_MAX_VIDEO_DURATION":     "2m",
+		"MEDIA_MAX_VIDEO_OUTPUT_BYTES": "524288",
 		"MEDIA_ALLOWED_VIDEO_CODECS":   "h264",
 		"MEDIA_UPLOAD_EXPIRY":          "5m",
 		"MEDIA_PROCESSING_TIMEOUT":     "30s",
@@ -51,11 +53,18 @@ func TestLoadAcceptsCompleteFailClosedConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if configuration.MaxUploadBytes != 1048576 || len(configuration.AllowedMIMETypes) != 2 {
+	if configuration.MaxUploadBytes != 1048576 || configuration.MaxVideoOutputBytes != 524288 ||
+		configuration.FFmpegExecutable != "ffmpeg" || configuration.FFprobeExecutable != "ffprobe" ||
+		len(configuration.AllowedMIMETypes) != 2 {
 		t.Fatalf("unexpected configuration: %#v", configuration)
 	}
 	if configuration.ManagementAddress != "127.0.0.1:9095" {
 		t.Fatalf("management address = %q, want default loopback", configuration.ManagementAddress)
+	}
+	if configuration.HTTPReadTimeout != 5*time.Minute ||
+		configuration.HTTPWriteTimeout != 5*time.Minute {
+		t.Fatalf("HTTP timeouts = %s/%s, want 5m/5m",
+			configuration.HTTPReadTimeout, configuration.HTTPWriteTimeout)
 	}
 	if configuration.InventoryTopic != "rwms.inventory.session.v1" ||
 		configuration.InventoryOwnerGroup != "media-service-inventory-owner-v1" ||
@@ -69,6 +78,37 @@ func TestLoadAcceptsCompleteFailClosedConfiguration(t *testing.T) {
 	if configuration.TaskBoardEntryOwnerProofTopic != "rwms.task-board.entry-owner-proof.v1" ||
 		configuration.TaskBoardEntryOwnerProofGroup != "media-service-task-board-entry-owner-proof-v1" {
 		t.Fatalf("task-board owner proof Kafka configuration = %#v", configuration)
+	}
+}
+
+func TestLoadRejectsNonPositiveHTTPTransferTimeouts(t *testing.T) {
+	setCompleteConfiguration(t)
+	t.Setenv("MEDIA_HTTP_READ_TIMEOUT", "0s")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "MEDIA_HTTP_READ_TIMEOUT") {
+		t.Fatalf("Load() error = %v, want read timeout rejection", err)
+	}
+
+	setCompleteConfiguration(t)
+	t.Setenv("MEDIA_HTTP_READ_TIMEOUT", "5m")
+	t.Setenv("MEDIA_HTTP_WRITE_TIMEOUT", "invalid")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "MEDIA_HTTP_WRITE_TIMEOUT") {
+		t.Fatalf("Load() error = %v, want write timeout rejection", err)
+	}
+}
+
+func TestLoadRequiresVideoPlaybackOutputLimitWhenVideoIsEnabled(t *testing.T) {
+	setCompleteConfiguration(t)
+	t.Setenv("MEDIA_MAX_VIDEO_OUTPUT_BYTES", "")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "MEDIA_MAX_VIDEO_OUTPUT_BYTES") {
+		t.Fatalf("Load() error = %v, want explicit video output limit rejection", err)
+	}
+}
+
+func TestLoadRejectsVideoPlaybackOutputLimitAboveUploadLimit(t *testing.T) {
+	setCompleteConfiguration(t)
+	t.Setenv("MEDIA_MAX_VIDEO_OUTPUT_BYTES", "1048577")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "must not exceed") {
+		t.Fatalf("Load() error = %v, want output/upload bound rejection", err)
 	}
 }
 
@@ -174,6 +214,7 @@ func setCompleteConfiguration(t *testing.T) {
 		"MEDIA_MAX_DECODED_PIXELS":     "1000000",
 		"MEDIA_MAX_IMAGE_OUTPUT_BYTES": "1048576",
 		"MEDIA_MAX_VIDEO_DURATION":     "2m",
+		"MEDIA_MAX_VIDEO_OUTPUT_BYTES": "524288",
 		"MEDIA_ALLOWED_VIDEO_CODECS":   "h264",
 		"MEDIA_UPLOAD_EXPIRY":          "5m",
 		"MEDIA_PROCESSING_TIMEOUT":     "30s",

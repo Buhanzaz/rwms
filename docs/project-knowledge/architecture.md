@@ -169,10 +169,25 @@ Ownerless version-1 uploads and plaintext catalog values are quarantined without
 being assigned to the next account. These stores remain client recovery/read
 optimizations; server state and authorization are authoritative.
 
+The active inventory editor follows that same account-and-warehouse boundary.
+Its route and structured draft metadata are encrypted with AES-GCM, while
+selected photo/video source files are copied into an app-private scoped
+directory before the UI adopts them. Relaunch restores the exact editor step
+and retained local media; a different login or warehouse cannot see or resume
+that draft. The recovered draft remains uncommitted client work until the
+normal version-fenced inventory command succeeds.
+
 Manager OAuth uses the public HTTPS `/auth/manager/callback`, which the native
 login client consumes inside the app. The production, release and local-test
 manifests do not expose AppAuth's custom-scheme redirect receiver, and the
 Gradle configuration has no custom redirect-scheme placeholder.
+
+Manager bearer retry carries the rejected access token into one serialized
+refresh. If another request has already persisted a different valid token, it
+is reused without a second refresh-token rotation. A transient refresh failure
+remains a transport failure and preserves the encrypted session; only an absent
+or terminally rejected refresh grant clears it. This client recovery rule does
+not weaken gateway or owner authorization.
 
 Evidence:
 [`BackgroundUploadStore`](../../app/src/main/java/dev/buhanzaz/rwms/manager/uploads/BackgroundUploadStore.kt),
@@ -180,7 +195,9 @@ Evidence:
 [`BackgroundUploadWorker`](../../app/src/main/java/dev/buhanzaz/rwms/manager/uploads/BackgroundUploadWorker.kt),
 [`ManagerWorkspaceCoordinator`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/coordinator/ManagerWorkspaceCoordinator.kt),
 [`MaintenanceCatalogCache`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/MaintenanceCatalogCache.kt),
+[`InventoryDraftStore`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/InventoryDraftStore.kt),
 [`ManagerAuth`](../../app/src/main/java/dev/buhanzaz/rwms/manager/auth/ManagerAuth.kt),
+[`manager bearer transport`](../../app/src/main/java/dev/buhanzaz/rwms/manager/network/Backend.kt),
 and the [manager manifest](../../app/src/main/AndroidManifest.xml).
 
 WorkerApp and DriverApp are separate packages, OAuth clients, encrypted stores
@@ -401,9 +418,19 @@ public media API. The exporter caps partition series and exposes no topic,
 identity, payload or free-form error labels. No second media deployable or
 cross-service recovery table is added.
 
+That same deployable now derives a bounded MP4 `PLAYBACK` object for accepted
+video originals. Both ffmpeg and ffprobe dependencies are resolved at startup,
+transformation time and output bytes are explicitly capped, and the original
+remains immutable in private object storage. Client-side parallel transfer
+limits do not change processing ownership or add another media scheduler.
+
 Evidence:
 [`consumer.go`](../../services/media-service/internal/worker/consumer.go),
 [`worker.go`](../../services/media-service/internal/persistence/worker.go),
+[`video_transcoder.go`](../../services/media-service/internal/media/video_transcoder.go),
+[`video_probe.go`](../../services/media-service/internal/media/video_probe.go),
+[`media-service startup`](../../services/media-service/cmd/media-service/main.go),
+[`V12__video_playback_variant.sql`](../../services/media-service/db/migration/V12__video_playback_variant.sql),
 [`processing_metrics.go`](../../services/media-service/internal/observability/processing_metrics.go),
 [`metrics_runtime.go`](../../services/media-service/cmd/media-service/metrics_runtime.go),
 [`V11__bounded_media_processing_recovery.sql`](../../services/media-service/db/migration/V11__bounded_media_processing_recovery.sql).

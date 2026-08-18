@@ -18,6 +18,8 @@ import type {
   DriverBoardCard,
 } from "@/features/logistics/driver-board/driver-board-model"
 import { DriverBoardPage } from "@/features/logistics/driver-board/driver-board-page"
+import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/repair-estimate"
+import type { RepairTaskDto } from "@/features/repair-tasks/model/repair-task"
 import { ApiError } from "@/lib/api-client"
 
 Object.defineProperties(HTMLElement.prototype, {
@@ -41,6 +43,10 @@ const assetApiMocks = vi.hoisted(() => ({
   listAssetRentalItems: vi.fn(),
 }))
 
+const repairTaskApiMocks = vi.hoisted(() => ({
+  getRepairTask: vi.fn(),
+}))
+
 const contextMocks = vi.hoisted(() => ({
   useAuth: vi.fn(),
   useWarehouse: vi.fn(),
@@ -52,6 +58,7 @@ const dndMocks = vi.hoisted(() => ({
   sortableData: new Map<string, unknown>(),
   draggableData: new Map<string, unknown>(),
   droppableData: new Map<string, unknown>(),
+  capitalPointerDown: vi.fn(),
 }))
 
 vi.mock("@/features/auth/use-auth", () => ({
@@ -79,6 +86,16 @@ vi.mock("@/features/logistics/driver-board/driver-board-api", async () => {
 vi.mock("@/features/rental-items/api/asset-rental-items-api", () => ({
   listAssetRentalItems: assetApiMocks.listAssetRentalItems,
 }))
+vi.mock("@/features/repair-tasks/api/repair-tasks-api", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/features/repair-tasks/api/repair-tasks-api")
+  >("@/features/repair-tasks/api/repair-tasks-api")
+
+  return {
+    ...actual,
+    getRepairTask: repairTaskApiMocks.getRepairTask,
+  }
+})
 vi.mock("@dnd-kit/core", () => ({
   closestCenter: vi.fn(),
   DndContext: ({
@@ -102,7 +119,7 @@ vi.mock("@dnd-kit/core", () => ({
     dndMocks.draggableData.set(id, data)
     return {
       attributes: {},
-      listeners: {},
+      listeners: { onPointerDown: dndMocks.capitalPointerDown },
       setNodeRef: vi.fn(),
       transform: null,
       isDragging: false,
@@ -263,6 +280,147 @@ const board: DriverBoard = {
   ],
 }
 
+function repairLine(
+  id: string,
+  params: Partial<RepairEstimateLineDto> = {}
+): RepairEstimateLineDto {
+  return {
+    id,
+    sourceLineKey: id,
+    lineType: "WORK",
+    description: "Работа без названия",
+    lineComment: "",
+    unit: "шт.",
+    quantity: 1,
+    normativeMinutes: 30,
+    unitPrice: "0.00",
+    lineTotal: "0.00",
+    catalogSnapshot: null,
+    customQueueBinding: null,
+    maintenanceMediaReferences: [],
+    rework: null,
+    ...params,
+  }
+}
+
+function repairStage({
+  id,
+  sortOrder,
+  queueName,
+  workLines = [],
+  materialLines = [],
+}: {
+  id: string
+  sortOrder: number
+  queueName: string
+  workLines?: RepairEstimateLineDto[]
+  materialLines?: RepairEstimateLineDto[]
+}): RepairTaskDto["subtasks"][number] {
+  return {
+    id,
+    taskBoardEntryId: null,
+    externalTaskId: null,
+    taskTitle: null,
+    taskText: null,
+    kind: "REPAIR_WORK",
+    status: "WAITING",
+    workLines,
+    materialLines,
+    primaryLineId: workLines[0]?.id ?? null,
+    groupComment: "",
+    evidence: [],
+    queueName,
+    queueId: null,
+    routeQueueKind: "REPAIR",
+    sortOrder,
+    entryType: "REAL",
+    queuePosition: sortOrder,
+    priority: 1,
+    pinned: false,
+    plannedDurationMinutes: null,
+    startedAt: null,
+    completedAt: null,
+    activeStartedAt: null,
+    activeWorkSeconds: 0,
+    workerGroup: null,
+    assignments: [],
+  }
+}
+
+function repairTaskDetails(): RepairTaskDto {
+  return {
+    id: CAPITAL_REPAIR_ID,
+    version: 2,
+    status: "QUEUED",
+    kind: "REPAIR",
+    origin: "ESTIMATE",
+    acceptanceStatus: "NOT_READY",
+    startedAt: null,
+    completedAt: null,
+    warehouseId: WAREHOUSE_ID,
+    rentalItemId: "00000000-0000-4000-8000-000000000031",
+    cabinNumber: "БТ-КАП",
+    actorId: "driver-board-manager",
+    sourceParty: null,
+    dispatchDate: null,
+    priority: 1,
+    maintenanceMediaReferences: [],
+    coverMediaId: null,
+    subtasks: [
+      repairStage({
+        id: "00000000-0000-4000-8000-000000000082",
+        sortOrder: 1,
+        queueName: "Малярный цех",
+      }),
+      repairStage({
+        id: "00000000-0000-4000-8000-000000000081",
+        sortOrder: 0,
+        queueName: "Столярный цех",
+        workLines: [
+          repairLine("00000000-0000-4000-8000-000000000083", {
+            description: "Заменить оконный блок",
+            quantity: 2,
+            unit: "шт.",
+            catalogSnapshot: {
+              nodeId: "00000000-0000-4000-8000-000000000084",
+              name: "Замена окна",
+              nodeType: "WORK",
+              furnitureEquipment: null,
+              characteristic: null,
+            },
+          }),
+        ],
+        materialLines: [
+          repairLine("00000000-0000-4000-8000-000000000085", {
+            lineType: "MATERIAL",
+            description: "Пена монтажная",
+            quantity: 3.5,
+            unit: "л",
+            normativeMinutes: 0,
+          }),
+        ],
+      }),
+    ],
+    sourceEstimateId: null,
+    sourceEstimateVersion: null,
+    sourceInventoryId: null,
+    sourceInventoryFindingId: null,
+    sourceRepairTaskId: null,
+    sourceRepairTaskVersion: null,
+    readyAt: null,
+    writtenOffAt: null,
+    decisionActorId: null,
+    taskBoardAvailable: true,
+    awaitingMovement: false,
+    movementToRepair: true,
+    forceCapitalRepair: false,
+    logisticsPlanningMode: "AUTO",
+    logisticsScheduledDate: null,
+    createdAt: "2026-08-01T08:00:00Z",
+    updatedAt: "2026-08-01T08:00:00Z",
+  }
+}
+
 function renderPage(currentBoard: DriverBoard = board) {
   apiMocks.getDriverBoard.mockResolvedValue(currentBoard)
   const queryClient = new QueryClient({
@@ -312,6 +470,7 @@ beforeEach(() => {
     totalElements: 1,
     totalPages: 1,
   })
+  repairTaskApiMocks.getRepairTask.mockResolvedValue(repairTaskDetails())
   dndMocks.sortableData.clear()
   dndMocks.draggableData.clear()
   dndMocks.droppableData.clear()
@@ -421,6 +580,128 @@ describe("DriverBoardPage", () => {
 
     expect(screen.getByLabelText(/^Задания на .*1 августа/i)).toBeTruthy()
     expect(screen.getByLabelText(/^Задания на .*2 августа/i)).toBeTruthy()
+  })
+
+  it("loads an ordered capital plan only after expansion and shows both line columns", async () => {
+    const actor = userEvent.setup()
+    renderPage()
+
+    const expandButton = await screen.findByRole("button", {
+      name: "Развернуть план капитального ремонта бытовки БТ-КАП",
+    })
+    expect(repairTaskApiMocks.getRepairTask).not.toHaveBeenCalled()
+
+    fireEvent.pointerDown(expandButton)
+    expect(dndMocks.capitalPointerDown).not.toHaveBeenCalled()
+    await actor.click(expandButton)
+
+    await waitFor(() => {
+      expect(repairTaskApiMocks.getRepairTask).toHaveBeenCalledWith(
+        CAPITAL_REPAIR_ID,
+        WAREHOUSE_ID
+      )
+    })
+    expect(
+      screen
+        .getByRole("button", {
+          name: "Свернуть план капитального ремонта бытовки БТ-КАП",
+        })
+        .getAttribute("aria-expanded")
+    ).toBe("true")
+    const stages = await screen.findAllByRole("region", {
+      name: /^Этап \d+: очередь /,
+    })
+    expect(stages).toHaveLength(2)
+    expect(stages[0]?.getAttribute("aria-label")).toBe(
+      "Этап 1: очередь Столярный цех"
+    )
+    expect(stages[1]?.getAttribute("aria-label")).toBe(
+      "Этап 2: очередь Малярный цех"
+    )
+
+    const firstStage = stages[0]!
+    expect(within(firstStage).getAllByRole("region")).toHaveLength(2)
+    expect(
+      within(firstStage).getByRole("heading", { name: "Работы" })
+    ).toBeTruthy()
+    expect(
+      within(firstStage).getByRole("heading", { name: "Материалы" })
+    ).toBeTruthy()
+    expect(within(firstStage).getByText("Замена окна")).toBeTruthy()
+    expect(within(firstStage).getByText("2 шт.")).toBeTruthy()
+    expect(within(firstStage).getByText("Пена монтажная")).toBeTruthy()
+    expect(within(firstStage).getByText("3,5 л")).toBeTruthy()
+    fireEvent.pointerDown(firstStage)
+    expect(dndMocks.capitalPointerDown).not.toHaveBeenCalled()
+
+    const secondStage = stages[1]!
+    expect(within(secondStage).getAllByRole("region")).toHaveLength(2)
+    expect(
+      within(secondStage).getByText("Работы не запланированы.")
+    ).toBeTruthy()
+    expect(
+      within(secondStage).getByText("Материалы не запланированы.")
+    ).toBeTruthy()
+  })
+
+  it("shows an honest capital-plan loading state", async () => {
+    const pendingPlan = deferred<RepairTaskDto | null>()
+    repairTaskApiMocks.getRepairTask.mockReturnValueOnce(pendingPlan.promise)
+    const actor = userEvent.setup()
+    renderPage()
+
+    await actor.click(
+      await screen.findByRole("button", {
+        name: "Развернуть план капитального ремонта бытовки БТ-КАП",
+      })
+    )
+
+    expect(
+      await screen.findByRole("status", {
+        name: "Загрузка плана капитального ремонта бытовки БТ-КАП",
+      })
+    ).toBeTruthy()
+
+    await act(async () => {
+      pendingPlan.resolve(repairTaskDetails())
+      await pendingPlan.promise
+    })
+    expect(await screen.findByText("Замена окна")).toBeTruthy()
+  })
+
+  it("shows a capital-plan read error and retries without starting a drag", async () => {
+    repairTaskApiMocks.getRepairTask.mockRejectedValueOnce(
+      new ApiError("Сервис ремонта временно недоступен", 503, null)
+    )
+    const actor = userEvent.setup()
+    renderPage()
+
+    await actor.click(
+      await screen.findByRole("button", {
+        name: "Развернуть план капитального ремонта бытовки БТ-КАП",
+      })
+    )
+
+    const capitalCard = screen.getByTestId(
+      `capital-repair-${CAPITAL_REPAIR_ID}`
+    )
+    const errorAlert = await within(capitalCard).findByRole("alert")
+    expect(
+      within(errorAlert).getByText("Не удалось загрузить план ремонта")
+    ).toBeTruthy()
+    expect(
+      within(errorAlert).getByText("Сервис ремонта временно недоступен")
+    ).toBeTruthy()
+
+    const retryButton = within(errorAlert).getByRole("button", {
+      name: "Повторить",
+    })
+    fireEvent.pointerDown(retryButton)
+    expect(dndMocks.capitalPointerDown).not.toHaveBeenCalled()
+    await actor.click(retryButton)
+
+    expect(await within(capitalCard).findByText("Замена окна")).toBeTruthy()
+    expect(repairTaskApiMocks.getRepairTask).toHaveBeenCalledTimes(2)
   })
 
   it("keeps a scheduled repair delivery out of the empty repair-place list", async () => {

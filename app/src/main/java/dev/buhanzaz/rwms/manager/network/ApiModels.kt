@@ -270,6 +270,7 @@ data class InventoryPlanSelectionDto(
     val priority: Int = 3,
     @param:ExplicitNull val coverMediaId: String? = null,
     val movementToRepair: Boolean,
+    val forceCapitalRepair: Boolean = false,
     @param:ExplicitNull val logisticsPlanningMode: String?,
     @param:ExplicitNull val logisticsScheduledDate: String? = null,
     val lines: List<InventoryPlanLineInputDto>,
@@ -285,6 +286,9 @@ data class InventoryFrozenPlanLineDto(
     val lineType: String,
     val catalogVersionId: String? = null,
     val catalogNodeId: String? = null,
+    val routingQueueId: String? = null,
+    val routingQueueName: String? = null,
+    val routingQueueType: String? = null,
     val description: String,
     val normalizedDescription: String? = null,
     val unit: String,
@@ -321,6 +325,7 @@ data class InventoryFrozenPlanDto(
     val priority: Int = 3,
     val coverMediaId: String? = null,
     val movementToRepair: Boolean = false,
+    val forceCapitalRepair: Boolean = false,
     val logisticsPlanningMode: String? = null,
     val logisticsScheduledDate: String? = null,
     val lines: List<InventoryFrozenPlanLineDto> = emptyList(),
@@ -958,6 +963,7 @@ data class EstimateRevisionDto(
     val reason: String? = null,
     val recordedAt: String,
     val coverMediaId: String? = null,
+    val forceCapitalRepair: Boolean = false,
 )
 
 /**
@@ -985,6 +991,7 @@ data class EstimateDto(
     val createdAt: String,
     val completedAt: String? = null,
     val actor: ActorSnapshotDto? = null,
+    val forceCapitalRepair: Boolean = false,
 )
 
 /**
@@ -1009,6 +1016,7 @@ data class CreateEstimateRequest(
     val plan: List<PlanStageInputDto>,
     val mediaReferences: List<MediaReferenceDto>,
     @param:ExplicitNull val coverMediaId: String? = null,
+    val forceCapitalRepair: Boolean = false,
 )
 
 /**
@@ -1022,6 +1030,7 @@ data class ReplaceEstimateRequest(
     val plan: List<PlanStageInputDto>,
     val mediaReferences: List<MediaReferenceDto>,
     @param:ExplicitNull val coverMediaId: String? = null,
+    val forceCapitalRepair: Boolean = false,
 )
 
 /**
@@ -1037,6 +1046,7 @@ data class AmendEstimateRequest(
     val plan: List<PlanStageInputDto>,
     val mediaReferences: List<MediaReferenceDto>,
     @param:ExplicitNull val coverMediaId: String? = null,
+    val forceCapitalRepair: Boolean = false,
 )
 
 /**
@@ -1135,6 +1145,15 @@ data class RepairPlanDto(
     val stages: List<RepairStageDto> = emptyList(),
 )
 
+/** Server-calculated repair complexity used to keep capital work out of the ordinary list. */
+data class RepairComplexityDto(
+    val type: String,
+    val name: String,
+    val color: String,
+    val plannedMinutes: String,
+    val forcedCapital: Boolean,
+)
+
 /**
  * Public-manager-gateway response/read payload for InventorySourceReferenceDto. It is a transport boundary model, not persisted domain state.
  */
@@ -1165,8 +1184,11 @@ data class RepairDto(
     val priority: Int = 3,
     val sourceParty: String? = null,
     val movementToRepair: Boolean = false,
+    val forceCapitalRepair: Boolean = false,
     val logisticsPlanningMode: String? = null,
     val logisticsScheduledDate: String? = null,
+    /** Nullable only while reading an app cache written before complexity became client-visible. */
+    val complexity: RepairComplexityDto? = null,
     val plan: RepairPlanDto,
     val inventorySource: InventorySourceReferenceDto? = null,
     val lease: LeaseSnapshotDto? = null,
@@ -1223,6 +1245,7 @@ data class CreateDirectRepairRequest(
     val plan: List<PlanStageInputDto>,
     val mediaReferences: List<MediaReferenceDto>,
     @param:ExplicitNull val coverMediaId: String? = null,
+    val forceCapitalRepair: Boolean = false,
 )
 
 /**
@@ -1234,6 +1257,7 @@ data class ReplaceRepairPlanRequest(
     val stages: List<PlanStageInputDto>,
     val mediaReferences: List<MediaReferenceDto>,
     @param:ExplicitNull val coverMediaId: String? = null,
+    val forceCapitalRepair: Boolean = false,
 )
 
 /**

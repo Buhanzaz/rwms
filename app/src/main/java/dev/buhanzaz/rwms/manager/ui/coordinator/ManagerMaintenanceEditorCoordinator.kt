@@ -10,6 +10,7 @@ import dev.buhanzaz.rwms.manager.network.RepairStageDto
 import dev.buhanzaz.rwms.manager.network.ReworkCandidateDto
 import dev.buhanzaz.rwms.manager.network.RoutingSnapshotDto
 import dev.buhanzaz.rwms.manager.network.RwmsBackend
+import dev.buhanzaz.rwms.manager.ui.components.isManagerVideoUri
 import java.time.LocalDate
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -161,6 +162,7 @@ internal class ManagerMaintenanceEditorCoordinator(
                     readyMedia = estimate.mediaReferences,
                     readyPhotoUris = readyPhotoUris,
                     priority = linkedRepair?.priority ?: DEFAULT_MAINTENANCE_PRIORITY,
+                    forceCapitalRepair = revision.forceCapitalRepair,
                     movementToRepair = linkedRepair?.movementToRepair ?: false,
                     logisticsPlanningMode = linkedRepair?.logisticsPlanningMode,
                     logisticsScheduledDate = linkedRepair?.logisticsScheduledDate,
@@ -248,6 +250,7 @@ internal class ManagerMaintenanceEditorCoordinator(
                     readyMedia = readyReferences,
                     readyPhotoUris = readyPhotoUris,
                     priority = repair.priority,
+                    forceCapitalRepair = repair.forceCapitalRepair,
                     movementToRepair = repair.movementToRepair,
                     logisticsPlanningMode = repair.logisticsPlanningMode,
                     logisticsScheduledDate = repair.logisticsScheduledDate,
@@ -319,6 +322,7 @@ internal class ManagerMaintenanceEditorCoordinator(
             photoUris = emptyList(),
             readyMedia = emptyList(),
             priority = source.priority,
+            forceCapitalRepair = source.forceCapitalRepair,
             step = 1,
             stages = emptyList(),
             repairKind = "REWORK",
@@ -683,6 +687,19 @@ internal class ManagerMaintenanceEditorCoordinator(
     }
 
     fun selectMaintenanceCoverPhoto(photoKey: String) {
+        val current = mutableState.value.maintenanceEditor ?: return
+        val mediaId = photoKey.removePrefix("media:").takeIf { photoKey.startsWith("media:") }
+        val uri = current.photoUris.firstOrNull { candidate ->
+            maintenanceLocalPhotoKey(candidate) == photoKey
+        } ?: mediaId?.let(current.readyPhotoUris::get)
+        if (uri == null) {
+            message("Медиафайл ещё не доступен для выбора обложки")
+            return
+        }
+        if (isManagerVideoUri(uri)) {
+            message("Обложкой может быть только фотография")
+            return
+        }
         editMaintenance { editor ->
             val valid = editor.photoUris.any { uri ->
                 maintenanceLocalPhotoKey(uri) == photoKey

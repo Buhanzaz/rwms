@@ -18,6 +18,8 @@ import dev.buhanzaz.rwms.manager.network.CreateCabinFurnitureTaskRequest
 import dev.buhanzaz.rwms.manager.network.CompleteEstimateRequest
 import dev.buhanzaz.rwms.manager.network.CurrentUserDto
 import dev.buhanzaz.rwms.manager.network.EstimateLineInputDto
+import dev.buhanzaz.rwms.manager.network.InventoryFindingDto
+import dev.buhanzaz.rwms.manager.network.InventorySessionDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.RepairDecisionRequest
 import dev.buhanzaz.rwms.manager.network.ReplaceEstimateRequest
@@ -314,41 +316,51 @@ class BackgroundUploadWorker(
         operation: BackgroundUploadOperation,
         command: InventoryUploadCommand,
     ) {
-        val prepared = prepareInventoryRetainedMedia(operation, command)
-        val preparedOperation = prepared.operation
-        val preparedCommand = prepared.command
-        val media = preparedOperation.aggregateReferences(preparedCommand.existingMedia)
-        val coverMediaId = preparedOperation.coverMediaId() ?: preparedCommand.existingCoverMediaId
+        val mediaPrepared = prepareInventoryRetainedMedia(operation, command)
+        var preparedOperation = mediaPrepared.operation
+        var preparedCommand = mediaPrepared.command
         if (!preparedCommand.inspectionSaved) {
-            updateStage(operation.id, "Сохранение инвентаризации")
-            try {
-                retryInventoryCommitAfterMediaReady {
-                    val currentSession = backend.api.inventory(preparedCommand.inventoryId)
-                    backend.api.saveInventoryInspection(
-                        inventoryId = preparedCommand.inventoryId,
-                        findingId = preparedCommand.findingId,
-                        request = SaveInspectionRequest(
-                            expectedSessionRevision = currentSession.sessionRevision,
-                            expectedFindingRevision = preparedCommand.expectedFindingRevision,
-                            inspection = preparedCommand.inspection,
-                            comment = preparedCommand.comment,
-                            passportObservation = preparedCommand.passportObservation,
-                            equipmentObservation = preparedCommand.equipmentObservation,
-                            media = media,
-                            coverMediaId = coverMediaId,
-                            planSelection = preparedCommand.planSelection?.withUploadedMedia(
-                                coverMediaId,
-                                preparedOperation.lineReferences(),
-                                preparedCommand.planLineIds,
-                                preparedCommand.planWorkLineIds.toSet(),
+            var revisionConflictRetryCount = 0
+            while (true) {
+                val revisionPrepared = prepareInventoryRevision(preparedOperation, preparedCommand)
+                preparedOperation = revisionPrepared.operation
+                preparedCommand = revisionPrepared.command
+                val media = preparedOperation.aggregateReferences(preparedCommand.existingMedia)
+                val coverMediaId = preparedOperation.coverMediaId() ?: preparedCommand.existingCoverMediaId
+                updateStage(operation.id, "Сохранение инвентаризации")
+                try {
+                    retryInventoryCommitAfterMediaReady {
+                        backend.api.saveInventoryInspection(
+                            inventoryId = preparedCommand.inventoryId,
+                            findingId = preparedCommand.findingId,
+                            request = SaveInspectionRequest(
+                                expectedSessionRevision = revisionPrepared.session.sessionRevision,
+                                expectedFindingRevision = preparedCommand.expectedFindingRevision,
+                                inspection = preparedCommand.inspection,
+                                comment = preparedCommand.comment,
+                                passportObservation = preparedCommand.passportObservation,
+                                equipmentObservation = preparedCommand.equipmentObservation,
+                                media = media,
+                                coverMediaId = coverMediaId,
+                                planSelection = preparedCommand.planSelection?.withUploadedMedia(
+                                    coverMediaId,
+                                    preparedOperation.lineReferences(),
+                                    preparedCommand.planLineIds,
+                                    preparedCommand.planWorkLineIds.toSet(),
+                                ),
                             ),
-                        ),
-                    )
+                        )
+                    }
+                    break
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Throwable) {
+                    if (inventoryInspectionAlreadySaved(preparedCommand, media, coverMediaId)) break
+                    if (!shouldRetryInventoryRevisionConflict(failure, revisionConflictRetryCount)) {
+                        throw failure
+                    }
+                    revisionConflictRetryCount += 1
                 }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (failure: Throwable) {
-                if (!inventoryInspectionAlreadySaved(preparedCommand, media, coverMediaId)) throw failure
             }
             store.update(requireExecutionScope(), operation.id) { current ->
                 current.copy(
@@ -374,6 +386,61 @@ class BackgroundUploadWorker(
     private data class PreparedInventoryUpload(
         val operation: BackgroundUploadOperation,
         val command: InventoryUploadCommand,
+    )
+
+    /**
+     * Reconciles a durable first-inspection command with the current active finding before its
+     * final side effect. A live asset-status refresh can legitimately advance this fence while
+     * photos upload; a non-initial inspection is deliberately left fail-closed.
+     */
+    private suspend fun prepareInventoryRevision(
+        operation: BackgroundUploadOperation,
+        command: InventoryUploadCommand,
+    ): PreparedInventoryRevision {
+        updateStage(operation.id, "Проверка актуальности инвентаризации")
+        val currentFinding = requireActiveInventoryFindingForUpload(
+            activeInventoryFinding(command.inventoryId, command.findingId),
+        )
+        val session = backend.api.inventory(command.inventoryId)
+        val rebasedCommand = command.rebasePendingInitialInspection(currentFinding)
+        if (rebasedCommand != command) {
+            store.update(requireExecutionScope(), operation.id) { current ->
+                current.copy(
+                    updatedAtEpochMillis = System.currentTimeMillis(),
+                    inventory = current.inventory?.takeIf { it.findingId == command.findingId }
+                        ?.copy(expectedFindingRevision = rebasedCommand.expectedFindingRevision)
+                        ?: current.inventory,
+                )
+            }
+        }
+        return PreparedInventoryRevision(
+            operation = operation.copy(inventory = rebasedCommand),
+            command = rebasedCommand,
+            session = session,
+        )
+    }
+
+    /** Captures the current active finding through the paginated public inventory read. */
+    private suspend fun activeInventoryFinding(
+        inventoryId: String,
+        findingId: String,
+    ): InventoryFindingDto? {
+        var page = 0
+        var totalPages = 1
+        do {
+            val findings = backend.api.inventoryFindings(inventoryId = inventoryId, page = page)
+            totalPages = findings.page.totalPages
+            findings.content.firstOrNull { it.id == findingId }?.let { return it }
+            page += 1
+        } while (page < totalPages)
+        return null
+    }
+
+    /** Bundles the authoritative session fence with the safely rebased initial inspection. */
+    private data class PreparedInventoryRevision(
+        val operation: BackgroundUploadOperation,
+        val command: InventoryUploadCommand,
+        val session: InventorySessionDto,
     )
 
     /**
@@ -453,6 +520,7 @@ class BackgroundUploadWorker(
                     plan = command.stages,
                     mediaReferences = media,
                     coverMediaId = coverMediaId,
+                    forceCapitalRepair = command.forceCapitalRepair,
                 ),
             ).version
             MaintenanceReplaceKind.ESTIMATE_AMENDMENT -> backend.api.amendEstimate(
@@ -469,6 +537,7 @@ class BackgroundUploadWorker(
                     plan = command.stages,
                     mediaReferences = media,
                     coverMediaId = coverMediaId,
+                    forceCapitalRepair = command.forceCapitalRepair,
                 ),
             ).estimate.version
             MaintenanceReplaceKind.REPAIR -> backend.api.replaceRepairPlan(
@@ -480,6 +549,7 @@ class BackgroundUploadWorker(
                     stages = command.stages,
                     mediaReferences = media,
                     coverMediaId = coverMediaId,
+                    forceCapitalRepair = command.forceCapitalRepair,
                 ),
             ).version
         }
@@ -621,39 +691,25 @@ class BackgroundUploadWorker(
         media: List<MediaReferenceDto>,
         coverMediaId: String?,
     ): Boolean = runCatching {
-        var page = 0
-        var totalPages = 1
-        var found = false
-        do {
-            val findings = backend.api.inventoryFindings(
-                inventoryId = command.inventoryId,
-                page = page,
-            )
-            totalPages = findings.page.totalPages
-            val finding = findings.content.firstOrNull { it.id == command.findingId }
-            if (finding != null) {
-                val expectedMedia = media.map { it.mediaId to it.generation }.toSet()
-                val actualMedia = finding.media.map { it.mediaId to it.generation }.toSet()
-                found = finding.findingRevision > command.expectedFindingRevision &&
-                    finding.inspection == command.inspection &&
-                    finding.comment == command.comment &&
-                    actualMedia == expectedMedia &&
-                    finding.coverMediaId == coverMediaId &&
-                    if (command.planSelection == null) {
-                        finding.frozenPlan == null
-                    } else {
-                        finding.frozenPlan?.let { plan ->
-                            plan.priority == command.planSelection.priority &&
-                                plan.movementToRepair == command.planSelection.movementToRepair &&
-                                plan.lines.size == command.planSelection.lines.size &&
-                                plan.stages.size == command.planSelection.stages.size
-                        } == true
-                    }
-                break
+        val finding = activeInventoryFinding(command.inventoryId, command.findingId)
+            ?: return@runCatching false
+        val expectedMedia = media.map { it.mediaId to it.generation }.toSet()
+        val actualMedia = finding.media.map { it.mediaId to it.generation }.toSet()
+        finding.findingRevision > command.expectedFindingRevision &&
+            finding.inspection == command.inspection &&
+            finding.comment == command.comment &&
+            actualMedia == expectedMedia &&
+            finding.coverMediaId == coverMediaId &&
+            if (command.planSelection == null) {
+                finding.frozenPlan == null
+            } else {
+                finding.frozenPlan?.let { plan ->
+                    plan.priority == command.planSelection.priority &&
+                        plan.movementToRepair == command.planSelection.movementToRepair &&
+                        plan.lines.size == command.planSelection.lines.size &&
+                        plan.stages.size == command.planSelection.stages.size
+                } == true
             }
-            page += 1
-        } while (page < totalPages)
-        found
     }.getOrDefault(false)
 
     private fun BackgroundUploadOperation.aggregateReferences(

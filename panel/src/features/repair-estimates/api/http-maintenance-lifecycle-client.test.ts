@@ -66,6 +66,7 @@ const estimateWrite: MaintenanceEstimateWrite = {
   ],
   plan: [stage],
   mediaReferences: [],
+  forceCapitalRepair: true,
 }
 
 function json(value: unknown, status = 200) {
@@ -213,6 +214,7 @@ describe("maintenance lifecycle HTTP client", () => {
       warehouseId,
       rentalItemId,
       dispatchDate: "2026-07-18",
+      forceCapitalRepair: true,
       lines: [
         expect.objectContaining({
           lineType: "WORK",
@@ -226,6 +228,7 @@ describe("maintenance lifecycle HTTP client", () => {
     const [, replaceInit] = requestAt(fetchMock, 1)
     expect(replaceInit.method).toBe("PUT")
     expect(JSON.parse(String(replaceInit.body)).expectedVersion).toBe(3)
+    expect(JSON.parse(String(replaceInit.body)).forceCapitalRepair).toBe(true)
 
     const [completeUrl, completeInit] = requestAt(fetchMock, 2)
     expect(String(completeUrl)).toContain(`/${estimateId}/complete`)
@@ -247,6 +250,7 @@ describe("maintenance lifecycle HTTP client", () => {
       expectedVersion: 5,
       expectedLinkedRepairVersion: 8,
       reason: "Уточнён объём",
+      forceCapitalRepair: true,
     })
   })
 
@@ -265,6 +269,7 @@ describe("maintenance lifecycle HTTP client", () => {
       plan: [stage],
       mediaReferences: [],
       coverMediaId: null,
+      forceCapitalRepair: true,
     })
     await replaceMaintenanceRepairPlan(
       "token",
@@ -318,6 +323,7 @@ describe("maintenance lifecycle HTTP client", () => {
     expect(JSON.parse(String(requestAt(fetchMock, 0)[1].body))).toMatchObject({
       lines: estimateWrite.lines,
       plan: [stage],
+      forceCapitalRepair: true,
     })
     expect(JSON.parse(String(requestAt(fetchMock, 1)[1].body))).toEqual({
       expectedVersion: 2,
@@ -325,6 +331,7 @@ describe("maintenance lifecycle HTTP client", () => {
       stages: [stage],
       mediaReferences: [{ mediaId: rentalItemId, generation: 7 }],
       coverMediaId: rentalItemId,
+      forceCapitalRepair: false,
     })
     expect(JSON.parse(String(requestAt(fetchMock, 2)[1].body))).toEqual({
       expectedVersion: 3,
@@ -345,6 +352,9 @@ describe("maintenance lifecycle HTTP client", () => {
       plan: [stage],
       coverMediaId: null,
     })
+    expect(
+      JSON.parse(String(requestAt(fetchMock, 3)[1].body))
+    ).not.toHaveProperty("forceCapitalRepair")
     expect(JSON.parse(String(requestAt(fetchMock, 4)[1].body))).toEqual({
       expectedVersion: 5,
       comment: "Принято",

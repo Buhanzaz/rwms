@@ -31,7 +31,13 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
+import tools.jackson.core.JsonParser;
+import tools.jackson.databind.DeserializationContext;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.PropertyName;
+import tools.jackson.databind.ValueDeserializer;
+import tools.jackson.databind.annotation.JsonDeserialize;
+import tools.jackson.databind.exc.InvalidNullException;
 
 /**
  * HTTP transport model container for inventory.
@@ -86,7 +92,35 @@ public final class InventoryApiModels {
       @JsonProperty(required = true) LogisticsPlanningMode logisticsPlanningMode,
       @JsonProperty(required = true) LocalDate logisticsScheduledDate,
       @NotNull @Size(min = 1, max = 2000) List<@Valid PlanLineInput> lines,
-      @NotNull @Size(max = 1000) List<@Valid PlanStageSelection> stages) {
+      @NotNull @Size(max = 1000) List<@Valid PlanStageSelection> stages,
+      @JsonProperty(defaultValue = "false")
+          @JsonDeserialize(using = DefaultFalseBooleanDeserializer.class)
+          Boolean forceCapitalRepair) {
+    public PlanSelection {
+      forceCapitalRepair = Boolean.TRUE.equals(forceCapitalRepair);
+    }
+
+    public PlanSelection(
+        String mode,
+        Integer priority,
+        UUID coverMediaId,
+        boolean movementToRepair,
+        LogisticsPlanningMode logisticsPlanningMode,
+        LocalDate logisticsScheduledDate,
+        List<PlanLineInput> lines,
+        List<PlanStageSelection> stages) {
+      this(
+          mode,
+          priority,
+          coverMediaId,
+          movementToRepair,
+          logisticsPlanningMode,
+          logisticsScheduledDate,
+          lines,
+          stages,
+          false);
+    }
+
     @AssertTrue(
         message =
             "inbound logistics planning must be present only when movementToRepair is selected")
@@ -94,6 +128,34 @@ public final class InventoryApiModels {
     public boolean isLogisticsPlanningValid() {
       return LogisticsPlanningMode.validInboundPlanning(
           movementToRepair, logisticsPlanningMode, logisticsScheduledDate);
+    }
+
+    /** The explicit capital route and inbound repair delivery are alternative choices. */
+    @AssertTrue(message = "movementToRepair and forceCapitalRepair are mutually exclusive")
+    @JsonIgnore
+    public boolean isRepairDestinationChoiceValid() {
+      return !movementToRepair || !forceCapitalRepair;
+    }
+  }
+
+  /** Supplies false only for an omitted additive flag while rejecting an explicit JSON null. */
+  public static final class DefaultFalseBooleanDeserializer extends ValueDeserializer<Boolean> {
+    @Override
+    public Boolean deserialize(JsonParser parser, DeserializationContext context) {
+      return parser.getBooleanValue();
+    }
+
+    @Override
+    public Boolean getAbsentValue(DeserializationContext context) {
+      return Boolean.FALSE;
+    }
+
+    @Override
+    public Boolean getNullValue(DeserializationContext context) {
+      throw InvalidNullException.from(
+          context,
+          PropertyName.construct(context.getParser().currentName()),
+          context.constructType(Boolean.class));
     }
   }
 
@@ -383,14 +445,49 @@ public final class InventoryApiModels {
       LogisticsPlanningMode logisticsPlanningMode,
       LocalDate logisticsScheduledDate,
       List<FrozenPlanLineView> lines,
-      List<FrozenPlanStageView> stages) {}
+      List<FrozenPlanStageView> stages,
+      boolean forceCapitalRepair) {
+    public FrozenPlanView(
+        String mode,
+        UUID catalogVersionId,
+        String fingerprintSha256,
+        int priority,
+        UUID coverMediaId,
+        boolean movementToRepair,
+        LogisticsPlanningMode logisticsPlanningMode,
+        LocalDate logisticsScheduledDate,
+        List<FrozenPlanLineView> lines,
+        List<FrozenPlanStageView> stages) {
+      this(
+          mode,
+          catalogVersionId,
+          fingerprintSha256,
+          priority,
+          coverMediaId,
+          movementToRepair,
+          logisticsPlanningMode,
+          logisticsScheduledDate,
+          lines,
+          stages,
+          false);
+    }
+  }
 
+  /**
+   * One immutable plan line together with its frozen task-board route.
+   *
+   * <p>The route is projected from the maintenance-owned source snapshot. All three routing
+   * fields are null together only for a legacy snapshot that predates line-level route evidence.
+   */
   public record FrozenPlanLineView(
       UUID id,
       String sourceKind,
       String lineType,
       UUID catalogVersionId,
       UUID catalogNodeId,
+      UUID routingQueueId,
+      String routingQueueName,
+      String routingQueueType,
       String description,
       String normalizedDescription,
       String unit,
@@ -455,7 +552,37 @@ public final class InventoryApiModels {
       Integer priority,
       String sourceParty,
       String planFingerprintSha256,
-      FinalPlanSummaryView planSummary) {}
+      FinalPlanSummaryView planSummary,
+      boolean forceCapitalRepair) {
+    public FinalPlanCandidateView(
+        FinalPlanTargetKind targetKind,
+        UUID targetId,
+        UUID estimateId,
+        UUID repairId,
+        long version,
+        String state,
+        boolean started,
+        boolean active,
+        Integer priority,
+        String sourceParty,
+        String planFingerprintSha256,
+        FinalPlanSummaryView planSummary) {
+      this(
+          targetKind,
+          targetId,
+          estimateId,
+          repairId,
+          version,
+          state,
+          started,
+          active,
+          priority,
+          sourceParty,
+          planFingerprintSha256,
+          planSummary,
+          false);
+    }
+  }
 
   public record FinalPlanSummaryView(
       int workLineCount, int materialLineCount, long grandTotalMinor) {}
@@ -472,7 +599,37 @@ public final class InventoryApiModels {
       LocalDate movementScheduledDate,
       LocalDate repairScheduledDate,
       List<FinalPlanCandidateView> collisionCandidates,
-      FinalPlanReconciliationDecision reconciliationDecision) {}
+      FinalPlanReconciliationDecision reconciliationDecision,
+      boolean forceCapitalRepair) {
+    public FinalPlanEntryView(
+        UUID findingId,
+        long findingRevision,
+        String planFingerprintSha256,
+        boolean hasWork,
+        FinalPlanTargetKind targetKind,
+        int order,
+        Integer priority,
+        boolean movementToRepair,
+        LocalDate movementScheduledDate,
+        LocalDate repairScheduledDate,
+        List<FinalPlanCandidateView> collisionCandidates,
+        FinalPlanReconciliationDecision reconciliationDecision) {
+      this(
+          findingId,
+          findingRevision,
+          planFingerprintSha256,
+          hasWork,
+          targetKind,
+          order,
+          priority,
+          movementToRepair,
+          movementScheduledDate,
+          repairScheduledDate,
+          collisionCandidates,
+          reconciliationDecision,
+          false);
+    }
+  }
 
   public record FinalPlanView(
       UUID inventoryId,

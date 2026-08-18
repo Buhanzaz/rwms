@@ -160,7 +160,10 @@ export async function getInventory(inventoryId: string) {
 export async function reviewInventoryRegistry(inventoryId: string) {
   const token = await accessToken()
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const rawSession = await inventoryHttp.getInventorySession(token, inventoryId)
+    const rawSession = await inventoryHttp.getInventorySession(
+      token,
+      inventoryId
+    )
     try {
       const review = await inventoryHttp.reviewInventoryRegistry({
         accessToken: token,
@@ -170,11 +173,17 @@ export async function reviewInventoryRegistry(inventoryId: string) {
         review.inventoryId !== rawSession.id ||
         review.sessionRevision !== rawSession.sessionRevision
       ) {
-        throw new Error("Сверка реестра относится к другой версии инвентаризации")
+        throw new Error(
+          "Сверка реестра относится к другой версии инвентаризации"
+        )
       }
       return applyInventoryRegistryReview(sessionView(rawSession), review)
     } catch (error) {
-      if (!(error instanceof ApiError && error.status === 409 && attempt === 0)) {
+      if (!(
+        error instanceof ApiError &&
+        error.status === 409 &&
+        attempt === 0
+      )) {
         throw error
       }
     }
@@ -382,6 +391,7 @@ export async function saveInventoryFinding(input: {
   repairPlans: ReturnType<typeof toInventoryRepairPlanSnapshot>[]
   repairCompletionMode?: RepairEstimateCompletionMode | null
   movementToRepair?: boolean
+  forceCapitalRepair?: boolean
   logisticsPlanningMode?: LogisticsPlanningMode
   logisticsScheduledDate?: string | null
   priority?: RepairPriority
@@ -418,6 +428,7 @@ export async function saveInventoryFinding(input: {
     planSelection = buildInventoryPlanSelection({
       completionMode: input.repairCompletionMode ?? "MANUAL",
       movementToRepair,
+      forceCapitalRepair: input.forceCapitalRepair === true,
       logisticsPlanningMode: movementToRepair
         ? (input.logisticsPlanningMode ?? "AUTO")
         : null,

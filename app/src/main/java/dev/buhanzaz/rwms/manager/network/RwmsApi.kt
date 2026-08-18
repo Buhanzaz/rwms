@@ -295,6 +295,13 @@ interface RwmsApi {
         @Header("If-None-Match") ifNoneMatch: String? = null,
     ): Response<RepairPageDto>
 
+    @GET("api/maintenance/v1/repairs/capital")
+    suspend fun activeCapitalRepairs(
+        @Query("warehouseId") warehouseId: String,
+        @Query("page") page: Int = 0,
+        @Query("size") size: Int = 100,
+    ): RepairPageDto
+
     @GET("api/maintenance/v1/acceptance")
     suspend fun acceptance(
         @Query("warehouseId") warehouseId: String,

@@ -60,6 +60,9 @@ final class InventoryMaintenancePlanValidation {
     if (request.priority() < 1 || request.priority() > 5) {
       throw invalid("Inventory repair priority must be between 1 and 5");
     }
+    if (!request.isRepairDestinationChoiceValid()) {
+      throw invalid("Capital repair and movement to repair are mutually exclusive");
+    }
     List<InventoryPlanLineSnapshot> lines = new ArrayList<>();
     for (InventoryPlanLineInput input : request.lines()) {
       validateMedia(request.findingId(), request.warehouseId(), input.mediaReferences());
@@ -155,7 +158,8 @@ final class InventoryMaintenancePlanValidation {
         catalog.getId(), request.mode(), List.copyOf(lines), List.copyOf(stages),
         request.movementToRepair(),
         List.copyOf(request.mediaReferences()), request.priority(), request.coverMediaId(),
-        request.logisticsPlanningMode(), request.logisticsScheduledDate());
+        request.logisticsPlanningMode(), request.logisticsScheduledDate(),
+        request.forceCapitalRepair());
     if (sourceMedia(snapshot).size() > 100) {
       throw invalid("Inventory plan cannot reference more than 100 media objects");
     }

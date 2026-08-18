@@ -175,17 +175,18 @@ class MediaUploader private constructor(
                 "Не задан порядок фотографии"
             }
         }
-        return uploadBoundedParallelOrdered(
+        return uploadAcceptedBoundedParallelOrdered(
             inputs = uploadRequests,
             permits = uploadPermits,
-            upload = { (uri, sortOrder) ->
-                uploadOne(
+            accept = { (uri, sortOrder) ->
+                acceptOne(
                     owner = owner,
                     localUri = uri,
                     sortOrder = sortOrder,
                     photo = payloadLoader(uri),
                 )
             },
+            complete = { _, mediaId -> awaitReady(owner, mediaId) },
             onReady = { (uri, _), reference ->
                 // Persisting this callback immediately lets an interrupted batch resume from
                 // the remaining local URIs instead of creating another attachment for the
@@ -195,12 +196,12 @@ class MediaUploader private constructor(
         )
     }
 
-    private suspend fun uploadOne(
+    private suspend fun acceptOne(
         owner: MediaOwner,
         localUri: String,
         sortOrder: Int,
         photo: PhotoPayload,
-    ): MediaReferenceDto {
+    ): String {
         val identity = mediaUploadIdentity(owner, localUri, photo, sortOrder)
         val completedMediaId = try {
             retryMediaCommandAfterOwnerProof {
@@ -260,7 +261,13 @@ class MediaUploader private constructor(
             // same checksum as the same user-selected photo.
             recoverAcceptedMediaId(owner, identity) ?: throw failure
         }
-        return awaitReadyMediaReference(completedMediaId) {
+        return completedMediaId
+    }
+
+    private suspend fun awaitReady(
+        owner: MediaOwner,
+        completedMediaId: String,
+    ): MediaReferenceDto = awaitReadyMediaReference(completedMediaId) {
             api.ownerMedia(
                 ownerType = owner.ownerType,
                 ownerId = owner.ownerId,
@@ -270,7 +277,6 @@ class MediaUploader private constructor(
                 context = owner.context,
             ).items.firstOrNull { it.id == completedMediaId }
         }
-    }
 
     private suspend fun recoverAcceptedMediaId(
         owner: MediaOwner,
@@ -306,12 +312,35 @@ internal suspend fun <Input, Output> uploadBoundedParallelOrdered(
     upload: suspend (Input) -> Output,
     onReady: suspend (Input, Output) -> Unit,
 ): List<Output> {
+    return uploadAcceptedBoundedParallelOrdered(
+        inputs = inputs,
+        parallelism = parallelism,
+        permits = permits,
+        accept = upload,
+        complete = { _, accepted -> accepted },
+        onReady = onReady,
+    )
+}
+
+/**
+ * Limits only byte-heavy upload/finalize transport. Processing polls continue independently, so
+ * a slow server-side transform cannot leave the mobile uplink idle while later media wait.
+ */
+internal suspend fun <Input, Accepted, Output> uploadAcceptedBoundedParallelOrdered(
+    inputs: List<Input>,
+    parallelism: Int = MEDIA_UPLOAD_PARALLELISM,
+    permits: Semaphore = Semaphore(parallelism),
+    accept: suspend (Input) -> Accepted,
+    complete: suspend (Input, Accepted) -> Output,
+    onReady: suspend (Input, Output) -> Unit,
+): List<Output> {
     require(parallelism > 0) { "Параллелизм загрузки должен быть положительным" }
     return supervisorScope {
         val uploads = inputs.map { input ->
             async {
                 try {
-                    Result.success(permits.withPermit { upload(input) })
+                    val accepted = permits.withPermit { accept(input) }
+                    Result.success(complete(input, accepted))
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: Throwable) {
@@ -551,7 +580,7 @@ internal const val MEDIA_READY_TIMEOUT_MESSAGE =
 internal const val INVENTORY_MEDIA_READY_TIMEOUT_MESSAGE =
     "Фотография обработана, но инвентаризация ещё не получила подтверждение готовности. Повторите сохранение через несколько секунд"
 internal const val INVENTORY_MEDIA_READY_MAX_RETRIES = 8
-internal const val MEDIA_UPLOAD_PARALLELISM = 3
+internal const val MEDIA_UPLOAD_PARALLELISM = 4
 private const val INVENTORY_MEDIA_NOT_READY_CODE = "INVENTORY_MEDIA_NOT_READY"
 private const val OWNER_PROOF_RETRY_INITIAL_DELAY_MILLIS = 250L
 private const val OWNER_PROOF_RETRY_MAX_DELAY_MILLIS = 2_000L

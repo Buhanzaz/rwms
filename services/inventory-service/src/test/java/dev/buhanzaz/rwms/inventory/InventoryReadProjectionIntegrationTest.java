@@ -468,22 +468,25 @@ class InventoryReadProjectionIntegrationTest {
     snapshot.put("movementToRepair", false);
     snapshot.putNull("logisticsPlanningMode");
     snapshot.putNull("logisticsScheduledDate");
-    snapshot
-        .putArray("lines")
-        .addObject()
-        .put("aggregationKind", "CATALOG")
-        .put("catalogVersionId", catalogVersionId.toString())
-        .put("catalogNodeId", materialNodeId.toString())
-        .put("catalogNodeName", "ДВП")
-        .put("type", "MATERIAL")
-        .put("description", "ДВП")
-        .putNull("normalizedDescription")
-        .put("unit", "PCS")
-        .put("quantity", "2")
-        .put("unitPriceMinor", 125)
-        .put("normativeMinutes", "0")
-        .putNull("groupComment")
-        .putArray("mediaReferences");
+    var sourceLine = snapshot.putArray("lines").addObject();
+    sourceLine.put("aggregationKind", "CATALOG");
+    sourceLine.put("catalogVersionId", catalogVersionId.toString());
+    sourceLine.put("catalogNodeId", materialNodeId.toString());
+    sourceLine.put("catalogNodeName", "ДВП");
+    sourceLine.put("type", "MATERIAL");
+    sourceLine.put("description", "ДВП");
+    sourceLine.putNull("normalizedDescription");
+    sourceLine.put("unit", "PCS");
+    sourceLine.put("quantity", "2");
+    sourceLine.put("unitPriceMinor", 125);
+    sourceLine.put("normativeMinutes", "0");
+    sourceLine
+        .putObject("routing")
+        .put("queueId", queueId.toString())
+        .put("queueName", "Материалы")
+        .put("queueType", "MAINTENANCE");
+    sourceLine.putNull("groupComment");
+    sourceLine.putArray("mediaReferences");
     var stage = snapshot.putArray("stages").addObject();
     stage.put("id", UUID.randomUUID().toString());
     stage.put("catalogNodeId", stageNodeId.toString());
@@ -569,6 +572,9 @@ class InventoryReadProjectionIntegrationTest {
               assertThat(line.lineType()).isEqualTo("MATERIAL");
               assertThat(line.description()).isEqualTo("ДВП");
               assertThat(line.quantity()).isEqualTo("2");
+              assertThat(line.routingQueueId()).isEqualTo(queueId);
+              assertThat(line.routingQueueName()).isEqualTo("Материалы");
+              assertThat(line.routingQueueType()).isEqualTo("MAINTENANCE");
             });
 
     FurnitureReviewState furnitureReview =
@@ -2932,6 +2938,7 @@ class InventoryReadProjectionIntegrationTest {
     candidate.put("state", started ? "IN_PROGRESS" : "DRAFT");
     candidate.put("started", started);
     candidate.put("active", active);
+    candidate.put("forceCapitalRepair", false);
     candidate.put("priority", 3);
     candidate.put("sourceParty", "OWNER");
     candidate.putNull("planFingerprintSha256");

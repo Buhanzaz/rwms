@@ -73,6 +73,7 @@ final class InventoryPublicationSourceLifecycle {
     value.put("planFingerprintSha256", request.planFingerprintSha256());
     value.put("priority", request.priority());
     value.put("movementToRepair", request.movementToRepair());
+    value.put("forceCapitalRepair", request.forceCapitalRepair());
     value.put("movementScheduledDate", request.movementScheduledDate());
     value.put("repairScheduledDate", request.repairScheduledDate());
     value.put("snapshot", request.snapshot());

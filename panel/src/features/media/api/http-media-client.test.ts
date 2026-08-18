@@ -157,6 +157,60 @@ describe("HttpMediaClient", () => {
     }
   })
 
+  it("reports byte progress while preserving Bearer and idempotency headers", async () => {
+    const session = {
+      uploadSessionId: SESSION_ID,
+      mediaId: MEDIA_ID,
+      expiresAt: "2026-07-18T10:05:00Z",
+      contentUploadUrl: `/api/media/v1/upload-sessions/${SESSION_ID}/content`,
+    }
+    const uploadedObject = {
+      objectVersionId: "opaque-version-1",
+      etag: "opaque-etag-1",
+      checksumSha256: CHECKSUM,
+    }
+    const asset = mediaAsset()
+    const progressUpload = vi.fn(async (_input, init, onProgress) => {
+      onProgress({ loadedBytes: 4, totalBytes: 16, percentage: 25 })
+      onProgress({ loadedBytes: 16, totalBytes: 16, percentage: 100 })
+      expect(init.body).toBeInstanceOf(File)
+      expect(new Headers(init.headers).get("Authorization")).toBe(
+        "Bearer access-token"
+      )
+      expect(new Headers(init.headers).get("Idempotency-Key")).toBe(
+        FINALIZE_KEY
+      )
+      return jsonResponse(uploadedObject, 201)
+    })
+    const { client, calls } = createClient(
+      [jsonResponse(session, 201), jsonResponse(asset)],
+      {
+        sha256: async () => CHECKSUM,
+        progressUpload,
+      }
+    )
+    const progress = vi.fn()
+    const file = new File([new Uint8Array(16)], "finding.jpg", {
+      type: "image/jpeg",
+    })
+
+    await client.uploadFile(
+      "access-token",
+      owner,
+      file,
+      0,
+      FOLDER_ID,
+      { createSession: CREATE_KEY, uploadAndFinalize: FINALIZE_KEY },
+      progress
+    )
+
+    expect(calls).toHaveLength(2)
+    expect(progressUpload).toHaveBeenCalledTimes(1)
+    expect(progress.mock.calls.map(([value]) => value.percentage)).toEqual([
+      0, 25, 100,
+    ])
+  })
+
   it("creates disposable Bearer-fetched object URLs and revokes them once", async () => {
     const contentPath =
       `/api/media/v1/assets/${MEDIA_ID}/variants/SMALL/content?` +
@@ -221,6 +275,68 @@ describe("HttpMediaClient", () => {
     objectUrl.dispose()
     expect(revoke).toHaveBeenCalledOnce()
     expect(revoke).toHaveBeenCalledWith("blob:ephemeral-media")
+  })
+
+  it("parses and fetches the scoped MP4 PLAYBACK variant for video", async () => {
+    const contentPath =
+      `/api/media/v1/assets/${MEDIA_ID}/variants/PLAYBACK/content?` +
+      new URLSearchParams({
+        ownerType: owner.ownerType,
+        ownerId: owner.ownerId,
+        warehouseId: owner.warehouseId,
+        context: owner.context,
+        generation: "2",
+      })
+    const video = {
+      ...mediaAsset({
+        fileName: "inspection.webm",
+        contentType: "video/webm",
+        kind: "VIDEO",
+        status: "READY",
+        generation: 2,
+      }),
+      variants: [
+        {
+          kind: "PLAYBACK",
+          contentType: "video/mp4",
+          contentPath,
+          width: 1280,
+          height: 720,
+        },
+      ],
+    }
+    const create = vi.fn(() => "blob:video-playback")
+    const revoke = vi.fn()
+    const { client, calls } = createClient(
+      [
+        jsonResponse({ items: [video], next: null }),
+        new Response("compressed-video", {
+          headers: { "Content-Type": "video/mp4" },
+        }),
+      ],
+      { objectUrls: { create, revoke } }
+    )
+
+    const page = await client.listOwnerMedia("video-token", owner)
+    const playback = page.items[0]!.playbackVariant!
+    const objectUrl = await client.createVariantObjectUrl(
+      "video-token",
+      owner,
+      playback
+    )
+
+    expect(playback.kind).toBe("PLAYBACK")
+    expect(playback.contentType).toBe("video/mp4")
+    expect(calls[1]?.url.pathname).toBe(
+      `/api/media/v1/assets/${MEDIA_ID}/variants/PLAYBACK/content`
+    )
+    expect(new Headers(calls[1]?.init.headers).get("Accept")).toBe("video/mp4")
+    expect(calls.every(({ url }) => !url.pathname.endsWith("/original"))).toBe(
+      true
+    )
+    expect(objectUrl.url).toBe("blob:video-playback")
+    objectUrl.dispose()
+    expect(revoke).toHaveBeenCalledWith("blob:video-playback")
   })
 
   it("uses the CABIN and WAREHOUSE owner scope for warehouse photos", async () => {

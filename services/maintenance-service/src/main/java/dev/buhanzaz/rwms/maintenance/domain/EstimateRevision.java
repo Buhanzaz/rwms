@@ -44,6 +44,9 @@ public class EstimateRevision {
   @Column(name = "total_minor", nullable = false)
   private long totalMinor;
 
+  @Column(name = "force_capital_repair", nullable = false)
+  private boolean forceCapitalRepair;
+
   @Column(name = "actor_ref", nullable = false, columnDefinition = "jsonb")
   @JdbcTypeCode(SqlTypes.JSON)
   private String actorRef;
@@ -61,6 +64,27 @@ public class EstimateRevision {
       String amendmentReason,
       long totalMinor,
       String actorRef) {
+    this(
+        estimateId,
+        revision,
+        dispatchDate,
+        sourceParty,
+        amendmentReason,
+        totalMinor,
+        false,
+        actorRef);
+  }
+
+  /** Creates one immutable estimate-revision header with the manager capital-repair choice. */
+  public EstimateRevision(
+      UUID estimateId,
+      int revision,
+      LocalDate dispatchDate,
+      String sourceParty,
+      String amendmentReason,
+      long totalMinor,
+      boolean forceCapitalRepair,
+      String actorRef) {
     if (estimateId == null || revision < 1 || dispatchDate == null || totalMinor < 0) {
       throw new IllegalArgumentException("Estimate revision identity and totals are required");
     }
@@ -70,6 +94,7 @@ public class EstimateRevision {
     this.sourceParty = normalize(sourceParty, 512);
     this.amendmentReason = normalize(amendmentReason, 2000);
     this.totalMinor = totalMinor;
+    this.forceCapitalRepair = forceCapitalRepair;
     this.actorRef = actorRef == null ? "{}" : actorRef;
     this.recordedAt = MaintenanceTime.now();
   }
@@ -77,12 +102,23 @@ public class EstimateRevision {
   /** The only mutable header is the current DRAFT revision. Completed revisions are never replaced. */
   public void replaceDraft(
       LocalDate dispatchDate, String sourceParty, long totalMinor, String actorRef) {
+    replaceDraft(dispatchDate, sourceParty, totalMinor, forceCapitalRepair, actorRef);
+  }
+
+  /** Replaces the current draft header without changing completed historical revisions. */
+  public void replaceDraft(
+      LocalDate dispatchDate,
+      String sourceParty,
+      long totalMinor,
+      boolean forceCapitalRepair,
+      String actorRef) {
     if (dispatchDate == null || totalMinor < 0) {
       throw new IllegalArgumentException("Estimate revision values are invalid");
     }
     this.dispatchDate = dispatchDate;
     this.sourceParty = normalize(sourceParty, 512);
     this.totalMinor = totalMinor;
+    this.forceCapitalRepair = forceCapitalRepair;
     this.actorRef = actorRef == null ? "{}" : actorRef;
     this.recordedAt = MaintenanceTime.now();
   }
@@ -101,6 +137,7 @@ public class EstimateRevision {
   public String getSourceParty() { return sourceParty; }
   public String getAmendmentReason() { return amendmentReason; }
   public long getTotalMinor() { return totalMinor; }
+  public boolean isForceCapitalRepair() { return forceCapitalRepair; }
   public String getActorRef() { return actorRef; }
   public OffsetDateTime getRecordedAt() { return recordedAt; }
 }

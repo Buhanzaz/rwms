@@ -236,6 +236,38 @@ func TestPublicMediaContractUsesOnlySameOriginOpaqueContentPaths(t *testing.T) {
 	}
 }
 
+func TestPublicMediaContractExposesCompressedPlaybackWithoutChangingOriginal(t *testing.T) {
+	root := repositoryRoot(t)
+	var document map[string]any
+	if err := yaml.Unmarshal(readContract(t, filepath.Join(root, "contracts", "openapi", "media-service.yaml")), &document); err != nil {
+		t.Fatalf("decode media-service.yaml: %v", err)
+	}
+	components := objectAt(t, document, "components")
+	parameters := objectAt(t, components, "parameters")
+	variantParameter := objectAt(t, parameters, "Variant")
+	if got := stringSliceAt(t, objectAt(t, variantParameter, "schema"), "enum"); !equalStrings(got, []string{
+		"SMALL", "MEDIUM", "LARGE", "PLAYBACK",
+	}) {
+		t.Fatalf("public variant parameter = %#v", got)
+	}
+	safeVariant := objectAt(t, objectAt(t, components, "schemas"), "SafeVariant")
+	safeKind := objectAt(t, objectAt(t, safeVariant, "properties"), "kind")
+	if got := stringSliceAt(t, safeKind, "enum"); !equalStrings(got, []string{
+		"SMALL", "MEDIUM", "LARGE", "PLAYBACK",
+	}) {
+		t.Fatalf("safe variant kinds = %#v", got)
+	}
+	paths := objectAt(t, document, "paths")
+	operation := objectAt(t, objectAt(t, paths,
+		"/api/media/v1/assets/{mediaId}/variants/{variant}/content"), "get")
+	responses := objectAt(t, operation, "responses")
+	okResponse := objectAt(t, responses, "200")
+	content := objectAt(t, okResponse, "content")
+	if content["video/mp4"] == nil || content["video/webm"] != nil {
+		t.Fatalf("derived playback content types = %#v", content)
+	}
+}
+
 func TestPublicMediaContractExposesAllCanonicalOwnerScopes(t *testing.T) {
 	root := repositoryRoot(t)
 	var document map[string]any

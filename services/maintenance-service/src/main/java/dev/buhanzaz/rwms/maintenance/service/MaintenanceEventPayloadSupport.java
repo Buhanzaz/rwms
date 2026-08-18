@@ -58,6 +58,7 @@ final class MaintenanceEventPayloadSupport {
   protected Map<String, Object> estimateLocal(MaintenanceEstimate value) {
     Map<String, Object> result = new LinkedHashMap<>();
     result.put("estimateId", value.getId().toString());
+    result.put("forceCapitalRepair", value.isForceCapitalRepair());
     if (value.getSourceParty() != null) result.put("sourceParty", value.getSourceParty());
     if (value.getComment() != null) result.put("comment", value.getComment());
     result.put(

@@ -9,6 +9,7 @@ import {
   type MediaRotationDegrees,
   type MediaUploadResult,
   type MediaVariant,
+  type PlaybackMediaVariant,
   type ServiceMediaOwner,
   type UploadedObject,
   type UploadSession,
@@ -19,6 +20,22 @@ type FetchFunction = (
   init?: RequestInit
 ) => Promise<Response>
 
+export type MediaUploadProgress = Readonly<{
+  loadedBytes: number
+  totalBytes: number
+  percentage: number
+}>
+
+export type MediaUploadProgressListener = (
+  progress: MediaUploadProgress
+) => void
+
+export type ProgressUploadFunction = (
+  input: string | URL,
+  init: RequestInit,
+  onProgress: MediaUploadProgressListener
+) => Promise<Response>
+
 type ObjectUrlFactory = Readonly<{
   create: (blob: Blob) => string
   revoke: (url: string) => void
@@ -27,6 +44,7 @@ type ObjectUrlFactory = Readonly<{
 export type HttpMediaClientOptions = Readonly<{
   baseUrl?: string
   fetch?: FetchFunction
+  progressUpload?: ProgressUploadFunction
   randomUUID?: () => string
   sha256?: (blob: Blob) => Promise<string>
   objectUrls?: ObjectUrlFactory
@@ -62,7 +80,8 @@ export interface MediaClient {
     accessToken: string,
     session: UploadSession,
     file: Blob,
-    idempotencyKey: string
+    idempotencyKey: string,
+    onProgress?: MediaUploadProgressListener
   ): Promise<UploadedObject>
   finalizeUploadSession(
     accessToken: string,
@@ -76,7 +95,8 @@ export interface MediaClient {
     file: File,
     sortOrder?: number,
     folderId?: string,
-    commandKeys?: MediaUploadCommandKeys
+    commandKeys?: MediaUploadCommandKeys,
+    onProgress?: MediaUploadProgressListener
   ): Promise<MediaUploadResult>
   listOwnerMedia(
     accessToken: string,
@@ -96,7 +116,7 @@ export interface MediaClient {
   createVariantObjectUrl(
     accessToken: string,
     owner: ServiceMediaOwner,
-    variant: MediaVariant
+    variant: MediaVariant | PlaybackMediaVariant
   ): Promise<DisposableMediaObjectUrl>
   deleteAsset(
     accessToken: string,
@@ -114,7 +134,7 @@ const UPLOAD_CONTENT_PATH = new RegExp(
   `^/api/media/v1/upload-sessions/${UUID_PATH_PART}/content$`
 )
 const VARIANT_CONTENT_PATH = new RegExp(
-  `^/api/media/v1/assets/${UUID_PATH_PART}/variants/(SMALL|MEDIUM|LARGE)/content$`
+  `^/api/media/v1/assets/${UUID_PATH_PART}/variants/(SMALL|MEDIUM|LARGE|PLAYBACK)/content$`
 )
 const SHA256 = /^[0-9a-f]{64}$/
 // Service-owned IDs include deterministic UUID-shaped identifiers imported
@@ -137,12 +157,13 @@ const MEDIA_STATUSES = new Set([
   "FAILED",
   "DELETED",
 ])
-const DERIVED_VARIANTS = new Set(["SMALL", "MEDIUM", "LARGE"])
+const DERIVED_VARIANTS = new Set(["SMALL", "MEDIUM", "LARGE", "PLAYBACK"])
 const ROTATIONS = new Set([0, 90, 180, 270])
 
 export class HttpMediaClient implements MediaClient {
   readonly #baseUrl: URL
   readonly #fetch: FetchFunction
+  readonly #progressUpload: ProgressUploadFunction
   readonly #randomUUID: () => string
   readonly #sha256: (blob: Blob) => Promise<string>
   readonly #objectUrls: ObjectUrlFactory
@@ -152,6 +173,7 @@ export class HttpMediaClient implements MediaClient {
       options.baseUrl ?? getGatewayRuntimeConfig().mediaApiBaseUrl
     )
     this.#fetch = options.fetch ?? ((input, init) => fetch(input, init))
+    this.#progressUpload = options.progressUpload ?? browserProgressUpload
     this.#randomUUID = options.randomUUID ?? (() => crypto.randomUUID())
     this.#sha256 = options.sha256 ?? browserSha256
     this.#objectUrls =
@@ -188,7 +210,8 @@ export class HttpMediaClient implements MediaClient {
     accessToken: string,
     session: UploadSession,
     file: Blob,
-    idempotencyKey: string
+    idempotencyKey: string,
+    onProgress?: MediaUploadProgressListener
   ) {
     const contentUrl = requireSameOriginPath(
       session.contentUploadUrl,
@@ -201,15 +224,23 @@ export class HttpMediaClient implements MediaClient {
     ) {
       throw new Error("Media content path does not match its upload session")
     }
+    const init: RequestInit = {
+      method: "PUT",
+      headers: {
+        "Content-Type": file.type,
+        "Idempotency-Key": idempotencyKey,
+      },
+      body: file,
+    }
     return parseUploadedObject(
-      await this.#requestJson<unknown>(accessToken, contentUrl, {
-        method: "PUT",
-        headers: {
-          "Content-Type": file.type,
-          "Idempotency-Key": idempotencyKey,
-        },
-        body: file,
-      })
+      onProgress
+        ? await this.#requestJsonWithProgress<unknown>(
+            accessToken,
+            contentUrl,
+            init,
+            onProgress
+          )
+        : await this.#requestJson<unknown>(accessToken, contentUrl, init)
     )
   }
 
@@ -241,7 +272,8 @@ export class HttpMediaClient implements MediaClient {
     file: File,
     sortOrder = 0,
     folderId?: string,
-    commandKeys?: MediaUploadCommandKeys
+    commandKeys?: MediaUploadCommandKeys,
+    onProgress?: MediaUploadProgressListener
   ): Promise<MediaUploadResult> {
     if (
       !file.name.trim() ||
@@ -253,6 +285,7 @@ export class HttpMediaClient implements MediaClient {
     if (folderId !== undefined && !UUID.test(folderId)) {
       throw new Error("Некорректная папка медиафайлов.")
     }
+    onProgress?.({ loadedBytes: 0, totalBytes: file.size, percentage: 0 })
     const checksumSha256 = await this.#sha256(file)
     if (!SHA256.test(checksumSha256)) {
       throw new Error("SHA-256 media checksum is invalid")
@@ -275,7 +308,8 @@ export class HttpMediaClient implements MediaClient {
       accessToken,
       session,
       file,
-      finalizeKey
+      finalizeKey,
+      onProgress
     )
     const asset = await this.finalizeUploadSession(
       accessToken,
@@ -349,7 +383,7 @@ export class HttpMediaClient implements MediaClient {
   async createVariantObjectUrl(
     accessToken: string,
     owner: ServiceMediaOwner,
-    variant: MediaVariant
+    variant: MediaVariant | PlaybackMediaVariant
   ) {
     const url = requireSameOriginPath(
       variant.contentPath,
@@ -400,6 +434,31 @@ export class HttpMediaClient implements MediaClient {
       init,
       "application/json"
     )
+    return (await response.json()) as T
+  }
+
+  async #requestJsonWithProgress<T>(
+    accessToken: string,
+    input: URL,
+    init: RequestInit,
+    onProgress: MediaUploadProgressListener
+  ) {
+    if (!accessToken.trim()) throw new Error("Не получен токен доступа.")
+    if (input.origin !== this.#baseUrl.origin) {
+      throw new Error("Media request must stay on the panel origin")
+    }
+    const headers = new Headers(init.headers)
+    headers.set("Authorization", `Bearer ${accessToken}`)
+    headers.set("Accept", "application/json")
+    const response = await this.#progressUpload(
+      input,
+      { ...init, headers },
+      onProgress
+    )
+    if (!response.ok) {
+      const problem = await readProblemDetail(response)
+      throw new ApiError(problem.message, response.status, problem.code)
+    }
     return (await response.json()) as T
   }
 
@@ -463,6 +522,68 @@ export class HttpMediaClient implements MediaClient {
       },
     }
   }
+}
+
+function browserProgressUpload(
+  input: string | URL,
+  init: RequestInit,
+  onProgress: MediaUploadProgressListener
+) {
+  return new Promise<Response>((resolve, reject) => {
+    if (!(init.body instanceof Blob)) {
+      reject(new Error("Progress media upload requires a Blob body"))
+      return
+    }
+    const request = new XMLHttpRequest()
+    request.open(init.method ?? "PUT", input.toString(), true)
+    new Headers(init.headers).forEach((value, name) =>
+      request.setRequestHeader(name, value)
+    )
+    request.upload.onprogress = (event) => {
+      const totalBytes = event.lengthComputable
+        ? event.total
+        : init.body instanceof Blob
+          ? init.body.size
+          : 0
+      if (totalBytes <= 0) return
+      const loadedBytes = Math.min(event.loaded, totalBytes)
+      onProgress({
+        loadedBytes,
+        totalBytes,
+        percentage: Math.round((loadedBytes / totalBytes) * 100),
+      })
+    }
+    request.onerror = () => reject(new Error("Не удалось загрузить медиафайл"))
+    request.onabort = () => reject(new Error("Загрузка медиафайла отменена"))
+    request.onload = () => {
+      const headers = new Headers()
+      request
+        .getAllResponseHeaders()
+        .trim()
+        .split(/[\r\n]+/)
+        .filter(Boolean)
+        .forEach((line) => {
+          const separator = line.indexOf(":")
+          if (separator > 0) {
+            headers.append(
+              line.slice(0, separator).trim(),
+              line.slice(separator + 1).trim()
+            )
+          }
+        })
+      const body = [204, 205, 304].includes(request.status)
+        ? null
+        : request.responseText
+      resolve(
+        new Response(body, {
+          status: request.status,
+          statusText: request.statusText,
+          headers,
+        })
+      )
+    }
+    request.send(init.body)
+  })
 }
 
 export function createHttpMediaClient(options: HttpMediaClientOptions = {}) {
@@ -654,7 +775,13 @@ function parseCabinCoverPage(
           previewRecord.generation,
           "generation"
         )
-        const variant = parseMediaVariant(previewRecord, origin, owner, mediaId)
+        const variant = parseMediaVariant(
+          previewRecord,
+          origin,
+          owner,
+          mediaId,
+          "IMAGE"
+        )
         if (variant.kind !== "SMALL") {
           throw new Error("Cabin preview is not SMALL")
         }
@@ -681,7 +808,8 @@ function parseCabinCoverPage(
         coverRecord,
         origin,
         owner,
-        coverMediaId
+        coverMediaId,
+        "IMAGE"
       )
       if (coverVariant.kind !== "SMALL") {
         throw new Error("Cabin cover is not SMALL")
@@ -736,8 +864,28 @@ function parseMediaAsset(
   if (record.variants.length > 0 && !owner) {
     throw new Error("Media variants require an owner scope")
   }
+  const mediaId = requireUUID(record.id, "id")
+  const parsedVariants = record.variants.map((variant) => {
+    if (!owner) throw new Error("Media variants require an owner scope")
+    return parseMediaVariant(
+      variant,
+      origin,
+      owner,
+      mediaId,
+      kind as MediaAsset["kind"]
+    )
+  })
+  const imageVariants = parsedVariants.filter(
+    (variant): variant is MediaVariant => variant.kind !== "PLAYBACK"
+  )
+  const playbackVariants = parsedVariants.filter(
+    (variant): variant is PlaybackMediaVariant => variant.kind === "PLAYBACK"
+  )
+  if (playbackVariants.length > 1) {
+    throw new Error("Video asset contains duplicate PLAYBACK variants")
+  }
   return {
-    id: requireUUID(record.id, "id"),
+    id: mediaId,
     folderId: requireUUID(record.folderId, "folderId"),
     fileName: requireBoundedString(record.fileName, "fileName", 512),
     contentType: requireMediaContentType(record.contentType, "contentType"),
@@ -752,15 +900,8 @@ function parseMediaAsset(
         ? null
         : requirePositiveInteger(record.sizeBytes, "sizeBytes"),
     createdAt: requireDateTime(record.createdAt, "createdAt"),
-    variants: record.variants.map((variant) => {
-      if (!owner) throw new Error("Media variants require an owner scope")
-      return parseMediaVariant(
-        variant,
-        origin,
-        owner,
-        requireUUID(record.id, "id")
-      )
-    }),
+    variants: imageVariants,
+    ...(playbackVariants[0] ? { playbackVariant: playbackVariants[0] } : {}),
   }
 }
 
@@ -768,8 +909,9 @@ function parseMediaVariant(
   value: unknown,
   origin: string,
   owner: ServiceMediaOwner,
-  mediaId: string
-): MediaVariant {
+  mediaId: string,
+  mediaKind: MediaAsset["kind"]
+): MediaVariant | PlaybackMediaVariant {
   const record = requireRecord(value, "media variant")
   const kind = requireEnum(record.kind, "kind", DERIVED_VARIANTS)
   const contentPath = requireString(record.contentPath, "contentPath")
@@ -786,9 +928,18 @@ function parseMediaVariant(
   ) {
     throw new Error("Media variant path does not match its kind")
   }
+  if (
+    (mediaKind === "IMAGE" && kind === "PLAYBACK") ||
+    (mediaKind === "VIDEO" && kind !== "PLAYBACK")
+  ) {
+    throw new Error("Media variant does not match the asset kind")
+  }
   return {
-    kind: kind as MediaVariant["kind"],
-    contentType: requireExactContentType(record.contentType, "image/webp"),
+    kind: kind as MediaVariant["kind"] | PlaybackMediaVariant["kind"],
+    contentType: requireExactContentType(
+      record.contentType,
+      kind === "PLAYBACK" ? "video/mp4" : "image/webp"
+    ),
     contentPath,
     width:
       record.width === null

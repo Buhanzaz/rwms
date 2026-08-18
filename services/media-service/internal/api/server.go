@@ -1351,7 +1351,8 @@ func (server *Server) getVariantContent(response http.ResponseWriter, request *h
 		if asset.Status != media.StatusReady || asset.Generation != generation {
 			return errMediaNotReady
 		}
-		if record == nil || record.Variant != variant || record.ObjectVersionID == "" {
+		if record == nil || record.Variant != variant || record.ObjectVersionID == "" ||
+			!publicVariantMatchesKind(asset.Kind, variant) {
 			return errOriginalMissing
 		}
 		selectedAsset = asset
@@ -1448,7 +1449,8 @@ func safeVariants(record persistence.AssetWithVariants, ownerType, ownerID strin
 	}
 	result := make([]any, 0, len(record.Variants))
 	for _, variant := range record.Variants {
-		if variant.Variant == media.VariantOriginal || variant.ObjectVersionID == "" {
+		if variant.Variant == media.VariantOriginal || variant.ObjectVersionID == "" ||
+			!publicVariantMatchesKind(record.Asset.Kind, variant.Variant) {
 			continue
 		}
 		contentPath := publicVariantContentPath(record.Asset.ID, record.Asset.Generation, variant,
@@ -1550,11 +1552,19 @@ func derivedFileName(original string, variant media.Variant, contentType string)
 func publicDerivedVariant(value string) (media.Variant, bool) {
 	variant := media.Variant(strings.ToUpper(strings.TrimSpace(value)))
 	switch variant {
-	case media.VariantSmall, media.VariantMedium, media.VariantLarge:
+	case media.VariantSmall, media.VariantMedium, media.VariantLarge, media.VariantPlayback:
 		return variant, true
 	default:
 		return "", false
 	}
+}
+
+func publicVariantMatchesKind(kind media.Kind, variant media.Variant) bool {
+	if kind == media.KindVideo {
+		return variant == media.VariantPlayback
+	}
+	return kind == media.KindImage &&
+		(variant == media.VariantSmall || variant == media.VariantMedium || variant == media.VariantLarge)
 }
 
 func assetResponse(asset persistence.AssetRecord, variants []any) map[string]any {

@@ -182,15 +182,19 @@ internal class ManagerMediaCoordinator(
             val currentReference = asset?.let { candidate ->
                 MediaReferenceDto(candidate.id, candidate.generation)
             } ?: request.reference
-            val preview = asset?.variants
-                ?.sortedBy { variant ->
-                    when (variant.kind) {
-                        "SMALL" -> 0
-                        "MEDIUM" -> 1
-                        else -> 2
+            val preview = if (asset?.kind == "VIDEO") {
+                asset.variants.firstOrNull { variant -> variant.kind == "PLAYBACK" }
+            } else {
+                asset?.variants
+                    ?.sortedBy { variant ->
+                        when (variant.kind) {
+                            "SMALL" -> 0
+                            "MEDIUM" -> 1
+                            else -> 2
+                        }
                     }
-                }
-                ?.firstOrNull()
+                    ?.firstOrNull()
+            }
             if (preview != null) {
                 runCatching {
                     mediaDownloader.downloadVariant(
@@ -213,6 +217,7 @@ internal class ManagerMediaCoordinator(
                     ownerId = scope.ownerId,
                     warehouseId = warehouseId,
                     context = scope.context,
+                    expectedContentType = asset?.contentType,
                 )
             }.getOrNull()?.let { uri ->
                 return ScopedDownloadedPhoto(

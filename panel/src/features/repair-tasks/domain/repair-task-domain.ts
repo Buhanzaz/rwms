@@ -247,6 +247,7 @@ export function createNewRepairTaskDraft(
     media: [],
     maintenanceMediaReferences: [],
     coverMediaId: null,
+    forceCapitalRepair: seed?.forceCapitalRepair ?? false,
     pendingUploads: [],
   }
 }
@@ -274,6 +275,7 @@ export function toRepairTaskEditorDraft(
     media: [],
     maintenanceMediaReferences: task.maintenanceMediaReferences ?? [],
     coverMediaId: task.coverMediaId ?? null,
+    forceCapitalRepair: task.forceCapitalRepair === true,
     pendingUploads: [],
   }
 }

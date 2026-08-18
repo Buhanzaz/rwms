@@ -52,7 +52,14 @@ class RwmsBackend(
         // (including the public-suffix asset reader) when the transport is first needed.
         OkHttp.initialize(applicationContext)
         OkHttpClient.Builder()
-            .addInterceptor(BearerTokenInterceptor(auth))
+            .addInterceptor(
+                BearerTokenInterceptor { forceRefresh, rejectedAccessToken ->
+                    auth.freshAccessToken(
+                        forceRefresh = forceRefresh,
+                        rejectedAccessToken = rejectedAccessToken,
+                    )
+                },
+            )
             // A camera original can be several megabytes.  The default ten-second write timeout is
             // too short for a normal 4G upload, and turns a completed server-side upload into an
             // indistinguishable "no connection" retry on the device.
@@ -102,13 +109,16 @@ class RwmsBackend(
 }
 
 /**
- * Encapsulates the manager public-gateway transport boundary; it is not a backend domain or persistence type.
+ * Retries one unauthorized gateway request with a serialized refreshed token. Refresh transport
+ * failures are propagated instead of exposing a misleading 401 that would clear a valid session.
  */
-private class BearerTokenInterceptor(
-    private val auth: ManagerAuthRepository,
+internal class BearerTokenInterceptor(
+    private val freshAccessToken: suspend (Boolean, String?) -> String?,
 ) : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
-        val token = runBlocking { auth.freshAccessToken() }
+        val token = runBlocking {
+            freshAccessToken(false, null)
+        }
             ?: throw IOException("Authenticated session is unavailable")
         val request = chain.request().newBuilder()
             .header("Authorization", "Bearer $token")
@@ -116,8 +126,12 @@ private class BearerTokenInterceptor(
         val response = chain.proceed(request)
         if (response.code != 401) return response
 
-        val refreshed = runBlocking { auth.freshAccessToken(forceRefresh = true) }
-            ?: return response
+        val refreshed = try {
+            runBlocking { freshAccessToken(true, token) }
+        } catch (failure: Throwable) {
+            response.close()
+            throw failure
+        } ?: return response
         response.close()
         return chain.proceed(
             request.newBuilder()

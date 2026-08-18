@@ -72,6 +72,7 @@ export type InventoryCollisionCandidate = {
   sourceParty: string | null
   planFingerprintSha256: string | null
   planSummary: InventoryCollisionPlanSummary
+  forceCapitalRepair: boolean
 }
 
 export type InventoryReconciliationDecision = {
@@ -93,6 +94,7 @@ export type InventoryFinalPlanEntry = {
   repairScheduledDate: string | null
   collisionCandidates: InventoryCollisionCandidate[]
   reconciliationDecision: InventoryReconciliationDecision | null
+  forceCapitalRepair: boolean
 }
 
 export type InventoryFinalPlan = {
@@ -189,6 +191,9 @@ export type InventoryFrozenPlanLine = {
   lineType: "WORK" | "MATERIAL"
   catalogVersionId: string | null
   catalogNodeId: string | null
+  routingQueueId: string | null
+  routingQueueName: string | null
+  routingQueueType: string | null
   description: string
   normalizedDescription: string | null
   unit: string
@@ -278,6 +283,7 @@ export type InventoryFrozenPlan = {
   priority?: 1 | 2 | 3 | 4 | 5
   coverMediaId?: string | null
   movementToRepair: boolean
+  forceCapitalRepair: boolean
   logisticsPlanningMode: LogisticsPlanningMode | null
   logisticsScheduledDate: string | null
   catalogVersionId: string
@@ -524,6 +530,7 @@ export type InventoryPlanSelection =
       priority: 1 | 2 | 3 | 4 | 5
       coverMediaId: string | null
       movementToRepair: boolean
+      forceCapitalRepair?: boolean
       logisticsPlanningMode: LogisticsPlanningMode | null
       logisticsScheduledDate: string | null
       lines: InventoryCatalogPlanLine[]
@@ -534,6 +541,7 @@ export type InventoryPlanSelection =
       priority: 1 | 2 | 3 | 4 | 5
       coverMediaId: string | null
       movementToRepair: boolean
+      forceCapitalRepair?: boolean
       logisticsPlanningMode: LogisticsPlanningMode | null
       logisticsScheduledDate: string | null
       lines: Array<InventoryCatalogPlanLine | InventoryManualPlanLine>

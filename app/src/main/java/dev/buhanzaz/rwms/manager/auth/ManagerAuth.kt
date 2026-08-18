@@ -131,6 +131,22 @@ private const val MANAGER_SCOPE =
     "openid profile offline_access rwms.read rwms.write warehouse.read"
 
 /**
+ * Reuses a valid token unless the caller explicitly rejected that same token. A token refreshed
+ * by another request is therefore accepted without rotating the refresh token a second time.
+ */
+internal fun reusableManagerAccessToken(
+    accessToken: String?,
+    needsTokenRefresh: Boolean,
+    forceRefresh: Boolean,
+    rejectedAccessToken: String?,
+): String? {
+    val usable = accessToken?.takeIf(String::isNotBlank) ?: return null
+    if (needsTokenRefresh) return null
+    if (!forceRefresh) return usable
+    return usable.takeIf { rejectedAccessToken != null && it != rejectedAccessToken }
+}
+
+/**
  * Owns the manager OAuth/session boundary. Encrypted client state enables requests but never grants server authorization.
  */
 class ManagerAuthRepository(
@@ -225,18 +241,28 @@ class ManagerAuthRepository(
 
     /**
      * Returns a usable token, serializing refreshes and durably replacing the encrypted session.
-     * An absent or revoked refresh token clears the local session instead of fabricating a token.
+     * Only terminal authorization failures clear the local session; transient refresh failures
+     * remain transport errors so a temporary outage cannot sign the manager out.
      */
-    suspend fun freshAccessToken(forceRefresh: Boolean = false): String? {
+    suspend fun freshAccessToken(
+        forceRefresh: Boolean = false,
+        rejectedAccessToken: String? = null,
+    ): String? {
         val current = currentState() ?: return null
-        if (!forceRefresh && !current.needsTokenRefresh && !current.accessToken.isNullOrBlank()) {
-            return current.accessToken
-        }
+        reusableManagerAccessToken(
+            accessToken = current.accessToken,
+            needsTokenRefresh = current.needsTokenRefresh,
+            forceRefresh = forceRefresh,
+            rejectedAccessToken = rejectedAccessToken,
+        )?.let { return it }
         return refreshMutex.withLock {
             val latest = currentState() ?: return@withLock null
-            if (!forceRefresh && !latest.needsTokenRefresh && !latest.accessToken.isNullOrBlank()) {
-                return@withLock latest.accessToken
-            }
+            reusableManagerAccessToken(
+                accessToken = latest.accessToken,
+                needsTokenRefresh = latest.needsTokenRefresh,
+                forceRefresh = forceRefresh,
+                rejectedAccessToken = rejectedAccessToken,
+            )?.let { return@withLock it }
             if (latest.refreshToken.isNullOrBlank()) {
                 clearSession(ManagerAuthState.SignedOut)
                 return@withLock null
@@ -260,17 +286,24 @@ class ManagerAuthRepository(
             }
             when (exchange) {
                 is RefreshExchange.Success -> {
+                    val accessToken = exchange.response.accessToken?.takeIf(String::isNotBlank)
+                        ?: throw IOException("Token refresh returned no access token")
                     detached.update(exchange.response, null)
                     withContext(NonCancellable) { persist(detached) }
-                    exchange.response.accessToken
+                    accessToken
                 }
                 is RefreshExchange.Failure -> {
                     if (exchange.exception?.error == "invalid_grant" ||
                         exchange.exception?.error == "access_denied"
                     ) {
                         clearSession(ManagerAuthState.Failure(MOBILE_ACCESS_MESSAGE))
+                        null
+                    } else {
+                        throw IOException(
+                            "Token refresh is temporarily unavailable",
+                            exchange.exception,
+                        )
                     }
-                    null
                 }
             }
         }

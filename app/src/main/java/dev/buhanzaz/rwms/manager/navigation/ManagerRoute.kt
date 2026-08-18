@@ -22,10 +22,15 @@ sealed class ManagerRoute(val route: String) {
     data object InventoryFurnitureDecision : ManagerRoute("manager-inventory-furniture-decision")
     data object InventoryFurniture : ManagerRoute("manager-inventory-furniture")
     data object InventoryCatalog : ManagerRoute("manager-inventory-catalog")
+
+    /** Late inspection observations collected after the work catalog selection. */
+    data object InventoryInspectionDetails :
+        ManagerRoute("manager-inventory-inspection-details")
     data object InventoryConfirmation : ManagerRoute("manager-inventory-confirmation")
     data object Maintenance : ManagerRoute("manager-maintenance")
     data object Estimates : ManagerRoute("manager-estimates")
     data object Repairs : ManagerRoute("manager-repairs")
+    data object CapitalRepairs : ManagerRoute("manager-capital-repairs")
     data object RepairQueue : ManagerRoute("manager-repair-queue")
     data object Acceptance : ManagerRoute("manager-maintenance-acceptance")
     data object MaintenanceEditor : ManagerRoute("manager-maintenance-editor")
@@ -53,4 +58,20 @@ sealed class ManagerRoute(val route: String) {
         fun transferRoute(lineId: String): String =
             "manager-photo-capture?target=$TARGET_TRANSFER&lineId=${Uri.encode(lineId)}"
     }
+}
+
+/** Rebuilds the normal inventory navigation chain up to one validated recovery target. */
+internal fun managerInventoryResumeBackStack(targetRoute: String): List<String> {
+    val routes = listOf(
+        ManagerRoute.Inventory.route,
+        ManagerRoute.InventoryEditor.route,
+        ManagerRoute.InventoryPhotos.route,
+        ManagerRoute.InventoryFurnitureDecision.route,
+        ManagerRoute.InventoryFurniture.route,
+        ManagerRoute.InventoryCatalog.route,
+        ManagerRoute.InventoryInspectionDetails.route,
+        ManagerRoute.InventoryConfirmation.route,
+    )
+    val targetIndex = routes.indexOf(targetRoute).takeIf { index -> index >= 1 } ?: 1
+    return routes.take(targetIndex + 1)
 }

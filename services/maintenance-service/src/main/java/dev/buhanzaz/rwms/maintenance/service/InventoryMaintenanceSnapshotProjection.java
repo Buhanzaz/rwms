@@ -65,7 +65,13 @@ final class InventoryMaintenanceSnapshotProjection {
           repair.getKind(),
           repair.getExecutionState(),
           repair.getAcceptanceState(),
-          hash(inventoryPlanSnapshot(stages)));
+          hash(
+              Map.of(
+                  "forceCapitalRepair",
+                  repair.isForceCapitalRepair(),
+                  "stages",
+                  inventoryPlanSnapshot(stages))),
+          repair.isForceCapitalRepair());
       repairsByAsset
           .computeIfAbsent(repair.getRentalItemId(), ignored -> new ArrayList<>())
           .add(fact);

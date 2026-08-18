@@ -104,6 +104,7 @@ export type InventoryRepairPlanSnapshotDto = {
   primaryLineId: string | null
   groupComment: string
   queueId: string | null
+  routingCatalogNodeId: string | null
   queueName: string | null
   routeQueueKind: "REPAIR" | "MOVEMENT" | "HOLDING" | null
   sortOrder: number
@@ -137,6 +138,8 @@ export type InventoryFindingDto = {
   repairCompletionMode: RepairEstimateCompletionMode | null
   repairPriority: RepairPriority
   movementToRepair: boolean
+  /** Always set by the current adapter; optional only for legacy panel fixtures. */
+  forceCapitalRepair?: boolean
   logisticsPlanningMode: LogisticsPlanningMode
   logisticsScheduledDate: string | null
   repairPlans: InventoryRepairPlanSnapshotDto[]

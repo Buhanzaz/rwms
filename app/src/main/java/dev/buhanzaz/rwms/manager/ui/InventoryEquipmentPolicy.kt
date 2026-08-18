@@ -133,6 +133,7 @@ internal fun InventoryFindingDto.inventoryFurnitureReinspectionSeed(
         quantities = inventoryFurnitureInitialQuantities(furnitureCatalog),
     )
 
+    InventoryReinspectionMode.REVIEW,
     InventoryReinspectionMode.SUPPLEMENT -> when (equipmentObservation.presence) {
         "PRESENT" -> InventoryFurnitureReinspectionSeed(
             observationRequested = true,

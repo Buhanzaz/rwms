@@ -41,7 +41,7 @@ class RwmsApiContractBoundaryTest {
             .filterNot(Method::isSynthetic)
             .associateBy(Method::getName)
 
-        assertThat(expected).hasSize(62)
+        assertThat(expected).hasSize(63)
         assertWithMessage("RwmsApi method inventory must stay synchronized with canonical public OpenAPI")
             .that(methods.keys)
             .containsExactlyElementsIn(expected.keys)
@@ -574,6 +574,7 @@ private fun expectedManagerRoutes(): Map<String, ManagerContractRoute> {
         "amendEstimate" to route("POST", "api/maintenance/v1/estimates/{estimateId}/amendments", "$maintenance /api/maintenance/v1/estimates/{id}/amendments"),
         "completeEstimate" to route("POST", "api/maintenance/v1/estimates/{estimateId}/complete", "$maintenance /api/maintenance/v1/estimates/{id}/complete"),
         "repairs" to route("GET", "api/maintenance/v1/repairs", "$maintenance /api/maintenance/v1/repairs"),
+        "activeCapitalRepairs" to route("GET", "api/maintenance/v1/repairs/capital", "$maintenance /api/maintenance/v1/repairs/capital"),
         "acceptance" to route("GET", "api/maintenance/v1/acceptance", "$maintenance /api/maintenance/v1/acceptance"),
         "createDirectRepair" to route("POST", "api/maintenance/v1/repairs/direct", "$maintenance /api/maintenance/v1/repairs/direct"),
         "repair" to route("GET", "api/maintenance/v1/repairs/{repairId}", "$maintenance /api/maintenance/v1/repairs/{id}"),

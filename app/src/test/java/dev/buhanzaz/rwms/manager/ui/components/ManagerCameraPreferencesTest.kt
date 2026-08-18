@@ -41,4 +41,18 @@ class ManagerCameraPreferencesTest {
 
         assertThat(ManagerCameraPreferences(context).load()).isEqualTo(expected)
     }
+
+    @Test
+    fun `legacy automatic hdr preference migrates once to fast ordinary photos`() {
+        context.getSharedPreferences("manager-camera-v2", Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("ultra-hdr", true)
+            .commit()
+
+        val migrated = ManagerCameraPreferences(context).load()
+        ManagerCameraPreferences(context).save(migrated.copy(ultraHdrEnabled = true))
+
+        assertThat(migrated.ultraHdrEnabled).isFalse()
+        assertThat(ManagerCameraPreferences(context).load().ultraHdrEnabled).isTrue()
+    }
 }

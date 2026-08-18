@@ -91,6 +91,16 @@ event IDs, validate contract shape and retain retry/quarantine/DLT state locally
 capture-release and publication flows retain durable attempts so retries do not create a second
 session or guess an uncertain dependency result.
 
+An inspection plan may carry the optional explicit `forceCapitalRepair` choice; omission means
+`false` and JSON `null` is rejected. Inventory persists it in immutable frozen-plan and final-plan
+evidence, includes it in the final-plan hash/publication request, and never recalculates maintenance
+complexity itself. A plan cannot select both repair movement and forced capital repair. Public
+frozen-plan lines expose the immutable queue ID, name and type already recorded in the maintenance
+source snapshot, so clients can reconstruct custom and repeated-catalog stages without duplicating
+or guessing line ownership; this adds no inventory table or migration. Migration
+[`V17__manual_capital_repair_selection.sql`](src/main/resources/db/migration/V17__manual_capital_repair_selection.sql)
+backfills existing evidence as `false` and preserves the no-work invariant.
+
 `INVENTORY_KAFKA_ENABLED` controls Kafka relay and consumer beans. `INVENTORY_DEPENDENCIES_ENABLED`
 controls the private client-credential dependency gateway for warehouse, asset and maintenance.
 

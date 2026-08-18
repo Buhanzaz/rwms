@@ -51,17 +51,24 @@ func TestValidateProcessedVariantsRequiresExactGenerationSet(t *testing.T) {
 	}
 }
 
-func TestValidateProcessedVariantsRequiresOneExactVideoOriginal(t *testing.T) {
+func TestValidateProcessedVariantsRequiresExactVideoOriginalAndPlayback(t *testing.T) {
 	mediaID := uuid.New()
 	job := WorkerJob{
 		MediaID: mediaID, MediaKind: media.KindVideo, Generation: 3, ContentType: "video/mp4",
 		ProcessingKind: media.ProcessingInitial, Rotation: media.Rotation0,
 	}
-	valid := []media.ProcessedVariant{{
-		Variant: media.VariantOriginal, ObjectKey: media.OriginalObjectKey(mediaID.String(), 3, ".mp4"),
-		ObjectVersionID: "minio-video-version", ContentType: "video/mp4", SizeBytes: 128,
-		ChecksumSHA256: hex64('a'),
-	}}
+	valid := []media.ProcessedVariant{
+		{
+			Variant: media.VariantOriginal, ObjectKey: media.OriginalObjectKey(mediaID.String(), 3, ".mp4"),
+			ObjectVersionID: "minio-video-version", ContentType: "video/mp4", SizeBytes: 128,
+			ChecksumSHA256: hex64('a'),
+		},
+		{
+			Variant: media.VariantPlayback, ObjectKey: media.VideoPlaybackObjectKey(mediaID.String(), 3),
+			ObjectVersionID: "minio-playback-version", ContentType: "video/mp4", SizeBytes: 64,
+			ChecksumSHA256: hex64('b'),
+		},
+	}
 	if err := validateProcessedVariants(job, valid); err != nil {
 		t.Fatalf("valid exact video set error = %v", err)
 	}
@@ -69,5 +76,13 @@ func TestValidateProcessedVariantsRequiresOneExactVideoOriginal(t *testing.T) {
 	invalid[0].Width = 10
 	if err := validateProcessedVariants(job, invalid); err == nil {
 		t.Fatal("video dimensions must remain unproved/zero")
+	}
+	if err := validateProcessedVariants(job, valid[:1]); err == nil {
+		t.Fatal("video generation without PLAYBACK must be rejected")
+	}
+	invalid = append([]media.ProcessedVariant(nil), valid...)
+	invalid[1].ContentType = "video/webm"
+	if err := validateProcessedVariants(job, invalid); err == nil {
+		t.Fatal("PLAYBACK must be canonical video/mp4")
 	}
 }

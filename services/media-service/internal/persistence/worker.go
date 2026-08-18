@@ -621,6 +621,7 @@ func validateProcessedVariants(job WorkerJob, variants []media.ProcessedVariant)
 			return ErrConflict
 		}
 		wanted[media.VariantOriginal] = media.OriginalObjectKey(job.MediaID.String(), job.Generation, extension)
+		wanted[media.VariantPlayback] = media.VideoPlaybackObjectKey(job.MediaID.String(), job.Generation)
 	default:
 		return ErrConflict
 	}
@@ -646,8 +647,14 @@ func validateProcessedVariants(job WorkerJob, variants []media.ProcessedVariant)
 			if variant.ContentType != expectedContentType || variant.Width <= 0 || variant.Height <= 0 {
 				return ErrConflict
 			}
-		} else if variant.ContentType != job.ContentType || variant.Width != 0 || variant.Height != 0 {
-			return ErrConflict
+		} else {
+			expectedContentType := job.ContentType
+			if variant.Variant == media.VariantPlayback {
+				expectedContentType = "video/mp4"
+			}
+			if variant.ContentType != expectedContentType || variant.Width != 0 || variant.Height != 0 {
+				return ErrConflict
+			}
 		}
 	}
 	return nil

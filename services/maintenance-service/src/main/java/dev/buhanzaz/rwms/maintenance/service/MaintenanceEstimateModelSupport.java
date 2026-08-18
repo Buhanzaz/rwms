@@ -60,7 +60,8 @@ final class MaintenanceEstimateModelSupport {
             revision.getRevision(), revision.getDispatchDate(), revision.getSourceParty(),
             lineResponses(value.getId(), revision.getRevision()),
             planResponses(value.getId(), revision.getRevision()), commandSupport.money(revision.getTotalMinor()),
-            revision.getAmendmentReason(), revision.getRecordedAt()))
+            revision.getAmendmentReason(), revision.getRecordedAt(),
+            revision.isForceCapitalRepair()))
         .toList();
     List<MediaReferenceInput> aggregateMedia = mediaSupport.media("ESTIMATE", value.getId());
     return new EstimateResponse(
@@ -68,7 +69,7 @@ final class MaintenanceEstimateModelSupport {
         value.getState(), value.getRevision(), revisions, value.getRepairId(),
         aggregateMedia, mediaSupport.effectiveCoverMediaId(value.getCoverMediaId(), aggregateMedia),
         value.getCreatedAt(), value.getCompletedAt(),
-        commandSupport.actor(value.getActorRef()));
+        commandSupport.actor(value.getActorRef()), value.isForceCapitalRepair());
   }
 
   protected List<EstimateLineResponse> lineResponses(UUID estimateId, int revision) {

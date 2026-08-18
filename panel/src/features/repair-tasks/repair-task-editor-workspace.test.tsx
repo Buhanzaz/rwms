@@ -44,16 +44,19 @@ vi.mock("@/features/repair-estimates/repair-estimate-workspace-layout", () => ({
     controls,
     photos,
     estimate,
+    information,
     message,
   }: {
     controls: ReactNode
     photos: ReactNode
     estimate: ReactNode
+    information: ReactNode
     message: ReactNode
   }) => (
     <section>
       {message}
       {photos}
+      {information}
       {estimate}
       {controls}
     </section>
@@ -198,6 +201,7 @@ const queuedTask: RepairTaskDto = {
   sourceRepairTaskId: null,
   sourceRepairTaskVersion: null,
   movementToRepair: false,
+  forceCapitalRepair: true,
   logisticsPlanningMode: "AUTO",
   logisticsScheduledDate: null,
   createdAt: "2026-07-24T10:00:00Z",
@@ -252,6 +256,7 @@ describe("RepairTaskEditorWorkspace queue retry", () => {
             accessToken="maintenance-token"
             warehouseId={warehouseId}
             task={null}
+            sourceTask={queuedTask}
             seed={{
               type: "repair-rework-seed-v1",
               warehouseId,
@@ -273,6 +278,11 @@ describe("RepairTaskEditorWorkspace queue retry", () => {
 
     expect(await screen.findByText("REPEAT · Ремонт каркаса")).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Переделать" })).toBeNull()
+    const forceCapitalRepair = screen.getByRole("checkbox", {
+      name: "Направить на капитальный ремонт",
+    })
+    expect(forceCapitalRepair.getAttribute("aria-checked")).toBe("true")
+    expect(forceCapitalRepair.hasAttribute("disabled")).toBe(true)
   })
 
   it("places editor actions in the top toolbar and keeps catalog paging below", async () => {
@@ -335,6 +345,31 @@ describe("RepairTaskEditorWorkspace queue retry", () => {
     await user.click(screen.getByRole("button", { name: "Назад" }))
     expect(onBack).toHaveBeenCalledTimes(1)
     expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it("retains and edits the explicit capital-repair choice on a primary repair", async () => {
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={new QueryClient()}>
+          <RepairTaskEditorWorkspace
+            accessToken="maintenance-token"
+            warehouseId={warehouseId}
+            task={queuedTask}
+            onClose={vi.fn()}
+            onSaved={vi.fn()}
+          />
+        </QueryClientProvider>
+      </MemoryRouter>
+    )
+
+    const checkbox = screen.getByRole("checkbox", {
+      name: "Направить на капитальный ремонт",
+    })
+    expect(checkbox.getAttribute("aria-checked")).toBe("true")
+
+    await user.click(checkbox)
+    expect(checkbox.getAttribute("aria-checked")).toBe("false")
   })
 
   it("replaces repair lines with previous photos and restores them", async () => {

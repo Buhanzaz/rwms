@@ -19,8 +19,10 @@ Kafka — отдельное представление и никогда не �
 
 Для изображения сервис создаёт `SMALL`, `MEDIUM`, `LARGE` в WebP и
 авторизуемый `ORIGINAL`, не меняя ориентацию пикселей, переданную клиентом.
-Видео хранится только как проверенный original после FFprobe. Неподтверждённые
-размеры видео остаются `NULL` в SQL.
+Для видео сохраняется точный загруженный `ORIGINAL` и создаётся сжатый MP4
+`PLAYBACK`: H.264, yuv420p, необязательный AAC audio, удалённые metadata и
+максимум 1280x720 с сохранением пропорций и чётных размеров. FFprobe проверяет
+source и result; неподтверждённые размеры видео остаются `NULL` в SQL.
 
 ## Зачем нужен сервис
 
@@ -64,8 +66,9 @@ gateway; private `/api/internal/**` доступны только сервиса
    точную приватную версию объекта MinIO.
 3. Клиент завершает session тем же idempotency key. Upload fact и processing
    request коммитятся атомарно.
-4. Kafka worker создаёт canonical original и WebP-variants для изображения
-   либо проверяет и копирует original видео. После этого публикуется безопасный
+4. Durable Kafka worker асинхронно создаёт canonical original и WebP-variants
+   для изображения либо проверяет видео, сохраняет его точный original и
+   создаёт сжатый MP4 playback. После этого публикуется безопасный
    invalidation-сигнал, а клиенты обновляют только свою scoped projection.
 5. Scoped read отдаёт ровно закреплённую версию объекта через media-service с
    `private, no-store`. Логическое удаление меняет PostgreSQL и создаёт один
@@ -92,13 +95,14 @@ Flyway выполняется вне процесса. До запуска пр�
 `db/migration/V8__task_board_worker_media.sql`,
 `db/migration/V9__asset_import_worker.sql` и
 `db/migration/V10__canonical_cabin_photo_library.sql`, затем
-`db/migration/V11__bounded_media_processing_recovery.sql`.
+`db/migration/V11__bounded_media_processing_recovery.sql`, затем
+`db/migration/V12__video_playback_variant.sql`.
 
 Go-приложение не выполняет миграции, baseline, repair и не принимает молча
 чужую непустую базу.
 
-- Новая local/test база мигрируется от V1 до V11.
-- База с точной историей V10 обновляется применением V11.
+- Новая local/test база мигрируется от V1 до V12.
+- База с точной историей V11 обновляется применением V12.
 - `baselineOnMigrate` должен оставаться `false`; непустая база без истории
   миграций отклоняется.
 - На старте и readiness проверяются успешные строки Flyway, их версии,
@@ -142,13 +146,23 @@ V1 и legacy union event schema — только compatibility evidence; их н
 | `MEDIA_KAFKA_CABIN_OWNER_GROUP` | Выделенная consumer group dynamic CABIN owner |
 | `MEDIA_INSTANCE_ID` | Уникальный безопасный ASCII идентификатор lease/fence owner |
 
-Если разрешён video MIME type, обязательны также `MEDIA_MAX_VIDEO_DURATION` и
-`MEDIA_ALLOWED_VIDEO_CODECS` через запятую.
+Если разрешён video MIME type, обязательны также `MEDIA_MAX_VIDEO_DURATION`,
+`MEDIA_MAX_VIDEO_OUTPUT_BYTES` и `MEDIA_ALLOWED_VIDEO_CODECS` через запятую.
+Output limit ограничивает и ffmpeg, и проверенный derived file и не может быть
+больше `MEDIA_MAX_UPLOAD_BYTES`. `MEDIA_PROCESSING_TIMEOUT` должен покрывать
+самое медленное разрешённое video transcode; worker lease автоматически на
+тридцать секунд длиннее этого timeout.
 
 Необязательные параметры: `MEDIA_HTTP_ADDRESS` (по умолчанию `:8085`),
+`MEDIA_HTTP_READ_TIMEOUT` и `MEDIA_HTTP_WRITE_TIMEOUT` (оба по умолчанию `5m`,
+как ограниченное окно передачи media в gateway),
 `MEDIA_MANAGEMENT_ADDRESS` (по умолчанию `127.0.0.1:9095`: явный числовой
 IPv4- или IPv6-loopback host с ненулевым TCP port) и `MEDIA_AUTH_AUDIENCE`
-(по умолчанию `rwms-services`). Processing group и topics имеют канонические
+(по умолчанию `rwms-services`), а также `MEDIA_FFMPEG_EXECUTABLE` (по умолчанию
+`ffmpeg`) и `MEDIA_FFPROBE_EXECUTABLE` (по умолчанию `ffprobe`). Когда video
+включено, startup разрешает оба executable до открытия runtime dependencies;
+обычные distribution-пакеты `ffmpeg` устанавливают оба binary.
+Processing group и topics имеют канонические
 значения и не должны меняться:
 `media-service-processing-v1`, `rwms.media.media.v1` и
 `rwms.media.processing.v1`. Терминальная ошибка processing публикует только
@@ -302,6 +316,9 @@ transition принадлежит
   API/command для следующего transition пока нет; его нужно спроектировать
   до публикации retry execution. `ATTEMPT_BUDGET_RESET` фиксирует review
   исчерпанного attempt cycle, но сам также не выполняет reset или requeue.
+- [`V12__video_playback_variant.sql`](db/migration/V12__video_playback_variant.sql)
+  только расширяет check constraint `media_variant` значением `PLAYBACK`;
+  существующие originals и image variants не изменяются.
 
 Typed fixed-cardinality recovery snapshot по-прежнему публикуется через
 structured logs и также копируется в standard-library OpenMetrics text на
@@ -388,6 +405,6 @@ go build -trimpath -o /tmp/rwms-media-service ./cmd/media-service
 ```
 
 Проверка миграций выполняется отдельно Flyway и PostgreSQL и должна покрыть
-clean install V1-to-V11, upgrade V10-to-V11, повторный запуск, checksum drift и
+clean install V1-to-V12, upgrade V11-to-V12, повторный запуск, checksum drift и
 непустую базу без истории. Проверки MinIO должны использовать versioned
 local/test bucket; Kafka-проверки — канонические topics и broker acknowledgements.

@@ -2343,6 +2343,10 @@ components:
         coverMediaId:
           description: Required and contained in mediaReferences when aggregate photos are present; otherwise null.
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        forceCapitalRepair:
+          description: Explicit manager choice, independent of catalog WORK flags; omitted means false.
+          type: boolean
+          default: false
     ReplaceEstimateRequest:
       type: object
       additionalProperties: false
@@ -2358,6 +2362,10 @@ components:
         mediaReferences: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/MediaReference' } }
         coverMediaId:
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        forceCapitalRepair:
+          description: Explicit manager choice, independent of catalog WORK flags; omitted means false.
+          type: boolean
+          default: false
     AmendEstimateRequest:
       type: object
       additionalProperties: false
@@ -2380,10 +2388,14 @@ components:
         mediaReferences: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/MediaReference' } }
         coverMediaId:
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        forceCapitalRepair:
+          description: Explicit manager choice, independent of catalog WORK flags; omitted means false.
+          type: boolean
+          default: false
     EstimateRevision:
       type: object
       additionalProperties: false
-      required: [revision, dispatchDate, lines, plan, total, recordedAt]
+      required: [revision, dispatchDate, lines, plan, total, recordedAt, forceCapitalRepair]
       properties:
         revision: { type: integer, minimum: 1 }
         dispatchDate: { type: string, format: date }
@@ -2395,10 +2407,11 @@ components:
         reason:
           oneOf: [ { type: string, maxLength: 2000 }, { type: 'null' } ]
         recordedAt: { type: string, format: date-time }
+        forceCapitalRepair: { type: boolean }
     Estimate:
       type: object
       additionalProperties: false
-      required: [id, warehouseId, rentalItemId, version, lifecycle, currentRevision, revisions, repairId, mediaReferences, coverMediaId, createdAt, completedAt, actor]
+      required: [id, warehouseId, rentalItemId, version, lifecycle, currentRevision, revisions, repairId, mediaReferences, coverMediaId, createdAt, completedAt, actor, forceCapitalRepair]
       properties:
         id: { type: string, format: uuid }
         warehouseId: { type: string, format: uuid }
@@ -2416,6 +2429,7 @@ components:
         completedAt:
           oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
         actor: { $ref: '#/components/schemas/ActorSnapshot' }
+        forceCapitalRepair: { type: boolean }
     EstimatePage:
       type: object
       additionalProperties: false
@@ -2572,6 +2586,11 @@ components:
             properties:
               logisticsPlanningMode: { type: 'null' }
               logisticsScheduledDate: { type: 'null' }
+        - not:
+            required: [movementToRepair, forceCapitalRepair]
+            properties:
+              movementToRepair: { const: true }
+              forceCapitalRepair: { const: true }
       properties:
         warehouseId: { type: string, format: uuid }
         inventoryId: { type: string, format: uuid }
@@ -2605,6 +2624,10 @@ components:
         logisticsScheduledDate:
           description: Required only for inbound FIXED_DATE and null without inbound movement.
           oneOf: [ { type: string, format: date }, { type: 'null' } ]
+        forceCapitalRepair:
+          description: Explicit inventory-manager choice; omitted means false.
+          type: boolean
+          default: false
     InventoryPlanLineSnapshot:
       type: object
       additionalProperties: false
@@ -2677,6 +2700,11 @@ components:
             properties:
               logisticsPlanningMode: { type: 'null' }
               logisticsScheduledDate: { type: 'null' }
+        - not:
+            required: [movementToRepair, forceCapitalRepair]
+            properties:
+              movementToRepair: { const: true }
+              forceCapitalRepair: { const: true }
       properties:
         catalogVersionId: { type: string, format: uuid }
         mode: { $ref: '#/components/schemas/InventoryPlanMode' }
@@ -2707,6 +2735,10 @@ components:
         logisticsScheduledDate:
           description: Frozen maintenance-owned planning choice; logistics resolves AUTO later.
           oneOf: [ { type: string, format: date }, { type: 'null' } ]
+        forceCapitalRepair:
+          description: Frozen explicit manager choice; omitted legacy snapshots mean false.
+          type: boolean
+          default: false
     FrozenInventoryPlan:
       type: object
       additionalProperties: false
@@ -2761,6 +2793,10 @@ components:
         lines: { type: array, items: { $ref: '#/components/schemas/InventoryPlanLineSnapshot' } }
         stages: { type: array, items: { $ref: '#/components/schemas/InventoryPlanStageSnapshot' } }
         movementToRepair: { type: boolean }
+        forceCapitalRepair:
+          description: Frozen explicit manager choice; omitted legacy snapshots mean false.
+          type: boolean
+          default: false
         movementToShipment: { type: boolean }
         mediaReferences: { type: array, items: { $ref: '#/components/schemas/MediaReference' } }
         priority: { type: integer, minimum: 1, maximum: 5 }
@@ -2793,6 +2829,10 @@ components:
           maxItems: 100
           items: { $ref: '#/components/schemas/MediaReference' }
         snapshotSchemaVersion: { type: integer, minimum: 1, maximum: 2 }
+        forceCapitalRepair:
+          description: Must equal the frozen snapshot value; omitted means false.
+          type: boolean
+          default: false
     InventoryPublicationPreflightRequest:
       type: object
       additionalProperties: false
@@ -2818,7 +2858,7 @@ components:
     InventoryPublicationCandidate:
       type: object
       additionalProperties: false
-      required: [targetKind, targetId, estimateId, repairId, version, state, started, active, priority, sourceParty, planFingerprintSha256, planSummary]
+      required: [targetKind, targetId, estimateId, repairId, version, state, started, active, priority, sourceParty, planFingerprintSha256, planSummary, forceCapitalRepair]
       properties:
         targetKind: { $ref: '#/components/schemas/InventoryPublicationTargetKind' }
         targetId: { type: string, format: uuid }
@@ -2837,6 +2877,7 @@ components:
         planFingerprintSha256:
           oneOf: [ { type: string, pattern: '^[0-9a-f]{64}$' }, { type: 'null' } ]
         planSummary: { $ref: '#/components/schemas/InventoryPublicationPlanSummary' }
+        forceCapitalRepair: { type: boolean }
     InventoryPublicationPreflightFinding:
       type: object
       additionalProperties: false
@@ -2879,6 +2920,10 @@ components:
           oneOf: [ { $ref: '#/components/schemas/InventoryPublicationTargetKind' }, { type: 'null' } ]
         selectedTargetId:
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        forceCapitalRepair:
+          description: Must equal the frozen snapshot value; omitted means false.
+          type: boolean
+          default: false
     InventoryPublicationSourceReference:
       type: object
       additionalProperties: false
@@ -2972,7 +3017,7 @@ components:
     InventoryRepairFact:
       type: object
       additionalProperties: false
-      required: [repairId, rootRepairId, origin, kind, executionState, acceptanceState, planFingerprintSha256]
+      required: [repairId, rootRepairId, origin, kind, executionState, acceptanceState, planFingerprintSha256, forceCapitalRepair]
       properties:
         repairId: { type: string, format: uuid }
         rootRepairId: { type: string, format: uuid }
@@ -2981,6 +3026,7 @@ components:
         executionState: { $ref: '#/components/schemas/RepairExecutionState' }
         acceptanceState: { $ref: '#/components/schemas/RepairAcceptanceState' }
         planFingerprintSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        forceCapitalRepair: { type: boolean }
     InventoryRepairSnapshot:
       type: object
       additionalProperties: false
@@ -3067,12 +3113,14 @@ components:
           description: Sum of quantity multiplied by normativeMinutes for every current WORK.
           $ref: '#/components/schemas/DecimalQuantity'
         forcedCapital:
-          description: True when at least one current catalog work forces CAPITAL.
+          description: >-
+            True when the explicit manager choice is enabled or at least one current catalog
+            work forces CAPITAL.
           type: boolean
     Repair:
       type: object
       additionalProperties: false
-      required: [id, rootRepairId, sourceRepairId, estimateId, warehouseId, rentalItemId, origin, kind, executionState, acceptanceState, reclassificationState, version, dispatchDate, priority, sourceParty, plan, inventorySource, lease, mediaReferences, coverMediaId, complexity, movementToRepair, logisticsPlanningMode, logisticsScheduledDate, createdAt, updatedAt, actor]
+      required: [id, rootRepairId, sourceRepairId, estimateId, warehouseId, rentalItemId, origin, kind, executionState, acceptanceState, reclassificationState, version, dispatchDate, priority, sourceParty, plan, inventorySource, lease, mediaReferences, coverMediaId, complexity, movementToRepair, logisticsPlanningMode, logisticsScheduledDate, createdAt, updatedAt, actor, forceCapitalRepair]
       properties:
         id: { type: string, format: uuid }
         rootRepairId: { type: string, format: uuid }
@@ -3109,6 +3157,9 @@ components:
           description: >-
             Selects the full repair movement cycle: driver delivery into the repair zone before
             worker tasks are shown and automatic movement from repair after completion.
+          type: boolean
+        forceCapitalRepair:
+          description: Explicit manager choice independent of catalog WORK flags.
           type: boolean
         logisticsPlanningMode:
           oneOf: [ { $ref: '#/components/schemas/RepairLogisticsPlanningMode' }, { type: 'null' } ]
@@ -3150,6 +3201,10 @@ components:
         mediaReferences: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/MediaReference' } }
         coverMediaId:
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        forceCapitalRepair:
+          description: Explicit manager choice; omitted means false.
+          type: boolean
+          default: false
     ReplaceRepairPlanRequest:
       type: object
       additionalProperties: false
@@ -3161,6 +3216,10 @@ components:
         mediaReferences: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/MediaReference' } }
         coverMediaId:
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        forceCapitalRepair:
+          description: Explicit manager choice; omitted means false.
+          type: boolean
+          default: false
     AddedReworkLineInput:
       type: object
       additionalProperties: false

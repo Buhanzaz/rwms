@@ -77,6 +77,7 @@ const estimate: RepairEstimateDto = {
   maintenanceMediaReferences: [],
   completionMode: null,
   movementToRepair: null,
+  forceCapitalRepair: false,
   taskPlans: [],
   createdAt: "2026-07-27T10:00:00Z",
   updatedAt: "2026-07-27T10:00:00Z",

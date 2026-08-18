@@ -35,6 +35,22 @@ class MaintenanceEditorStatePolicyTest {
     }
 
     @Test
+    fun `capital repair and inbound repair movement clear each other`() {
+        val capital = editor()
+            .withMovementToRepair(true)
+            .withForceCapitalRepair(true)
+        val movement = capital.withMovementToRepair(true)
+
+        assertThat(capital.forceCapitalRepair).isTrue()
+        assertThat(capital.movementToRepair).isFalse()
+        assertThat(capital.logisticsPlanningMode).isNull()
+        assertThat(movement.forceCapitalRepair).isFalse()
+        assertThat(movement.movementToRepair).isTrue()
+        assertThat(movement.logisticsPlanningMode)
+            .isEqualTo(LOGISTICS_PLANNING_MODE_AUTO)
+    }
+
+    @Test
     fun `read only maintenance editor accepts only wizard step changes`() {
         val original = editor(readOnly = true).copy(
             sourceParty = "Original source",

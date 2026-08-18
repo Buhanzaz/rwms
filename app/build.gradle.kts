@@ -32,8 +32,8 @@ android {
         applicationId = "dev.buhanzaz.rwms.manager"
         minSdk = 23
         targetSdk = 36
-        versionCode = 40
-        versionName = "0.3.37"
+        versionCode = 47
+        versionName = "0.3.44"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -83,6 +83,7 @@ dependencies {
     val retrofitVersion = "3.0.0"
     val okHttpVersion = "5.3.2"
     val moshiVersion = "1.15.2"
+    val media3Version = "1.10.1"
     // AGP 8.13.2 bundles R8 8.13.19, whose highest supported Kotlin
     // metadata level is 2.3. Kotlin 2.4 requires R8 9.1.29 or newer.
     val kotlinVersion = "2.3.0"
@@ -118,6 +119,8 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$cameraVersion")
     implementation("androidx.camera:camera-view:$cameraVersion")
     implementation("androidx.camera:camera-video:$cameraVersion")
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-ui:$media3Version")
 
     constraints {
         implementation("org.jetbrains.kotlin:kotlin-stdlib:$kotlinVersion")

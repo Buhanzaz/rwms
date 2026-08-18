@@ -24,6 +24,7 @@ class MediaDownloader(
         lineId: String? = null,
         warehouseId: String,
         context: String,
+        expectedContentType: String? = null,
     ): String {
         val safeMediaId = mediaId.replace(UNSAFE_FILE_NAME, "_")
         val stem = "$safeMediaId-$generation"
@@ -45,7 +46,7 @@ class MediaDownloader(
             // A disconnect can happen while a successful HTTP response is being copied to the
             // local cache, not just before headers arrive. Retry the whole idempotent read so a
             // supplement does not lose a photo merely because its response body was interrupted.
-            persistBody(stem, body)
+            persistBody(stem, body, expectedContentType)
         }
     }
 
@@ -60,10 +61,14 @@ class MediaDownloader(
                 '\n' !in contentPath &&
                 '\r' !in contentPath,
         ) {
-            "Медиасервис вернул небезопасный путь фотографии"
+            "Медиасервис вернул небезопасный путь медиафайла"
         }
         val safeMediaId = mediaId.replace(UNSAFE_FILE_NAME, "_")
-        val stem = "$safeMediaId-$generation-preview"
+        val variantKey = contentPath
+            .substringAfter("/variants/")
+            .substringBefore('/')
+            .replace(UNSAFE_FILE_NAME, "_")
+        val stem = "$safeMediaId-$generation-$variantKey"
         mediaCacheDir.listFiles()
             ?.firstOrNull { file -> file.nameWithoutExtension == stem && file.length() > 0L }
             ?.let { cached -> return Uri.fromFile(cached).toString() }
@@ -72,10 +77,18 @@ class MediaDownloader(
         }
     }
 
-    private fun persistBody(stem: String, body: ResponseBody): String {
-        val extension = when (body.contentType()?.toString()?.substringBefore(';')) {
+    private fun persistBody(
+        stem: String,
+        body: ResponseBody,
+        expectedContentType: String? = null,
+    ): String {
+        val contentType = body.contentType()?.toString()?.substringBefore(';')
+            ?: expectedContentType?.substringBefore(';')
+        val extension = when (contentType) {
             "image/png" -> "png"
             "image/webp" -> "webp"
+            "video/mp4" -> "mp4"
+            "video/webm" -> "webm"
             else -> "jpg"
         }
         mediaCacheDir.mkdirs()
@@ -87,10 +100,10 @@ class MediaDownloader(
                     temporary.outputStream().use(input::copyTo)
                 }
             }
-            require(temporary.length() > 0L) { "Медиасервис вернул пустую фотографию" }
+            require(temporary.length() > 0L) { "Медиасервис вернул пустой медиафайл" }
             if (target.exists()) target.delete()
             check(temporary.renameTo(target)) {
-                "Не удалось сохранить фотографию во временный кэш"
+                "Не удалось сохранить медиафайл во временный кэш"
             }
         } catch (failure: Throwable) {
             temporary.delete()

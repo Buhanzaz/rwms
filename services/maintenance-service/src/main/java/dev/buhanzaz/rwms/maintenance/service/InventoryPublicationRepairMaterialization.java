@@ -108,6 +108,7 @@ final class InventoryPublicationRepairMaterialization {
         finding.repairScheduledDate(),
         "Инвентаризация",
         inventoryActorJson());
+    draft.selectForceCapitalRepair(finding.forceCapitalRepair());
     draft.selectPriority(finding.priority());
     draft.selectMovementToRepair(
         finding.movementToRepair(), planningMode, finding.movementScheduledDate());

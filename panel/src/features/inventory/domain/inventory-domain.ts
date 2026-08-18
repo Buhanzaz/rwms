@@ -40,6 +40,7 @@ export function toInventoryRepairPlanSnapshot(
     primaryLineId: plan.primaryLineId,
     groupComment: plan.groupComment,
     queueId: plan.queueId ?? null,
+    routingCatalogNodeId: plan.routingCatalogNodeId ?? null,
     queueName: plan.queueName,
     routeQueueKind: plan.routeQueueKind,
     sortOrder: plan.sortOrder,

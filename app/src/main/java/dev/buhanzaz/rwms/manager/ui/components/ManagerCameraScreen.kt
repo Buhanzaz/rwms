@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.manager.ui.components
 
 import android.Manifest
+import android.app.Dialog
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.PackageManager
@@ -20,7 +21,9 @@ import android.os.VibratorManager
 import android.util.Log
 import android.util.Range
 import android.util.Size
+import android.view.KeyEvent
 import android.view.OrientationEventListener
+import android.view.View
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
@@ -110,6 +113,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -121,6 +125,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.content.ContextCompat
 import androidx.exifinterface.media.ExifInterface
 import androidx.lifecycle.LifecycleOwner
@@ -152,6 +157,7 @@ internal fun ManagerCameraExperience(
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
+    val hostView = LocalView.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val mainExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
     // CameraX invokes the file callback on this executor. Keep pixel normalization off the main
@@ -763,10 +769,21 @@ internal fun ManagerCameraExperience(
             if (cameraMode == ManagerCameraMode.Video) toggleVideoRecording() else takePhoto()
         }
     }
-    DisposableEffect(context) {
+    DisposableEffect(context, hostView) {
         val activity = context.managerMainActivity()
+        val dialog = hostView.managerComposeDialog()
         activity?.setVolumeShutterHandler { volumeShutterAction() }
-        onDispose { activity?.setVolumeShutterHandler(null) }
+        dialog?.setOnKeyListener { _, keyCode, event ->
+            managerHandleVolumeShutterKey(
+                keyCode = keyCode,
+                action = event.action,
+                repeatCount = event.repeatCount,
+            ) { volumeShutterAction() }
+        }
+        onDispose {
+            dialog?.setOnKeyListener(null)
+            activity?.setVolumeShutterHandler(null)
+        }
     }
 
     Box(
@@ -967,6 +984,30 @@ private tailrec fun Context.managerMainActivity(): MainActivity? = when (this) {
     is MainActivity -> this
     is ContextWrapper -> baseContext.managerMainActivity()
     else -> null
+}
+
+/** Resolves the Compose dialog that owns this camera composition, when one exists. */
+private tailrec fun View.managerComposeDialog(): Dialog? {
+    val window = (this as? DialogWindowProvider)?.window
+    return (window?.callback as? Dialog)
+        ?: (parent as? View)?.managerComposeDialog()
+}
+
+/**
+ * Consumes both volume keys inside the active camera window. This is required when the camera is
+ * hosted by a Compose dialog, whose window dispatches keys without calling [MainActivity].
+ */
+internal fun managerHandleVolumeShutterKey(
+    keyCode: Int,
+    action: Int,
+    repeatCount: Int,
+    onShutter: () -> Unit,
+): Boolean {
+    if (keyCode != KeyEvent.KEYCODE_VOLUME_UP && keyCode != KeyEvent.KEYCODE_VOLUME_DOWN) {
+        return false
+    }
+    if (action == KeyEvent.ACTION_DOWN && repeatCount == 0) onShutter()
+    return true
 }
 
 private const val MANAGER_CAPTURE_WIDE_ZOOM_TARGET = 0.6f
@@ -1217,11 +1258,10 @@ private fun bindManagerCamera(
     } else {
         val captureBuilder = ImageCapture.Builder()
             .setCaptureMode(
-                if (settings.motionCaptureEnabled && mode == ManagerCameraMode.Photo) {
-                    ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
-                } else {
-                    ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
-                },
+                managerStillCaptureMode(
+                    mode = mode,
+                    photoHdrExtensionActive = photoHdrExtensionActive,
+                ),
             )
             .setTargetRotation(managerCaptureTargetRotation(previewView.display?.rotation))
             .setResolutionSelector(managerPhotoResolutionSelector(settings, selectedLens.photoSizes))
@@ -1247,6 +1287,19 @@ private fun bindManagerCamera(
     }
 }
 
+/**
+ * Prioritizes shutter latency for ordinary photos while preserving quality processing on opt-in
+ * Night and HDR modes.
+ */
+internal fun managerStillCaptureMode(
+    mode: ManagerCameraMode,
+    photoHdrExtensionActive: Boolean,
+): Int = if (mode == ManagerCameraMode.Photo && !photoHdrExtensionActive) {
+    ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
+} else {
+    ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
+}
+
 private fun managerPhotoResolutionSelector(
     settings: ManagerCameraSettings,
     photoSizes: List<Size>,
@@ -1259,32 +1312,40 @@ private fun managerPhotoResolutionSelector(
     }
     val builder = ResolutionSelector.Builder()
         .setAspectRatioStrategy(aspectRatioStrategy)
-        .setAllowedResolutionMode(ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE)
-    val requestedMegapixels = settings.requestedMegapixels
-    if (requestedMegapixels != null) {
-        val requestedPixels = requestedMegapixels * 1_000_000L
-        managerPreferredPhotoSize(photoSizes, requestedMegapixels)?.let { preferredSize ->
-            builder.setResolutionStrategy(
-                ResolutionStrategy(
-                    preferredSize,
-                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
-                ),
-            )
-        }
-        builder.setResolutionFilter(
-            ResolutionFilter { supportedSizes, _ ->
-                supportedSizes.sortedWith(
-                    compareBy<Size> { size ->
-                        abs(size.width.toLong() * size.height - requestedPixels)
-                    }.thenByDescending { size -> size.width.toLong() * size.height },
-                )
-            },
+        .setAllowedResolutionMode(
+            managerPhotoAllowedResolutionMode(settings.requestedMegapixels),
         )
-    } else {
-        builder.setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+    val effectiveMegapixels = managerEffectivePhotoMegapixels(settings.requestedMegapixels)
+    val requestedPixels = effectiveMegapixels * 1_000_000L
+    managerPreferredPhotoSize(photoSizes, effectiveMegapixels)?.let { preferredSize ->
+        builder.setResolutionStrategy(
+            ResolutionStrategy(
+                preferredSize,
+                ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
+            ),
+        )
     }
+    builder.setResolutionFilter(
+        ResolutionFilter { supportedSizes, _ ->
+            supportedSizes.sortedWith(
+                compareBy<Size> { size ->
+                    abs(size.width.toLong() * size.height - requestedPixels)
+                }.thenByDescending { size -> size.width.toLong() * size.height },
+            )
+        },
+    )
     return builder.build()
 }
+
+/**
+ * Keeps the automatic profile responsive while explicit high-resolution choices stay available.
+ */
+internal fun managerPhotoAllowedResolutionMode(requestedMegapixels: Int?): Int =
+    if (requestedMegapixels == null) {
+        ResolutionSelector.PREFER_CAPTURE_RATE_OVER_HIGHER_RESOLUTION
+    } else {
+        ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE
+    }
 
 @androidx.annotation.OptIn(markerClass = [ExperimentalCamera2Interop::class])
 private fun managerSupportedPhotoSizes(cameraInfo: CameraInfo): List<Size> = runCatching {
@@ -2193,7 +2254,6 @@ private fun ManagerPhotoSettingsPanel(
 
             ManagerSettingsDetail.None -> {
                 val selectedMegapixels = settings.requestedMegapixels
-                    ?: capabilities.photoMegapixels.firstOrNull()
                 val tiles = listOf(
                     ManagerSettingTileModel(
                         symbol = lightMode.settingsSymbol,
@@ -2261,9 +2321,9 @@ private fun ManagerPhotoSettingsPanel(
                         },
                     ),
                     ManagerSettingTileModel(
-                        symbol = selectedMegapixels?.toString() ?: "MAX",
+                        symbol = selectedMegapixels?.toString() ?: "A",
                         title = "Качество",
-                        value = selectedMegapixels?.let { "${it}MP" } ?: "Макс",
+                        value = selectedMegapixels?.let { "${it}MP" } ?: "Авто",
                         onClick = { onDetailChanged(ManagerSettingsDetail.Quality) },
                     ),
                     ManagerSettingTileModel(
@@ -2475,7 +2535,7 @@ private fun ManagerQualitySettings(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             CameraChoiceChip(
-                text = "Максимум",
+                text = "Авто",
                 selected = settings.requestedMegapixels == null,
                 onClick = { onSettingsChanged(settings.copy(requestedMegapixels = null)) },
             )
@@ -2500,7 +2560,8 @@ private fun ManagerQualitySettings(
         }
         if (capabilities.photoMegapixels.any { it >= 40 }) {
             Text(
-                "Полное разрешение 40+ MP снимается в формате 4:3 и может сохраняться дольше.",
+                "Авто выбирает около 12 MP для быстрого снимка. Полное разрешение 40+ MP " +
+                    "снимается в формате 4:3 и может сохраняться дольше.",
                 color = Color.White.copy(alpha = 0.58f),
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 8.dp),

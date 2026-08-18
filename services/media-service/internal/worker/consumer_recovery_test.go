@@ -77,6 +77,8 @@ func TestClassifyProcessingFailureSeparatesDependencyAndTerminal(t *testing.T) {
 		{name: "shutdown cancellation", err: context.Canceled, want: processingFailureCanceled},
 		{name: "processor timeout", err: context.DeadlineExceeded, want: processingFailureTransient},
 		{name: "object dependency outage", err: storage.ErrDependency, want: processingFailureTransient},
+		{name: "video transcoder unavailable", err: media.ErrVideoTranscoderUnavailable, want: processingFailureTransient},
+		{name: "video probe unavailable", err: media.ErrVideoProbeUnavailable, want: processingFailureTransient},
 		{name: "missing pinned version", err: storage.ErrObjectVersionMismatch, want: processingFailureTerminal},
 		{name: "validation failure", err: errors.New("unsupported image encoding"), want: processingFailureTerminal},
 	}

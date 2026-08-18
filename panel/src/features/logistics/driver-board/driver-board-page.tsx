@@ -70,6 +70,7 @@ import {
   FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Select,
   SelectContent,
@@ -102,6 +103,11 @@ import {
   DriverTripDetailsDialog,
   DriverTripDetailsView,
 } from "@/features/logistics/driver-board/driver-trip-details"
+import {
+  getRepairTask,
+  repairTaskDetailQueryKey,
+} from "@/features/repair-tasks/api/repair-tasks-api"
+import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/repair-estimate"
 import { listAssetRentalItems } from "@/features/rental-items/api/asset-rental-items-api"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
@@ -851,13 +857,16 @@ function DateColumn({
 
 function CapitalCard({
   repair,
+  warehouseId,
   disabled,
   onPromote,
 }: {
   repair: CapitalRepairCard
+  warehouseId: string
   disabled: boolean
   onPromote: (repair: CapitalRepairCard) => void
 }) {
+  const [expanded, setExpanded] = useState(false)
   const dragItem: CapitalDragItem = { type: "capital", repair }
   const { attributes, listeners, setNodeRef, transform, isDragging } =
     useDraggable({
@@ -883,53 +892,257 @@ function CapitalCard({
       {...listeners}
       aria-label={`Переместить капитальный ремонт бытовки ${repair.unitNumber} в текущие задания`}
     >
-      <Card size="sm" className="border-l-4">
-        <CardHeader>
-          <CardTitle>Бытовка {repair.unitNumber}</CardTitle>
-          <CardDescription>
-            {Number(repair.plannedMinutes).toLocaleString("ru-RU")} мин.
-          </CardDescription>
-          <CardAction className="flex items-center gap-1">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={disabled}
-              aria-label={`Добавить капитальный ремонт бытовки ${repair.unitNumber} в текущие задания`}
+      <Collapsible open={expanded} onOpenChange={setExpanded} asChild>
+        <Card size="sm" className="border-l-4">
+          <CardHeader>
+            <CardTitle>Бытовка {repair.unitNumber}</CardTitle>
+            <CardDescription>
+              {Number(repair.plannedMinutes).toLocaleString("ru-RU")} мин.
+            </CardDescription>
+            <CardAction className="flex items-center gap-1">
+              <CollapsibleTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label={
+                    expanded
+                      ? `Свернуть план капитального ремонта бытовки ${repair.unitNumber}`
+                      : `Развернуть план капитального ремонта бытовки ${repair.unitNumber}`
+                  }
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => event.stopPropagation()}
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <HugeiconsIcon
+                    icon={ChevronDownIcon}
+                    className={cn(
+                      "transition-transform",
+                      expanded && "rotate-180"
+                    )}
+                    aria-hidden="true"
+                  />
+                </Button>
+              </CollapsibleTrigger>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={disabled}
+                aria-label={`Добавить капитальный ремонт бытовки ${repair.unitNumber} в текущие задания`}
+                onPointerDown={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onPromote(repair)
+                }}
+              >
+                В текущее
+              </Button>
+              <span
+                className="flex size-8 items-center justify-center text-muted-foreground"
+                aria-hidden="true"
+              >
+                <HugeiconsIcon icon={DragDropVerticalIcon} />
+              </span>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <div className="flex flex-wrap gap-1">
+              <Badge
+                style={{
+                  backgroundColor: repair.complexityColor,
+                  color: "#ffffff",
+                }}
+              >
+                {repair.complexityName}
+              </Badge>
+              <Badge variant={repair.priority <= 2 ? "default" : "secondary"}>
+                Приоритет {repair.priority}
+              </Badge>
+              {repair.forcedCapital ? (
+                <Badge variant="outline">Принудительно</Badge>
+              ) : null}
+            </div>
+            <CollapsibleContent
               onPointerDown={(event) => event.stopPropagation()}
-              onKeyDown={(event) => event.stopPropagation()}
-              onClick={(event) => {
-                event.stopPropagation()
-                onPromote(repair)
-              }}
             >
-              В текущее
-            </Button>
-            <span
-              className="flex size-8 items-center justify-center text-muted-foreground"
-              aria-hidden="true"
-            >
-              <HugeiconsIcon icon={DragDropVerticalIcon} />
-            </span>
-          </CardAction>
-        </CardHeader>
-        <CardContent className="flex flex-wrap gap-1">
-          <Badge
-            style={{
-              backgroundColor: repair.complexityColor,
-              color: "#ffffff",
+              <CapitalRepairPlan
+                repair={repair}
+                warehouseId={warehouseId}
+                expanded={expanded}
+              />
+            </CollapsibleContent>
+          </CardContent>
+        </Card>
+      </Collapsible>
+    </div>
+  )
+}
+
+function planLineName(line: RepairEstimateLineDto) {
+  return (
+    line.catalogSnapshot?.name.trim() ||
+    line.description.trim() ||
+    "Без названия"
+  )
+}
+
+function planLineAmount(line: RepairEstimateLineDto) {
+  const quantity = new Intl.NumberFormat("ru-RU", {
+    maximumFractionDigits: 3,
+  }).format(line.quantity)
+  return `${quantity} ${line.unit.trim() || "единица не указана"}`
+}
+
+function CapitalRepairPlanLines({
+  lines,
+  emptyMessage,
+}: {
+  lines: RepairEstimateLineDto[]
+  emptyMessage: string
+}) {
+  if (lines.length === 0) {
+    return <p className="text-sm text-muted-foreground">{emptyMessage}</p>
+  }
+
+  return (
+    <ul className="flex flex-col gap-2">
+      {lines.map((line) => (
+        <li key={line.id} className="flex items-start justify-between gap-3">
+          <span className="min-w-0 text-sm break-words">
+            {planLineName(line)}
+          </span>
+          <span className="shrink-0 text-sm text-muted-foreground">
+            {planLineAmount(line)}
+          </span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/**
+ * Lazily reads the maintenance-owned repair plan only while its capital card
+ * is expanded; the query cache remains shared with the repair workspace.
+ */
+function CapitalRepairPlan({
+  repair,
+  warehouseId,
+  expanded,
+}: {
+  repair: CapitalRepairCard
+  warehouseId: string
+  expanded: boolean
+}) {
+  const planQuery = useQuery({
+    queryKey: repairTaskDetailQueryKey(warehouseId, repair.repairId),
+    queryFn: async () => {
+      const plan = await getRepairTask(repair.repairId, warehouseId)
+      if (!plan) {
+        throw new Error("Ремонт больше не найден.")
+      }
+      return plan
+    },
+    enabled: expanded,
+  })
+
+  if (planQuery.isPending) {
+    return (
+      <div
+        role="status"
+        className="flex flex-col gap-2"
+        aria-label={`Загрузка плана капитального ремонта бытовки ${repair.unitNumber}`}
+      >
+        <p className="text-sm text-muted-foreground">
+          Загружаем работы и материалы…
+        </p>
+        <Skeleton className="h-16 w-full" />
+      </div>
+    )
+  }
+
+  if (planQuery.isError || !planQuery.data) {
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>Не удалось загрузить план ремонта</AlertTitle>
+        <AlertDescription>
+          {planQuery.error instanceof Error
+            ? planQuery.error.message
+            : "Повторите запрос."}
+        </AlertDescription>
+        <AlertAction>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onPointerDown={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation()
+              void planQuery.refetch()
             }}
           >
-            {repair.complexityName}
-          </Badge>
-          <Badge variant={repair.priority <= 2 ? "default" : "secondary"}>
-            Приоритет {repair.priority}
-          </Badge>
-          {repair.forcedCapital ? (
-            <Badge variant="outline">Принудительно</Badge>
-          ) : null}
-        </CardContent>
-      </Card>
+            <HugeiconsIcon icon={RefreshIcon} data-icon="inline-start" />
+            Повторить
+          </Button>
+        </AlertAction>
+      </Alert>
+    )
+  }
+
+  const stages = planQuery.data.subtasks
+    .slice()
+    .sort((left, right) => left.sortOrder - right.sortOrder)
+
+  if (stages.length === 0) {
+    return (
+      <p role="status" className="text-sm text-muted-foreground">
+        Этапы капитального ремонта не запланированы.
+      </p>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {stages.map((stage, index) => {
+        const queueName = stage.queueName?.trim() || "Очередь не указана"
+        const workHeadingId = `capital-${repair.repairId}-${stage.id}-work`
+        const materialHeadingId = `capital-${repair.repairId}-${stage.id}-material`
+
+        return (
+          <section
+            key={stage.id}
+            aria-label={`Этап ${index + 1}: очередь ${queueName}`}
+            className="flex flex-col gap-2 rounded-md border p-3"
+          >
+            <div className="flex flex-col gap-0.5">
+              <p className="text-xs text-muted-foreground">Этап {index + 1}</p>
+              <h4 className="font-medium">Очередь: {queueName}</h4>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <section aria-labelledby={workHeadingId}>
+                <h5 id={workHeadingId} className="mb-2 font-medium">
+                  Работы
+                </h5>
+                <CapitalRepairPlanLines
+                  lines={stage.workLines}
+                  emptyMessage="Работы не запланированы."
+                />
+              </section>
+              <section aria-labelledby={materialHeadingId}>
+                <h5 id={materialHeadingId} className="mb-2 font-medium">
+                  Материалы
+                </h5>
+                <CapitalRepairPlanLines
+                  lines={stage.materialLines}
+                  emptyMessage="Материалы не запланированы."
+                />
+              </section>
+            </div>
+          </section>
+        )
+      })}
     </div>
   )
 }
@@ -1151,10 +1364,12 @@ function CurrentColumn({
 
 function CapitalColumn({
   repairs,
+  warehouseId,
   disabled,
   onPromote,
 }: {
   repairs: CapitalRepairCard[]
+  warehouseId: string
   disabled: boolean
   onPromote: (repair: CapitalRepairCard) => void
 }) {
@@ -1182,6 +1397,7 @@ function CapitalColumn({
           <CapitalCard
             key={repair.repairId}
             repair={repair}
+            warehouseId={warehouseId}
             disabled={disabled}
             onPromote={onPromote}
           />
@@ -2049,6 +2265,7 @@ export function DriverBoardPage() {
           </div>
           <CapitalColumn
             repairs={board.capitalRepairs}
+            warehouseId={warehouseId}
             disabled={disabled}
             onPromote={(repair) => promoteMutation.mutate(repair)}
           />

@@ -383,6 +383,7 @@ async function toTask(
     taskBoardAvailable: board !== null,
     awaitingMovement: isAwaitingMovementToRepair(repair),
     movementToRepair: repair.movementToRepair,
+    forceCapitalRepair: repair.forceCapitalRepair,
     logisticsPlanningMode: repair.logisticsPlanningMode,
     logisticsScheduledDate: repair.logisticsScheduledDate,
     createdAt: repair.createdAt,
@@ -768,7 +769,9 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
       this.board(accessToken, warehouseId),
     ])
     return Promise.all(
-      page.items.map((repair) => toTask(repair, this.rentalItemsClient, board))
+      page.items
+        .filter((repair) => repair.complexity.type !== "CAPITAL")
+        .map((repair) => toTask(repair, this.rentalItemsClient, board))
     )
   }
 
@@ -842,7 +845,8 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
         content.lines,
         content.plan,
         command.maintenanceMediaReferences,
-        command.coverMediaId
+        command.coverMediaId,
+        command.forceCapitalRepair
       )
     }
     if (command.kind === "REWORK") {
@@ -897,6 +901,7 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
         plan: content.plan,
         mediaReferences: command.maintenanceMediaReferences,
         coverMediaId: command.coverMediaId,
+        forceCapitalRepair: command.forceCapitalRepair === true,
       }
     )
   }
@@ -1072,7 +1077,8 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
       uniqueMaintenanceLines(repair.plan.stages),
       stages,
       repair.mediaReferences,
-      repair.coverMediaId ?? null
+      repair.coverMediaId ?? null,
+      repair.forceCapitalRepair
     )
     return toTask(
       saved,

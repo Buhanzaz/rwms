@@ -17,9 +17,11 @@ live projection. Sanitized Kafka facts are a separate representation and are
 never used as replay authority.
 
 Images produce `SMALL`, `MEDIUM`, `LARGE` WebP variants and an authorized
-`ORIGINAL` without changing the uploaded pixel orientation. Videos are
-original-only and validated with FFprobe. An unproved video dimension remains
-SQL `NULL`.
+`ORIGINAL` without changing the uploaded pixel orientation. Videos retain the
+exact uploaded `ORIGINAL` and produce a compressed `PLAYBACK` MP4 with H.264,
+yuv420p, optional AAC audio, stripped metadata and a 1280x720 maximum while
+preserving aspect ratio and even dimensions. FFprobe validates the source and
+result; unproved video dimensions remain SQL `NULL`.
 
 ## Why this service exists
 
@@ -62,9 +64,10 @@ gateway; private `/api/internal/**` routes are service-to-service only.
    the exact private MinIO version.
 3. It completes the session with the same idempotency key. The service commits
    the upload fact and processing request atomically.
-4. A Kafka worker creates a canonical image original plus WebP variants, or
-   validates and copies a video original. It then publishes a safe
-   invalidation; clients refresh their scoped projection.
+4. The durable Kafka worker asynchronously creates a canonical image original
+   plus WebP variants, or validates a video, preserves its exact original and
+   creates the compressed MP4 playback. It then publishes a safe invalidation;
+   clients refresh their scoped projection.
 5. Scoped reads stream only the pinned object version through media-service
    with `private, no-store` headers. Logical deletion changes PostgreSQL state
    and emits one fact; it never physically deletes versioned bytes.
@@ -90,12 +93,13 @@ Flyway is external to this process. Apply
 `db/migration/V8__task_board_worker_media.sql` and
 `db/migration/V9__asset_import_worker.sql`, then
 `db/migration/V10__canonical_cabin_photo_library.sql`, then
-`db/migration/V11__bounded_media_processing_recovery.sql` before starting the
-service. The Go application never migrates, baselines, repairs or silently
-adopts a database.
+`db/migration/V11__bounded_media_processing_recovery.sql`, then
+`db/migration/V12__video_playback_variant.sql` before starting the service. The
+Go application never migrates, baselines, repairs or silently adopts a
+database.
 
-- New local/test databases migrate through V1 to V11.
-- A database already at the exact V10 history is upgraded by applying V11.
+- New local/test databases migrate through V1 to V12.
+- A database already at the exact V11 history is upgraded by applying V12.
 - `baselineOnMigrate` must remain `false`; a non-empty unversioned database is
   rejected.
 - Startup verifies both successful Flyway history rows, their versions,
@@ -139,13 +143,24 @@ absent.
 | `MEDIA_KAFKA_CABIN_OWNER_GROUP` | Dedicated dynamic CABIN owner consumer group |
 | `MEDIA_INSTANCE_ID` | Unique safe ASCII lease/fence owner ID |
 
-When a video MIME type is allowed, `MEDIA_MAX_VIDEO_DURATION` and the
-comma-separated `MEDIA_ALLOWED_VIDEO_CODECS` are also required.
+When a video MIME type is allowed, `MEDIA_MAX_VIDEO_DURATION`,
+`MEDIA_MAX_VIDEO_OUTPUT_BYTES` and the comma-separated
+`MEDIA_ALLOWED_VIDEO_CODECS` are also required. The output limit bounds both
+ffmpeg and the validated derived file and must not exceed
+`MEDIA_MAX_UPLOAD_BYTES`. `MEDIA_PROCESSING_TIMEOUT` must cover the slowest
+permitted video transcode; the worker lease automatically extends thirty
+seconds beyond that timeout.
 
 Optional settings are `MEDIA_HTTP_ADDRESS` (default `:8085`),
+`MEDIA_HTTP_READ_TIMEOUT` and `MEDIA_HTTP_WRITE_TIMEOUT` (both default `5m`,
+matching the gateway's bounded media-transfer window),
 `MEDIA_MANAGEMENT_ADDRESS` (default `127.0.0.1:9095`, an explicit numeric IPv4
 or IPv6 loopback host with a non-zero TCP port), and `MEDIA_AUTH_AUDIENCE`
-(default `rwms-services`). The processing group and topic variables have
+(default `rwms-services`), plus `MEDIA_FFMPEG_EXECUTABLE` (default `ffmpeg`) and
+`MEDIA_FFPROBE_EXECUTABLE` (default `ffprobe`). When video is enabled, startup
+resolves both executables before opening runtime dependencies; normal
+distribution `ffmpeg` packages install both binaries. The processing
+group and topic variables have
 canonical defaults and may not be changed:
 `media-service-processing-v1`, `rwms.media.media.v1` and
 `rwms.media.processing.v1`. Terminal processing failures publish only a
@@ -301,6 +316,9 @@ state transition is owned by
   API/command for that follow-up transition; it must be designed before retry
   execution is exposed. `ATTEMPT_BUDGET_RESET` records review of an exhausted
   attempt cycle but likewise performs no reset or requeue by itself.
+- [`V12__video_playback_variant.sql`](db/migration/V12__video_playback_variant.sql)
+  only expands the `media_variant` check constraint with `PLAYBACK`; existing
+  originals and image variants remain unchanged.
 
 The typed, fixed-cardinality recovery snapshot continues to be emitted through
 structured logs and is also copied to standard-library OpenMetrics text at
@@ -387,6 +405,6 @@ go build -trimpath -o /tmp/rwms-media-service ./cmd/media-service
 ```
 
 Migration verification must run separately with Flyway and PostgreSQL and cover
-clean V1-to-V11 install, V10-to-V11 upgrade, repeat, checksum drift and non-empty
+clean V1-to-V12 install, V11-to-V12 upgrade, repeat, checksum drift and non-empty
 unversioned rejection. MinIO integration checks must use a versioned local/test
 bucket; Kafka checks must use the canonical topics and broker acknowledgements.

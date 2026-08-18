@@ -59,6 +59,9 @@ public class InventoryFinalPlanEntry {
   @Column(name = "movement_to_repair", nullable = false)
   private boolean movementToRepair;
 
+  @Column(name = "force_capital_repair", nullable = false)
+  private boolean forceCapitalRepair;
+
   @Column(name = "movement_scheduled_date")
   private LocalDate movementScheduledDate;
 
@@ -92,6 +95,45 @@ public class InventoryFinalPlanEntry {
       LocalDate repairScheduledDate,
       String collisionCandidates,
       String reconciliationDecision) {
+    this(
+        inventoryId,
+        finalPlanVersion,
+        findingId,
+        findingRevision,
+        assetId,
+        assetVersion,
+        planFingerprintSha256,
+        hasWork,
+        targetKind,
+        order,
+        priority,
+        movementToRepair,
+        false,
+        movementScheduledDate,
+        repairScheduledDate,
+        collisionCandidates,
+        reconciliationDecision);
+  }
+
+  /** Creates immutable final-plan evidence including the frozen capital-repair choice. */
+  public InventoryFinalPlanEntry(
+      UUID inventoryId,
+      long finalPlanVersion,
+      UUID findingId,
+      long findingRevision,
+      UUID assetId,
+      Long assetVersion,
+      String planFingerprintSha256,
+      boolean hasWork,
+      FinalPlanTargetKind targetKind,
+      int order,
+      Integer priority,
+      boolean movementToRepair,
+      boolean forceCapitalRepair,
+      LocalDate movementScheduledDate,
+      LocalDate repairScheduledDate,
+      String collisionCandidates,
+      String reconciliationDecision) {
     if (inventoryId == null
         || finalPlanVersion < 1
         || findingId == null
@@ -106,6 +148,7 @@ public class InventoryFinalPlanEntry {
           || targetKind != null
           || priority != null
           || movementToRepair
+          || forceCapitalRepair
           || movementScheduledDate != null
           || repairScheduledDate != null
           || !"[]".equals(collisionCandidates)
@@ -137,6 +180,7 @@ public class InventoryFinalPlanEntry {
     this.order = order;
     this.priority = priority;
     this.movementToRepair = movementToRepair;
+    this.forceCapitalRepair = forceCapitalRepair;
     this.movementScheduledDate = movementScheduledDate;
     this.repairScheduledDate = repairScheduledDate;
     this.collisionCandidates = collisionCandidates;
@@ -155,6 +199,7 @@ public class InventoryFinalPlanEntry {
   public int getOrder() { return order; }
   public Integer getPriority() { return priority; }
   public boolean isMovementToRepair() { return movementToRepair; }
+  public boolean isForceCapitalRepair() { return forceCapitalRepair; }
   public LocalDate getMovementScheduledDate() { return movementScheduledDate; }
   public LocalDate getRepairScheduledDate() { return repairScheduledDate; }
   public String getCollisionCandidates() { return collisionCandidates; }

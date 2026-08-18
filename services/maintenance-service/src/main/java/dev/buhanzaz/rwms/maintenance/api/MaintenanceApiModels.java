@@ -532,7 +532,35 @@ public final class MaintenanceApiModels {
       @NotNull @Size(max = 2000) List<@Valid EstimateLineInput> lines,
       @NotNull @Size(max = 1000) List<@Valid PlanStageInput> plan,
       @NotNull @Size(max = 100) List<@Valid MediaReferenceInput> mediaReferences,
-      UUID coverMediaId) {
+      UUID coverMediaId,
+      @JsonProperty(defaultValue = "false")
+          @JsonDeserialize(using = DefaultFalseBooleanDeserializer.class)
+          Boolean forceCapitalRepair) {
+    public CreateEstimateRequest {
+      forceCapitalRepair = Boolean.TRUE.equals(forceCapitalRepair);
+    }
+
+    public CreateEstimateRequest(
+        UUID warehouseId,
+        UUID rentalItemId,
+        LocalDate dispatchDate,
+        String sourceParty,
+        List<EstimateLineInput> lines,
+        List<PlanStageInput> plan,
+        List<MediaReferenceInput> mediaReferences,
+        UUID coverMediaId) {
+      this(
+          warehouseId,
+          rentalItemId,
+          dispatchDate,
+          sourceParty,
+          lines,
+          plan,
+          mediaReferences,
+          coverMediaId,
+          false);
+    }
+
     public CreateEstimateRequest(
         UUID warehouseId,
         UUID rentalItemId,
@@ -549,7 +577,8 @@ public final class MaintenanceApiModels {
           lines,
           plan,
           mediaReferences,
-          null);
+          null,
+          false);
     }
   }
   public record UpdateEstimateRequest(
@@ -559,7 +588,33 @@ public final class MaintenanceApiModels {
       @NotNull @Size(max = 2000) List<@Valid EstimateLineInput> lines,
       @NotNull @Size(max = 1000) List<@Valid PlanStageInput> plan,
       @NotNull @Size(max = 100) List<@Valid MediaReferenceInput> mediaReferences,
-      UUID coverMediaId) {
+      UUID coverMediaId,
+      @JsonProperty(defaultValue = "false")
+          @JsonDeserialize(using = DefaultFalseBooleanDeserializer.class)
+          Boolean forceCapitalRepair) {
+    public UpdateEstimateRequest {
+      forceCapitalRepair = Boolean.TRUE.equals(forceCapitalRepair);
+    }
+
+    public UpdateEstimateRequest(
+        Long expectedVersion,
+        LocalDate dispatchDate,
+        String sourceParty,
+        List<EstimateLineInput> lines,
+        List<PlanStageInput> plan,
+        List<MediaReferenceInput> mediaReferences,
+        UUID coverMediaId) {
+      this(
+          expectedVersion,
+          dispatchDate,
+          sourceParty,
+          lines,
+          plan,
+          mediaReferences,
+          coverMediaId,
+          false);
+    }
+
     public UpdateEstimateRequest(
         Long expectedVersion,
         LocalDate dispatchDate,
@@ -574,7 +629,8 @@ public final class MaintenanceApiModels {
           lines,
           plan,
           mediaReferences,
-          null);
+          null,
+          false);
     }
   }
   public record AmendEstimateRequest(
@@ -586,7 +642,37 @@ public final class MaintenanceApiModels {
       @NotNull @Size(max = 2000) List<@Valid EstimateLineInput> lines,
       @NotNull @Size(max = 1000) List<@Valid PlanStageInput> plan,
       @NotNull @Size(max = 100) List<@Valid MediaReferenceInput> mediaReferences,
-      UUID coverMediaId) {
+      UUID coverMediaId,
+      @JsonProperty(defaultValue = "false")
+          @JsonDeserialize(using = DefaultFalseBooleanDeserializer.class)
+          Boolean forceCapitalRepair) {
+    public AmendEstimateRequest {
+      forceCapitalRepair = Boolean.TRUE.equals(forceCapitalRepair);
+    }
+
+    public AmendEstimateRequest(
+        Long expectedVersion,
+        Long expectedLinkedRepairVersion,
+        LocalDate dispatchDate,
+        String reason,
+        String sourceParty,
+        List<EstimateLineInput> lines,
+        List<PlanStageInput> plan,
+        List<MediaReferenceInput> mediaReferences,
+        UUID coverMediaId) {
+      this(
+          expectedVersion,
+          expectedLinkedRepairVersion,
+          dispatchDate,
+          reason,
+          sourceParty,
+          lines,
+          plan,
+          mediaReferences,
+          coverMediaId,
+          false);
+    }
+
     public AmendEstimateRequest(
         Long expectedVersion,
         Long expectedLinkedRepairVersion,
@@ -605,7 +691,8 @@ public final class MaintenanceApiModels {
           lines,
           plan,
           mediaReferences,
-          null);
+          null,
+          false);
     }
   }
 
@@ -699,7 +786,29 @@ public final class MaintenanceApiModels {
       List<PlanStageInput> plan,
       String total,
       String reason,
-      OffsetDateTime recordedAt) {}
+      OffsetDateTime recordedAt,
+      boolean forceCapitalRepair) {
+    public EstimateRevisionResponse(
+        int revision,
+        LocalDate dispatchDate,
+        String sourceParty,
+        List<EstimateLineResponse> lines,
+        List<PlanStageInput> plan,
+        String total,
+        String reason,
+        OffsetDateTime recordedAt) {
+      this(
+          revision,
+          dispatchDate,
+          sourceParty,
+          lines,
+          plan,
+          total,
+          reason,
+          recordedAt,
+          false);
+    }
+  }
   public record EstimateResponse(
       UUID id,
       UUID warehouseId,
@@ -713,7 +822,39 @@ public final class MaintenanceApiModels {
       UUID coverMediaId,
       OffsetDateTime createdAt,
       OffsetDateTime completedAt,
-      ActorSnapshot actor) {
+      ActorSnapshot actor,
+      boolean forceCapitalRepair) {
+    public EstimateResponse(
+        UUID id,
+        UUID warehouseId,
+        UUID rentalItemId,
+        long version,
+        EstimateState lifecycle,
+        int currentRevision,
+        List<EstimateRevisionResponse> revisions,
+        UUID repairId,
+        List<MediaReferenceInput> mediaReferences,
+        UUID coverMediaId,
+        OffsetDateTime createdAt,
+        OffsetDateTime completedAt,
+        ActorSnapshot actor) {
+      this(
+          id,
+          warehouseId,
+          rentalItemId,
+          version,
+          lifecycle,
+          currentRevision,
+          revisions,
+          repairId,
+          mediaReferences,
+          coverMediaId,
+          createdAt,
+          completedAt,
+          actor,
+          false);
+    }
+
     public EstimateResponse(
         UUID id,
         UUID warehouseId,
@@ -740,7 +881,8 @@ public final class MaintenanceApiModels {
           null,
           createdAt,
           completedAt,
-          actor);
+          actor,
+          false);
     }
   }
 
@@ -868,7 +1010,66 @@ public final class MaintenanceApiModels {
       LocalDate logisticsScheduledDate,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt,
-      ActorSnapshot actor) {
+      ActorSnapshot actor,
+      boolean forceCapitalRepair) {
+    public RepairResponse(
+        UUID id,
+        UUID rootRepairId,
+        UUID sourceRepairId,
+        UUID estimateId,
+        UUID warehouseId,
+        UUID rentalItemId,
+        RepairOrigin origin,
+        RepairKind kind,
+        RepairExecutionState executionState,
+        RepairAcceptanceState acceptanceState,
+        RepairReclassificationState reclassificationState,
+        long version,
+        LocalDate dispatchDate,
+        int priority,
+        String sourceParty,
+        RepairPlanResponse plan,
+        InventorySourceReference inventorySource,
+        LeaseSnapshot lease,
+        List<MediaReferenceInput> mediaReferences,
+        UUID coverMediaId,
+        RepairComplexitySnapshot complexity,
+        boolean movementToRepair,
+        RepairLogisticsPlanningMode logisticsPlanningMode,
+        LocalDate logisticsScheduledDate,
+        OffsetDateTime createdAt,
+        OffsetDateTime updatedAt,
+        ActorSnapshot actor) {
+      this(
+          id,
+          rootRepairId,
+          sourceRepairId,
+          estimateId,
+          warehouseId,
+          rentalItemId,
+          origin,
+          kind,
+          executionState,
+          acceptanceState,
+          reclassificationState,
+          version,
+          dispatchDate,
+          priority,
+          sourceParty,
+          plan,
+          inventorySource,
+          lease,
+          mediaReferences,
+          coverMediaId,
+          complexity,
+          movementToRepair,
+          logisticsPlanningMode,
+          logisticsScheduledDate,
+          createdAt,
+          updatedAt,
+          actor,
+          false);
+    }
   }
 
   public record InventoryPlanLineInput(
@@ -906,7 +1107,45 @@ public final class MaintenanceApiModels {
       @JsonProperty(required = true)
           RepairLogisticsPlanningMode logisticsPlanningMode,
       @JsonProperty(required = true)
-          LocalDate logisticsScheduledDate) {
+          LocalDate logisticsScheduledDate,
+      @JsonProperty(defaultValue = "false")
+          @JsonDeserialize(using = DefaultFalseBooleanDeserializer.class)
+          Boolean forceCapitalRepair) {
+    public FreezeInventoryPlanRequest {
+      forceCapitalRepair = Boolean.TRUE.equals(forceCapitalRepair);
+    }
+
+    public FreezeInventoryPlanRequest(
+        UUID warehouseId,
+        UUID inventoryId,
+        UUID findingId,
+        Long sourceRevision,
+        InventoryPlanMode mode,
+        List<InventoryPlanLineInput> lines,
+        List<InventoryPlanStageSelection> plan,
+        List<MediaReferenceInput> mediaReferences,
+        Integer priority,
+        UUID coverMediaId,
+        boolean movementToRepair,
+        RepairLogisticsPlanningMode logisticsPlanningMode,
+        LocalDate logisticsScheduledDate) {
+      this(
+          warehouseId,
+          inventoryId,
+          findingId,
+          sourceRevision,
+          mode,
+          lines,
+          plan,
+          mediaReferences,
+          priority,
+          coverMediaId,
+          movementToRepair,
+          logisticsPlanningMode,
+          logisticsScheduledDate,
+          false);
+    }
+
     public FreezeInventoryPlanRequest(
         UUID warehouseId,
         UUID inventoryId,
@@ -931,7 +1170,8 @@ public final class MaintenanceApiModels {
           coverMediaId,
           false,
           null,
-          null);
+          null,
+          false);
     }
 
     @AssertTrue(
@@ -941,6 +1181,13 @@ public final class MaintenanceApiModels {
     public boolean isLogisticsPlanningValid() {
       return validInboundLogisticsPlanning(
           movementToRepair, logisticsPlanningMode, logisticsScheduledDate);
+    }
+
+    /** The explicit capital route and inbound repair delivery are alternative choices. */
+    @AssertTrue(message = "movementToRepair and forceCapitalRepair are mutually exclusive")
+    @JsonIgnore
+    public boolean isRepairDestinationChoiceValid() {
+      return !movementToRepair || !forceCapitalRepair;
     }
   }
   public record InventoryPlanLineSnapshot(
@@ -993,7 +1240,39 @@ public final class MaintenanceApiModels {
       @JsonProperty(required = true)
           RepairLogisticsPlanningMode logisticsPlanningMode,
       @JsonProperty(required = true)
-          LocalDate logisticsScheduledDate) {
+          LocalDate logisticsScheduledDate,
+      @JsonProperty(defaultValue = "false")
+          @JsonDeserialize(using = DefaultFalseBooleanDeserializer.class)
+          Boolean forceCapitalRepair) {
+    public FrozenInventoryPlanSnapshot {
+      forceCapitalRepair = Boolean.TRUE.equals(forceCapitalRepair);
+    }
+
+    public FrozenInventoryPlanSnapshot(
+        UUID catalogVersionId,
+        InventoryPlanMode mode,
+        List<InventoryPlanLineSnapshot> lines,
+        List<InventoryPlanStageSnapshot> stages,
+        boolean movementToRepair,
+        List<MediaReferenceInput> mediaReferences,
+        Integer priority,
+        UUID coverMediaId,
+        RepairLogisticsPlanningMode logisticsPlanningMode,
+        LocalDate logisticsScheduledDate) {
+      this(
+          catalogVersionId,
+          mode,
+          lines,
+          stages,
+          movementToRepair,
+          mediaReferences,
+          priority,
+          coverMediaId,
+          logisticsPlanningMode,
+          logisticsScheduledDate,
+          false);
+    }
+
     public FrozenInventoryPlanSnapshot(
         UUID catalogVersionId,
         InventoryPlanMode mode,
@@ -1013,7 +1292,8 @@ public final class MaintenanceApiModels {
           priority,
           coverMediaId,
           null,
-          null);
+          null,
+          false);
     }
 
     @AssertTrue(
@@ -1023,6 +1303,13 @@ public final class MaintenanceApiModels {
     public boolean isLogisticsPlanningValid() {
       return validInboundLogisticsPlanning(
           movementToRepair, logisticsPlanningMode, logisticsScheduledDate);
+    }
+
+    /** The frozen capital route and inbound repair delivery cannot coexist. */
+    @AssertTrue(message = "movementToRepair and forceCapitalRepair are mutually exclusive")
+    @JsonIgnore
+    public boolean isRepairDestinationChoiceValid() {
+      return !movementToRepair || !forceCapitalRepair;
     }
   }
   public record FrozenInventoryPlanResponse(
@@ -1063,9 +1350,42 @@ public final class MaintenanceApiModels {
       @NotNull LocalDate repairScheduledDate,
       @NotNull @JsonSetter(nulls = Nulls.FAIL) JsonNode snapshot,
       @NotNull @Size(max = 100) List<@Valid MediaReferenceInput> media,
-      @NotNull @Min(1) @Max(2) Integer snapshotSchemaVersion) {
+      @NotNull @Min(1) @Max(2) Integer snapshotSchemaVersion,
+      @JsonProperty(defaultValue = "false")
+          @JsonDeserialize(using = DefaultFalseBooleanDeserializer.class)
+          Boolean forceCapitalRepair) {
+    public InventoryPublicationFindingInput(
+        UUID findingId,
+        Long findingRevision,
+        UUID assetId,
+        Long assetVersion,
+        String planFingerprintSha256,
+        Integer priority,
+        boolean movementToRepair,
+        LocalDate movementScheduledDate,
+        LocalDate repairScheduledDate,
+        JsonNode snapshot,
+        List<MediaReferenceInput> media,
+        Integer snapshotSchemaVersion) {
+      this(
+          findingId,
+          findingRevision,
+          assetId,
+          assetVersion,
+          planFingerprintSha256,
+          priority,
+          movementToRepair,
+          movementScheduledDate,
+          repairScheduledDate,
+          snapshot,
+          media,
+          snapshotSchemaVersion,
+          false);
+    }
+
     public InventoryPublicationFindingInput {
       media = media == null ? null : List.copyOf(media);
+      forceCapitalRepair = Boolean.TRUE.equals(forceCapitalRepair);
     }
   }
 
@@ -1098,7 +1418,37 @@ public final class MaintenanceApiModels {
       @Min(1) @Max(5) Integer priority,
       String sourceParty,
       String planFingerprintSha256,
-      @NotNull InventoryPublicationPlanSummary planSummary) {}
+      @NotNull InventoryPublicationPlanSummary planSummary,
+      boolean forceCapitalRepair) {
+    public InventoryPublicationCandidate(
+        InventoryPublicationTargetKind targetKind,
+        UUID targetId,
+        UUID estimateId,
+        UUID repairId,
+        long version,
+        String state,
+        boolean started,
+        boolean active,
+        Integer priority,
+        String sourceParty,
+        String planFingerprintSha256,
+        InventoryPublicationPlanSummary planSummary) {
+      this(
+          targetKind,
+          targetId,
+          estimateId,
+          repairId,
+          version,
+          state,
+          started,
+          active,
+          priority,
+          sourceParty,
+          planFingerprintSha256,
+          planSummary,
+          false);
+    }
+  }
 
   public record InventoryPublicationPreflightFinding(
       @NotNull UUID findingId,
@@ -1128,9 +1478,52 @@ public final class MaintenanceApiModels {
       @NotNull @Min(1) @Max(2) Integer snapshotSchemaVersion,
       @NotNull InventoryPublicationStrategy strategy,
       @JsonProperty(required = true) InventoryPublicationTargetKind selectedTargetKind,
-      @JsonProperty(required = true) UUID selectedTargetId) {
+      @JsonProperty(required = true) UUID selectedTargetId,
+      @JsonProperty(defaultValue = "false")
+          @JsonDeserialize(using = DefaultFalseBooleanDeserializer.class)
+          Boolean forceCapitalRepair) {
+    public InventoryPublicationApplyRequest(
+        UUID warehouseId,
+        Long finalPlanVersion,
+        String finalPlanSha256,
+        Long findingRevision,
+        UUID assetId,
+        Long assetVersion,
+        String planFingerprintSha256,
+        Integer priority,
+        boolean movementToRepair,
+        LocalDate movementScheduledDate,
+        LocalDate repairScheduledDate,
+        JsonNode snapshot,
+        List<MediaReferenceInput> media,
+        Integer snapshotSchemaVersion,
+        InventoryPublicationStrategy strategy,
+        InventoryPublicationTargetKind selectedTargetKind,
+        UUID selectedTargetId) {
+      this(
+          warehouseId,
+          finalPlanVersion,
+          finalPlanSha256,
+          findingRevision,
+          assetId,
+          assetVersion,
+          planFingerprintSha256,
+          priority,
+          movementToRepair,
+          movementScheduledDate,
+          repairScheduledDate,
+          snapshot,
+          media,
+          snapshotSchemaVersion,
+          strategy,
+          selectedTargetKind,
+          selectedTargetId,
+          false);
+    }
+
     public InventoryPublicationApplyRequest {
       media = media == null ? null : List.copyOf(media);
+      forceCapitalRepair = Boolean.TRUE.equals(forceCapitalRepair);
     }
 
     public InventoryPublicationFindingInput finding(UUID findingId) {
@@ -1146,7 +1539,8 @@ public final class MaintenanceApiModels {
           repairScheduledDate,
           snapshot,
           media,
-          snapshotSchemaVersion);
+          snapshotSchemaVersion,
+          forceCapitalRepair);
     }
   }
 
@@ -1226,7 +1620,27 @@ public final class MaintenanceApiModels {
       RepairKind kind,
       RepairExecutionState executionState,
       RepairAcceptanceState acceptanceState,
-      String planFingerprintSha256) {}
+      String planFingerprintSha256,
+      boolean forceCapitalRepair) {
+    public InventoryRepairFact(
+        UUID repairId,
+        UUID rootRepairId,
+        RepairOrigin origin,
+        RepairKind kind,
+        RepairExecutionState executionState,
+        RepairAcceptanceState acceptanceState,
+        String planFingerprintSha256) {
+      this(
+          repairId,
+          rootRepairId,
+          origin,
+          kind,
+          executionState,
+          acceptanceState,
+          planFingerprintSha256,
+          false);
+    }
+  }
   public record InventoryRepairSnapshot(
       UUID assetId,
       List<InventoryRepairFact> repairs) {}
@@ -1241,7 +1655,35 @@ public final class MaintenanceApiModels {
       @NotNull @Size(max = 2000) List<@Valid EstimateLineInput> lines,
       @NotNull @Size(max = 1000) List<@Valid PlanStageInput> plan,
       @NotNull @Size(max = 100) List<@Valid MediaReferenceInput> mediaReferences,
-      UUID coverMediaId) {
+      UUID coverMediaId,
+      @JsonProperty(defaultValue = "false")
+          @JsonDeserialize(using = DefaultFalseBooleanDeserializer.class)
+          Boolean forceCapitalRepair) {
+    public CreateDirectRepairRequest {
+      forceCapitalRepair = Boolean.TRUE.equals(forceCapitalRepair);
+    }
+
+    public CreateDirectRepairRequest(
+        UUID warehouseId,
+        UUID rentalItemId,
+        LocalDate dispatchDate,
+        String sourceParty,
+        List<EstimateLineInput> lines,
+        List<PlanStageInput> plan,
+        List<MediaReferenceInput> mediaReferences,
+        UUID coverMediaId) {
+      this(
+          warehouseId,
+          rentalItemId,
+          dispatchDate,
+          sourceParty,
+          lines,
+          plan,
+          mediaReferences,
+          coverMediaId,
+          false);
+    }
+
     public CreateDirectRepairRequest(
         UUID warehouseId,
         UUID rentalItemId,
@@ -1258,7 +1700,8 @@ public final class MaintenanceApiModels {
           lines,
           plan,
           mediaReferences,
-          null);
+          null,
+          false);
     }
 
     public CreateDirectRepairRequest(
@@ -1276,7 +1719,8 @@ public final class MaintenanceApiModels {
           List.of(),
           plan,
           mediaReferences,
-          null);
+          null,
+          false);
     }
   }
   public record UpdateRepairPlanRequest(
@@ -1284,16 +1728,38 @@ public final class MaintenanceApiModels {
       @NotNull @Size(max = 2000) List<@Valid EstimateLineInput> lines,
       @NotNull @Size(max = 1000) List<@Valid PlanStageInput> stages,
       @NotNull @Size(max = 100) List<@Valid MediaReferenceInput> mediaReferences,
-      UUID coverMediaId) {
+      UUID coverMediaId,
+      @JsonProperty(defaultValue = "false")
+          @JsonDeserialize(using = DefaultFalseBooleanDeserializer.class)
+          Boolean forceCapitalRepair) {
+    public UpdateRepairPlanRequest {
+      forceCapitalRepair = Boolean.TRUE.equals(forceCapitalRepair);
+    }
+
+    public UpdateRepairPlanRequest(
+        Long expectedVersion,
+        List<EstimateLineInput> lines,
+        List<PlanStageInput> stages,
+        List<MediaReferenceInput> mediaReferences,
+        UUID coverMediaId) {
+      this(
+          expectedVersion,
+          lines,
+          stages,
+          mediaReferences,
+          coverMediaId,
+          false);
+    }
+
     public UpdateRepairPlanRequest(Long expectedVersion, List<PlanStageInput> stages) {
-      this(expectedVersion, List.of(), stages, List.of(), null);
+      this(expectedVersion, List.of(), stages, List.of(), null, false);
     }
 
     public UpdateRepairPlanRequest(
         Long expectedVersion,
         List<PlanStageInput> stages,
         List<MediaReferenceInput> mediaReferences) {
-      this(expectedVersion, List.of(), stages, mediaReferences, null);
+      this(expectedVersion, List.of(), stages, mediaReferences, null, false);
     }
 
     public UpdateRepairPlanRequest(
@@ -1301,7 +1767,7 @@ public final class MaintenanceApiModels {
         List<EstimateLineInput> lines,
         List<PlanStageInput> stages,
         List<MediaReferenceInput> mediaReferences) {
-      this(expectedVersion, lines, stages, mediaReferences, null);
+      this(expectedVersion, lines, stages, mediaReferences, null, false);
     }
   }
 

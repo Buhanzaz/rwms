@@ -578,6 +578,7 @@ class HttpInventoryDependencyGatewayTest {
         {"assets":[{"assetId":"%s","repairs":[{
           "repairId":"%s","rootRepairId":"%s","origin":"DIRECT_REPAIR","kind":"PRIMARY",
           "executionState":"DRAFT","acceptanceState":"NOT_READY",
+          "forceCapitalRepair":false,
           "planFingerprintSha256":"%s"
         }]}]}
         """

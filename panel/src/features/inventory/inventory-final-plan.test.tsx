@@ -58,9 +58,11 @@ const plan: InventoryFinalPlan = {
             materialLineCount: 1,
             grandTotalMinor: 12500,
           },
+          forceCapitalRepair: true,
         },
       ],
       reconciliationDecision: null,
+      forceCapitalRepair: true,
     },
     {
       findingId: SECOND_FINDING_ID,
@@ -75,6 +77,7 @@ const plan: InventoryFinalPlan = {
       repairScheduledDate: null,
       collisionCandidates: [],
       reconciliationDecision: null,
+      forceCapitalRepair: false,
     },
   ],
 }
@@ -153,6 +156,12 @@ describe("inventory final plan", () => {
     ).toBeTruthy()
 
     const firstCard = screen.getByLabelText("Позиция 1, бытовка БЫТ-001")
+    const forceCapitalRepair = within(firstCard).getByRole("checkbox", {
+      name: "Направить на капитальный ремонт",
+    })
+    expect(forceCapitalRepair.getAttribute("aria-checked")).toBe("true")
+    expect(forceCapitalRepair.hasAttribute("disabled")).toBe(true)
+    expect(within(firstCard).getByText("Капитальный ремонт")).toBeTruthy()
     await user.click(
       within(firstCard).getByRole("combobox", { name: "Существующая запись" })
     )
@@ -392,8 +401,9 @@ describe("inventory final plan", () => {
       />
     )
 
-    expect(screen.getByText(/Найдено несколько активных смет или ремонтов/))
-      .toBeTruthy()
+    expect(
+      screen.getByText(/Найдено несколько активных смет или ремонтов/)
+    ).toBeTruthy()
     await user.click(
       screen.getByRole("button", { name: "Сохранить итоговый план" })
     )

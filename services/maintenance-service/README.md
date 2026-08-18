@@ -48,6 +48,22 @@ task-board, media, logistics and warehouse-service. Do not make a remote call wh
 transaction holds maintenance locks. The application flow commits local preparation before remote
 preflight/effects, then continues local fenced state through durable recovery records.
 
+## Explicit capital-repair choice
+
+Estimate, primary-repair, inventory freeze, and inventory publication commands may carry an
+optional `forceCapitalRepair`; omission means `false`, while an explicit JSON `null` is rejected.
+The choice is persisted independently of catalog flags and is copied into every estimate revision,
+repair response, inventory snapshot, and newly produced ESTIMATE/REPAIR v1 Kafka fact. For replay
+compatibility, consumers accept the field's omission in historical v1 facts as `false`; explicit
+non-boolean values remain invalid. Repair complexity is CAPITAL when this explicit choice is true or
+any current catalog WORK forces capital repair. Inventory freeze and stored snapshot boundaries
+reject a plan that also requests repair movement, so maintenance never owns two competing
+destinations for one finding. The
+existing capital-repair logistics, separate active-capital list, acceptance, and return-to-FREE
+cycle remain the only downstream implementation; clients do not create those effects themselves.
+Migration [`V44__manual_capital_repair_selection.sql`](src/main/resources/db/migration/V44__manual_capital_repair_selection.sql)
+backfills existing estimates, revisions, and repairs as `false`.
+
 ## Furniture settings and booked-cabin conflicts
 
 The existing maintenance furniture editor exposes the asset-owned nullable maximum per cabin below
@@ -57,7 +73,10 @@ catalogue or balance. A save completes local preparation, synchronously runs the
 asset ensure/update command outside the local write transaction, and confirms the returned version
 and maximum before the catalog mutation succeeds. Catalog reads enrich confirmed links with current
 asset-owned values. Migration `V42__furniture_equipment_maximum_sync.sql` expands that existing link
-intent; asset-service remains the source of truth.
+intent. `V43__backfill_furniture_equipment_link_intents.sql` seeds one `PENDING` intent for each
+pre-durable furniture node UUID, preferring its active catalog snapshot over draft or superseded copies,
+so the existing reconciler can establish its missing asset-service external reference without inventing
+local settings or remapping the catalog. Asset-service remains the source of truth.
 
 When asset-service rejects a maintenance lease or fenced status command because the cabin still has
 an active order reservation, `MaintenanceHttpTransport` allow-lists only the exact upstream `409`

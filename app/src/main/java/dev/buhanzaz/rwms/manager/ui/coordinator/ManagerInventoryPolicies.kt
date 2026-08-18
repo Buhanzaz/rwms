@@ -355,27 +355,35 @@ internal fun InventoryEditorState.inventoryPhotoValidationError(): String? =
         else -> null
     }
 
-internal fun inventoryRentalItemSuggestions(
-    items: List<RentalItemDto>,
-    query: String,
-    limit: Int = 8,
-): List<RentalItemDto> {
+/** Matches the visible inventory population by the beginning of its canonical cabin number. */
+internal fun InventoryFindingDto.matchesInventoryNumberPrefix(query: String): Boolean {
     val normalized = query.trim()
-    if (normalized.isEmpty()) return items.take(limit)
-    return items
-        .asSequence()
-        .filter { it.number.contains(normalized, ignoreCase = true) }
-        .take(limit)
-        .toList()
+    return normalized.isEmpty() || displayCanonicalNumber.startsWith(
+        prefix = normalized,
+        ignoreCase = true,
+    )
 }
 
-internal fun hasExactInventoryRentalItemNumber(
+/** Prevents an add action while any canonical warehouse number still matches the typed prefix. */
+internal fun hasInventoryRentalItemNumberPrefix(
     items: List<RentalItemDto>,
     query: String,
 ): Boolean {
     val normalized = query.trim()
-    return normalized.isNotEmpty() &&
-        items.any { it.number.equals(normalized, ignoreCase = true) }
+    return normalized.isNotEmpty() && items.any { item ->
+        item.number.startsWith(prefix = normalized, ignoreCase = true)
+    }
+}
+
+/** Returns the canonical warehouse item for an exact, case-insensitive number search. */
+internal fun findExactInventoryRentalItem(
+    items: List<RentalItemDto>,
+    query: String,
+): RentalItemDto? {
+    val normalized = query.trim()
+    return normalized.takeIf(String::isNotEmpty)?.let { number ->
+        items.firstOrNull { it.number.equals(number, ignoreCase = true) }
+    }
 }
 
 /**

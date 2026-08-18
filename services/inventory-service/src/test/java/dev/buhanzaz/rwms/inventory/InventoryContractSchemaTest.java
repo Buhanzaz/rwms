@@ -360,11 +360,15 @@ class InventoryContractSchemaTest {
                 "fingerprintSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "priority":3,"coverMediaId":null,
                 "movementToRepair":false,
+                "forceCapitalRepair":false,
                 "logisticsPlanningMode":null,"logisticsScheduledDate":null,
                 "lines":[{
                   "id":"00000000-0000-0000-0000-000000000736",
                   "sourceKind":"MANUAL","lineType":"WORK","catalogVersionId":null,
-                  "catalogNodeId":null,"description":"Work","normalizedDescription":"work",
+                  "catalogNodeId":null,
+                  "routingQueueId":"00000000-0000-0000-0000-000000000735",
+                  "routingQueueName":"Repair","routingQueueType":"MAINTENANCE",
+                  "description":"Work","normalizedDescription":"work",
                   "unit":"HOUR","quantity":"1.25","unitPriceMinor":1234,
                   "normativeMinutes":"2.5","groupComment":null,"mediaReferences":[]
                 }],
@@ -436,6 +440,10 @@ class InventoryContractSchemaTest {
         .put("logisticsPlanningMode", "FIXED_DATE")
         .put("logisticsScheduledDate", "2026-08-12");
     assertThat(finding.validate(inboundFixedFrozenPlan)).isEmpty();
+    ObjectNode ambiguousRepairDestination = inboundFixedFrozenPlan.deepCopy();
+    ((ObjectNode) ambiguousRepairDestination.required("frozenPlan"))
+        .put("forceCapitalRepair", true);
+    assertThat(finding.validate(ambiguousRepairDestination)).isNotEmpty();
 
     JsonSchema validatedFinding = openApiSchema("ValidatedFinding");
     JsonNode validated =

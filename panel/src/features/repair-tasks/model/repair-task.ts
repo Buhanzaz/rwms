@@ -118,6 +118,8 @@ export type RepairTaskDto = {
   taskBoardAvailable?: boolean
   awaitingMovement?: boolean
   movementToRepair: boolean
+  /** Present on live maintenance responses; optional for legacy panel fixtures. */
+  forceCapitalRepair?: boolean
   logisticsPlanningMode: LogisticsPlanningMode
   logisticsScheduledDate: string | null
   createdAt: string
@@ -141,6 +143,7 @@ export type RepairTaskEditorDraft = {
   media: RepairEstimateMediaRefDto[]
   maintenanceMediaReferences: MaintenanceMediaReferenceDto[]
   coverMediaId: string | null
+  forceCapitalRepair: boolean
   pendingUploads: PendingEstimateMediaUpload[]
 }
 
@@ -161,6 +164,7 @@ export type RepairTaskWriteCommand = {
   media: RepairEstimateMediaRefDto[]
   maintenanceMediaReferences: MaintenanceMediaReferenceDto[]
   coverMediaId: string | null
+  forceCapitalRepair?: boolean
   subtasks: RepairTaskSubtaskDto[]
   priority?: RepairPriority
   movementToRepair: boolean
@@ -179,6 +183,7 @@ export type RepairTaskReworkSeed = {
   rentalItemId: string
   lines: RepairEstimateLineDto[]
   selectedLineageRootIds?: string[]
+  forceCapitalRepair?: boolean
 }
 
 export type RentalItemRepairSeed = {

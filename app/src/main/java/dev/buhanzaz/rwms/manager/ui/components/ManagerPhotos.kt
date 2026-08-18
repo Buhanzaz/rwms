@@ -64,10 +64,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.exifinterface.media.ExifInterface
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import java.io.File
@@ -284,6 +288,39 @@ private fun ManagerZoomablePhoto(
     }
 }
 
+/** Plays one local or owner-authorized remote video and releases its decoder with composition. */
+@Composable
+private fun ManagerVideoPlayer(
+    videoUri: String,
+    active: Boolean,
+) {
+    val context = LocalContext.current
+    val player = remember(context, videoUri) {
+        ExoPlayer.Builder(context).build().apply {
+            setMediaItem(MediaItem.fromUri(videoUri))
+            playWhenReady = false
+            prepare()
+        }
+    }
+    LaunchedEffect(player, active) {
+        if (!active) player.pause()
+    }
+    DisposableEffect(player) {
+        onDispose { player.release() }
+    }
+    AndroidView(
+        factory = { playerContext ->
+            PlayerView(playerContext).apply {
+                useController = true
+                this.player = player
+                contentDescription = "Видеозапись"
+            }
+        },
+        update = { view -> view.player = player },
+        modifier = Modifier.fillMaxSize(),
+    )
+}
+
 private const val MANAGER_PHOTO_MIN_SCALE = 1f
 private const val MANAGER_PHOTO_MAX_SCALE = 5f
 private const val MANAGER_PHOTO_DISMISS_SWIPE_DP = 96
@@ -376,10 +413,9 @@ fun ManagerPhotoGalleryDialog(
                     ) {
                         val uri = photoUris[logicalIndex]
                         if (isManagerVideoUri(uri)) {
-                            Text(
-                                text = "Видео будет доступно после загрузки",
-                                color = Color.White,
-                                textAlign = TextAlign.Center,
+                            ManagerVideoPlayer(
+                                videoUri = uri,
+                                active = logicalIndex == currentLogicalIndex,
                             )
                         } else {
                             ManagerZoomablePhoto(
@@ -499,18 +535,31 @@ internal fun managerExifOrientationNeedsRepair(orientation: Int): Boolean = orie
  * the durable upload outbox. PNG/WebP bytes are retained unchanged unless their EXIF says that
  * their pixels need a transform; then the normalized app-owned result is an upright JPEG.
  */
-fun copyManagerPhotoToAppCache(context: Context, source: Uri): String? = runCatching {
-    val extension = when (context.contentResolver.getType(source)?.lowercase()) {
+fun copyManagerMediaToAppCache(context: Context, source: Uri): String? = runCatching {
+    val contentType = context.contentResolver.getType(source)?.substringBefore(';')?.lowercase()
+    val extension = when (contentType) {
         "image/png" -> "png"
         "image/webp" -> "webp"
-        else -> "jpg"
+        "image/jpeg" -> "jpg"
+        "video/mp4" -> "mp4"
+        "video/webm" -> "webm"
+        else -> when (source.path?.substringAfterLast('.', "")?.lowercase(Locale.ROOT)) {
+            "jpg", "jpeg" -> "jpg"
+            "png" -> "png"
+            "webp" -> "webp"
+            "mp4" -> "mp4"
+            "webm" -> "webm"
+            else -> return@runCatching null
+        }
     }
     val target = createManagerMediaFile(context.cacheDir, "picked", extension)
         ?: return@runCatching null
     context.contentResolver.openInputStream(source)?.use { input ->
         target.outputStream().use { output -> input.copyTo(output) }
     } ?: return@runCatching null
-    val normalized = if (extension == "jpg" || managerPhotoNeedsPixelNormalization(target)) {
+    val normalized = if (extension == "jpg" ||
+        (extension in setOf("png", "webp") && managerPhotoNeedsPixelNormalization(target))
+    ) {
         normalizeManagerCameraJpegOrientation(
             source = target,
             fallbackOrientation = ExifInterface.ORIENTATION_NORMAL,
@@ -528,6 +577,10 @@ fun copyManagerPhotoToAppCache(context: Context, source: Uri): String? = runCatc
     }
     Uri.fromFile(normalized).toString()
 }.getOrNull()
+
+/** Compatibility name for call sites that still present the shared media picker as photos. */
+fun copyManagerPhotoToAppCache(context: Context, source: Uri): String? =
+    copyManagerMediaToAppCache(context, source)
 
 private fun managerPhotoNeedsPixelNormalization(file: File): Boolean = runCatching {
     ExifInterface(file).getAttributeInt(
@@ -556,7 +609,7 @@ private fun managerLocalPhotoFile(uriText: String): File? = runCatching {
     uri.path?.let(::File)?.takeIf(File::isFile)
 }.getOrNull()
 
-private fun isManagerVideoUri(uriText: String): Boolean = Uri.parse(uriText)
+internal fun isManagerVideoUri(uriText: String): Boolean = Uri.parse(uriText)
     .path
     ?.substringAfterLast('.', missingDelimiterValue = "")
     ?.lowercase(Locale.ROOT)

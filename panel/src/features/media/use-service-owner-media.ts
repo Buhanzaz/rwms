@@ -10,6 +10,8 @@ import {
   type MediaAsset,
   type MediaUploadCommandKeys,
   type MediaVariant,
+  type MediaVariantKind,
+  type PlaybackMediaVariant,
   type ReadyMediaReference,
   type ServiceMediaOwner,
 } from "@/features/media/media-service"
@@ -18,17 +20,18 @@ import {
   retryOwnerProofOperation,
   shouldRetryOwnerProof,
 } from "@/features/media/owner-proof-retry"
+import { runMediaUploadQueue } from "@/features/media/media-upload-queue"
 
 const mediaClient = createHttpMediaClient()
-const INITIAL_VARIANTS: readonly DerivedMediaVariantKind[] = ["MEDIUM"]
+const INITIAL_VARIANTS: readonly MediaVariantKind[] = ["MEDIUM", "PLAYBACK"]
 const EMPTY_MEDIA_ASSETS: readonly MediaAsset[] = []
 
 export const SERVICE_OWNER_MEDIA_QUERY_KEY = ["service-owner-media"] as const
 
 type LoadedAssetVariants = Readonly<{
   signature: string
-  urls: Partial<Record<DerivedMediaVariantKind, string>>
-  resolved: Partial<Record<DerivedMediaVariantKind, DerivedMediaVariantKind>>
+  urls: Partial<Record<MediaVariantKind, string>>
+  resolved: Partial<Record<MediaVariantKind, MediaVariantKind>>
 }>
 
 export type ServiceOwnerMediaUploadJob = Readonly<{
@@ -36,6 +39,15 @@ export type ServiceOwnerMediaUploadJob = Readonly<{
   sortOrder: number
   folderId: string
   commandKeys: MediaUploadCommandKeys
+  onProgress?: (percentage: number) => void
+}>
+
+export type ServiceOwnerVideo = Readonly<{
+  id: string
+  fileName: string
+  url: string
+  contentType: string
+  createdAt: string
 }>
 
 function ownerIdentity(owner: ServiceMediaOwner) {
@@ -59,8 +71,10 @@ function assetSignature(asset: MediaAsset) {
 
 function nearestVariant(
   asset: MediaAsset,
-  requested: DerivedMediaVariantKind
-): MediaVariant | null {
+  requested: MediaVariantKind
+): MediaVariant | PlaybackMediaVariant | null {
+  if (requested === "PLAYBACK") return asset.playbackVariant ?? null
+
   const priority: Record<DerivedMediaVariantKind, DerivedMediaVariantKind[]> = {
     SMALL: ["SMALL", "MEDIUM", "LARGE"],
     MEDIUM: ["MEDIUM", "LARGE", "SMALL"],
@@ -75,7 +89,7 @@ function nearestVariant(
 
 function loadedUrl(
   loaded: LoadedAssetVariants | undefined,
-  requested: DerivedMediaVariantKind
+  requested: MediaVariantKind
 ) {
   const resolved = loaded?.resolved[requested]
   return resolved ? loaded.urls[resolved] : undefined
@@ -84,7 +98,7 @@ function loadedUrl(
 function mutationError(error: unknown) {
   return error instanceof Error
     ? error.message
-    : "Операция с фотографиями не выполнена"
+    : "Операция с медиафайлами не выполнена"
 }
 
 export function useServiceOwnerMedia({
@@ -96,7 +110,7 @@ export function useServiceOwnerMedia({
   accessToken: string | null
   owner: ServiceMediaOwner
   enabled?: boolean
-  initialVariants?: readonly DerivedMediaVariantKind[]
+  initialVariants?: readonly MediaVariantKind[]
 }) {
   const queryClient = useQueryClient()
   const queryKey = serviceOwnerMediaQueryKey(owner)
@@ -133,10 +147,20 @@ export function useServiceOwnerMedia({
       ),
     [assets]
   )
-  const signatures = useMemo(
+  const readyVideos = useMemo(
     () =>
-      new Map(readyImages.map((asset) => [asset.id, assetSignature(asset)])),
-    [readyImages]
+      assets.filter(
+        (asset) => asset.kind === "VIDEO" && asset.status === "READY"
+      ),
+    [assets]
+  )
+  const readyMedia = useMemo(
+    () => [...readyImages, ...readyVideos],
+    [readyImages, readyVideos]
+  )
+  const signatures = useMemo(
+    () => new Map(readyMedia.map((asset) => [asset.id, assetSignature(asset)])),
+    [readyMedia]
   )
   const currentLoaded = useMemo(
     () =>
@@ -183,7 +207,7 @@ export function useServiceOwnerMedia({
   }, [signatures])
 
   const ensureVariant = useCallback(
-    async (asset: MediaAsset, requested: DerivedMediaVariantKind) => {
+    async (asset: MediaAsset, requested: MediaVariantKind) => {
       if (!accessToken) return
       const variant = nearestVariant(asset, requested)
       if (!variant) return
@@ -266,7 +290,7 @@ export function useServiceOwnerMedia({
     let active = true
     void Promise.resolve().then(() => {
       if (!active) return
-      for (const asset of readyImages) {
+      for (const asset of readyMedia) {
         for (const variant of initialVariants)
           void ensureVariant(asset, variant)
       }
@@ -280,28 +304,36 @@ export function useServiceOwnerMedia({
     ensureVariant,
     initialVariantKey,
     initialVariants,
-    readyImages,
+    readyMedia,
   ])
 
   const uploadMutation = useMutation({
     mutationFn: async (jobs: readonly ServiceOwnerMediaUploadJob[]) => {
       if (!accessToken) throw new Error("Для загрузки требуется авторизация")
-      const uploaded: MediaAsset[] = []
-      for (const job of jobs) {
-        const result = await mediaClient.uploadFile(
-          accessToken,
-          owner,
-          job.file,
-          job.sortOrder,
-          job.folderId,
-          job.commandKeys
+      return runMediaUploadQueue(jobs, async (job) => {
+        const result = await retryOwnerProofOperation(() =>
+          job.onProgress
+            ? mediaClient.uploadFile(
+                accessToken,
+                owner,
+                job.file,
+                job.sortOrder,
+                job.folderId,
+                job.commandKeys,
+                (progress) => job.onProgress?.(progress.percentage)
+              )
+            : mediaClient.uploadFile(
+                accessToken,
+                owner,
+                job.file,
+                job.sortOrder,
+                job.folderId,
+                job.commandKeys
+              )
         )
-        uploaded.push(result.asset)
-      }
-      return uploaded
+        return result.asset
+      })
     },
-    retry: shouldRetryOwnerProof,
-    retryDelay: ownerProofRetryDelay,
     onSuccess: () => queryClient.invalidateQueries({ queryKey }),
   })
   const deleteMutation = useMutation({
@@ -344,13 +376,30 @@ export function useServiceOwnerMedia({
       }),
     [currentLoaded, readyImages]
   )
+  const videos = useMemo<ServiceOwnerVideo[]>(
+    () =>
+      readyVideos.flatMap((asset) => {
+        const url = loadedUrl(currentLoaded[asset.id], "PLAYBACK")
+        if (!url) return []
+        return [
+          {
+            id: asset.id,
+            fileName: asset.fileName,
+            url,
+            contentType: "video/mp4",
+            createdAt: asset.createdAt,
+          },
+        ]
+      }),
+    [currentLoaded, readyVideos]
+  )
   const readyReferences = useMemo<ReadyMediaReference[]>(
     () =>
-      readyImages.flatMap((asset) => {
+      readyMedia.flatMap((asset) => {
         const reference = readyMediaReference(asset)
         return reference ? [reference] : []
       }),
-    [readyImages]
+    [readyMedia]
   )
 
   const requestFullscreen = useCallback(
@@ -361,37 +410,40 @@ export function useServiceOwnerMedia({
     [ensureVariant, readyImages]
   )
   const retryPreviews = useCallback(() => {
-    for (const asset of readyImages) {
+    for (const asset of readyMedia) {
       for (const variant of initialVariants) void ensureVariant(asset, variant)
     }
-  }, [ensureVariant, initialVariants, readyImages])
+  }, [ensureVariant, initialVariants, readyMedia])
 
   const logicalPhotoCount = assets.filter(
     (asset) => asset.kind === "IMAGE" && asset.status !== "DELETED"
   ).length
+  const logicalMediaCount = assets.filter(
+    (asset) => asset.status !== "DELETED"
+  ).length
   const operationError =
-    uploadMutation.error ??
-    deleteMutation.error ??
-    query.error
+    uploadMutation.error ?? deleteMutation.error ?? query.error
 
   return {
     assets,
     photos,
+    videos,
     logicalPhotoCount,
+    logicalMediaCount,
     readyReferences,
     query,
     requestFullscreen,
     retryPreviews,
     upload: uploadMutation.mutateAsync,
     remove: deleteMutation.mutateAsync,
-    pending:
-      uploadMutation.isPending ||
-      deleteMutation.isPending,
+    uploadPending: uploadMutation.isPending,
+    deletePending: deleteMutation.isPending,
+    pending: uploadMutation.isPending || deleteMutation.isPending,
     error: operationError ? mutationError(operationError) : null,
     previewError,
     previewUnavailable:
-      readyImages.length > 0 &&
-      photos.length === 0 &&
+      readyMedia.length > 0 &&
+      photos.length + videos.length === 0 &&
       failedVariantKeys.length > 0,
   }
 }

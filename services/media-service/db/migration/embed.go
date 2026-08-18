@@ -69,3 +69,8 @@ var V10 []byte
 //
 //go:embed V11__bounded_media_processing_recovery.sql
 var V11 []byte
+
+// V12 contains the immutable video playback-variant migration bytes.
+//
+//go:embed V12__video_playback_variant.sql
+var V12 []byte

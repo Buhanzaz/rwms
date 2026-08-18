@@ -34,6 +34,29 @@ class InventoryReinspectionPolicyTest {
     }
 
     @Test
+    fun `review uses the retained supplement seed without removing evidence`() {
+        val photo = MediaReferenceDto("photo-1", 3)
+        val finding = finding(media = listOf(photo))
+
+        val review = finding.inventoryReinspectionSeed(InventoryReinspectionMode.REVIEW)
+
+        assertThat(review).isEqualTo(
+            finding.inventoryReinspectionSeed(InventoryReinspectionMode.SUPPLEMENT),
+        )
+        assertThat(
+            finding.inventoryReinspectionRemovedMediaIds(InventoryReinspectionMode.REVIEW),
+        ).isEmpty()
+    }
+
+    @Test
+    fun `saved finding opens in review while uninspected finding opens editable`() {
+        assertThat(finding(inspection = "MATCHED").inventoryReinspectionOpenMode())
+            .isEqualTo(InventoryReinspectionMode.REVIEW)
+        assertThat(finding(inspection = "NOT_INSPECTED").inventoryReinspectionOpenMode())
+            .isEqualTo(InventoryReinspectionMode.SUPPLEMENT)
+    }
+
+    @Test
     fun `replace starts from registry and excludes every previous active photo`() {
         val first = MediaReferenceDto("photo-1", 3)
         val second = MediaReferenceDto("photo-2", 4)

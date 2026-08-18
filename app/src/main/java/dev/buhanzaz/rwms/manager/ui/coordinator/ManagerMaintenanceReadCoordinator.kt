@@ -417,6 +417,12 @@ internal class ManagerMaintenanceReadCoordinator(
                             ifNoneMatch = if (force) null else cached?.repairsEtag,
                         )
                     }
+                    val capitalRepairsRequest = async {
+                        backend.api.activeCapitalRepairs(
+                            warehouseId = warehouseId,
+                            size = 200,
+                        )
+                    }
                     val estimates = conditionalRead(
                         response = estimatesRequest.await(),
                         cachedValue = cached?.estimates,
@@ -429,10 +435,10 @@ internal class ManagerMaintenanceReadCoordinator(
                         cachedEtag = cached?.repairsEtag,
                         missingCacheMessage = "Сервер подтвердил старый ремонт, которого нет на телефоне",
                     )
-                    estimates to repairs
+                    Triple(estimates, repairs, capitalRepairsRequest.await())
                 }
             } catch (failure: Throwable) {
-                if (cached != null && canUseCachedReadAfter(failure)) {
+                if (cached?.capitalRepairs != null && canUseCachedReadAfter(failure)) {
                     applyMaintenanceRead(warehouseId, cached)
                     return@withLock
                 }
@@ -442,10 +448,12 @@ internal class ManagerMaintenanceReadCoordinator(
 
             val estimates = refreshed.first.value.items
             val repairs = refreshed.second.value.items
+            val capitalRepairs = refreshed.third.items
             val retainedLabels = cached?.assetLabels.orEmpty()
             val labels = retainedLabels + resolveMaintenanceAssetLabels(
                 (estimates.asSequence().map(EstimateDto::rentalItemId) +
-                    repairs.asSequence().map(RepairDto::rentalItemId))
+                    repairs.asSequence().map(RepairDto::rentalItemId) +
+                    capitalRepairs.asSequence().map(RepairDto::rentalItemId))
                     .distinct()
                     .filterNot(retainedLabels::containsKey)
                     .toList(),
@@ -455,6 +463,7 @@ internal class ManagerMaintenanceReadCoordinator(
                 estimatesEtag = refreshed.first.etag,
                 repairs = refreshed.second.value,
                 repairsEtag = refreshed.second.etag,
+                capitalRepairs = refreshed.third,
                 assetLabels = labels,
             )
             managerReadCache.writeMaintenance(scope, snapshot)
@@ -466,13 +475,18 @@ internal class ManagerMaintenanceReadCoordinator(
         warehouseId: String,
         snapshot: CachedMaintenanceRead,
     ) {
+        val repairLists = splitMaintenanceRepairLists(
+            repairs = snapshot.repairs?.items.orEmpty(),
+            activeCapitalRepairs = snapshot.capitalRepairs?.items.orEmpty(),
+        )
         mutableState.update { current ->
             if (current.selectedWarehouseId != warehouseId) {
                 current
             } else {
                 current.copy(
                     estimates = snapshot.estimates?.items.orEmpty(),
-                    repairs = snapshot.repairs?.items.orEmpty(),
+                    repairs = repairLists.first,
+                    capitalRepairs = repairLists.second,
                     maintenanceAssetLabels = current.maintenanceAssetLabels + snapshot.assetLabels,
                 )
             }
@@ -616,4 +630,20 @@ internal class ManagerMaintenanceReadCoordinator(
         }
         return item
     }
+}
+
+/**
+ * Keeps every calculated CAPITAL repair out of the ordinary table while the separate list uses
+ * the server-owned active-capital lifecycle. IDs cover a cache written before complexity was
+ * client-visible; current responses use the authoritative calculated complexity.
+ */
+internal fun splitMaintenanceRepairLists(
+    repairs: List<RepairDto>,
+    activeCapitalRepairs: List<RepairDto>,
+): Pair<List<RepairDto>, List<RepairDto>> {
+    val activeCapitalIds = activeCapitalRepairs.mapTo(mutableSetOf(), RepairDto::id)
+    val ordinary = repairs.filterNot { repair ->
+        repair.complexity?.type == "CAPITAL" || repair.id in activeCapitalIds
+    }
+    return ordinary to activeCapitalRepairs
 }

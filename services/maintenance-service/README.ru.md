@@ -49,6 +49,22 @@ task-board, media, logistics и warehouse-service. Нельзя выполнят
 write-транзакция удерживает maintenance locks. Application flow фиксирует local preparation до
 remote preflight/effects, затем продолжает local fenced state через durable recovery records.
 
+## Явный выбор капитального ремонта
+
+Команды сметы, первичного ремонта, inventory freeze и inventory publication могут передавать
+необязательный `forceCapitalRepair`: отсутствие означает `false`, а явный JSON `null` отклоняется.
+Выбор хранится независимо от флагов каталога и копируется в каждую ревизию сметы, ответ ремонта,
+inventory snapshot и каждый новый Kafka-факт ESTIMATE/REPAIR v1. Для совместимости повторного
+чтения отсутствие поля в историческом факте v1 принимается как `false`; явные не-boolean значения
+остаются недопустимыми. Сложность ремонта становится CAPITAL, когда этот явный выбор истинен либо
+любая текущая catalog WORK принудительно требует капремонт. Границы inventory freeze и сохранённого
+snapshot отклоняют план, который одновременно запрашивает перемещение на ремонт, поэтому
+maintenance не владеет двумя конкурирующими направлениями одного finding.
+Единственным downstream implementation остаётся существующий логистический цикл капремонта,
+отдельный active-capital список, приёмка и возврат в FREE; клиенты сами эти эффекты не создают.
+Миграция [`V44__manual_capital_repair_selection.sql`](src/main/resources/db/migration/V44__manual_capital_repair_selection.sql)
+заполняет существующие сметы, ревизии и ремонты значением `false`.
+
 ## Настройки мебели и конфликты забронированной бытовки
 
 Существующий maintenance editor мебели показывает asset-owned nullable максимум на бытовку ниже
@@ -58,7 +74,11 @@ node, ожидаемую asset version и последнее подтвержд�
 private asset-команду ensure/update вне local write transaction и подтверждает возвращённые version
 и maximum до успешного завершения mutation каталога. Catalog reads обогащают подтверждённые связи
 актуальными asset-owned значениями. Миграция `V42__furniture_equipment_maximum_sync.sql` расширяет
-существующий link intent; источником истины остаётся asset-service.
+существующий link intent. `V43__backfill_furniture_equipment_link_intents.sql` создаёт один `PENDING`
+intent для каждого мебельного node UUID со старой локальной snapshot и выбирает active snapshot, а не
+копию из draft или superseded каталога, чтобы существующий reconciler установил недостающую external
+reference в asset-service без выдумывания локальных настроек или remap каталога. Источником истины
+остаётся asset-service.
 
 Когда asset-service отклоняет maintenance lease или fenced status command из-за активной order
 reservation бытовки, `MaintenanceHttpTransport` пропускает только точный upstream `409` code

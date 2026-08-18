@@ -29,6 +29,8 @@ public class FindingPlanSnapshot {
   @Column(name = "plan_mode", nullable = false, length = 16) private String planMode;
   @Column(name = "movement_to_repair", nullable = false)
   private boolean movementToRepair;
+  @Column(name = "force_capital_repair", nullable = false)
+  private boolean forceCapitalRepair;
   @Enumerated(EnumType.STRING)
   @Column(name = "logistics_planning_mode", length = 16)
   private LogisticsPlanningMode logisticsPlanningMode;
@@ -67,6 +69,7 @@ public class FindingPlanSnapshot {
         catalogVersionId,
         fingerprint,
         sourceSnapshot,
+        false,
         sourceSnapshot != null && sourceSnapshot.contains("\"movementToShipment\"") ? 1 : 2);
   }
 
@@ -82,12 +85,42 @@ public class FindingPlanSnapshot {
       String fingerprint,
       String sourceSnapshot,
       int snapshotSchemaVersion) {
+    this(
+        findingId,
+        findingRevision,
+        inventoryId,
+        planMode,
+        movementToRepair,
+        logisticsPlanningMode,
+        logisticsScheduledDate,
+        catalogVersionId,
+        fingerprint,
+        sourceSnapshot,
+        false,
+        snapshotSchemaVersion);
+  }
+
+  /** Persists one immutable frozen plan together with its explicit capital-repair choice. */
+  public FindingPlanSnapshot(
+      UUID findingId,
+      long findingRevision,
+      UUID inventoryId,
+      String planMode,
+      boolean movementToRepair,
+      LogisticsPlanningMode logisticsPlanningMode,
+      LocalDate logisticsScheduledDate,
+      UUID catalogVersionId,
+      String fingerprint,
+      String sourceSnapshot,
+      boolean forceCapitalRepair,
+      int snapshotSchemaVersion) {
     this.findingId = findingId;
     this.findingRevision = findingRevision;
     this.inventoryId = inventoryId;
     this.planMode = planMode;
     validateLogisticsPlanning(movementToRepair, logisticsPlanningMode, logisticsScheduledDate);
     this.movementToRepair = movementToRepair;
+    this.forceCapitalRepair = forceCapitalRepair;
     this.logisticsPlanningMode = logisticsPlanningMode;
     this.logisticsScheduledDate = logisticsScheduledDate;
     this.catalogVersionId = catalogVersionId;
@@ -122,6 +155,10 @@ public class FindingPlanSnapshot {
 
   public boolean isMovementToRepair() {
     return movementToRepair;
+  }
+
+  public boolean isForceCapitalRepair() {
+    return forceCapitalRepair;
   }
 
   public LogisticsPlanningMode getLogisticsPlanningMode() {

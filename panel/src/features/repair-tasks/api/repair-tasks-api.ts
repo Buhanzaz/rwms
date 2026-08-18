@@ -139,6 +139,7 @@ function buildWriteCommand(params: {
     media: [],
     maintenanceMediaReferences: params.draft.maintenanceMediaReferences,
     coverMediaId: params.draft.coverMediaId,
+    forceCapitalRepair: params.draft.forceCapitalRepair,
     subtasks: params.subtasks,
     priority: params.priority,
     movementToRepair: params.movementToRepair === true,
@@ -339,6 +340,7 @@ export async function writeOffRepairDraft(params: {
   media: RepairEstimateMediaRefDto[]
   maintenanceMediaReferences: Array<{ mediaId: string; generation: number }>
   coverMediaId?: string | null
+  forceCapitalRepair: boolean
   pendingUploads: PendingEstimateMediaUpload[]
   writeOffReason: string
   contentsPlan: CabinContentsDispositionPlanInput | null
@@ -366,6 +368,7 @@ export async function writeOffRepairDraft(params: {
     media: params.media,
     maintenanceMediaReferences: params.maintenanceMediaReferences,
     coverMediaId: params.coverMediaId ?? null,
+    forceCapitalRepair: params.forceCapitalRepair,
     pendingUploads: params.pendingUploads,
   }
   const subtasks = await planSubtasks({

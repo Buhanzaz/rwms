@@ -642,6 +642,7 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
       value.put("order", entry.order());
       value.put("priority", entry.priority());
       value.put("movementToRepair", entry.movementToRepair());
+      value.put("forceCapitalRepair", entry.forceCapitalRepair());
       value.put("movementScheduledDate", entry.movementScheduledDate());
       value.put("repairScheduledDate", entry.repairScheduledDate());
       value.put(
@@ -687,6 +688,7 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
       body.put("snapshotSchemaVersion", snapshot.getSnapshotSchemaVersion());
       body.put("priority", entry.priority());
       body.put("movementToRepair", entry.movementToRepair());
+      body.put("forceCapitalRepair", entry.forceCapitalRepair());
       if (entry.movementScheduledDate() == null) body.putNull("movementScheduledDate");
       else body.put("movementScheduledDate", entry.movementScheduledDate().toString());
       body.put("repairScheduledDate", entry.repairScheduledDate().toString());
@@ -786,7 +788,8 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
           || candidate.path("version").asLong(-1) < 0
           || candidate.path("state").asText().isBlank()
           || !candidate.path("started").isBoolean()
-          || !candidate.path("active").isBoolean()) {
+          || !candidate.path("active").isBoolean()
+          || !candidate.path("forceCapitalRepair").isBoolean()) {
         throw new IllegalArgumentException();
       }
       if (candidate.hasNonNull("priority")) validateFinalPlanPriority(candidate.path("priority").asInt(-1));
@@ -940,6 +943,7 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
         entry.order(),
         entry.priority(),
         entry.movementToRepair(),
+        entry.forceCapitalRepair(),
         entry.movementScheduledDate(),
         entry.repairScheduledDate(),
         entry.collisionCandidates(),
@@ -975,7 +979,8 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
         finalPlanCandidates(read(entry.getCollisionCandidates())),
         entry.getReconciliationDecision() == null
             ? null
-            : finalPlanDecision(read(entry.getReconciliationDecision())));
+            : finalPlanDecision(read(entry.getReconciliationDecision())),
+        entry.isForceCapitalRepair());
   }
 
   List<FinalPlanCandidateView> finalPlanCandidates(JsonNode candidates) {
@@ -1004,7 +1009,8 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
               new FinalPlanSummaryView(
                   summary.path("workLineCount").asInt(),
                   summary.path("materialLineCount").asInt(),
-                  summary.path("grandTotalMinor").asLong())));
+                  summary.path("grandTotalMinor").asLong()),
+              candidate.path("forceCapitalRepair").asBoolean()));
     }
     return List.copyOf(result);
   }
@@ -1195,6 +1201,7 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
           || entry.getTargetKind() != expectedTarget
           || entry.getPriority() == null
           || entry.getRepairScheduledDate() == null
+          || entry.isForceCapitalRepair() != snapshot.isForceCapitalRepair()
           || entry.isMovementToRepair() != (entry.getMovementScheduledDate() != null)) {
         throw InventoryException.conflict("Inventory final-plan work fields are invalid");
       }
@@ -1246,6 +1253,11 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
 
     String planFingerprintSha256() {
       return snapshot == null ? null : snapshot.getFingerprint();
+    }
+
+    /** Returns the immutable manager choice carried by this draft's frozen plan. */
+    boolean forceCapitalRepair() {
+      return snapshot != null && snapshot.isForceCapitalRepair();
     }
 
     FinalPlanDraft withOrder(int value) {

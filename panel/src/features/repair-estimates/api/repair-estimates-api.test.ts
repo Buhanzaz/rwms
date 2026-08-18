@@ -68,6 +68,7 @@ const draft: RepairEstimateEditorDraft = {
     },
   ],
   media: [],
+  forceCapitalRepair: true,
   pendingUploads: [],
 }
 
@@ -83,6 +84,7 @@ describe("saveRepairEstimateDraft", () => {
 
     expect(estimateClient.saveDraft).toHaveBeenCalledWith(
       expect.objectContaining({
+        forceCapitalRepair: true,
         lines: expect.arrayContaining([
           expect.objectContaining({
             id: draft.lines[1].id,

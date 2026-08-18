@@ -211,6 +211,69 @@ describe("repair completion", () => {
     ).toBeNull()
   })
 
+  it("places capital repair below movement and keeps the choices exclusive", async () => {
+    capabilities.get.mockResolvedValue({
+      warehouseId: "warehouse-1",
+      movementQueueDefinitions: [
+        { queueDefinitionId: "movement", workQueueId: "warehouse-movement" },
+      ],
+    })
+    const user = userEvent.setup()
+    const onComplete = vi.fn()
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false } },
+          })
+        }
+      >
+        <RepairWorkCompletionDialog
+          open
+          accessToken="access-token"
+          warehouseId="warehouse-1"
+          lines={[line]}
+          pending={false}
+          error={null}
+          title="Настройка работ"
+          description="Проверьте план."
+          completeLabel="Сохранить"
+          pendingLabel="Сохранение..."
+          previewKey="exclusive-capital-repair"
+          showForceCapitalRepair
+          onOpenChange={vi.fn()}
+          onComplete={onComplete}
+        />
+      </QueryClientProvider>
+    )
+
+    const movement = await screen.findByRole("checkbox", {
+      name: "Создать перемещение на ремонт",
+    })
+    const capital = screen.getByRole("checkbox", {
+      name: "Направить на капитальный ремонт",
+    })
+    expect(
+      movement.compareDocumentPosition(capital) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).not.toBe(0)
+
+    await user.click(movement)
+    expect(movement.getAttribute("data-state")).toBe("checked")
+    await user.click(capital)
+    expect(capital.getAttribute("data-state")).toBe("checked")
+    expect(movement.getAttribute("data-state")).toBe("unchecked")
+    await user.click(screen.getByRole("button", { name: "Сохранить" }))
+
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        movementToRepair: false,
+        forceCapitalRepair: true,
+        logisticsScheduledDate: null,
+      })
+    )
+  })
+
   it("requires and submits a date for inbound logistics planning", async () => {
     capabilities.get.mockResolvedValue({
       warehouseId: "warehouse-1",
@@ -261,10 +324,9 @@ describe("repair completion", () => {
     }) as HTMLButtonElement
     expect(completeButton.disabled).toBe(true)
 
-    fireEvent.change(
-      screen.getByLabelText("Дата логистического задания"),
-      { target: { value: "2026-08-12" } }
-    )
+    fireEvent.change(screen.getByLabelText("Дата логистического задания"), {
+      target: { value: "2026-08-12" },
+    })
     expect(completeButton.disabled).toBe(false)
 
     await user.click(completeButton)

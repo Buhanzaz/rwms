@@ -84,6 +84,10 @@ public class MaintenanceRepair {
   @Column(name = "movement_to_repair", nullable = false)
   private boolean movementToRepair;
 
+  /** Explicit manager override independent of capital-forcing catalog work. */
+  @Column(name = "force_capital_repair", nullable = false)
+  private boolean forceCapitalRepair;
+
   @Enumerated(EnumType.STRING)
   @Column(name = "logistics_planning_mode", length = 16)
   private RepairLogisticsPlanningMode logisticsPlanningMode;
@@ -198,7 +202,7 @@ public class MaintenanceRepair {
       throw new IllegalStateException("Only a repair pending acceptance can receive rework");
     }
     UUID root = source.rootRepairId == null ? source.id : source.rootRepairId;
-    return create(
+    MaintenanceRepair rework = create(
         source.warehouseId,
         source.rentalItemId,
         source.rentalItemVersionSnapshot,
@@ -211,6 +215,8 @@ public class MaintenanceRepair {
         source.sourceParty,
         reason,
         actorRef);
+    rework.forceCapitalRepair = source.forceCapitalRepair;
+    return rework;
   }
 
   private static MaintenanceRepair create(
@@ -380,6 +386,17 @@ public class MaintenanceRepair {
       throw new IllegalArgumentException("Repair priority must be between 1 and 5");
     }
     this.priority = priority;
+  }
+
+  /** Replaces the explicit capital-repair choice before repair work starts. */
+  public boolean selectForceCapitalRepair(boolean forceCapitalRepair) {
+    requirePreStartAmendment();
+    boolean changed = this.forceCapitalRepair != forceCapitalRepair;
+    this.forceCapitalRepair = forceCapitalRepair;
+    if (changed) {
+      updatedAt = MaintenanceTime.now();
+    }
+    return changed;
   }
 
   /**
@@ -851,6 +868,7 @@ public class MaintenanceRepair {
   public String getSourceParty() { return sourceParty; }
   public UUID getCoverMediaId() { return coverMediaId; }
   public boolean isMovementToRepair() { return movementToRepair; }
+  public boolean isForceCapitalRepair() { return forceCapitalRepair; }
   public RepairLogisticsPlanningMode getLogisticsPlanningMode() {
     return logisticsPlanningMode;
   }

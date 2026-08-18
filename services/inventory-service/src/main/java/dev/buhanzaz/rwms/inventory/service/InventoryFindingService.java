@@ -974,6 +974,7 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
     body.put("mode", selection.mode());
     body.put("priority", selection.priority());
     body.put("movementToRepair", selection.movementToRepair());
+    body.put("forceCapitalRepair", selection.forceCapitalRepair());
     if (selection.logisticsPlanningMode() == null) {
       body.putNull("logisticsPlanningMode");
     } else {
@@ -1047,6 +1048,10 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
     }
     if (!selection.isLogisticsPlanningValid()) {
       throw new IllegalArgumentException("Inventory logistics planning is invalid");
+    }
+    if (!selection.isRepairDestinationChoiceValid()) {
+      throw new IllegalArgumentException(
+          "Capital repair and movement to repair are mutually exclusive");
     }
     boolean manualMode = "MANUAL".equals(selection.mode());
     for (PlanLineInput line : selection.lines()) {
@@ -1138,7 +1143,8 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
               selection.logisticsPlanningMode(),
               selection.logisticsScheduledDate(),
               currentLines,
-              selection.stages());
+              selection.stages(),
+              selection.forceCapitalRepair());
     }
     return new SaveInspectionRequest(
         request.expectedSessionRevision(),
@@ -1331,6 +1337,9 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
     UUID catalogVersionId = UUID.fromString(snapshot.path("catalogVersionId").asText());
     boolean movementToRepair =
         requiredBoolean(snapshot, "movementToRepair", "frozen movement to repair");
+    boolean forceCapitalRepair =
+        booleanOrDefault(
+            snapshot, "forceCapitalRepair", "frozen capital-repair choice", false);
     LogisticsPlanningMode logisticsPlanningMode;
     LocalDate logisticsScheduledDate;
     try {
@@ -1349,6 +1358,7 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
       throw new IllegalStateException("Persisted frozen logistics planning is invalid");
     }
     if (movementToRepair != selection.movementToRepair()
+        || forceCapitalRepair != selection.forceCapitalRepair()
         || logisticsPlanningMode != selection.logisticsPlanningMode()
         || !java.util.Objects.equals(
             logisticsScheduledDate, selection.logisticsScheduledDate())) {
@@ -1367,6 +1377,7 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
             catalogVersionId,
             frozen.fingerprint(),
             write(snapshot),
+            forceCapitalRepair,
             2));
     int lineNo = 0;
     for (JsonNode line : snapshot.path("lines")) {

@@ -101,7 +101,8 @@ final class InventoryPublicationEstimateMaterialization {
         null,
         inventoryActorJson());
     draft.selectInventoryPublication(
-        finding.priority(), finding.movementToRepair(), finding.movementScheduledDate());
+        finding.priority(), finding.movementToRepair(), finding.movementScheduledDate(),
+        finding.forceCapitalRepair());
     draft.replaceCoverMediaId(snapshot.coverMediaId());
     MaintenanceEstimate estimate = estimates.saveAndFlush(draft);
     List<InventoryPublicationPublishedLine> lines = materialization.publicationLines(sourceId, snapshot);
@@ -190,6 +191,7 @@ final class InventoryPublicationEstimateMaterialization {
         estimate.getSourceParty(),
         null,
         totalMinor,
+        estimate.isForceCapitalRepair(),
         inventoryActorJson()));
   }
 

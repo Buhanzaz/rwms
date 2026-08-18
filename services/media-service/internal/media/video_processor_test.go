@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"testing"
 	"time"
 )
@@ -63,13 +64,23 @@ func (acceptedVideoProbe) Probe(context.Context, string) (VideoMetadata, error) 
 	return VideoMetadata{Codec: "h264", Container: "mp4", Duration: time.Second}, nil
 }
 
-func testVideoProcessor(store ObjectStore) VideoProcessor {
-	return VideoProcessor{Store: store, Probe: acceptedVideoProbe{},
-		AllowedCodecs: map[string]struct{}{"h264": {}}, MaxDuration: time.Minute,
-		Limits: testProcessingLimits()}
+// copyingVideoTranscoder is a deterministic processor test double that proves
+// playback bytes come from the injected transformation boundary.
+type copyingVideoTranscoder struct {
+	bytes []byte
 }
 
-func TestVideoProcessorCopiesOnlyTheOriginalWithoutRewritingIt(t *testing.T) {
+func (transcoder copyingVideoTranscoder) Transcode(_ context.Context, request VideoTranscodeRequest) error {
+	return os.WriteFile(request.DestinationPath, transcoder.bytes, 0o600)
+}
+
+func testVideoProcessor(store ObjectStore) VideoProcessor {
+	return VideoProcessor{Store: store, Probe: acceptedVideoProbe{}, Transcoder: copyingVideoTranscoder{bytes: []byte("compressed playback")},
+		AllowedCodecs: map[string]struct{}{"h264": {}}, MaxDuration: time.Minute,
+		MaxOutputBytes: 1 << 20, Limits: testProcessingLimits()}
+}
+
+func TestVideoProcessorPreservesOriginalAndWritesCompressedPlayback(t *testing.T) {
 	store := newMemoryObjectStore(map[string][]byte{
 		"media/m-1/source/upload.mp4": []byte("video bytes"),
 	})
@@ -94,6 +105,39 @@ func TestVideoProcessorCopiesOnlyTheOriginalWithoutRewritingIt(t *testing.T) {
 	}
 	if result.Original.ChecksumSHA256 == "" {
 		t.Fatal("checksum was not recorded")
+	}
+	if got, want := result.Playback.ObjectKey, "media/m-1/generations/1/playback.mp4"; got != want {
+		t.Fatalf("playback key = %q, want %q", got, want)
+	}
+	if got, want := result.Playback.ContentType, "video/mp4"; got != want {
+		t.Fatalf("playback content type = %q, want %q", got, want)
+	}
+	if got, want := string(store.objects[result.Playback.ObjectKey]), "compressed playback"; got != want {
+		t.Fatalf("stored playback = %q, want %q", got, want)
+	}
+	if result.Playback.ChecksumSHA256 == "" || result.Playback.ChecksumSHA256 == result.Original.ChecksumSHA256 {
+		t.Fatal("independent playback checksum was not recorded")
+	}
+}
+
+func TestVideoProcessorRejectsPlaybackBeyondConfiguredOutputLimitBeforeObjectWrites(t *testing.T) {
+	store := newMemoryObjectStore(map[string][]byte{
+		"media/m-1/source/upload.mp4": []byte("video bytes"),
+	})
+	processor := testVideoProcessor(store)
+	processor.MaxOutputBytes = 4
+	_, err := processor.Process(context.Background(), VideoProcessRequest{
+		MediaID: "m-1", SourceObjectKey: "media/m-1/source/upload.mp4",
+		SourceVersionID: "version-1", ContentType: "video/mp4", Generation: 1,
+	})
+	if err == nil {
+		t.Fatal("Process() error = nil, want bounded playback rejection")
+	}
+	if _, exists := store.objects[OriginalObjectKey("m-1", 1, ".mp4")]; exists {
+		t.Fatal("original generation object was written before playback validation")
+	}
+	if _, exists := store.objects[VideoPlaybackObjectKey("m-1", 1)]; exists {
+		t.Fatal("oversized playback generation object was written")
 	}
 }
 

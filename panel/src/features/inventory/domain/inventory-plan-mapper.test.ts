@@ -57,6 +57,7 @@ describe("inventory plan mapper", () => {
     const result = buildInventoryPlanSelection({
       completionMode: "MANUAL",
       movementToRepair: false,
+      forceCapitalRepair: true,
       logisticsPlanningMode: null,
       logisticsScheduledDate: null,
       priority: 2,
@@ -66,11 +67,7 @@ describe("inventory plan mapper", () => {
         {
           id: "plan-1",
           kind: "REPAIR_WORK",
-          includedLineIds: [
-            catalogWork.id,
-            manualWork.id,
-            manualMaterial.id,
-          ],
+          includedLineIds: [catalogWork.id, manualWork.id, manualMaterial.id],
           primaryLineId: catalogWork.id,
           groupComment: "Плановый комментарий",
           queueId: "00000000-0000-4000-8000-000000000103",
@@ -85,6 +82,7 @@ describe("inventory plan mapper", () => {
 
     expect(result).toMatchObject({
       mode: "MANUAL",
+      forceCapitalRepair: true,
       lines: [
         {
           aggregationKind: "CATALOG",
@@ -132,6 +130,7 @@ describe("inventory plan mapper", () => {
 
     expect(result).toMatchObject({
       movementToRepair: true,
+      forceCapitalRepair: false,
       logisticsPlanningMode: "AUTO",
       logisticsScheduledDate: null,
       lines: [{ routingCatalogNodeId: null }],
@@ -446,6 +445,67 @@ describe("inventory plan mapper", () => {
         ],
       })
     ).toThrow("Для ручного этапа выберите основной вид работ из каталога")
+  })
+
+  it("uses the selected queue's technical catalog route for custom-only lines", () => {
+    const routeNodeId = "00000000-0000-4000-8000-000000000106"
+    const customWork = {
+      ...manualWork,
+      customQueueBinding: {
+        queueId: "00000000-0000-4000-8000-000000000103",
+        queueName: "Ремонт",
+        queueKind: "REPAIR" as const,
+      },
+    }
+    const result = buildInventoryPlanSelection({
+      completionMode: "MANUAL",
+      movementToRepair: false,
+      logisticsPlanningMode: null,
+      logisticsScheduledDate: null,
+      priority: 2,
+      coverMediaId: null,
+      lines: [customWork, manualMaterial],
+      taskPlans: [
+        {
+          id: "plan-1",
+          kind: "REPAIR_WORK",
+          includedLineIds: [customWork.id, manualMaterial.id],
+          primaryLineId: customWork.id,
+          groupComment: "Пользовательский маршрут",
+          queueId: customWork.customQueueBinding.queueId,
+          routingCatalogNodeId: routeNodeId,
+          queueName: customWork.customQueueBinding.queueName,
+          routeQueueKind: customWork.customQueueBinding.queueKind,
+          sortOrder: 10,
+          generationStatus: "PENDING_GENERATION",
+          workflowRequestRef: null,
+        },
+      ],
+    })
+
+    expect(result).toMatchObject({
+      lines: [
+        { aggregationKind: "MANUAL", routingCatalogNodeId: routeNodeId },
+        { aggregationKind: "MANUAL", routingCatalogNodeId: routeNodeId },
+      ],
+      stages: [{ catalogNodeId: routeNodeId, order: 0 }],
+    })
+  })
+
+  it("rejects selecting movement and explicit capital repair together", () => {
+    expect(() =>
+      buildInventoryPlanSelection({
+        completionMode: "AUTO",
+        movementToRepair: true,
+        forceCapitalRepair: true,
+        logisticsPlanningMode: "AUTO",
+        logisticsScheduledDate: null,
+        priority: 1,
+        coverMediaId: null,
+        taskPlans: [],
+        lines: [catalogWork],
+      })
+    ).toThrow("нельзя выбрать одновременно")
   })
 
   it("preserves a fixed logistics date and rejects inconsistent planning", () => {

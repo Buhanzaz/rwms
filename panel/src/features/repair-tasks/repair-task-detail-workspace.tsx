@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { RepairWorkDetailWorkspaceLayout } from "@/features/repair-estimates/repair-estimate-workspace-layout"
 import { RepairWorkInformationSnapshot } from "@/features/repair-estimates/repair-work-information-snapshot"
+import { ForceCapitalRepairField } from "@/features/repair-estimates/force-capital-repair-field"
 import type { RepairTaskDto } from "@/features/repair-tasks/model/repair-task"
 import { RepairSubtasksEditor } from "@/features/repair-tasks/repair-subtasks-editor"
 import { RepairTaskStatusBadge } from "@/features/repair-tasks/repair-task-status-badge"
@@ -87,6 +88,12 @@ export function RepairTaskDetailWorkspace({
               {task.priority ?? 3}
             </Badge>
           </div>
+          <ForceCapitalRepairField
+            id={`repair-task-force-capital-detail-${task.id}`}
+            checked={task.forceCapitalRepair === true}
+            disabled
+            inherited={task.kind === "REWORK"}
+          />
         </div>
       }
       informationDescription="Сведения о ремонтном задании."

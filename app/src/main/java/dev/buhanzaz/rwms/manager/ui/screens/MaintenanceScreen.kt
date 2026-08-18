@@ -77,9 +77,11 @@ import androidx.compose.ui.window.DialogProperties
 import dev.buhanzaz.rwms.manager.network.CatalogNodeDto
 import dev.buhanzaz.rwms.manager.network.CatalogLinkDto
 import dev.buhanzaz.rwms.manager.network.EstimateDto
+import dev.buhanzaz.rwms.manager.network.EstimateLineDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.RentalItemDto
 import dev.buhanzaz.rwms.manager.network.RepairDto
+import dev.buhanzaz.rwms.manager.network.RepairStageDto
 import dev.buhanzaz.rwms.manager.network.ReworkCandidateDto
 import dev.buhanzaz.rwms.manager.network.RoutingSnapshotDto
 import dev.buhanzaz.rwms.manager.ui.MaintenanceEditorMode
@@ -111,6 +113,7 @@ import dev.buhanzaz.rwms.manager.ui.components.ManagerScreenScaffold
 import dev.buhanzaz.rwms.manager.ui.components.StatusPill
 import dev.buhanzaz.rwms.manager.ui.components.StatusPillEmphasis
 import dev.buhanzaz.rwms.manager.ui.components.copyManagerPhotoToAppCache
+import dev.buhanzaz.rwms.manager.ui.components.isManagerVideoUri
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.LocalDate
@@ -157,6 +160,7 @@ fun MaintenanceMenuScreen(
     onBack: () -> Unit,
     onOpenEstimates: () -> Unit,
     onOpenRepairs: () -> Unit,
+    onOpenCapitalRepairs: () -> Unit,
     onOpenRepairQueue: () -> Unit,
     onOpenAcceptance: () -> Unit,
 ) {
@@ -187,6 +191,14 @@ fun MaintenanceMenuScreen(
                     description = "Таблица прямых ремонтов и работ из смет",
                     accent = androidx.compose.ui.graphics.Color(0xFFEA580C),
                     onClick = onOpenRepairs,
+                )
+            }
+            item {
+                ManagerMenuCard(
+                    title = "Кап. ремонты",
+                    description = "Отдельная очередь капитальных ремонтов и состав работ",
+                    accent = androidx.compose.ui.graphics.Color(0xFFB91C1C),
+                    onClick = onOpenCapitalRepairs,
                 )
             }
             item {
@@ -314,6 +326,159 @@ fun RepairsListScreen(
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
                 Text("Новый ремонт")
+            }
+        }
+    }
+}
+
+/**
+ * Displays the maintenance-owned active CAPITAL projection separately from ordinary repairs.
+ * Expanding a card is presentation-only and never creates or advances logistics work.
+ */
+@Composable
+fun CapitalRepairsListScreen(
+    uiState: ManagerUiState,
+    onBack: () -> Unit,
+    onLoadMaintenance: () -> Unit,
+    onOpenRepair: (String) -> Unit,
+) {
+    LaunchedEffect(uiState.selectedWarehouseId) {
+        if (uiState.selectedWarehouseId != null) onLoadMaintenance()
+    }
+    ManagerScreenScaffold(title = "Кап. ремонты", onBack = onBack) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (uiState.capitalRepairs.isEmpty()) {
+                item {
+                    EmptyState(
+                        title = "Капитальных ремонтов пока нет",
+                        description = "Здесь появятся активные ремонты с рассчитанной сложностью CAPITAL.",
+                    )
+                }
+            } else {
+                items(uiState.capitalRepairs, key = RepairDto::id) { repair ->
+                    CapitalRepairCard(
+                        repair = repair,
+                        assetLabel = uiState.maintenanceAssetLabels[repair.rentalItemId],
+                        enabled = !uiState.busy,
+                        onOpen = { onOpenRepair(repair.id) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CapitalRepairCard(
+    repair: RepairDto,
+    assetLabel: String?,
+    enabled: Boolean,
+    onOpen: () -> Unit,
+) {
+    var expanded by remember(repair.id) { mutableStateOf(false) }
+    ManagerPanel {
+        RowWithPill(
+            title = "Капитальный ремонт",
+            pill = capitalRepairStatusLabel(repair),
+        )
+        Text("Бытовка: ${assetLabel ?: "—"}", style = MaterialTheme.typography.bodyMedium)
+        Text("Приоритет: ${repair.priority}", style = MaterialTheme.typography.bodyMedium)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedButton(
+                onClick = { expanded = !expanded },
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(if (expanded) "Свернуть" else "Показать состав")
+            }
+            Button(
+                onClick = onOpen,
+                enabled = enabled,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Открыть")
+            }
+        }
+        if (expanded) {
+            val stages = repair.plan.stages.sortedBy(RepairStageDto::order)
+            if (stages.isEmpty()) {
+                Text(
+                    "Работы и материалы ещё не добавлены.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                stages.forEach { stage -> CapitalRepairStage(stage) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CapitalRepairStage(stage: RepairStageDto) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(stage.routing.queueName, style = MaterialTheme.typography.titleSmall)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            CapitalRepairLinesColumn(
+                title = "Работы",
+                lines = stage.workLines,
+                modifier = Modifier.weight(1f),
+            )
+            CapitalRepairLinesColumn(
+                title = "Материалы",
+                lines = stage.materialLines,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CapitalRepairLinesColumn(
+    title: String,
+    lines: List<EstimateLineDto>,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        shape = MaterialTheme.shapes.medium,
+        tonalElevation = 1.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(title, style = MaterialTheme.typography.labelLarge)
+            if (lines.isEmpty()) {
+                Text(
+                    "Нет позиций",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                lines.forEach { line ->
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            line.description,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            capitalRepairQuantityLabel(line),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
         }
     }
@@ -873,6 +1038,9 @@ private fun MaintenanceAssetSearchFeedback(feedback: MaintenanceSearchFeedback) 
     }
 }
 
+/**
+ * Renders the shared work catalog and an optional full-width action below its primary navigation.
+ */
 @Composable
 internal fun MaintenanceCatalogStep(
     editor: MaintenanceEditorState,
@@ -889,6 +1057,8 @@ internal fun MaintenanceCatalogStep(
     onRefreshCatalog: () -> Unit,
     onEdit: ((MaintenanceEditorState) -> MaintenanceEditorState) -> Unit,
     onContinue: () -> Unit,
+    secondaryActionLabel: String? = null,
+    onSecondaryAction: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var mode by remember(editor.entityId, editor.mode) {
@@ -987,6 +1157,7 @@ internal fun MaintenanceCatalogStep(
                 mediaReferences,
             )
         ) return
+        onEdit { current -> current.moveMaintenanceLocalPhotosToWork(photoUris) }
         addContext = null
         existingWorkContext = null
         path = maintenanceCatalogPathAfterAdd(
@@ -1122,6 +1293,7 @@ internal fun MaintenanceCatalogStep(
             catalogNodes = catalogNodes,
             catalogLinks = uiState.maintenanceCatalogLinks,
             liveRoutings = uiState.repairTaskBoards.maintenanceWorkRoutingOptions(),
+            availableLocalPhotoUris = editor.photoUris,
             availablePhotos = editor.readyMedia
                 .filterNot { reference ->
                     editor.lines.any { line ->
@@ -1145,7 +1317,7 @@ internal fun MaintenanceCatalogStep(
                         coverPhotoKey = current.coverPhotoKey.takeUnless { key ->
                             key?.removePrefix("media:") in lineMediaIds
                         },
-                    )
+                    ).moveMaintenanceLocalPhotosToWork(line.photoUris)
                 }
                 customLineVisible = false
             },
@@ -1160,6 +1332,7 @@ internal fun MaintenanceCatalogStep(
             .toSet()
         MaintenanceLineEditSheet(
             line = line,
+            availableLocalPhotoUris = editor.photoUris,
             availablePhotos = (
                 editor.readyMedia.filter { reference -> reference.mediaId !in occupiedMediaIds } +
                     line.mediaReferences
@@ -1186,6 +1359,7 @@ internal fun MaintenanceCatalogStep(
     addContext?.let { context ->
         MaintenanceCatalogAddSheet(
             context = context,
+            availableLocalPhotoUris = editor.photoUris,
             availablePhotos = editor.readyMedia
                 .filterNot { reference ->
                     editor.lines.any { line ->
@@ -1457,6 +1631,16 @@ internal fun MaintenanceCatalogStep(
                 enabled = canContinue && !uiState.busy,
                 modifier = Modifier.widthIn(min = 104.dp),
             ) { Text("Далее") }
+        }
+        secondaryActionLabel?.let { label ->
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = onSecondaryAction,
+                enabled = !uiState.busy,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(label)
+            }
         }
     }
 }
@@ -1895,6 +2079,7 @@ private fun MaintenanceCatalogExistingWorkDialog(
 @Composable
 private fun MaintenanceCatalogAddSheet(
     context: MaintenanceCatalogAddContext,
+    availableLocalPhotoUris: List<String>,
     availablePhotos: List<MaintenanceWorkPhotoOption>,
     onDismiss: () -> Unit,
     onConfirm: (String, String, List<String>, List<MediaReferenceDto>) -> Unit,
@@ -1904,11 +2089,24 @@ private fun MaintenanceCatalogAddSheet(
     var capturedPhotoUris by remember(context.quantityNode.id) {
         mutableStateOf(emptyList<String>())
     }
+    var selectedLocalPhotoUris by remember(context.quantityNode.id) {
+        mutableStateOf(emptySet<String>())
+    }
     var selectedMediaIds by remember(context.quantityNode.id) {
         mutableStateOf(emptySet<String>())
     }
     var cameraOpen by remember(context.quantityNode.id) { mutableStateOf(false) }
     var pickerOpen by remember(context.quantityNode.id) { mutableStateOf(false) }
+    val androidContext = LocalContext.current
+    val galleryLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        capturedPhotoUris = (
+            capturedPhotoUris + uris.mapNotNull { uri ->
+                copyManagerPhotoToAppCache(androidContext, uri)
+            }
+            ).distinct()
+    }
     val workCount = context.nodes.count { node -> node.nodeType == "WORK" }
     val hasWork = workCount > 0
     val canAttachWorkPhotos = workCount == 1
@@ -1970,31 +2168,98 @@ private fun MaintenanceCatalogAddSheet(
                     }
                     if (canAttachWorkPhotos) {
                         item {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                OutlinedButton(
-                                    onClick = { cameraOpen = true },
-                                    modifier = Modifier.weight(1f),
-                                ) { Text("Добавить фото") }
-                                OutlinedButton(
-                                    onClick = { pickerOpen = true },
-                                    modifier = Modifier.weight(1f),
-                                ) { Text("Выбрать из сделанных") }
-                            }
+                            MaintenanceWorkPhotoActions(
+                                onAddPhoto = { cameraOpen = true },
+                                onChooseTaken = { pickerOpen = true },
+                                onChooseGallery = {
+                                    galleryLauncher.launch(
+                                        arrayOf("image/*", "video/mp4", "video/webm"),
+                                    )
+                                },
+                            )
                         }
                         item {
                             Text(
-                                text = if (capturedPhotoUris.isEmpty() && selectedMediaIds.isEmpty()) {
+                                text = if (
+                                    capturedPhotoUris.isEmpty() &&
+                                    selectedLocalPhotoUris.isEmpty() &&
+                                    selectedMediaIds.isEmpty()
+                                ) {
                                     "Фото необязательны и относятся только к этой работе."
                                 } else {
-                                    "Выбрано фото: ${capturedPhotoUris.size + selectedMediaIds.size}"
+                                    "Выбрано фото: ${
+                                        capturedPhotoUris.size +
+                                            selectedLocalPhotoUris.size +
+                                            selectedMediaIds.size
+                                    }"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                        capturedPhotoUris.forEach { uri ->
+                            item(key = "new-work-photo:$uri") {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    ManagerPhotoPreview(
+                                        photoUri = uri,
+                                        modifier = Modifier.width(96.dp).aspectRatio(4f / 3f),
+                                    )
+                                    Text("Новое фото", modifier = Modifier.weight(1f))
+                                    TextButton(
+                                        onClick = { capturedPhotoUris = capturedPhotoUris - uri },
+                                    ) { Text("Убрать") }
+                                }
+                            }
+                        }
+                        availableLocalPhotoUris
+                            .filter(selectedLocalPhotoUris::contains)
+                            .forEach { uri ->
+                                item(key = "new-work-state-photo:$uri") {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    ) {
+                                        ManagerPhotoPreview(
+                                            photoUri = uri,
+                                            modifier = Modifier.width(96.dp).aspectRatio(4f / 3f),
+                                        )
+                                        Text("Из фото состояния", modifier = Modifier.weight(1f))
+                                        TextButton(
+                                            onClick = {
+                                                selectedLocalPhotoUris -= uri
+                                            },
+                                        ) { Text("Убрать") }
+                                    }
+                                }
+                            }
+                        availablePhotos
+                            .filter { option -> option.reference.mediaId in selectedMediaIds }
+                            .forEach { option ->
+                                item(key = "new-work-media:${option.reference.mediaId}") {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    ) {
+                                        ManagerPhotoPreview(
+                                            photoUri = option.uri,
+                                            modifier = Modifier.width(96.dp).aspectRatio(4f / 3f),
+                                        )
+                                        Text("Загруженное фото", modifier = Modifier.weight(1f))
+                                        TextButton(
+                                            onClick = {
+                                                selectedMediaIds = selectedMediaIds -
+                                                    option.reference.mediaId
+                                            },
+                                        ) { Text("Убрать") }
+                                    }
+                                }
+                            }
                     } else {
                         item {
                             Text(
@@ -2011,7 +2276,10 @@ private fun MaintenanceCatalogAddSheet(
                             onConfirm(
                                 quantity.trim(),
                                 comment.trim().takeIf { hasWork }.orEmpty(),
-                                capturedPhotoUris.takeIf { canAttachWorkPhotos }.orEmpty(),
+                                (capturedPhotoUris + selectedLocalPhotoUris)
+                                    .distinct()
+                                    .takeIf { canAttachWorkPhotos }
+                                    .orEmpty(),
                                 availablePhotos
                                     .filter { option ->
                                         canAttachWorkPhotos &&
@@ -2050,18 +2318,58 @@ private fun MaintenanceCatalogAddSheet(
     }
     if (pickerOpen) {
         MaintenanceWorkPhotoPickerDialog(
+            availableLocalPhotoUris = availableLocalPhotoUris,
             availablePhotos = availablePhotos,
+            selectedLocalPhotoUris = selectedLocalPhotoUris,
             selectedMediaIds = selectedMediaIds,
+            onSelectedLocalPhotoUrisChange = { selectedLocalPhotoUris = it },
             onSelectedMediaIdsChange = { selectedMediaIds = it },
             onDismiss = { pickerOpen = false },
         )
     }
 }
 
+/** Keeps direct capture prominent while grouping the two reuse sources on a second row. */
+@Composable
+private fun MaintenanceWorkPhotoActions(
+    onAddPhoto: () -> Unit,
+    onChooseTaken: () -> Unit,
+    onChooseGallery: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(
+            onClick = onAddPhoto,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Добавить фото")
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedButton(
+                onClick = onChooseTaken,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Из сделанных")
+            }
+            OutlinedButton(
+                onClick = onChooseGallery,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Из галереи")
+            }
+        }
+    }
+}
+
 @Composable
 private fun MaintenanceWorkPhotoPickerDialog(
+    availableLocalPhotoUris: List<String>,
     availablePhotos: List<MaintenanceWorkPhotoOption>,
+    selectedLocalPhotoUris: Set<String>,
     selectedMediaIds: Set<String>,
+    onSelectedLocalPhotoUrisChange: (Set<String>) -> Unit,
     onSelectedMediaIdsChange: (Set<String>) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -2069,13 +2377,37 @@ private fun MaintenanceWorkPhotoPickerDialog(
         onDismissRequest = onDismiss,
         title = { Text("Выбрать фото работы") },
         text = {
-            if (availablePhotos.isEmpty()) {
-                Text("Свободных загруженных фотографий пока нет.")
+            if (availableLocalPhotoUris.isEmpty() && availablePhotos.isEmpty()) {
+                Text("В фото состояния пока нет доступных фотографий.")
             } else {
                 LazyColumn(
                     modifier = Modifier.heightIn(max = 420.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    items(availableLocalPhotoUris, key = { uri -> "local:$uri" }) { uri ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            ManagerPhotoPreview(
+                                photoUri = uri,
+                                modifier = Modifier.width(96.dp).aspectRatio(4f / 3f),
+                            )
+                            Checkbox(
+                                checked = uri in selectedLocalPhotoUris,
+                                onCheckedChange = { checked ->
+                                    onSelectedLocalPhotoUrisChange(
+                                        if (checked) {
+                                            selectedLocalPhotoUris + uri
+                                        } else {
+                                            selectedLocalPhotoUris - uri
+                                        },
+                                    )
+                                },
+                            )
+                        }
+                    }
                     items(availablePhotos, key = { it.reference.mediaId }) { option ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -2104,10 +2436,7 @@ private fun MaintenanceWorkPhotoPickerDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onDismiss) { Text("Выбрать") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
+            Button(onClick = onDismiss) { Text("Готово") }
         },
     )
 }
@@ -2340,6 +2669,7 @@ private fun CustomMaintenanceLineSheet(
     catalogNodes: List<CatalogNodeDto>,
     catalogLinks: List<CatalogLinkDto>,
     liveRoutings: List<RoutingSnapshotDto>,
+    availableLocalPhotoUris: List<String>,
     availablePhotos: List<MaintenanceWorkPhotoOption>,
     onDismiss: () -> Unit,
     onAdd: (MaintenanceLineEditorState) -> Unit,
@@ -2350,11 +2680,24 @@ private fun CustomMaintenanceLineSheet(
     var capturedPhotoUris by remember(editor.entityId, editor.lines.size) {
         mutableStateOf(emptyList<String>())
     }
+    var selectedLocalPhotoUris by remember(editor.entityId, editor.lines.size) {
+        mutableStateOf(emptySet<String>())
+    }
     var selectedMediaIds by remember(editor.entityId, editor.lines.size) {
         mutableStateOf(emptySet<String>())
     }
     var cameraOpen by remember(editor.entityId, editor.lines.size) { mutableStateOf(false) }
     var pickerOpen by remember(editor.entityId, editor.lines.size) { mutableStateOf(false) }
+    val androidContext = LocalContext.current
+    val galleryLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        capturedPhotoUris = (
+            capturedPhotoUris + uris.mapNotNull { uri ->
+                copyManagerPhotoToAppCache(androidContext, uri)
+            }
+            ).distinct()
+    }
     val stageRoutings = (editor.stages
         .filter { stage -> stage.kind == "REPAIR_WORK" }
         .map { stage -> stage.routing } + editor.lines
@@ -2415,6 +2758,7 @@ private fun CustomMaintenanceLineSheet(
                                         ?: availableRoutings.firstOrNull(),
                                 )
                                 capturedPhotoUris = emptyList()
+                                selectedLocalPhotoUris = emptySet()
                                 selectedMediaIds = emptySet()
                             },
                             label = { Text("Материал") },
@@ -2442,26 +2786,30 @@ private fun CustomMaintenanceLineSheet(
                     }
                     item {
                         Text("Фото работы", style = MaterialTheme.typography.labelLarge)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            OutlinedButton(
-                                onClick = { cameraOpen = true },
-                                modifier = Modifier.weight(1f),
-                            ) { Text("Добавить фото") }
-                            OutlinedButton(
-                                onClick = { pickerOpen = true },
-                                modifier = Modifier.weight(1f),
-                            ) { Text("Выбрать из сделанных") }
-                        }
+                        MaintenanceWorkPhotoActions(
+                            onAddPhoto = { cameraOpen = true },
+                            onChooseTaken = { pickerOpen = true },
+                            onChooseGallery = {
+                                galleryLauncher.launch(
+                                    arrayOf("image/*", "video/mp4", "video/webm"),
+                                )
+                            },
+                        )
                     }
                     item {
                         Text(
-                            if (capturedPhotoUris.isEmpty() && selectedMediaIds.isEmpty()) {
+                            if (
+                                capturedPhotoUris.isEmpty() &&
+                                selectedLocalPhotoUris.isEmpty() &&
+                                selectedMediaIds.isEmpty()
+                            ) {
                                 "Фото необязательны и относятся только к этой работе."
                             } else {
-                                "Выбрано фото: ${capturedPhotoUris.size + selectedMediaIds.size}"
+                                "Выбрано фото: ${
+                                    capturedPhotoUris.size +
+                                        selectedLocalPhotoUris.size +
+                                        selectedMediaIds.size
+                                }"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2573,9 +2921,10 @@ private fun CustomMaintenanceLineSheet(
                                         draft.lineType == "WORK"
                                     }.orEmpty(),
                                     customRouting = draft.routing,
-                                    photoUris = capturedPhotoUris.takeIf {
-                                        draft.lineType == "WORK"
-                                    }.orEmpty(),
+                                    photoUris = (capturedPhotoUris + selectedLocalPhotoUris)
+                                        .distinct()
+                                        .takeIf { draft.lineType == "WORK" }
+                                        .orEmpty(),
                                     mediaReferences = availablePhotos
                                         .filter { option ->
                                             option.reference.mediaId in selectedMediaIds
@@ -2613,8 +2962,11 @@ private fun CustomMaintenanceLineSheet(
     }
     if (pickerOpen) {
         MaintenanceWorkPhotoPickerDialog(
+            availableLocalPhotoUris = availableLocalPhotoUris,
             availablePhotos = availablePhotos,
+            selectedLocalPhotoUris = selectedLocalPhotoUris,
             selectedMediaIds = selectedMediaIds,
+            onSelectedLocalPhotoUrisChange = { selectedLocalPhotoUris = it },
             onSelectedMediaIdsChange = { selectedMediaIds = it },
             onDismiss = { pickerOpen = false },
         )
@@ -2625,6 +2977,7 @@ private fun CustomMaintenanceLineSheet(
 @Composable
 private fun MaintenanceLineEditSheet(
     line: MaintenanceLineEditorState,
+    availableLocalPhotoUris: List<String>,
     availablePhotos: List<MaintenanceWorkPhotoOption>,
     onDismiss: () -> Unit,
     onSave: (MaintenanceLineEditorState) -> Unit,
@@ -2632,11 +2985,22 @@ private fun MaintenanceLineEditSheet(
     var quantity by remember(line.id) { mutableStateOf(line.quantity) }
     var comment by remember(line.id) { mutableStateOf(line.comment) }
     var capturedPhotoUris by remember(line.id) { mutableStateOf(line.photoUris) }
+    var selectedLocalPhotoUris by remember(line.id) { mutableStateOf(emptySet<String>()) }
     var selectedMediaIds by remember(line.id) {
         mutableStateOf(line.mediaReferences.map(MediaReferenceDto::mediaId).toSet())
     }
     var cameraOpen by remember(line.id) { mutableStateOf(false) }
     var pickerOpen by remember(line.id) { mutableStateOf(false) }
+    val androidContext = LocalContext.current
+    val galleryLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        capturedPhotoUris = (
+            capturedPhotoUris + uris.mapNotNull { uri ->
+                copyManagerPhotoToAppCache(androidContext, uri)
+            }
+            ).distinct()
+    }
     val canSave = maintenanceQuantity(quantity)?.let { it > BigDecimal.ZERO } == true &&
         (line.lineType != "WORK" || comment.length <= 2_000)
     val selectedMedia = (
@@ -2680,21 +3044,21 @@ private fun MaintenanceLineEditSheet(
                     }
                     item {
                         Text("Фото работы", style = MaterialTheme.typography.labelLarge)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            OutlinedButton(
-                                onClick = { cameraOpen = true },
-                                modifier = Modifier.weight(1f),
-                            ) { Text("Добавить фото") }
-                            OutlinedButton(
-                                onClick = { pickerOpen = true },
-                                modifier = Modifier.weight(1f),
-                            ) { Text("Выбрать из сделанных") }
-                        }
+                        MaintenanceWorkPhotoActions(
+                            onAddPhoto = { cameraOpen = true },
+                            onChooseTaken = { pickerOpen = true },
+                            onChooseGallery = {
+                                galleryLauncher.launch(
+                                    arrayOf("image/*", "video/mp4", "video/webm"),
+                                )
+                            },
+                        )
                     }
-                    if (capturedPhotoUris.isEmpty() && selectedMedia.isEmpty()) {
+                    if (
+                        capturedPhotoUris.isEmpty() &&
+                        selectedLocalPhotoUris.isEmpty() &&
+                        selectedMedia.isEmpty()
+                    ) {
                         item {
                             Text(
                                 "Фото необязательны и относятся только к этой работе.",
@@ -2721,6 +3085,28 @@ private fun MaintenanceLineEditSheet(
                                 }
                             }
                         }
+                        availableLocalPhotoUris
+                            .filter(selectedLocalPhotoUris::contains)
+                            .forEach { uri ->
+                                item(key = "state-local:$uri") {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    ) {
+                                        ManagerPhotoPreview(
+                                            photoUri = uri,
+                                            modifier = Modifier.width(96.dp).aspectRatio(4f / 3f),
+                                        )
+                                        Text("Из фото состояния", modifier = Modifier.weight(1f))
+                                        TextButton(
+                                            onClick = {
+                                                selectedLocalPhotoUris -= uri
+                                            },
+                                        ) { Text("Убрать") }
+                                    }
+                                }
+                            }
                         availablePhotos
                             .filter { option -> option.reference.mediaId in selectedMediaIds }
                             .forEach { option ->
@@ -2755,9 +3141,10 @@ private fun MaintenanceLineEditSheet(
                                     comment = comment.trim().takeIf {
                                         line.lineType == "WORK"
                                     }.orEmpty(),
-                                    photoUris = capturedPhotoUris.takeIf {
-                                        line.lineType == "WORK"
-                                    }.orEmpty(),
+                                    photoUris = (capturedPhotoUris + selectedLocalPhotoUris)
+                                        .distinct()
+                                        .takeIf { line.lineType == "WORK" }
+                                        .orEmpty(),
                                     mediaReferences = selectedMedia.takeIf {
                                         line.lineType == "WORK"
                                     }.orEmpty(),
@@ -2793,8 +3180,11 @@ private fun MaintenanceLineEditSheet(
     }
     if (pickerOpen) {
         MaintenanceWorkPhotoPickerDialog(
+            availableLocalPhotoUris = availableLocalPhotoUris,
             availablePhotos = availablePhotos,
+            selectedLocalPhotoUris = selectedLocalPhotoUris,
             selectedMediaIds = selectedMediaIds,
+            onSelectedLocalPhotoUrisChange = { selectedLocalPhotoUris = it },
             onSelectedMediaIdsChange = { selectedMediaIds = it },
             onDismiss = { pickerOpen = false },
         )
@@ -2876,7 +3266,11 @@ private fun MaintenancePhotosStep(
                                 modifier = Modifier.weight(1f),
                             ) { Text("Фотография") }
                             FilledTonalButton(
-                                onClick = { galleryLauncher.launch(arrayOf("image/*")) },
+                                onClick = {
+                                    galleryLauncher.launch(
+                                        arrayOf("image/*", "video/mp4", "video/webm"),
+                                    )
+                                },
                                 enabled = !busy,
                                 modifier = Modifier.weight(1f),
                             ) { Text("Галерея") }
@@ -2888,12 +3282,16 @@ private fun MaintenancePhotosStep(
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                ) {
-                                    rowPhotos.forEach { photo ->
-                                        MaintenancePhotoGridCard(
-                                            photo = photo,
-                                            selected = editor.coverPhotoKey == photo.key,
-                                            enabled = !editor.readOnly && !busy,
+								) {
+									rowPhotos.forEach { photo ->
+										val coverSelectable = photo.uri?.let { uri ->
+											!isManagerVideoUri(uri)
+										} == true
+										MaintenancePhotoGridCard(
+											photo = photo,
+											selected = editor.coverPhotoKey == photo.key,
+											enabled = coverSelectable && !editor.readOnly && !busy,
+											removalEnabled = !busy,
                                             onSelect = { onSelectCover(photo.key) },
                                             onPreview = photo.uri?.let { uri ->
                                                 { galleryPhotoUri = uri }
@@ -2964,6 +3362,7 @@ private fun MaintenancePhotoGridCard(
     photo: MaintenancePhotoGridItem,
     selected: Boolean,
     enabled: Boolean,
+    removalEnabled: Boolean,
     onSelect: () -> Unit,
     onPreview: (() -> Unit)?,
     onRemove: (() -> Unit)?,
@@ -3037,12 +3436,12 @@ private fun MaintenancePhotoGridCard(
             if (onRemove != null) {
                 TextButton(
                     onClick = onRemove,
-                    enabled = enabled,
+                    enabled = removalEnabled,
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Удалить") }
             }
+        }
     }
-}
 }
 
 @Composable
@@ -3087,6 +3486,22 @@ private fun MaintenanceReviewStep(
         if (!emptyOutcome) {
             item {
                 ManagerPanel {
+                    val capitalChoiceEnabled = !editor.readOnly &&
+                        !alreadySubmitted &&
+                        !(editor.repairKind == "REWORK" && editor.entityId == null)
+                    ForceCapitalRepairOption(
+                        editor = editor,
+                        enabled = capitalChoiceEnabled,
+                        onEdit = onEdit,
+                    )
+                    if (editor.repairKind == "REWORK" && editor.entityId == null) {
+                        Text(
+                            "Новая доработка наследует выбор капитального ремонта " +
+                                "из исходного ремонта.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     RepairMovementLogisticsOptions(
                         editor = editor,
                         enabled = !editor.readOnly && !alreadySubmitted,
@@ -3095,6 +3510,14 @@ private fun MaintenanceReviewStep(
                     Text(
                         "Приоритет ремонта: ${editor.priority}",
                         style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        if (editor.forceCapitalRepair) {
+                            "Капитальный ремонт выбран явно"
+                        } else {
+                            "Явный капитальный ремонт не выбран"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
                     )
                     Text(
                         if (editor.movementToRepair) {
@@ -3279,6 +3702,22 @@ private fun MaintenanceEditorState.replaceMaintenanceLine(
         coverPhotoKey = coverPhotoKey.takeUnless { key ->
             key?.removePrefix("media:") in workMediaIds
         },
+    ).moveMaintenanceLocalPhotosToWork(
+        updatedLines.flatMap(MaintenanceLineEditorState::photoUris),
+    )
+}
+
+/** Moves condition-photo originals into work-line evidence without duplicating background uploads. */
+internal fun MaintenanceEditorState.moveMaintenanceLocalPhotosToWork(
+    workPhotoUris: Collection<String>,
+): MaintenanceEditorState {
+    val movedPhotoUris = photoUris.filterTo(mutableSetOf()) { it in workPhotoUris }
+    if (movedPhotoUris.isEmpty()) return this
+    return copy(
+        photoUris = photoUris.filterNot(movedPhotoUris::contains),
+        coverPhotoKey = coverPhotoKey.takeUnless { key ->
+            movedPhotoUris.any { uri -> maintenanceLocalPhotoKey(uri) == key }
+        },
     )
 }
 
@@ -3424,6 +3863,28 @@ private fun repairExecutionStateLabel(value: String): String = when (value) {
     "CANCELLED" -> "Отменён"
     else -> value
 }
+
+/** Maps the authoritative repair lifecycle to the compact capital-list status. */
+internal fun capitalRepairStatusLabel(repair: RepairDto): String = when (repair.acceptanceState) {
+    "PENDING" -> "Ожидание приёмки"
+    "IN_REWORK" -> "Доработка"
+    "ACCEPTED" -> "Принят"
+    "WRITTEN_OFF" -> "Списан"
+    else -> when (repair.executionState) {
+        "DRAFT" -> "Ожидает постановки"
+        // Maintenance does not own the driver's current movement state. The logistics board
+        // renders waiting/in-transit/arrival from its own projection; this screen stays exact.
+        "QUEUED" -> "В очереди капремонта"
+        "IN_PROGRESS" -> "На кап. ремонте"
+        "COMPLETED" -> "Ожидание приёмки"
+        "CANCELLED" -> "Отменён"
+        else -> repair.executionState
+    }
+}
+
+/** Formats the exact maintenance quantity and unit without client-side recalculation. */
+internal fun capitalRepairQuantityLabel(line: EstimateLineDto): String =
+    listOfNotNull(line.quantity, line.unit?.takeIf(String::isNotBlank)).joinToString(" ")
 
 private val quantityPattern = Regex("^(?:0|[1-9][0-9]*)(?:[,.][0-9]{1,3})?$")
 private val pricePattern = Regex("^(?:0|[1-9][0-9]*)(?:[,.][0-9]{1,2})?$")

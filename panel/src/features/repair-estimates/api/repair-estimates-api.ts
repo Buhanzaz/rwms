@@ -150,6 +150,7 @@ function buildDraftCommand(params: {
     media: [],
     maintenanceMediaReferences: params.draft.maintenanceMediaReferences ?? [],
     coverMediaId: params.draft.coverMediaId ?? null,
+    forceCapitalRepair: params.draft.forceCapitalRepair,
   }
 }
 

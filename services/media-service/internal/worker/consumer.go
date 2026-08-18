@@ -189,7 +189,7 @@ func (processor Processor) Process(ctx context.Context, job persistence.WorkerJo
 			return nil, err
 		}
 		// Unproved video dimensions remain zero in Go and are persisted as SQL NULL.
-		return []media.ProcessedVariant{result.Original}, nil
+		return []media.ProcessedVariant{result.Original, result.Playback}, nil
 	default:
 		return nil, fmt.Errorf("unsupported media kind")
 	}
@@ -821,6 +821,9 @@ func classifyProcessingFailure(err error) processingFailureClass {
 	}
 	if errors.Is(err, storage.ErrObjectVersionMismatch) {
 		return processingFailureTerminal
+	}
+	if errors.Is(err, media.ErrVideoTranscoderUnavailable) || errors.Is(err, media.ErrVideoProbeUnavailable) {
+		return processingFailureTransient
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, storage.ErrDependency) {
 		return processingFailureTransient

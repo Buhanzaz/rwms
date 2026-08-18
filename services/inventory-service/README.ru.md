@@ -92,6 +92,16 @@ transport: relay арендует ordered aggregate head, проверяет sto
 capture-release и publication flows сохраняют durable attempts, поэтому retry не создаёт второй
 session и не угадывает uncertain dependency result.
 
+План осмотра может содержать необязательный явный выбор `forceCapitalRepair`: отсутствие означает
+`false`, а JSON `null` отклоняется. Inventory хранит его в неизменяемых frozen-plan и final-plan
+evidence, включает в hash итогового плана/publication request и сам не пересчитывает maintenance
+complexity. План не может одновременно выбрать перемещение на ремонт и принудительный капремонт.
+Публичные frozen-plan lines возвращают неизменяемые ID, имя и тип очереди, уже записанные в source
+snapshot maintenance, поэтому клиенты восстанавливают произвольные и повторяющиеся catalog stages
+без дублирования строк или угадывания владельца; новая таблица или миграция inventory не нужны.
+Миграция [`V17__manual_capital_repair_selection.sql`](src/main/resources/db/migration/V17__manual_capital_repair_selection.sql)
+заполняет существующие evidence значением `false` и сохраняет invariant плана без работ.
+
 `INVENTORY_KAFKA_ENABLED` управляет Kafka relay и consumer beans.
 `INVENTORY_DEPENDENCIES_ENABLED` управляет private client-credential dependency gateway для
 warehouse, asset и maintenance.

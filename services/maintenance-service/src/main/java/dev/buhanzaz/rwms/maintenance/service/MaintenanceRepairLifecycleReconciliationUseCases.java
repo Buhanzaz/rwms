@@ -226,7 +226,7 @@ final class MaintenanceRepairLifecycleReconciliationUseCases {
       throw commandSupport.invalid("Repair needs at least one planned stage before queueing");
     }
     RepairComplexitySnapshot complexity =
-        repairModelSupport.repairComplexityFromStoredStages(repair.getWarehouseId(), repair.getId());
+        repairModelSupport.repairComplexityFromStoredStages(repair);
     RentalItemFactProjection fact = repairModelSupport.requireRentalItemFact(
         repair.getRentalItemId(), repair.getWarehouseId());
     boolean existingOwner = taskBoardSupport.primaryLifecycleOwnerWithLeaseIdentity(repair).isPresent();
@@ -753,8 +753,7 @@ final class MaintenanceRepairLifecycleReconciliationUseCases {
         synchronizedRepairs, repair.getRentalItemId(), repair.getWarehouseId());
 
     boolean capital = complexityRepairs.stream().map(
-        value -> repairModelSupport.repairComplexityFromStoredStages(
-            value.getWarehouseId(), value.getId()))
+        repairModelSupport::repairComplexityFromStoredStages)
         .anyMatch(complexity -> complexity.type() == RepairComplexity.CAPITAL);
     List<TaskCancellationPlan> cancellations = capital
         ? complexityRepairs.stream()

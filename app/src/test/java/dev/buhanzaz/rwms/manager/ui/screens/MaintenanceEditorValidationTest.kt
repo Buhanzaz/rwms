@@ -15,6 +15,34 @@ import org.junit.Test
 
 class MaintenanceEditorValidationTest {
     @Test
+    fun `selecting a condition photo for work moves it without duplicating the upload`() {
+        val movedPhotoUri = "file:///cache/manager-photos/moved.jpg"
+        val remainingPhotoUri = "file:///cache/manager-photos/remaining.jpg"
+        val editor = MaintenanceEditorState(
+            mode = MaintenanceEditorMode.ESTIMATE,
+            entityId = null,
+            expectedVersion = null,
+            readOnly = false,
+            selectedAsset = null,
+            dispatchDate = "2026-08-13",
+            sourceParty = "",
+            lines = emptyList(),
+            photoUris = listOf(movedPhotoUri, remainingPhotoUri),
+            readyMedia = emptyList(),
+            priority = 3,
+            step = 3,
+            coverPhotoKey = maintenanceLocalPhotoKey(movedPhotoUri),
+        )
+
+        val moved = editor.moveMaintenanceLocalPhotosToWork(
+            listOf(movedPhotoUri, "file:///cache/manager-photos/new-work-photo.jpg"),
+        )
+
+        assertThat(moved.photoUris).containsExactly(remainingPhotoUri)
+        assertThat(moved.coverPhotoKey).isNull()
+    }
+
+    @Test
     fun `initial details and submission require a repair priority`() {
         val photoUri = "content://rwms/maintenance/movement-priority.jpg"
         val editor = MaintenanceEditorState(

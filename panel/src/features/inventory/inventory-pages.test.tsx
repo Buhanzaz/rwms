@@ -418,6 +418,7 @@ function finalPlan(sessionRevision = 2) {
         repairScheduledDate: null,
         collisionCandidates: [],
         reconciliationDecision: null,
+        forceCapitalRepair: false,
       },
     ],
   }
@@ -751,6 +752,7 @@ describe("InventorySessionPage inspection", () => {
       primaryLineId: workLine.id,
       groupComment: "Сохранённая ручная группа",
       queueId: "repair-queue",
+      routingCatalogNodeId: "catalog-work-1",
       queueName: "Ремонт",
       routeQueueKind: "REPAIR" as const,
       sortOrder: 10,

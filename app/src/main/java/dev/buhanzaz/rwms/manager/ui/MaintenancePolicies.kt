@@ -263,6 +263,7 @@ internal fun MaintenanceEditorState.withMovementToRepair(
 ): MaintenanceEditorState = if (required) {
     copy(
         movementToRepair = true,
+        forceCapitalRepair = false,
         logisticsPlanningMode = logisticsPlanningMode
             ?.takeIf { mode -> mode in logisticsPlanningModes }
             ?: LOGISTICS_PLANNING_MODE_AUTO,
@@ -277,6 +278,23 @@ internal fun MaintenanceEditorState.withMovementToRepair(
         logisticsPlanningMode = null,
         logisticsScheduledDate = null,
     )
+}
+
+/**
+ * Selects the explicit capital-repair route and clears the alternative inbound repair movement.
+ * The owning service still calculates catalog-derived capital complexity independently.
+ */
+internal fun MaintenanceEditorState.withForceCapitalRepair(
+    required: Boolean,
+): MaintenanceEditorState = if (required) {
+    copy(
+        forceCapitalRepair = true,
+        movementToRepair = false,
+        logisticsPlanningMode = null,
+        logisticsScheduledDate = null,
+    )
+} else {
+    copy(forceCapitalRepair = false)
 }
 
 internal fun MaintenanceEditorState.withLogisticsPlanningMode(

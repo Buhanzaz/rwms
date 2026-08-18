@@ -539,6 +539,7 @@ function FindingEditor({
         repairCompletionMode: completion?.completionMode ?? null,
         movementToRepair:
           movementRouteAvailable && completion?.movementToRepair === true,
+        forceCapitalRepair: completion?.forceCapitalRepair === true,
         logisticsPlanningMode:
           movementRouteAvailable && completion?.movementToRepair === true
             ? completion.logisticsPlanningMode
@@ -733,6 +734,7 @@ function FindingEditor({
         pendingLabel="Сохраняем..."
         previewKey={`inventory:${session.id}:${finding.id}:${session.version}`}
         initialMovementToRepair={finding.movementToRepair}
+        initialForceCapitalRepair={finding.forceCapitalRepair}
         initialLogisticsPlanningMode={finding.logisticsPlanningMode}
         initialLogisticsScheduledDate={finding.logisticsScheduledDate}
         initialPriority={finding.repairPriority}
@@ -751,6 +753,7 @@ function FindingEditor({
             : undefined
         }
         movementRouteAvailable={movementRouteAvailable}
+        showForceCapitalRepair
         onOpenChange={(open) => {
           setCompletionOpen(open)
           if (!open) setCompletionEquipmentObservation(null)

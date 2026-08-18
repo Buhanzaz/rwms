@@ -187,6 +187,13 @@ the exact result. Lost responses and local commit races are replay-safe; rename
 or remap conflicts require audited administrator retry or abandonment and never
 silently delete the remote item.
 
+`V43__backfill_furniture_equipment_link_intents.sql` rehydrates one `PENDING`
+intent for each pre-durable furniture node UUID, preferring its active catalog
+snapshot over draft or superseded copies. The migration changes only
+maintenance-owned state; the existing reconciler subsequently establishes the
+asset external reference with its idempotent ensure command, while a missing or
+remapped live binding remains a visible failure rather than stale local truth.
+
 All maintenance-owned cross-service commands use immutable local plans and
 short prepare/remote/finalize boundaries. Remote calls reject an ambient local
 transaction. Transfer arrival receives the exact post-arrival asset version
@@ -201,12 +208,25 @@ catalog step. Without such a step they retain the current branch. A reverse
 edge is never followed automatically, so a cyclic catalog cannot reset the
 user to the root or grow navigation indefinitely.
 
+An estimate, its immutable revisions and the resulting repair retain the
+explicit `forceCapitalRepair` choice. Omission on a compatible command means
+`false`; explicit `null` is invalid. Effective capital complexity is the
+logical OR of that choice and any catalog work that already forces capital
+repair. A single plan cannot also request a movement to ordinary repair. Once
+queued, the repair uses the existing capital-repair placement,
+driver-movement, execution and acceptance lifecycle rather than creating a
+second queue owner or a client-side task.
+
 Evidence: [`services/maintenance-service/`](../../services/maintenance-service/),
 [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml),
 [`PropertyDispositionApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/disposition/application/PropertyDispositionApplicationService.java),
 [`FurnitureEquipmentLinkStore.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/FurnitureEquipmentLinkStore.java),
 [`MaintenanceApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceApplicationService.java),
+[`MaintenanceEstimateModelSupport.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceEstimateModelSupport.java),
+[`MaintenanceRepairModelSupport.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceRepairModelSupport.java),
 [`V38__durable_furniture_equipment_links.sql`](../../services/maintenance-service/src/main/resources/db/migration/V38__durable_furniture_equipment_links.sql),
+[`V43__backfill_furniture_equipment_link_intents.sql`](../../services/maintenance-service/src/main/resources/db/migration/V43__backfill_furniture_equipment_link_intents.sql),
+[`V44__manual_capital_repair_selection.sql`](../../services/maintenance-service/src/main/resources/db/migration/V44__manual_capital_repair_selection.sql),
 [`repair-estimate-catalog-picker.tsx`](../../panel/src/features/repair-estimates/repair-estimate-catalog-picker.tsx),
 [`MaintenanceScreen.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/screens/MaintenanceScreen.kt).
 
@@ -228,12 +248,26 @@ one finding, records passport facts, photos, furniture, works/materials and the
 proposed repair priority/movement choice. It does not start or complete the
 session and does not publish operational tasks.
 
+The field proposal may explicitly force capital repair. Inventory preserves
+that boolean in the finding plan snapshot, every reviewed final-plan candidate
+and the exact publication request. It does not infer or schedule the driver
+task: maintenance combines the flag with catalog-derived complexity and owns
+the resulting capital-repair lifecycle after publication.
+
 Membership is live while a session is active. An arrival at the inventoried
 warehouse becomes an expected uninspected item; a departure is excluded even
 if it had already been inspected. A terminal asset fact for either
 `WRITTEN_OFF` or `LOST` is a departure, so the cabin leaves the active
 population while prior evidence remains historical. A later return requires a
 new inspection.
+
+A durable ManagerApp first-inspection upload rereads the active finding before
+its final command. If a live asset-status or snapshot update advanced only the
+uninspected finding revision while media was uploading, it persists and uses
+that current fence. The rebase is allowed only for `NOT_INSPECTED` findings in
+`IDLE` or `SOURCE_CREATED`; an inactive finding, in-flight source creation, or
+saved/reinspection remains a visible fail-closed conflict and cannot be
+overwritten by background work.
 
 Inspection saves evidence and a frozen proposal only. Repair, movement and
 task-board effects are not created before inventory completion. Completion is
@@ -242,6 +276,14 @@ Existing future work is explicitly replaced or manually merged; work already
 started is preserved and overlapping works and materials are subtracted before
 the remaining successor is queued. A cabin that is `AFTER_RENT` and awaiting
 inspection produces a draft estimate for its remarks, not a repair task.
+
+Maintenance owns frozen-plan allocation. Every stage first consumes at most one
+matching catalog work line, then the remaining work for that exact routing
+queue, while materials select their direct or closest matching routed stage;
+each line can be consumed only once. Inventory exposes the recorded routing
+snapshot and panel/ManagerApp mirror that deterministic allocation for editing
+and readback. A custom-only stage therefore requires an explicit repair or
+holding queue and does not borrow a catalog work from another stage.
 
 Inspection evidence keeps general photographs separate from photographs of a
 specific work line: work-line references belong to the frozen plan and are not
@@ -262,6 +304,15 @@ requires a fresh inventory read; a cached/offline snapshot is not allowed to
 produce a version-fenced repeat command. A first, not-yet-saved inspection
 retains its normal offline-capable flow. Older revisions stay historical rather
 than being destructively deleted.
+
+Immediately before a durable queued first inspection, ManagerApp reads the
+active finding and then the session revision. If inventory-service returns
+`409 INVENTORY_VERSION_CONFLICT` with detail `Inventory revision is stale`
+after that preflight, the client performs one new read/rebase/save cycle. Each
+rebase still accepts only an active `NOT_INSPECTED` finding in `IDLE` or `SOURCE_CREATED`; an in-flight
+source, departed finding, or server-side inspection change fails closed rather
+than being overwritten. This is Android retry recovery only: inventory-service
+keeps ownership of the command, revision checks and inspection transition.
 
 For a supplement, Android resolves every retained logical media ID through the
 media owner's current `READY` projection and replaces only its generation before
@@ -305,6 +356,9 @@ Evidence: [`services/inventory-service/`](../../services/inventory-service/),
 [`inventory-service.yaml`](../../contracts/openapi/inventory-service.yaml),
 [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml),
 [`InventoryApplicationService.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryApplicationService.java),
+[`FindingPlanSnapshot.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/domain/FindingPlanSnapshot.java),
+[`V17__manual_capital_repair_selection.sql`](../../services/inventory-service/src/main/resources/db/migration/V17__manual_capital_repair_selection.sql),
+[`InventoryUploadRevisionPolicy.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/uploads/InventoryUploadRevisionPolicy.kt),
 [`InventoryIdempotencyService.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryIdempotencyService.java),
 [`InventoryIdempotencyRecoveryIntegrationTest.java`](../../services/inventory-service/src/test/java/dev/buhanzaz/rwms/inventory/service/InventoryIdempotencyRecoveryIntegrationTest.java),
 [`InventoryReadProjectionIntegrationTest.java`](../../services/inventory-service/src/test/java/dev/buhanzaz/rwms/inventory/InventoryReadProjectionIntegrationTest.java),
@@ -499,6 +553,18 @@ images nor accepts a mutable rotation command for new media. Its historical
 `rotationDegrees` read field is retained for compatible display of old assets,
 not as current media state to mutate.
 
+Video uploads retain the immutable original and, after finalization, are
+processed asynchronously into a bounded MP4 `PLAYBACK` derivative. The
+derivative uses H.264/AAC, strips mutable metadata, fits within 1280x720 without
+upscaling and remains subject to an explicit output-byte limit. Image variants
+and video playback are both media-owned; clients resolve only a scoped READY
+variant URL. Panel and ManagerApp bound independent upload transfers to four
+and do not retain a transfer slot while polling processing readiness. The panel
+renders a selected local original immediately, reports authenticated
+content-transfer byte progress below it and withholds cover/delete commands
+until the matching server item is ready; the blob preview remains disposable
+UI state rather than media truth.
+
 An exact create-upload replay normally returns the existing open session. If
 the session expired before any content was finalized, media-service issues a
 new session for the same logical media ID and immutable object identity. It
@@ -523,6 +589,8 @@ Evidence: [`services/media-service/`](../../services/media-service/),
 [`validator.go`](../../services/media-service/internal/auth/validator.go),
 [`consumer.go`](../../services/media-service/internal/worker/consumer.go),
 [`worker.go`](../../services/media-service/internal/persistence/worker.go),
+[`video_transcoder.go`](../../services/media-service/internal/media/video_transcoder.go),
+[`V12__video_playback_variant.sql`](../../services/media-service/db/migration/V12__video_playback_variant.sql),
 [`V11__bounded_media_processing_recovery.sql`](../../services/media-service/db/migration/V11__bounded_media_processing_recovery.sql),
 [`upload_session_recovery_integration_test.go`](../../services/media-service/internal/persistence/upload_session_recovery_integration_test.go).
 

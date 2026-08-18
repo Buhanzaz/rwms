@@ -25,6 +25,7 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 	v9 := flywayChecksum(mediamigration.V9)
 	v10 := flywayChecksum(mediamigration.V10)
 	v11 := flywayChecksum(mediamigration.V11)
+	v12 := flywayChecksum(mediamigration.V12)
 	const (
 		flyway124V1      int32 = -1307356325
 		flyway124V2      int32 = -573926044
@@ -39,13 +40,14 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 		flyway124V9      int32 = -122399598
 		flyway124V10     int32 = 1320117672
 		flyway124V11     int32 = -48948501
+		flyway124V12     int32 = 1877852350
 	)
 	if v1 != flyway124V1 || v2 != flyway124V2 || v3 != flyway124V3 || v4 != flyway124V4 ||
 		v4Guard != flyway124V4Guard || v5 != flyway124V5 || v5Guard != flyway124V5Guard ||
 		v6 != flyway124V6 || v7 != flyway124V7 || v8 != flyway124V8 || v9 != flyway124V9 ||
-		v10 != flyway124V10 || v11 != flyway124V11 {
+		v10 != flyway124V10 || v11 != flyway124V11 || v12 != flyway124V12 {
 		t.Fatalf(
-			"Flyway 12.4 checksum drift: V1=%d (want %d), V2=%d (want %d), V3=%d (want %d), V4=%d (want %d), V4.1=%d (want %d), V5=%d (want %d), V5.1=%d (want %d), V6=%d (want %d), V7=%d (want %d), V8=%d (want %d), V9=%d (want %d), V10=%d (want %d), V11=%d (want %d)",
+			"Flyway 12.4 checksum drift: V1=%d (want %d), V2=%d (want %d), V3=%d (want %d), V4=%d (want %d), V4.1=%d (want %d), V5=%d (want %d), V5.1=%d (want %d), V6=%d (want %d), V7=%d (want %d), V8=%d (want %d), V9=%d (want %d), V10=%d (want %d), V11=%d (want %d), V12=%d (want %d)",
 			v1,
 			flyway124V1,
 			v2,
@@ -72,6 +74,8 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 			flyway124V10,
 			v11,
 			flyway124V11,
+			v12,
+			flyway124V12,
 		)
 	}
 }
@@ -89,6 +93,7 @@ func TestVerifyMigrationHistoryAcceptsCanonicalAndOutOfOrderFlywayRanks(t *testi
 		canonical[0], canonical[1], canonical[2], canonical[3], canonical[5],
 		canonical[4], canonical[6], canonical[7], canonical[8], canonical[9], canonical[10],
 		canonical[11], canonical[12],
+		canonical[13],
 	}
 	if err := verifyMigrationHistory(outOfOrder); err != nil {
 		t.Fatalf("real out-of-order Flyway upgrade history rejected: %v", err)
@@ -204,6 +209,7 @@ func approvedMigrationHistory() []migrationHistoryRow {
 		{"9", "asset import worker", "V9__asset_import_worker.sql", mediamigration.V9},
 		{"10", "canonical cabin photo library", "V10__canonical_cabin_photo_library.sql", mediamigration.V10},
 		{"11", "bounded media processing recovery", "V11__bounded_media_processing_recovery.sql", mediamigration.V11},
+		{"12", "video playback variant", "V12__video_playback_variant.sql", mediamigration.V12},
 	}
 	history := make([]migrationHistoryRow, 0, len(migrations))
 	for _, migration := range migrations {
@@ -257,6 +263,24 @@ func TestBoundedProcessingRecoveryMigrationIsAdditiveAndPayloadFree(t *testing.T
 	} {
 		if strings.Contains(sql, forbidden) {
 			t.Errorf("V11 contains destructive or payload-bearing statement %q", forbidden)
+		}
+	}
+}
+
+func TestVideoPlaybackMigrationOnlyExpandsTheVariantConstraint(t *testing.T) {
+	sql := strings.ToLower(string(mediamigration.V12))
+	for _, required := range []string{
+		"drop constraint media_variant_variant_check",
+		"add constraint media_variant_variant_check",
+		"'small', 'medium', 'large', 'playback', 'original'",
+	} {
+		if !strings.Contains(sql, required) {
+			t.Errorf("V12 does not contain %q", required)
+		}
+	}
+	for _, forbidden := range []string{"drop table", "truncate table", "delete from", "update media_"} {
+		if strings.Contains(sql, forbidden) {
+			t.Errorf("V12 contains destructive data statement %q", forbidden)
 		}
 	}
 }

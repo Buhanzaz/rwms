@@ -298,6 +298,7 @@ internal class ManagerMaintenancePersistenceCoordinator(
                     stages = content.stages,
                     existingMedia = existingMedia,
                     existingCoverMediaId = existingCoverMediaId,
+                    forceCapitalRepair = editor.forceCapitalRepair,
                     replaceKind = replaceKind,
                     expectedLinkedRepairVersion = editor.linkedRepairExpectedVersion,
                     amendmentIdempotencyKey = if (
@@ -469,6 +470,7 @@ internal class ManagerMaintenancePersistenceCoordinator(
                 plan = content.stages,
                 mediaReferences = content.mediaReferences,
                 coverMediaId = content.coverMediaId,
+                forceCapitalRepair = editor.forceCapitalRepair,
             ),
         ).toPersistedMaintenanceEntity()
 
@@ -505,6 +507,7 @@ internal class ManagerMaintenancePersistenceCoordinator(
                         plan = content.stages,
                         mediaReferences = content.mediaReferences,
                         coverMediaId = content.coverMediaId,
+                        forceCapitalRepair = editor.forceCapitalRepair,
                     ),
                 ).toPersistedMaintenanceEntity()
             }
@@ -577,6 +580,7 @@ internal class ManagerMaintenancePersistenceCoordinator(
                             plan = content.stages,
                             mediaReferences = content.mediaReferences,
                             coverMediaId = content.coverMediaId,
+                            forceCapitalRepair = editor.forceCapitalRepair,
                         ),
                     ).toPersistedMaintenanceEntity()
                 } else {
@@ -591,6 +595,7 @@ internal class ManagerMaintenancePersistenceCoordinator(
                             plan = content.stages,
                             mediaReferences = content.mediaReferences,
                             coverMediaId = content.coverMediaId,
+                            forceCapitalRepair = editor.forceCapitalRepair,
                         ),
                     ).toPersistedMaintenanceEntity()
                 }
@@ -605,6 +610,7 @@ internal class ManagerMaintenancePersistenceCoordinator(
                     stages = content.stages,
                     mediaReferences = content.mediaReferences,
                     coverMediaId = content.coverMediaId,
+                    forceCapitalRepair = editor.forceCapitalRepair,
                 ),
             ).toPersistedMaintenanceEntity()
         }

@@ -35,7 +35,6 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -73,6 +72,8 @@ import dev.buhanzaz.rwms.manager.ui.InventoryEditorState
 import dev.buhanzaz.rwms.manager.ui.InventoryReinspectionMode
 import dev.buhanzaz.rwms.manager.ui.InventorySemanticChange
 import dev.buhanzaz.rwms.manager.ui.ManagerUiState
+import dev.buhanzaz.rwms.manager.ui.findExactInventoryRentalItem
+import dev.buhanzaz.rwms.manager.ui.hasInventoryRentalItemNumberPrefix
 import dev.buhanzaz.rwms.manager.ui.inventoryBusinessStatus
 import dev.buhanzaz.rwms.manager.ui.inventoryBusinessStatusLabel
 import dev.buhanzaz.rwms.manager.ui.inventoryCategoryOptions
@@ -85,17 +86,17 @@ import dev.buhanzaz.rwms.manager.ui.inventoryEquipmentQuantityText
 import dev.buhanzaz.rwms.manager.ui.inventoryFurnitureCatalog
 import dev.buhanzaz.rwms.manager.ui.inventoryFinishingOptions
 import dev.buhanzaz.rwms.manager.ui.inventoryInspectionLabel
+import dev.buhanzaz.rwms.manager.ui.inventoryReinspectionOpenMode
 import dev.buhanzaz.rwms.manager.ui.inventoryPassportFacts
 import dev.buhanzaz.rwms.manager.ui.inventoryPhotoValidationError
-import dev.buhanzaz.rwms.manager.ui.inventoryRentalItemSuggestions
 import dev.buhanzaz.rwms.manager.ui.inventoryRentalTypeOptions
 import dev.buhanzaz.rwms.manager.ui.inventorySemanticChanges
+import dev.buhanzaz.rwms.manager.ui.matchesInventoryNumberPrefix
 import dev.buhanzaz.rwms.manager.ui.persistedInventoryMediaReferences
 import dev.buhanzaz.rwms.manager.ui.requiresInventoryReinspectionChoice
-import dev.buhanzaz.rwms.manager.ui.hasExactInventoryRentalItemNumber
-import dev.buhanzaz.rwms.manager.ui.withInventoryRentalType
 import dev.buhanzaz.rwms.manager.ui.toMaintenancePlanEditor
-import dev.buhanzaz.rwms.manager.ui.LOGISTICS_PLANNING_MODE_AUTO
+import dev.buhanzaz.rwms.manager.ui.withInventoryRentalType
+import dev.buhanzaz.rwms.manager.ui.withMovementToRepair
 import dev.buhanzaz.rwms.manager.ui.components.EmptyState
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPanel
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPhotoPreview
@@ -104,16 +105,13 @@ import dev.buhanzaz.rwms.manager.ui.components.ManagerScreenScaffold
 import dev.buhanzaz.rwms.manager.ui.components.StatusPill
 import dev.buhanzaz.rwms.manager.ui.components.StatusPillEmphasis
 import dev.buhanzaz.rwms.manager.ui.components.copyManagerPhotoToAppCache
+import dev.buhanzaz.rwms.manager.ui.components.isManagerVideoUri
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 
 internal const val INVENTORY_FIELD_ONLY_EMPTY_STATE_DESCRIPTION =
     "Активную инвентаризацию начинает менеджер в панели. Когда сессия появится для " +
         "выбранного склада, здесь можно будет проверять бытовки."
-
-internal const val INVENTORY_FIELD_ONLY_SESSION_NOTICE =
-    "Телефон сохраняет только проверку бытовки. Общие задачи ремонта и перемещения " +
-        "появятся после завершения инвентаризации в панели."
 
 internal const val INVENTORY_AFTER_RENT_ESTIMATE_NOTICE =
     "Замечания по бытовке после аренды станут черновиком сметы после общей сверки " +
@@ -122,9 +120,42 @@ internal const val INVENTORY_AFTER_RENT_ESTIMATE_NOTICE =
 internal const val INVENTORY_REINSPECTION_DIALOG_TITLE = "Бытовка уже проверена"
 internal const val INVENTORY_REINSPECTION_SUPPLEMENT_LABEL = "Дополнить осмотр"
 internal const val INVENTORY_REINSPECTION_REPLACE_LABEL = "Перезаписать осмотр"
+internal const val INVENTORY_REVIEW_EDIT_LABEL = "Изменить осмотр"
 
 internal fun inventoryAfterRentEstimateNotice(status: String?): String? =
     INVENTORY_AFTER_RENT_ESTIMATE_NOTICE.takeIf { status == "AFTER_RENT" }
+
+@Composable
+private fun InventoryStepActions(
+    primaryLabel: String,
+    primaryEnabled: Boolean,
+    onPrimary: () -> Unit,
+    readOnly: Boolean,
+    onRequestEdit: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Button(
+            onClick = onPrimary,
+            enabled = primaryEnabled,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(primaryLabel)
+        }
+        if (readOnly) {
+            OutlinedButton(
+                onClick = onRequestEdit,
+                enabled = primaryEnabled,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(INVENTORY_REVIEW_EDIT_LABEL)
+            }
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -157,9 +188,6 @@ fun InventoryDashboardScreen(
     var selectedConflictFindingId by remember(uiState.inventorySession?.id) {
         mutableStateOf<String?>(null)
     }
-    var selectedReinspectionFinding by remember(uiState.inventorySession?.id) {
-        mutableStateOf<InventoryFindingDto?>(null)
-    }
     var filters by remember(uiState.inventorySession?.id) {
         mutableStateOf(InventoryHistoryFilters())
     }
@@ -168,7 +196,11 @@ fun InventoryDashboardScreen(
             selectedNumber,
             { finding ->
                 number = ""
-                selectedReinspectionFinding = finding
+                onOpenInventoryFinding(
+                    finding,
+                    finding.inventoryReinspectionOpenMode(),
+                    onOpenEditor,
+                )
             },
             {
                 number = ""
@@ -179,14 +211,16 @@ fun InventoryDashboardScreen(
     val openExistingNumber: (String) -> Unit = prepareNumber
     val addNewNumber: (String) -> Unit = prepareNumber
     val openFinding: (InventoryFindingDto) -> Unit = { finding ->
-        if (finding.requiresInventoryReinspectionChoice()) {
-            selectedReinspectionFinding = finding
-        } else {
-            onOpenInventoryFinding(finding, InventoryReinspectionMode.SUPPLEMENT, onOpenEditor)
-        }
+        onOpenInventoryFinding(
+            finding,
+            finding.inventoryReinspectionOpenMode(),
+            onOpenEditor,
+        )
     }
-    val filteredFindings = remember(uiState.inventoryFindings, filters) {
-        uiState.inventoryFindings.filter(filters::matches)
+    val filteredFindings = remember(uiState.inventoryFindings, filters, number) {
+        uiState.inventoryFindings
+            .filter { finding -> finding.matchesInventoryNumberPrefix(number) }
+            .filter(filters::matches)
     }
 
     ManagerScreenScaffold(title = "Инвентаризация", onBack = onBack) { padding ->
@@ -234,15 +268,17 @@ fun InventoryDashboardScreen(
                 if (filteredFindings.isEmpty()) {
                     item {
                         EmptyState(
-                            title = if (uiState.inventoryFindings.isEmpty()) {
-                                "Проверок пока нет"
-                            } else {
-                                "По выбранным фильтрам ничего нет"
+                            title = when {
+                                uiState.inventoryFindings.isEmpty() -> "Проверок пока нет"
+                                number.isNotBlank() -> "По номеру ничего нет"
+                                else -> "По выбранным фильтрам ничего нет"
                             },
-                            description = if (uiState.inventoryFindings.isEmpty()) {
-                                "Результаты появятся здесь после первой проверки номера."
-                            } else {
-                                "Измените или сбросьте фильтры истории."
+                            description = when {
+                                uiState.inventoryFindings.isEmpty() ->
+                                    "Результаты появятся здесь после первой проверки номера."
+                                number.isNotBlank() ->
+                                    "Продолжайте ввод или добавьте бытовку, если номер отсутствует в базе."
+                                else -> "Измените или сбросьте фильтры истории."
                             },
                         )
                     }
@@ -298,30 +334,6 @@ fun InventoryDashboardScreen(
         )
     }
 
-    selectedReinspectionFinding?.let { finding ->
-        InventoryReinspectionDialog(
-            finding = finding,
-            busy = uiState.busy,
-            onDismiss = { selectedReinspectionFinding = null },
-            onSupplement = {
-                selectedReinspectionFinding = null
-                onOpenInventoryFinding(
-                    finding,
-                    InventoryReinspectionMode.SUPPLEMENT,
-                    onOpenEditor,
-                )
-            },
-            onReplace = {
-                selectedReinspectionFinding = null
-                onOpenInventoryFinding(
-                    finding,
-                    InventoryReinspectionMode.REPLACE,
-                    onOpenEditor,
-                )
-            },
-        )
-    }
-
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -336,8 +348,8 @@ private fun InventoryNumberSearch(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
-    val suggestions = inventoryRentalItemSuggestions(rentalItems, value)
-    val canAdd = value.isNotBlank() && !hasExactInventoryRentalItemNumber(rentalItems, value)
+    val canAdd = value.isNotBlank() &&
+        !hasInventoryRentalItemNumberPrefix(rentalItems, value)
     val chooseExisting: (String) -> Unit = { number ->
         expanded = false
         focusManager.clearFocus()
@@ -350,9 +362,9 @@ private fun InventoryNumberSearch(
     }
 
     ExposedDropdownMenuBox(
-        expanded = expanded,
+        expanded = expanded && canAdd,
         onExpandedChange = { nextExpanded ->
-            if (enabled) expanded = nextExpanded
+            if (enabled) expanded = nextExpanded && canAdd
         },
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -373,16 +385,14 @@ private fun InventoryNumberSearch(
                 },
             label = { Text("Номер бытовки") },
             trailingIcon = {
-                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded && canAdd)
             },
             singleLine = true,
             enabled = enabled,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(
                 onSearch = {
-                    val exact = rentalItems.firstOrNull {
-                        it.number.equals(value.trim(), ignoreCase = true)
-                    }
+                    val exact = findExactInventoryRentalItem(rentalItems, value)
                     if (exact != null) {
                         chooseExisting(exact.number)
                     } else if (canAdd) {
@@ -392,48 +402,14 @@ private fun InventoryNumberSearch(
             ),
         )
         ExposedDropdownMenu(
-            expanded = expanded && (suggestions.isNotEmpty() || canAdd),
+            expanded = expanded && canAdd,
             onDismissRequest = { expanded = false },
-            modifier = Modifier.heightIn(max = 320.dp),
         ) {
-            if (canAdd) {
-                DropdownMenuItem(
-                    text = { Text("+ Добавить бытовку «${value.trim()}»") },
-                    onClick = { addNew(value.trim()) },
-                    modifier = Modifier.heightIn(min = 56.dp),
-                )
-                if (suggestions.isNotEmpty()) HorizontalDivider()
-            }
-            suggestions.forEach { item ->
-                DropdownMenuItem(
-                    text = {
-                        Column {
-                            Text(item.number)
-                            item.rentalType?.takeIf(String::isNotBlank)?.let {
-                                Text(
-                                    it,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            Text(
-                                "Просмотреть",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                    },
-                    trailingIcon = {
-                        Text(
-                            "→",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    },
-                    onClick = { chooseExisting(item.number) },
-                    modifier = Modifier.heightIn(min = 56.dp),
-                )
-            }
+            DropdownMenuItem(
+                text = { Text("+ Добавить бытовку «${value.trim()}»") },
+                onClick = { addNew(value.trim()) },
+                modifier = Modifier.heightIn(min = 56.dp),
+            )
         }
     }
 }
@@ -498,7 +474,6 @@ private fun InventoryHistoryHeader(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("История сессии", style = MaterialTheme.typography.titleMedium)
         InventoryHistoryFilterMenu(
             defaultLabel = "Проверка",
             selectedLabel = filters.inspection?.label,
@@ -579,19 +554,10 @@ private fun <T> InventoryHistoryFilterMenu(
 @Composable
 private fun InventorySessionSummary(session: InventorySessionDto) {
     ManagerPanel {
-        StatusPill(
-            label = inventoryLifecycleLabel(session.lifecycle),
-            emphasis = StatusPillEmphasis.Positive,
-        )
         Text("Активная сессия", style = MaterialTheme.typography.titleLarge)
         Text(
             "Проверено ${session.inspectedCount} из ${session.expectedCount}; найдено: ${session.findingCount}.",
             style = MaterialTheme.typography.bodyMedium,
-        )
-        Text(
-            INVENTORY_FIELD_ONLY_SESSION_NOTICE,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -761,8 +727,9 @@ private fun InventoryPassportFact(
     }
 }
 
+/** Lets the manager retain or replace a saved inspection before local editing is enabled. */
 @Composable
-private fun InventoryReinspectionDialog(
+internal fun InventoryReinspectionDialog(
     finding: InventoryFindingDto,
     busy: Boolean,
     onDismiss: () -> Unit,
@@ -993,6 +960,7 @@ fun InventoryEditorScreen(
     onEdit: ((InventoryEditorState) -> InventoryEditorState) -> Unit,
     onChooseOrigin: (String) -> Unit,
     onOpenPhotos: () -> Unit,
+    onRequestEdit: () -> Unit,
 ) {
     if (editor == null) {
         ManagerScreenScaffold(title = "Проверка бытовки", onBack = onBack) { padding ->
@@ -1005,7 +973,7 @@ fun InventoryEditorScreen(
         return
     }
     var showOriginPrompt by remember(editor.findingId) {
-        mutableStateOf(editor.isCreation && editor.creationOrigin == null)
+        mutableStateOf(!editor.readOnly && editor.isCreation && editor.creationOrigin == null)
     }
 
     ManagerScreenScaffold(title = "Проверка бытовки", onBack = onBack) { padding ->
@@ -1079,24 +1047,30 @@ fun InventoryEditorScreen(
                                 modifier = Modifier.weight(1f),
                                 style = MaterialTheme.typography.bodyLarge,
                             )
-                            TextButton(onClick = { showOriginPrompt = true }) {
-                                Text("Изменить")
+                            if (!editor.readOnly) {
+                                TextButton(onClick = { showOriginPrompt = true }) {
+                                    Text("Изменить")
+                                }
                             }
                         }
                     }
                 }
             }
             item {
-                PassportEditor(editor = editor, onEdit = onEdit)
+                PassportEditor(
+                    editor = editor,
+                    readOnly = editor.readOnly,
+                    onEdit = onEdit,
+                )
             }
             item {
-                Button(
-                    onClick = onOpenPhotos,
-                    enabled = editor.canInspect && !busy,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Добавить фотографии")
-                }
+                InventoryStepActions(
+                    primaryLabel = if (editor.readOnly) "Далее" else "Добавить фотографии",
+                    primaryEnabled = (editor.readOnly || editor.canInspect) && !busy,
+                    onPrimary = onOpenPhotos,
+                    readOnly = editor.readOnly,
+                    onRequestEdit = onRequestEdit,
+                )
             }
         }
     }
@@ -1141,6 +1115,7 @@ fun InventoryEditorScreen(
 @Composable
 private fun PassportEditor(
     editor: InventoryEditorState,
+    readOnly: Boolean,
     onEdit: ((InventoryEditorState) -> InventoryEditorState) -> Unit,
 ) {
     ManagerPanel {
@@ -1161,7 +1136,7 @@ private fun PassportEditor(
             label = "Категория",
             value = editor.category,
             options = editor.inventoryCategoryOptions(),
-            enabled = !editor.isCreation || editor.creationOrigin == "ADDED_USED",
+            enabled = !readOnly && (!editor.isCreation || editor.creationOrigin == "ADDED_USED"),
         ) { value ->
             onEdit { it.copy(category = value) }
         }
@@ -1169,6 +1144,7 @@ private fun PassportEditor(
             label = "Тип бытовки",
             value = editor.rentalType,
             options = editor.inventoryRentalTypeOptions(),
+            enabled = !readOnly,
         ) { value ->
             onEdit { it.withInventoryRentalType(value) }
         }
@@ -1176,7 +1152,7 @@ private fun PassportEditor(
             label = "Габариты",
             value = editor.dimensions,
             options = editor.inventoryDimensionOptions(),
-            enabled = editor.rentalType.isNotBlank(),
+            enabled = !readOnly && editor.rentalType.isNotBlank(),
         ) { value ->
             onEdit { it.copy(dimensions = value) }
         }
@@ -1184,56 +1160,9 @@ private fun PassportEditor(
             label = "Отделка",
             value = editor.finishing,
             options = editor.inventoryFinishingOptions(),
+            enabled = !readOnly,
         ) { value ->
             onEdit { it.copy(finishing = value) }
-        }
-        InventoryCharacteristicsSelector(editor = editor, onEdit = onEdit)
-        Text("Линолеум", style = MaterialTheme.typography.labelLarge)
-        Row(
-            modifier = Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            FilterChip(
-                selected = editor.linoleum == true,
-                onClick = { onEdit { it.copy(linoleum = true) } },
-                label = { Text("Есть") },
-            )
-            FilterChip(
-                selected = editor.linoleum == false,
-                onClick = { onEdit { it.copy(linoleum = false) } },
-                label = { Text("Нет") },
-            )
-            if (!editor.isCreation) {
-                FilterChip(
-                    selected = editor.linoleum == null,
-                    onClick = { onEdit { it.copy(linoleum = null) } },
-                    label = { Text("Не указано") },
-                )
-            }
-        }
-        if (editor.isSanitary) {
-            Text("Настройки санблока", style = MaterialTheme.typography.titleSmall)
-            InventoryCounter(
-                label = "Туалеты",
-                value = editor.sanitaryToilets,
-            ) { value ->
-                onEdit { it.copy(sanitaryToilets = value) }
-            }
-            InventoryCounter(
-                label = "Раковины",
-                value = editor.sanitarySinks,
-            ) { value ->
-                onEdit { it.copy(sanitarySinks = value) }
-            }
-            InventoryCounter(
-                label = "Душевые",
-                value = editor.sanitaryShowers,
-            ) { value ->
-                onEdit { it.copy(sanitaryShowers = value) }
-            }
-        }
-        PassportTextField("Комментарий проверки", editor.comment, singleLine = false) { value ->
-            onEdit { it.copy(comment = value) }
         }
     }
 }
@@ -1297,6 +1226,7 @@ private fun PassportDropdown(
 @Composable
 private fun InventoryCharacteristicsSelector(
     editor: InventoryEditorState,
+    enabled: Boolean,
     onEdit: ((InventoryEditorState) -> InventoryEditorState) -> Unit,
 ) {
     var expanded by remember(editor.findingId) { mutableStateOf(false) }
@@ -1304,7 +1234,7 @@ private fun InventoryCharacteristicsSelector(
     ExposedDropdownMenuBox(
         expanded = expanded,
         onExpandedChange = { nextExpanded ->
-            if (options.isNotEmpty()) expanded = nextExpanded
+            if (enabled && options.isNotEmpty()) expanded = nextExpanded
         },
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -1315,7 +1245,7 @@ private fun InventoryCharacteristicsSelector(
                 .fillMaxWidth()
                 .menuAnchor(
                     type = ExposedDropdownMenuAnchorType.PrimaryNotEditable,
-                    enabled = options.isNotEmpty(),
+                    enabled = enabled && options.isNotEmpty(),
                 ),
             label = { Text("Характеристики") },
             placeholder = { Text("Выберите характеристики") },
@@ -1323,7 +1253,7 @@ private fun InventoryCharacteristicsSelector(
                 ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
             },
             readOnly = true,
-            enabled = options.isNotEmpty(),
+            enabled = enabled && options.isNotEmpty(),
             singleLine = true,
             shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
         )
@@ -1364,6 +1294,7 @@ private fun InventoryCharacteristicsSelector(
 private fun InventoryCounter(
     label: String,
     value: Int,
+    enabled: Boolean,
     onValueChange: (Int) -> Unit,
 ) {
     Row(
@@ -1377,7 +1308,7 @@ private fun InventoryCounter(
         )
         OutlinedButton(
             onClick = { onValueChange((value - 1).coerceAtLeast(0)) },
-            enabled = value > 0,
+            enabled = enabled && value > 0,
             modifier = Modifier.heightIn(min = 48.dp),
         ) {
             Text("−")
@@ -1389,6 +1320,7 @@ private fun InventoryCounter(
         )
         OutlinedButton(
             onClick = { onValueChange(value + 1) },
+            enabled = enabled,
             modifier = Modifier.heightIn(min = 48.dp),
         ) {
             Text("+")
@@ -1401,6 +1333,7 @@ private fun PassportTextField(
     label: String,
     value: String,
     singleLine: Boolean = true,
+    enabled: Boolean = true,
     onValueChange: (String) -> Unit,
 ) {
     OutlinedTextField(
@@ -1410,6 +1343,7 @@ private fun PassportTextField(
         label = { Text(label) },
         singleLine = singleLine,
         minLines = if (singleLine) 1 else 3,
+        enabled = enabled,
     )
 }
 
@@ -1424,6 +1358,7 @@ fun InventoryPhotosScreen(
     onSelectCoverPhoto: (String) -> Unit,
     onRemovePhoto: (String) -> Unit,
     onAddFurniture: () -> Unit,
+    onRequestEdit: () -> Unit,
 ) {
     if (editor == null) {
         ManagerScreenScaffold(title = "Фотографии", onBack = onBack) { padding ->
@@ -1467,7 +1402,7 @@ fun InventoryPhotosScreen(
                     start = 16.dp,
                     top = 16.dp,
                     end = 16.dp,
-                    bottom = 96.dp,
+                    bottom = if (editor.readOnly) 152.dp else 96.dp,
                 ),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -1497,12 +1432,16 @@ fun InventoryPhotosScreen(
                         ) {
                             FilledTonalButton(
                                 onClick = onOpenCamera,
-                                enabled = !busy,
+                                enabled = !editor.readOnly && !busy,
                                 modifier = Modifier.weight(1f),
                             ) { Text("Фотография") }
                             FilledTonalButton(
-                                onClick = { galleryLauncher.launch(arrayOf("image/*")) },
-                                enabled = !busy,
+                                onClick = {
+                                    galleryLauncher.launch(
+                                        arrayOf("image/*", "video/mp4", "video/webm"),
+                                    )
+                                },
+                                enabled = !editor.readOnly && !busy,
                                 modifier = Modifier.weight(1f),
                             ) { Text("Галерея") }
                         }
@@ -1523,6 +1462,7 @@ fun InventoryPhotosScreen(
                         ) {
                             photos.forEach { uri ->
                                 val selected = editor.coverPhotoUri == uri
+                                val video = isManagerVideoUri(uri)
                                 Column(modifier = Modifier.weight(1f)) {
                                     Box(
                                         modifier = Modifier
@@ -1540,18 +1480,29 @@ fun InventoryPhotosScreen(
                                             .padding(3.dp)
                                             .inventoryPhotoGesture(
                                                 onClick = {
-                                                    if (!busy) onSelectCoverPhoto(uri)
+                                                    if (video) {
+                                                        galleryPhotoUri = uri
+                                                    } else if (!editor.readOnly && !busy) {
+                                                        onSelectCoverPhoto(uri)
+                                                    }
                                                 },
                                                 onLongPress = { galleryPhotoUri = uri },
                                             )
                                             .semantics {
                                                 role = Role.Button
-                                                contentDescription = if (selected) {
+                                                contentDescription = if (video) {
+                                                    "Видеозапись; открыть просмотр"
+                                                } else if (selected) {
                                                     "Титульная фотография"
                                                 } else {
                                                     "Выбрать титульной фотографией; удерживайте для просмотра"
                                                 }
-                                                if (!busy) {
+                                                if (video) {
+                                                    onClick(label = "Открыть видеозапись") {
+                                                        galleryPhotoUri = uri
+                                                        true
+                                                    }
+                                                } else if (!editor.readOnly && !busy) {
                                                     onClick(label = "Выбрать титульной фотографией") {
                                                         onSelectCoverPhoto(uri)
                                                         true
@@ -1568,11 +1519,13 @@ fun InventoryPhotosScreen(
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
-                                    TextButton(
-                                        onClick = { onRemovePhoto(uri) },
-                                        enabled = !busy,
-                                        modifier = Modifier.fillMaxWidth(),
-                                    ) { Text("Удалить") }
+                                    if (!editor.readOnly) {
+                                        TextButton(
+                                            onClick = { onRemovePhoto(uri) },
+                                            enabled = !busy,
+                                            modifier = Modifier.fillMaxWidth(),
+                                        ) { Text("Удалить") }
+                                    }
                                 }
                             }
                             if (photos.size == 1) Box(modifier = Modifier.weight(1f))
@@ -1589,14 +1542,16 @@ fun InventoryPhotosScreen(
                     }
                 }
             }
-            Button(
-                onClick = onAddFurniture,
-                enabled = photoError == null && !busy,
+            InventoryStepActions(
+                primaryLabel = if (editor.readOnly) "Далее" else "Добавить мебель",
+                primaryEnabled = (editor.readOnly || photoError == null) && !busy,
+                onPrimary = onAddFurniture,
+                readOnly = editor.readOnly,
+                onRequestEdit = onRequestEdit,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp),
-            ) { Text("Добавить мебель") }
+            )
         }
     }
     galleryPhotoUri?.let { initialPhoto ->
@@ -1605,7 +1560,7 @@ fun InventoryPhotosScreen(
             title = "Фото состояния",
             photoUris = editor.photoUris,
             initialIndex = initialIndex,
-            onRemovePhotoUri = onRemovePhoto,
+            onRemovePhotoUri = onRemovePhoto.takeUnless { editor.readOnly },
             onDismiss = { galleryPhotoUri = null },
         )
     }
@@ -1620,6 +1575,8 @@ fun InventoryFurnitureDecisionScreen(
     onBack: () -> Unit,
     onFurnitureAbsent: () -> Unit,
     onFurniturePresent: () -> Unit,
+    onReviewContinue: () -> Unit,
+    onRequestEdit: () -> Unit,
 ) {
     if (editor == null) {
         ManagerScreenScaffold(title = "Мебель", onBack = onBack) { padding ->
@@ -1637,18 +1594,39 @@ fun InventoryFurnitureDecisionScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             ManagerPanel {
-                Text("Есть мебель в бытовке?", style = MaterialTheme.typography.titleLarge)
                 Text(
-                    "Сохраните фактическое наличие мебели как доказательство осмотра. " +
-                        "Задание на комплектацию или перемещение из телефона не создаётся.",
+                    if (editor.readOnly) "Мебель в бытовке" else "Есть мебель в бытовке?",
+                    style = MaterialTheme.typography.titleLarge,
+                )
+                Text(
+                    if (editor.readOnly) {
+                        when (editor.equipmentObservationRequested) {
+                            true -> "В сохранённом осмотре мебель отмечена как присутствующая."
+                            false -> "В сохранённом осмотре мебель отмечена как отсутствующая."
+                            null -> "В сохранённом осмотре наличие мебели не указано."
+                        }
+                    } else {
+                        "Сохраните фактическое наличие мебели как доказательство осмотра. " +
+                            "Задание на комплектацию или перемещение из телефона не создаётся."
+                    },
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            OutlinedButton(onClick = onFurnitureAbsent, modifier = Modifier.fillMaxWidth()) {
-                Text("Мебели нет")
-            }
-            Button(onClick = onFurniturePresent, modifier = Modifier.fillMaxWidth()) {
-                Text("Мебель есть")
+            if (editor.readOnly) {
+                InventoryStepActions(
+                    primaryLabel = "Далее",
+                    primaryEnabled = true,
+                    onPrimary = onReviewContinue,
+                    readOnly = true,
+                    onRequestEdit = onRequestEdit,
+                )
+            } else {
+                OutlinedButton(onClick = onFurnitureAbsent, modifier = Modifier.fillMaxWidth()) {
+                    Text("Мебели нет")
+                }
+                Button(onClick = onFurniturePresent, modifier = Modifier.fillMaxWidth()) {
+                    Text("Мебель есть")
+                }
             }
         }
     }
@@ -1661,6 +1639,7 @@ fun InventoryFurnitureScreen(
     onBack: () -> Unit,
     onEdit: ((InventoryEditorState) -> InventoryEditorState) -> Unit,
     onContinue: () -> Unit,
+    onRequestEdit: () -> Unit,
 ) {
     if (editor == null) {
         ManagerScreenScaffold(title = "Комплектация мебелью", onBack = onBack) { padding ->
@@ -1723,7 +1702,8 @@ fun InventoryFurnitureScreen(
                                         )
                                     }
                                 },
-                                enabled = !busy && (currentText.toLongOrNull() ?: 0L) > 0L,
+                                enabled = !editor.readOnly && !busy &&
+                                    (currentText.toLongOrNull() ?: 0L) > 0L,
                             ) { Text("−") }
                             OutlinedTextField(
                                 value = currentText,
@@ -1738,7 +1718,7 @@ fun InventoryFurnitureScreen(
                                     }
                                 },
                                 modifier = Modifier.width(92.dp).padding(horizontal = 8.dp),
-                                enabled = !busy,
+                                enabled = !editor.readOnly && !busy,
                                 singleLine = true,
                                 textStyle = MaterialTheme.typography.titleMedium.copy(
                                     textAlign = TextAlign.Center,
@@ -1755,7 +1735,7 @@ fun InventoryFurnitureScreen(
                                         )
                                     }
                                 },
-                                enabled = !busy,
+                                enabled = !editor.readOnly && !busy,
                             ) { Text("+") }
                         }
                     }
@@ -1765,11 +1745,13 @@ fun InventoryFurnitureScreen(
                 validationError?.let { error ->
                     Text(error, color = MaterialTheme.colorScheme.error)
                 }
-                Button(
-                    onClick = onContinue,
-                    enabled = validationError == null && !busy,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Продолжить") }
+                InventoryStepActions(
+                    primaryLabel = "Продолжить",
+                    primaryEnabled = (editor.readOnly || validationError == null) && !busy,
+                    onPrimary = onContinue,
+                    readOnly = editor.readOnly,
+                    onRequestEdit = onRequestEdit,
+                )
             }
         }
     }
@@ -1792,6 +1774,7 @@ fun InventoryCatalogScreen(
     onEditPlan: ((dev.buhanzaz.rwms.manager.ui.MaintenanceEditorState) ->
         dev.buhanzaz.rwms.manager.ui.MaintenanceEditorState) -> Unit,
     onContinue: () -> Unit,
+    onRequestEdit: () -> Unit,
 ) {
     if (editor == null) {
         ManagerScreenScaffold(title = "Каталог работ", onBack = onBack) { padding ->
@@ -1811,8 +1794,127 @@ fun InventoryCatalogScreen(
             onRefreshCatalog = onRefreshCatalog,
             onEdit = onEditPlan,
             onContinue = onContinue,
+            secondaryActionLabel = INVENTORY_REVIEW_EDIT_LABEL.takeIf { editor.readOnly },
+            onSecondaryAction = onRequestEdit,
             modifier = Modifier.fillMaxSize().padding(padding),
         )
+    }
+}
+
+/** Collects late inspection observations after work selection and before final confirmation. */
+@Composable
+fun InventoryInspectionDetailsScreen(
+    editor: InventoryEditorState?,
+    busy: Boolean,
+    onBack: () -> Unit,
+    onEdit: ((InventoryEditorState) -> InventoryEditorState) -> Unit,
+    onContinue: () -> Unit,
+    onRequestEdit: () -> Unit,
+) {
+    if (editor == null) {
+        ManagerScreenScaffold(title = "Детали проверки", onBack = onBack) { padding ->
+            EmptyState(
+                title = "Проверка не найдена",
+                description = "Вернитесь к инвентаризации и откройте бытовку заново.",
+                modifier = Modifier.padding(padding),
+            )
+        }
+        return
+    }
+    val validationError = when {
+        editor.isCreation && editor.linoleum == null -> "Укажите, есть ли линолеум"
+        editor.comment.length > 2_000 -> "Комментарий не может быть длиннее 2000 символов"
+        else -> null
+    }
+    ManagerScreenScaffold(title = "Детали проверки", onBack = onBack) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item {
+                ManagerPanel {
+                    InventoryCharacteristicsSelector(
+                        editor = editor,
+                        enabled = !editor.readOnly,
+                        onEdit = onEdit,
+                    )
+                    Text("Линолеум", style = MaterialTheme.typography.labelLarge)
+                    Row(
+                        modifier = Modifier.horizontalScroll(
+                            androidx.compose.foundation.rememberScrollState(),
+                        ),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilterChip(
+                            selected = editor.linoleum == true,
+                            onClick = { onEdit { it.copy(linoleum = true) } },
+                            enabled = !editor.readOnly,
+                            label = { Text("Есть") },
+                        )
+                        FilterChip(
+                            selected = editor.linoleum == false,
+                            onClick = { onEdit { it.copy(linoleum = false) } },
+                            enabled = !editor.readOnly,
+                            label = { Text("Нет") },
+                        )
+                        if (!editor.isCreation) {
+                            FilterChip(
+                                selected = editor.linoleum == null,
+                                onClick = { onEdit { it.copy(linoleum = null) } },
+                                enabled = !editor.readOnly,
+                                label = { Text("Не указано") },
+                            )
+                        }
+                    }
+                    if (editor.isSanitary) {
+                        Text("Настройки санблока", style = MaterialTheme.typography.titleSmall)
+                        InventoryCounter(
+                            label = "Туалеты",
+                            value = editor.sanitaryToilets,
+                            enabled = !editor.readOnly,
+                        ) { value ->
+                            onEdit { it.copy(sanitaryToilets = value) }
+                        }
+                        InventoryCounter(
+                            label = "Раковины",
+                            value = editor.sanitarySinks,
+                            enabled = !editor.readOnly,
+                        ) { value ->
+                            onEdit { it.copy(sanitarySinks = value) }
+                        }
+                        InventoryCounter(
+                            label = "Душевые",
+                            value = editor.sanitaryShowers,
+                            enabled = !editor.readOnly,
+                        ) { value ->
+                            onEdit { it.copy(sanitaryShowers = value) }
+                        }
+                    }
+                    PassportTextField(
+                        label = "Комментарий проверки",
+                        value = editor.comment,
+                        singleLine = false,
+                        enabled = !editor.readOnly,
+                    ) { value ->
+                        onEdit { it.copy(comment = value.take(2_000)) }
+                    }
+                }
+            }
+            validationError?.let { error ->
+                item { Text(error, color = MaterialTheme.colorScheme.error) }
+            }
+            item {
+                InventoryStepActions(
+                    primaryLabel = "Продолжить",
+                    primaryEnabled = (editor.readOnly ||
+                        (editor.canInspect && validationError == null)) && !busy,
+                    onPrimary = onContinue,
+                    readOnly = editor.readOnly,
+                    onRequestEdit = onRequestEdit,
+                )
+            }
+        }
     }
 }
 
@@ -1824,6 +1926,8 @@ fun InventoryConfirmationScreen(
     onEditPlan: ((dev.buhanzaz.rwms.manager.ui.MaintenanceEditorState) ->
         dev.buhanzaz.rwms.manager.ui.MaintenanceEditorState) -> Unit,
     onSave: (() -> Unit) -> Unit,
+    onCloseReview: () -> Unit,
+    onRequestEdit: () -> Unit,
 ) {
     if (editor == null) {
         ManagerScreenScaffold(title = "Подтверждение", onBack = onBack) { padding ->
@@ -1887,21 +1991,27 @@ fun InventoryConfirmationScreen(
                 ManagerPanel {
                     InventoryRepairDeliveryOptions(
                         editor = maintenancePlan,
-                        enabled = !busy,
+                        enabled = !editor.readOnly && !busy,
                         onEdit = onEditPlan,
                     )
                 }
             }
-            validationError?.let { error ->
+            validationError?.takeUnless { editor.readOnly }?.let { error ->
                 Text(error, color = MaterialTheme.colorScheme.error)
             }
-            Button(
-                onClick = { onSave(onBack) },
-                enabled = validationError == null && !busy,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(if (editor.isCreation) "Подтвердить добавление" else "Подтвердить проверку")
-            }
+            InventoryStepActions(
+                primaryLabel = when {
+                    editor.readOnly -> "Закрыть просмотр"
+                    editor.isCreation -> "Подтвердить добавление"
+                    else -> "Подтвердить проверку"
+                },
+                primaryEnabled = (editor.readOnly || validationError == null) && !busy,
+                onPrimary = {
+                    if (editor.readOnly) onCloseReview() else onSave(onBack)
+                },
+                readOnly = editor.readOnly,
+                onRequestEdit = onRequestEdit,
+            )
         }
     }
 }
@@ -1939,17 +2049,7 @@ private fun InventoryRepairDeliveryOptions(
         Checkbox(
             checked = editor.movementToRepair,
             onCheckedChange = { deliverToRepair ->
-                onEdit { current ->
-                    current.copy(
-                        movementToRepair = deliverToRepair,
-                        logisticsPlanningMode = if (deliverToRepair) {
-                            LOGISTICS_PLANNING_MODE_AUTO
-                        } else {
-                            null
-                        },
-                        logisticsScheduledDate = null,
-                    )
-                }
+                onEdit { current -> current.withMovementToRepair(deliverToRepair) }
             },
             enabled = enabled,
         )
@@ -1958,6 +2058,11 @@ private fun InventoryRepairDeliveryOptions(
             modifier = Modifier.weight(1f),
         )
     }
+    ForceCapitalRepairOption(
+        editor = editor,
+        enabled = enabled,
+        onEdit = onEdit,
+    )
     Text(
         "Телефон сохраняет только проверку бытовки. Задача ремонта или перемещения " +
             "из этой проверки не создаётся.",
@@ -2001,10 +2106,4 @@ private fun Modifier.inventoryPhotoGesture(
             InventoryPhotoGestureAction.SelectCover -> if (up != null) onClick()
         }
     }
-}
-
-private fun inventoryLifecycleLabel(value: String): String = when (value) {
-    "ACTIVE" -> "Активна"
-    "COMPLETED" -> "Завершена"
-    else -> value
 }

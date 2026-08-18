@@ -131,6 +131,7 @@ export type MaintenanceEstimateRevision = {
   total: string
   reason: string | null
   recordedAt: string
+  forceCapitalRepair: boolean
 }
 
 export type MaintenanceEstimate = {
@@ -147,6 +148,7 @@ export type MaintenanceEstimate = {
   createdAt: string
   completedAt: string | null
   actor: MaintenanceActorSnapshot
+  forceCapitalRepair: boolean
 }
 
 /** A maintenance-owned draft that was created for one return-document line. */
@@ -172,6 +174,7 @@ export type MaintenanceEstimateWrite = {
   plan: MaintenancePlanStageInput[]
   mediaReferences: MaintenanceMediaReference[]
   coverMediaId?: string | null
+  forceCapitalRepair?: boolean
 }
 
 export type MaintenanceDeliverySnapshot = {
@@ -271,6 +274,7 @@ export type MaintenanceRepair = {
     forcedCapital: boolean
   }
   movementToRepair: boolean
+  forceCapitalRepair: boolean
   logisticsPlanningMode: "AUTO" | "FIXED_DATE"
   logisticsScheduledDate: string | null
   createdAt: string
@@ -539,6 +543,7 @@ export function createDirectMaintenanceRepair(
     plan: MaintenancePlanStageInput[]
     mediaReferences: MaintenanceMediaReference[]
     coverMediaId: string | null
+    forceCapitalRepair?: boolean
   }
 ) {
   return bearerRequest<MaintenanceRepair>(
@@ -556,7 +561,8 @@ export function replaceMaintenanceRepairPlan(
   lines: MaintenanceEstimateLineInput[],
   stages: MaintenancePlanStageInput[],
   mediaReferences: MaintenanceMediaReference[],
-  coverMediaId: string | null
+  coverMediaId: string | null,
+  forceCapitalRepair = false
 ) {
   return bearerRequest<MaintenanceRepair>(
     accessToken,
@@ -567,6 +573,7 @@ export function replaceMaintenanceRepairPlan(
       stages,
       mediaReferences,
       coverMediaId,
+      forceCapitalRepair,
     })
   )
 }

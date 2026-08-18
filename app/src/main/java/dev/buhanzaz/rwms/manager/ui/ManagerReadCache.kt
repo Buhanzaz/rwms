@@ -173,6 +173,7 @@ internal data class CachedMaintenanceRead(
     val estimatesEtag: String? = null,
     val repairs: RepairPageDto? = null,
     val repairsEtag: String? = null,
+    val capitalRepairs: RepairPageDto? = null,
     val assetLabels: Map<String, String> = emptyMap(),
 )
 
