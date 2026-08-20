@@ -37,6 +37,8 @@ request, record the conflict in `open-questions.md` and ask for a decision.
   [`cabin-lifecycle.ru.md`](cabin-lifecycle.ru.md) — the complete confirmed
   cabin path from registration and booking through shipment, return, estimate,
   repair, inventory, transfer and disposition, including operational variants.
+- [`cabin-cad.md`](cabin-cad.md) — the standalone Fusion STEP → Master
+  Template → parametric CAD flow and its explicit boundary from RWMS services.
 - [`service-catalog.md`](service-catalog.md) — active clients, deployables,
   state ownership, permitted boundaries and primary evidence.
 - [`domain-logic.md`](domain-logic.md) — confirmed business responsibilities

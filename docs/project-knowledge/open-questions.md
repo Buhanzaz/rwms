@@ -4,6 +4,62 @@ Use this file only for unresolved contradictions or product decisions that
 block a safe implementation. This is not a backlog and does not authorize
 work.
 
+## Explicitly Empty Inventory Passport
+
+- Status: `Open`
+- Affected owner and consumers: inventory-service as evidence owner;
+  asset-service as cabin-passport owner; panel and ManagerApp as clients.
+- Requested behavior: a completed inventory makes a `PRESENT` passport the
+  complete warehouse truth, while `ABSENT` deliberately leaves the asset
+  passport unchanged.
+- Conflicting contract or invariant: inventory also permits
+  `EXPLICIT_EMPTY`, but asset-service requires active catalog identities for
+  type, dimensions, finishing and category. Clearing those required identities
+  would create a cabin that cannot satisfy the current asset model; interpreting
+  it as `ABSENT` would discard an explicit field decision.
+- Evidence:
+  [`InventoryFinding.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/domain/InventoryFinding.java),
+  [`InventoryPublicationService.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryPublicationService.java),
+  [`InventoryAssetOutcomeService.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/InventoryAssetOutcomeService.java),
+  and [`asset-service.yaml`](../../contracts/openapi/asset-service.yaml).
+- Smallest decision needed: decide whether a future `EXPLICIT_EMPTY` passport
+  should be rejected at inventory completion, mapped to a dedicated
+  incomplete/unknown asset state, or assigned explicit catalog placeholder
+  values.
+- Resolution and date: none. Publication fails closed for `EXPLICIT_EMPTY`;
+  the current completed plan contains zero such observations.
+
+## Missing Cabin At Inventory: Rental Or Write-Off
+
+- Status: `Open`
+- Affected owner and consumers: inventory-service as session/finding owner;
+  logistics-service as rental/order/shipment owner; maintenance-service as
+  write-off-decision owner; asset-service as cabin/custody owner; panel and
+  ManagerApp as clients.
+- Requested behavior: at inventory completion, a cabin not found at the
+  warehouse should be resolvable either as rented (client, address, driver and
+  actual shipment date, without deducting its contents from warehouse stock)
+  or as written off.
+- Conflicting contract or invariant: current inventory publication has no
+  rental-creation command. Logistics creates rental state through its canonical
+  inquiry/order/document transitions, while maintenance requires a proposal
+  with reason and global-administrator approval before a write-off becomes
+  effective. Treating either option as an immediate inventory mutation would
+  bypass the owning aggregate, custody/accounting rules and audit trail.
+- Evidence:
+  [`inventory-service.yaml`](../../contracts/openapi/inventory-service.yaml),
+  [`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml),
+  [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml),
+  [`InventoryPublicationService.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryPublicationService.java),
+  and [`PropertyDispositionApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/disposition/application/PropertyDispositionApplicationService.java).
+- Smallest decision needed: confirm whether “rented” must create a full
+  retroactive logistics order/shipment against an existing client and driver,
+  including the authoritative actual date and furniture-custody rule; confirm
+  that “write off” creates the normal approval proposal rather than applying an
+  immediate terminal status.
+- Resolution and date: none. The current task does not fabricate either owner
+  transition until this meaning is confirmed.
+
 ## Cabin Dossier Detail And Historical Snapshot Boundary
 
 - Status: `Open`
@@ -197,16 +253,18 @@ work.
   administrators.
 - Requested behavior: every published APK must be traceable to one reviewed
   source revision and expose a verifiable version, signature and checksum.
-- Conflicting contract or invariant: the manager download site has two manually
-  kept HTML implementations and publishes a mutable debug APK with hand-entered
-  version/date/size metadata. The worker site now separately publishes a
-  reviewed signed 0.1.11 APK through one validated manifest, a versioned
-  Worker-owned download route and a SHA-256 check, but there is still no shared
-  release registry, documented signing authority/retention policy or
-  organization-wide checksum-verification flow. DriverApp has no assigned
-  download-site or published release contract yet.
+- Conflicting contract or invariant: the manager download site still has two
+  manually kept page implementations and currently distributes a debug-signed
+  test APK. Its active release now has a Manager-owned immutable route and one
+  integrity record covering source, package, version, signer and SHA-256. The
+  worker site separately publishes through its own validated manifest and
+  Worker-owned route, but there is still no shared release registry, documented
+  production-signing authority/retention policy or organization-wide
+  checksum-verification flow. DriverApp has no assigned download-site or
+  published release contract yet.
 - Evidence:
   [`manager app build`](../../app/build.gradle.kts),
+  [`manager release record`](../../manager-download-site/release.json),
   [`download preparation`](../../manager-download-site/scripts/prepare-sites-worker.mjs),
   [`Next page`](../../manager-download-site/app/page.jsx),
   [`static page`](../../manager-download-site/public/index.html),
@@ -218,9 +276,11 @@ work.
   signing authority and key custody, artifact repository/retention policy, and
   manifest fields used as the only rendered version source.
 - Resolution and date: the WorkerApp publication portion was completed on
-  2026-08-10 under an explicit reviewed release scope. The overall question
-  remains open for ManagerApp, DriverApp and the organization-wide release
-  policy.
+  2026-08-10. On 2026-08-13 the ManagerApp `0.3.37-debug` publication replaced
+  its mutable external artifact link with a versioned Manager-owned asset and
+  recorded the exact reviewed source, signing certificate and checksum. The
+  overall question remains open for production signing, the duplicate Manager
+  page implementation, DriverApp and the organization-wide release policy.
 
 ## Media Terminal Retry Authorization
 

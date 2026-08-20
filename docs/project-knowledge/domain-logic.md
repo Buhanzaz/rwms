@@ -134,14 +134,15 @@ entry identity.
 
 A slinger joins with the current worker-group identity. If that group is
 executing another entry, task-board pauses that entire entry and later resumes
-it when the joint logistics task closes. Every configured logistics secondary
-binding is required, interrupting and notified; an active logistics queue must
-explicitly configure at least one slinger class rather than relying on an
-invented fallback. A primary assignment without a group does not satisfy that
-secondary binding even when the driver is also slinger-qualified. The driver
-and joined slinger share one evidence set and terminal transition. Completion
-by either participant requires at least one
-result photo whose media generation is `READY`, then removes the task for both.
+it when the joint logistics task closes. Configured logistics secondary
+participation is optional, interrupting and notified: the driver may close with
+a ready photo before a slinger accepts. The WorkerApp control says `Взять
+задание`, but sends the existing `JOIN` command with the current group. A
+primary assignment without a group never becomes a secondary assignment even
+when the driver is also slinger-qualified. The driver and any joined slinger
+share one evidence set and terminal transition. Completion by the driver or
+joined slinger requires at least one result photo whose media generation is
+`READY`, then removes the task for both.
 
 Evidence: [`services/task-board-service/`](../../services/task-board-service/),
 [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
@@ -261,21 +262,100 @@ if it had already been inspected. A terminal asset fact for either
 population while prior evidence remains historical. A later return requires a
 new inspection.
 
-A durable ManagerApp first-inspection upload rereads the active finding before
-its final command. If a live asset-status or snapshot update advanced only the
+A warehouse MANAGE user can explicitly refresh a stale active session from a fresh, read-only
+asset capture. Inventory checks the expected session revision before the remote capture and again
+under the local apply lock, then atomically feeds captured arrivals/current snapshots and
+target-session departures through the existing membership journal. A target departure never
+changes another warehouse's active session merely because that asset was absent from this capture.
+The command retains findings, inspection/furniture evidence, media references and movement history;
+it restarts only the derived furniture review and marks any final plan stale. Furniture review
+seeding treats the client-written `quantity` field as authoritative and accepts stored
+`observedQuantity` review facts for compatibility. A final plan with no maintenance work sends a
+required empty preflight list, which maintenance accepts as a valid empty candidate set.
+
+Media references are exact finding-revision evidence. Membership/current-snapshot refresh,
+source-asset attachment, conflict resolution, furniture confirmation and owner-proof closure may
+advance a finding without changing that evidence; each such transition copies only the immediately
+preceding exact media set inside the same inventory transaction. An inspection save still replaces
+the set with exactly what the client submitted, including an intentional empty set. Inventory migration
+[`V18__carry_forward_inventory_finding_media.sql`](../../services/inventory-service/src/main/resources/db/migration/V18__carry_forward_inventory_finding_media.sql)
+repairs pre-fix drift only when the retained cover ID proves the current revision is missing its
+media, and copies the newest whole prior set containing that cover without rewriting historical
+references or media-service objects.
+
+A durable ManagerApp inspection upload rereads the active finding before its
+final command. If a live asset-status or snapshot update advanced only an
 uninspected finding revision while media was uploading, it persists and uses
-that current fence. The rebase is allowed only for `NOT_INSPECTED` findings in
-`IDLE` or `SOURCE_CREATED`; an inactive finding, in-flight source creation, or
-saved/reinspection remains a visible fail-closed conflict and cannot be
-overwritten by background work.
+that current fence. A saved supplement or replacement proceeds only while the
+finding still has the exact revision captured by the freshly opened editor.
+Both paths require `IDLE` or `SOURCE_CREATED`; an inactive finding, in-flight
+source creation, or newer saved inspection remains a visible fail-closed
+conflict and cannot be overwritten by background work.
 
 Inspection saves evidence and a frozen proposal only. Repair, movement and
 task-board effects are not created before inventory completion. Completion is
-fenced by the reviewed plan version and publishes durable, idempotent intents.
-Existing future work is explicitly replaced or manually merged; work already
-started is preserved and overlapping works and materials are subtracted before
-the remaining successor is queued. A cabin that is `AFTER_RENT` and awaiting
-inspection produces a draft estimate for its remarks, not a repair task.
+fenced by the reviewed plan version and publishes durable, idempotent intents
+for every found cabin, including no-work findings. After the reviewed furniture
+snapshot applies, each intent first asks asset-service to make the completed
+finding current truth: `FREE` for no work, `REPAIR` for ordinary work and
+`CAPITAL_REPAIR` for an explicit capital choice. That asset-owned transaction
+supersedes non-terminal rental, transfer, reservation, presentation and lease
+bindings without deleting their rows or events; `LOST`, `WRITTEN_OFF` and a
+wrong warehouse remain conflicts. Asset furniture reconciliation still fences
+the immutable completed-plan identity, warehouse, catalog and terminal state,
+but a non-terminal status/version drift caused by that preceding authoritative
+asset outcome is not a reason to reject the same reviewed furniture counts.
+
+The same asset command also consumes the passport observation frozen with the
+exact publication intent. `PRESENT` is a complete authoritative passport: type,
+dimensions, finishing and category must resolve by exact active catalog names;
+the complete characteristic set is replaced after splitting every raw string or
+array element on commas; and a missing characteristic value clears that set,
+while a missing/non-boolean linoleum value stores `null`. `ABSENT` preserves the
+asset passport. Catalog resolution happens before any binding release and the
+passport, characteristics, status, asset events, receipt and per-asset watermark
+commit in one asset transaction. An old status-only watermark may adopt the
+same immutable source once; afterwards an equal-time passport-payload change is
+a conflict. Inventory migration
+[`V23__freeze_inventory_outcome_passport_observation.sql`](../../services/inventory-service/src/main/resources/db/migration/V23__freeze_inventory_outcome_passport_observation.sql)
+backfills only revision-fenced finding/final-plan evidence, and asset migration
+[`V39__inventory_outcome_passport_watermark.sql`](../../services/asset-service/src/main/resources/db/migration/V39__inventory_outcome_passport_watermark.sql)
+does not rewrite existing cabin passports.
+
+Publication then projects the finding's exact image set as the current
+media-service cabin folder, applies one plan-wide logistics outcome and finally
+calls maintenance for either the reviewed work or an explicit no-work cleanup.
+Media keeps every older association and MinIO object as an archive, while
+current covers and presentation resolve only from the latest inventory folder.
+Logistics supersedes active rental/document lines and their cancellable tasks;
+maintenance supersedes non-terminal estimates, repairs, task/driver effects and
+leases before materializing the selected repair/capital-repair successor, or
+before confirming `FREE` has no current maintenance work. All three owners keep
+permanent receipts and latest-completed-inventory watermarks, so a stale session
+cannot overwrite a newer one and an exact retry is recoverable without a
+distributed transaction. A same-source no-work retry may carry a higher
+`authoritativeAssetVersion` after passport application; maintenance preserves
+the immutable outcome coordinator but records that exact invocation fingerprint
+and response in its own receipt.
+
+Every intent in one completed plan carries the same durable reapplication
+generation. A scheduler retry or recovery from an unknown remote result keeps
+that generation and therefore the same owner-local idempotency keys. Only the
+explicit completed-history command advances it, once for the whole plan, so
+all owner services deliberately reassert the same immutable inventory source.
+Asset preserves an active operation lease on that same-source reassertion
+because it can already belong to the exact inventory repair; maintenance and
+logistics supersede unrelated predecessor work and release its lease using the
+stored owner and fencing token.
+
+A MANAGE command on completed inventory history fences the exact session
+revision and final-plan version/SHA, then rebuilds durable local work without a
+remote call. It creates missing no-work outcomes and requeues every existing
+publication, including a prior `SUCCEEDED` row, because an older success cannot
+prove that the later media, logistics and maintenance-cleanup steps were
+applied. Publication attempts and responses, finding revisions, photos and
+media-service/MinIO objects remain evidence; ordinary schedulers replay the
+immutable plan through owner-local idempotency receipts.
 
 Maintenance owns frozen-plan allocation. Every stage first consumes at most one
 matching catalog work line, then the remaining work for that exact routing
@@ -305,14 +385,18 @@ produce a version-fenced repeat command. A first, not-yet-saved inspection
 retains its normal offline-capable flow. Older revisions stay historical rather
 than being destructively deleted.
 
-Immediately before a durable queued first inspection, ManagerApp reads the
-active finding and then the session revision. If inventory-service returns
-`409 INVENTORY_VERSION_CONFLICT` with detail `Inventory revision is stale`
-after that preflight, the client performs one new read/rebase/save cycle. Each
-rebase still accepts only an active `NOT_INSPECTED` finding in `IDLE` or `SOURCE_CREATED`; an in-flight
-source, departed finding, or server-side inspection change fails closed rather
-than being overwritten. This is Android retry recovery only: inventory-service
-keeps ownership of the command, revision checks and inspection transition.
+Immediately before every durable queued inspection, ManagerApp reads the active
+finding and then the session revision. If inventory-service returns `409
+INVENTORY_VERSION_CONFLICT` with detail `Inventory revision is stale` after
+that preflight, the client performs one new read/fence/save cycle. An initial
+`NOT_INSPECTED` finding may adopt its current revision; a supplement or
+replacement must still match its original finding revision exactly. An
+in-flight source, departed finding, or newer server-side inspection fails
+closed rather than being overwritten. The panel uses the same separation: it
+refreshes the broad session revision immediately before save but retains the
+editor's finding revision. These are client recovery rules only;
+inventory-service keeps ownership of the command, revision checks and
+inspection transition.
 
 For a supplement, Android resolves every retained logical media ID through the
 media owner's current `READY` projection and replaces only its generation before
@@ -354,14 +438,24 @@ If logistics reports any existing or uncertain task, recovery fails closed.
 
 Evidence: [`services/inventory-service/`](../../services/inventory-service/),
 [`inventory-service.yaml`](../../contracts/openapi/inventory-service.yaml),
+[`asset-service.yaml`](../../contracts/openapi/asset-service.yaml),
 [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml),
+[`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml),
+[`media-service.yaml`](../../contracts/openapi/media-service.yaml),
 [`InventoryApplicationService.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryApplicationService.java),
+[`InventorySessionService.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventorySessionService.java),
+[`InventoryFindingService.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryFindingService.java),
+[`InventoryReviewService.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryReviewService.java),
 [`FindingPlanSnapshot.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/domain/FindingPlanSnapshot.java),
 [`V17__manual_capital_repair_selection.sql`](../../services/inventory-service/src/main/resources/db/migration/V17__manual_capital_repair_selection.sql),
 [`InventoryUploadRevisionPolicy.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/uploads/InventoryUploadRevisionPolicy.kt),
 [`InventoryIdempotencyService.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryIdempotencyService.java),
 [`InventoryIdempotencyRecoveryIntegrationTest.java`](../../services/inventory-service/src/test/java/dev/buhanzaz/rwms/inventory/service/InventoryIdempotencyRecoveryIntegrationTest.java),
 [`InventoryReadProjectionIntegrationTest.java`](../../services/inventory-service/src/test/java/dev/buhanzaz/rwms/inventory/InventoryReadProjectionIntegrationTest.java),
+[`InventoryAssetOutcomeService.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/InventoryAssetOutcomeService.java),
+[`InventoryOutcomeService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inventory/service/InventoryOutcomeService.java),
+[`InventoryAuthoritativeOutcomeService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryAuthoritativeOutcomeService.java),
+[`inventory_cabin_photos.go`](../../services/media-service/internal/persistence/inventory_cabin_photos.go),
 [`MaintenanceApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceApplicationService.java),
 [`InventoryMaintenanceService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryMaintenanceService.java),
 [`V40__version_inventory_repair_sources.sql`](../../services/maintenance-service/src/main/resources/db/migration/V40__version_inventory_repair_sources.sql),
@@ -637,6 +731,15 @@ operational recovery state but do not make every cabin partial. Resolving or
 rebuilding coverage never deletes its audit evidence, and relay delivery state
 does not substitute for projection completeness.
 
+When `media-service` attaches a completed task's evidence to the cabin photo
+library, its canonical `rwms.media.cabin-photo.v1` cover fact is journaled by
+dossier. Only a non-null `taskBoardEntryId` creates the
+`MEDIA_TASK_EVIDENCE_ATTACHED` cabin activity; a direct cover change remains
+journal-only. The read API returns only the opaque media ID, generation and
+task-entry ID. The panel resolves that reference through the public,
+authorization-checked task-entry media scope, so neither dossier nor the panel
+publishes an object-store path or signed URL.
+
 Analytics recovery metrics are observations, not projection transitions.
 Read-only aggregate queries report active and terminal gaps, oldest gap age,
 maximum retained gap attempt, pending/retry sanitized-DLT backlog and its
@@ -661,6 +764,7 @@ Evidence: [`services/dossier-service/`](../../services/dossier-service/),
 [`services/analytics-service/`](../../services/analytics-service/),
 [`services/assistant-service/`](../../services/assistant-service/),
 [`DossierQueryService.java`](../../services/dossier-service/src/main/java/dev/buhanzaz/rwms/dossier/service/DossierQueryService.java),
+[`DossierProjectionService.java`](../../services/dossier-service/src/main/java/dev/buhanzaz/rwms/dossier/service/DossierProjectionService.java),
 [`DossierSanitizedDeadLetter.java`](../../services/dossier-service/src/main/java/dev/buhanzaz/rwms/dossier/domain/DossierSanitizedDeadLetter.java),
 [`AnalyticsRecoveryMetrics.java`](../../services/analytics-service/src/main/java/dev/buhanzaz/rwms/analytics/eventing/AnalyticsRecoveryMetrics.java),
 [`DossierRecoveryMetrics.java`](../../services/dossier-service/src/main/java/dev/buhanzaz/rwms/dossier/eventing/DossierRecoveryMetrics.java),

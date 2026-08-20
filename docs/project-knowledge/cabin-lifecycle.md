@@ -388,9 +388,24 @@ while repair work exists:
    stores a proposal only. Saving a finding does not yet mutate another owner.
 3. Review builds a server-owned final plan in `DRAFT`; source changes make it
    `STALE`.
-4. Completing the exact plan version changes it to `COMPLETED` and publishes
-   idempotent effects. Publication progresses through `READY`, `PENDING`,
-   `SUCCEEDED`, retryable failure, or an explicit blocked state.
+4. Completing the exact plan version changes it to `COMPLETED` and records a
+   durable idempotent outcome for every found cabin. After furniture
+   reconciliation, asset-service applies the final finding as current truth:
+   no work becomes `FREE`, ordinary work becomes `REPAIR`, and the explicit
+   capital choice becomes `CAPITAL_REPAIR`. Active rental/transfer holds,
+   reservations and leases are superseded without deleting their history.
+5. The exact finding images become the current media-service inventory folder;
+   older cabin folders remain historical and their MinIO objects are unchanged.
+6. One plan-wide logistics command supersedes active rental/document lines and
+   their cancellable tasks. A mixed document with an unrelated active line
+   fails the batch before any effect instead of partially changing it.
+7. A work finding then supersedes non-terminal maintenance predecessors and
+   creates the reviewed repair using the effective asset version; `AFTER_RENT`
+   is not a separate estimate branch for completed inventory. A no-work finding
+   explicitly cleans up non-terminal maintenance work before settling as
+   `FREE`. Publication progresses through `READY`, `PENDING`, `SUCCEEDED`,
+   retryable failure, or an explicit blocked state. Terminal `LOST` and
+   `WRITTEN_OFF` cabins remain rejected.
 
 Variants include:
 
@@ -398,13 +413,25 @@ Variants include:
 - permanently creating a previously unknown cabin in `FREE`;
 - supplementing the current cabin record;
 - replacing a proposed snapshot;
-- publishing new maintenance work with origin `INVENTORY`;
-- preserving already-started work and deducting it from a replacement plan;
-- opening a draft estimate for an `AFTER_RENT` finding instead of creating a
-  repair task directly.
+- publishing or reconciling a repair with origin `INVENTORY` while preserving
+  superseded repair evidence;
+- replacing a non-terminal rental, transfer, reservation or earlier repair
+  status with the reviewed inventory outcome.
 
 The session ends as `COMPLETED` or `CANCELLED`. A closed or blocked publication
-remains visible; it is not silently treated as applied.
+remains visible; it is not silently treated as applied. From completed history,
+a MANAGE user can rebuild missing work and requeue every existing publication,
+including an earlier success, because the later photo, logistics and no-work
+owner effects may not have existed when that result was recorded. Exact
+owner-local receipts make the replay safe; photos and finding evidence are
+retained.
+
+All findings in one frozen plan share one durable reapplication generation.
+Automatic retries preserve it and their downstream keys; only the confirmed
+history action advances it for the whole plan. During that same-source
+reassertion asset-service preserves an operation lease that may already belong
+to the exact inventory repair, while maintenance or logistics releases only an
+unrelated predecessor lease under its recorded owner and fencing token.
 
 ## 10. Transfer branch
 

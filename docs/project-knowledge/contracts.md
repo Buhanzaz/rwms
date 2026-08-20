@@ -116,9 +116,12 @@ ordinary worker assignments plus only active/paused logistics entries for an
 eligible secondary slinger; it never exposes waiting driver work. A slinger
 `JOIN` supplies the current `workerGroupId`, allowing task-board to pause the
 whole previous group entry and resume it after the shared task closes. Every
-configured logistics secondary is required. `LOGISTICS_DRIVER` completion by
-either assigned participant requires at least one result photo linked to a
-`READY` media generation and closes the same entry for both.
+configured logistics secondary is optional: a driver may complete before a
+slinger accepts, while a joined slinger may also complete. The visible WorkerApp
+verb `Взять задание` still sends `JOIN` with the current `workerGroupId`.
+`LOGISTICS_DRIVER` completion requires at least one result photo linked to a
+`READY` media generation from either active participant and closes the same
+entry for both.
 
 Native device registration remains wire-compatible: omitted `targetKind`
 means legacy `TOKEN`, while current clients send `FID` and put the Firebase
@@ -214,6 +217,79 @@ media-service was found. The payload remains hash-only and may not contain the
 source record, object key, owner data or free-form dependency error. Any
 out-of-repository strict enum consumer must accept the added value before a
 runtime rollout.
+
+### Inventory Session Refresh And Empty Preflight
+
+[`inventory-service.yaml`](../../contracts/openapi/inventory-service.yaml) defines the additive
+MANAGE command `POST /api/inventory/v1/sessions/{inventoryId}/refresh`. Its required body carries
+`expectedSessionRevision`, and `Idempotency-Key` identifies an exact replay. A successful response
+is the authoritative session detail after inventory-service has reconciled a fresh asset capture;
+the command preserves stored finding/inspection evidence while invalidating derived furniture and
+final-plan state.
+
+The private inventory-publication preflight in
+[`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml) keeps `findings`
+required and bounded to 5000, but permits an empty list. Empty means the valid final plan has no
+maintenance candidates; maintenance returns the same inventory/plan identity with an empty result
+instead of rejecting the request.
+
+The same boundary fingerprints and stores the exact raw versioned snapshot. For schema version 1
+only, maintenance recognizes the historical producer shape where the identical non-empty aggregate
+media list was copied onto every plan line. It removes those copies only from the executable
+in-memory representation after fingerprint verification, preserving the aggregate evidence and raw
+source. No other version-1 shape is normalized, and version 2 retains strict current validation.
+Inventory's read-only call to this preflight has one same-request retry only for transport failures
+or HTTP `502`, `503` and `504`; semantic, authorization, other server and malformed-response
+failures are not retried.
+
+### Authoritative Completed-Inventory Outcome Recovery
+
+[`inventory-service.yaml`](../../contracts/openapi/inventory-service.yaml) defines the public
+MANAGE command `POST /api/inventory/v1/sessions/{inventoryId}/outcome/recalculate`. Its request
+requires the session revision plus the completed final-plan version and SHA-256, and its successful
+`202` response reports created, requeued and already-authoritative publication counts. The command
+only schedules owner-local durable work; it does not report a downstream status or repair as
+applied before the existing publication records settle.
+
+The private asset command
+`PUT /api/internal/asset/v1/inventory/outcomes/{inventoryId}/findings/{findingId}` in
+[`asset-service.yaml`](../../contracts/openapi/asset-service.yaml) accepts immutable completed-plan
+identity and exactly one desired `FREE`, `REPAIR` or `CAPITAL_REPAIR` status from the
+inventory-service credential. Its response identifies released bindings and the effective asset
+version. The reviewed furniture snapshot SHA remains immutable source evidence, but asset-service
+does not compare it with a later full live hash after that same authoritative status/version update;
+warehouse, catalog and terminal-state guards still fail closed.
+
+The private media command
+`PUT /api/internal/media/v1/inventory/outcomes/{inventoryId}/findings/{findingId}/cabin-photos` in
+[`media-service.yaml`](../../contracts/openapi/media-service.yaml) accepts exact `READY IMAGE`
+references and their generations under the `media.inventory` service credential. It makes one
+deterministic inventory folder current while retaining older gallery associations and objects.
+
+The plan-wide logistics command
+`PUT /api/internal/logistics/v1/inventory/outcomes/{inventoryId}` in
+[`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml) carries every final-plan
+asset and desired status under one immutable plan identity and the exact `logistics.inventory`
+service credential. A complete selected non-terminal document/order can be superseded, but a
+document with an unrelated active line rejects the whole batch before local or remote effects.
+
+The private maintenance work request in
+[`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml) requires both the
+inventory completion timestamp and the effective `authoritativeAssetVersion`; the frozen manual
+capital choice remains part of the new repair plan. A `FREE` finding instead uses
+`PUT /api/internal/maintenance/v1/inventory/outcomes/{inventoryId}/findings/{findingId}/no-work`,
+which supersedes non-terminal maintenance work and its external effects without creating a new
+repair. These are separate owner commands with permanent idempotency receipts and per-owner latest
+inventory watermarks, not one distributed transaction. No boundary transfers media bytes, object
+keys or permission to delete inventory photos.
+
+The reapplication generation is inventory-service persistence, not a public
+request field. Automatic retries retain its exact downstream idempotency keys;
+the public history command advances one generation for the whole frozen plan.
+A same-source asset reassertion does not release the active operation lease,
+because that lease can already be owned by the exact maintenance successor.
+The maintenance and logistics commands remain responsible for releasing an
+unrelated predecessor lease with its recorded owner and fencing token.
 
 ### Inventory-Created Assets
 
@@ -354,13 +430,13 @@ Canonical structure is supplemented by executable implementation inventories.
 Inventory-service and logistics-service parse their owning OpenAPI documents,
 compare every method/path pair with merged Spring controller mappings, and send
 unauthenticated probes through the real owner security filter chain. Inventory
-contains 27 bearer operations. Logistics route parity derives its complete
+contains 28 bearer operations. Logistics route parity derives its complete
 operation count from the current canonical file and permits exactly four
 anonymous client-presentation operations; every other route is bearer
 protected.
 
 The gateway inventory resolves every canonical domain-public operation through
-the current functional routers and the real edge security chain. It covers 273
+the current functional routers and the real edge security chain. It covers 274
 domain-public operations, proves the four logistics presentation operations are
 the only anonymous domain routes, and proves canonical internal operations and
 reserved internal/private aliases are not public gateway routes. Auth callbacks

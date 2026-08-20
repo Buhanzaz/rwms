@@ -47,6 +47,17 @@ Evidence:
 [`SseProxyHandler.java`](../../services/api-gateway-service/src/main/java/dev/buhanzaz/rwms/gateway/config/SseProxyHandler.java),
 [`GatewaySseConcurrencyIntegrationTest.java`](../../services/api-gateway-service/src/test/java/dev/buhanzaz/rwms/gateway/GatewaySseConcurrencyIntegrationTest.java).
 
+### Standalone engineering prototype
+
+`cabin-cad/` is a separate browser engineering prototype rather than an RWMS
+domain client. It currently keeps its CAD document and Fusion-derived Master
+Template in browser storage, calls no gateway or domain service, and owns no
+authoritative cabin lifecycle fact. Its Master Setup imports separate STEP
+occurrences, assigns type geometry and occurrence placement rules, and feeds
+the same renderer-neutral evaluator to Master Setup and ordinary CAD. See the
+[`Cabin CAD flow`](cabin-cad.md) and
+[`application shell`](../../cabin-cad/src/app/App.tsx).
+
 ## Deployables And Ownership
 
 | Deployable            | Shape                      | Owner responsibility                                                       | Canonical API                                                                  |
@@ -77,8 +88,16 @@ the target generation. Row-level locks serialize coverage changes with relay
 status changes on the same audit row, while transport delivery and projection
 coverage remain separate state dimensions.
 
+The media-service cabin-photo fact is one additional read-model input. A fact
+whose `taskBoardEntryId` is non-null becomes a task-evidence activity with an
+opaque media revision and task-entry reference; direct cover changes remain in
+the dossier journal only. Dossier does not resolve a photo or authorize a media
+read: the panel calls the existing public task-entry media boundary with the
+caller bearer token.
+
 Evidence:
 [`DossierQueryService.java`](../../services/dossier-service/src/main/java/dev/buhanzaz/rwms/dossier/service/DossierQueryService.java),
+[`DossierProjectionService.java`](../../services/dossier-service/src/main/java/dev/buhanzaz/rwms/dossier/service/DossierProjectionService.java),
 [`DossierVisibilityCoverageResolver.java`](../../services/dossier-service/src/main/java/dev/buhanzaz/rwms/dossier/service/DossierVisibilityCoverageResolver.java),
 [`DossierRelayTransactions.java`](../../services/dossier-service/src/main/java/dev/buhanzaz/rwms/dossier/eventing/DossierRelayTransactions.java),
 [`V3__dossier_cabin_visibility_scope.sql`](../../services/dossier-service/src/main/resources/db/migration/V3__dossier_cabin_visibility_scope.sql).
@@ -215,12 +234,20 @@ dated logistics and durable uploads. The dated surface selects only
 warehouse board. WorkerApp contains ordinary worker work plus active secondary
 logistics collaboration, but no driver board, driver trip read or driver take
 surface. Both retain encrypted JPEG evidence and durable outbox state across a
-process or device restart; server projections remain authoritative.
+process or device restart; server projections remain authoritative. WorkerApp
+keeps selected task execution full-screen at every window width because its
+general/work-bound media and result capture require the complete surface. Its
+header projects only the task-board timer snapshot, and its existing
+Manager-derived CameraX surface routes either volume key to one foreground
+capture without moving evidence ownership into the client.
 
 Evidence:
 [`WorkerAuthConfiguration.kt`](../../worker-app/core-auth/src/main/java/dev/buhanzaz/rwms/worker/core/auth/WorkerAuthConfiguration.kt),
 [`DriverAuthConfiguration.kt`](../../driver-app/core-auth/src/main/java/dev/buhanzaz/rwms/driver/core/auth/DriverAuthConfiguration.kt),
 [`WorkerGatewayApi.kt`](../../worker-app/core-network/src/main/java/dev/buhanzaz/rwms/worker/core/network/WorkerGatewayApi.kt),
+[`WorkerApp navigation`](../../worker-app/app/src/main/java/dev/buhanzaz/rwms/worker/WorkerApp.kt),
+[`Worker task detail`](../../worker-app/feature-task-detail/src/main/java/dev/buhanzaz/rwms/worker/feature/taskdetail/TaskDetailScreen.kt),
+[`Worker CameraX`](../../worker-app/feature-camera/src/main/java/dev/buhanzaz/rwms/worker/feature/camera/CameraScreen.kt),
 [`DriverGatewayApi.kt`](../../driver-app/core-network/src/main/java/dev/buhanzaz/rwms/driver/core/network/DriverGatewayApi.kt),
 [`DriverApp.kt`](../../driver-app/app/src/main/java/dev/buhanzaz/rwms/driver/DriverApp.kt),
 and
@@ -300,6 +327,33 @@ Evidence:
 - MinIO is private and media ownership stays in `media-service`.
 - Multi-service workflows are owned and persisted by the initiating service;
   there is no 2PC and no browser saga.
+
+Completed-inventory recovery is an inventory-owned saga over narrow commands,
+not a shared aggregate. The immutable finding first updates asset status and
+guards, then selects the current media folder, applies one plan-wide logistics
+supersession, and finally applies maintenance work or no-work cleanup. Asset,
+media, logistics and maintenance each own permanent replay receipts and a
+latest-completed-inventory watermark in their own database; superseded rows and
+MinIO objects remain historical. The inventory OAuth client uses exact
+`asset.inventory`, `media.inventory`, `logistics.inventory` and
+`maintenance.inventory` owner scopes, and no interactive client can call these
+private routes.
+
+Inventory also persists one plan-wide reapplication generation. Automatic
+retries, including recovery after a lost response, reuse the same downstream
+keys; an explicit completed-history recalculation advances the generation once
+for every finding in that plan. A same-source reassertion preserves the active
+asset lease that may belong to the exact maintenance successor, while the
+maintenance or logistics owner releases only its unrelated predecessor lease
+under the recorded owner and fencing token.
+
+Evidence:
+[`InventoryPublicationService`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryPublicationService.java),
+[`asset outcome`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/InventoryAssetOutcomeService.java),
+[`media outcome`](../../services/media-service/internal/persistence/inventory_cabin_photos.go),
+[`logistics outcome`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inventory/service/InventoryOutcomeService.java),
+and
+[`maintenance outcome`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryAuthoritativeOutcomeService.java).
 
 Inventory keeps low-level PostgreSQL mechanics behind two exact technical
 owners. `InventoryAssetInboxStore` is the only asset-consumer owner of
@@ -448,10 +502,10 @@ entered; extracted collaborators do not introduce a second transaction policy.
 | Manager `ManagerViewModel` | Workspace/auth, inventory, shipment, return, transfer, maintenance catalog/read/editor/persistence and media coordinators connected through narrow ports |
 | Asset application | Rental items, logistics effects, equipment, maintenance and classifiers; separate inventory capture/projection/furniture/source, HTML-import and property-disposition facades |
 | Task board | Read projection, external registration/mutation, logistics tasks, driver-audience validation/visibility, non-overlapping native mobile surfaces, transactional slinger push, worker execution and ordering; workforce profile, credential and group owners |
-| Inventory | Session, read, finding/validation/review, planning, completion, statistics, publication and projection owners |
-| Maintenance | Catalog, estimate, repair, transfer, inbound and reconciliation owners; separate inventory maintenance/publication and property-disposition facades |
-| Logistics | Return, shipment, transfer, reconciliation and rental-order document hooks; one grouped document driver-intent planner; rental-order read/create/lifecycle/reservation/terms/shipment/replacement owners |
-| Worker task UI | Ordinary group/qualification work plus active joined logistics-secondary work; JOIN uses the current group and reuses the task-detail/camera/durable-upload navigation; there is no driver board or driver-trip surface |
+| Inventory | Session, read, finding/validation/review, planning, completion, statistics, projection, history-outcome recovery and publication-saga owners |
+| Maintenance | Catalog, estimate, repair, transfer, inbound and reconciliation owners; separate inventory publication, authoritative supersession and property-disposition workflows |
+| Logistics | Return, shipment, transfer, reconciliation and rental-order document hooks; one grouped document driver-intent planner; rental-order read/create/lifecycle/reservation/terms/shipment/replacement owners; separate completed-inventory supersession workflow |
+| Worker task UI | Ordinary group/qualification work plus active optional logistics-secondary work; the visible `Взять задание` action sends JOIN with the current group and reuses task-detail/camera/durable-upload navigation; there is no driver board or driver-trip surface |
 | Driver task UI | Driver-only primary warehouse work plus durable uploads; TAKE/PAUSE/RESUME/COMPLETE and CameraX evidence, with no JOIN or slinger notification handling |
 | Assistant | Conversation creation store, one durable ordered clarification queue, cabin search/reference tools and selection delegation; only the visible `PENDING` head is actionable and logistics/asset remain the command owners |
 | Private HTTP adapters | Logistics and maintenance gateway facades delegate by remote owner to warehouse, asset, task-board, logistics, maintenance or media clients over one technical OAuth/HTTP transport each |
@@ -588,7 +642,7 @@ producer/consumer compatibility tests.
 
 Owner-specific route gates close that second half. Inventory and logistics
 compare their canonical method/path sets with merged Spring controller mappings
-and exercise the production security chains. The gateway resolves all 273
+and exercise the production security chains. The gateway resolves all 274
 canonical domain-public operations through its 17 domain routers, keeps exactly
 four logistics presentation operations anonymous, and rejects canonical
 internal operations plus reserved private/internal aliases. The current focused

@@ -163,6 +163,127 @@ remains `NOT_INSPECTED` and in an idle/save-ready source state. One `409
 INVENTORY_VERSION_CONFLICT` with detail `Inventory revision is stale` triggers
 a new read/rebase/save cycle; a saved/repeated or departed finding is not rebased over server data.
 
+When a MANAGE user selects **Recalculate session changes** on the panel finish surface, the panel
+first refuses to run beside a dirty furniture/final-plan draft or another finish command. It sends
+the displayed session revision and a new idempotency key to inventory-service. The owner checks that
+revision, completes a fresh asset capture outside the local apply transaction, rechecks the revision
+under lock, and atomically journals target-session arrivals, departures and current snapshots. Saved
+finding inspections/media/history remain in PostgreSQL; only the derived registry/furniture/final
+plan projections are discarded or marked stale. The returned session replaces the detail cache and
+the panel clears only those derived query entries before the user rebuilds cabin and furniture
+review. If the rebuilt final plan contains no maintenance work, inventory sends `findings: []` and
+maintenance returns an empty candidate set instead of a validation failure.
+
+Every inventory transition in that sequence which advances a finding but does not edit photos,
+including source-asset attachment, carries the immediately preceding exact media-reference set into
+the new finding revision in the same local transaction. Explicit inspection save remains the sole
+replacement operation and may persist an intentional empty set. Migration
+[`V18__carry_forward_inventory_finding_media.sql`](../../services/inventory-service/src/main/resources/db/migration/V18__carry_forward_inventory_finding_media.sql)
+repairs older missing-current-revision rows only when the finding still names a cover photo and a
+prior exact set contains it; it appends that newest whole set without combining older revisions or
+touching MinIO objects.
+
+Preparing that final plan calls maintenance's read-only publication preflight. Inventory retries it
+once with the identical request and idempotency key only after a transport failure or HTTP
+`502/503/504`; semantic, authorization, other server and malformed-response failures remain
+fail-closed. Maintenance first verifies the raw frozen-plan fingerprint. For schema version 1 only,
+it then recognizes a historical producer snapshot when the identical non-empty aggregate media list
+was copied onto every line, clears only those executable line copies and retains the aggregate
+evidence. The raw inventory snapshot and fingerprint remain unchanged. No other version-1 shape is
+normalized, and version 2 is never adapted.
+
+Exact completion now persists one publication intent per final-plan finding and performs no remote
+effect inside the completion transaction. Durable recovery first waits for the furniture intent.
+It then sends the immutable completed-at/plan/finding identity to asset-service, which rejects an
+older watermark or terminal cabin, otherwise releases/supersedes active reservations, holds,
+leases and transfer state and applies `FREE`, `REPAIR` or `CAPITAL_REPAIR`. Inventory stores the
+canonical asset result and effective version before the remaining owner effects:
+
+0. The request carries the exact passport observation frozen on that publication intent and its
+   canonical SHA-256. For `PRESENT`, asset-service resolves required names only against active
+   catalog rows, atomically replaces type, dimensions, finishing, category, normalized complete
+   characteristics and nullable linoleum, and emits ordinary asset facts. `ABSENT` leaves those
+   values unchanged. A missing/ambiguous catalog value, wrong warehouse, terminal cabin or
+   observation/hash mismatch rolls back the complete asset command before downstream publication.
+
+1. If the exact finding revision has images, media-service projects their immutable IDs and
+   generations into the deterministic inventory folder and makes that folder the current cabin
+   presentation. Older folders and objects remain available as history.
+2. Inventory submits the whole immutable final plan to logistics-service under one plan-stable
+   idempotency key. Logistics supersedes active rental/document lines and cancellable tasks for
+   every listed asset while retaining their rows and audit facts.
+3. A work finding asks maintenance to supersede non-terminal predecessor work and materialize the
+   reviewed ordinary/capital repair, including a former `AFTER_RENT` cabin. A no-work finding sends
+   an explicit cleanup command, so stale estimates, repairs, tasks, driver effects and leases do not
+   survive a `FREE` result. If the preceding asset command changed only the cabin's technical
+   version while applying the same immutable inventory source, maintenance retains the original
+   no-work coordinator and binds the newer exact request to a separate receipt; this is a
+   recoverable reassertion, not a different inventory decision. Inventory projects this command
+   explicitly to the maintenance schema; the asset-only passport observation and hash remain on
+   the asset boundary.
+
+The panel repair-detail workspace keeps three evidence sets separate: aggregate task media, the
+selected work line's source media, and worker result photos. Maintenance reconstructs an
+authoritative repair's immutable inventory source from the newest completed receipt that names the
+repair, then from the outcome coordinator's original target, and finally from a legacy repair-source
+row. Aggregate and work-line references therefore prefer that inventory-finding owner even when an
+adopted repair still has an older estimate origin; otherwise they use the original estimate or
+repair owner proof. Only worker-result evidence uses the task-board entry proof. The panel renders
+the exact `mediaId`/generation references from the current projections; it neither substitutes the
+repair-wide gallery nor changes media or MinIO ownership. Each exact work-line set uses the shared
+compact carousel with an in-image count and always-visible previous/next controls; aggregate and
+result-evidence sets retain the standard gallery presentation. Warehouse card previews consume the
+association-ordered cabin projection independently of the explicit cover position, so a cover
+selected later in that order cannot invalidate the whole batch. The authoritative read projection
+is implemented by
+[`InventoryRepairSourceReadProjection`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryRepairSourceReadProjection.java),
+and the panel owner precedence is implemented by
+[`repair-task-media-owner.ts`](../../panel/src/features/repair-tasks/repair-task-media-owner.ts); the
+work-line presentation is implemented by
+[`ServiceOwnerPhotos`](../../panel/src/features/media/service-owner-photos.tsx).
+
+Maintenance registrations and immutable source rows written before the V45 coordinator remain
+historical evidence. They do not bind the current outcome: an estimate or operation-only source is
+superseded, while a repair previously adopted into an `APPLIED` outcome is replaced by one new
+full-plan repair and bound through a new permanent receipt. The old source, outcome, receipt and
+repair rows remain unchanged. A current V45 repair is reasserted instead of duplicated.
+
+Each owner uses a permanent receipt and latest-completed-inventory watermark. An exact retry returns
+the stored result, an older inventory is rejected, and no service reads another owner's database.
+Inventory keeps one durable reapplication generation across every finding in the completed plan.
+Automatic retry after a timeout or lost response keeps the same generation and downstream keys;
+only a confirmed history recalculation advances the whole plan to a new generation. On that
+same-source reassertion asset-service preserves a possibly current-successor operation lease, while
+the maintenance or logistics owner releases an unrelated predecessor lease under its exact owner
+and fencing token. Maintenance accepts an exact same-owner/fence terminal asset response in either
+`RELEASED` or naturally `EXPIRED` state; a local `RECONCILIATION_REQUIRED` lease may therefore
+finish recovery, while a locally `RELEASED` lease is not called again. When the latest generation
+preserves its current repair, maintenance also enqueues generation-specific status and execution
+reassertions: calculated `REPAIR`/`CAPITAL_REPAIR` truth is restored after the asset-first command,
+and an inventory movement whose predecessor task was superseded receives a new driver task.
+Ordinary repair movement is an inbound `DELIVER_TO_REPAIR` task sourced by the authoritative
+inventory finding. External-capital movement is a separate outbound `CAPITAL_TO_PRODUCTION` task
+sourced by the current capital repair; it never becomes an ordinary repair task. The ordinary
+driver-task source identity is resolved from the authoritative outcome before older
+publication-source formats, so logistics can distinguish the current inventory finding from
+predecessor work.
+
+From completed history, the panel MANAGE action **Recalculate and apply outcomes** confirms the
+exact session revision and completed final-plan version/SHA. Inventory creates missing intents,
+advances one shared plan reapplication generation, requeues every existing intent, including an
+earlier `SUCCEEDED` result, and makes a failed furniture
+reconciliation immediately eligible. Replaying every row is deliberate: an old success cannot prove
+that owner effects introduced later in the chain were applied. The public command returns `202`
+after this local scheduling step; the existing schedulers perform remote effects and keep every
+prior attempt/result as audit evidence. Finding media references and MinIO objects are not mutated
+by either scheduling or outcome apply; only media-service's current-folder pointer changes.
+Migration
+[`V22__retry_legacy_maintenance_source_outcomes.sql`](../../services/inventory-service/src/main/resources/db/migration/V22__retry_legacy_maintenance_source_outcomes.sql)
+advances the whole affected completed plan, rather than only its blocked rows, when a partially
+processed pre-coordinator maintenance source conflict is detected. This keeps all findings on one
+reapplication generation and allows prior apparent successes to receive the corrected owner
+effects without deleting their attempts or receipts.
+
 Evidence:
 [`ManagerWorkspaceCoordinator`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/coordinator/ManagerWorkspaceCoordinator.kt),
 [`BackgroundUploadWorker`](../../app/src/main/java/dev/buhanzaz/rwms/manager/uploads/BackgroundUploadWorker.kt),
@@ -173,6 +294,21 @@ Evidence:
 [`inventory coordinator`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/coordinator/ManagerInventoryCoordinator.kt),
 [`inventory draft store`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/InventoryDraftStore.kt),
 [`inventory upload revision policy`](../../app/src/main/java/dev/buhanzaz/rwms/manager/uploads/InventoryUploadRevisionPolicy.kt),
+[`inventory session refresh`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventorySessionService.java),
+[`inventory membership reconciliation`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryFindingService.java),
+[`inventory history recovery`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryOutcomeRecoveryService.java),
+[`inventory publication`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryPublicationService.java),
+[`inventory passport intent migration`](../../services/inventory-service/src/main/resources/db/migration/V23__freeze_inventory_outcome_passport_observation.sql),
+[`asset outcome owner`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/InventoryAssetOutcomeService.java),
+[`asset passport watermark migration`](../../services/asset-service/src/main/resources/db/migration/V39__inventory_outcome_passport_watermark.sql),
+[`media inventory projection`](../../services/media-service/internal/persistence/inventory_cabin_photos.go),
+[`logistics outcome owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inventory/service/InventoryOutcomeService.java),
+[`maintenance preflight contract`](../../contracts/openapi/maintenance-service.yaml),
+[`maintenance outcome owner`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryAuthoritativeOutcomeService.java),
+[`maintenance source compatibility`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryPublicationSourceLifecycle.java),
+[`maintenance inventory apply`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryPublicationApplyUseCases.java),
+[`panel inventory finish flow`](../../panel/src/features/inventory/inventory-pages.tsx),
+[`panel repair task media`](../../panel/src/features/repair-tasks/repair-task-media-owner.ts),
 and
 [`maintenance work-photo UI`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/screens/MaintenanceScreen.kt).
 
@@ -220,9 +356,18 @@ A `409` is a real concurrent-write signal. A client refreshes authoritative
 state and asks the user to reconcile when necessary; it does not silently
 overwrite or roll back another service.
 
+An operation-lease release has one narrow terminal recovery rule: when the
+stored lease is already `RELEASED` or `EXPIRED`, the owner returns that terminal
+projection only if the original owner identity and fencing token still match.
+Natural expiry may have advanced the row version, so the earlier expected
+version alone does not turn this exact readback into a conflict. A different
+owner or fencing token still returns `409`.
+
 Evidence:
 [`contracts/openapi/`](../../contracts/openapi/),
 [`domain-event-envelope-v2.schema.yaml`](../../contracts/events/technical/domain-event-envelope-v2.schema.yaml),
+[`AssetLogisticsService.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/AssetLogisticsService.java),
+[`AssetMaintenanceService.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/AssetMaintenanceService.java),
 service-local `*Idempotency*`, event-store, and application-service sources.
 
 ## Cross-service command and saga
@@ -588,14 +733,24 @@ and
    invalidations, so WorkerApp refreshes the authoritative feed.
 8. WorkerApp has no driver board or driver-trip route. It reveals a joint
    `LOGISTICS_DRIVER` entry only after the driver has made it active and only
-   to an eligible secondary worker. The slinger accepts with `JOIN` and the
-   current group ID. Task-board pauses the whole entry currently executed by
-   that group, not only one worker's timer, and resumes it after the joint task
-   closes.
-9. The joined driver and slinger share one task-board entry and evidence set.
-   At least one result photo must have reached media state `READY`; after that,
-   either participant may complete the entry. The one owner transition closes
-   it for both clients and resumes the interrupted group work.
+   to an eligible secondary worker. The visible `Взять задание` action sends
+   `JOIN` with the current group ID. Task-board pauses the whole entry currently
+   executed by that group, not only one worker's timer, and resumes it after the
+   joint task closes. Every selected task is a dedicated full-screen Navigation 3
+   destination on phones, tablets and foldables; the worker board never shares
+   that image-heavy detail in a list/detail scene. The screen keeps task-board's
+   timer snapshot authoritative, shows startup immediately after a queued take,
+   and decrements the header countdown only from a confirmed `WORKING` snapshot.
+   It then presents general source photos, materials, ordered works with their
+   exact work-bound photos, comments and result evidence in execution order.
+   Selecting a thumbnail opens that exact index in the authenticated paged and
+   zoomable viewer.
+9. Slinger participation is optional. The driver may close before anyone joins,
+   while a joined driver and slinger share one task-board entry and evidence
+   set. At least one result photo from either active participant must have
+   reached media state `READY`; after that, either active participant may
+   complete the entry. The one owner transition closes it for both clients and
+   resumes interrupted group work.
 10. DriverApp exposes warehouse work, dated personal logistics and durable
     uploads as three main destinations. The logistics surface defaults to the
     device-local current date and filters only task-board-issued
@@ -628,6 +783,8 @@ Evidence:
 [`TaskDetailScreen.kt`](../../driver-app/feature-task-detail/src/main/java/dev/buhanzaz/rwms/driver/feature/taskdetail/TaskDetailScreen.kt),
 [`logistics-board-page.tsx`](../../panel/src/features/logistics/driver-board/logistics-board-page.tsx),
 [`Worker TasksScreen.kt`](../../worker-app/feature-tasks/src/main/java/dev/buhanzaz/rwms/worker/feature/tasks/TasksScreen.kt),
+[`Worker task detail`](../../worker-app/feature-task-detail/src/main/java/dev/buhanzaz/rwms/worker/feature/taskdetail/TaskDetailScreen.kt),
+[`Worker photo viewer`](../../worker-app/app/src/main/java/dev/buhanzaz/rwms/worker/PhotoPagerScreen.kt),
 and
 [`Driver TasksScreen.kt`](../../driver-app/feature-tasks/src/main/java/dev/buhanzaz/rwms/driver/feature/tasks/TasksScreen.kt).
 
@@ -723,6 +880,12 @@ and
    `transferred` records the immutable target-warehouse snapshot. Both retain
    the maintenance repair aggregate as `sourceRef`; dossier performs no
    warehouse lookup and owns no repair-transfer command.
+7. A media-service cabin-photo fact is journaled as source evidence. Only
+   `media.cabin.cover-changed.v1` with a non-null `taskBoardEntryId` creates
+   `MEDIA_TASK_EVIDENCE_ATTACHED`; a direct cover change has no public activity
+   and never enters the ordinary media lifecycle projection. The dossier API
+   exposes the opaque media ID, generation and task-entry ID; the panel reads
+   the image only through the existing public task-entry media owner proof.
 
 Evidence:
 [`DossierInboxProcessor.java`](../../services/dossier-service/src/main/java/dev/buhanzaz/rwms/dossier/service/DossierInboxProcessor.java),
@@ -733,7 +896,7 @@ Evidence:
 [`V3__dossier_cabin_visibility_scope.sql`](../../services/dossier-service/src/main/resources/db/migration/V3__dossier_cabin_visibility_scope.sql),
 [`dossier-consumers.yaml`](../../contracts/events/dossier-consumers.yaml),
 and
-[`V4__dossier_repair_transfer_activities.sql`](../../services/dossier-service/src/main/resources/db/migration/V4__dossier_repair_transfer_activities.sql).
+[`V5__dossier_task_evidence_activity.sql`](../../services/dossier-service/src/main/resources/db/migration/V5__dossier_task_evidence_activity.sql).
 
 Dossier's operational gauges deliberately use a broader retained-state view
 than one cabin visibility response. They report blocked checkpoints, unresolved

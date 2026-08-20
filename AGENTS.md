@@ -283,6 +283,9 @@ mutable domain models are forbidden.
 - `manager-download-site/` is the separate download surface for ManagerApp from
   `app/` (`dev.buhanzaz.rwms.manager`). It publishes only ManagerApp release
   metadata and APKs.
+- Every functional update under `app/` must build, install-check and publish the
+  exact resulting ManagerApp APK to `manager-download-site/` / Downloads before
+  handoff. Do not leave an updated ManagerApp APK only in `app/build/`.
 - Never place, link, mirror or describe a WorkerApp APK in
   `manager-download-site/`, or a ManagerApp APK in `worker-download-site/`.
   Do not use the panel or either Android app as a release-file host.
@@ -423,6 +426,24 @@ editing.
 Use full Testcontainers, browser automation, Kafka outage/replay or
 cross-service suites when risk requires them, focused checks reveal a wider
 issue or the user asks.
+
+## Cabin CAD Runtime Diagnostics
+
+- `cabin-cad` runtime diagnostics must be durable and searchable, never
+  console-only. Preserve the bounded browser journal under
+  `cabin-cad/diagnostics/v1`, its explicit NDJSON export, and the local Vite
+  sink at `cabin-cad/.runtime/diagnostics.ndjson` with bounded rotation.
+- Start every `cabin-cad` crash investigation by searching the current and
+  rotated NDJSON files with `rg`, then reproduce the flow and correlate by
+  `sessionId`, `sequence`, `scope` and `event`. If the file sink was not active,
+  inspect the browser journal through `window.cabinCadDiagnostics` or request
+  its exported NDJSON; do not claim that no error occurred from an empty
+  console alone.
+- Log operation boundaries, safe counts, durations, browser/runtime state and
+  original exception stacks. Never log CAD documents, STEP bytes or geometry,
+  embedded texture data, serialized storage payloads, credentials, tokens or
+  customer data. Diagnostic files are local runtime artifacts and must not be
+  committed.
 
 ## Agent Coordination
 
