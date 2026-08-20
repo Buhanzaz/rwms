@@ -16,15 +16,15 @@ const CabinPhotoTopic = "rwms.media.cabin-photo.v1"
 func associateCabinImageUpload(
 	ctx context.Context,
 	tx pgx.Tx,
-	cabinID, mediaID, warehouseID uuid.UUID,
+	cabinID, mediaID, warehouseID, galleryFolderID uuid.UUID,
 	sortOrder int64,
 	attachedAt time.Time,
 ) error {
 	_, err := tx.Exec(ctx, `insert into media_cabin_photo (
 		cabin_id,media_id,warehouse_id,media_generation,task_board_entry_id,
-		association_source,sort_order,attached_at)
-	values ($1,$2,$3,0,null,'DIRECT',$4,$5)`,
-		cabinID, mediaID, warehouseID, sortOrder, attachedAt)
+		association_source,gallery_folder_id,sort_order,attached_at)
+	values ($1,$2,$3,0,null,'DIRECT',$4,$5,$6)`,
+		cabinID, mediaID, warehouseID, galleryFolderID, sortOrder, attachedAt)
 	if err != nil {
 		return translateConstraint(err)
 	}
@@ -109,7 +109,7 @@ func (repository *Repository) SetCabinCoverFromTaskEvidence(
 		return CabinCoverChangeRecord{}, false, err
 	}
 
-	warehouseID, generation, err := validateCabinTaskEvidence(ctx, tx, command)
+	warehouseID, generation, folderID, err := validateCabinTaskEvidence(ctx, tx, command)
 	if err != nil {
 		return CabinCoverChangeRecord{}, false, err
 	}
@@ -121,11 +121,11 @@ func (repository *Repository) SetCabinCoverFromTaskEvidence(
 	}
 	_, err = tx.Exec(ctx, `insert into media_cabin_photo (
 		cabin_id,media_id,warehouse_id,media_generation,task_board_entry_id,
-		association_source,sort_order,attached_at)
-	values ($1,$2,$3,$4,$5,'TASK_EVIDENCE',$6,$7)
+		association_source,gallery_folder_id,sort_order,attached_at)
+	values ($1,$2,$3,$4,$5,'TASK_EVIDENCE',$6,$7,$8)
 	on conflict (cabin_id,media_id) do nothing`,
 		command.CabinID, command.EvidenceMediaID, warehouseID, generation,
-		command.TaskBoardEntryID, sortOrder, now)
+		command.TaskBoardEntryID, folderID, sortOrder, now)
 	if err != nil {
 		return CabinCoverChangeRecord{}, false, translateConstraint(err)
 	}
@@ -139,8 +139,8 @@ func (repository *Repository) SetCabinCoverFromTaskEvidence(
 	if errors.Is(err, pgx.ErrNoRows) {
 		currentVersion = 0
 		if _, err := tx.Exec(ctx, `insert into media_cabin_photo_library (
-			cabin_id,warehouse_id,cover_media_id,version,updated_at)
-			values ($1,$2,null,0,$3)`, command.CabinID, warehouseID, now); err != nil {
+			cabin_id,warehouse_id,cover_media_id,version,updated_at,active_gallery_folder_id)
+			values ($1,$2,null,0,$3,null)`, command.CabinID, warehouseID, now); err != nil {
 			return CabinCoverChangeRecord{}, false, translateConstraint(err)
 		}
 	} else if err != nil {
@@ -167,9 +167,10 @@ func (repository *Repository) SetCabinCoverFromTaskEvidence(
 
 	version := currentVersion + 1
 	commandTag, err := tx.Exec(ctx, `update media_cabin_photo_library
-		set warehouse_id=$2,cover_media_id=$3,version=$4,updated_at=$5
+	set warehouse_id=$2,cover_media_id=$3,version=$4,updated_at=$5,
+		active_gallery_folder_id=$7
 		where cabin_id=$1 and version=$6`, command.CabinID, warehouseID,
-		command.EvidenceMediaID, version, now, currentVersion)
+		command.EvidenceMediaID, version, now, currentVersion, folderID)
 	if err != nil {
 		return CabinCoverChangeRecord{}, false, translateConstraint(err)
 	}
@@ -206,10 +207,11 @@ func validateCabinTaskEvidence(
 	ctx context.Context,
 	tx pgx.Tx,
 	command SetCabinCoverFromTaskEvidenceCommand,
-) (uuid.UUID, int, error) {
+) (uuid.UUID, int, uuid.UUID, error) {
 	var warehouseID uuid.UUID
+	var folderID uuid.UUID
 	var generation int
-	err := tx.QueryRow(ctx, `select proof.warehouse_id,asset.current_generation
+	err := tx.QueryRow(ctx, `select proof.warehouse_id,asset.current_generation,asset.folder_id
 		from media_task_board_entry_owner_proof proof
 		join media_consumer_aggregate_checkpoint checkpoint
 		  on checkpoint.consumer_name=$4
@@ -242,11 +244,11 @@ func validateCabinTaskEvidence(
 		for share of proof,cabin_binding`,
 		command.CabinID, command.TaskBoardEntryID, command.EvidenceMediaID,
 		TaskBoardEntryOwnerProofConsumer, TaskBoardEntryOwnerProofAggregate).
-		Scan(&warehouseID, &generation)
+		Scan(&warehouseID, &generation, &folderID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, 0, ErrConflict
+		return uuid.Nil, 0, uuid.Nil, ErrConflict
 	}
-	return warehouseID, generation, err
+	return warehouseID, generation, folderID, err
 }
 
 func insertCabinCoverCommand(
@@ -310,11 +312,11 @@ func (repository *Repository) associateProcessedCabinImage(
 		return nil
 	}
 	now := repository.now().UTC().Truncate(time.Microsecond)
-	var cabinID, associationWarehouseID uuid.UUID
+	var cabinID, associationWarehouseID, galleryFolderID uuid.UUID
 	var associatedEntryID *uuid.UUID
-	err := tx.QueryRow(ctx, `select cabin_id,warehouse_id,task_board_entry_id
+	err := tx.QueryRow(ctx, `select cabin_id,warehouse_id,task_board_entry_id,gallery_folder_id
 		from media_cabin_photo where media_id=$1 for update`, asset.ID).
-		Scan(&cabinID, &associationWarehouseID, &associatedEntryID)
+		Scan(&cabinID, &associationWarehouseID, &associatedEntryID, &galleryFolderID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if asset.OwnerType != OwnerTypeCabin {
 			return nil
@@ -324,12 +326,13 @@ func (repository *Repository) associateProcessedCabinImage(
 			return ErrConflict
 		}
 		associationWarehouseID = asset.WarehouseID
+		galleryFolderID = asset.FolderID
 		_, err = tx.Exec(ctx, `insert into media_cabin_photo (
 			cabin_id,media_id,warehouse_id,media_generation,task_board_entry_id,
-			association_source,sort_order,attached_at)
-		values ($1,$2,$3,$4,null,'DIRECT',$5,$6)`,
+			association_source,gallery_folder_id,sort_order,attached_at)
+		values ($1,$2,$3,$4,null,'DIRECT',$5,$6,$7)`,
 			cabinID, asset.ID, associationWarehouseID, asset.Generation,
-			asset.SortOrder, asset.CreatedAt)
+			galleryFolderID, asset.SortOrder, asset.CreatedAt)
 		if err != nil {
 			return translateConstraint(err)
 		}
@@ -349,8 +352,9 @@ func (repository *Repository) associateProcessedCabinImage(
 	if errors.Is(err, pgx.ErrNoRows) {
 		version = 1
 		if _, err := tx.Exec(ctx, `insert into media_cabin_photo_library (
-			cabin_id,warehouse_id,cover_media_id,version,updated_at)
-			values ($1,$2,$3,1,$4)`, cabinID, associationWarehouseID, asset.ID, now); err != nil {
+			cabin_id,warehouse_id,cover_media_id,version,updated_at,active_gallery_folder_id)
+			values ($1,$2,$3,1,$4,$5)`, cabinID, associationWarehouseID, asset.ID, now,
+			galleryFolderID); err != nil {
 			return translateConstraint(err)
 		}
 	} else if err != nil {
@@ -358,8 +362,8 @@ func (repository *Repository) associateProcessedCabinImage(
 	} else if currentCover == nil {
 		version++
 		if _, err := tx.Exec(ctx, `update media_cabin_photo_library
-			set cover_media_id=$2,version=$3,updated_at=$4
-			where cabin_id=$1`, cabinID, asset.ID, version, now); err != nil {
+			set cover_media_id=$2,version=$3,updated_at=$4,active_gallery_folder_id=$5
+			where cabin_id=$1`, cabinID, asset.ID, version, now, galleryFolderID); err != nil {
 			return err
 		}
 	} else if *currentCover == asset.ID {
@@ -419,7 +423,7 @@ func readCabinPhotoAssets(
 	}
 	rows, err := tx.Query(ctx, `/* media_public_cabin_gallery */
 		with authorized_assets as materialized (
-			select asset.media_id,asset.folder_id,asset.owner_type,asset.owner_id,
+			select asset.media_id,photo.gallery_folder_id,asset.owner_type,asset.owner_id,
 				asset.warehouse_id,asset.media_kind,asset.original_file_name,
 				asset.original_content_type,asset.source_object_key,
 				coalesce(asset.source_version_id,''),coalesce(asset.source_etag,''),

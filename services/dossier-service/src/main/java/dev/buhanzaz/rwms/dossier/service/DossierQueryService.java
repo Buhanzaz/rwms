@@ -6,11 +6,13 @@ import dev.buhanzaz.rwms.dossier.domain.DossierActivity;
 import dev.buhanzaz.rwms.dossier.domain.DossierActivityCode;
 import dev.buhanzaz.rwms.dossier.domain.DossierMediaProjection;
 import dev.buhanzaz.rwms.dossier.domain.DossierProducer;
+import dev.buhanzaz.rwms.dossier.domain.DossierSourceFact;
 import dev.buhanzaz.rwms.dossier.mapper.DossierMediaProjectionMapper;
 import dev.buhanzaz.rwms.dossier.repository.DossierActiveGenerationRepository;
 import dev.buhanzaz.rwms.dossier.repository.DossierActivityRepository;
 import dev.buhanzaz.rwms.dossier.repository.DossierMediaProjectionRepository;
 import dev.buhanzaz.rwms.dossier.repository.DossierSanitizedDeadLetterRepository;
+import dev.buhanzaz.rwms.dossier.repository.DossierSourceFactRepository;
 import dev.buhanzaz.rwms.dossier.repository.DossierUnlinkedFactRepository;
 import dev.buhanzaz.rwms.dossier.security.DossierAuthorizer;
 import jakarta.persistence.criteria.Predicate;
@@ -30,6 +32,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 /** Builds the read-only, warehouse-scoped cabin dossier from the active local projection generation. */
 @Service
@@ -37,29 +41,35 @@ public class DossierQueryService {
   private final DossierActiveGenerationRepository activeGenerations;
   private final DossierActivityRepository activities;
   private final DossierMediaProjectionRepository media;
+  private final DossierSourceFactRepository sourceFacts;
   private final DossierUnlinkedFactRepository unlinked;
   private final DossierSanitizedDeadLetterRepository deadLetters;
   private final DossierAuthorizer authorizer;
   private final DossierCursorCodec cursors;
   private final DossierMediaProjectionMapper mediaMapper;
+  private final ObjectMapper mapper;
 
   public DossierQueryService(
       DossierActiveGenerationRepository activeGenerations,
       DossierActivityRepository activities,
       DossierMediaProjectionRepository media,
+      DossierSourceFactRepository sourceFacts,
       DossierUnlinkedFactRepository unlinked,
       DossierSanitizedDeadLetterRepository deadLetters,
       DossierAuthorizer authorizer,
       DossierCursorCodec cursors,
-      DossierMediaProjectionMapper mediaMapper) {
+      DossierMediaProjectionMapper mediaMapper,
+      ObjectMapper mapper) {
     this.activeGenerations = activeGenerations;
     this.activities = activities;
     this.media = media;
+    this.sourceFacts = sourceFacts;
     this.unlinked = unlinked;
     this.deadLetters = deadLetters;
     this.authorizer = authorizer;
     this.cursors = cursors;
     this.mediaMapper = mediaMapper;
+    this.mapper = mapper;
   }
 
   /**
@@ -123,7 +133,14 @@ public class DossierQueryService {
                     root.get("warehouseId").in(scope.warehouseIds()));
     List<DossierMediaProjection> mediaRows = media.findAll(visibleMedia);
     List<DossierApiModels.Activity> responseRows =
-        selected.stream().map(row -> map(row, mediaRows)).toList();
+        selected.stream()
+            .map(
+                row ->
+                    map(
+                        row,
+                        mediaRows,
+                        sourceFacts.findByEventId(row.getSourceEventId()).orElse(null)))
+            .toList();
     String next =
         hasNext
             ? cursors.encode(
@@ -202,7 +219,9 @@ public class DossierQueryService {
   }
 
   private DossierApiModels.Activity map(
-      DossierActivity value, List<DossierMediaProjection> mediaRows) {
+      DossierActivity value,
+      List<DossierMediaProjection> mediaRows,
+      DossierSourceFact sourceFact) {
     List<DossierApiModels.MediaProjection> attached =
         mediaRows.stream()
             .filter(
@@ -232,7 +251,46 @@ public class DossierQueryService {
             value.getSourceAggregateType(),
             value.getSourceAggregateId(),
             value.getSourceSecondaryId()),
-        attached);
+        attached,
+        taskEvidencePhotos(value, sourceFact));
+  }
+
+  /**
+   * Extracts the contract-defined task-evidence reference from the immutable validated journal.
+   * Corrupt or incompatible stored data is omitted rather than disclosed or reconstructed.
+   */
+  private List<DossierApiModels.TaskEvidencePhoto> taskEvidencePhotos(
+      DossierActivity activity, DossierSourceFact sourceFact) {
+    if (activity.getActivityCode() != DossierActivityCode.MEDIA_TASK_EVIDENCE_ATTACHED
+        || sourceFact == null
+        || !activity.getSourceEventId().equals(sourceFact.getEventId())
+        || sourceFact.getProducer() != DossierProducer.MEDIA
+        || !"CABIN_PHOTO_LIBRARY".equals(sourceFact.getAggregateType())
+        || !"media.cabin.cover-changed.v1".equals(sourceFact.getEventType())) {
+      return List.of();
+    }
+    try {
+      JsonNode payload = mapper.readTree(sourceFact.getCanonicalEnvelope()).path("payload");
+      UUID mediaId = requiredUuid(payload, "mediaId");
+      UUID taskBoardEntryId = requiredUuid(payload, "taskBoardEntryId");
+      JsonNode generation = payload.required("generation");
+      if (!generation.isIntegralNumber()
+          || !generation.canConvertToLong()
+          || generation.longValue() <= 0) {
+        return List.of();
+      }
+      return List.of(
+          new DossierApiModels.TaskEvidencePhoto(
+              mediaId, generation.longValue(), taskBoardEntryId));
+    } catch (RuntimeException exception) {
+      return List.of();
+    }
+  }
+
+  private static UUID requiredUuid(JsonNode object, String field) {
+    JsonNode value = object.required(field);
+    if (!value.isTextual()) throw new IllegalArgumentException("DOSSIER_TASK_EVIDENCE_INVALID");
+    return UUID.fromString(value.stringValue());
   }
 
   private static void validate(Query query) {

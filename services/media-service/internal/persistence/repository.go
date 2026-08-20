@@ -325,7 +325,7 @@ func (repository *Repository) CreateUpload(ctx context.Context, command CreateUp
 			return AssetRecord{}, false, ErrConflict
 		}
 		if err := associateCabinImageUpload(ctx, tx, cabinID, assetID,
-			command.WarehouseID, command.SortOrder, now); err != nil {
+			command.WarehouseID, folderID, command.SortOrder, now); err != nil {
 			return AssetRecord{}, false, err
 		}
 	}
@@ -1336,6 +1336,9 @@ func (repository *Repository) ReadCabinCovers(
 				asset.processing_status,asset.current_generation,
 				photo.sort_order,photo.attached_at as created_at
 			from media_cabin_photo photo
+			join media_cabin_photo_library active_library
+			  on active_library.cabin_id=photo.cabin_id
+			 and active_library.active_gallery_folder_id=photo.gallery_folder_id
 			join media_asset asset on asset.media_id=photo.media_id
 			where photo.warehouse_id=$1 and photo.cabin_id::text=any($2::text[])
 			  and asset.media_kind='IMAGE' and asset.deleted_at is null

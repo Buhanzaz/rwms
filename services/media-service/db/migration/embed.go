@@ -74,3 +74,8 @@ var V11 []byte
 //
 //go:embed V12__video_playback_variant.sql
 var V12 []byte
+
+// V13 contains the immutable authoritative inventory CABIN-photo migration bytes.
+//
+//go:embed V13__authoritative_inventory_cabin_photos.sql
+var V13 []byte

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Media Service API
-  version: 1.14.0
+  version: 1.15.0
   license: { name: UNLICENSED }
   description: >-
     Stateful Go media API. PostgreSQL owns metadata and replay state; MinIO
@@ -89,6 +89,59 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ServiceOwnerProof' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /api/internal/media/v1/inventory/outcomes/{inventoryId}/findings/{findingId}/cabin-photos:
+    put:
+      summary: Make a completed inventory finding photo batch the current cabin folder
+      operationId: applyInventoryCabinPhotos
+      description: >-
+        Requires only a SERVICE JWT with sub=client_id=inventory-service,
+        audience rwms-services and exactly media.inventory. In one serializable
+        media-owned transaction the command validates current active CABIN and
+        INVENTORY_FINDING owner proofs in the same warehouse, validates every
+        unique reference as a READY IMAGE at its exact current generation and
+        requires coverMediaId among those references. It associates the
+        existing assets to one deterministic gallery folder without changing
+        media ownership or deleting any PostgreSQL row or MinIO object, makes
+        that folder and cover current, and retains every prior folder in the
+        CABIN gallery history. Exact Idempotency-Key replay returns its frozen
+        receipt; changed key reuse, an older completion, or a different
+        immutable source at the same completedAt is rejected. A new key may
+        reassert the same latest immutable source after another cover change.
+      parameters:
+        - name: inventoryId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: findingId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApplyInventoryCabinPhotosRequest' }
+      responses:
+        '200':
+          description: Exact frozen idempotent replay.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InventoryCabinPhotosResult' }
+        '201':
+          description: New receipt committed; the latest immutable source is selected or reasserted.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InventoryCabinPhotosResult' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -504,6 +557,11 @@ paths:
     get:
       summary: List bounded owner media with same-origin derived content paths
       operationId: listOwnerMedia
+      description: >-
+        For ownerType CABIN the list is the complete retained photo archive.
+        folderId is the media-owned association gallery folder, so a completed
+        inventory batch is returned as one folder while all earlier direct,
+        task-evidence and inventory folders remain separately grouped.
       parameters:
         - $ref: '#/components/parameters/OwnerType'
         - $ref: '#/components/parameters/OwnerId'
@@ -535,11 +593,14 @@ paths:
       operationId: listCabinCovers
       description: >-
         Requires USER, rwms.read and warehouse VIEW. The service returns only
-        cabins with a current canonical media owner binding. photoCount counts
-        logical non-deleted IMAGE associations, never derived variant rows.
-        previews contains at most 100 ordered READY images with exactly one
-        SMALL variant per logical image. cover is resolved only through the
-        canonical single cover pointer and never by a sort-order fallback.
+        cabins with a current canonical media owner binding. photoCount and
+        previews include only associations from the active gallery folder;
+        historical folders remain available from the CABIN archive list.
+        photoCount counts logical non-deleted IMAGE associations, never derived
+        variant rows. previews contains at most 100 ordered READY images with
+        exactly one SMALL variant per logical image. cover is resolved only
+        through the active folder's canonical pointer and never by a sort-order
+        fallback.
       requestBody:
         required: true
         content:
@@ -953,6 +1014,65 @@ components:
       properties:
         mediaId: { type: string, format: uuid }
         generation: { type: integer, minimum: 1 }
+    ApplyInventoryCabinPhotosRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - warehouseId
+        - cabinId
+        - completedAt
+        - sourceRevision
+        - finalPlanVersion
+        - finalPlanSha256
+        - coverMediaId
+        - mediaReferences
+      properties:
+        warehouseId: { type: string, format: uuid }
+        cabinId: { type: string, format: uuid }
+        completedAt:
+          description: Authoritative completion time used by the per-cabin latest-result fence.
+          type: string
+          format: date-time
+        sourceRevision: { type: integer, format: int64, minimum: 1 }
+        finalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        finalPlanSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        coverMediaId:
+          description: One mediaId from mediaReferences that becomes the current CABIN cover.
+          type: string
+          format: uuid
+        mediaReferences:
+          description: One to one hundred unique READY finding-owned IMAGE generations selected by the final plan.
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/OpaqueReadyMediaReference' }
+    InventoryCabinPhotosResult:
+      type: object
+      additionalProperties: false
+      required:
+        - inventoryId
+        - findingId
+        - cabinId
+        - folderId
+        - coverMediaId
+        - photoCount
+        - libraryVersion
+        - replay
+      properties:
+        inventoryId: { type: string, format: uuid }
+        findingId: { type: string, format: uuid }
+        cabinId: { type: string, format: uuid }
+        folderId:
+          description: Deterministic CABIN gallery folder for this immutable completed source.
+          type: string
+          format: uuid
+        coverMediaId: { type: string, format: uuid }
+        photoCount: { type: integer, minimum: 1, maximum: 100 }
+        libraryVersion: { type: integer, format: int64, minimum: 0 }
+        replay:
+          description: True only for the exact frozen Idempotency-Key receipt.
+          type: boolean
     LogisticsMediaReferenceValidationRequest:
       type: object
       additionalProperties: false
@@ -1225,17 +1345,17 @@ components:
       properties:
         cabinId: { type: string, format: uuid }
         photoCount:
-          description: Number of logical, non-deleted IMAGE assets for this cabin.
+          description: Number of logical, non-deleted IMAGE associations in the active gallery folder.
           type: integer
           minimum: 1
           maximum: 100
         cover:
-          description: Exact canonical cover pointer projection; null when the pointer has no READY SMALL variant.
+          description: Exact active-folder cover pointer projection; null when the pointer has no READY SMALL variant.
           oneOf:
             - { $ref: '#/components/schemas/CabinCoverVariant' }
             - { type: 'null' }
         previews:
-          description: Ordered READY, non-deleted logical images with one exact SMALL variant each.
+          description: Ordered READY, non-deleted active-folder images with one exact SMALL variant each.
           type: array
           maxItems: 100
           uniqueItems: true
@@ -1262,7 +1382,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         folderId:
-          description: Logical photo folder shared by assets from one batch upload.
+          description: Logical owner folder; for CABIN archive reads this is the association gallery folder, including inventory-derived batches.
           type: string
           format: uuid
         clientReferenceId:

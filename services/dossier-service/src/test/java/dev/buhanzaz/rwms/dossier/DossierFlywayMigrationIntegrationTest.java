@@ -65,7 +65,7 @@ class DossierFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndPassesJpaValidation() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(4);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(5);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -133,7 +133,7 @@ class DossierFlywayMigrationIntegrationTest {
     insertLegacyMediaProjection(cabinId, warehouseId, firstMediaId, 0);
     insertLegacyMediaProjection(cabinId, warehouseId, secondMediaId, 1);
 
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(4);
     assertThat(
             jdbc.queryForObject(
                 "select folder_id from dossier_media_projection where media_id=?",
@@ -200,7 +200,7 @@ class DossierFlywayMigrationIntegrationTest {
         "update dossier_sanitized_dead_letter set failure_code='INVALID_ENVELOPE' where id=?",
         validationFailureWithEventId);
 
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(3);
 
     assertThat(
             jdbc.queryForObject(
@@ -252,19 +252,19 @@ class DossierFlywayMigrationIntegrationTest {
   }
 
   @Test
-  void v4AddsOnlyTheCanonicalRepairTransferActivityCodes() {
-    Flyway throughV3 =
+  void v5AddsTheCanonicalTaskEvidenceActivityCodeWithoutRemovingExistingCodes() {
+    Flyway throughV4 =
         Flyway.configure()
             .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
             .locations(MIGRATIONS)
-            .target("3")
+            .target("4")
             .baselineOnMigrate(false)
             .validateOnMigrate(true)
             .validateMigrationNaming(true)
             .cleanDisabled(true)
             .outOfOrder(false)
             .load();
-    assertThat(throughV3.migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(throughV4.migrate().migrationsExecuted).isEqualTo(4);
 
     assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isOne();
 
@@ -278,7 +278,12 @@ class DossierFlywayMigrationIntegrationTest {
             """,
             String.class);
     assertThat(definition)
-        .contains("REPAIR_TRANSFER_PREPARED", "REPAIR_TRANSFERRED", "CABIN_CREATED")
+        .contains(
+            "REPAIR_TRANSFER_PREPARED",
+            "REPAIR_TRANSFERRED",
+            "MEDIA_TASK_EVIDENCE_ATTACHED",
+            "MEDIA_READY",
+            "CABIN_CREATED")
         .doesNotContain("REPAIR_TRANSFER_FAILED");
   }
 
@@ -583,7 +588,6 @@ class DossierFlywayMigrationIntegrationTest {
             .profiles("test")
             .web(WebApplicationType.SERVLET)
             .properties(
-                "server.port=0",
                 "spring.datasource.url=" + POSTGRES.getJdbcUrl(),
                 "spring.datasource.username=" + POSTGRES.getUsername(),
                 "spring.datasource.password=" + POSTGRES.getPassword(),
@@ -597,7 +601,7 @@ class DossierFlywayMigrationIntegrationTest {
                 "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://127.0.0.1:65535/jwks",
                 "rwms.platform.kafka.enabled=false",
                 "rwms.dossier.security.dev-auth-bypass=false")
-            .run()) {
+            .run("--server.port=0")) {
       assertThat(context.getBean(EntityManagerFactory.class).isOpen()).isTrue();
       assertRepositoryOrdering(context);
       assertDltRepeatSave(context);

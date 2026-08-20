@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.dossier.eventing;
 
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.charset.StandardCharsets;
@@ -50,6 +51,24 @@ class DossierProducerSchemaValidatorTest {
             """
             {"inventoryId":"20000000-0000-0000-0000-000000000001","warehouseId":"30000000-0000-0000-0000-000000000001","sessionRevision":1,"lifecycle":"COMPLETED","businessDate":"2026-07-18","expectedCount":0,"findingCount":0,"terminalAt":"2026-07-18T01:00:00Z","statistics":{"unexpected":"field"}}
             """));
+  }
+
+  @Test
+  void acceptsTheCanonicalCabinPhotoFactSchema() {
+    assertThatCode(
+            () ->
+                schemas.validate(
+                    "rwms.media.cabin-photo.v1",
+                    envelope(
+                            "media.cabin.cover-changed.v1",
+                            "media-service",
+                            "CABIN_PHOTO_LIBRARY",
+                            1,
+                            """
+                            {"cabinId":"20000000-0000-0000-0000-000000000001","warehouseId":"30000000-0000-0000-0000-000000000001","mediaId":"40000000-0000-0000-0000-000000000001","generation":1,"taskBoardEntryId":"50000000-0000-0000-0000-000000000001","previousCoverMediaId":null,"changedAt":"2026-07-18T00:00:00Z"}
+                            """)
+                        .getBytes(StandardCharsets.UTF_8)))
+        .doesNotThrowAnyException();
   }
 
   private void assertRejected(String topic, String value) {

@@ -212,6 +212,17 @@ func PostgresDatabaseURL(baseURL, databaseName string) (string, error) {
 // It is used by legacy integration tests that otherwise share mutable outbox
 // and owner-projection state through MEDIA_TEST_DATABASE_URL.
 func NewMigratedMediaDatabase(t testing.TB, baseURL string) string {
+	return newMigratedMediaDatabase(t, baseURL, true)
+}
+
+// NewMigratedMediaDatabaseThroughV12 returns an isolated database immediately
+// before the authoritative inventory photo migration so its additive upgrade
+// path can be tested without touching a shared database.
+func NewMigratedMediaDatabaseThroughV12(t testing.TB, baseURL string) string {
+	return newMigratedMediaDatabase(t, baseURL, false)
+}
+
+func newMigratedMediaDatabase(t testing.TB, baseURL string, includeV13 bool) string {
 	t.Helper()
 	databaseURL := NewIsolatedPostgresDatabase(t, baseURL)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -251,6 +262,10 @@ func NewMigratedMediaDatabase(t testing.TB, baseURL string) string {
 		{"canonical cabin photo library", "V10__canonical_cabin_photo_library.sql", mediamigration.V10},
 		{"bounded media processing recovery", "V11__bounded_media_processing_recovery.sql", mediamigration.V11},
 		{"video playback variant", "V12__video_playback_variant.sql", mediamigration.V12},
+		{"authoritative inventory cabin photos", "V13__authoritative_inventory_cabin_photos.sql", mediamigration.V13},
+	}
+	if !includeV13 {
+		migrations = migrations[:len(migrations)-1]
 	}
 	for index, migration := range migrations {
 		started := time.Now()
@@ -260,7 +275,7 @@ func NewMigratedMediaDatabase(t testing.TB, baseURL string) string {
 		if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
 			installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
 		values ($1,$2,$3,'SQL',$4,$5,current_user,$6,true)`, index+1,
-			[]string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12"}[index],
+			[]string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13"}[index],
 			migration.description, migration.script, realFlywayChecksum(migration.body),
 			int(time.Since(started)/time.Millisecond)); err != nil {
 			t.Fatalf("record isolated media %s: %v", migration.script, err)

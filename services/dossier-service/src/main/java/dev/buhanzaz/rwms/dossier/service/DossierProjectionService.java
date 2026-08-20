@@ -119,7 +119,7 @@ public class DossierProjectionService {
       return ProjectionOutcome.DEFERRED;
     }
 
-    if (producer == DossierProducer.MEDIA) {
+    if (isMediaLifecycle(event, producer)) {
       applyMedia(event, generationId, subject, now);
     }
     boolean projected = createActivity(event, generationId, producer, subject, now, publish);
@@ -304,6 +304,7 @@ public class DossierProjectionService {
       OffsetDateTime now,
       boolean publish) {
     if (event.activityCode() == null
+        || isDirectCabinCoverChange(event)
         || activities.existsBySourceEventIdAndCabinIdAndGenerationId(
             event.eventId(), subject.cabinId(), generationId)) {
       return false;
@@ -423,7 +424,10 @@ public class DossierProjectionService {
             .findAllByProducerAndSubjectSecondaryIdOrderByRecordedAtAscEventIdAsc(
                 DossierProducer.MEDIA, cabinId)
             .stream()
-            .filter(value -> "MEDIA".equals(value.getAggregateType()))
+            .filter(
+                value ->
+                    "MEDIA".equals(value.getAggregateType())
+                        || "CABIN_PHOTO_LIBRARY".equals(value.getAggregateType()))
             .sorted(
                 Comparator.comparingLong(
                         dev.buhanzaz.rwms.dossier.domain.DossierSourceFact::getAggregateVersion)
@@ -458,7 +462,9 @@ public class DossierProjectionService {
         deferredConflicts.identityConflict(deferred, generationId, now);
         continue;
       }
-      applyMedia(deferred, generationId, subject, now);
+      if (isMediaLifecycle(deferred, DossierProducer.MEDIA)) {
+        applyMedia(deferred, generationId, subject, now);
+      }
       createActivity(deferred, generationId, DossierProducer.MEDIA, subject, now, publish);
       unlinked
           .findBySourceEventIdAndGenerationId(deferred.eventId(), generationId)
@@ -535,7 +541,7 @@ public class DossierProjectionService {
             continue;
           }
           DossierProducer producer = producer(deferred.producerCode());
-          if (producer == DossierProducer.MEDIA) {
+          if (isMediaLifecycle(deferred, producer)) {
             applyMedia(deferred, generationId, subject, now);
           }
           createActivity(deferred, generationId, producer, subject, now, publish);
@@ -629,6 +635,17 @@ public class DossierProjectionService {
   private static DossierProducer producer(String producerCode) {
     return DossierProducer.valueOf(
         producerCode.replace('-', '_').toUpperCase(java.util.Locale.ROOT));
+  }
+
+  /** Returns whether a fact carries the media lifecycle shape consumed by the media projection. */
+  private static boolean isMediaLifecycle(DossierValidatedEvent event, DossierProducer producer) {
+    return producer == DossierProducer.MEDIA && "MEDIA".equals(event.aggregateType());
+  }
+
+  /** Keeps direct cabin-cover changes in the immutable journal without inventing a task history row. */
+  private static boolean isDirectCabinCoverChange(DossierValidatedEvent event) {
+    return "media.cabin.cover-changed.v1".equals(event.eventType())
+        && event.payload().required("taskBoardEntryId").isNull();
   }
 
   private record ResolvedSubject(UUID cabinId, UUID warehouseId) {}

@@ -58,6 +58,7 @@ spring:
         - rwms.inventory.session.v1.dossier-projection-v1.dlt
         - rwms.inventory.publication.v1.dossier-projection-v1.dlt
         - rwms.media.media.v1.dossier-projection-v1.dlt
+        - rwms.media.cabin-photo.v1.dossier-projection-v1.dlt
         - rwms.logistics.return.v1.dossier-projection-v1.dlt
         - rwms.logistics.shipment.v1.dossier-projection-v1.dlt
         - rwms.logistics.transfer.v1.dossier-projection-v1.dlt
@@ -65,7 +66,7 @@ spring:
         - rwms.task-board.queue-entry.v1.dossier-projection-v1.dlt
       bindings:
         dossierSourceConsumer-in-0:
-          destination: rwms.asset.rental-item.v1,rwms.maintenance.estimate.v1,rwms.maintenance.repair.v1,rwms.inventory.session.v1,rwms.inventory.publication.v1,rwms.media.media.v1,rwms.logistics.return.v1,rwms.logistics.shipment.v1,rwms.logistics.transfer.v1,rwms.task-board.board-task.v1,rwms.task-board.queue-entry.v1
+          destination: rwms.asset.rental-item.v1,rwms.maintenance.estimate.v1,rwms.maintenance.repair.v1,rwms.inventory.session.v1,rwms.inventory.publication.v1,rwms.media.media.v1,rwms.media.cabin-photo.v1,rwms.logistics.return.v1,rwms.logistics.shipment.v1,rwms.logistics.transfer.v1,rwms.task-board.board-task.v1,rwms.task-board.queue-entry.v1
           group: dossier-projection-v1
           consumer:
             max-attempts: 1

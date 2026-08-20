@@ -207,6 +207,10 @@ public final class DossierEnvelopeValidator {
           default -> throw invalid("SOURCE_SCHEMA_REJECTED");
         };
       }
+      case CABIN_PHOTO -> {
+        UUID cabinId = uuid(payload, "cabinId", false);
+        yield new Subject(cabinId, uuid(payload, "warehouseId", false), cabinId);
+      }
       case NONE -> new Subject(null, optionalUuid(payload, "warehouseId"), aggregateId);
     };
   }
@@ -282,6 +286,26 @@ public final class DossierEnvelopeValidator {
         "media.media.deleted.v1", "MEDIA_DELETED");
     mediaCodes.forEach((event, code) -> add(result, "rwms.media.media.v1", "MEDIA", SubjectKind.MEDIA, media, requiredMedia, "mediaId", code, event));
     add(result, "rwms.media.media.v1", "MEDIA", SubjectKind.MEDIA, media, requiredMedia, "mediaId", null, "media.media.uploaded.v1");
+
+    Set<String> cabinPhoto =
+        Set.of(
+            "cabinId",
+            "warehouseId",
+            "mediaId",
+            "generation",
+            "taskBoardEntryId",
+            "previousCoverMediaId",
+            "changedAt");
+    add(
+        result,
+        "rwms.media.cabin-photo.v1",
+        "CABIN_PHOTO_LIBRARY",
+        SubjectKind.CABIN_PHOTO,
+        cabinPhoto,
+        cabinPhoto,
+        "cabinId",
+        "MEDIA_TASK_EVIDENCE_ATTACHED",
+        "media.cabin.cover-changed.v1");
 
     Set<String> logistics = Set.of("documentId", "documentType", "state", "warehouseId", "destinationWarehouseId", "lineCount", "resultCode");
     String[] families = {"return", "shipment", "transfer"};
@@ -472,6 +496,7 @@ public final class DossierEnvelopeValidator {
     INVENTORY_PUBLICATION,
     INVENTORY_OWNER_PROOF,
     MEDIA,
+    CABIN_PHOTO,
     NONE
   }
 }

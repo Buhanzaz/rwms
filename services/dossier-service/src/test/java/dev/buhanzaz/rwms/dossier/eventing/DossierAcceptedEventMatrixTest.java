@@ -34,6 +34,7 @@ class DossierAcceptedEventMatrixTest {
         events("events/inventory/inventory-events-v1.schema.json", "inventory.publication."));
     assertTopic(
         "rwms.media.media.v1", events("events/media/media-facts-v1.schema.json", "media.media."));
+    assertTopic("rwms.media.cabin-photo.v1", Set.of("media.cabin.cover-changed.v1"));
     for (String family : Set.of("return", "shipment", "transfer")) {
       assertTopic(
           "rwms.logistics." + family + ".v1",

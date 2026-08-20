@@ -577,7 +577,7 @@ func (repository *Repository) ImportAsset(ctx context.Context, command assetimpo
 		return assetimport.ImportAssetResult{}, translateAssetImportError(err)
 	}
 	if err := associateCabinImageUpload(ctx, tx, command.CabinID, command.MediaID,
-		command.WarehouseID, 0, now); err != nil {
+		command.WarehouseID, command.MediaID, 0, now); err != nil {
 		return assetimport.ImportAssetResult{}, err
 	}
 	jobID := uuid.New()

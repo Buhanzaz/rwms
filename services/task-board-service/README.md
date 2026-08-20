@@ -69,9 +69,11 @@ slingers. The waiting logistics task is announced only on the DriverApp SSE surf
 receives neither a pre-take `NEW_TASK` nor a cross-surface entry ID. A slinger joins from the
 current group; if that worker was executing another group task, task-board pauses the whole
 previous entry and resumes it after the shared task closes. Every
-logistics-driver secondary binding is required and interrupting, and completion by either assigned
-participant requires at least one READY result photo. A group-less primary assignment never
-satisfies a secondary binding, even when that driver also has the slinger qualification. Only the
+logistics-driver secondary binding is optional for native execution and remains interrupting when
+the slinger joins. The driver may close before a slinger joins; once joined, either active
+participant may close with at least one READY result photo from either participant. A group-less
+primary assignment never becomes a secondary assignment, even when that driver also has the
+slinger qualification. Only the
 private source replan boundary may replace audience under the shared task/entry version fence;
 public board movement does not.
 
@@ -199,8 +201,9 @@ so shared and unassigned audiences remain identity-free.
 [`V30__driver_worker_surfaces_and_push_outbox.sql`](src/main/resources/db/migration/V30__driver_worker_surfaces_and_push_outbox.sql)
 separates WorkerApp/DriverApp installations, adds the leased push outbox, normalizes every configured
 logistics secondary binding to required/interrupting/notified, and raises its result-photo minimum
-to one. It does not invent a missing slinger class; each active logistics-driver queue must have an
-explicit primary driver binding and at least one secondary slinger binding.
+to one. The current mobile surface policy deliberately exposes configured secondaries as optional:
+it retains notification and group interruption when a slinger joins, but never blocks driver
+completion waiting for one. The migration does not invent a missing slinger class.
 
 ## Security and isolation
 

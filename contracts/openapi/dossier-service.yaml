@@ -185,6 +185,7 @@ components:
         - INVENTORY_PUBLICATION_BLOCKED
         - INVENTORY_PUBLICATION_CLOSED_BLOCKED
         - MEDIA_READY
+        - MEDIA_TASK_EVIDENCE_ATTACHED
         - MEDIA_FAILED
         - MEDIA_ROTATED
         - MEDIA_DELETED
@@ -235,6 +236,18 @@ components:
         findingId: { type: string, format: uuid }
         generation: { type: integer, format: int64, minimum: 0 }
         state: { $ref: '#/components/schemas/MediaState' }
+    TaskEvidencePhoto:
+      type: object
+      additionalProperties: false
+      description: >-
+        Opaque task-evidence media revision. Resolve it only through the
+        authorized task-board media owner scope; no object location or signed
+        URL is returned by dossier.
+      required: [mediaId, generation, taskBoardEntryId]
+      properties:
+        mediaId: { type: string, format: uuid }
+        generation: { type: integer, format: int64, minimum: 1 }
+        taskBoardEntryId: { type: string, format: uuid }
     Activity:
       type: object
       additionalProperties: false
@@ -269,6 +282,10 @@ components:
         media:
           type: array
           items: { $ref: '#/components/schemas/MediaProjection' }
+        taskEvidencePhotos:
+          type: array
+          maxItems: 1
+          items: { $ref: '#/components/schemas/TaskEvidencePhoto' }
     CabinDossierResponse:
       type: object
       additionalProperties: false

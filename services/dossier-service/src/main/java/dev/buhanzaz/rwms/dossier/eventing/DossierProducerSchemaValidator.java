@@ -23,6 +23,7 @@ public final class DossierProducerSchemaValidator {
     JsonSchema maintenance = load("maintenance/maintenance-events-v1.schema.json");
     JsonSchema inventory = load("inventory/inventory-events-v1.schema.json");
     JsonSchema media = load("media/media-facts-v1.schema.json");
+    JsonSchema cabinPhoto = load("media/cabin-photo-facts-v1.schema.json");
     JsonSchema logistics = load("logistics/logistics-events-v1.schema.json");
     JsonSchema taskBoard = load("task-board/task-board-events-v1.schema.json");
     schemas =
@@ -33,6 +34,7 @@ public final class DossierProducerSchemaValidator {
             Map.entry("rwms.inventory.session.v1", inventory),
             Map.entry("rwms.inventory.publication.v1", inventory),
             Map.entry("rwms.media.media.v1", media),
+            Map.entry("rwms.media.cabin-photo.v1", cabinPhoto),
             Map.entry("rwms.logistics.return.v1", logistics),
             Map.entry("rwms.logistics.shipment.v1", logistics),
             Map.entry("rwms.logistics.transfer.v1", logistics),

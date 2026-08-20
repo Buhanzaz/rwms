@@ -70,9 +70,11 @@ push `TASK_JOIN_AVAILABLE` для подходящих стропальщико�
 Стропальщик присоединяется из current group; если он выполнял другое групповое задание, task-board
 ставит на паузу всю предыдущую entry и
 возобновляет её после закрытия совместной задачи. Каждый logistics-driver secondary binding
-обязательный и interrupting, а completion любым назначенным участником требует минимум одно READY
-result photo. Primary assignment без группы никогда не закрывает secondary binding, даже если у
-водителя также есть квалификация стропальщика. Только private source replan boundary может заменить
+необязателен для native execution и остаётся interrupting, когда стропальщик присоединяется.
+Водитель может закрыть задание до JOIN стропальщика; после JOIN закрыть может любой активный
+участник при хотя бы одном READY result photo от любого участника. Primary assignment без группы
+никогда не становится secondary assignment, даже если у водителя также есть квалификация
+стропальщика. Только private source replan boundary может заменить
 audience под общим task/entry version fence; public board move её не меняет.
 
 ## Внутренняя структура приложения
@@ -198,9 +200,9 @@ Migration
 [`V30__driver_worker_surfaces_and_push_outbox.sql`](src/main/resources/db/migration/V30__driver_worker_surfaces_and_push_outbox.sql)
 разделяет WorkerApp/DriverApp installations, добавляет leased push outbox, нормализует каждый
 настроенный logistics secondary binding как required/interrupting/notified и повышает минимум
-result photo до одного. Миграция не придумывает отсутствующий класс стропальщиков: каждая активная
-logistics-driver queue должна явно иметь primary binding водителя и хотя бы один secondary binding
-стропальщика.
+result photo до одного. Текущая mobile surface policy намеренно показывает настроенный secondary
+binding как необязательный: notification и прерывание группы при JOIN сохраняются, но driver
+completion никогда не ждёт стропальщика. Миграция не придумывает отсутствующий класс стропальщиков.
 
 ## Безопасность и изоляция
 

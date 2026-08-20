@@ -132,10 +132,11 @@ func TestOpenAPIParsesAndExposesOnlyApprovedRuntimePaths(t *testing.T) {
 	}
 	paths := objectAt(t, document, "paths")
 	approved := map[string]string{
-		"/health/live":                                                                                     "get",
-		"/health/ready":                                                                                    "get",
-		"/api/media/v1/events":                                                                             "get",
-		"/api/internal/media/v1/owner-proofs":                                                              "post",
+		"/health/live":                        "get",
+		"/health/ready":                       "get",
+		"/api/media/v1/events":                "get",
+		"/api/internal/media/v1/owner-proofs": "post",
+		"/api/internal/media/v1/inventory/outcomes/{inventoryId}/findings/{findingId}/cabin-photos":        "put",
 		"/api/internal/media/v1/asset-imports/preflight":                                                   "post",
 		"/api/internal/media/v1/asset-imports/{jobId}":                                                     "get",
 		"/api/internal/media/v1/asset-imports/{jobId}/activate":                                            "post",
@@ -148,11 +149,11 @@ func TestOpenAPIParsesAndExposesOnlyApprovedRuntimePaths(t *testing.T) {
 		"/api/media/v1/upload-sessions":                                                                    "post",
 		"/api/media/v1/upload-sessions/{uploadSessionId}/content":                                          "put",
 		"/api/media/v1/upload-sessions/{uploadSessionId}/complete":                                         "post",
-		"/api/media/v1/assets":                                                                             "get",
-		"/api/media/v1/cabin-covers":                                                                       "post",
-		"/api/media/v1/assets/{mediaId}/original":                                                          "get",
-		"/api/media/v1/assets/{mediaId}/variants/{variant}/content":                                        "get",
-		"/api/media/v1/assets/{mediaId}/deletion":                                                          "post",
+		"/api/media/v1/assets":                                      "get",
+		"/api/media/v1/cabin-covers":                                "post",
+		"/api/media/v1/assets/{mediaId}/original":                   "get",
+		"/api/media/v1/assets/{mediaId}/variants/{variant}/content": "get",
+		"/api/media/v1/assets/{mediaId}/deletion":                   "post",
 	}
 	if len(paths) != len(approved) {
 		t.Fatalf("OpenAPI paths = %d, want exactly %d", len(paths), len(approved))
@@ -164,6 +165,62 @@ func TestOpenAPIParsesAndExposesOnlyApprovedRuntimePaths(t *testing.T) {
 		}
 		if _, ok := pathItem["delete"]; ok {
 			t.Errorf("%s exposes forbidden delete operation", path)
+		}
+	}
+}
+
+func TestInventoryCabinPhotosContractIsClosedAndExactlyServiceScoped(t *testing.T) {
+	root := repositoryRoot(t)
+	var document map[string]any
+	if err := yaml.Unmarshal(readContract(t, filepath.Join(root, "contracts", "openapi", "media-service.yaml")), &document); err != nil {
+		t.Fatalf("decode media-service.yaml: %v", err)
+	}
+	components := objectAt(t, document, "components")
+	schemas := objectAt(t, components, "schemas")
+	requestSchema := objectAt(t, schemas, "ApplyInventoryCabinPhotosRequest")
+	responseSchema := objectAt(t, schemas, "InventoryCabinPhotosResult")
+	if requestSchema["additionalProperties"] != false || responseSchema["additionalProperties"] != false {
+		t.Fatal("inventory cabin photo request/response must reject additional properties")
+	}
+	requestProperties := objectAt(t, requestSchema, "properties")
+	responseProperties := objectAt(t, responseSchema, "properties")
+	if len(requestProperties) != 8 || len(responseProperties) != 8 {
+		t.Fatalf("inventory cabin photo property counts = request:%d response:%d",
+			len(requestProperties), len(responseProperties))
+	}
+	for _, required := range []string{
+		"warehouseId", "cabinId", "completedAt", "sourceRevision",
+		"finalPlanVersion", "finalPlanSha256", "coverMediaId", "mediaReferences",
+	} {
+		if requestProperties[required] == nil {
+			t.Fatalf("inventory request is missing %s", required)
+		}
+	}
+	for _, required := range []string{
+		"inventoryId", "findingId", "cabinId", "folderId", "coverMediaId",
+		"photoCount", "libraryVersion", "replay",
+	} {
+		if responseProperties[required] == nil {
+			t.Fatalf("inventory response is missing %s", required)
+		}
+	}
+	references := objectAt(t, requestProperties, "mediaReferences")
+	if references["minItems"] != 1 || references["maxItems"] != 100 ||
+		references["uniqueItems"] != true {
+		t.Fatalf("inventory media reference bounds = %#v", references)
+	}
+	paths := objectAt(t, document, "paths")
+	operation := objectAt(t, objectAt(t, paths,
+		"/api/internal/media/v1/inventory/outcomes/{inventoryId}/findings/{findingId}/cabin-photos"), "put")
+	description := stringAt(t, operation, "description")
+	for _, required := range []string{
+		"inventory-service", "media.inventory", "serializable", "READY IMAGE",
+		"deterministic gallery folder", "retains every prior folder",
+		"Idempotency-Key", "older completion", "new key may reassert",
+	} {
+		if !strings.Contains(description, required) {
+			t.Fatalf("inventory operation description does not contain %q: %s",
+				required, description)
 		}
 	}
 }

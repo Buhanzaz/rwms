@@ -26,6 +26,7 @@ class DossierContractTopologyTest {
           "rwms.inventory.session.v1",
           "rwms.inventory.publication.v1",
           "rwms.media.media.v1",
+          "rwms.media.cabin-photo.v1",
           "rwms.logistics.return.v1",
           "rwms.logistics.shipment.v1",
           "rwms.logistics.transfer.v1",
@@ -67,6 +68,7 @@ class DossierContractTopologyTest {
           "INVENTORY_PUBLICATION_BLOCKED",
           "INVENTORY_PUBLICATION_CLOSED_BLOCKED",
           "MEDIA_READY",
+          "MEDIA_TASK_EVIDENCE_ATTACHED",
           "MEDIA_FAILED",
           "MEDIA_ROTATED",
           "MEDIA_DELETED");
@@ -139,6 +141,15 @@ class DossierContractTopologyTest {
     assertThat(map(mediaProjection, "properties").keySet())
         .containsExactlyInAnyOrder("mediaId", "folderId", "findingId", "generation", "state");
 
+    Map<String, Object> taskEvidencePhoto = map(schemas, "TaskEvidencePhoto");
+    assertThat(strings(taskEvidencePhoto, "required"))
+        .containsExactly("mediaId", "generation", "taskBoardEntryId");
+    assertThat(map(taskEvidencePhoto, "properties").keySet())
+        .containsExactlyInAnyOrder("mediaId", "generation", "taskBoardEntryId");
+    Map<String, Object> activity = map(schemas, "Activity");
+    assertThat(strings(activity, "required")).doesNotContain("taskEvidencePhotos");
+    assertThat(map(activity, "properties").keySet()).contains("taskEvidencePhotos");
+
     String raw = Files.readString(OPENAPI);
     assertThat(raw)
         .doesNotContain("sourceEventId")
@@ -161,18 +172,18 @@ class DossierContractTopologyTest {
     INPUT_TOPICS.forEach(topic -> expected.add(topic + ".dossier-projection-v1.dlt"));
     expected.add("rwms.dossier.cabin-activity.v1");
     assertThat(addresses).containsExactlyInAnyOrderElementsOf(expected);
-    assertThat(channels).hasSize(23);
+    assertThat(channels).hasSize(25);
 
     Map<String, Object> operations = map(root, "operations");
-    assertThat(operations).hasSize(23);
+    assertThat(operations).hasSize(25);
     long receives =
         operations.values().stream()
             .map(DossierContractTopologyTest::map)
             .filter(operation -> "receive".equals(operation.get("action")))
             .count();
     long sends = operations.size() - receives;
-    assertThat(receives).isEqualTo(11);
-    assertThat(sends).isEqualTo(12);
+    assertThat(receives).isEqualTo(12);
+    assertThat(sends).isEqualTo(13);
 
     assertThat(root)
         .containsEntry("x-rwms-consumer-group", "dossier-projection-v1")
@@ -278,6 +289,11 @@ class DossierContractTopologyTest {
         "inventory.publication.");
     assertDiscriminator(
         schemas,
+        "CabinPhotoDiscriminator",
+        "media/cabin-photo-facts-v1.schema.json",
+        "media.cabin.");
+    assertDiscriminator(
+        schemas,
         "LogisticsReturnDiscriminator",
         "logistics/logistics-events-v1.schema.json",
         "logistics.return.");
@@ -315,6 +331,7 @@ class DossierContractTopologyTest {
             "InventoryFindingFactV1",
             "InventoryPublicationFactV1",
             "MediaFactV1",
+            "CabinPhotoFactV1",
             "LogisticsReturnFactV1",
             "LogisticsShipmentFactV1",
             "LogisticsTransferFactV1",
@@ -403,7 +420,12 @@ class DossierContractTopologyTest {
 
   private static Set<String> producerEventTypes(String relative, String prefix) throws Exception {
     Map<String, Object> producer = json(CONTRACTS.resolve("events").resolve(relative));
-    return strings(map(map(producer, "properties"), "eventType"), "enum").stream()
+    Map<String, Object> eventType = map(map(producer, "properties"), "eventType");
+    if (eventType.containsKey("const")) {
+      String value = String.valueOf(eventType.get("const"));
+      return value.startsWith(prefix) ? Set.of(value) : Set.of();
+    }
+    return strings(eventType, "enum").stream()
         .filter(value -> value.startsWith(prefix))
         .collect(java.util.stream.Collectors.toUnmodifiableSet());
   }

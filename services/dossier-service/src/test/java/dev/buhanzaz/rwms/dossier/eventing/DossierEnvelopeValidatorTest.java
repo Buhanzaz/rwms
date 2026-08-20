@@ -180,6 +180,37 @@ class DossierEnvelopeValidatorTest {
   }
 
   @Test
+  void validatesTaskEvidenceCabinPhotoAsACabinSubject() {
+    UUID mediaId = UUID.fromString("40000000-0000-0000-0000-000000000009");
+    UUID taskBoardEntryId = UUID.fromString("40000000-0000-0000-0000-000000000010");
+    String fact =
+        envelope(
+                "media.cabin.cover-changed.v1",
+                "media-service",
+                "CABIN_PHOTO_LIBRARY",
+                CABIN_ID,
+                """
+                {"cabinId":"%s","warehouseId":"%s","mediaId":"%s","generation":1,"taskBoardEntryId":"%s","previousCoverMediaId":null,"changedAt":"2026-07-18T00:00:00Z"}
+                """
+                    .formatted(CABIN_ID, WAREHOUSE_ID, mediaId, taskBoardEntryId))
+            .replace("\"aggregateVersion\":0", "\"aggregateVersion\":1");
+
+    DossierValidatedEvent event =
+        validator.validate(
+            "rwms.media.cabin-photo.v1",
+            0,
+            5,
+            CABIN_ID.toString(),
+            fact.getBytes(StandardCharsets.UTF_8));
+
+    assertThat(event.cabinId()).isEqualTo(CABIN_ID);
+    assertThat(event.warehouseId()).isEqualTo(WAREHOUSE_ID);
+    assertThat(event.secondaryId()).isEqualTo(CABIN_ID);
+    assertThat(event.activityCode()).isEqualTo("MEDIA_TASK_EVIDENCE_ATTACHED");
+    assertThat(event.subjectCapable()).isTrue();
+  }
+
+  @Test
   void mapsCanonicalRepairTransferFactsToPublicActivitiesAtTheirEventWarehouse() {
     Map.of(
             "maintenance.repair.transfer-prepared.v1", "REPAIR_TRANSFER_PREPARED",

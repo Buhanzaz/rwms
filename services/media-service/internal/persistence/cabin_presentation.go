@@ -122,6 +122,7 @@ func (repository *Repository) ReadCabinPresentationSnapshots(
 			bool_or(variant.variant='LARGE') as has_large
 		from media_cabin_photo photo
 		join media_cabin_photo_library library on library.cabin_id=photo.cabin_id
+		 and library.active_gallery_folder_id=photo.gallery_folder_id
 		join media_asset asset on asset.media_id=photo.media_id
 		join media_variant variant on variant.media_id=asset.media_id
 		 and variant.generation=asset.current_generation

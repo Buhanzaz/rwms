@@ -73,6 +73,7 @@ type repository interface {
 	GetAssetScoped(context.Context, uuid.UUID, string, string, uuid.UUID) (persistence.AssetRecord, error)
 	UpsertServiceOwnerProof(context.Context, persistence.ServiceOwnerProofCommand) (persistence.ServiceOwnerProofRecord, bool, error)
 	ValidateLogisticsReferences(context.Context, persistence.ValidateLogisticsReferencesCommand) error
+	ApplyInventoryCabinPhotos(context.Context, persistence.ApplyInventoryCabinPhotosCommand) (persistence.InventoryCabinPhotoResult, bool, bool, error)
 	SetCabinCoverFromTaskEvidence(context.Context, persistence.SetCabinCoverFromTaskEvidenceCommand) (persistence.CabinCoverChangeRecord, bool, error)
 	Delete(context.Context, persistence.DeleteCommand) (persistence.AssetRecord, bool, error)
 }
@@ -225,6 +226,7 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("POST /api/internal/media/v1/asset-imports/{jobId}/replace-sources", server.replaceAssetImportSources)
 	server.mux.HandleFunc("POST /api/internal/media/v1/asset-imports/{jobId}/retry", server.retryAssetImport)
 	server.mux.HandleFunc("POST /api/internal/media/v1/logistics/references/validate", server.validateLogisticsReferences)
+	server.mux.HandleFunc("PUT /api/internal/media/v1/inventory/outcomes/{inventoryId}/findings/{findingId}/cabin-photos", server.applyInventoryCabinPhotos)
 	server.mux.HandleFunc("POST /api/internal/media/v1/logistics/cabin-presentations/snapshots", server.listLogisticsCabinPresentationSnapshots)
 	server.mux.HandleFunc("POST /api/internal/media/v1/logistics/cabins/{cabinId}/cover-from-task-evidence", server.setCabinCoverFromTaskEvidence)
 	server.mux.HandleFunc("GET /api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content", server.getLogisticsCabinPresentationVariantContent)
@@ -245,6 +247,7 @@ func (server *Server) routes() {
 	// would conflict with the GET {jobId} pattern in net/http's ServeMux.
 	server.mux.HandleFunc("/api/internal/media/v1/asset-imports/", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/internal/media/v1/logistics/references/validate", server.methodNotAllowed)
+	server.mux.HandleFunc("/api/internal/media/v1/inventory/outcomes/{inventoryId}/findings/{findingId}/cabin-photos", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/internal/media/v1/logistics/cabin-presentations/snapshots", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/internal/media/v1/logistics/cabins/{cabinId}/cover-from-task-evidence", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content", server.methodNotAllowed)
@@ -403,6 +406,128 @@ type validateLogisticsReferencesResponse struct {
 	LineID      uuid.UUID                         `json:"lineId"`
 	WarehouseID uuid.UUID                         `json:"warehouseId"`
 	References  []logisticsMediaReferenceResponse `json:"references"`
+}
+
+// inventoryCabinPhotoReferenceRequest is one exact generation decoded from
+// the private completed-inventory request.
+type inventoryCabinPhotoReferenceRequest struct {
+	MediaID    string `json:"mediaId"`
+	Generation int    `json:"generation"`
+}
+
+// applyInventoryCabinPhotosRequest is the closed JSON shape accepted from
+// inventory-service after a final plan has been completed.
+type applyInventoryCabinPhotosRequest struct {
+	WarehouseID      string                                `json:"warehouseId"`
+	CabinID          string                                `json:"cabinId"`
+	CompletedAt      time.Time                             `json:"completedAt"`
+	SourceRevision   int64                                 `json:"sourceRevision"`
+	FinalPlanVersion int64                                 `json:"finalPlanVersion"`
+	FinalPlanSHA256  string                                `json:"finalPlanSha256"`
+	CoverMediaID     string                                `json:"coverMediaId"`
+	MediaReferences  []inventoryCabinPhotoReferenceRequest `json:"mediaReferences"`
+}
+
+// applyInventoryCabinPhotos accepts only inventory-service's exact private
+// scope and delegates the authoritative folder selection to one serializable
+// media-owned transaction.
+func (server *Server) applyInventoryCabinPhotos(response http.ResponseWriter, request *http.Request) {
+	if !server.inventoryPrincipal(response, request) {
+		return
+	}
+	idempotencyKey, ok := requireUUIDHeader(response, request, "Idempotency-Key", server)
+	if !ok {
+		return
+	}
+	inventoryID, inventoryErr := uuid.Parse(request.PathValue("inventoryId"))
+	findingID, findingErr := uuid.Parse(request.PathValue("findingId"))
+	var body applyInventoryCabinPhotosRequest
+	if !server.decode(response, request, &body) {
+		return
+	}
+	warehouseID, warehouseErr := uuid.Parse(body.WarehouseID)
+	cabinID, cabinErr := uuid.Parse(body.CabinID)
+	coverMediaID, coverErr := uuid.Parse(body.CoverMediaID)
+	completedAt := body.CompletedAt.UTC().Truncate(time.Microsecond)
+	if inventoryErr != nil || findingErr != nil || warehouseErr != nil ||
+		cabinErr != nil || coverErr != nil || inventoryID == uuid.Nil ||
+		findingID == uuid.Nil || warehouseID == uuid.Nil || cabinID == uuid.Nil ||
+		coverMediaID == uuid.Nil || completedAt.IsZero() || body.SourceRevision < 1 ||
+		body.FinalPlanVersion < 1 || !checksumPattern.MatchString(body.FinalPlanSHA256) ||
+		len(body.MediaReferences) < 1 || len(body.MediaReferences) > 100 {
+		server.problem(response, request, http.StatusBadRequest,
+			"MEDIA_INVALID_INVENTORY_CABIN_PHOTOS", "Invalid inventory cabin photo outcome")
+		return
+	}
+	references := make([]persistence.InventoryCabinPhotoReference, 0, len(body.MediaReferences))
+	canonicalReferences := make([]map[string]any, 0, len(body.MediaReferences))
+	seen := make(map[uuid.UUID]struct{}, len(body.MediaReferences))
+	coverFound := false
+	for _, value := range body.MediaReferences {
+		mediaID, err := uuid.Parse(value.MediaID)
+		if err != nil || mediaID == uuid.Nil || value.Generation < 1 {
+			server.problem(response, request, http.StatusBadRequest,
+				"MEDIA_INVALID_INVENTORY_CABIN_PHOTOS", "Invalid inventory cabin photo outcome")
+			return
+		}
+		if _, duplicate := seen[mediaID]; duplicate {
+			server.problem(response, request, http.StatusBadRequest,
+				"MEDIA_INVALID_INVENTORY_CABIN_PHOTOS", "Invalid inventory cabin photo outcome")
+			return
+		}
+		seen[mediaID] = struct{}{}
+		coverFound = coverFound || mediaID == coverMediaID
+		references = append(references, persistence.InventoryCabinPhotoReference{
+			MediaID: mediaID, Generation: value.Generation,
+		})
+		canonicalReferences = append(canonicalReferences, map[string]any{
+			"mediaId": mediaID, "generation": value.Generation,
+		})
+	}
+	if !coverFound {
+		server.problem(response, request, http.StatusBadRequest,
+			"MEDIA_INVALID_INVENTORY_CABIN_PHOTOS", "Invalid inventory cabin photo outcome")
+		return
+	}
+	fingerprint := requestFingerprint(map[string]any{
+		"inventoryId": inventoryID, "findingId": findingID,
+		"warehouseId": warehouseID, "cabinId": cabinID,
+		"completedAt": completedAt, "sourceRevision": body.SourceRevision,
+		"finalPlanVersion": body.FinalPlanVersion,
+		"finalPlanSha256":  body.FinalPlanSHA256,
+		"coverMediaId":     coverMediaID, "mediaReferences": canonicalReferences,
+	})
+	result, replayed, changed, err := server.repository.ApplyInventoryCabinPhotos(
+		request.Context(), persistence.ApplyInventoryCabinPhotosCommand{
+			InventoryID: inventoryID, FindingID: findingID,
+			WarehouseID: warehouseID, CabinID: cabinID, CompletedAt: completedAt,
+			SourceRevision: body.SourceRevision, FinalPlanVersion: body.FinalPlanVersion,
+			FinalPlanSHA256: body.FinalPlanSHA256, CoverMediaID: coverMediaID,
+			MediaReferences: references, IdempotencyKey: idempotencyKey,
+			RequestSHA256: fingerprint, CorrelationID: correlationID(request.Context()),
+		})
+	if err != nil {
+		server.repositoryProblem(response, request, err)
+		return
+	}
+	if changed {
+		server.publishCabinCoverChange(persistence.CabinCoverChangeRecord{
+			CabinID: result.CabinID, WarehouseID: result.WarehouseID,
+			MediaID: result.CoverMediaID, Generation: result.CoverGeneration,
+			Version: result.LibraryVersion, ChangedAt: result.ChangedAt,
+		})
+	}
+	status := http.StatusCreated
+	if replayed {
+		status = http.StatusOK
+	}
+	response.Header().Set("Cache-Control", "no-store")
+	writeJSON(response, status, map[string]any{
+		"inventoryId": result.InventoryID, "findingId": result.FindingID,
+		"cabinId": result.CabinID, "folderId": result.FolderID,
+		"coverMediaId": result.CoverMediaID, "photoCount": result.PhotoCount,
+		"libraryVersion": result.LibraryVersion, "replay": replayed,
+	})
 }
 
 // validateLogisticsReferences proves only the caller-supplied opaque
@@ -1659,6 +1784,18 @@ func (server *Server) logisticsPrincipal(response http.ResponseWriter, request *
 	}
 	err := principal.RequireExact("logistics-service", "media.logistics")
 	if err == nil {
+		return true
+	}
+	server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+	return false
+}
+
+func (server *Server) inventoryPrincipal(response http.ResponseWriter, request *http.Request) bool {
+	principal, ok := server.servicePrincipal(response, request)
+	if !ok {
+		return false
+	}
+	if principal.RequireExact("inventory-service", "media.inventory") == nil {
 		return true
 	}
 	server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")

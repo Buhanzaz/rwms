@@ -696,29 +696,20 @@ class TaskBoardWorkerExecutionService {
   }
 
   private void ensureRequiredSecondaryAssignments(QueueEntry entry) {
+    if (entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER) return;
     List<WorkQueueClassBinding> secondary =
         bindings.findAllByQueueIdOrderByBindingOrderAscIdAsc(entry.getQueue().getId()).stream()
             .filter(binding -> binding.getBindingOrder() > 0)
             .toList();
-    if (entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER
-        && secondary.isEmpty()) {
-      throw new ConflictException(
-          "Для логистической очереди не настроен вторичный класс стропальщиков");
-    }
     List<WorkQueueClassBinding> required =
         secondary.stream()
-            .filter(
-                binding ->
-                    entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER
-                        || binding.getParticipationPolicy() == ParticipationPolicy.REQUIRED)
+            .filter(binding -> binding.getParticipationPolicy() == ParticipationPolicy.REQUIRED)
             .toList();
     if (required.isEmpty()) return;
-    boolean logisticsDriver = entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER;
     Set<UUID> liveSecondaryWorkerIds =
         assignments.findAllByQueueEntryIdAndStatusIn(
                 entry.getId(), Set.of(AssignmentStatus.ACTIVE, AssignmentStatus.PAUSED))
             .stream()
-            .filter(assignment -> !logisticsDriver || assignment.getWorkerGroup() != null)
             .map(TaskAssignment::getWorker)
             .filter(Objects::nonNull)
             .map(Worker::getId)

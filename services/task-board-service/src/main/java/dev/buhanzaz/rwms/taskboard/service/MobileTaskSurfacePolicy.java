@@ -18,8 +18,9 @@ import org.springframework.stereotype.Component;
  * Defines the non-overlapping queue and action capabilities of DriverApp and WorkerApp.
  *
  * <p>The policy is applied to context, feed, detail and commands so a client cannot recover a
- * removed capability by calling a route directly. Driver-logistics secondary bindings are treated
- * as required slinger bindings even while an older stored projection is being upgraded.
+ * removed capability by calling a route directly. Driver-logistics secondary bindings are exposed
+ * as optional slinger participation: the driver starts the task, while a notified slinger may
+ * join it and either active participant may close it after a result photo is ready.
  */
 @Component
 public class MobileTaskSurfacePolicy {
@@ -143,7 +144,7 @@ public class MobileTaskSurfacePolicy {
         binding.order(),
         false,
         true,
-        ParticipationPolicy.REQUIRED,
+        ParticipationPolicy.OPTIONAL,
         true);
   }
 }

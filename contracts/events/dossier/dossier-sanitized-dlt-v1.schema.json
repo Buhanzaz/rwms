@@ -40,6 +40,7 @@
         "rwms.inventory.session.v1",
         "rwms.inventory.publication.v1",
         "rwms.media.media.v1",
+        "rwms.media.cabin-photo.v1",
         "rwms.logistics.return.v1",
         "rwms.logistics.shipment.v1",
         "rwms.logistics.transfer.v1",

@@ -73,6 +73,11 @@ gateway; private `/api/internal/**` доступны только сервиса
 5. Scoped read отдаёт ровно закреплённую версию объекта через media-service с
    `private, no-store`. Логическое удаление меняет PostgreSQL и создаёт один
    факт, но не удаляет версии байтов физически.
+6. После завершения final plan инвентаризации inventory-service может выбрать
+   точные READY поколения изображений, принадлежащих finding, как текущую
+   gallery folder бытовки. Media-service меняет только свои association и
+   cover projections; прежние папки, media rows, variants и версии MinIO
+   сохраняются.
 
 Намеренно нет прямой загрузки браузером в MinIO и изменяемых public URL. Иначе
 раскрываются storage-права, становятся неоднозначными версии объекта и итог
@@ -96,13 +101,14 @@ Flyway выполняется вне процесса. До запуска пр�
 `db/migration/V9__asset_import_worker.sql` и
 `db/migration/V10__canonical_cabin_photo_library.sql`, затем
 `db/migration/V11__bounded_media_processing_recovery.sql`, затем
-`db/migration/V12__video_playback_variant.sql`.
+`db/migration/V12__video_playback_variant.sql`, затем
+`db/migration/V13__authoritative_inventory_cabin_photos.sql`.
 
 Go-приложение не выполняет миграции, baseline, repair и не принимает молча
 чужую непустую базу.
 
-- Новая local/test база мигрируется от V1 до V12.
-- База с точной историей V11 обновляется применением V12.
+- Новая local/test база мигрируется от V1 до V13.
+- База с точной историей V12 обновляется применением V13.
 - `baselineOnMigrate` должен оставаться `false`; непустая база без истории
   миграций отклоняется.
 - На старте и readiness проверяются успешные строки Flyway, их версии,
@@ -202,10 +208,14 @@ return/shipment/transfer. Все они авторизуются по local owne
 внутри media-service.
 
 `POST /api/media/v1/cabin-covers` возвращает ограниченную warehouse batch.
-`photoCount` считает логические не удалённые IMAGE assets. В `previews` не
-более 100 READY изображений в каноническом порядке, ровно с одним `SMALL`
-variant на логическое изображение; `cover` — первый preview для совместимости.
-MEDIUM, LARGE, ORIGINAL и координаты object storage эта projection не выдаёт.
+`photoCount`, `previews` и явный `cover` включают только активную gallery
+folder. В `previews` не более 100 READY изображений в порядке associations,
+ровно с одним `SMALL` variant на логическое изображение. MEDIUM, LARGE,
+ORIGINAL и координаты object storage эта projection не выдаёт. CABIN owner
+read через `GET /api/media/v1/assets` остаётся полным архивом: его projected
+`folderId` берётся из CABIN association, поэтому фотографии инвентаризации
+образуют одну deterministic folder без изменения принадлежащих finding строк
+`media_asset`.
 
 Inventory stream должен начинаться с `inventory.finding.added.v1` версии 0;
 последующие facts непрерывны и сохраняют исходный warehouse. Reuse event ID,
@@ -218,6 +228,35 @@ bypass нет:
 ```bash
 MEDIA_DATABASE_URL=... media-service reconcile-inventory-owner reviewed-batch.json
 ```
+
+## Авторитетные папки бытовки из инвентаризации
+
+`PUT /api/internal/media/v1/inventory/outcomes/{inventoryId}/findings/{findingId}/cabin-photos`
+принимает только точный SERVICE JWT inventory-service с единственным scope
+`media.inventory` и UUID `Idempotency-Key`. Точная transport shape задана в
+[`media-service.yaml`](../../contracts/openapi/media-service.yaml), а
+serializable transition принадлежит
+[`inventory_cabin_photos.go`](internal/persistence/inventory_cabin_photos.go).
+
+Транзакция требует активные, не quarantine-нутые CABIN и INVENTORY_FINDING
+bindings в одном warehouse. Каждая уникальная выбранная ссылка должна быть
+finding-owned READY IMAGE на точном current generation, а cover должен входить
+в эти ссылки. Fingerprint неизменяемого запроса определяет одну стабильную
+gallery folder. Exact replay ключа возвращает замороженный receipt; reuse ключа
+с другим запросом отклоняется. Per-CABIN watermark отклоняет более старое
+завершение и другой immutable source с тем же временем завершения. Новый ключ
+может повторно утвердить тот же последний source после более поздней смены
+cover заданием или прямой операцией.
+
+[`V13__authoritative_inventory_cabin_photos.sql`](db/migration/V13__authoritative_inventory_cabin_photos.sql)
+backfill-ит association folders из `media_asset.folder_id`, активную folder из
+существующего cover и добавляет inventory receipt, watermark и source-audit
+state. Миграция не обновляет и не удаляет `media_asset`, `media_variant` или
+данные object store. В полном CABIN archive inventory associations используют
+derived folder; текущие cover/previews и logistics current presentation
+используют только активную folder. Существующие direct и task-evidence
+associations остаются в истории, а выбор task evidence также выбирает его
+собственную association folder.
 
 ## Приватный импорт assets из Yandex.Disk
 
@@ -405,6 +444,6 @@ go build -trimpath -o /tmp/rwms-media-service ./cmd/media-service
 ```
 
 Проверка миграций выполняется отдельно Flyway и PostgreSQL и должна покрыть
-clean install V1-to-V12, upgrade V11-to-V12, повторный запуск, checksum drift и
+clean install V1-to-V13, upgrade V12-to-V13, повторный запуск, checksum drift и
 непустую базу без истории. Проверки MinIO должны использовать versioned
 local/test bucket; Kafka-проверки — канонические topics и broker acknowledgements.

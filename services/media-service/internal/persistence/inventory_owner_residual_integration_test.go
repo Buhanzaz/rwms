@@ -92,17 +92,17 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 		}
 	})
 
-	t.Run("clean V1 through V12 repeat and checksum drift", func(t *testing.T) {
+	t.Run("clean V1 through V13 repeat and checksum drift", func(t *testing.T) {
 		databaseURL := testsupport.NewIsolatedPostgresDatabase(t, environment.DatabaseURL)
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		pool := openResidualPool(t, ctx, databaseURL)
-		installResidualMigrations(t, ctx, pool, 14)
+		installResidualMigrations(t, ctx, pool, 15)
 		pool.Close()
 
 		first, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open clean V1 through V12 database: %v", err)
+			t.Fatalf("open clean V1 through V13 database: %v", err)
 		}
 		assertTaskBoardV8ConstraintsValidated(t, ctx, first.Pool)
 		first.Close()
@@ -166,10 +166,12 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			"V11__bounded_media_processing_recovery.sql", mediamigration.V11)
 		applyResidualMigration(t, ctx, pool, 14, "12", "video playback variant",
 			"V12__video_playback_variant.sql", mediamigration.V12)
+		applyResidualMigration(t, ctx, pool, 15, "13", "authoritative inventory cabin photos",
+			"V13__authoritative_inventory_cabin_photos.sql", mediamigration.V13)
 		pool.Close()
 		database, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open upgraded V12 database: %v", err)
+			t.Fatalf("open upgraded V13 database: %v", err)
 		}
 		defer database.Close()
 		assertTaskBoardV8ConstraintsValidated(t, ctx, database.Pool)
@@ -523,10 +525,11 @@ func installResidualMigrations(t testing.TB, ctx context.Context, pool *pgxpool.
 		{"canonical cabin photo library", "V10__canonical_cabin_photo_library.sql", mediamigration.V10},
 		{"bounded media processing recovery", "V11__bounded_media_processing_recovery.sql", mediamigration.V11},
 		{"video playback variant", "V12__video_playback_variant.sql", mediamigration.V12},
+		{"authoritative inventory cabin photos", "V13__authoritative_inventory_cabin_photos.sql", mediamigration.V13},
 	}
 	for index := 0; index < through; index++ {
 		migration := migrations[index]
-		versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12"}
+		versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13"}
 		applyResidualMigration(t, ctx, pool, index+1, versions[index], migration.description,
 			migration.script, migration.body)
 	}

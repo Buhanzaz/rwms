@@ -1511,6 +1511,95 @@ func TestLogisticsCabinCoverCommandRequiresExactServiceAndIdempotencyKey(t *test
 	}
 }
 
+func TestInventoryCabinPhotosRequiresExactServiceAndReturnsFrozenShape(t *testing.T) {
+	inventoryID, findingID, warehouseID, cabinID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	firstMediaID, coverMediaID, folderID := uuid.New(), uuid.New(), uuid.New()
+	completedAt := time.Date(2026, time.August, 19, 12, 5, 24, 123000000, time.UTC)
+	changedAt := completedAt.Add(time.Minute)
+	repository := &repositoryStub{
+		inventoryCabinPhotoResult: persistence.InventoryCabinPhotoResult{
+			InventoryID: inventoryID, FindingID: findingID, CabinID: cabinID,
+			FolderID: folderID, CoverMediaID: coverMediaID, PhotoCount: 2,
+			LibraryVersion: 9, WarehouseID: warehouseID, CoverGeneration: 4,
+			ChangedAt: changedAt,
+		},
+		inventoryCabinPhotoChanged: true,
+	}
+	server := newTestServer(t, repository, inventoryValidatorStub(), &storeStub{})
+	invalidations := &invalidationRecorder{}
+	server.invalidations = invalidations
+	idempotencyKey := uuid.New()
+	body := fmt.Sprintf(`{"warehouseId":"%s","cabinId":"%s","completedAt":"%s","sourceRevision":80,"finalPlanVersion":11,"finalPlanSha256":"%s","coverMediaId":"%s","mediaReferences":[{"mediaId":"%s","generation":2},{"mediaId":"%s","generation":4}]}`,
+		warehouseID, cabinID, completedAt.Format(time.RFC3339Nano), strings.Repeat("a", 64),
+		coverMediaID, firstMediaID, coverMediaID)
+	request := httptest.NewRequest(http.MethodPut,
+		"/api/internal/media/v1/inventory/outcomes/"+inventoryID.String()+
+			"/findings/"+findingID.String()+"/cabin-photos", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer inventory")
+	request.Header.Set("Idempotency-Key", idempotencyKey.String())
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("inventory cabin photos response = %d %s", response.Code, response.Body.String())
+	}
+	command := repository.inventoryCabinPhotoCommand
+	if repository.inventoryCabinPhotoCalls != 1 || command.InventoryID != inventoryID ||
+		command.FindingID != findingID || command.WarehouseID != warehouseID ||
+		command.CabinID != cabinID || !command.CompletedAt.Equal(completedAt) ||
+		command.SourceRevision != 80 || command.FinalPlanVersion != 11 ||
+		command.FinalPlanSHA256 != strings.Repeat("a", 64) ||
+		command.CoverMediaID != coverMediaID || len(command.MediaReferences) != 2 ||
+		command.MediaReferences[0].MediaID != firstMediaID ||
+		command.MediaReferences[1].Generation != 4 || command.IdempotencyKey != idempotencyKey ||
+		command.CorrelationID == uuid.Nil || !checksumPattern.MatchString(command.RequestSHA256) {
+		t.Fatalf("inventory cabin photo command = %#v, calls=%d", command,
+			repository.inventoryCabinPhotoCalls)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil || len(payload) != 8 ||
+		payload["inventoryId"] != inventoryID.String() || payload["findingId"] != findingID.String() ||
+		payload["cabinId"] != cabinID.String() || payload["folderId"] != folderID.String() ||
+		payload["coverMediaId"] != coverMediaID.String() || payload["photoCount"] != float64(2) ||
+		payload["libraryVersion"] != float64(9) || payload["replay"] != false {
+		t.Fatalf("inventory cabin photo payload = %#v error=%v", payload, err)
+	}
+	events := invalidations.snapshot()
+	if len(events) != 1 || events[0].WarehouseID != warehouseID ||
+		events[0].OwnerType != persistence.OwnerTypeCabin ||
+		events[0].OwnerID != cabinID.String() || events[0].MediaID != coverMediaID ||
+		events[0].Generation != 4 || events[0].Revision != 9 ||
+		!events[0].OccurredAt.Equal(changedAt) {
+		t.Fatalf("inventory cabin photo invalidations = %#v", events)
+	}
+
+	repository.inventoryCabinPhotoReplay = true
+	repository.inventoryCabinPhotoChanged = false
+	replayResponse := httptest.NewRecorder()
+	replayRequest := httptest.NewRequest(http.MethodPut, request.URL.Path, strings.NewReader(body))
+	replayRequest.Header.Set("Authorization", "Bearer inventory")
+	replayRequest.Header.Set("Idempotency-Key", idempotencyKey.String())
+	server.Handler().ServeHTTP(replayResponse, replayRequest)
+	if replayResponse.Code != http.StatusOK ||
+		!strings.Contains(replayResponse.Body.String(), `"replay":true`) ||
+		len(invalidations.snapshot()) != 1 {
+		t.Fatalf("inventory replay response = %d %s events=%#v", replayResponse.Code,
+			replayResponse.Body.String(), invalidations.snapshot())
+	}
+
+	wrongServer := newTestServer(t, &repositoryStub{}, logisticsValidatorStub(), &storeStub{})
+	wrongResponse := httptest.NewRecorder()
+	wrongRequest := httptest.NewRequest(http.MethodPut, request.URL.Path, strings.NewReader(body))
+	wrongRequest.Header.Set("Authorization", "Bearer logistics")
+	wrongRequest.Header.Set("Idempotency-Key", uuid.NewString())
+	wrongServer.Handler().ServeHTTP(wrongResponse, wrongRequest)
+	if wrongResponse.Code != http.StatusForbidden ||
+		!strings.Contains(wrongResponse.Body.String(), `"code":"MEDIA_FORBIDDEN"`) {
+		t.Fatalf("wrong inventory service response = %d %s", wrongResponse.Code,
+			wrongResponse.Body.String())
+	}
+}
+
 func TestLogisticsReferenceValidationFailsClosed(t *testing.T) {
 	documentID, lineID, warehouseID, mediaID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	validBody := logisticsReferenceBody(t, persistence.OwnerTypeLogisticsTransfer, documentID, lineID, warehouseID,
@@ -1815,6 +1904,13 @@ func logisticsValidatorStub() validatorStub {
 	}}
 }
 
+func inventoryValidatorStub() validatorStub {
+	return validatorStub{servicePrincipal: auth.ServicePrincipal{
+		Subject: "inventory-service", ClientID: "inventory-service",
+		Scopes: map[string]struct{}{"media.inventory": {}},
+	}}
+}
+
 func sameStrings(left, right []string) bool {
 	if len(left) != len(right) {
 		return false
@@ -1949,6 +2045,12 @@ type repositoryStub struct {
 	cabinCoverChangeReplay       bool
 	cabinCoverChangeErr          error
 	cabinCoverChangeCommand      persistence.SetCabinCoverFromTaskEvidenceCommand
+	inventoryCabinPhotoResult    persistence.InventoryCabinPhotoResult
+	inventoryCabinPhotoReplay    bool
+	inventoryCabinPhotoChanged   bool
+	inventoryCabinPhotoErr       error
+	inventoryCabinPhotoCalls     int
+	inventoryCabinPhotoCommand   persistence.ApplyInventoryCabinPhotosCommand
 	originalAsset                persistence.AssetRecord
 	originalVariant              *persistence.VariantRecord
 	originalReadErr              error
@@ -2108,6 +2210,16 @@ func (stub *repositoryStub) SetCabinCoverFromTaskEvidence(
 ) (persistence.CabinCoverChangeRecord, bool, error) {
 	stub.cabinCoverChangeCommand = command
 	return stub.cabinCoverChange, stub.cabinCoverChangeReplay, stub.cabinCoverChangeErr
+}
+
+func (stub *repositoryStub) ApplyInventoryCabinPhotos(
+	_ context.Context,
+	command persistence.ApplyInventoryCabinPhotosCommand,
+) (persistence.InventoryCabinPhotoResult, bool, bool, error) {
+	stub.inventoryCabinPhotoCalls++
+	stub.inventoryCabinPhotoCommand = command
+	return stub.inventoryCabinPhotoResult, stub.inventoryCabinPhotoReplay,
+		stub.inventoryCabinPhotoChanged, stub.inventoryCabinPhotoErr
 }
 
 func (stub *repositoryStub) ReadOriginal(_ context.Context, mediaID uuid.UUID, ownerType, ownerID string, warehouseID uuid.UUID, generation *int,

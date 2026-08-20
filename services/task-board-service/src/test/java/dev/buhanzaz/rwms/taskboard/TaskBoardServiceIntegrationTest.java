@@ -2847,6 +2847,133 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
+  void logisticsDriverCompletesWithReadyPhotoWithoutSecondarySlinger() {
+    var driverClass = registry.createClass(workerClass("DRIVER_MOBILE_SOLO_COMPLETION"));
+    var slingerClass = registry.createClass(workerClass("SLINGER_MOBILE_SOLO_COMPLETION"));
+    var driverQueue =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
+            W1,
+            queue(
+                "SOLO_COMPLETION_DRIVER",
+                QueueType.MOVEMENT,
+                QueuePurpose.LOGISTICS_DRIVER,
+                List.of(
+                    new QueueBindingRequest(
+                        driverClass.id(), 0, false, ParticipationPolicy.PRIMARY, false),
+                    new QueueBindingRequest(
+                        slingerClass.id(), 1, false, ParticipationPolicy.OPTIONAL, false))));
+    var driver =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Solo mobile driver",
+                null,
+                null,
+                List.of(new QualificationRequest(driverClass.id(), true, null))));
+    jdbc.update("update worker set app_login='solo.mobile.driver' where id=?", driver.id());
+
+    UUID externalTaskId = UUID.randomUUID();
+    var registration =
+        board.registerExternalTask(
+            "logistics-service",
+            driverRegistration(
+                driverQueue.definitionId(),
+                externalTaskId,
+                LocalDate.of(2026, 8, 12),
+                new DriverTaskAudienceDto(
+                    DriverTaskAudienceMode.ASSIGNED_DRIVER, driver.id(), null)));
+    registration =
+        board.setExternalTaskLane(
+            "logistics-service",
+            externalTaskId,
+            new SetTaskLaneRequest(registration.taskVersion(), TaskLane.CURRENT));
+    UUID driverTaskId = registration.taskId();
+    BoardEntryDto waiting =
+        board.logisticsSnapshot(W1).current().stream()
+            .filter(candidate -> candidate.taskId().equals(driverTaskId))
+            .findFirst()
+            .orElseThrow();
+
+    WorkerContext takeContext = workerBoard.context(MobileTaskSurface.DRIVER, driver.id(), W1);
+    UUID takeOperation = UUID.randomUUID();
+    WorkerActionAppliedResult taken =
+        workerBoard.applyAction(
+            MobileTaskSurface.DRIVER,
+            driver.id(),
+            W1,
+            waiting.id(),
+            takeOperation.toString(),
+            new WorkerActionRequest(
+                takeOperation,
+                WorkerAction.TAKE,
+                waiting.version(),
+                null,
+                takeContext.serverTime(),
+                takeContext.offlineLease().id(),
+                null));
+
+    WorkerContext evidenceContext =
+        workerBoard.context(MobileTaskSurface.DRIVER, driver.id(), W1);
+    UUID evidenceOperation = UUID.randomUUID();
+    UUID evidenceId = UUID.randomUUID();
+    workerBoard.reserveEvidence(
+        MobileTaskSurface.DRIVER,
+        driver.id(),
+        W1,
+        waiting.id(),
+        evidenceOperation.toString(),
+        new EvidenceReservationRequest(
+            evidenceOperation,
+            evidenceId,
+            waiting.routeIndex(),
+            evidenceContext.serverTime(),
+            evidenceContext.offlineLease().id(),
+            "image/jpeg",
+            128,
+            "a".repeat(64)));
+    publishReadyTaskEvidence(waiting.id(), evidenceId, driver.id(), UUID.randomUUID());
+
+    WorkerTaskDetail ready =
+        workerBoard.detail(MobileTaskSurface.DRIVER, driver.id(), W1, waiting.id());
+    assertThat(ready.completionAllowed()).isTrue();
+    assertThat(ready.evidence())
+        .singleElement()
+        .satisfies(photo -> assertThat(photo.state()).isEqualTo("READY"));
+
+    WorkerContext completionContext =
+        workerBoard.context(MobileTaskSurface.DRIVER, driver.id(), W1);
+    UUID completionOperation = UUID.randomUUID();
+    WorkerActionAppliedResult completed =
+        workerBoard.applyAction(
+            MobileTaskSurface.DRIVER,
+            driver.id(),
+            W1,
+            waiting.id(),
+            completionOperation.toString(),
+            new WorkerActionRequest(
+                completionOperation,
+                WorkerAction.COMPLETE,
+                ready.version(),
+                null,
+                completionContext.serverTime(),
+                completionContext.offlineLease().id(),
+                evidenceId));
+
+    assertThat(taken.entry().status()).isEqualTo("IN_PROGRESS");
+    assertThat(completed.entry().status()).isEqualTo("DONE");
+    assertThat(
+            workerBoard
+                .detail(MobileTaskSurface.DRIVER, driver.id(), W1, waiting.id())
+                .status())
+        .isEqualTo("DONE");
+    assertThat(assignments.findAllByQueueEntryId(waiting.id()))
+        .extracting(TaskAssignment::getStatus)
+        .containsExactly(AssignmentStatus.DONE);
+  }
+
+  @Test
   void driverAndSlingerShareActiveTaskPushPhotoCompletionAndGroupTimer() {
     var driverClass = registry.createClass(workerClass("DRIVER_MOBILE_COLLABORATION"));
     var slingerClass = registry.createClass(workerClass("SLINGER_MOBILE_COLLABORATION"));
@@ -2993,6 +3120,27 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .doesNotContain(waiting.id());
     assertThat(mobileFeedEntryIds(MobileTaskSurface.DRIVER, driver.id()))
         .containsExactly(waiting.id());
+    WorkerContext hiddenSlingerContext =
+        workerBoard.context(MobileTaskSurface.WORKER, slinger.id(), W1);
+    UUID hiddenTakeOperation = UUID.randomUUID();
+    assertThatThrownBy(
+            () ->
+                workerBoard.applyAction(
+                    MobileTaskSurface.WORKER,
+                    slinger.id(),
+                    W1,
+                    waiting.id(),
+                    hiddenTakeOperation.toString(),
+                    new WorkerActionRequest(
+                        hiddenTakeOperation,
+                        WorkerAction.TAKE,
+                        waiting.version(),
+                        repairGroup.id(),
+                        hiddenSlingerContext.serverTime(),
+                        hiddenSlingerContext.offlineLease().id(),
+                        null)))
+        .isInstanceOf(NotFoundException.class)
+        .hasMessageContaining("Задание не найдено");
 
     WorkerContext driverContext =
         workerBoard.context(MobileTaskSurface.DRIVER, driver.id(), W1);
@@ -3044,7 +3192,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .satisfies(
             offered -> {
               assertThat(offered.entryId()).isEqualTo(waiting.id());
-              assertThat(offered.availabilityMode()).isEqualTo("REQUIRED_JOIN");
+              assertThat(offered.availabilityMode()).isEqualTo("OPTIONAL_JOIN");
             });
 
     WorkerContext slingerContext =
@@ -3068,15 +3216,6 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                         null)))
         .isInstanceOf(ConflictException.class)
         .hasMessageContaining("присоединитесь");
-    assertThatThrownBy(
-            () ->
-                board.complete(
-                    W1,
-                    waiting.id(),
-                    new VersionCommand(taken.currentVersion()),
-                    driver.id()))
-        .isInstanceOf(ConflictException.class)
-        .hasMessageContaining("вторичного исполнителя");
     UUID joinOperation = UUID.randomUUID();
     WorkerActionAppliedResult joined =
         workerBoard.applyAction(
@@ -3144,60 +3283,20 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             "image/jpeg",
             128,
             "b".repeat(64)));
-    UUID mediaId = UUID.randomUUID();
-    OffsetDateTime readyAt = OffsetDateTime.now(ZoneOffset.UTC);
-    String readyEvent =
-        """
-        {
-          "envelopeVersion":2,
-          "eventId":"%s",
-          "eventType":"media.media.ready.v1",
-          "eventVersion":1,
-          "occurredAt":null,
-          "recordedAt":"%s",
-          "producer":"media-service",
-          "aggregateType":"MEDIA",
-          "aggregateId":"%s",
-          "aggregateVersion":1,
-          "correlation":{"correlationId":"%s","causationId":null},
-          "actorRef":{"subjectId":"%s","principalType":"WORKER","profileRevision":null},
-          "payload":{
-            "mediaId":"%s",
-            "ownerType":"TASK_BOARD_ENTRY",
-            "ownerId":"%s",
-            "warehouseId":"%s",
-            "clientReferenceId":"%s",
-            "kind":"IMAGE",
-            "status":"READY",
-            "generation":1,
-            "rotationDegrees":0
-          }
-        }
-        """
-            .formatted(
-                UUID.randomUUID(),
-                readyAt,
-                mediaId,
-                UUID.randomUUID(),
-                slinger.id(),
-                mediaId,
-                waiting.id(),
-                W1,
-                evidenceId);
-    mediaEvents.process(readyEvent.getBytes(StandardCharsets.UTF_8));
+    publishReadyTaskEvidence(waiting.id(), evidenceId, slinger.id(), UUID.randomUUID());
 
     WorkerTaskDetail ready =
-        workerBoard.detail(MobileTaskSurface.DRIVER, driver.id(), W1, waiting.id());
+        workerBoard.detail(MobileTaskSurface.WORKER, slinger.id(), W1, waiting.id());
     assertThat(ready.evidence())
         .singleElement()
         .satisfies(photo -> assertThat(photo.state()).isEqualTo("READY"));
     WorkerContext completionContext =
-        workerBoard.context(MobileTaskSurface.DRIVER, driver.id(), W1);
+        workerBoard.context(MobileTaskSurface.WORKER, slinger.id(), W1);
     UUID completionOperation = UUID.randomUUID();
     WorkerActionAppliedResult completed =
         workerBoard.applyAction(
-            MobileTaskSurface.DRIVER,
-            driver.id(),
+            MobileTaskSurface.WORKER,
+            slinger.id(),
             W1,
             waiting.id(),
             completionOperation.toString(),
@@ -3211,6 +3310,11 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 evidenceId));
 
     assertThat(completed.entry().status()).isEqualTo("DONE");
+    assertThat(
+            workerBoard
+                .detail(MobileTaskSurface.DRIVER, driver.id(), W1, waiting.id())
+                .status())
+        .isEqualTo("DONE");
     assertThat(
             workerBoard
                 .detail(MobileTaskSurface.WORKER, slinger.id(), W1, waiting.id())
@@ -4931,6 +5035,51 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .filter(e -> e.title().equals(title))
         .findFirst()
         .orElseThrow();
+  }
+
+  /** Marks a reserved task photo ready through the same media event consumed in production. */
+  private void publishReadyTaskEvidence(
+      UUID entryId, UUID evidenceId, UUID workerId, UUID mediaId) {
+    OffsetDateTime readyAt = OffsetDateTime.now(ZoneOffset.UTC);
+    String readyEvent =
+        """
+        {
+          "envelopeVersion":2,
+          "eventId":"%s",
+          "eventType":"media.media.ready.v1",
+          "eventVersion":1,
+          "occurredAt":null,
+          "recordedAt":"%s",
+          "producer":"media-service",
+          "aggregateType":"MEDIA",
+          "aggregateId":"%s",
+          "aggregateVersion":1,
+          "correlation":{"correlationId":"%s","causationId":null},
+          "actorRef":{"subjectId":"%s","principalType":"WORKER","profileRevision":null},
+          "payload":{
+            "mediaId":"%s",
+            "ownerType":"TASK_BOARD_ENTRY",
+            "ownerId":"%s",
+            "warehouseId":"%s",
+            "clientReferenceId":"%s",
+            "kind":"IMAGE",
+            "status":"READY",
+            "generation":1,
+            "rotationDegrees":0
+          }
+        }
+        """
+            .formatted(
+                UUID.randomUUID(),
+                readyAt,
+                mediaId,
+                UUID.randomUUID(),
+                workerId,
+                mediaId,
+                entryId,
+                W1,
+                evidenceId);
+    mediaEvents.process(readyEvent.getBytes(StandardCharsets.UTF_8));
   }
 
   private List<WorkerFeedEntry> mobileFeedEntries(

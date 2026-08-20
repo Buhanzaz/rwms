@@ -12,6 +12,10 @@ public final class DossierApiModels {
   public record CabinDossierResponse(
       UUID cabinId, List<Activity> activities, String nextCursor, Visibility visibility) {}
 
+  /**
+   * One sanitized cabin activity. Task-evidence photo references are optional for rollout
+   * compatibility and never include an object locator.
+   */
   public record Activity(
       UUID activityId,
       UUID cabinId,
@@ -21,7 +25,8 @@ public final class DossierApiModels {
       OffsetDateTime recordedAt,
       ActorReference actorRef,
       SourceReference sourceRef,
-      List<MediaProjection> media) {}
+      List<MediaProjection> media,
+      @JsonInclude(JsonInclude.Include.NON_EMPTY) List<TaskEvidencePhoto> taskEvidencePhotos) {}
 
   public record ActorReference(UUID subjectId, String principalType, String profileRevision) {}
 
@@ -33,6 +38,12 @@ public final class DossierApiModels {
 
   public record MediaProjection(
       UUID mediaId, UUID folderId, UUID findingId, long generation, String state) {}
+
+  /**
+   * Opaque task-media revision that a client resolves through its own authorized media owner
+   * scope; it never contains an object-store location or a signed URL.
+   */
+  public record TaskEvidencePhoto(UUID mediaId, long generation, UUID taskBoardEntryId) {}
 
   public enum Visibility { COMPLETE, PARTIAL }
 }

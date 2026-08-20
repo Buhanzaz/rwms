@@ -1568,6 +1568,74 @@ class DossierRuntimeIntegrationQaTest {
   }
 
   @Test
+  void taskEvidenceCabinPhotoProjectsOneOpaqueHistoryReferenceWithoutAMediaLifecycleRow()
+      throws Exception {
+    UUID cabinId = UUID.fromString("38600000-0000-0000-0000-000000000001");
+    UUID taskEvidenceMediaId = UUID.fromString("38700000-0000-0000-0000-000000000001");
+    UUID taskBoardEntryId = UUID.fromString("38800000-0000-0000-0000-000000000001");
+    UUID directCoverMediaId = UUID.fromString("38700000-0000-0000-0000-000000000002");
+
+    assertThat(
+            List.of(
+                processor.process(
+                    asset(
+                        cabinId,
+                        WAREHOUSE_A,
+                        0,
+                        125,
+                        "asset.rental-item.created.v1",
+                        true)),
+                processor.process(
+                    cabinPhoto(
+                        cabinId,
+                        WAREHOUSE_A,
+                        taskEvidenceMediaId,
+                        taskBoardEntryId,
+                        1,
+                        126)),
+                processor.process(
+                    cabinPhoto(
+                        cabinId, WAREHOUSE_A, directCoverMediaId, null, 2, 127))))
+        .containsOnly(DossierInboxProcessor.Outcome.PROCESSED);
+
+    List<DossierActivity> history =
+        activities.findAllByCabinIdAndGenerationIdOrderByOccurredAtDescRecordedAtDescSourceEventIdDesc(
+            cabinId, activeGeneration(), org.springframework.data.domain.Pageable.unpaged());
+    assertThat(history)
+        .extracting(DossierActivity::getActivityCode)
+        .containsExactlyInAnyOrder(
+            DossierActivityCode.CABIN_CREATED,
+            DossierActivityCode.MEDIA_TASK_EVIDENCE_ATTACHED);
+    assertThat(media.findAllByCabinIdAndGenerationIdOrderByMediaIdAsc(cabinId, activeGeneration()))
+        .isEmpty();
+
+    JsonNode response =
+        new ObjectMapper()
+            .readTree(
+                mvc.perform(
+                        get("/api/dossier/v1/cabins/{cabinId}", cabinId)
+                            .header(HttpHeaders.AUTHORIZATION, "Bearer read-a"))
+                    .andExpect(status().isOk())
+                    .andReturn()
+                    .getResponse()
+                    .getContentAsString());
+    JsonNode evidenceActivity = null;
+    for (JsonNode activity : response.required("activities")) {
+      if ("MEDIA_TASK_EVIDENCE_ATTACHED".equals(activity.required("activityCode").textValue())) {
+        evidenceActivity = activity;
+        break;
+      }
+    }
+    assertThat(evidenceActivity).isNotNull();
+    assertThat(evidenceActivity.required("taskEvidencePhotos")).hasSize(1);
+    JsonNode photo = evidenceActivity.required("taskEvidencePhotos").get(0);
+    assertThat(photo.required("mediaId").textValue()).isEqualTo(taskEvidenceMediaId.toString());
+    assertThat(photo.required("generation").longValue()).isEqualTo(1L);
+    assertThat(photo.required("taskBoardEntryId").textValue()).isEqualTo(taskBoardEntryId.toString());
+    assertThat(response.toString()).doesNotContain("href", "objectKey", "signedUrl");
+  }
+
+  @Test
   void httpFiltersUseBusinessTimeInclusiveExclusiveBoundsAndComposeWithoutRecordedTimeFallback()
       throws Exception {
     UUID cabin = UUID.fromString("39000000-0000-0000-0000-000000000001");
@@ -2003,6 +2071,27 @@ class DossierRuntimeIntegrationQaTest {
       String status) {
     return cabinMedia(
         mediaId, mediaId, cabinId, warehouse, aggregateVersion, offset, status);
+  }
+
+  private DossierValidatedEvent cabinPhoto(
+      UUID cabinId,
+      UUID warehouse,
+      UUID mediaId,
+      UUID taskBoardEntryId,
+      long aggregateVersion,
+      long offset) {
+    String taskEntry = taskBoardEntryId == null ? "null" : "\"" + taskBoardEntryId + "\"";
+    String payload =
+        """
+        {"cabinId":"%s","warehouseId":"%s","mediaId":"%s","generation":1,"taskBoardEntryId":%s,"previousCoverMediaId":null,"changedAt":"2026-07-18T12:00:00Z"}
+        """
+            .formatted(cabinId, warehouse, mediaId, taskEntry);
+    String envelope =
+        """
+        {"envelopeVersion":2,"eventId":"%s","eventType":"media.cabin.cover-changed.v1","eventVersion":1,"occurredAt":null,"recordedAt":"2026-07-18T12:00:00Z","producer":"media-service","aggregateType":"CABIN_PHOTO_LIBRARY","aggregateId":"%s","aggregateVersion":%d,"correlation":{"correlationId":"%s","causationId":null},"actorRef":null,"payload":%s}
+        """
+            .formatted(UUID.randomUUID(), cabinId, aggregateVersion, CORRELATION_ID, payload.strip());
+    return validate("rwms.media.cabin-photo.v1", offset, cabinId, envelope);
   }
 
   private DossierValidatedEvent cabinMedia(

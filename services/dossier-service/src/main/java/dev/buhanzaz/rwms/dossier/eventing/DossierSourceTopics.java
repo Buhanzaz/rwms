@@ -29,6 +29,9 @@ public final class DossierSourceTopics {
               "rwms.media.media.v1",
               new TopicPolicy("media-service", "media", Set.of("MEDIA"))),
           Map.entry(
+              "rwms.media.cabin-photo.v1",
+              new TopicPolicy("media-service", "media", Set.of("CABIN_PHOTO_LIBRARY"))),
+          Map.entry(
               "rwms.logistics.return.v1",
               new TopicPolicy("logistics-service", "logistics", Set.of("RETURN"))),
           Map.entry(

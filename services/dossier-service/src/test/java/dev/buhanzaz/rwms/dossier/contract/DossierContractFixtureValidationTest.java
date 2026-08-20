@@ -33,6 +33,7 @@ class DossierContractFixtureValidationTest {
           "rwms.inventory.session.v1",
           "rwms.inventory.publication.v1",
           "rwms.media.media.v1",
+          "rwms.media.cabin-photo.v1",
           "rwms.logistics.return.v1",
           "rwms.logistics.shipment.v1",
           "rwms.logistics.transfer.v1",
@@ -119,6 +120,18 @@ class DossierContractFixtureValidationTest {
                     """
                         .formatted(AGGREGATE_ID, SECONDARY_ID, WAREHOUSE_ID))),
             Map.entry(
+                "rwms.media.cabin-photo.v1",
+                envelope(
+                    "media.cabin.cover-changed.v1",
+                    "media-service",
+                    "CABIN_PHOTO_LIBRARY",
+                    1,
+                    """
+                    {"cabinId":"%s","warehouseId":"%s","mediaId":"%s","generation":1,"taskBoardEntryId":"%s","previousCoverMediaId":null,"changedAt":"2026-07-18T00:00:00Z"}
+                    """
+                        .formatted(AGGREGATE_ID, WAREHOUSE_ID, SECONDARY_ID, CABIN_ID))
+                    .replace("\"occurredAt\":\"2026-07-18T00:00:00Z\"", "\"occurredAt\":null")),
+            Map.entry(
                 "rwms.logistics.return.v1",
                 envelope(
                     "logistics.return.created.v1",
@@ -165,7 +178,7 @@ class DossierContractFixtureValidationTest {
                     """
                         .formatted(AGGREGATE_ID, SECONDARY_ID))));
 
-    assertThat(fixtures).hasSize(11);
+    assertThat(fixtures).hasSize(12);
     fixtures.forEach(
         (topic, fixture) ->
             assertThatCode(
@@ -262,7 +275,7 @@ class DossierContractFixtureValidationTest {
             "asset-service", "RENTAL_ITEM",
             "maintenance-service", "REPAIR",
             "inventory-service", "FINDING",
-            "media-service", "MEDIA");
+            "media-service", "CABIN_PHOTO_LIBRARY");
     visibleSourceFamilies.forEach(
         (producer, aggregateType) -> {
           JsonNode family = valid.deepCopy();

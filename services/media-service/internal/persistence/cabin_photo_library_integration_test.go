@@ -48,8 +48,8 @@ func TestCabinTaskEvidenceAtomicallyReplacesOneCoverIntegration(t *testing.T) {
 		t.Fatalf("seed direct photo generation: %v", err)
 	}
 	if _, err := database.Pool.Exec(ctx, `update media_cabin_photo_library
-		set cover_media_id=$1,version=1 where cabin_id=$2`,
-		directAsset.ID, cabinID); err != nil {
+		set cover_media_id=$1,active_gallery_folder_id=$2,version=1 where cabin_id=$3`,
+		directAsset.ID, directAsset.FolderID, cabinID); err != nil {
 		t.Fatalf("seed direct cover pointer: %v", err)
 	}
 

@@ -49,6 +49,14 @@ channels:
       through the canonical inventory finding fact; arrival order is irrelevant.
     messages:
       mediaFactV1: { $ref: '#/components/messages/MediaFactV1' }
+  cabinPhotoFacts:
+    address: rwms.media.cabin-photo.v1
+    description: >-
+      Cabin cover facts are journaled as media evidence. Only a fact with a
+      non-null taskBoardEntryId creates the public task-evidence activity;
+      direct cover changes remain journal-only.
+    messages:
+      cabinPhotoFactV1: { $ref: '#/components/messages/CabinPhotoFactV1' }
   logisticsReturnFacts:
     address: rwms.logistics.return.v1
     description: Validated and journaled as SUBJECT_NOT_PROVIDED; never visible.
@@ -99,6 +107,9 @@ channels:
   mediaDlt:
     address: rwms.media.media.v1.dossier-projection-v1.dlt
     messages: { sanitizedDltV1: { $ref: '#/components/messages/SanitizedDltV1' } }
+  cabinPhotoDlt:
+    address: rwms.media.cabin-photo.v1.dossier-projection-v1.dlt
+    messages: { sanitizedDltV1: { $ref: '#/components/messages/SanitizedDltV1' } }
   logisticsReturnDlt:
     address: rwms.logistics.return.v1.dossier-projection-v1.dlt
     messages: { sanitizedDltV1: { $ref: '#/components/messages/SanitizedDltV1' } }
@@ -121,6 +132,7 @@ operations:
   consumeInventoryFindingFacts: { action: receive, channel: { $ref: '#/channels/inventoryFindingFacts' } }
   consumeInventoryPublicationFacts: { action: receive, channel: { $ref: '#/channels/inventoryPublicationFacts' } }
   consumeMediaFacts: { action: receive, channel: { $ref: '#/channels/mediaFacts' } }
+  consumeCabinPhotoFacts: { action: receive, channel: { $ref: '#/channels/cabinPhotoFacts' } }
   consumeLogisticsReturnFacts: { action: receive, channel: { $ref: '#/channels/logisticsReturnFacts' } }
   consumeLogisticsShipmentFacts: { action: receive, channel: { $ref: '#/channels/logisticsShipmentFacts' } }
   consumeLogisticsTransferFacts: { action: receive, channel: { $ref: '#/channels/logisticsTransferFacts' } }
@@ -133,6 +145,7 @@ operations:
   publishInventoryFindingDlt: { action: send, channel: { $ref: '#/channels/inventoryFindingDlt' } }
   publishInventoryPublicationDlt: { action: send, channel: { $ref: '#/channels/inventoryPublicationDlt' } }
   publishMediaDlt: { action: send, channel: { $ref: '#/channels/mediaDlt' } }
+  publishCabinPhotoDlt: { action: send, channel: { $ref: '#/channels/cabinPhotoDlt' } }
   publishLogisticsReturnDlt: { action: send, channel: { $ref: '#/channels/logisticsReturnDlt' } }
   publishLogisticsShipmentDlt: { action: send, channel: { $ref: '#/channels/logisticsShipmentDlt' } }
   publishLogisticsTransferDlt: { action: send, channel: { $ref: '#/channels/logisticsTransferDlt' } }
@@ -238,6 +251,17 @@ components:
         media.media.failed.v1: MEDIA_FAILED
         media.media.rotated.v1: MEDIA_ROTATED
         media.media.deleted.v1: MEDIA_DELETED
+    CabinPhotoFactV1:
+      name: dossier.input.media.cabin-photo.v1
+      payload:
+        allOf:
+          - { $ref: './technical/domain-event-envelope-v2.schema.yaml' }
+          - { $ref: './media/cabin-photo-facts-v1.schema.json' }
+          - $ref: '#/components/schemas/CabinPhotoDiscriminator'
+      x-rwms-record-key: aggregateId
+      x-rwms-activity-code-map:
+        media.cabin.cover-changed.v1: MEDIA_TASK_EVIDENCE_ATTACHED
+      x-rwms-public-activity-condition: payload.taskBoardEntryId is non-null
     LogisticsReturnFactV1:
       name: dossier.input.logistics.return.v1
       payload:
@@ -381,6 +405,16 @@ components:
             - inventory.publication.transient-failed.v1
             - inventory.publication.blocked.v1
             - inventory.publication.closed-blocked.v1
+        eventVersion: { const: 1 }
+    CabinPhotoDiscriminator:
+      type: object
+      required: [producer, aggregateType, eventType, eventVersion]
+      properties:
+        producer: { const: media-service }
+        aggregateType: { const: CABIN_PHOTO_LIBRARY }
+        eventType:
+          enum:
+            - media.cabin.cover-changed.v1
         eventVersion: { const: 1 }
     LogisticsReturnDiscriminator:
       type: object
