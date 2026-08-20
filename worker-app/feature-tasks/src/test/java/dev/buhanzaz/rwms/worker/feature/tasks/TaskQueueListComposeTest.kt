@@ -138,7 +138,7 @@ class TaskQueueListComposeTest {
     }
 
     @Test
-    fun collapsedTaskShowsDateAndElapsedTimeThenOpensPhotoDetails() {
+    fun collapsedTaskShowsDateAndElapsedTimeThenOpensFullScreenTask() {
         var openedEntryId: String? = null
         val section = TaskQueueSection(
             queueId = "repair",
@@ -160,9 +160,7 @@ class TaskQueueListComposeTest {
 
         compose.onNodeWithText("Дата: 2026-08-10").assertIsDisplayed()
         compose.onNodeWithText("Время работы: 0:01:05").assertIsDisplayed()
-        compose.onAllNodesWithText("Фото и детали").assertCountEquals(0)
-        compose.onNodeWithTag("task-card-toggle-repair-timed-task").performClick()
-        compose.onNodeWithText("Фото и детали").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Открыть задание").assertIsDisplayed().performClick()
         assertThat(openedEntryId).isEqualTo("timed-task")
     }
 

@@ -792,9 +792,6 @@ function parseCabinCoverPage(
         throw new Error("Cabin preview count exceeds photo count")
       }
       if (item.cover === null) {
-        if (previews.length > 0) {
-          throw new Error("Cabin cover does not match previews")
-        }
         return { cabinId, photoCount, cover: null, previews }
       }
 
@@ -819,17 +816,17 @@ function parseCabinCoverPage(
         generation: coverGeneration,
         ...coverVariant,
       }
-      const first = previews[0]
-      if (
-        !first ||
-        first.mediaId !== cover.mediaId ||
-        first.generation !== cover.generation ||
-        first.kind !== cover.kind ||
-        first.contentType !== cover.contentType ||
-        first.contentPath !== cover.contentPath ||
-        first.width !== cover.width ||
-        first.height !== cover.height
-      ) {
+      const matchingPreview = previews.some(
+        (preview) =>
+          preview.mediaId === cover.mediaId &&
+          preview.generation === cover.generation &&
+          preview.kind === cover.kind &&
+          preview.contentType === cover.contentType &&
+          preview.contentPath === cover.contentPath &&
+          preview.width === cover.width &&
+          preview.height === cover.height
+      )
+      if (!matchingPreview) {
         throw new Error("Cabin cover does not match previews")
       }
       return {

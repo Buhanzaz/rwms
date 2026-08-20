@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.worker.feature.taskdetail
 
+import dev.buhanzaz.rwms.worker.core.database.WorkerAssignmentEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerTaskEntity
 import dev.buhanzaz.rwms.worker.core.network.WorkerMediaReferenceDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerTaskTimerSnapshotDto
@@ -26,16 +27,45 @@ internal data class PhotoCapturePresentation(
     val message: String?,
 )
 
-/** A visible photo control must never silently ignore a tap while detail loads. */
-internal fun photoCapturePresentation(hasLoadedDetail: Boolean): PhotoCapturePresentation =
-    if (hasLoadedDetail) {
-        PhotoCapturePresentation(enabled = true, message = null)
-    } else {
+/** A photo can be captured only by an active participant of an in-progress synchronized task. */
+internal fun photoCapturePresentation(
+    hasLoadedDetail: Boolean,
+    taskStatus: String?,
+    currentWorkerId: String,
+    queuePurpose: String?,
+    assignments: List<WorkerAssignmentEntity>,
+    locallyPending: Boolean,
+): PhotoCapturePresentation = when {
+    !hasLoadedDetail ->
         PhotoCapturePresentation(
             enabled = false,
             message = "Загружаем карточку задания. Добавление фото станет доступно после синхронизации.",
         )
-    }
+    locallyPending -> PhotoCapturePresentation(
+        enabled = false,
+        message = "Действие по заданию ожидает синхронизации. Добавление фото станет доступно после подтверждения.",
+    )
+    taskStatus == "PAUSED" -> PhotoCapturePresentation(
+        enabled = false,
+        message = "Сначала продолжите задание, затем можно добавить фотографию.",
+    )
+    taskStatus != "IN_PROGRESS" -> PhotoCapturePresentation(
+        enabled = false,
+        message = "Добавление фото доступно только во время выполнения задания.",
+    )
+    assignments.none { assignment ->
+        assignment.workerId == currentWorkerId &&
+            assignment.status == "ACTIVE" &&
+            (
+                queuePurpose != LOGISTICS_DRIVER_QUEUE_PURPOSE ||
+                    assignment.workerGroupId != null
+                )
+    } -> PhotoCapturePresentation(
+        enabled = false,
+        message = "Сначала возьмите задание, затем можно добавить фотографию.",
+    )
+    else -> PhotoCapturePresentation(enabled = true, message = null)
+}
 
 internal fun evidencePresentation(
     state: String,
@@ -116,6 +146,13 @@ internal data class TaskSourceMediaPresentation(
     val byWorkId: Map<String, List<WorkerMediaReferenceDto>>,
 )
 
+/** Compact timer state rendered in the task app bar after the worker takes the task. */
+internal data class TaskHeaderTimerPresentation(
+    val label: String,
+    val countdown: String?,
+    val running: Boolean,
+)
+
 internal fun taskSourceMediaPresentation(
     works: List<WorkerWorkDto>,
     sourceMedia: List<WorkerMediaReferenceDto>,
@@ -129,6 +166,46 @@ internal fun taskSourceMediaPresentation(
         general = sourceMedia.filterNot { it.mediaId in workMediaIds },
         byWorkId = byWorkId,
     )
+}
+
+/**
+ * Keeps the task-board timer authoritative while giving immediate feedback for an optimistic take.
+ * The client never invents elapsed work: it starts decrementing only after a WORKING snapshot arrives.
+ */
+internal fun taskHeaderTimerPresentation(
+    taskStatus: String?,
+    locallyPending: Boolean,
+    timerState: String?,
+    remaining: String?,
+): TaskHeaderTimerPresentation? {
+    if (taskStatus != "IN_PROGRESS") return null
+    if (locallyPending) {
+        return TaskHeaderTimerPresentation(
+            label = "Таймер",
+            countdown = "запускается…",
+            running = false,
+        )
+    }
+    return when (timerState) {
+        "WORKING" -> TaskHeaderTimerPresentation(
+            label = "Осталось",
+            countdown = remaining ?: "синхронизация…",
+            running = remaining != null,
+        )
+        "BREAK" -> TaskHeaderTimerPresentation("Перерыв", remaining, running = false)
+        "OFF_SHIFT" -> TaskHeaderTimerPresentation("Вне смены", remaining, running = false)
+        "PAUSED" -> TaskHeaderTimerPresentation("Таймер на паузе", remaining, running = false)
+        else -> TaskHeaderTimerPresentation("Таймер", "синхронизация…", running = false)
+    }
+}
+
+/** Converts the canonical task object discriminator to a worker-facing type label. */
+internal fun workerTaskObjectKindLabel(kind: String?): String = when (kind) {
+    "CABIN" -> "Бытовка"
+    "EQUIPMENT" -> "Оборудование"
+    "OTHER" -> "Другой объект"
+    null -> "Не указан"
+    else -> kind
 }
 
 /** Worker-facing work metadata deliberately has no price/cost field. */

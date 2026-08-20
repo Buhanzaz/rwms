@@ -8,9 +8,9 @@ import type {
   InventoryFindingPage,
   InventoryMediaReference,
   InventoryObservation,
+  OutcomeRecalculation,
   InventoryNumberResolution,
   InventoryPlanSelection,
-  InventoryPublicationBatch,
   InventoryPublicationIntent,
   InventoryRegistryReview,
   InventorySessionDetail,
@@ -25,6 +25,8 @@ import type {
   UpdateInventoryPlanningSettingsRequest,
   InventoryStatisticsPage,
   InventoryStatisticsSummary,
+  RefreshInventorySessionRequest,
+  RecalculateInventoryOutcomeRequest,
 } from "@/features/inventory/model/inventory-service"
 
 function requireInventoryAccessToken(accessToken: string | null) {
@@ -154,6 +156,23 @@ export function reviewInventoryRegistry(input: {
         expectedSessionRevision: input.session.sessionRevision,
         findingRevisions: revisionExpectations(input.session.findings),
       }),
+    }
+  )
+}
+
+export function refreshInventorySession(input: {
+  accessToken: string | null
+  inventoryId: string
+  request: RefreshInventorySessionRequest
+  idempotencyKey: string
+}) {
+  return bearerRequest<InventorySessionDetail>(
+    requireInventoryAccessToken(input.accessToken),
+    endpoint(`/sessions/${encodeURIComponent(input.inventoryId)}/refresh`),
+    {
+      method: "POST",
+      headers: commandHeaders(input.idempotencyKey),
+      body: JSON.stringify(input.request),
     }
   )
 }
@@ -464,23 +483,21 @@ export function cancelInventorySession(input: {
   )
 }
 
-export function publishInventoryFindings(input: {
+export function recalculateInventoryOutcome(input: {
   accessToken: string | null
   inventoryId: string
-  expectedSessionRevision: number
+  request: RecalculateInventoryOutcomeRequest
   idempotencyKey: string
 }) {
-  return bearerRequest<InventoryPublicationBatch>(
+  return bearerRequest<OutcomeRecalculation>(
     requireInventoryAccessToken(input.accessToken),
-    endpoint(`/sessions/${encodeURIComponent(input.inventoryId)}/publications`),
+    endpoint(
+      `/sessions/${encodeURIComponent(input.inventoryId)}/outcome/recalculate`
+    ),
     {
       method: "POST",
       headers: commandHeaders(input.idempotencyKey),
-      body: JSON.stringify({
-        expectedSessionRevision: input.expectedSessionRevision,
-        allEligible: true,
-        findings: [],
-      }),
+      body: JSON.stringify(input.request),
     }
   )
 }

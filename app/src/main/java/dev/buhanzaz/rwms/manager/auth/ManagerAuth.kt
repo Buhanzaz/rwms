@@ -177,7 +177,6 @@ class ManagerAuthRepository(
     private val loadedState = AtomicReference<AuthState?>(null)
     private val nativeCookies = AtomicReference<EphemeralCookieJar?>(null)
     private val loginMutex = Mutex()
-    private val refreshMutex = Mutex()
     private val mutableState = MutableStateFlow<ManagerAuthState>(ManagerAuthState.Loading)
 
     val state: StateFlow<ManagerAuthState> = mutableState.asStateFlow()
@@ -255,8 +254,11 @@ class ManagerAuthRepository(
             forceRefresh = forceRefresh,
             rejectedAccessToken = rejectedAccessToken,
         )?.let { return it }
-        return refreshMutex.withLock {
-            val latest = currentState() ?: return@withLock null
+        return ManagerProcessRefreshCoordinator.withLock {
+            // WorkManager and the foreground UI own separate repository instances backed by the
+            // same encrypted DataStore. Re-read it after acquiring the process-wide rotation lock
+            // so a second caller observes the token just rotated by the first one.
+            val latest = persistedState() ?: return@withLock null
             reusableManagerAccessToken(
                 accessToken = latest.accessToken,
                 needsTokenRefresh = latest.needsTokenRefresh,
@@ -346,9 +348,11 @@ class ManagerAuthRepository(
 
     private suspend fun currentState(): AuthState? {
         loadedState.get()?.let { return it }
-        return withContext(Dispatchers.IO) {
-            stateStore.value.read()?.also(loadedState::set)
-        }
+        return persistedState()
+    }
+
+    private suspend fun persistedState(): AuthState? = withContext(Dispatchers.IO) {
+        stateStore.value.read().also(loadedState::set)
     }
 
     private suspend fun persist(state: AuthState) {
@@ -369,6 +373,13 @@ class ManagerAuthRepository(
             authorizationService.value.dispose()
         }
     }
+}
+
+/** Serializes rotating manager refresh tokens across foreground and WorkManager repositories. */
+internal object ManagerProcessRefreshCoordinator {
+    private val mutex = Mutex()
+
+    suspend fun <T> withLock(block: suspend () -> T): T = mutex.withLock { block() }
 }
 
 /**

@@ -32,6 +32,7 @@ export const DOSSIER_ACTIVITY_CODES = [
   "MEDIA_FAILED",
   "MEDIA_ROTATED",
   "MEDIA_DELETED",
+  "MEDIA_TASK_EVIDENCE_ATTACHED",
 ] as const
 
 export const DOSSIER_SOURCE_TYPES = [
@@ -84,6 +85,18 @@ export type DossierMediaProjection = {
   state: DossierMediaState
 }
 
+/**
+ * An opaque, ready photo captured for a completed worker task.
+ *
+ * The panel resolves it only through the public media API using the task-entry
+ * owner proof; this record deliberately contains no object-storage locator.
+ */
+export type DossierTaskEvidencePhoto = {
+  mediaId: string
+  generation: number
+  taskBoardEntryId: string
+}
+
 export type DossierActivity = {
   activityId: string
   cabinId: string
@@ -94,6 +107,7 @@ export type DossierActivity = {
   actorRef: DossierActorReference | null
   sourceRef: DossierSourceReference
   media: DossierMediaProjection[]
+  taskEvidencePhotos: DossierTaskEvidencePhoto[]
 }
 
 export type CabinDossierPage = {

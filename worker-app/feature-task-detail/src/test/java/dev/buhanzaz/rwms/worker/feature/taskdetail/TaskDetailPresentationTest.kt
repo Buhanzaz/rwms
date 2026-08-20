@@ -13,10 +13,89 @@ import org.junit.Test
 class TaskDetailPresentationTest {
     @Test
     fun `photo button is visibly unavailable until its route index is loaded`() {
-        val presentation = photoCapturePresentation(hasLoadedDetail = false)
+        val presentation = photoCapturePresentation(
+            hasLoadedDetail = false,
+            taskStatus = null,
+            currentWorkerId = "slinger",
+            queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
+            assignments = emptyList(),
+            locallyPending = false,
+        )
 
         assertThat(presentation.enabled).isFalse()
         assertThat(presentation.message).contains("Загружаем карточку")
+    }
+
+    @Test
+    fun `secondary logistics worker cannot capture before taking active task`() {
+        val presentation = photoCapturePresentation(
+            hasLoadedDetail = true,
+            taskStatus = "IN_PROGRESS",
+            currentWorkerId = "slinger",
+            queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
+            assignments = listOf(
+                assignment(
+                    workerId = "driver",
+                    workerName = "Водитель",
+                    status = "ACTIVE",
+                    workerGroupId = null,
+                ),
+            ),
+            locallyPending = false,
+        )
+
+        assertThat(presentation.enabled).isFalse()
+        assertThat(presentation.message).contains("Сначала возьмите задание")
+    }
+
+    @Test
+    fun `active secondary logistics worker can capture after taking task`() {
+        val presentation = photoCapturePresentation(
+            hasLoadedDetail = true,
+            taskStatus = "IN_PROGRESS",
+            currentWorkerId = "slinger",
+            queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
+            assignments = listOf(
+                assignment(
+                    workerId = "driver",
+                    workerName = "Водитель",
+                    status = "ACTIVE",
+                    workerGroupId = null,
+                ),
+                assignment(
+                    workerId = "slinger",
+                    workerName = "Стропальщик",
+                    status = "ACTIVE",
+                    workerGroupId = "slinger-group",
+                ),
+            ),
+            locallyPending = false,
+        )
+
+        assertThat(presentation.enabled).isTrue()
+        assertThat(presentation.message).isNull()
+    }
+
+    @Test
+    fun `paused task cannot capture a photo`() {
+        val presentation = photoCapturePresentation(
+            hasLoadedDetail = true,
+            taskStatus = "PAUSED",
+            currentWorkerId = "slinger",
+            queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
+            assignments = listOf(
+                assignment(
+                    workerId = "slinger",
+                    workerName = "Стропальщик",
+                    status = "PAUSED",
+                    workerGroupId = "slinger-group",
+                ),
+            ),
+            locallyPending = false,
+        )
+
+        assertThat(presentation.enabled).isFalse()
+        assertThat(presentation.message).contains("продолжите задание")
     }
 
     @Test
@@ -308,6 +387,7 @@ class TaskDetailPresentationTest {
 
         assertThat(presentation.actions).containsExactly(WorkerTaskAction.JOIN)
         assertThat(presentation.message).contains("можно присоединиться")
+        assertThat(presentation.joinLabel).isEqualTo("Взять задание")
         assertThat(
             selectedGroupForAction(
                 WorkerTaskAction.JOIN,
@@ -325,11 +405,26 @@ class TaskDetailPresentationTest {
             queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
             assignments = listOf(assignment("primary", "Основной исполнитель", "ACTIVE")),
             locallyPending = false,
-            hasCurrentGroup = false,
+            hasCurrentGroup = true,
         )
 
-        assertThat(presentation.actions).isEmpty()
-        assertThat(presentation.message).contains("текущую группу")
+        assertThat(presentation.actions).containsExactly(WorkerTaskAction.JOIN)
+        assertThat(presentation.joinLabel).isEqualTo("Взять задание")
+    }
+
+    @Test
+    fun `non-logistics join retains its join label`() {
+        val presentation = taskActionPresentation(
+            currentWorkerId = "worker-current",
+            taskStatus = "IN_PROGRESS",
+            availabilityMode = "REQUIRED_JOIN",
+            queuePurpose = "GENERAL",
+            assignments = listOf(assignment("worker-other", "Основной исполнитель", "ACTIVE")),
+            locallyPending = false,
+        )
+
+        assertThat(presentation.actions).containsExactly(WorkerTaskAction.JOIN)
+        assertThat(presentation.joinLabel).isEqualTo("Присоединиться")
     }
 
     @Test
@@ -384,6 +479,43 @@ class TaskDetailPresentationTest {
                 selectedEvidenceId = "photo-one",
             ),
         ).isNull()
+    }
+
+    @Test
+    fun `active logistics slinger can complete with a selected ready photo`() {
+        val presentation = taskActionPresentation(
+            currentWorkerId = "slinger",
+            taskStatus = "IN_PROGRESS",
+            availabilityMode = "OPTIONAL_JOIN",
+            queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
+            assignments = listOf(
+                assignment(
+                    workerId = "driver",
+                    workerName = "Водитель",
+                    status = "ACTIVE",
+                    workerGroupId = null,
+                ),
+                assignment(
+                    workerId = "slinger",
+                    workerName = "Стропальщик",
+                    status = "ACTIVE",
+                    workerGroupId = "slinger-group",
+                ),
+            ),
+            locallyPending = false,
+        )
+
+        assertThat(presentation.actions).containsExactly(
+            WorkerTaskAction.PAUSE,
+            WorkerTaskAction.COMPLETE,
+        ).inOrder()
+        assertThat(
+            completionEvidenceId(
+                queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
+                readyEvidenceIds = setOf("driver-photo", "slinger-photo"),
+                selectedEvidenceId = "slinger-photo",
+            ),
+        ).isEqualTo("slinger-photo")
     }
 
     @Test
@@ -528,6 +660,57 @@ class TaskDetailPresentationTest {
         ).inOrder()
         assertThat(presentation.actionsEnabled).isFalse()
         assertThat(presentation.message).isEqualTo("Действие ожидает синхронизации")
+    }
+
+    @Test
+    fun `task header appears immediately after take but waits for authoritative timer`() {
+        val beforeTake = taskHeaderTimerPresentation(
+            taskStatus = "WAITING",
+            locallyPending = false,
+            timerState = "PAUSED",
+            remaining = "1:00:00",
+        )
+        val pendingTake = taskHeaderTimerPresentation(
+            taskStatus = "IN_PROGRESS",
+            locallyPending = true,
+            timerState = "PAUSED",
+            remaining = "1:00:00",
+        )
+
+        assertThat(beforeTake).isNull()
+        assertThat(pendingTake).isEqualTo(
+            TaskHeaderTimerPresentation(
+                label = "Таймер",
+                countdown = "запускается…",
+                running = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `authoritative working timer exposes reverse countdown in task header`() {
+        val presentation = taskHeaderTimerPresentation(
+            taskStatus = "IN_PROGRESS",
+            locallyPending = false,
+            timerState = "WORKING",
+            remaining = "0:24:59",
+        )
+
+        assertThat(presentation).isEqualTo(
+            TaskHeaderTimerPresentation(
+                label = "Осталось",
+                countdown = "0:24:59",
+                running = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `task object type uses worker-facing labels`() {
+        assertThat(workerTaskObjectKindLabel("CABIN")).isEqualTo("Бытовка")
+        assertThat(workerTaskObjectKindLabel("EQUIPMENT")).isEqualTo("Оборудование")
+        assertThat(workerTaskObjectKindLabel("OTHER")).isEqualTo("Другой объект")
+        assertThat(workerTaskObjectKindLabel(null)).isEqualTo("Не указан")
     }
 
     private fun assignment(

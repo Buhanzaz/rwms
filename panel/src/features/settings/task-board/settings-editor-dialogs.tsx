@@ -604,6 +604,11 @@ export function ClassEditorDialog({
       setValidation("Укажите название класса.")
       return
     }
+    const selectedWorkerIds = new Set(
+      eligibleWorkers
+        .filter((worker) => members[worker.id])
+        .map((worker) => worker.id)
+    )
     await onSave({
       version: item?.version ?? 0,
       name: name.trim(),
@@ -939,10 +944,21 @@ export function GroupEditorDialog({
       description: optional(description),
       active,
       members: eligibleWorkers
-        .filter((worker) => members[worker.id])
+        .filter((worker) => selectedWorkerIds.has(worker.id))
         .map((worker) => ({
           workerId: worker.id,
           active: true,
+        })),
+      currentGroupChanges: workers
+        .filter((worker) => {
+          const shouldBeCurrent = selectedWorkerIds.has(worker.id)
+          const isCurrent = item !== null && worker.currentGroupId === item.id
+          return shouldBeCurrent !== isCurrent
+        })
+        .map((worker) => ({
+          workerId: worker.id,
+          expectedVersion: worker.version,
+          current: selectedWorkerIds.has(worker.id),
         })),
     })
   }
@@ -1000,7 +1016,8 @@ export function GroupEditorDialog({
       <FieldSet>
         <FieldLegend>Участники</FieldLegend>
         <FieldDescription>
-          Доступны только активные рабочие с квалификацией выбранного класса.
+          Выбранные рабочие станут участниками и текущими исполнителями этой
+          бригады после одного сохранения.
         </FieldDescription>
         <FieldGroup className="gap-3">
           {eligibleWorkers.map((worker) => (
@@ -1080,108 +1097,6 @@ export function CredentialPasswordDialog({
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="new-password"
           />
-        </Field>
-      </FieldGroup>
-    </EditorShell>
-  )
-}
-
-const NO_CURRENT_GROUP = "__none__"
-
-export function CurrentGroupDialog({
-  worker,
-  groups,
-  pending,
-  error,
-  onClose,
-  onSave,
-}: {
-  worker: WorkerDto
-  groups: WorkerGroupDto[]
-  pending: boolean
-  error: string | null
-  onClose: () => void
-  onSave: (workerGroupId: string | null) => Promise<void>
-}) {
-  const activeMembershipGroups = groups.filter(
-    (group) =>
-      group.active &&
-      group.members.some(
-        (member) => member.workerId === worker.id && member.active
-      )
-  )
-  const initialGroupId = activeMembershipGroups.some(
-    (group) => group.id === worker.currentGroupId
-  )
-    ? worker.currentGroupId!
-    : NO_CURRENT_GROUP
-  const [selectedGroupId, setSelectedGroupId] = useState(initialGroupId)
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    await onSave(selectedGroupId === NO_CURRENT_GROUP ? null : selectedGroupId)
-  }
-
-  return (
-    <EditorShell
-      title="Текущая бригада"
-      description={`Назначение рабочего ${worker.displayName} на выбранном складе.`}
-      pending={pending}
-      error={null}
-      submitDisabled={
-        (selectedGroupId === NO_CURRENT_GROUP ? null : selectedGroupId) ===
-        worker.currentGroupId
-      }
-      onClose={onClose}
-      onSubmit={(event) => void submit(event)}
-    >
-      <FieldGroup>
-        <Field data-invalid={error ? true : undefined}>
-          <FieldLabel htmlFor="worker-current-group">
-            Текущая бригада
-          </FieldLabel>
-          <Select
-            value={selectedGroupId}
-            onValueChange={setSelectedGroupId}
-            disabled={pending}
-          >
-            <SelectTrigger
-              id="worker-current-group"
-              className="w-full"
-              aria-invalid={Boolean(error)}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectItem value={NO_CURRENT_GROUP}>Не выбрана</SelectItem>
-                {activeMembershipGroups.map((group) => (
-                  <SelectItem
-                    key={group.id}
-                    value={group.id}
-                    disabled={group.operationalStatus === "DISABLED"}
-                  >
-                    {group.name}
-                    {group.operationalStatus === "DISABLED"
-                      ? " — недоступна"
-                      : null}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-          <FieldDescription>
-            Доступны только активные бригады, где участие рабочего активно.
-            Недоступную бригаду сначала нужно включить.
-          </FieldDescription>
-          {worker.currentGroupId !== null &&
-          initialGroupId === NO_CURRENT_GROUP ? (
-            <FieldDescription>
-              Текущее назначение «{worker.currentGroupName ?? "Без названия"}»
-              больше не входит в доступные активные участия.
-            </FieldDescription>
-          ) : null}
-          <FieldError>{error}</FieldError>
         </Field>
       </FieldGroup>
     </EditorShell>

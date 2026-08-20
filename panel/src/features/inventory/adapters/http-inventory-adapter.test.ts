@@ -16,7 +16,8 @@ import {
   listInventorySessions,
   previewInventoryCompletion,
   prepareInventoryFinalPlan,
-  publishInventoryFindings,
+  recalculateInventoryOutcome,
+  refreshInventorySession,
   resolveInventoryFindingConflict,
   reviewInventoryRegistry,
   retryFindingPublication,
@@ -140,6 +141,34 @@ describe("http inventory adapter", () => {
     )
     expect(JSON.parse(start[1].body)).toEqual({
       warehouseId: session.warehouseId,
+    })
+  })
+
+  it("refreshes the exact session revision with idempotency", async () => {
+    const refreshed = { ...session, sessionRevision: 4 }
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(refreshed), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await refreshInventorySession({
+      accessToken: "inventory-token",
+      inventoryId: session.id,
+      request: { expectedSessionRevision: 3 },
+      idempotencyKey: "00000000-0000-4000-8000-000000000111",
+    })
+
+    const [url, request] = fetchMock.mock.calls[0]
+    expect(url).toContain(`/sessions/${session.id}/refresh`)
+    expect(request.method).toBe("POST")
+    expect(new Headers(request.headers).get("Idempotency-Key")).toBe(
+      "00000000-0000-4000-8000-000000000111"
+    )
+    expect(JSON.parse(request.body)).toEqual({
+      expectedSessionRevision: 3,
     })
   })
 
@@ -812,12 +841,61 @@ describe("http inventory adapter", () => {
     ).toBe(completeIdempotencyKey)
   })
 
+  it("posts the completed-plan fence and parses the accepted outcome recalculation", async () => {
+    const idempotencyKey = "00000000-0000-4000-8000-000000000108"
+    const response = {
+      inventoryId: session.id,
+      sessionRevision: 3,
+      finalPlanVersion: 2,
+      finalPlanSha256: "b".repeat(64),
+      furnitureReconciliationState: "PENDING" as const,
+      createdPublicationCount: 75,
+      requeuedPublicationCount: 89,
+      preservedSucceededPublicationCount: 52,
+      publicationBatch: {
+        inventoryId: session.id,
+        aggregateState: "PENDING" as const,
+        intents: [],
+      },
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    const result = await recalculateInventoryOutcome({
+      accessToken: "token",
+      inventoryId: session.id,
+      request: {
+        expectedSessionRevision: 3,
+        finalPlanVersion: 2,
+        finalPlanSha256: "b".repeat(64),
+      },
+      idempotencyKey,
+    })
+
+    const [url, request] = fetchMock.mock.calls[0]
+    expect(url).toContain(`/sessions/${session.id}/outcome/recalculate`)
+    expect(request.method).toBe("POST")
+    expect(new Headers(request.headers).get("Idempotency-Key")).toBe(
+      idempotencyKey
+    )
+    expect(JSON.parse(request.body)).toEqual({
+      expectedSessionRevision: 3,
+      finalPlanVersion: 2,
+      finalPlanSha256: "b".repeat(64),
+    })
+    expect(result).toEqual(response)
+  })
+
   it("preserves caller-owned create identity and supports publication recovery", async () => {
     const findingId = "00000000-0000-4000-8000-000000000104"
     const createIdempotencyKey = "00000000-0000-4000-8000-000000000105"
     const retryIdempotencyKey = "00000000-0000-4000-8000-000000000106"
     const closeIdempotencyKey = "00000000-0000-4000-8000-000000000107"
-    const publishIdempotencyKey = "00000000-0000-4000-8000-000000000108"
     const fetchMock = vi.fn().mockImplementation(() =>
       Promise.resolve(
         new Response(JSON.stringify({}), {
@@ -841,12 +919,6 @@ describe("http inventory adapter", () => {
     }
     await createAndAttachInventoryAsset(createInput)
     await createAndAttachInventoryAsset(createInput)
-    await publishInventoryFindings({
-      accessToken: "token",
-      inventoryId: session.id,
-      expectedSessionRevision: 3,
-      idempotencyKey: publishIdempotencyKey,
-    })
     await retryFindingPublication({
       accessToken: "token",
       inventoryId: session.id,
@@ -871,15 +943,12 @@ describe("http inventory adapter", () => {
         createIdempotencyKey
       )
     }
-    expect(
-      new Headers(fetchMock.mock.calls[2][1].headers).get("Idempotency-Key")
-    ).toBe(publishIdempotencyKey)
-    expect(JSON.parse(fetchMock.mock.calls[3][1].body)).toEqual({
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({
       expectedPublicationRevision: 7,
       reconcileReason: "Источник повторно сверен",
       currentPreconditionSha256: "a".repeat(64),
     })
-    expect(JSON.parse(fetchMock.mock.calls[4][1].body)).toEqual({
+    expect(JSON.parse(fetchMock.mock.calls[3][1].body)).toEqual({
       expectedPublicationRevision: 8,
       reason: "Закрыто оператором после сверки",
     })

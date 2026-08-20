@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  useIsMutating,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Add01Icon,
@@ -7,6 +12,8 @@ import {
   CheckmarkCircle02Icon,
   ClipboardCheckIcon,
   FilterIcon,
+  Loading03Icon,
+  RefreshIcon,
   SentIcon,
 } from "@hugeicons/core-free-icons"
 import { useNavigate, useParams, useSearchParams } from "react-router-dom"
@@ -16,6 +23,18 @@ import { MobileAppRequiredDialog } from "@/components/mobile-app-required-dialog
 import { PageToolbar, PageToolbarActions } from "@/components/page-toolbar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import {
   Card,
   CardContent,
@@ -53,10 +72,12 @@ import {
   inventoryListQueryKey,
   inventoryPreliminaryStatisticsQueryKey,
   inventoryPlanningSettingsQueryKey,
+  inventoryPublicationQueryKey,
   listInventories,
   previewInventoryCompletion,
   prepareInventoryFinalPlan,
-  publishInventoryWorks,
+  recalculateInventoryOutcome,
+  refreshInventorySession,
   reviewInventoryRegistry,
   resolveInventoryFindingConflict,
   saveInventoryFurnitureReview,
@@ -102,6 +123,7 @@ import {
   inventoryRepairMovementCount,
   toInventoryRepairPlanSnapshot,
 } from "@/features/inventory/domain/inventory-domain"
+import { applyInventoryOutcomeRecalculation } from "@/features/inventory/domain/inventory-view-mapper"
 import { formatMoneyDecimal } from "@/features/repair-estimates/domain/repair-estimate-domain"
 import type {
   InventoryFindingDto,
@@ -143,6 +165,10 @@ function errorMessage(error: unknown) {
     return "Данные инвентаризации изменились. Обновите страницу и повторите действие."
   }
   return error instanceof Error ? error.message : "Операция не выполнена"
+}
+
+function outcomeRecalculationErrorMessage(error: unknown) {
+  return `${errorMessage(error)} Данные, фотографии и история сохранены. Обновите страницу и повторите пересчёт.`
 }
 
 function showPublicationNotice(session: InventorySessionDto) {
@@ -515,7 +541,6 @@ function FindingEditor({
       if (!actor) throw new Error("Нет доступа")
       return saveInventoryFinding({
         inventoryId: session.id,
-        expectedVersion: session.version,
         expectedFindingVersion: baseFindingVersion,
         actor,
         findingId: finding.id,
@@ -1510,6 +1535,59 @@ export function InventoryFinishPage() {
       void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
     },
   })
+  const refreshSessionMutation = useMutation({
+    mutationFn: () => {
+      if (!session) throw new Error("Инвентаризация недоступна")
+      return refreshInventorySession({
+        inventoryId: session.id,
+        expectedSessionRevision: session.version,
+      })
+    },
+    onSuccess: (updated) => {
+      queryClient.removeQueries({
+        queryKey: inventoryFurnitureReviewQueryKey(updated.id),
+      })
+      queryClient.removeQueries({
+        queryKey: [...INVENTORY_QUERY_KEY, "final-plan", updated.id],
+      })
+      queryClient.removeQueries({
+        queryKey: [...INVENTORY_QUERY_KEY, "finish-preview", updated.id],
+      })
+      queryClient.removeQueries({
+        queryKey: [...INVENTORY_QUERY_KEY, "statistics-preview", updated.id],
+      })
+      queryClient.removeQueries({
+        queryKey: [...INVENTORY_QUERY_KEY, "registry-review", updated.id],
+      })
+      queryClient.setQueryData(inventoryDetailQueryKey(updated.id), updated)
+      setAcknowledgedRiskSignature(null)
+      setKeepInspectionFinding(null)
+      setKeepInspectionReason("")
+      setKeepInspectionSubmitted(false)
+      setFurnitureReviewDirty(false)
+      setFinalPlanDirty(false)
+      setDataChangedDialogOpen(false)
+      setRegistryReviewEnabled(false)
+      conflictNavigationRequested.current = false
+      resolutionMutation.reset()
+      startFurnitureReviewMutation.reset()
+      registryReviewMutation.reset()
+      saveFurnitureReviewMutation.reset()
+      prepareFinalPlanMutation.reset()
+      saveFinalPlanMutation.reset()
+      completionMutation.reset()
+      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
+      toast.success(
+        "Изменения сессии пересчитаны. Сохранённые осмотры бытовок сохранены."
+      )
+    },
+    onError: () => {
+      if (!session) return
+      void queryClient.invalidateQueries({
+        queryKey: inventoryDetailQueryKey(session.id),
+      })
+    },
+  })
   const goBack = useWorkspaceBack(
     session ? `/inventory/${session.id}` : "/inventory"
   )
@@ -1533,19 +1611,73 @@ export function InventoryFinishPage() {
         description="Откройте её в истории."
       />
     )
+  const refreshBlockedByUnsavedDraft = furnitureReviewDirty || finalPlanDirty
+  const refreshBlockedByPendingOperation =
+    refreshSessionMutation.isPending ||
+    resolutionMutation.isPending ||
+    startFurnitureReviewMutation.isPending ||
+    registryReviewMutation.isPending ||
+    saveFurnitureReviewMutation.isPending ||
+    prepareFinalPlanMutation.isPending ||
+    saveFinalPlanMutation.isPending ||
+    completionMutation.isPending
+  const refreshSessionCard = (
+    <Card>
+      <CardHeader>
+        <CardTitle>Пересчитать данные инвентаризации</CardTitle>
+        <CardDescription>
+          Сохранённые осмотры бытовок останутся в базе. Сервер заново соберёт
+          живой состав склада, после чего сверку мебели и итоговый план нужно
+          будет построить заново по текущим данным.
+        </CardDescription>
+      </CardHeader>
+      <CardFooter className="flex-col items-stretch gap-2 border-t">
+        {refreshBlockedByUnsavedDraft ? (
+          <p className="text-sm text-muted-foreground">
+            Сначала сохраните или отмените несохранённые изменения сверки мебели
+            или итогового плана.
+          </p>
+        ) : null}
+        {refreshSessionMutation.error ? (
+          <p role="alert" className="text-sm text-destructive">
+            Не удалось пересчитать изменения сессии:{" "}
+            {errorMessage(refreshSessionMutation.error)}
+          </p>
+        ) : null}
+        <Button
+          type="button"
+          variant="outline"
+          disabled={
+            refreshBlockedByPendingOperation || refreshBlockedByUnsavedDraft
+          }
+          onClick={() => {
+            refreshSessionMutation.reset()
+            refreshSessionMutation.mutate()
+          }}
+        >
+          {refreshSessionMutation.isPending
+            ? "Пересчитываем изменения сессии..."
+            : "Пересчитать изменения сессии"}
+        </Button>
+      </CardFooter>
+    </Card>
+  )
   if (
     session.reviewStage === "FURNITURE" &&
     (furnitureReviewQuery.error || !furnitureReviewQuery.data)
   )
     return (
-      <InventoryUnavailable
-        title="Сверка мебели недоступна"
-        description={
-          furnitureReviewQuery.error
-            ? errorMessage(furnitureReviewQuery.error)
-            : "Не удалось получить снимок мебели для этой инвентаризации."
-        }
-      />
+      <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto">
+        {refreshSessionCard}
+        <InventoryUnavailable
+          title="Сверка мебели недоступна"
+          description={
+            furnitureReviewQuery.error
+              ? errorMessage(furnitureReviewQuery.error)
+              : "Не удалось получить снимок мебели для этой инвентаризации."
+          }
+        />
+      </div>
     )
   const furnitureReview = furnitureReviewQuery.data
   const cabinReviewSession =
@@ -1614,6 +1746,7 @@ export function InventoryFinishPage() {
           Назад
         </Button>
       </PageToolbar>
+      {refreshSessionCard}
       {session.reviewStage === "CABINS" ? (
         <>
           <Card>
@@ -2195,22 +2328,112 @@ export function InventoryHistoryDetailPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [searchParams] = useSearchParams()
+  const [outcomeDialogOpen, setOutcomeDialogOpen] = useState(false)
   const { currentUser } = useAuth()
-  const { inventoryId, actor, query, session } = useInventoryDetailRoute()
+  const { inventoryId, query, session } = useInventoryDetailRoute()
   const findingId = searchParams.get("findingId")
   const selectedFinding =
     session?.findings.find((item) => item.id === findingId) ?? null
   const goBack = useWorkspaceBack(`/inventory/history/${inventoryId}`)
-  const publishMutation = useMutation({
-    mutationFn: () => {
-      if (!session || !actor) throw new Error("Инвентаризация недоступна")
-      return publishInventoryWorks({ inventoryId: session.id, actor })
+  const canRecalculate = Boolean(
+    session &&
+    hasInventoryWarehouseAccess(currentUser, session.warehouseId, "MANAGE")
+  )
+  const historyMutationKey = [
+    ...INVENTORY_QUERY_KEY,
+    "history-mutation",
+    inventoryId,
+  ] as const
+  const historyMutationCount = useIsMutating({
+    mutationKey: historyMutationKey,
+  })
+  const historyFinalPlanQueryKey = inventoryFinalPlanQueryKey(
+    session?.id ?? null,
+    session?.version ?? null
+  )
+  const historyFinalPlanQuery = useQuery({
+    queryKey: historyFinalPlanQueryKey,
+    queryFn: () =>
+      session ? getInventoryFinalPlan(session.id) : Promise.resolve(null),
+    enabled: Boolean(
+      session && session.status === "COMPLETED" && canRecalculate
+    ),
+  })
+  const completedFinalPlan =
+    historyFinalPlanQuery.data?.state === "COMPLETED"
+      ? historyFinalPlanQuery.data
+      : null
+  const outcomeMutation = useMutation({
+    mutationKey: [...historyMutationKey, "outcome-recalculate"],
+    mutationFn: async () => {
+      if (!session || !completedFinalPlan) {
+        throw new Error("Завершённый итоговый план недоступен")
+      }
+      const outcome = await recalculateInventoryOutcome({
+        inventoryId: session.id,
+        expectedSessionRevision: session.version,
+        finalPlanVersion: completedFinalPlan.finalPlanVersion,
+        finalPlanSha256: completedFinalPlan.finalPlanSha256,
+      })
+      if (
+        outcome.inventoryId !== session.id ||
+        outcome.finalPlanVersion !== completedFinalPlan.finalPlanVersion ||
+        outcome.finalPlanSha256 !== completedFinalPlan.finalPlanSha256
+      ) {
+        throw new Error(
+          "Сервис вернул пересчёт для другой версии итогового плана"
+        )
+      }
+      return outcome
     },
-    onSuccess: (published) => {
-      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
-      showPublicationNotice(published)
+    onSuccess: async (outcome) => {
+      queryClient.setQueryData(
+        inventoryPublicationQueryKey(outcome.inventoryId),
+        outcome.publicationBatch
+      )
+      queryClient.setQueryData<InventorySessionDto>(
+        inventoryDetailQueryKey(outcome.inventoryId),
+        (cached) =>
+          cached ? applyInventoryOutcomeRecalculation(cached, outcome) : cached
+      )
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: inventoryDetailQueryKey(outcome.inventoryId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: [...INVENTORY_QUERY_KEY, "final-plan", outcome.inventoryId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: [
+            ...INVENTORY_QUERY_KEY,
+            "statistics-preview",
+            outcome.inventoryId,
+          ],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: inventoryListQueryKey(session!.warehouseId),
+        }),
+      ])
+      setOutcomeDialogOpen(false)
+      toast.success(
+        `Пересчёт запущен: создано ${outcome.createdPublicationCount}, заново поставлено ${outcome.requeuedPublicationCount}, уже полностью применено ${outcome.preservedSucceededPublicationCount}.`
+      )
     },
   })
+  const historyMutationPending =
+    historyMutationCount > 0 || outcomeMutation.isPending
+  const outcomeActionDisabled =
+    !canRecalculate ||
+    !completedFinalPlan ||
+    historyFinalPlanQuery.isFetching ||
+    historyMutationPending
+  const outcomeActionDisabledReason = !canRecalculate
+    ? "Для пересчёта нужны права MANAGE на выбранном складе"
+    : !completedFinalPlan
+      ? "Завершённый итоговый план не загружен"
+      : historyMutationPending
+        ? "Другая команда истории ещё выполняется"
+        : undefined
   if (query.isLoading) return <InventoryLoading />
   if (query.error)
     return (
@@ -2297,14 +2520,6 @@ export function InventoryHistoryDetailPage() {
       </div>
     )
   }
-  const canPublish = hasInventoryWarehouseAccess(
-    currentUser,
-    session.warehouseId,
-    "MANAGE"
-  )
-  const unpublished = session.findings.some(
-    (item) => item.lines.length > 0 && item.publicationStatus !== "PUBLISHED"
-  )
   const furnitureReconciliation = inventoryFurnitureReconciliationPresentation(
     session.furnitureReconciliationState
   )
@@ -2319,24 +2534,73 @@ export function InventoryHistoryDetailPage() {
           <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
           Назад
         </Button>
-        {unpublished ? (
-          <PageToolbarActions>
-            <Button
-              type="button"
-              disabled={!canPublish || publishMutation.isPending}
-              onClick={() => publishMutation.mutate()}
-            >
-              <HugeiconsIcon icon={SentIcon} data-icon="inline-start" />
-              Передать в ремонты
-            </Button>
-          </PageToolbarActions>
-        ) : null}
+        <PageToolbarActions>
+          <AlertDialog
+            open={outcomeDialogOpen}
+            onOpenChange={(open) => {
+              if (!open && historyMutationPending) return
+              setOutcomeDialogOpen(open)
+            }}
+          >
+            <AlertDialogTrigger asChild>
+              <Button
+                type="button"
+                disabled={outcomeActionDisabled}
+                title={outcomeActionDisabledReason}
+              >
+                <HugeiconsIcon icon={RefreshIcon} data-icon="inline-start" />
+                Пересчитать и применить итоги
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  Применить итоги завершённой инвентаризации?
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  Завершённая инвентаризация станет текущей истиной. Активная
+                  аренда, резерв, внутреннее перемещение и прежняя привязка к
+                  ремонту могут быть заменены её результатом. Бытовка без работ
+                  станет свободной, с обычными работами — в ремонте, с
+                  принудительным капремонтом — в капитальном ремонте.
+                  Фотографии, доказательства и история сохраняются.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              {outcomeMutation.error ? (
+                <Alert variant="destructive">
+                  <AlertTitle>Пересчёт не запущен</AlertTitle>
+                  <AlertDescription>
+                    {outcomeRecalculationErrorMessage(outcomeMutation.error)}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={historyMutationPending}>
+                  Отмена
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  disabled={historyMutationPending}
+                  onClick={(event) => {
+                    event.preventDefault()
+                    outcomeMutation.mutate()
+                  }}
+                >
+                  {historyMutationPending ? (
+                    <HugeiconsIcon
+                      icon={Loading03Icon}
+                      data-icon="inline-start"
+                      className="animate-spin"
+                    />
+                  ) : null}
+                  {historyMutationPending
+                    ? "Запускаем пересчёт…"
+                    : "Пересчитать и применить"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </PageToolbarActions>
       </PageToolbar>
-      {publishMutation.error ? (
-        <p role="alert" className="text-sm text-destructive">
-          {errorMessage(publishMutation.error)}
-        </p>
-      ) : null}
       {session.statistics ? (
         <section className="flex flex-col gap-3" aria-labelledby="frozen-title">
           <h2 id="frozen-title" className="text-lg font-semibold">

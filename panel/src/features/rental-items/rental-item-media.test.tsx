@@ -1,13 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ApiError } from "@/lib/api-client"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 
 const media = vi.hoisted(() => ({
   listOwnerMedia: vi.fn(),
+  listCabinCovers: vi.fn(),
   createVariantObjectUrl: vi.fn(),
   createOriginalObjectUrl: vi.fn(),
   uploadFile: vi.fn(),
@@ -112,6 +113,7 @@ function Harness() {
             state: "READY",
           },
         ],
+        taskEvidencePhotos: [],
       },
     ],
     actorDisplays: new Map([
@@ -132,6 +134,12 @@ function Harness() {
   const service = rentalItemMedia.photos.find((photo) => photo.id === ASSET_ID)
   return (
     <div>
+      <span data-testid="media-error">
+        {String(Boolean(rentalItemMedia.error))}
+      </span>
+      <span data-testid="media-loading">
+        {String(rentalItemMedia.isLoading)}
+      </span>
       <span data-testid="photo-count">{rentalItemMedia.photos.length}</span>
       <span data-testid="logical-photo-count">
         {rentalItemMedia.logicalPhotoCount}
@@ -230,6 +238,7 @@ function ActivityAssociationHarness() {
             state: "READY",
           },
         ],
+        taskEvidencePhotos: [],
       },
       {
         activityId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
@@ -257,6 +266,7 @@ function ActivityAssociationHarness() {
             state: "READY",
           },
         ],
+        taskEvidencePhotos: [],
       },
     ],
     actorDisplays: new Map([
@@ -317,12 +327,273 @@ function renderActivityAssociationHarness() {
   )
 }
 
+function CurrentInventoryFolderHarness() {
+  const rentalItemMedia = useRentalItemMedia({
+    item,
+    accessToken: "media-token",
+    initialVariants: INITIAL_VARIANTS,
+    dossierActivities: [
+      {
+        activityId: "aaaaaaaa-1111-4aaa-8aaa-aaaaaaaaaaaa",
+        cabinId: RENTAL_ITEM_ID,
+        warehouseId: WAREHOUSE_ID,
+        activityCode: "INVENTORY_INSPECTION_SAVED",
+        occurredAt: "2026-08-19T07:30:00Z",
+        recordedAt: "2026-08-19T07:31:00Z",
+        actorRef: {
+          subjectId: NEW_ACTOR_ID,
+          principalType: "USER",
+          profileRevision: null,
+        },
+        sourceRef: {
+          producer: "inventory-service",
+          aggregateType: "INVENTORY_SESSION",
+          aggregateId: "bbbbbbbb-1111-4bbb-8bbb-bbbbbbbbbbbb",
+          secondaryId: "cccccccc-1111-4ccc-8ccc-cccccccccccc",
+        },
+        media: [
+          {
+            mediaId: NEW_ASSET_ID,
+            folderId: NEW_FOLDER_ID,
+            findingId: "cccccccc-1111-4ccc-8ccc-cccccccccccc",
+            generation: 1,
+            state: "READY",
+          },
+        ],
+        taskEvidencePhotos: [],
+      },
+    ],
+    actorDisplays: new Map([
+      [
+        NEW_ACTOR_ID,
+        {
+          subjectId: NEW_ACTOR_ID,
+          principalType: "USER",
+          globalRole: "WAREHOUSE_MANAGER",
+          username: "inventory.actor",
+          firstName: "Ирина",
+          lastName: "Инвентаризатор",
+          email: "inventory.actor@example.test",
+        },
+      ],
+    ]),
+  })
+  const inventoryFolder = rentalItemMedia.photoFolders.find(
+    (folder) => folder.id === NEW_FOLDER_ID
+  )
+
+  return (
+    <div>
+      <span data-testid="current-photo-ids">
+        {rentalItemMedia.photos.map((photo) => photo.id).join(",")}
+      </span>
+      <span data-testid="current-photo-count">
+        {rentalItemMedia.logicalPhotoCount}
+      </span>
+      <span data-testid="inventory-folder-source">
+        {inventoryFolder?.sourceLabel}
+      </span>
+      <span data-testid="inventory-folder-actor">
+        {inventoryFolder?.actorLabel}
+      </span>
+      <span data-testid="archive-folder-count">
+        {rentalItemMedia.photoFolders.length}
+      </span>
+    </div>
+  )
+}
+
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
 })
 
+beforeEach(() => {
+  media.listCabinCovers.mockResolvedValue({
+    items: [
+      {
+        cabinId: RENTAL_ITEM_ID,
+        photoCount: 1,
+        cover: {
+          mediaId: ASSET_ID,
+          generation: 1,
+          kind: "SMALL",
+          contentType: "image/webp",
+          contentPath: "/api/media/old-small.webp",
+          width: 360,
+          height: 240,
+        },
+        previews: [],
+      },
+    ],
+  })
+})
+
 describe("rental item media", () => {
+  it("keeps owner photos available when the cabin cover projection fails", async () => {
+    media.listOwnerMedia.mockResolvedValue({
+      items: [
+        {
+          id: ASSET_ID,
+          folderId: FOLDER_ID,
+          fileName: "service.jpg",
+          contentType: "image/jpeg",
+          kind: "IMAGE",
+          status: "READY",
+          version: 1,
+          generation: 1,
+          rotationDegrees: 0,
+          sortOrder: 0,
+          sizeBytes: 3,
+          createdAt: "2026-07-19T10:00:00Z",
+          variants: [
+            {
+              kind: "SMALL",
+              contentType: "image/webp",
+              contentPath: "/api/media/service-small.webp",
+              width: 360,
+              height: 240,
+            },
+          ],
+        },
+      ],
+      next: null,
+    })
+    media.listCabinCovers.mockRejectedValue(
+      new Error("Invalid cabin cover request")
+    )
+    media.createVariantObjectUrl.mockResolvedValue({
+      url: "blob:service-small",
+      contentType: "image/webp",
+      size: 3,
+      dispose: vi.fn(),
+    })
+
+    renderHarness()
+
+    await waitFor(() =>
+      expect(screen.getByTestId("photo-count").textContent).toBe("1")
+    )
+    expect(screen.getByTestId("folder-count").textContent).toBe("1")
+    expect(screen.getByTestId("media-error").textContent).toBe("false")
+    expect(screen.getByTestId("media-loading").textContent).toBe("false")
+    expect(media.listCabinCovers).toHaveBeenCalledTimes(1)
+  })
+
+  it("still exposes an owner media failure", async () => {
+    media.listOwnerMedia.mockRejectedValue(new Error("Owner media failed"))
+
+    renderHarness()
+
+    await waitFor(() =>
+      expect(screen.getByTestId("media-error").textContent).toBe("true")
+    )
+    expect(screen.getByTestId("photo-count").textContent).toBe("0")
+  })
+
+  it("shows only the latest inventory folder as current and keeps older folders in history", async () => {
+    media.listOwnerMedia.mockResolvedValue({
+      items: [
+        {
+          id: ASSET_ID,
+          folderId: FOLDER_ID,
+          fileName: "acceptance.jpg",
+          contentType: "image/jpeg",
+          kind: "IMAGE",
+          status: "READY",
+          version: 1,
+          generation: 1,
+          rotationDegrees: 0,
+          sortOrder: 0,
+          sizeBytes: 3,
+          createdAt: "2026-07-19T09:58:00Z",
+          variants: [
+            {
+              kind: "SMALL",
+              contentType: "image/webp",
+              contentPath: "/api/media/acceptance-small.webp",
+              width: 360,
+              height: 240,
+            },
+          ],
+        },
+        {
+          id: NEW_ASSET_ID,
+          folderId: NEW_FOLDER_ID,
+          fileName: "inventory.jpg",
+          contentType: "image/jpeg",
+          kind: "IMAGE",
+          status: "READY",
+          version: 1,
+          generation: 1,
+          rotationDegrees: 0,
+          sortOrder: 1,
+          sizeBytes: 3,
+          createdAt: "2026-08-19T07:29:00Z",
+          variants: [
+            {
+              kind: "SMALL",
+              contentType: "image/webp",
+              contentPath: "/api/media/inventory-small.webp",
+              width: 360,
+              height: 240,
+            },
+          ],
+        },
+      ],
+      next: null,
+    })
+    media.listCabinCovers.mockResolvedValue({
+      items: [
+        {
+          cabinId: RENTAL_ITEM_ID,
+          photoCount: 1,
+          cover: {
+            mediaId: NEW_ASSET_ID,
+            generation: 1,
+            kind: "SMALL",
+            contentType: "image/webp",
+            contentPath: "/api/media/inventory-small.webp",
+            width: 360,
+            height: 240,
+          },
+          previews: [],
+        },
+      ],
+    })
+    media.createVariantObjectUrl.mockImplementation(
+      async (_token, _owner, variant: { contentPath: string }) => ({
+        url: `blob:${variant.contentPath}`,
+        contentType: "image/webp",
+        size: 3,
+        dispose: vi.fn(),
+      })
+    )
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CurrentInventoryFolderHarness />
+      </QueryClientProvider>
+    )
+
+    await waitFor(() =>
+      expect(screen.getByTestId("current-photo-ids").textContent).toBe(
+        NEW_ASSET_ID
+      )
+    )
+    expect(screen.getByTestId("current-photo-count").textContent).toBe("1")
+    expect(screen.getByTestId("archive-folder-count").textContent).toBe("2")
+    expect(screen.getByTestId("inventory-folder-source").textContent).toBe(
+      "Инвентаризация"
+    )
+    expect(screen.getByTestId("inventory-folder-actor").textContent).toBe(
+      "Руководитель склада — Инвентаризатор Ирина"
+    )
+  })
+
   it("prefers each asset's exact source activity over a newer secondary media association", async () => {
     media.listOwnerMedia.mockResolvedValue({
       items: [

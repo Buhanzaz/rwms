@@ -6,6 +6,7 @@ import type {
   InventoryFrozenStatistics,
   InventoryMembershipMovement,
   InventoryObservation,
+  OutcomeRecalculation,
   InventoryRegistryReview,
   InventorySessionDetail,
   InventorySessionSummary,
@@ -444,6 +445,42 @@ export function toInventorySessionView(input: {
     ),
     reviewStage: input.session.reviewStage,
     furnitureReconciliationState: input.session.furnitureReconciliationState,
+  }
+}
+
+export function applyInventoryOutcomeRecalculation(
+  session: InventorySessionDto,
+  outcome: OutcomeRecalculation
+): InventorySessionDto {
+  if (
+    outcome.inventoryId !== session.id ||
+    outcome.publicationBatch.inventoryId !== session.id
+  ) {
+    throw new Error("Сервис вернул результат для другой инвентаризации")
+  }
+
+  const intentsByFindingId = new Map(
+    outcome.publicationBatch.intents.map((intent) => [intent.findingId, intent])
+  )
+
+  return {
+    ...session,
+    version: outcome.sessionRevision,
+    publicationStatus: aggregatePublicationStatus(
+      outcome.publicationBatch.aggregateState
+    ),
+    furnitureReconciliationState: outcome.furnitureReconciliationState,
+    findings: session.findings.map((finding) => {
+      const intent = intentsByFindingId.get(finding.id)
+      if (!intent) return finding
+      return {
+        ...finding,
+        publicationStatus: publicationStatus(intent),
+        publicationOperationKey: intent.id,
+        publishedRepairTaskId: intent.maintenanceRepairId,
+        publicationError: intent.failureCode,
+      }
+    }),
   }
 }
 

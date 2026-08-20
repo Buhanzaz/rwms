@@ -5,15 +5,21 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -29,7 +35,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.buhanzaz.rwms.worker.core.database.TaskEvidenceEntity
 import dev.buhanzaz.rwms.worker.core.network.TaskEvidenceDto
@@ -49,7 +57,7 @@ fun TaskDetailScreen(
     entryId: String,
     onBack: (() -> Unit)?,
     onCamera: (routeIndex: Int) -> Unit,
-    onMedia: (title: String, readPaths: List<String>) -> Unit,
+    onMedia: (title: String, readPaths: List<String>, initialIndex: Int) -> Unit,
     viewModel: TaskDetailViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(userId, entryId) { viewModel.bind(userId, entryId) }
@@ -57,13 +65,20 @@ fun TaskDetailScreen(
     val detail = state.detail
     val task = state.task
     val session = state.session
-    val photoCapture = photoCapturePresentation(detail != null)
     val cabinNumber = cabinNumberForDisplay(task?.unitNumber, detail?.taskObject?.label)
     val displayedStatus = when {
         task?.locallyPending == true -> task.status
         detail != null -> detail.status
         else -> task?.status
     }
+    val photoCapture = photoCapturePresentation(
+        hasLoadedDetail = detail != null,
+        taskStatus = displayedStatus,
+        currentWorkerId = userId,
+        queuePurpose = state.queuePurpose,
+        assignments = state.assignments,
+        locallyPending = task?.locallyPending == true,
+    )
     val readyServerEvidence = detail?.evidence.orEmpty()
         .filter { evidence -> evidence.state == "READY" && !evidence.readPath.isNullOrBlank() }
     val readyEvidenceIds = readyServerEvidence.mapTo(mutableSetOf()) { it.evidenceId }.apply {
@@ -131,62 +146,123 @@ fun TaskDetailScreen(
         operationalAvailability = session?.operationalAvailability ?: "DISABLED",
     )
     LaunchedEffect(readyEvidenceCount) { viewModel.refresh() }
-    WorkerScreenScaffold(title = detail?.title ?: state.task?.title ?: "Задание", onBack = onBack) { padding ->
+    val taskTitle = detail?.title ?: state.task?.title ?: "Задание"
+    val headerTimer = taskHeaderTimerPresentation(
+        taskStatus = displayedStatus,
+        locallyPending = task?.locallyPending == true,
+        timerState = timerSnapshot?.timerState,
+        remaining = timing.remaining,
+    )
+    WorkerScreenScaffold(
+        title = cabinNumber?.let { "Бытовка $it" } ?: "Задание",
+        onBack = onBack,
+        actions = {
+            headerTimer?.let { timer ->
+                Column(
+                    modifier = Modifier.padding(end = 8.dp).testTag("task-header-countdown"),
+                    horizontalAlignment = Alignment.End,
+                ) {
+                    Text(
+                        timer.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    timer.countdown?.let { countdown ->
+                        Text(
+                            countdown,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (timer.running) {
+                                kpiTimeColor ?: MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+            }
+        },
+    ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
             verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(bottom = 28.dp),
         ) {
             item {
-                Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        displayedStatus?.let { TaskStatusChip(it) }
-                        detail?.availabilityMode?.let {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                        .testTag("task-summary"),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    ),
+                ) {
+                    Column(
+                        Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            taskTitle,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            displayedStatus?.let { TaskStatusChip(it) }
+                            detail?.availabilityMode?.let {
+                                Text(
+                                    when (it) {
+                                        "MANDATORY" -> "Обязательное"
+                                        "REQUIRED_JOIN" -> "Требуется присоединение"
+                                        "SECONDARY_PENDING" -> "Ожидает основного исполнителя"
+                                        "OPTIONAL_JOIN" -> "Можно присоединиться"
+                                        else -> "Доступное"
+                                    },
+                                )
+                            }
+                        }
+                        cabinNumber?.let { Text("Бытовка: $it") }
+                        (detail?.taskId ?: task?.taskId)?.let { Text("Номер задания: $it") }
+                        Text("Тип объекта: ${workerTaskObjectKindLabel(detail?.taskObject?.kind)}")
+                        detail?.taskObject?.label?.takeIf { it.isNotBlank() && it != cabinNumber }
+                            ?.let { Text("Объект: $it") }
+                        detail?.description?.takeIf(String::isNotBlank)?.let { Text(it) }
+                        detail?.taskText?.takeIf(String::isNotBlank)?.let {
                             Text(
-                                when (it) {
-                                    "MANDATORY" -> "Обязательное"
-                                    "REQUIRED_JOIN" -> "Требуется присоединение"
-                                    "SECONDARY_PENDING" -> "Ожидает основного исполнителя"
-                                    "OPTIONAL_JOIN" -> "Можно присоединиться"
-                                    else -> "Доступное"
+                                it,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
+                        Text(
+                            "Плановое время: ${timing.planned ?: "не задано"}",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            "${timing.activeLabel}: ${timing.activeElapsed}",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        timing.remaining?.let { remaining ->
+                            Text(
+                                "Осталось: $remaining${timing.remainingPercent?.let { " · $it" }.orEmpty()}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = kpiTimeColor ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = if (kpiTimeColor == null) {
+                                    FontWeight.Normal
+                                } else {
+                                    FontWeight.Bold
                                 },
                             )
                         }
-                    }
-                    cabinNumber?.let { Text("Бытовка: $it") }
-                    (detail?.taskId ?: task?.taskId)?.let { Text("Номер задания: $it") }
-                    detail?.description?.let { Text(it) }
-                    detail?.taskText?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
-                    Text(
-                        "Плановое время: ${timing.planned ?: "не задано"}",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Text(
-                        "${timing.activeLabel}: ${timing.activeElapsed}",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    timing.remaining?.let { remaining ->
                         Text(
-                            "Осталось: $remaining${timing.remainingPercent?.let { " · $it" }.orEmpty()}",
+                            "Группа: ${session?.currentGroupName ?: "не выбрана руководителем"}",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = kpiTimeColor ?: MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = if (kpiTimeColor == null) FontWeight.Normal else FontWeight.Bold,
                         )
-                    }
-                    state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                }
-            }
-            item {
-                Column(
-                    Modifier.padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text("Текущая группа", style = MaterialTheme.typography.titleSmall)
-                    Text(session?.currentGroupName ?: "Не выбрана руководителем")
-                    if (session?.operationalAvailability == "DISABLED") {
-                        Text(
-                            "Группа временно недоступна",
-                            color = MaterialTheme.colorScheme.error,
-                        )
+                        if (session?.operationalAvailability == "DISABLED") {
+                            Text(
+                                "Группа временно недоступна",
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                     }
                 }
             }
@@ -195,38 +271,164 @@ fun TaskDetailScreen(
                     modifier = Modifier.padding(horizontal = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    ActionButtons(
+                    ProgressActionButtons(
                         presentation = actionPresentation,
-                        completionAllowed = (
-                            (detail?.completionAllowed == true) ||
-                                (task?.let { readyEvidenceCount >= it.resultPhotoMinCount } == true)
-                            ) &&
-                            (
-                                state.queuePurpose != LOGISTICS_DRIVER_QUEUE_PURPOSE ||
-                                    selectedCompletionEvidenceId != null
-                                ),
-                        onAction = {
-                            viewModel.perform(
-                                action = it.wireValue,
-                                evidenceId = selectedCompletionEvidenceId,
+                        onAction = { viewModel.perform(it.wireValue) },
+                    )
+                    actionPresentation.message?.let {
+                        Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (actionPresentation.performers.isNotEmpty()) {
+                        Text(
+                            "Исполнители: ${actionPresentation.performers.joinToString()}",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+            }
+
+            item { TaskSectionTitle("Общие фото", "Фото, приложенные к заданию") }
+            if (generalSourceMedia.isEmpty()) {
+                item { EmptyTaskSection("Общих фотографий нет") }
+            } else {
+                item {
+                    SourceMediaStrip(
+                        media = generalSourceMedia,
+                        contentDescription = "Общее фото задания",
+                        onOpen = { index ->
+                            onMedia(
+                                "$taskTitle · общие фото",
+                                generalSourceMedia.map(WorkerMediaReferenceDto::readPath),
+                                index,
                             )
                         },
                     )
-                    if (
-                        state.queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE &&
-                        WorkerTaskAction.COMPLETE in actionPresentation.actions
+                }
+            }
+
+            item { TaskSectionTitle("Материалы", "Что подготовить для выполнения") }
+            if (detail?.materials.isNullOrEmpty()) {
+                item { EmptyTaskSection("Материалы не указаны") }
+            } else {
+                items(requireNotNull(detail).materials, key = { it.id }) { material ->
+                    Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                material.name,
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                            Text(
+                                "${material.quantity} ${material.unit.orEmpty()}".trim(),
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                }
+            }
+
+            item { TaskSectionTitle("Работы", "Что именно нужно сделать") }
+            if (detail?.works.isNullOrEmpty()) {
+                item { EmptyTaskSection("Состав работ не указан") }
+            } else {
+                items(requireNotNull(detail).works, key = { it.id }) { work ->
+                    val media = sourceMediaPresentation.byWorkId[work.id].orEmpty()
+                    WorkRow(
+                        work = work,
+                        sourceMedia = media,
+                        onMedia = { index ->
+                            onMedia(
+                                "$taskTitle · ${work.name}",
+                                media.map(WorkerMediaReferenceDto::readPath),
+                                index,
+                            )
+                        },
+                    )
+                }
+            }
+
+            if (detail?.comments?.isNotEmpty() == true) {
+                item { TaskSectionTitle("Комментарии", "Уточнения к выполнению") }
+                items(detail.comments, key = { it.id }) { comment ->
+                    Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(
+                                comment.authorDisplayName ?: "RWMS",
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                            Text(comment.text)
+                        }
+                    }
+                }
+            }
+
+            item { TaskSectionTitle("Фото результата", "Снимите выполненную работу перед завершением") }
+            item {
+                Row(
+                    Modifier.padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Button(
+                        onClick = { onCamera(requireNotNull(detail).routeIndex) },
+                        enabled = photoCapture.enabled,
+                    ) { Text("Сфотографировать результат") }
+                    Text("Готово: $readyEvidenceCount")
+                }
+                photoCapture.message?.let { message ->
+                    Text(
+                        message,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (readyServerEvidence.isNotEmpty()) {
+                item {
+                    EvidenceMediaStrip(
+                        evidence = readyServerEvidence,
+                        onOpen = { index ->
+                            onMedia(
+                                "$taskTitle · фото результата",
+                                readyServerEvidence.map { requireNotNull(it.readPath) },
+                                index,
+                            )
+                        },
+                    )
+                }
+            }
+            if (localEvidenceWithoutServerPhoto.isNotEmpty()) {
+                items(localEvidenceWithoutServerPhoto, key = { "local-${it.evidenceId}" }) { evidence ->
+                    EvidenceRow(
+                        evidence = evidence,
+                        hasValidReservationPayload = evidence.evidenceId in state.retryableEvidenceIds,
+                        onRetry = { viewModel.retryEvidence(evidence.evidenceId) },
+                    )
+                }
+            }
+
+            if (
+                state.queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE &&
+                WorkerTaskAction.COMPLETE in actionPresentation.actions
+            ) {
+                item {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         when {
-                            readyEvidenceIds.isEmpty() ->
-                                Text(
-                                    "Для завершения добавьте фотографию бытовки",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            readyEvidenceIds.size == 1 ->
-                                Text(
-                                    "Единственная готовая фотография выбрана автоматически",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                            readyEvidenceIds.isEmpty() -> Text(
+                                "Для завершения добавьте фотографию бытовки",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            readyEvidenceIds.size == 1 -> Text(
+                                "Единственная готовая фотография выбрана автоматически",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                             else -> {
                                 Text(
                                     "Выберите фотографию, которая станет титульной",
@@ -249,103 +451,31 @@ fun TaskDetailScreen(
                             }
                         }
                     }
-                    actionPresentation.message?.let {
-                        Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    if (actionPresentation.performers.isNotEmpty()) {
-                        Text(
-                            "Исполнители: ${actionPresentation.performers.joinToString()}",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
                 }
             }
-            item {
-                Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+
+            if (WorkerTaskAction.COMPLETE in actionPresentation.actions) {
+                item {
+                    val completionAllowed = (
+                        (detail?.completionAllowed == true) ||
+                            (task?.let { readyEvidenceCount >= it.resultPhotoMinCount } == true)
+                        ) &&
+                        (
+                            state.queuePurpose != LOGISTICS_DRIVER_QUEUE_PURPOSE ||
+                                selectedCompletionEvidenceId != null
+                            )
                     Button(
-                        onClick = { onCamera(requireNotNull(detail).routeIndex) },
-                        enabled = photoCapture.enabled,
-                    ) { Text("Добавить фото") }
-                    Text("$readyEvidenceCount готово")
-                }
-                photoCapture.message?.let { message ->
-                    Text(
-                        message,
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            if (detail?.materials?.isNotEmpty() == true) {
-                item { Text("Материалы", modifier = Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.titleMedium) }
-                items(detail.materials, key = { it.id }) { material ->
-                    Text(
-                        "${material.name}: ${material.quantity} ${material.unit.orEmpty()}",
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                    )
-                }
-            }
-            if (detail?.works?.isNotEmpty() == true) {
-                item { Text("Работы", modifier = Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.titleMedium) }
-                items(detail.works, key = { it.id }) { work ->
-                    val media = sourceMediaPresentation.byWorkId[work.id].orEmpty()
-                    WorkRow(
-                        work = work,
-                        sourceMedia = media,
-                        onMedia = {
-                            onMedia(
-                                "${detail.title} · ${work.name}",
-                                media.map(WorkerMediaReferenceDto::readPath).filter(String::isNotBlank),
-                            )
-                        },
-                    )
-                }
-            }
-            if (generalSourceMedia.isNotEmpty()) {
-                item { Text("Общие фото", modifier = Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.titleMedium) }
-                items(generalSourceMedia, key = { it.mediaId }) { media ->
-                    MediaRow(
-                        media,
                         onClick = {
-                            onMedia(
-                                detail?.title ?: task?.title ?: "Задание",
-                                generalSourceMedia.map { it.readPath }.filter(String::isNotBlank),
+                            viewModel.perform(
+                                action = WorkerTaskAction.COMPLETE.wireValue,
+                                evidenceId = selectedCompletionEvidenceId,
                             )
                         },
-                    )
-                }
-            }
-            if (readyServerEvidence.isNotEmpty() || localEvidenceWithoutServerPhoto.isNotEmpty()) {
-                item { Text("Фото результата", modifier = Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.titleMedium) }
-                if (readyServerEvidence.isNotEmpty()) {
-                    items(readyServerEvidence, key = { "server-${it.evidenceId}" }) { evidence ->
-                        ServerEvidenceRow(
-                            evidence = evidence,
-                            onClick = {
-                                onMedia(
-                                    "${detail?.title ?: task?.title ?: "Задание"} · фото результата",
-                                    readyServerEvidence.mapNotNull { it.readPath?.takeIf(String::isNotBlank) },
-                                )
-                            },
-                        )
-                    }
-                }
-                items(localEvidenceWithoutServerPhoto, key = { "local-${it.evidenceId}" }) { evidence ->
-                    EvidenceRow(
-                        evidence = evidence,
-                        hasValidReservationPayload = evidence.evidenceId in state.retryableEvidenceIds,
-                        onRetry = { viewModel.retryEvidence(evidence.evidenceId) },
-                    )
-                }
-            }
-            if (detail?.comments?.isNotEmpty() == true) {
-                item { Text("Комментарии", modifier = Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.titleMedium) }
-                items(detail.comments, key = { it.id }) { comment ->
-                    Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text(comment.authorDisplayName ?: "RWMS", style = MaterialTheme.typography.labelMedium)
-                            Text(comment.text)
-                        }
+                        enabled = actionPresentation.actionsEnabled && completionAllowed,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                            .testTag("task-complete"),
+                    ) {
+                        Text("Завершить задание")
                     }
                 }
             }
@@ -353,10 +483,10 @@ fun TaskDetailScreen(
     }
 }
 
+/** Shows take/join and pause/resume controls before the completion section. */
 @Composable
-private fun ActionButtons(
+private fun ProgressActionButtons(
     presentation: TaskActionPresentation,
-    completionAllowed: Boolean,
     onAction: (WorkerTaskAction) -> Unit,
 ) {
     Row(
@@ -373,19 +503,13 @@ private fun ActionButtons(
             Button(
                 onClick = { onAction(WorkerTaskAction.JOIN) },
                 enabled = presentation.actionsEnabled,
-            ) { Text("Присоединиться") }
+            ) { Text(presentation.joinLabel) }
         }
         if (WorkerTaskAction.PAUSE in presentation.actions) {
             OutlinedButton(
                 onClick = { onAction(WorkerTaskAction.PAUSE) },
                 enabled = presentation.actionsEnabled,
             ) { Text("Пауза") }
-        }
-        if (WorkerTaskAction.COMPLETE in presentation.actions) {
-            Button(
-                onClick = { onAction(WorkerTaskAction.COMPLETE) },
-                enabled = presentation.actionsEnabled && completionAllowed,
-            ) { Text("Завершить") }
         }
         if (WorkerTaskAction.RESUME in presentation.actions) {
             Button(
@@ -396,21 +520,114 @@ private fun ActionButtons(
     }
 }
 
+/** Renders a consistent heading for one stage of task execution. */
 @Composable
-private fun MediaRow(media: WorkerMediaReferenceDto, onClick: () -> Unit) {
-    MediaThumbnailRow(
-        thumbnailPath = media.thumbnailPath ?: media.readPath,
-        title = if (media.kind == "SOURCE") "Общее фото задания" else "Фото результата",
-        subtitle = media.recordedAt,
-        onClick = onClick,
+private fun TaskSectionTitle(title: String, description: String) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Text(
+            description,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** Makes a missing optional server section explicit without fabricating content. */
+@Composable
+private fun EmptyTaskSection(message: String) {
+    Text(
+        message,
+        modifier = Modifier.padding(horizontal = 16.dp),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+}
+
+/** Displays source photos as a swipeable strip and opens the exact selected item. */
+@Composable
+private fun SourceMediaStrip(
+    media: List<WorkerMediaReferenceDto>,
+    contentDescription: String,
+    onOpen: (index: Int) -> Unit,
+    modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(horizontal = 16.dp),
+) {
+    LazyRow(
+        modifier = modifier.fillMaxWidth().testTag("task-source-photo-strip"),
+        contentPadding = contentPadding,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        itemsIndexed(media, key = { _, item -> item.mediaId }) { index, item ->
+            TaskMediaTile(
+                thumbnailPath = item.thumbnailPath ?: item.readPath,
+                contentDescription = "$contentDescription ${index + 1}",
+                subtitle = item.recordedAt,
+                onClick = { onOpen(index) },
+            )
+        }
+    }
+}
+
+/** Displays uploaded result evidence separately from source photos. */
+@Composable
+private fun EvidenceMediaStrip(
+    evidence: List<TaskEvidenceDto>,
+    onOpen: (index: Int) -> Unit,
+) {
+    LazyRow(
+        modifier = Modifier.fillMaxWidth().testTag("task-result-photo-strip"),
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        itemsIndexed(evidence, key = { _, item -> item.evidenceId }) { index, item ->
+            TaskMediaTile(
+                thumbnailPath = item.thumbnailPath ?: requireNotNull(item.readPath),
+                contentDescription = "Фото результата ${index + 1}",
+                subtitle = item.recordedAt,
+                onClick = { onOpen(index) },
+            )
+        }
+    }
+}
+
+/** One compact photo preview shared by general, work and result carousels. */
+@Composable
+private fun TaskMediaTile(
+    thumbnailPath: String,
+    contentDescription: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.width(168.dp).clickable(onClick = onClick),
+    ) {
+        Column {
+            RemoteMediaThumbnail(
+                path = thumbnailPath,
+                contentDescription = contentDescription,
+                modifier = Modifier.fillMaxWidth().height(112.dp),
+            )
+            Text(
+                subtitle,
+                modifier = Modifier.fillMaxWidth().padding(10.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }
 
 @Composable
 private fun WorkRow(
     work: WorkerWorkDto,
     sourceMedia: List<WorkerMediaReferenceDto>,
-    onMedia: () -> Unit,
+    onMedia: (index: Int) -> Unit,
 ) {
     val presentation = workPresentation(work)
     Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
@@ -423,52 +640,18 @@ private fun WorkRow(
             presentation.comment?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
             if (sourceMedia.isNotEmpty()) {
                 Text("Фото к работе", style = MaterialTheme.typography.titleSmall)
-                sourceMedia.forEach { media ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().clickable(onClick = onMedia)
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RemoteMediaThumbnail(media.thumbnailPath ?: media.readPath)
-                        Column {
-                            Text("Фото работы", style = MaterialTheme.typography.bodyMedium)
-                            Text(media.recordedAt, style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ServerEvidenceRow(evidence: TaskEvidenceDto, onClick: () -> Unit) {
-    MediaThumbnailRow(
-        thumbnailPath = evidence.thumbnailPath ?: requireNotNull(evidence.readPath),
-        title = "Фото результата",
-        subtitle = evidence.recordedAt,
-        onClick = onClick,
-    )
-}
-
-@Composable
-private fun MediaThumbnailRow(
-    thumbnailPath: String,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit,
-) {
-    Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth().clickable(onClick = onClick)) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            RemoteMediaThumbnail(thumbnailPath)
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(title, style = MaterialTheme.typography.titleSmall)
-                Text(subtitle, style = MaterialTheme.typography.bodySmall)
+                SourceMediaStrip(
+                    media = sourceMedia,
+                    contentDescription = "Фото работы ${work.name}",
+                    onOpen = onMedia,
+                    contentPadding = PaddingValues(0.dp),
+                )
+            } else {
+                Text(
+                    "Фотографий к этой работе нет",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
@@ -477,18 +660,20 @@ private fun MediaThumbnailRow(
 @Composable
 private fun RemoteMediaThumbnail(
     path: String,
+    contentDescription: String,
+    modifier: Modifier = Modifier.size(88.dp),
     viewModel: TaskMediaThumbnailViewModel = hiltViewModel(),
 ) {
     val thumbnails by viewModel.thumbnails.collectAsStateWithLifecycle()
     LaunchedEffect(path) { viewModel.load(path) }
     Box(
-        modifier = Modifier.size(88.dp),
+        modifier = modifier,
         contentAlignment = Alignment.Center,
     ) {
         when (val thumbnail = thumbnails[path]) {
             is TaskMediaThumbnail.Ready -> Image(
                 bitmap = thumbnail.bitmap.asImageBitmap(),
-                contentDescription = "Миниатюра фото задания",
+                contentDescription = contentDescription,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )

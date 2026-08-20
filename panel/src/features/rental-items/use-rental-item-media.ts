@@ -98,6 +98,36 @@ function mediaActivity(
   )
 }
 
+function inventoryMediaActivity(
+  assetId: string,
+  activities: readonly DossierActivity[]
+) {
+  return activities.find(
+    (activity) =>
+      activity.sourceRef.producer === "inventory-service" &&
+      activity.media.some((media) => media.mediaId === assetId)
+  )
+}
+
+function photoActivity(
+  assetId: string,
+  activities: readonly DossierActivity[]
+) {
+  return (
+    inventoryMediaActivity(assetId, activities) ??
+    mediaActivity(assetId, activities)
+  )
+}
+
+function photoSourceLabel(
+  assetId: string,
+  activities: readonly DossierActivity[]
+) {
+  return inventoryMediaActivity(assetId, activities)
+    ? "Инвентаризация"
+    : "Добавленные фотографии"
+}
+
 function dossierActorLabel(
   activity: DossierActivity | undefined,
   actorDisplays: ReadonlyMap<string, DossierActorDisplay>
@@ -194,6 +224,19 @@ export function useRentalItemMedia({
         ? 2_000
         : false,
   })
+  const coverQuery = useQuery({
+    queryKey: [
+      ...RENTAL_ITEM_COVERS_QUERY_KEY,
+      "detail",
+      warehouseId,
+      rentalItemId,
+    ],
+    queryFn: () =>
+      mediaClient.listCabinCovers(accessToken!, warehouseId, [rentalItemId]),
+    enabled: enabled && item !== null && Boolean(accessToken),
+    retry: shouldRetryOwnerProof,
+    retryDelay: ownerProofRetryDelay,
+  })
   const readyImages = useMemo(
     () =>
       (query.data?.items ?? []).filter(
@@ -201,13 +244,24 @@ export function useRentalItemMedia({
       ),
     [query.data?.items]
   )
-  const logicalPhotoCount = useMemo(
-    () =>
-      (query.data?.items ?? []).filter(
-        (asset) => asset.kind === "IMAGE" && asset.status !== "DELETED"
-      ).length,
-    [query.data?.items]
-  )
+  const currentCover = coverQuery.error
+    ? undefined
+    : coverQuery.data?.items.find(
+        (projection) => projection.cabinId === rentalItemId
+      )
+  const currentFolderId = useMemo(() => {
+    const currentMediaId =
+      currentCover?.cover?.mediaId ?? currentCover?.previews[0]?.mediaId
+    return currentMediaId
+      ? (readyImages.find((asset) => asset.id === currentMediaId)?.folderId ??
+          null)
+      : null
+  }, [currentCover?.cover?.mediaId, currentCover?.previews, readyImages])
+  const logicalPhotoCount =
+    currentCover?.photoCount ??
+    (query.data?.items ?? []).filter(
+      (asset) => asset.kind === "IMAGE" && asset.status !== "DELETED"
+    ).length
   const assetSignatures = useMemo(
     () =>
       new Map(readyImages.map((asset) => [asset.id, assetSignature(asset)])),
@@ -341,7 +395,7 @@ export function useRentalItemMedia({
     readyImages,
   ])
 
-  const photos = useMemo(() => {
+  const allPhotos = useMemo(() => {
     const servicePhotos = readyImages.flatMap<RentalItemMediaPhoto>((asset) => {
       const loaded = activeLoadedVariants[asset.id]
       if (!loaded || loaded.signature !== assetSignature(asset)) return []
@@ -350,7 +404,7 @@ export function useRentalItemMedia({
       const large = resolvedLoadedUrl(loaded, "LARGE")
       const url = medium ?? small ?? large
       if (!url) return []
-      const activity = mediaActivity(asset.id, dossierActivities)
+      const activity = photoActivity(asset.id, dossierActivities)
       return [
         {
           id: asset.id,
@@ -369,7 +423,7 @@ export function useRentalItemMedia({
             asset.createdAt ??
             null,
           actorLabel: dossierActorLabel(activity, actorDisplays),
-          sourceLabel: "Добавленные фотографии",
+          sourceLabel: photoSourceLabel(asset.id, dossierActivities),
           stage: "GENERAL",
           processingStatus: "READY",
           asset,
@@ -379,16 +433,29 @@ export function useRentalItemMedia({
     return servicePhotos
   }, [activeLoadedVariants, actorDisplays, dossierActivities, readyImages])
 
+  const photos = useMemo(
+    () =>
+      coverQuery.error
+        ? allPhotos
+        : currentFolderId === null
+          ? coverQuery.data
+            ? []
+            : allPhotos
+          : allPhotos.filter((photo) => photo.folderId === currentFolderId),
+    [allPhotos, coverQuery.data, coverQuery.error, currentFolderId]
+  )
+
   const photoFolders = useMemo<RentalItemPhotoFolder[]>(() => {
     const folders = new Map<string, RentalItemPhotoFolder>()
     const photosByAsset = new Map(
-      photos.map((photo) => [photo.id, photo] as const)
+      allPhotos.map((photo) => [photo.id, photo] as const)
     )
     for (const asset of query.data?.items ?? []) {
       if (asset.kind !== "IMAGE") continue
       const existing = folders.get(asset.folderId)
       const photo = photosByAsset.get(asset.id)
-      const activity = mediaActivity(asset.id, dossierActivities)
+      const activity = photoActivity(asset.id, dossierActivities)
+      const sourceLabel = photoSourceLabel(asset.id, dossierActivities)
       const occurredAt =
         activity?.occurredAt ?? activity?.recordedAt ?? asset.createdAt
       if (existing) {
@@ -399,6 +466,10 @@ export function useRentalItemMedia({
             existing.actorLabel === UNKNOWN_ACTOR
               ? dossierActorLabel(activity, actorDisplays)
               : existing.actorLabel,
+          sourceLabel:
+            existing.sourceLabel === "Инвентаризация"
+              ? existing.sourceLabel
+              : sourceLabel,
           photos: photo ? [...existing.photos, photo] : existing.photos,
           assets: [...existing.assets, asset],
         })
@@ -408,7 +479,7 @@ export function useRentalItemMedia({
         id: asset.folderId,
         occurredAt,
         actorLabel: dossierActorLabel(activity, actorDisplays),
-        sourceLabel: "Добавленные фотографии",
+        sourceLabel,
         stage: "GENERAL",
         photos: photo ? [photo] : [],
         assets: [asset],
@@ -420,7 +491,7 @@ export function useRentalItemMedia({
       const rightTime = right.occurredAt ? Date.parse(right.occurredAt) : 0
       return rightTime - leftTime
     })
-  }, [actorDisplays, dossierActivities, photos, query.data?.items])
+  }, [actorDisplays, allPhotos, dossierActivities, query.data?.items])
 
   const requestFolderPreview = useCallback(
     (folderId: string) =>

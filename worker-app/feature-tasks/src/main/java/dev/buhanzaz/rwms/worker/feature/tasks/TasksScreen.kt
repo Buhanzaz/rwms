@@ -433,12 +433,12 @@ private fun TaskRow(
                         fontWeight = if (kpiColor == null) FontWeight.Normal else FontWeight.Bold,
                     )
                 }
-                OutlinedButton(
-                    onClick = onOpen,
-                    modifier = Modifier.fillMaxWidth().testTag("task-open-${task.entryId}"),
-                ) {
-                    Text("Фото и детали")
-                }
+            }
+            OutlinedButton(
+                onClick = onOpen,
+                modifier = Modifier.fillMaxWidth().testTag("task-open-${task.entryId}"),
+            ) {
+                Text("Открыть задание")
             }
         }
     }

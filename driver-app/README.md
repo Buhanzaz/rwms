@@ -23,6 +23,8 @@ Profile and logout are a secondary action above the menu, not a fourth
 destination. Driver actions are `TAKE`, `PAUSE`, `RESUME` and `COMPLETE`.
 DriverApp never offers `JOIN`; that belongs to the slinger flow in WorkerApp.
 For a `LOGISTICS_DRIVER` task, completion requires one READY result photo. The
+driver does not wait for a slinger: an eligible slinger may join after the
+driver's take, and either active participant may close the same task. The
 camera is enabled only while the task is effectively `IN_PROGRESS` and the
 current driver is its active participant (or a durable local `TAKE` is waiting
 to synchronize). The detail screen reports server-READY and locally retained

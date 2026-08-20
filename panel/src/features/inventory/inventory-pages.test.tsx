@@ -17,6 +17,7 @@ import type {
   InventorySessionDto,
   InventoryStatisticsDto,
 } from "@/features/inventory/model/inventory"
+import type { OutcomeRecalculation } from "@/features/inventory/model/inventory-service"
 import type {
   RepairEstimateCompletionMode,
   RepairEstimateLineDto,
@@ -34,6 +35,8 @@ const inventoryApi = vi.hoisted(() => ({
   getInventory: vi.fn(),
   prepareInventoryFinalPlan: vi.fn(),
   previewInventoryCompletion: vi.fn(),
+  recalculateInventoryOutcome: vi.fn(),
+  refreshInventorySession: vi.fn(),
   reviewInventoryRegistry: vi.fn(),
   resolveInventoryFindingConflict: vi.fn(),
   saveInventoryFurnitureReview: vi.fn(),
@@ -78,6 +81,8 @@ vi.mock("@/features/inventory/api/inventory-api", async () => {
     getInventoryPlanningSettings: inventoryApi.getInventoryPlanningSettings,
     prepareInventoryFinalPlan: inventoryApi.prepareInventoryFinalPlan,
     previewInventoryCompletion: inventoryApi.previewInventoryCompletion,
+    recalculateInventoryOutcome: inventoryApi.recalculateInventoryOutcome,
+    refreshInventorySession: inventoryApi.refreshInventorySession,
     reviewInventoryRegistry: inventoryApi.reviewInventoryRegistry,
     resolveInventoryFindingConflict:
       inventoryApi.resolveInventoryFindingConflict,
@@ -205,6 +210,7 @@ import {
   InventoryHistoryDetailPage,
   InventorySessionPage,
 } from "@/features/inventory/inventory-pages"
+import { inventoryPublicationQueryKey } from "@/features/inventory/api/inventory-api"
 
 const WAREHOUSE_ID = "11111111-1111-4111-8111-111111111111"
 const INVENTORY_ID = "22222222-2222-4222-8222-222222222222"
@@ -424,6 +430,43 @@ function finalPlan(sessionRevision = 2) {
   }
 }
 
+function completedFinalPlan(sessionRevision = 2) {
+  return { ...finalPlan(sessionRevision), state: "COMPLETED" as const }
+}
+
+function outcomeRecalculation(
+  overrides: Partial<OutcomeRecalculation> = {}
+): OutcomeRecalculation {
+  return {
+    inventoryId: INVENTORY_ID,
+    sessionRevision: 3,
+    finalPlanVersion: 1,
+    finalPlanSha256: FINAL_PLAN_SHA256,
+    furnitureReconciliationState: "PENDING" as const,
+    createdPublicationCount: 75,
+    requeuedPublicationCount: 141,
+    preservedSucceededPublicationCount: 0,
+    publicationBatch: {
+      inventoryId: INVENTORY_ID,
+      aggregateState: "PENDING" as const,
+      intents: [
+        {
+          id: "99999999-9999-4999-8999-999999999999",
+          inventoryId: INVENTORY_ID,
+          findingId: FINDING_ID,
+          publicationRevision: 2,
+          state: "READY" as const,
+          sourceRevision: 1,
+          attemptCount: 1,
+          maintenanceRepairId: null,
+          failureCode: null,
+        },
+      ],
+    },
+    ...overrides,
+  }
+}
+
 function completionEvidence(sessionRevision = 2) {
   return {
     inventoryId: INVENTORY_ID,
@@ -592,7 +635,9 @@ describe("InventorySessionPage inspection", () => {
     ).toBeTruthy()
     expect(screen.getByText("Ошибочно выбран склад")).toBeTruthy()
     expect(
-      screen.queryByRole("button", { name: "Передать в ремонты" })
+      screen.queryByRole("button", {
+        name: "Пересчитать и применить итоги",
+      })
     ).toBeNull()
   })
 
@@ -855,7 +900,6 @@ describe("InventorySessionPage inspection", () => {
     await waitFor(() =>
       expect(inventoryApi.saveInventoryFinding).toHaveBeenCalledWith(
         expect.objectContaining({
-          expectedVersion: 2,
           expectedFindingVersion: initialFinding.version,
           comment: "Черновик осмотра",
         })
@@ -1380,6 +1424,189 @@ describe("InventoryFinishPage conflict resolution", () => {
     ).toBeNull()
   })
 
+  it("recovers a stuck confirmed furniture revision by refreshing all derived state", async () => {
+    const user = userEvent.setup()
+    const staged = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      {
+        version: 3,
+        reviewStage: "FURNITURE",
+        furnitureReconciliationState: "READY",
+      }
+    )
+    const refreshed = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      {
+        version: 4,
+        reviewStage: "CABINS",
+        furnitureReconciliationState: "NOT_REQUIRED",
+      }
+    )
+    const staleReview = furnitureReview({
+      sessionRevision: 2,
+      confirmed: true,
+      reviewSha256: "b".repeat(64),
+    })
+    inventoryApi.getInventory
+      .mockResolvedValueOnce(staged)
+      .mockResolvedValue(refreshed)
+    inventoryApi.getInventoryFurnitureReview.mockResolvedValue(staleReview)
+    inventoryApi.refreshInventorySession.mockResolvedValue(refreshed)
+
+    const { queryClient } = renderPage(`/inventory/${INVENTORY_ID}/finish`)
+
+    expect(
+      await screen.findByText("Обновляем версию инвентаризации...")
+    ).toBeTruthy()
+    queryClient.setQueryData(
+      ["inventory-service", "final-plan", INVENTORY_ID, 3],
+      finalPlan(3)
+    )
+    queryClient.setQueryData(
+      ["inventory-service", "finish-preview", INVENTORY_ID, 3, 1],
+      completionReview(staged)
+    )
+
+    await user.click(
+      screen.getByRole("button", { name: "Пересчитать изменения сессии" })
+    )
+
+    await waitFor(() =>
+      expect(inventoryApi.refreshInventorySession).toHaveBeenCalledWith({
+        inventoryId: INVENTORY_ID,
+        expectedSessionRevision: 3,
+      })
+    )
+    expect(await screen.findByText("Итоговая сверка бытовок")).toBeTruthy()
+    expect(
+      screen.getByRole("button", {
+        name: "Завершить проверку бытовок и перейти к мебели",
+      })
+    ).toBeTruthy()
+    expect(
+      queryClient.getQueryData([
+        "inventory-service",
+        "furniture-review",
+        INVENTORY_ID,
+      ])
+    ).toBeUndefined()
+    expect(
+      queryClient.getQueryData([
+        "inventory-service",
+        "final-plan",
+        INVENTORY_ID,
+        3,
+      ])
+    ).toBeUndefined()
+    expect(
+      queryClient.getQueryData([
+        "inventory-service",
+        "finish-preview",
+        INVENTORY_ID,
+        3,
+        1,
+      ])
+    ).toBeUndefined()
+    expect(toast.success).toHaveBeenCalledWith(
+      "Изменения сессии пересчитаны. Сохранённые осмотры бытовок сохранены."
+    )
+  })
+
+  it("blocks session refresh while furniture changes are unsaved", async () => {
+    const user = userEvent.setup()
+    const staged = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      {
+        version: 2,
+        reviewStage: "FURNITURE",
+        furnitureReconciliationState: "READY",
+      }
+    )
+    inventoryApi.getInventory.mockResolvedValue(staged)
+    inventoryApi.getInventoryFurnitureReview.mockResolvedValue(
+      furnitureReview()
+    )
+
+    renderPage(`/inventory/${INVENTORY_ID}/finish`)
+
+    const refresh = (await screen.findByRole("button", {
+      name: "Пересчитать изменения сессии",
+    })) as HTMLButtonElement
+    expect(refresh.disabled).toBe(false)
+
+    const stock = screen.getByLabelText(
+      "Посчитано на складе"
+    ) as HTMLInputElement
+    await user.clear(stock)
+    await user.type(stock, "1")
+
+    await waitFor(() => expect(refresh.disabled).toBe(true))
+    expect(
+      screen.getByText(
+        /Сначала сохраните или отмените несохранённые изменения сверки мебели/
+      )
+    ).toBeTruthy()
+    expect(inventoryApi.refreshInventorySession).not.toHaveBeenCalled()
+  })
+
+  it("shows the server reason when session refresh is rejected", async () => {
+    const user = userEvent.setup()
+    const reviewed = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      { version: 8 }
+    )
+    inventoryApi.getInventory.mockResolvedValue(reviewed)
+    inventoryApi.refreshInventorySession.mockRejectedValue(
+      new Error("Dependency rejected invalid inventory input")
+    )
+
+    renderPage(`/inventory/${INVENTORY_ID}/finish`)
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Пересчитать изменения сессии",
+      })
+    )
+
+    expect(
+      await screen.findByText(
+        /Не удалось пересчитать изменения сессии: Dependency rejected invalid inventory input/
+      )
+    ).toBeTruthy()
+  })
+
+  it("blocks session refresh while another finish mutation is pending", async () => {
+    const user = userEvent.setup()
+    const reviewed = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      { version: 8 }
+    )
+    inventoryApi.getInventory.mockResolvedValue(reviewed)
+    inventoryApi.startInventoryFurnitureReview.mockImplementation(
+      () => new Promise(() => undefined)
+    )
+
+    renderPage(`/inventory/${INVENTORY_ID}/finish`)
+
+    const refresh = (await screen.findByRole("button", {
+      name: "Пересчитать изменения сессии",
+    })) as HTMLButtonElement
+    expect(refresh.disabled).toBe(false)
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Завершить проверку бытовок и перейти к мебели",
+      })
+    )
+
+    await waitFor(() => expect(refresh.disabled).toBe(true))
+    expect(inventoryApi.startInventoryFurnitureReview).toHaveBeenCalledWith({
+      session: reviewed,
+      acknowledgeIncomplete: false,
+    })
+    expect(inventoryApi.refreshInventorySession).not.toHaveBeenCalled()
+  })
+
   it("does not preview or apply a stale final plan and requires rebuilding it", async () => {
     const user = userEvent.setup()
     const staged = activeSession(
@@ -1817,6 +2044,240 @@ describe("InventoryFinishPage conflict resolution", () => {
     expect(
       await screen.findByRole("region", { name: "Редактор осмотра" })
     ).toBeTruthy()
+  })
+})
+
+describe("InventoryHistoryDetailPage authoritative outcome recovery", () => {
+  it("keeps the completed-history action disabled without MANAGE access", async () => {
+    const completed = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      {
+        version: 2,
+        status: "COMPLETED",
+        completedAt: "2026-07-27T09:00:00Z",
+        reviewStage: "FURNITURE",
+      }
+    )
+    auth.useAuth.mockReturnValue({
+      accessToken: "inventory-token",
+      currentUser: {
+        ...currentUser,
+        warehouseAccesses: [{ warehouseId: WAREHOUSE_ID, level: "VIEW" }],
+      },
+    })
+    inventoryApi.getInventory.mockResolvedValue(completed)
+
+    renderPage(`/inventory/history/${INVENTORY_ID}`)
+
+    const action = (await screen.findByRole("button", {
+      name: "Пересчитать и применить итоги",
+    })) as HTMLButtonElement
+    expect(action.disabled).toBe(true)
+    expect(action.title).toContain("MANAGE")
+    expect(inventoryApi.getInventoryFinalPlan).not.toHaveBeenCalled()
+  })
+
+  it("keeps the action disabled when the completed final-plan identity is absent", async () => {
+    const completed = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      {
+        version: 2,
+        status: "COMPLETED",
+        completedAt: "2026-07-27T09:00:00Z",
+        reviewStage: "FURNITURE",
+      }
+    )
+    inventoryApi.getInventory.mockResolvedValue(completed)
+    inventoryApi.getInventoryFinalPlan.mockResolvedValue(null)
+
+    renderPage(`/inventory/history/${INVENTORY_ID}`)
+
+    const action = (await screen.findByRole("button", {
+      name: "Пересчитать и применить итоги",
+    })) as HTMLButtonElement
+    await waitFor(() => expect(action.disabled).toBe(true))
+    expect(action.title).toContain("итоговый план")
+    expect(inventoryApi.recalculateInventoryOutcome).not.toHaveBeenCalled()
+  })
+
+  it("requires explicit confirmation and disables the dialog while recalculation is pending", async () => {
+    const user = userEvent.setup()
+    const completed = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      {
+        version: 2,
+        status: "COMPLETED",
+        completedAt: "2026-07-27T09:00:00Z",
+        reviewStage: "FURNITURE",
+      }
+    )
+    let resolveOutcome!: (value: OutcomeRecalculation) => void
+    const pendingOutcome = new Promise<OutcomeRecalculation>((resolve) => {
+      resolveOutcome = resolve
+    })
+    inventoryApi.getInventory.mockResolvedValue(completed)
+    inventoryApi.getInventoryFinalPlan.mockResolvedValue(completedFinalPlan(2))
+    inventoryApi.recalculateInventoryOutcome.mockReturnValue(pendingOutcome)
+
+    renderPage(`/inventory/history/${INVENTORY_ID}`)
+
+    const action = (await screen.findByRole("button", {
+      name: "Пересчитать и применить итоги",
+    })) as HTMLButtonElement
+    await waitFor(() => expect(action.disabled).toBe(false))
+    await user.click(action)
+
+    const dialog = await screen.findByRole("alertdialog", {
+      name: "Применить итоги завершённой инвентаризации?",
+    })
+    expect(within(dialog).getByText(/текущей истиной/)).toBeTruthy()
+    expect(
+      within(dialog).getByText(/аренда, резерв, внутреннее перемещение/)
+    ).toBeTruthy()
+    expect(within(dialog).getByText(/Бытовка без работ/).textContent).toContain(
+      "капитальном ремонте"
+    )
+    expect(
+      within(dialog).getByText(/Фотографии, доказательства и история/)
+    ).toBeTruthy()
+    expect(inventoryApi.recalculateInventoryOutcome).not.toHaveBeenCalled()
+
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: "Пересчитать и применить",
+      })
+    )
+
+    await waitFor(() =>
+      expect(inventoryApi.recalculateInventoryOutcome).toHaveBeenCalledWith({
+        inventoryId: INVENTORY_ID,
+        expectedSessionRevision: 2,
+        finalPlanVersion: 1,
+        finalPlanSha256: FINAL_PLAN_SHA256,
+      })
+    )
+    expect(
+      (
+        within(dialog).getByRole("button", {
+          name: "Запускаем пересчёт…",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true)
+    expect(
+      (
+        within(dialog).getByRole("button", {
+          name: "Отмена",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true)
+
+    resolveOutcome(outcomeRecalculation())
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+  })
+
+  it("stores the publication response, refreshes exact caches and reports all counts", async () => {
+    const user = userEvent.setup()
+    const completed = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      {
+        version: 2,
+        status: "COMPLETED",
+        completedAt: "2026-07-27T09:00:00Z",
+        reviewStage: "FURNITURE",
+      }
+    )
+    const outcome = outcomeRecalculation()
+    inventoryApi.getInventory.mockResolvedValue(completed)
+    inventoryApi.getInventoryFinalPlan.mockResolvedValue(completedFinalPlan(2))
+    inventoryApi.recalculateInventoryOutcome.mockResolvedValue(outcome)
+
+    const { queryClient } = renderPage(`/inventory/history/${INVENTORY_ID}`)
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries")
+
+    const action = (await screen.findByRole("button", {
+      name: "Пересчитать и применить итоги",
+    })) as HTMLButtonElement
+    await waitFor(() => expect(action.disabled).toBe(false))
+    await user.click(action)
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Пересчитать и применить",
+      })
+    )
+
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith(
+        "Пересчёт запущен: создано 75, заново поставлено 141, уже полностью применено 0."
+      )
+    )
+    expect(
+      queryClient.getQueryData(inventoryPublicationQueryKey(INVENTORY_ID))
+    ).toEqual(outcome.publicationBatch)
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["inventory-service", "detail", INVENTORY_ID],
+    })
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["inventory-service", "final-plan", INVENTORY_ID],
+    })
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["inventory-service", "statistics-preview", INVENTORY_ID],
+    })
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["inventory-service", "list", WAREHOUSE_ID],
+    })
+    expect(inventoryApi.getInventory).toHaveBeenCalledTimes(2)
+    expect(inventoryApi.getInventoryFinalPlan).toHaveBeenCalledTimes(2)
+  })
+
+  it("keeps a Problem Details failure recoverable in the confirmation", async () => {
+    const user = userEvent.setup()
+    const completed = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      {
+        version: 2,
+        status: "COMPLETED",
+        completedAt: "2026-07-27T09:00:00Z",
+        reviewStage: "FURNITURE",
+      }
+    )
+    inventoryApi.getInventory.mockResolvedValue(completed)
+    inventoryApi.getInventoryFinalPlan.mockResolvedValue(completedFinalPlan(2))
+    inventoryApi.recalculateInventoryOutcome.mockRejectedValue(
+      new ApiError(
+        "Dependency rejected invalid inventory input",
+        422,
+        "INVALID_INVENTORY_INPUT"
+      )
+    )
+
+    renderPage(`/inventory/history/${INVENTORY_ID}`)
+
+    const action = (await screen.findByRole("button", {
+      name: "Пересчитать и применить итоги",
+    })) as HTMLButtonElement
+    await waitFor(() => expect(action.disabled).toBe(false))
+    await user.click(action)
+    const dialog = await screen.findByRole("alertdialog")
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: "Пересчитать и применить",
+      })
+    )
+
+    const failure = await within(dialog).findByRole("alert")
+    expect(within(failure).getByText("Пересчёт не запущен")).toBeTruthy()
+    expect(failure.textContent).toContain(
+      "Dependency rejected invalid inventory input"
+    )
+    expect(failure.textContent).toContain("фотографии и история сохранены")
+    expect(failure.textContent).toContain("повторите пересчёт")
+    expect(
+      (
+        within(dialog).getByRole("button", {
+          name: "Пересчитать и применить",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(false)
   })
 })
 

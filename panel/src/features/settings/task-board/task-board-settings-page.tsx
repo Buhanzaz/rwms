@@ -39,7 +39,6 @@ import {
 import {
   ClassEditorDialog,
   CredentialPasswordDialog,
-  CurrentGroupDialog,
   GroupAvailabilityDialog,
   GroupEditorDialog,
   QueueDefinitionEditorDialog,
@@ -125,8 +124,6 @@ export function TaskBoardSettingsPage() {
     null
   )
   const [passwordWorker, setPasswordWorker] = useState<WorkerDto | null>(null)
-  const [currentGroupWorker, setCurrentGroupWorker] =
-    useState<WorkerDto | null>(null)
   const [availabilityGroup, setAvailabilityGroup] =
     useState<WorkerGroupDto | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
@@ -175,7 +172,6 @@ export function TaskBoardSettingsPage() {
     setWorkerEditor(null)
     setGroupEditor(null)
     setPasswordWorker(null)
-    setCurrentGroupWorker(null)
     setAvailabilityGroup(null)
     setDeleteTarget(null)
     setActionError(null)
@@ -860,17 +856,6 @@ export function TaskBoardSettingsPage() {
                         type="button"
                         size="sm"
                         variant="outline"
-                        disabled={!item.active || mutation.isPending}
-                        onClick={() => setCurrentGroupWorker(item)}
-                      >
-                        {item.currentGroupId
-                          ? "Сменить бригаду"
-                          : "Назначить бригаду"}
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
                         onClick={() => setWorkerEditor(item)}
                       >
                         Изменить
@@ -1065,31 +1050,6 @@ export function TaskBoardSettingsPage() {
                   password
                 ),
               "Пароль рабочего изменён."
-            )
-          }}
-        />
-      ) : null}
-      {currentGroupWorker ? (
-        <CurrentGroupDialog
-          key={currentGroupWorker.id}
-          worker={currentGroupWorker}
-          groups={groups}
-          pending={mutation.isPending}
-          error={actionError}
-          onClose={closeEditors}
-          onSave={async (workerGroupId) => {
-            if (!accessToken) return
-            await run(
-              () =>
-                taskBoardSettingsClient.setWorkerCurrentGroup(
-                  accessToken,
-                  warehouseId,
-                  currentGroupWorker.id,
-                  currentGroupWorker.version,
-                  workerGroupId
-                ),
-              "Текущая бригада сохранена.",
-              false
             )
           }}
         />

@@ -402,7 +402,7 @@ class BackgroundUploadWorker(
             activeInventoryFinding(command.inventoryId, command.findingId),
         )
         val session = backend.api.inventory(command.inventoryId)
-        val rebasedCommand = command.rebasePendingInitialInspection(currentFinding)
+        val rebasedCommand = command.preparePendingInspectionFence(currentFinding)
         if (rebasedCommand != command) {
             store.update(requireExecutionScope(), operation.id) { current ->
                 current.copy(

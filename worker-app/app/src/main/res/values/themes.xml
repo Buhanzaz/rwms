@@ -2,5 +2,6 @@
     <style name="Theme.RwmsWorker" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowNoTitle">true</item>
+        <item name="android:windowBackground">@drawable/worker_startup_background</item>
     </style>
 </resources>

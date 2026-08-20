@@ -5,22 +5,26 @@ import dev.buhanzaz.rwms.manager.network.InventoryFindingDto
 import retrofit2.HttpException
 
 /**
- * Refreshes the fence for a queued initial inspection without allowing a background retry to
- * overwrite an inspection that has already changed on the server.
+ * Prepares the finding fence for a queued inspection without allowing background work to
+ * overwrite a newer inspection. An initial inspection may absorb a live projection-only revision;
+ * a supplement or replacement proceeds only with the exact revision captured by its fresh editor.
  */
-internal fun InventoryUploadCommand.rebasePendingInitialInspection(
+internal fun InventoryUploadCommand.preparePendingInspectionFence(
     currentFinding: InventoryFindingDto,
 ): InventoryUploadCommand {
     check(currentFinding.id == findingId) {
         "Сервис вернул другую бытовку при обновлении очереди инвентаризации"
     }
-    require(currentFinding.inspection == "NOT_INSPECTED") {
-        INVENTORY_UPLOAD_INSPECTION_CHANGED_MESSAGE
-    }
     require(currentFinding.mutationState in INVENTORY_SAVE_READY_MUTATION_STATES) {
         INVENTORY_UPLOAD_MUTATION_IN_PROGRESS_MESSAGE
     }
-    return copy(expectedFindingRevision = currentFinding.findingRevision)
+    if (currentFinding.inspection == "NOT_INSPECTED") {
+        return copy(expectedFindingRevision = currentFinding.findingRevision)
+    }
+    require(currentFinding.findingRevision == expectedFindingRevision) {
+        INVENTORY_UPLOAD_INSPECTION_CHANGED_MESSAGE
+    }
+    return this
 }
 
 /** Rejects a retry when its finding left the active session and is no longer commandable. */
@@ -31,8 +35,9 @@ internal fun requireActiveInventoryFindingForUpload(
 
 /**
  * Permits one reconciliation only after inventory service reports its standard stale-revision
- * conflict. The caller must still reread the active finding and apply [rebasePendingInitialInspection]
- * before issuing the next command, so this never authorizes overwriting a changed inspection.
+ * conflict. The caller must still reread the active finding and apply
+ * [preparePendingInspectionFence] before issuing the next command, so this never authorizes
+ * overwriting a changed inspection.
  */
 internal fun shouldRetryInventoryRevisionConflict(
     failure: Throwable,

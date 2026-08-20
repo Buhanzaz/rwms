@@ -20,11 +20,13 @@ Russian version: [README.ru.md](README.ru.md).
   offline cache is not authorization.
 - The application and round launcher icon resolve to the adaptive
   [`ic_launcher_worker.xml`](app/src/main/res/mipmap-anydpi-v26/ic_launcher_worker.xml)
-  resource on Android 8+. Its
-  [full-bleed artwork](app/src/main/res/drawable-nodpi/ic_launcher_worker_artwork.png)
-  contains no baked-in mask or outer white margin, so the operating system alone
-  applies the final circle or squircle. Earlier Android versions use the
-  full-bleed bitmap alias under `mipmap-anydpi`.
+  resource on Android 8+. The complete
+  [worker artwork](app/src/main/res/drawable-nodpi/ic_launcher_worker_artwork.png)
+  is centered by
+  [`ic_launcher_worker_foreground.xml`](app/src/main/res/drawable/ic_launcher_worker_foreground.xml)
+  inside the adaptive safe zone. Android 12+ uses that compact foreground on a
+  worker-blue system splash instead of scaling the artwork across the screen.
+  Earlier Android versions keep the bitmap alias under `mipmap-anydpi`.
 
 ### Transport contract gate
 
@@ -56,20 +58,29 @@ has no driver work surface or driver trip read. Task-board exposes a joint
 only to an eligible secondary worker; a stale cached waiting entry is hidden
 locally as an additional fail-closed guard.
 
-The eligible slinger joins an active joint task with the current group ID when
-one exists. The owning service pauses the previous assignment timer for that
-group and later resumes it according to the server workflow. Once joined, the
-slinger can pause, resume, or complete the shared task. Completion requires at
-least one server-`READY` photo; either joined participant may complete, and the
-server closes the same task for both. Ordinary group-bound roles and
-qualification-only categories keep their own panels; queues and task cards can
-also collapse. Panels stack on a narrow screen and use a two-pane horizontal
-board from 720 dp. A card shows cabin, scheduled date and authoritative elapsed
-time; its expanded state adds status, optional budget timer and photo count.
-“Photos and details” opens the existing task detail, CameraX evidence capture
-and durable upload flow. The Downloads screen remains the recovery surface for
-failed or pending uploads and explicit retry. The task screen records a work
-result and JPEG evidence but never decides a task transition locally.
+The eligible slinger takes an active joint task with the current group ID when
+one exists: the visible `Взять задание` control sends the `JOIN` wire action.
+The owning service pauses the previous assignment timer for that group and
+later resumes it according to the server workflow. Slinger participation is
+optional, so the driver may complete with a ready result photo before anyone
+joins. Once joined, the slinger can pause, resume, or complete the shared task.
+Completion requires at least one server-`READY` photo from either active
+participant; the server closes the same task for both. Ordinary group-bound
+roles and qualification-only categories keep their own panels; queues and task
+cards can also collapse. Panels stack on a narrow screen and use a two-column
+horizontal board from 720 dp. A card shows cabin, scheduled date and
+authoritative elapsed time; its expanded state adds status, optional budget
+timer and photo count. `Открыть задание` always opens a dedicated full-screen
+task destination, including on tablets and unfolded devices. The task screen
+presents identity and object type first, then separate swipeable general photos,
+materials, ordered works with their own photo strips, comments and result
+evidence. Selecting any thumbnail opens that exact item in the full-screen paged
+and zoomable viewer. After TAKE/JOIN, the app bar immediately shows timer startup
+and then the task-board-owned reverse countdown; breaks, off-shift time and
+pauses remain server-owned. Result capture and the completion command stay at
+the end of the execution flow. Downloads remains the recovery surface for failed
+or pending uploads and explicit retry. The task screen records a work result and
+JPEG evidence but never decides a task transition locally.
 
 Server-provided KPI ranges determine colors; no local green/yellow/red policy
 is invented. Worker-facing work data does not expose price/cost fields.
@@ -122,6 +133,12 @@ response was lost.
 Worker evidence is JPEG-only. The camera normalizes physical orientation into
 pixels and writes EXIF 'Orientation=1' before encryption; it limits normalized
 images to 8 MP and the evidence contract to 15 MB. Ultra HDR is not used.
+The WorkerApp CameraX surface carries the ManagerApp photo controls needed in
+the field: rear/front selection, supported optical zoom, focus/metering, night
+mode, flash/torch, framing grid and exposure. While the camera is active, either
+hardware volume key triggers exactly one photo per press; holding a key does not
+create duplicate evidence and normal volume handling returns after the camera
+closes.
 The visible Video tab intentionally does not produce MP4 because the public
 worker evidence contract does not accept it.
 

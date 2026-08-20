@@ -13,6 +13,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { taskBoardEntryMediaOwner } from "@/features/media/media-service"
+import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
 import {
   REPAIR_TASKS_QUERY_KEY,
   repairTaskDetailQueryKey,
@@ -22,7 +24,9 @@ import type {
   RepairTaskDto,
   RepairTaskSubtaskDto,
 } from "@/features/repair-tasks/model/repair-task"
+import { repairTaskSourceMediaOwner } from "@/features/repair-tasks/repair-task-media-owner"
 import { repairSubtaskStatusLabel } from "@/features/repair-tasks/repair-task-status-labels"
+import { cn } from "@/lib/utils"
 
 type RepairSnapshotLine = RepairTaskSubtaskDto["workLines"][number]
 
@@ -33,6 +37,9 @@ function RepairSnapshotLines({
   lines,
   includeQuantity = false,
   showComments = true,
+  accessToken = null,
+  task,
+  subtask,
 }: {
   title: string
   itemLabel: string
@@ -40,6 +47,9 @@ function RepairSnapshotLines({
   lines: RepairSnapshotLine[]
   includeQuantity?: boolean
   showComments?: boolean
+  accessToken?: string | null
+  task?: RepairTaskDto
+  subtask?: RepairTaskSubtaskDto
 }) {
   return (
     <section className="flex min-w-0 flex-col gap-2" aria-label={title}>
@@ -47,41 +57,66 @@ function RepairSnapshotLines({
       {lines.length > 0 ? (
         <div className="flex min-w-0 flex-col gap-2">
           <div
-            className={`hidden gap-3 px-3 text-xs font-medium text-muted-foreground sm:grid ${showComments ? "grid-cols-2" : "grid-cols-1"}`}
+            className={cn(
+              "hidden gap-3 px-3 text-xs font-medium text-muted-foreground sm:grid",
+              showComments ? "grid-cols-2" : "grid-cols-1"
+            )}
           >
             <span>{itemLabel}</span>
             {showComments ? <span>Комментарий</span> : null}
           </div>
-          <dl className="flex min-w-0 flex-col gap-2">
+          <div className="flex min-w-0 flex-col gap-2">
             {lines.map((line) => {
               const description = line.description.trim() || itemLabel
               const lineName = includeQuantity
                 ? `${description} × ${line.quantity} ${line.unit}`
                 : description
+              const mediaReferences = line.maintenanceMediaReferences ?? []
 
               return (
-                <div
+                <article
                   key={line.id}
-                  className={`grid min-w-0 gap-1 rounded-md border p-3 sm:gap-3 ${showComments ? "sm:grid-cols-2" : "sm:grid-cols-1"}`}
+                  className="flex min-w-0 flex-col gap-3 rounded-md border p-3"
                 >
-                  <dt className="text-xs font-medium text-muted-foreground sm:sr-only">
-                    {itemLabel}
-                  </dt>
-                  <dd className="min-w-0 break-words">{lineName}</dd>
-                  {showComments ? (
-                    <>
-                      <dt className="text-xs font-medium text-muted-foreground sm:sr-only">
-                        Комментарий
-                      </dt>
-                      <dd className="min-w-0 break-words">
-                        {line.lineComment.trim() || "—"}
-                      </dd>
-                    </>
+                  <dl
+                    className={cn(
+                      "grid min-w-0 gap-1 sm:gap-3",
+                      showComments ? "sm:grid-cols-2" : "sm:grid-cols-1"
+                    )}
+                  >
+                    <dt className="text-xs font-medium text-muted-foreground sm:sr-only">
+                      {itemLabel}
+                    </dt>
+                    <dd className="min-w-0 break-words">{lineName}</dd>
+                    {showComments ? (
+                      <>
+                        <dt className="text-xs font-medium text-muted-foreground sm:sr-only">
+                          Комментарий
+                        </dt>
+                        <dd className="min-w-0 break-words">
+                          {line.lineComment.trim() || "—"}
+                        </dd>
+                      </>
+                    ) : null}
+                  </dl>
+                  {task && subtask && mediaReferences.length > 0 ? (
+                    <ServiceOwnerPhotos
+                      accessToken={accessToken}
+                      owner={repairTaskSourceMediaOwner(task, line)}
+                      readOnly
+                      maxItems={100}
+                      title={`Фото работы «${description}»`}
+                      presentation="work-carousel"
+                      visibleMediaIds={mediaReferences.map(
+                        (reference) => reference.mediaId
+                      )}
+                      authoritativeReadyReferences={mediaReferences}
+                    />
                   ) : null}
-                </div>
+                </article>
               )
             })}
-          </dl>
+          </div>
         </div>
       ) : (
         <p className="text-muted-foreground">{emptyLabel}</p>
@@ -91,9 +126,11 @@ function RepairSnapshotLines({
 }
 
 export function RepairSubtasksEditor({
+  accessToken,
   task,
   readOnly = false,
 }: {
+  accessToken: string | null
   task: RepairTaskDto
   readOnly?: boolean
 }) {
@@ -213,13 +250,16 @@ export function RepairSubtasksEditor({
               </CardAction>
             ) : null}
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex flex-col gap-3">
             <div className="grid gap-3 lg:grid-cols-2">
               <RepairSnapshotLines
                 title="Работы"
                 itemLabel="Работа"
                 emptyLabel="Работ нет."
                 lines={subtask.workLines}
+                accessToken={accessToken}
+                task={task}
+                subtask={subtask}
               />
               <RepairSnapshotLines
                 title="Материалы"
@@ -230,6 +270,11 @@ export function RepairSubtasksEditor({
                 showComments={false}
               />
             </div>
+            <RepairTaskEvidencePhotos
+              accessToken={accessToken}
+              warehouseId={task.warehouseId}
+              evidence={subtask.evidence ?? []}
+            />
           </CardContent>
         </Card>
       ))}
@@ -251,5 +296,54 @@ export function RepairSubtasksEditor({
         </div>
       ) : null}
     </div>
+  )
+}
+
+function RepairTaskEvidencePhotos({
+  accessToken,
+  warehouseId,
+  evidence,
+}: {
+  accessToken: string | null
+  warehouseId: string
+  evidence: NonNullable<RepairTaskSubtaskDto["evidence"]>
+}) {
+  if (evidence.length === 0) return null
+
+  const byEntry = new Map<
+    string,
+    NonNullable<RepairTaskSubtaskDto["evidence"]>
+  >()
+  evidence.forEach((item) => {
+    const current = byEntry.get(item.entryId)
+    if (current) current.push(item)
+    else byEntry.set(item.entryId, [item])
+  })
+
+  return (
+    <section
+      className="flex min-w-0 flex-col gap-2"
+      aria-label="Фото результата задания"
+    >
+      {[...byEntry.entries()].map(([entryId, items], index) => (
+        <ServiceOwnerPhotos
+          key={entryId}
+          accessToken={accessToken}
+          owner={taskBoardEntryMediaOwner(entryId, warehouseId)}
+          readOnly
+          maxItems={100}
+          title={
+            byEntry.size === 1
+              ? "Фото результата задания"
+              : `Фото результата задания ${index + 1}`
+          }
+          visibleMediaIds={items.map((item) => item.mediaId)}
+          authoritativeReadyReferences={items.map((item) => ({
+            mediaId: item.mediaId,
+            generation: item.mediaGeneration,
+          }))}
+        />
+      ))}
+    </section>
   )
 }

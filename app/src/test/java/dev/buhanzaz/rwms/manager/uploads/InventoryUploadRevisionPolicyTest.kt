@@ -10,11 +10,11 @@ import org.junit.Test
 import retrofit2.HttpException
 import retrofit2.Response
 
-/** Verifies the fail-closed fence rebase for a durable first inventory inspection. */
+/** Verifies fail-closed fence preparation for durable initial and repeat inspections. */
 class InventoryUploadRevisionPolicyTest {
     @Test
     fun `rebases an initial queued inspection after an asset snapshot refresh`() {
-        val rebased = command(expectedFindingRevision = 3).rebasePendingInitialInspection(
+        val rebased = command(expectedFindingRevision = 3).preparePendingInspectionFence(
             finding(findingRevision = 7),
         )
 
@@ -23,7 +23,7 @@ class InventoryUploadRevisionPolicyTest {
 
     @Test
     fun `allows a source-created finding to finish its first inspection`() {
-        val rebased = command(expectedFindingRevision = 1).rebasePendingInitialInspection(
+        val rebased = command(expectedFindingRevision = 1).preparePendingInspectionFence(
             finding(findingRevision = 2, mutationState = "SOURCE_CREATED"),
         )
 
@@ -31,10 +31,19 @@ class InventoryUploadRevisionPolicyTest {
     }
 
     @Test
-    fun `does not rebase a queued repeat inspection over server data`() {
+    fun `keeps the exact fence for an unchanged queued supplement`() {
+        val prepared = command(expectedFindingRevision = 4).preparePendingInspectionFence(
+            finding(findingRevision = 4, inspection = "READY"),
+        )
+
+        assertThat(prepared.expectedFindingRevision).isEqualTo(4)
+    }
+
+    @Test
+    fun `does not rebase a queued repeat inspection over newer server data`() {
         val failure = runCatching {
-            command().rebasePendingInitialInspection(
-                finding(inspection = "READY"),
+            command(expectedFindingRevision = 1).preparePendingInspectionFence(
+                finding(findingRevision = 2, inspection = "READY"),
             )
         }.exceptionOrNull()
 
@@ -45,7 +54,7 @@ class InventoryUploadRevisionPolicyTest {
     @Test
     fun `does not rebase while source asset creation is in flight`() {
         val failure = runCatching {
-            command().rebasePendingInitialInspection(
+            command().preparePendingInspectionFence(
                 finding(mutationState = "SOURCE_CREATE_PENDING"),
             )
         }.exceptionOrNull()

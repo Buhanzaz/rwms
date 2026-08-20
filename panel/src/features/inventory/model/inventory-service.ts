@@ -436,6 +436,10 @@ export type StartFurnitureReviewRequest = {
   acknowledgeIncomplete: boolean
 }
 
+export type RefreshInventorySessionRequest = {
+  expectedSessionRevision: number
+}
+
 export type SaveFurnitureReviewRequest = {
   expectedSessionRevision: number
   assetSnapshotSha256: string
@@ -552,6 +556,24 @@ export type InventoryPublicationBatch = {
   inventoryId: string
   aggregateState: InventoryAggregatePublicationState
   intents: InventoryPublicationIntent[]
+}
+
+export type RecalculateInventoryOutcomeRequest = {
+  expectedSessionRevision: number
+  finalPlanVersion: number
+  finalPlanSha256: string
+}
+
+export type OutcomeRecalculation = {
+  inventoryId: string
+  sessionRevision: number
+  finalPlanVersion: number
+  finalPlanSha256: string
+  furnitureReconciliationState: InventoryFurnitureReconciliationState
+  createdPublicationCount: number
+  requeuedPublicationCount: number
+  preservedSucceededPublicationCount: number
+  publicationBatch: InventoryPublicationBatch
 }
 
 export type InventoryCreateIntent = {

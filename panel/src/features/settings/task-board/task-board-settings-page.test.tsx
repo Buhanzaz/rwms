@@ -51,7 +51,6 @@ const mocks = vi.hoisted(() => ({
   reorderQueueDefinitions: vi.fn(),
   disableGroup: vi.fn(),
   enableGroup: vi.fn(),
-  setWorkerCurrentGroup: vi.fn(),
   selectedWarehouse: null as { id: string } | null,
 }))
 
@@ -84,7 +83,6 @@ vi.mock("@/features/settings/task-board/api/task-board-settings-api", () => ({
     reorderQueueDefinitions: mocks.reorderQueueDefinitions,
     disableGroup: mocks.disableGroup,
     enableGroup: mocks.enableGroup,
-    setWorkerCurrentGroup: mocks.setWorkerCurrentGroup,
   },
   taskBoardSettingsKeys: {
     queueDefinitions: ["task-board-settings", "queue-definitions"],
@@ -300,7 +298,6 @@ beforeEach(() => {
   mocks.reorderQueueDefinitions.mockResolvedValue([])
   mocks.disableGroup.mockResolvedValue({})
   mocks.enableGroup.mockResolvedValue({})
-  mocks.setWorkerCurrentGroup.mockResolvedValue({})
 })
 
 afterEach(() => {
@@ -516,31 +513,19 @@ describe("TaskBoardSettingsPage navigation", () => {
 })
 
 describe("TaskBoardSettingsPage workforce operations", () => {
-  it("shows and changes the manager-selected current group", async () => {
+  it("shows the current group without a second assignment action", async () => {
     const user = userEvent.setup()
-    const group = groupFixture()
     mocks.listClasses.mockResolvedValue([classFixture()])
-    mocks.listGroups.mockResolvedValue([group])
+    mocks.listGroups.mockResolvedValue([groupFixture()])
     mocks.listWorkers.mockResolvedValue([workerFixture()])
 
     renderPage()
     await user.click(await screen.findByRole("radio", { name: "Рабочие" }))
 
     expect(screen.getByText("Не выбрана")).toBeTruthy()
-    await user.click(screen.getByRole("button", { name: "Назначить бригаду" }))
-    await user.click(screen.getByRole("combobox", { name: "Текущая бригада" }))
-    await user.click(screen.getByRole("option", { name: group.name }))
-    await user.click(screen.getByRole("button", { name: "Сохранить" }))
-
-    await waitFor(() =>
-      expect(mocks.setWorkerCurrentGroup).toHaveBeenCalledWith(
-        "task-board-token",
-        WAREHOUSE_ID,
-        "worker-1",
-        4,
-        group.id
-      )
-    )
+    expect(
+      screen.queryByRole("button", { name: "Назначить бригаду" })
+    ).toBeNull()
   })
 
   it("keeps a disable conflict visible and never invents success", async () => {

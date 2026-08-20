@@ -89,17 +89,20 @@ private data object ProfileRoute : NavKey
 @Serializable
 private data object DownloadsRoute : NavKey
 
+/** Opens one authenticated task-media collection at the thumbnail selected by the worker. */
 @Serializable
-private data class PhotoRoute(val title: String, val readPaths: List<String>) : NavKey
+internal data class PhotoRoute(
+    val title: String,
+    val readPaths: List<String>,
+    val initialIndex: Int,
+) : NavKey
 
 @Composable
 private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -> Unit) {
     val backStack = rememberNavBackStack(MenuRoute)
-    val listDetailStrategy = rememberWorkerListDetailSceneStrategy<NavKey>()
     NavDisplay(
         backStack = backStack,
         onBack = { backStack.removeLastOrNull() },
-        sceneStrategies = listOf(listDetailStrategy),
         // Navigation 3 does not scope ViewModels to entries by default. Both
         // task detail and camera are Hilt ViewModels, so install its standard
         // state + ViewModel entry decorators. This makes every CameraRoute
@@ -118,7 +121,7 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                     onProfile = dropUnlessResumed { backStack.add(ProfileRoute) },
                 )
             }
-            entry<BoardRoute>(metadata = WorkerListDetailScene.listPane()) {
+            entry<BoardRoute> {
                 val openTask: (String) -> Unit = dropUnlessResumedWithArgument { entryId ->
                     backStack.removeAll { it is TaskRoute }
                     backStack.add(TaskRoute(entryId))
@@ -129,18 +132,17 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                     onBack = { backStack.removeLastOrNull() },
                 )
             }
-            entry<TaskRoute>(metadata = WorkerListDetailScene.detailPane()) { route ->
-                val showBack = LocalTaskDetailBackButtonVisibility.current
+            entry<TaskRoute> { route ->
                 val openCamera: (Int) -> Unit = dropUnlessResumedWithArgument { routeIndex ->
                     backStack.add(newCameraRoute(route.entryId, routeIndex))
                 }
                 TaskDetailScreen(
                     userId = userId,
                     entryId = route.entryId,
-                    onBack = if (showBack) ({ backStack.removeLastOrNull() }) else null,
+                    onBack = { backStack.removeLastOrNull() },
                     onCamera = openCamera,
-                    onMedia = { title, paths ->
-                        backStack.add(PhotoRoute(title, paths))
+                    onMedia = { title, paths, initialIndex ->
+                        backStack.add(PhotoRoute(title, paths, initialIndex))
                     },
                 )
             }
@@ -161,7 +163,12 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                 WorkerDownloadsScreen(userId, onBack = { backStack.removeLastOrNull() })
             }
             entry<PhotoRoute> { route ->
-                PhotoPagerScreen(route.title, route.readPaths, onBack = { backStack.removeLastOrNull() })
+                PhotoPagerScreen(
+                    title = route.title,
+                    paths = route.readPaths,
+                    initialIndex = route.initialIndex,
+                    onBack = { backStack.removeLastOrNull() },
+                )
             }
         },
     )

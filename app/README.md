@@ -17,8 +17,10 @@ Russian version: [README.ru.md](README.ru.md).
 - OAuth client `rwms-manager-android` uses Authorization Code with PKCE S256
   and refresh-token rotation. Session material is encrypted with a
   non-exportable Android Keystore key; a password is not retained by the app.
-- A gateway `401` gets one serialized refresh attempt. A concurrent request
-  reuses an already-rotated access token, while a transient refresh transport
+- A gateway `401` gets one process-wide serialized refresh attempt shared by
+  the foreground UI and WorkManager. After acquiring that lock each repository
+  rereads the encrypted state, so a concurrent request reuses the access and
+  refresh tokens already rotated by its peer. A transient refresh transport
   failure keeps the encrypted session and is shown as a connectivity failure.
   Only a missing/revoked refresh token or terminal `invalid_grant`/
   `access_denied` response makes the session unusable.
@@ -65,7 +67,10 @@ linoleum, sanitary counters, and inspection comment belong to that late details
 step rather than the passport. A saved inspection opens the same steps in
 read-only mode. Every step offers “Edit inspection”: supplementing enables the
 retained data on the current step, while replacing returns to the passport with
-a clean inspection revision. A non-empty inspection, estimate, or primary
+a clean inspection revision. The durable queue submits either repeat mode only
+while the finding still has the exact freshly opened revision; it may refresh
+the broader session fence after unrelated cabin changes, but never rebases over
+a newer inspection of the same cabin. A non-empty inspection, estimate, or primary
 repair plan can also retain an explicit “send to capital repair” choice; the
 inventory editor places it after “create movement to repair”, and choosing one
 destination clears the other. Custom work/material stages retain their selected

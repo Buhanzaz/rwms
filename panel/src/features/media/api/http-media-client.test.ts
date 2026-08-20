@@ -454,7 +454,7 @@ describe("HttpMediaClient", () => {
             cabinId: OWNER_ID,
             photoCount: 2,
             cover,
-            previews: [cover, secondPreview],
+            previews: [secondPreview, cover],
           },
         ],
       }),
@@ -471,7 +471,7 @@ describe("HttpMediaClient", () => {
           cabinId: OWNER_ID,
           photoCount: 2,
           cover,
-          previews: [cover, secondPreview],
+          previews: [secondPreview, cover],
         },
       ],
     })
@@ -487,7 +487,53 @@ describe("HttpMediaClient", () => {
     )
   })
 
-  it("rejects a CABIN cover that is not exactly the first SMALL preview", async () => {
+  it("accepts CABIN previews when the independent cover pointer is null", async () => {
+    const contentPath =
+      `/api/media/v1/assets/${MEDIA_ID}/variants/SMALL/content?` +
+      new URLSearchParams({
+        ownerType: "CABIN",
+        ownerId: OWNER_ID,
+        warehouseId: WAREHOUSE_ID,
+        context: "WAREHOUSE",
+        generation: "2",
+      })
+    const preview = {
+      mediaId: MEDIA_ID,
+      generation: 2,
+      kind: "SMALL",
+      contentType: "image/webp",
+      contentPath,
+      width: 360,
+      height: 240,
+    }
+    const { client } = createClient([
+      jsonResponse({
+        items: [
+          {
+            cabinId: OWNER_ID,
+            photoCount: 1,
+            cover: null,
+            previews: [preview],
+          },
+        ],
+      }),
+    ])
+
+    await expect(
+      client.listCabinCovers("cover-token", WAREHOUSE_ID, [OWNER_ID])
+    ).resolves.toEqual({
+      items: [
+        {
+          cabinId: OWNER_ID,
+          photoCount: 1,
+          cover: null,
+          previews: [preview],
+        },
+      ],
+    })
+  })
+
+  it("rejects a CABIN cover that does not exactly match any SMALL preview", async () => {
     const contentPath =
       `/api/media/v1/assets/${MEDIA_ID}/variants/SMALL/content?` +
       new URLSearchParams({

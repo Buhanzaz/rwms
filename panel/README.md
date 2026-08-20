@@ -42,7 +42,9 @@ contexts and screens are usable.
 - The rental-item dossier consumes the complete canonical activity vocabulary.
   Maintenance repair transfer preparation and completion are shown in the
   repair history using the immutable warehouse snapshot returned by
-  `dossier-service`; the exact boundary is the [dossier OpenAPI](../contracts/openapi/dossier-service.yaml)
+  `dossier-service`. A completed task-evidence cover fact becomes a history
+  activity with an opaque media ID, generation and task-entry ID, never an
+  object-storage URL; the exact boundary is the [dossier OpenAPI](../contracts/openapi/dossier-service.yaml)
   and the strict [panel activity model](src/features/rental-items/dossier/model/dossier-service.ts).
 - The cabin `История` tab renders those canonical activities as a compact,
   chronological, expandable timeline. Related estimate, repair, inventory, and
@@ -51,7 +53,9 @@ contexts and screens are usable.
   Expanding a group shows the exact server-supplied time, actor, media states,
   event breakdown, and available route to its owning workflow without inferring
   missing domain data; permission-controlled technical mode retains raw source
-  metadata. See the [activity register](src/features/rental-items/dossier/dossier-activity-register.tsx).
+  metadata. `Открыть фото задания` resolves only that opaque task-evidence
+  reference through the public `TASK_BOARD_ENTRY` media owner proof and the
+  caller's bearer session. See the [activity register](src/features/rental-items/dossier/dossier-activity-register.tsx).
 - When queuing a repair returns the exact Problem Details code
   `BOOKED_UNIT_REPLACEMENT_REQUIRED`, the repair editor keeps the persisted draft
   task ID and version, closes the completion dialog, and shows
@@ -79,7 +83,27 @@ contexts and screens are usable.
   byte progress directly below that preview; cover/delete actions appear only
   after the server item is ready. Only an image can be selected as the cover,
   and protected blob URLs are released when their generation or owner scope
-  changes. See the [media feature](src/features/media/).
+  changes. A cabin detail carousel reads only the media-service current-folder
+  projection; its photo archive still lists every historical folder. If that
+  auxiliary cover projection fails while owner media loaded successfully, the
+  detail falls back to those loaded photos and does not report the whole photo
+  service unavailable. Warehouse card previews preserve association order and
+  accept the explicit cover pointer at any position in that order, so a valid
+  cover selection cannot invalidate the complete cabin batch. Repair task
+  details keep the task's aggregate media, each work line's source media, and
+  task-board result evidence in separate exact-reference galleries. Only each
+  work-line gallery uses a compact carousel with an in-image photo count and
+  always-visible previous/next controls; aggregate and result-evidence
+  galleries keep the standard shared presentation. Aggregate
+  and work-line references use their original inventory, estimate, or repair
+  owner proof; an authoritative inventory source wins over a legacy repair
+  origin or estimate link. Only worker-result evidence uses the task-board
+  entry proof.
+  They do not substitute the cabin gallery. Inventory folders use the inventory
+  dossier activity for their source, occurrence time, and actor labels. See the
+  [rental-item media hook](src/features/rental-items/use-rental-item-media.ts),
+  [cover parser](src/features/media/api/http-media-client.ts), and [media
+  feature](src/features/media/).
 - The panel may combine independent public reads for a screen, but it must not
   orchestrate cross-service business workflows in the browser.
 
@@ -272,6 +296,29 @@ OpenAPI operation (`expectedVersion`, ETag, or equivalent) and show a consistent
 refresh/retry path for `409 Conflict`. Retried creates and effects require the
 contract's idempotency key or stable external identifier. Do not infer command
 success from a cache update or SSE notification.
+
+An inventory inspection save rereads the current session and uses that broad
+session revision, while retaining the finding revision captured when the editor
+opened. An unrelated cabin update therefore does not block a supplement, but a
+concurrent edit of the same cabin still fails closed with `409`.
+
+The MANAGE-only inventory finish surface exposes **Recalculate session changes** in both cabin and
+furniture review. It is disabled while a review/plan draft is dirty or a competing finish command is
+running. The command refreshes authoritative membership on the server; on success the panel keeps
+saved cabin inspections, replaces the session detail and removes only derived registry, furniture,
+statistics, final-plan and completion-preview caches so the review can be rebuilt from current data.
+
+Completed inventory history exposes the separate MANAGE-only **Recalculate and
+apply outcome** action. It submits the exact completed session revision and final-plan
+version/hash with an idempotency key to the public inventory boundary. Its mandatory
+confirmation explains that the inventory is current truth: no-work cabins become
+`FREE`, ordinary work becomes `REPAIR`, forced capital work becomes
+`CAPITAL_REPAIR`, and active rental, reservation, internal-transfer or previous-repair
+bindings may be superseded. Photos, evidence and history remain preserved. The action
+is disabled without the completed final-plan identity or while a competing history
+command runs. An accepted response updates the publication cache and refreshes only
+the affected session detail, final plan, statistics and warehouse history queries; the
+authoritative contract is the [inventory OpenAPI](../contracts/openapi/inventory-service.yaml).
 
 ## Local development and checks
 

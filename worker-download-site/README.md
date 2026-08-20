@@ -54,6 +54,16 @@ handling. `npm run build:cloudflare` then creates the deployable OpenNext
 Worker and static assets under '.open-next/'. For a published release, the
 checks also prove that the generated APK bytes match the rendered checksum.
 
+## Published VPS route
+
+The active VPS renders this component at
+`https://77-90-158-90.sslip.io/worker-download/`. Its immutable artifact is
+served from the exact versioned `artifactPath` in [release.json](release.json);
+`/downloads/rwms-worker.apk` is only a convenience redirect and is not release
+evidence. Worker files remain isolated under `/var/www/rwms-worker-download`;
+the ManagerApp page at `/download/` is a separate surface and must not be
+replaced by a WorkerApp publication.
+
 ## Publication safety
 
 Publishing is an external release action and needs explicit authorization. Do

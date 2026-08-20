@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  applyInventoryOutcomeRecalculation,
   applyInventoryCompletionPreview,
   toInventoryFurnitureReviewView,
   toInventoryFindingView,
@@ -274,6 +275,56 @@ describe("inventory service view mapper", () => {
           includedLineIds: ["00000000-0000-4000-8000-000000000206"],
           plannedDurationMinutes: 45,
           photoRequired: true,
+        },
+      ],
+    })
+  })
+
+  it("updates the cached publication and furniture state from an outcome recalculation", () => {
+    const view = toInventorySessionView({
+      session,
+      findings: [finding],
+      statistics,
+    })
+
+    const recalculated = applyInventoryOutcomeRecalculation(view, {
+      inventoryId: session.id,
+      sessionRevision: 6,
+      finalPlanVersion: 2,
+      finalPlanSha256: "f".repeat(64),
+      furnitureReconciliationState: "PENDING",
+      createdPublicationCount: 0,
+      requeuedPublicationCount: 1,
+      preservedSucceededPublicationCount: 0,
+      publicationBatch: {
+        inventoryId: session.id,
+        aggregateState: "PENDING",
+        intents: [
+          {
+            id: "00000000-0000-4000-8000-000000000260",
+            inventoryId: session.id,
+            findingId: finding.id,
+            publicationRevision: 7,
+            state: "READY",
+            sourceRevision: 4,
+            attemptCount: 3,
+            maintenanceRepairId: null,
+            failureCode: null,
+          },
+        ],
+      },
+    })
+
+    expect(recalculated).toMatchObject({
+      version: 6,
+      publicationStatus: "PENDING",
+      furnitureReconciliationState: "PENDING",
+      findings: [
+        {
+          publicationStatus: "READY",
+          publicationOperationKey: "00000000-0000-4000-8000-000000000260",
+          publishedRepairTaskId: null,
+          publicationError: null,
         },
       ],
     })

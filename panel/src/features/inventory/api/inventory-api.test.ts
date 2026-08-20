@@ -14,6 +14,8 @@ const inventoryHttp = vi.hoisted(() => ({
   getFurnitureReview: vi.fn(),
   getInventoryPreliminaryStatistics: vi.fn(),
   getInventorySession: vi.fn(),
+  recalculateInventoryOutcome: vi.fn(),
+  refreshInventorySession: vi.fn(),
   resolveInventoryNumber: vi.fn(),
   resolveInventoryFindingConflict: vi.fn(),
   reviewInventoryRegistry: vi.fn(),
@@ -39,6 +41,8 @@ import {
   cancelInventory,
   getInventoryFurnitureReview,
   getInventoryPreliminaryStatistics,
+  recalculateInventoryOutcome,
+  refreshInventorySession,
   resolveInventoryFindingConflict,
   resolveInventoryNumber,
   reviewInventoryRegistry,
@@ -240,6 +244,87 @@ describe("inventory API", () => {
         }),
       ],
     })
+  })
+
+  it("refreshes derived session state and then returns the complete saved findings", async () => {
+    const sessionAfterRefresh = {
+      ...refreshedSession,
+      sessionRevision: 9,
+      reviewStage: "FURNITURE" as const,
+      furnitureReconciliationState: "READY" as const,
+      findings: [{ ...rawFinding, inspection: "READY" as const }],
+    }
+    inventoryHttp.refreshInventorySession.mockResolvedValue({
+      ...sessionAfterRefresh,
+      findings: undefined,
+    })
+    inventoryHttp.getInventorySession.mockResolvedValue(sessionAfterRefresh)
+
+    const result = await refreshInventorySession({
+      inventoryId: INVENTORY_ID,
+      expectedSessionRevision: 8,
+    })
+
+    expect(inventoryHttp.refreshInventorySession).toHaveBeenCalledWith({
+      accessToken: "inventory-token",
+      inventoryId: INVENTORY_ID,
+      request: { expectedSessionRevision: 8 },
+      idempotencyKey: expect.any(String),
+    })
+    expect(inventoryHttp.getInventorySession).toHaveBeenLastCalledWith(
+      "inventory-token",
+      INVENTORY_ID
+    )
+    expect(result).toMatchObject({
+      id: INVENTORY_ID,
+      version: 9,
+      reviewStage: "FURNITURE",
+      findings: [
+        expect.objectContaining({
+          id: rawFinding.id,
+          inspectionStatus: "READY",
+        }),
+      ],
+    })
+  })
+
+  it("recalculates a completed outcome with the exact final-plan identity", async () => {
+    const outcome = {
+      inventoryId: INVENTORY_ID,
+      sessionRevision: 8,
+      finalPlanVersion: 4,
+      finalPlanSha256: "f".repeat(64),
+      furnitureReconciliationState: "PENDING" as const,
+      createdPublicationCount: 75,
+      requeuedPublicationCount: 89,
+      preservedSucceededPublicationCount: 52,
+      publicationBatch: {
+        inventoryId: INVENTORY_ID,
+        aggregateState: "PENDING" as const,
+        intents: [],
+      },
+    }
+    inventoryHttp.recalculateInventoryOutcome.mockResolvedValue(outcome)
+
+    const result = await recalculateInventoryOutcome({
+      inventoryId: INVENTORY_ID,
+      expectedSessionRevision: 8,
+      finalPlanVersion: 4,
+      finalPlanSha256: "f".repeat(64),
+    })
+
+    expect(inventoryHttp.recalculateInventoryOutcome).toHaveBeenCalledWith({
+      accessToken: "inventory-token",
+      inventoryId: INVENTORY_ID,
+      request: {
+        expectedSessionRevision: 8,
+        finalPlanVersion: 4,
+        finalPlanSha256: "f".repeat(64),
+      },
+      idempotencyKey: expect.any(String),
+    })
+    expect(result).toEqual(outcome)
+    expect(inventoryHttp.getInventorySession).not.toHaveBeenCalled()
   })
 
   it("refreshes and returns the session revision after a missing-number resolution", async () => {
@@ -480,7 +565,6 @@ describe("inventory API", () => {
     await expect(
       saveInventoryFinding({
         inventoryId: INVENTORY_ID,
-        expectedVersion: 8,
         expectedFindingVersion: rawFinding.findingRevision,
         actor,
         findingId: rawFinding.id,
@@ -503,7 +587,7 @@ describe("inventory API", () => {
     expect(inventoryHttp.saveInventoryInspection).not.toHaveBeenCalled()
   })
 
-  it("keeps the draft finding revision instead of masking a concurrent edit", async () => {
+  it("refreshes the session fence but keeps the draft finding fence", async () => {
     inventoryHttp.getInventorySession.mockResolvedValue({
       ...refreshedSession,
       sessionRevision: 9,
@@ -512,7 +596,6 @@ describe("inventory API", () => {
 
     await saveInventoryFinding({
       inventoryId: INVENTORY_ID,
-      expectedVersion: 9,
       expectedFindingVersion: 4,
       actor,
       findingId: rawFinding.id,
@@ -558,7 +641,6 @@ describe("inventory API", () => {
 
     await saveInventoryFinding({
       inventoryId: INVENTORY_ID,
-      expectedVersion: 8,
       expectedFindingVersion: rawFinding.findingRevision,
       actor,
       findingId: rawFinding.id,
@@ -600,7 +682,6 @@ describe("inventory API", () => {
     })
     await saveInventoryFinding({
       inventoryId: INVENTORY_ID,
-      expectedVersion: 8,
       expectedFindingVersion: rawFinding.findingRevision,
       actor,
       findingId: rawFinding.id,

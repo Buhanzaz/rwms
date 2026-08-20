@@ -11,7 +11,6 @@ import {
 } from "vitest"
 
 import {
-  CurrentGroupDialog,
   GroupAvailabilityDialog,
   GroupEditorDialog,
   QueueDefinitionEditorDialog,
@@ -465,52 +464,15 @@ describe("GroupEditorDialog", () => {
       expect.objectContaining({
         workerClassId: slingerClass.id,
         members: [{ workerId: multiQualified.id, active: true }],
+        currentGroupChanges: [
+          {
+            workerId: multiQualified.id,
+            expectedVersion: multiQualified.version,
+            current: true,
+          },
+        ],
       })
     )
-  })
-})
-
-describe("CurrentGroupDialog", () => {
-  it("offers only active memberships and prevents choosing a disabled group", async () => {
-    const user = userEvent.setup()
-    const onSave = vi.fn(async () => undefined)
-    const currentWorker = worker("worker-1", "Иван Петров", [generalClass])
-    const available = group("group-1", "Бригада 1", currentWorker)
-    const disabled = group("group-2", "Бригада 2", currentWorker, {
-      operationalStatus: "DISABLED",
-    })
-    const inactive = group("group-3", "Бригада 3", currentWorker, {
-      active: false,
-    })
-    const otherWorker = worker("worker-2", "Пётр Иванов", [generalClass])
-    const unrelated = group("group-4", "Чужая бригада", otherWorker)
-
-    render(
-      <CurrentGroupDialog
-        worker={currentWorker}
-        groups={[available, disabled, inactive, unrelated]}
-        pending={false}
-        error={null}
-        onClose={vi.fn()}
-        onSave={onSave}
-      />
-    )
-
-    await user.click(screen.getByRole("combobox", { name: "Текущая бригада" }))
-
-    expect(screen.getByRole("option", { name: available.name })).toBeTruthy()
-    expect(
-      screen
-        .getByRole("option", { name: `${disabled.name} — недоступна` })
-        .getAttribute("aria-disabled")
-    ).toBe("true")
-    expect(screen.queryByRole("option", { name: inactive.name })).toBeNull()
-    expect(screen.queryByRole("option", { name: unrelated.name })).toBeNull()
-
-    await user.click(screen.getByRole("option", { name: available.name }))
-    await user.click(screen.getByRole("button", { name: "Сохранить" }))
-
-    expect(onSave).toHaveBeenCalledWith(available.id)
   })
 })
 

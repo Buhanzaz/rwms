@@ -8,10 +8,10 @@ import { RepairWorkDetailWorkspaceLayout } from "@/features/repair-estimates/rep
 import { RepairWorkInformationSnapshot } from "@/features/repair-estimates/repair-work-information-snapshot"
 import { ForceCapitalRepairField } from "@/features/repair-estimates/force-capital-repair-field"
 import type { RepairTaskDto } from "@/features/repair-tasks/model/repair-task"
+import { repairTaskSourceMediaOwner } from "@/features/repair-tasks/repair-task-media-owner"
 import { RepairSubtasksEditor } from "@/features/repair-tasks/repair-subtasks-editor"
 import { RepairTaskStatusBadge } from "@/features/repair-tasks/repair-task-status-badge"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
-import { maintenanceRepairMediaOwner } from "@/features/media/media-service"
 import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
 
 export function RepairTaskDetailWorkspace({
@@ -25,6 +25,7 @@ export function RepairTaskDetailWorkspace({
   readOnly?: boolean
   onEdit?: () => void
 }) {
+  const generalMediaReferences = task.maintenanceMediaReferences ?? []
   const estimateLink = task.sourceEstimateId ? (
     <Button variant="outline" size="sm" asChild>
       <Link
@@ -54,9 +55,14 @@ export function RepairTaskDetailWorkspace({
       photos={
         <ServiceOwnerPhotos
           accessToken={accessToken}
-          owner={maintenanceRepairMediaOwner(task.id, task.warehouseId)}
+          owner={repairTaskSourceMediaOwner(task)}
           readOnly
-          title="Фотографии ремонта"
+          maxItems={100}
+          title="Общие медиа задания"
+          visibleMediaIds={generalMediaReferences.map(
+            (reference) => reference.mediaId
+          )}
+          authoritativeReadyReferences={generalMediaReferences}
           coverMediaId={task.coverMediaId ?? null}
         />
       }
@@ -104,6 +110,7 @@ export function RepairTaskDetailWorkspace({
         task.subtasks.length > 0 ? (
           <RepairSubtasksEditor
             key={task.version}
+            accessToken={accessToken}
             task={task}
             readOnly={readOnly}
           />

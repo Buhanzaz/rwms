@@ -154,6 +154,12 @@ export type GroupMemberRequest = {
   active: boolean
 }
 
+export type CurrentGroupChangeRequest = {
+  workerId: string
+  expectedVersion: number
+  current: boolean
+}
+
 export type WorkerGroupDto = {
   id: string
   version: number
@@ -175,6 +181,7 @@ export type WorkerGroupRequest = {
   description: string | null
   active: boolean
   members: GroupMemberRequest[]
+  currentGroupChanges: CurrentGroupChangeRequest[]
 }
 
 export const queueTypeLabels: Record<QueueType, string> = {

@@ -60,6 +60,8 @@ type OwnedPendingMedia = Readonly<{
   assetId: string | null
 }>
 
+type ServiceOwnerPhotosPresentation = "default" | "work-carousel"
+
 export function ServiceOwnerPhotos({
   accessToken,
   owner,
@@ -67,6 +69,7 @@ export function ServiceOwnerPhotos({
   readOnly,
   maxItems = 20,
   title = "Фотографии",
+  presentation = "default",
   toolbarAction,
   visibleMediaIds,
   authoritativeReadyReferences,
@@ -82,6 +85,7 @@ export function ServiceOwnerPhotos({
   readOnly: boolean
   maxItems?: number
   title?: string
+  presentation?: ServiceOwnerPhotosPresentation
   toolbarAction?: ReactNode
   visibleMediaIds?: readonly string[]
   /** Domain-owned references, not an unfiltered owner-media listing. */
@@ -115,6 +119,7 @@ export function ServiceOwnerPhotos({
       readOnly={readOnly}
       maxItems={maxItems}
       title={title}
+      presentation={presentation}
       toolbarAction={toolbarAction}
       visibleMediaIds={visibleMediaIds}
       authoritativeReadyReferences={authoritativeReadyReferences}
@@ -133,6 +138,7 @@ function OwnedServiceOwnerPhotos({
   readOnly,
   maxItems,
   title,
+  presentation,
   toolbarAction,
   visibleMediaIds,
   authoritativeReadyReferences,
@@ -147,6 +153,7 @@ function OwnedServiceOwnerPhotos({
   readOnly: boolean
   maxItems: number
   title: string
+  presentation: ServiceOwnerPhotosPresentation
   toolbarAction?: ReactNode
   visibleMediaIds?: readonly string[]
   authoritativeReadyReferences?: readonly ReadyMediaReference[]
@@ -156,6 +163,7 @@ function OwnedServiceOwnerPhotos({
   onReadyStateChange?: (ready: boolean) => void
   onCoverMediaIdChange?: (mediaId: string | null) => void
 }) {
+  const workCarousel = presentation === "work-carousel"
   const [managerOpen, setManagerOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
   const [sessionMediaIds, setSessionMediaIds] = useState<readonly string[]>([])
@@ -603,10 +611,15 @@ function OwnedServiceOwnerPhotos({
               activeIndex={activeIndex}
               onActiveIndexChange={setActiveIndex}
               onRequestFullscreen={media.requestFullscreen}
-              className="min-h-56 flex-1 rounded-lg border"
+              showPhotoCount={workCarousel}
+              className={
+                workCarousel
+                  ? "h-56 min-h-56 rounded-lg border"
+                  : "min-h-56 flex-1 rounded-lg border"
+              }
               imageVariant="preview"
               fit="contain"
-              controlsVisibility="mobile-visible"
+              controlsVisibility={workCarousel ? "always" : "mobile-visible"}
               fullscreenQuality="preview"
               emptyLabel="Нет медиа"
             />

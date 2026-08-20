@@ -51,6 +51,10 @@ export function inventoryDetailQueryKey(inventoryId: string | null) {
   return [...INVENTORY_QUERY_KEY, "detail", inventoryId] as const
 }
 
+export function inventoryPublicationQueryKey(inventoryId: string | null) {
+  return [...INVENTORY_QUERY_KEY, "publication", inventoryId] as const
+}
+
 export function inventoryFurnitureReviewQueryKey(inventoryId: string | null) {
   return [...INVENTORY_QUERY_KEY, "furniture-review", inventoryId] as const
 }
@@ -155,6 +159,24 @@ export async function getInventory(inventoryId: string) {
     inventoryId
   )
   return sessionView(session)
+}
+
+export async function refreshInventorySession(input: {
+  inventoryId: string
+  expectedSessionRevision: number
+}) {
+  const token = await accessToken()
+  await inventoryHttp.refreshInventorySession({
+    accessToken: token,
+    inventoryId: input.inventoryId,
+    request: {
+      expectedSessionRevision: input.expectedSessionRevision,
+    },
+    idempotencyKey: commandKey(),
+  })
+  return sessionView(
+    await inventoryHttp.getInventorySession(token, input.inventoryId)
+  )
 }
 
 export async function reviewInventoryRegistry(inventoryId: string) {
@@ -378,7 +400,6 @@ export async function addInventoryRentalItem(input: {
 
 export async function saveInventoryFinding(input: {
   inventoryId: string
-  expectedVersion: number
   expectedFindingVersion: number
   actor: InventoryActorSnapshot
   findingId: string
@@ -446,7 +467,10 @@ export async function saveInventoryFinding(input: {
     accessToken: token,
     inventoryId: input.inventoryId,
     findingId: input.findingId,
-    expectedSessionRevision: input.expectedVersion,
+    // The session revision fences the live inventory as a whole and may advance when another
+    // cabin changes while this editor is open. The finding revision below remains the narrow
+    // conflict fence, so refreshing only the aggregate revision cannot overwrite this cabin.
+    expectedSessionRevision: rawSession.sessionRevision,
     expectedFindingRevision: input.expectedFindingVersion,
     inspection,
     comment: input.comment,
@@ -693,22 +717,20 @@ export async function cancelInventory(input: {
   return sessionView({ ...cancelled, findings: [] })
 }
 
-export async function publishInventoryWorks(input: {
+export async function recalculateInventoryOutcome(input: {
   inventoryId: string
-  actor: InventoryActorSnapshot
+  expectedSessionRevision: number
+  finalPlanVersion: number
+  finalPlanSha256: string
 }) {
-  const token = await accessToken()
-  const session = await inventoryHttp.getInventorySession(
-    token,
-    input.inventoryId
-  )
-  await inventoryHttp.publishInventoryFindings({
-    accessToken: token,
+  return inventoryHttp.recalculateInventoryOutcome({
+    accessToken: await accessToken(),
     inventoryId: input.inventoryId,
-    expectedSessionRevision: session.sessionRevision,
+    request: {
+      expectedSessionRevision: input.expectedSessionRevision,
+      finalPlanVersion: input.finalPlanVersion,
+      finalPlanSha256: input.finalPlanSha256,
+    },
     idempotencyKey: commandKey(),
   })
-  return sessionView(
-    await inventoryHttp.getInventorySession(token, input.inventoryId)
-  )
 }

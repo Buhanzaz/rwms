@@ -22,6 +22,7 @@ internal data class TaskActionPresentation(
     val message: String?,
     val performers: List<String>,
     val takeLabel: String,
+    val joinLabel: String,
 )
 
 /**
@@ -129,6 +130,13 @@ internal fun taskActionPresentation(
         message = message,
         performers = performers,
         takeLabel = if (canJoinMandatoryTask) "Взять срочное" else "Взять",
+        joinLabel = if (
+            isSecondaryLogistics && (canJoinOptionalLogisticsTask || canJoinRequiredTask)
+        ) {
+            "Взять задание"
+        } else {
+            "Присоединиться"
+        },
     )
 }
 

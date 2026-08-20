@@ -14,6 +14,7 @@ import { maintenanceEstimateMediaOwner } from "@/features/media/media-service"
 const mediaState = vi.hoisted(() => ({
   value: {} as Record<string, unknown>,
 }))
+const photoCarousel = vi.hoisted(() => vi.fn())
 
 vi.mock("@/features/media/use-service-owner-media", () => ({
   serviceOwnerMediaQueryKey: () => ["service-owner-media"],
@@ -21,19 +22,20 @@ vi.mock("@/features/media/use-service-owner-media", () => ({
 }))
 
 vi.mock("@/components/media/photo-carousel", () => ({
-  PhotoCarousel: ({
-    photos,
-    emptyLabel = "Нет фото",
-  }: {
+  PhotoCarousel: (props: {
     photos: Array<{ id: string }>
     emptyLabel?: string
-  }) => (
-    <div>
-      {photos.length === 0
-        ? emptyLabel
-        : photos.map((photo) => <span key={photo.id}>{photo.id}</span>)}
-    </div>
-  ),
+  }) => {
+    photoCarousel(props)
+    const { photos, emptyLabel = "Нет фото" } = props
+    return (
+      <div>
+        {photos.length === 0
+          ? emptyLabel
+          : photos.map((photo) => <span key={photo.id}>{photo.id}</span>)}
+      </div>
+    )
+  },
 }))
 
 import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
@@ -66,6 +68,7 @@ function mediaValue(overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  photoCarousel.mockClear()
   mediaState.value = mediaValue()
 })
 
@@ -75,6 +78,52 @@ afterEach(() => {
 })
 
 describe("ServiceOwnerPhotos", () => {
+  it("maps the work gallery presentation to compact always-visible carousel controls", () => {
+    const photoId = "33333333-3333-4333-8333-333333333333"
+    mediaState.value = mediaValue({
+      assets: [{ id: photoId, kind: "IMAGE", status: "READY" }],
+      photos: [{ id: photoId, url: "blob:work-photo" }],
+      logicalPhotoCount: 1,
+      logicalMediaCount: 1,
+      readyReferences: [{ mediaId: photoId, generation: 1 }],
+    })
+
+    const view = render(
+      <ServiceOwnerPhotos
+        accessToken="token"
+        owner={owner}
+        readOnly
+        title="Фото работы"
+      />
+    )
+
+    expect(photoCarousel).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        showPhotoCount: false,
+        controlsVisibility: "mobile-visible",
+        className: "min-h-56 flex-1 rounded-lg border",
+      })
+    )
+
+    view.rerender(
+      <ServiceOwnerPhotos
+        accessToken="token"
+        owner={owner}
+        readOnly
+        title="Фото работы"
+        presentation="work-carousel"
+      />
+    )
+
+    expect(photoCarousel).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        showPhotoCount: true,
+        controlsVisibility: "always",
+        className: "h-56 min-h-56 rounded-lg border",
+      })
+    )
+  })
+
   it("distinguishes an empty owner from an unavailable media service", () => {
     const view = render(
       <ServiceOwnerPhotos

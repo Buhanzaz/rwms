@@ -2,6 +2,11 @@ package dev.buhanzaz.rwms.manager.auth
 
 import android.net.Uri
 import com.google.common.truth.Truth.assertThat
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -74,6 +79,25 @@ class ManagerAuthConfigurationTest {
                 rejectedAccessToken = null,
             ),
         ).isNull()
+    }
+
+    @Test
+    fun `foreground and worker refreshes share one process rotation lock`() = runTest {
+        val active = AtomicInteger()
+        val maximum = AtomicInteger()
+
+        List(2) {
+            async {
+                ManagerProcessRefreshCoordinator.withLock {
+                    val now = active.incrementAndGet()
+                    maximum.accumulateAndGet(now) { left, right -> maxOf(left, right) }
+                    delay(10)
+                    active.decrementAndGet()
+                }
+            }
+        }.awaitAll()
+
+        assertThat(maximum.get()).isEqualTo(1)
     }
 
     @Test(expected = IllegalArgumentException::class)

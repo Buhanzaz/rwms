@@ -24,6 +24,13 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
@@ -41,6 +48,9 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
+import { useAuth } from "@/features/auth/use-auth"
+import { taskBoardEntryMediaOwner } from "@/features/media/media-service"
+import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
 import {
   formatDossierActorLabel,
   type DossierActorDisplay,
@@ -54,6 +64,7 @@ import {
   type DossierActivityCode,
   type DossierActivityFilters,
   type DossierSourceType,
+  type DossierTaskEvidencePhoto,
   type DossierVisibility,
 } from "@/features/rental-items/dossier/model/dossier-service"
 import { cn } from "@/lib/utils"
@@ -95,6 +106,7 @@ const activityLabel: Record<DossierActivityCode, string> = {
   MEDIA_FAILED: "Обработка фотографии завершилась ошибкой",
   MEDIA_ROTATED: "Фотография повёрнута",
   MEDIA_DELETED: "Фотография удалена",
+  MEDIA_TASK_EVIDENCE_ATTACHED: "Фотография задания добавлена в историю",
 }
 
 function formatInstant(value: string) {
@@ -606,14 +618,92 @@ function ActivityMediaSummary({ activity }: { activity: DossierActivity }) {
   )
 }
 
+/** Opens one task-owned evidence photo through the authorized media boundary. */
+function TaskEvidencePhotoLink({
+  photo,
+  warehouseId,
+  accessToken,
+}: {
+  photo: DossierTaskEvidencePhoto
+  warehouseId: string
+  accessToken: string | null
+}) {
+  const [open, setOpen] = useState(false)
+  const owner = taskBoardEntryMediaOwner(photo.taskBoardEntryId, warehouseId)
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="self-start"
+        onClick={() => setOpen(true)}
+      >
+        Открыть фото задания
+        <HugeiconsIcon
+          icon={ArrowUpRight01Icon}
+          data-icon="inline-end"
+          aria-hidden="true"
+        />
+      </Button>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>Фотография задания</DialogTitle>
+          <DialogDescription>
+            Фотография открывается с проверкой доступа к заданию.
+          </DialogDescription>
+        </DialogHeader>
+        <ServiceOwnerPhotos
+          accessToken={accessToken}
+          owner={owner}
+          readOnly
+          maxItems={1}
+          title="Фотография задания"
+          visibleMediaIds={[photo.mediaId]}
+          authoritativeReadyReferences={[
+            { mediaId: photo.mediaId, generation: photo.generation },
+          ]}
+        />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** Renders every opaque task-photo reference recorded with the activity. */
+function TaskEvidencePhotoLinks({
+  activity,
+  accessToken,
+}: {
+  activity: DossierActivity
+  accessToken: string | null
+}) {
+  if (activity.taskEvidencePhotos.length === 0) return null
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {activity.taskEvidencePhotos.map((photo) => (
+        <TaskEvidencePhotoLink
+          key={`${photo.taskBoardEntryId}:${photo.mediaId}:${photo.generation}`}
+          photo={photo}
+          warehouseId={activity.warehouseId}
+          accessToken={accessToken}
+        />
+      ))}
+    </div>
+  )
+}
+
 function TimelineGroupDetails({
   group,
   actorDisplays,
   showTechnicalActorDetails,
+  accessToken,
 }: {
   group: TimelineGroup
   actorDisplays: Map<string, DossierActorDisplay>
   showTechnicalActorDetails: boolean
+  accessToken: string | null
 }) {
   const link = timelineGroupLink(group)
   const mediaCount = groupMedia(group).length
@@ -669,6 +759,10 @@ function TimelineGroupDetails({
                   {actorLabel(activity, actorDisplays)}
                 </p>
                 <ActivityMediaSummary activity={activity} />
+                <TaskEvidencePhotoLinks
+                  activity={activity}
+                  accessToken={accessToken}
+                />
                 {showTechnicalActorDetails ? (
                   <div className="flex flex-col gap-2">
                     <p className="font-mono text-xs break-all text-muted-foreground">
@@ -702,10 +796,12 @@ function ActivityTimeline({
   activities,
   visibility,
   showTechnicalActorDetails,
+  accessToken,
 }: {
   activities: DossierActivity[]
   visibility: DossierVisibility
   showTechnicalActorDetails: boolean
+  accessToken: string | null
 }) {
   const actorDisplays = useDossierActorDisplays(
     activities.flatMap((activity) =>
@@ -831,6 +927,7 @@ function ActivityTimeline({
                         group={group}
                         actorDisplays={actorDisplays}
                         showTechnicalActorDetails={showTechnicalActorDetails}
+                        accessToken={accessToken}
                       />
                     </CollapsibleContent>
                   </Collapsible>
@@ -861,6 +958,8 @@ export function DossierActivityRegister({
   onLoadMore: () => void
   showTechnicalActorDetails?: boolean
 }) {
+  const { accessToken } = useAuth()
+
   if (isLoading) {
     return (
       <Card aria-busy="true">
@@ -904,6 +1003,7 @@ export function DossierActivityRegister({
         activities={activities}
         visibility={visibility}
         showTechnicalActorDetails={showTechnicalActorDetails}
+        accessToken={accessToken}
       />
       {hasNextPage ? (
         <Button

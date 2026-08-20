@@ -40,8 +40,8 @@ android {
         applicationId = "dev.buhanzaz.rwms.worker"
         minSdk = 23
         targetSdk = 36
-        versionCode = 17
-        versionName = "0.1.16"
+        versionCode = 18
+        versionName = "0.1.17"
         testInstrumentationRunner = "dev.buhanzaz.rwms.worker.HiltWorkerTestRunner"
         manifestPlaceholders["appAuthRedirectScheme"] = "rwms-worker-auth"
     }
@@ -107,9 +107,6 @@ dependencies {
     implementation(libs.compose.material.icons)
     implementation(libs.navigation3.runtime)
     implementation(libs.navigation3.ui)
-    implementation(libs.material.adaptive)
-    implementation(libs.material.adaptive.layout)
-    implementation(libs.material.adaptive.navigation)
     implementation(libs.androidx.hilt.viewmodel.compose)
     implementation(libs.hilt.android)
     implementation(libs.room.runtime)

@@ -14,7 +14,7 @@ class WorkerLogisticsContractTest {
     }
 
     @Test
-    fun `worker category decodes active shared task as required join work`() {
+    fun `worker category decodes active shared task as optional join work`() {
         val category = json.decodeFromString<WorkerCategoryDto>(
             """
             {
@@ -24,7 +24,7 @@ class WorkerLogisticsContractTest {
               "queuePurpose":"LOGISTICS_DRIVER",
               "groupIds":["group-slingers"],
               "sortOrder":10,
-              "audienceModes":["REQUIRED_JOIN"],
+              "audienceModes":["OPTIONAL_JOIN"],
               "resultPhotoMinCount":1
             }
             """.trimIndent(),
@@ -32,12 +32,12 @@ class WorkerLogisticsContractTest {
 
         assertThat(category.queuePurpose).isEqualTo("LOGISTICS_DRIVER")
         assertThat(category.groupIds).containsExactly("group-slingers")
-        assertThat(category.audienceModes).containsExactly("REQUIRED_JOIN")
+        assertThat(category.audienceModes).containsExactly("OPTIONAL_JOIN")
         assertThat(category.resultPhotoMinCount).isEqualTo(1)
     }
 
     @Test
-    fun `worker feed decodes only an active task waiting for secondary join`() {
+    fun `worker feed decodes only an active task available for secondary join`() {
         val entry = json.decodeFromString<WorkerFeedEntryDto>(
             """
             {
@@ -53,7 +53,7 @@ class WorkerLogisticsContractTest {
               "priority":3,
               "queuePosition":0,
               "status":"IN_PROGRESS",
-              "availabilityMode":"REQUIRED_JOIN",
+              "availabilityMode":"OPTIONAL_JOIN",
               "plannedDurationMinutes":null,
               "activeStartedAt":"2026-08-10T08:00:00Z",
               "activeWorkSeconds":120,
@@ -78,7 +78,7 @@ class WorkerLogisticsContractTest {
         )
 
         assertThat(entry.status).isEqualTo("IN_PROGRESS")
-        assertThat(entry.availabilityMode).isEqualTo("REQUIRED_JOIN")
+        assertThat(entry.availabilityMode).isEqualTo("OPTIONAL_JOIN")
         assertThat(entry.assignments).hasSize(1)
         assertThat(entry.resultPhotoMinCount).isEqualTo(1)
     }

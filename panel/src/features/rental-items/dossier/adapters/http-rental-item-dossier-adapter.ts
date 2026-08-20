@@ -12,6 +12,7 @@ import {
   type DossierMediaState,
   type DossierSourceProducer,
   type DossierSourceReference,
+  type DossierTaskEvidencePhoto,
   type DossierVisibility,
   type GetCabinDossierQuery,
 } from "@/features/rental-items/dossier/model/dossier-service"
@@ -158,6 +159,29 @@ function parseMediaProjection(value: unknown): DossierMediaProjection {
   }
 }
 
+/** Parses an opaque task-evidence reference without accepting an object URL. */
+function parseTaskEvidencePhoto(value: unknown): DossierTaskEvidencePhoto {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["mediaId", "generation", "taskBoardEntryId"])
+  ) {
+    throw new Error(INVALID_RESPONSE_MESSAGE)
+  }
+
+  const { mediaId, generation, taskBoardEntryId } = value
+  if (
+    !isUuid(mediaId) ||
+    typeof generation !== "number" ||
+    !Number.isSafeInteger(generation) ||
+    generation < 1 ||
+    !isUuid(taskBoardEntryId)
+  ) {
+    throw new Error(INVALID_RESPONSE_MESSAGE)
+  }
+
+  return { mediaId, generation, taskBoardEntryId }
+}
+
 function parseActivity(
   value: unknown,
   responseCabinId: string
@@ -174,6 +198,7 @@ function parseActivity(
       "actorRef",
       "sourceRef",
       "media",
+      "taskEvidencePhotos",
     ])
   ) {
     throw new Error(INVALID_RESPONSE_MESSAGE)
@@ -189,6 +214,7 @@ function parseActivity(
     actorRef,
     sourceRef,
     media,
+    taskEvidencePhotos = [],
   } = value
   if (
     !isUuid(activityId) ||
@@ -199,7 +225,9 @@ function parseActivity(
     !activityCodes.has(activityCode) ||
     (occurredAt !== null && !isDateTime(occurredAt)) ||
     !isDateTime(recordedAt) ||
-    !Array.isArray(media)
+    !Array.isArray(media) ||
+    !Array.isArray(taskEvidencePhotos) ||
+    taskEvidencePhotos.length > 1
   ) {
     throw new Error(INVALID_RESPONSE_MESSAGE)
   }
@@ -214,6 +242,7 @@ function parseActivity(
     actorRef: parseActorReference(actorRef),
     sourceRef: parseSourceReference(sourceRef),
     media: media.map(parseMediaProjection),
+    taskEvidencePhotos: taskEvidencePhotos.map(parseTaskEvidencePhoto),
   }
 }
 

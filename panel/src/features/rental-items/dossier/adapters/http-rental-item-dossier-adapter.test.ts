@@ -17,6 +17,7 @@ const SOURCE_ID = "50000000-0000-0000-0000-000000000001"
 const SECONDARY_ID = "60000000-0000-0000-0000-000000000001"
 const MEDIA_ID = "70000000-0000-0000-0000-000000000001"
 const FINDING_ID = "80000000-0000-0000-0000-000000000001"
+const TASK_ENTRY_ID = "90000000-0000-0000-0000-000000000001"
 
 function dossierResponse(overrides: Record<string, unknown> = {}) {
   return {
@@ -49,6 +50,11 @@ function dossierResponse(overrides: Record<string, unknown> = {}) {
             state: "READY",
           },
         ],
+        taskEvidencePhotos: [] as {
+          mediaId: string
+          generation: number
+          taskBoardEntryId: string
+        }[],
       },
     ],
     nextCursor: "cursor-page-2",
@@ -107,6 +113,53 @@ describe("dossier-service HTTP adapter", () => {
       ).resolves.toEqual(response)
     }
   )
+
+  it("maps an opaque task-evidence photo without accepting a storage URL", async () => {
+    const response = dossierResponse()
+    response.activities[0]!.activityCode = "MEDIA_TASK_EVIDENCE_ATTACHED"
+    response.activities[0]!.taskEvidencePhotos = [
+      {
+        mediaId: MEDIA_ID,
+        generation: 3,
+        taskBoardEntryId: TASK_ENTRY_ID,
+      },
+    ]
+    fetchMock.mockResolvedValue(jsonResponse(response))
+
+    await expect(
+      getRentalItemDossierPage("access-token", CABIN_ID)
+    ).resolves.toEqual(response)
+  })
+
+  it("accepts an older response that has no task-evidence-photo field", async () => {
+    const response = dossierResponse()
+    const { taskEvidencePhotos: _ignored, ...legacyActivity } =
+      response.activities[0]!
+    const legacyResponse = { ...response, activities: [legacyActivity] }
+    fetchMock.mockResolvedValue(jsonResponse(legacyResponse))
+
+    await expect(
+      getRentalItemDossierPage("access-token", CABIN_ID)
+    ).resolves.toEqual({
+      ...legacyResponse,
+      activities: [{ ...legacyActivity, taskEvidencePhotos: [] }],
+    })
+  })
+
+  it("rejects more than one task-evidence photo for one history activity", async () => {
+    const response = dossierResponse()
+    response.activities[0]!.taskEvidencePhotos = [
+      { mediaId: MEDIA_ID, generation: 1, taskBoardEntryId: TASK_ENTRY_ID },
+      { mediaId: MEDIA_ID, generation: 2, taskBoardEntryId: TASK_ENTRY_ID },
+    ]
+    fetchMock.mockResolvedValue(jsonResponse(response))
+
+    await expect(
+      getRentalItemDossierPage("access-token", CABIN_ID)
+    ).rejects.toThrow(
+      "Сервис досье вернул некорректный ответ об истории бытовки."
+    )
+  })
 
   it("preserves PARTIAL coverage even when the visible filtered page is empty", async () => {
     fetchMock.mockResolvedValue(

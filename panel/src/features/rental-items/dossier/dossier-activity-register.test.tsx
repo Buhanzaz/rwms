@@ -31,6 +31,28 @@ vi.mock("@/features/auth/use-auth", () => ({
   }),
 }))
 
+vi.mock("@/features/media/service-owner-photos", () => ({
+  ServiceOwnerPhotos: ({
+    owner,
+    visibleMediaIds,
+    authoritativeReadyReferences,
+  }: {
+    owner: { ownerId: string } | null
+    visibleMediaIds?: readonly string[]
+    authoritativeReadyReferences?: readonly {
+      mediaId: string
+      generation: number
+    }[]
+  }) => (
+    <output data-testid="task-evidence-photo-viewer">
+      {owner?.ownerId ?? "no-owner"}|{visibleMediaIds?.join(",") ?? ""}|
+      {authoritativeReadyReferences
+        ?.map((reference) => `${reference.mediaId}:${reference.generation}`)
+        .join(",") ?? ""}
+    </output>
+  ),
+}))
+
 vi.mock("@/hooks/use-mobile", () => ({
   useIsMobile: () => viewport.isMobile,
 }))
@@ -38,6 +60,8 @@ vi.mock("@/hooks/use-mobile", () => ({
 const CABIN_ID = "10000000-0000-0000-0000-000000000001"
 const ACTOR_ID = "40000000-0000-0000-0000-000000000001"
 const ACTIVITY_ID = "30000000-0000-0000-0000-000000000001"
+const TASK_ENTRY_ID = "60000000-0000-0000-0000-000000000001"
+const TASK_EVIDENCE_MEDIA_ID = "70000000-0000-0000-0000-000000000001"
 const fetchMock = vi.fn()
 
 function activity(overrides: Partial<DossierActivity> = {}): DossierActivity {
@@ -59,6 +83,7 @@ function activity(overrides: Partial<DossierActivity> = {}): DossierActivity {
       aggregateId: CABIN_ID,
     },
     media: [],
+    taskEvidencePhotos: [],
     ...overrides,
   }
 }
@@ -353,6 +378,55 @@ describe("DossierActivityRegister", () => {
     )
     expect(screen.getByText("2 события, 2 фото")).toBeTruthy()
     expect(screen.getAllByText("Готово: 1")).toHaveLength(2)
+  })
+
+  it("opens task evidence with its task-entry media owner proof", () => {
+    renderWithQueryClient(
+      <DossierActivityRegister
+        pages={[
+          page({
+            activities: [
+              activity({
+                activityCode: "MEDIA_TASK_EVIDENCE_ATTACHED",
+                sourceRef: {
+                  producer: "media-service",
+                  aggregateType: "CABIN_PHOTO_LIBRARY",
+                  aggregateId: "80000000-0000-0000-0000-000000000001",
+                  secondaryId: CABIN_ID,
+                },
+                taskEvidencePhotos: [
+                  {
+                    mediaId: TASK_EVIDENCE_MEDIA_ID,
+                    generation: 2,
+                    taskBoardEntryId: TASK_ENTRY_ID,
+                  },
+                ],
+              }),
+            ],
+          }),
+        ]}
+        error={null}
+        isLoading={false}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        onLoadMore={vi.fn()}
+      />
+    )
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Фотография задания добавлена в историю/,
+      })
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: "Открыть фото задания" })
+    )
+
+    expect(screen.getByRole("dialog")).toBeTruthy()
+    expect(screen.getByText("Фотография задания")).toBeTruthy()
+    expect(screen.getByTestId("task-evidence-photo-viewer").textContent).toBe(
+      `${TASK_ENTRY_ID}|${TASK_EVIDENCE_MEDIA_ID}|${TASK_EVIDENCE_MEDIA_ID}:2`
+    )
   })
 
   it("groups a repair lifecycle and reveals its details and link on click", () => {
