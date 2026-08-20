@@ -141,7 +141,32 @@ Interactive panel and Android clients reach this namespace only through the publ
 
 `/api/internal/logistics/v1/maintenance/**` is the narrow private boundary for maintenance-owned
 repair work requiring logistics driver/equipment orchestration. It uses service credentials and is
-not a client route.
+not a client route. Its driver-task intake accepts ordinary inbound `DELIVER_TO_REPAIR` work and a
+separate outbound `CAPITAL_TO_PRODUCTION` task whose source is the external capital repair; both
+remain logistics-owned scheduled work and never bypass the ordered driver queue.
+
+`PUT /api/internal/logistics/v1/inventory/outcomes/{inventoryId}` applies the latest completed
+inventory as authoritative logistics truth for exact canonical `assetId` values. It accepts only an
+exact `inventory-service` SERVICE token with audience `rwms-services` and sole scope
+`logistics.inventory`, plus a UUID `Idempotency-Key`. The complete batch is rejected with `409`
+before mutation when it is stale, has an ambiguous equal-time source, crosses warehouse ownership,
+or selects only part of a nonterminal document. Otherwise selected document lines and rental terms
+remain historical but are marked inventory-superseded and excluded from active rental/shipment
+reads. Fully selected nonterminal documents become `CANCELLED`; `ACCEPTED`, `ESTIMATE_REQUESTED`,
+`SHIPPED`, `COMPLETED` and already `CANCELLED` documents retain their terminal state. Orders with no
+active terms move from `DRAFT`/`SAVED` to `CANCELLED` or from `FULFILLED` to `CLOSED`; existing
+terminal orders retain their state. Unfinished logistics-owned driver/document tasks are cancelled
+through task-board's source-owned general cancellation even after start, while completed work is
+preserved. The batch does not create repair or capital-repair work: maintenance runs afterward
+through the existing integrations, and a same-source reassertion protects the `INVENTORY` movement
+whose `sourceId` is a current finding while still cancelling older inventory-source movement.
+An inventory-displaced logistics guard enters reconciliation until asset-service confirms its exact
+typed document-line lease as `RELEASED` or `EXPIRED`; the release runs outside the database
+transaction with a stable dependency idempotency key, and an owner/fence mismatch fails closed.
+Equipment work already `EXECUTING` or `RECONCILIATION_REQUIRED` fails closed; earlier
+equipment work enters its existing durable cancellation path. A permanent receipt, per-asset source
+watermark and task-action checkpoints retain every row and resume an uncertain remote result; no
+inventory outcome path deletes logistics history.
 
 `/api/logistics/public/v1/client-presentations/**` is intentionally anonymous, but a signed
 presentation token, its revision and current viewability constrain access. Media access also verifies
@@ -178,6 +203,8 @@ facade delegates every interface operation:
 | `RentalOrderUnitReplacementService` | Direct and presentation replacement over ordered batch checkpoints, pre-start driver-task cancellation and same-order document/member convergence |
 | `ShipmentFurnitureTaskService` | All-active-order furniture composition, existing movement-task readiness and replacement recovery checkpoints |
 | Rental-order command store, editability and problem/outcome leaves | Row/receipt replay, saved-draft synchronization and canonical local problem mapping; `LogisticsTransactionLock` owns the narrow transaction advisory-lock access |
+| `InventoryOutcomeService` | Non-transactional completed-inventory orchestration and frozen successful replay |
+| `InventoryOutcomePreparationStore`, `InventoryOutcomeTaskStore`, `InventoryOutcomeTaskProcessor` | Atomic warehouse/document/order supersession, durable task/asset-lease checkpoints and task-board/asset/repair-place reconciliation outside database transactions |
 
 Owner clients depend only on the shared transport and their configured private
 base URL; they do not depend on peers or refer back to the facade. Domain and
@@ -312,6 +339,13 @@ additional-contact JSON in the existing `presentation_booking` idempotency recei
 create a second order source of truth, rewrite historical rows or remove historical desired-window
 and scheduled-time columns; those legacy values remain physically readable only for persistence and
 old receipt comparison, never for public commands or projections.
+
+Migration
+[`V50__authoritative_inventory_outcomes.sql`](src/main/resources/db/migration/V50__authoritative_inventory_outcomes.sql)
+adds nullable supersession markers to retained document, line, guard, rental-order, rental-term and
+driver-task rows; active-read indexes for unsuperseded lines/terms; permanent command receipts;
+per-asset completed-source watermarks; and recoverable task/asset-lease action checkpoints. It is
+additive and contains no historical-row backfill, rewrite or deletion.
 
 Logistics commits facts, projection checkpoints and a transactional outbox together. Kafka delivery
 is at-least-once: aggregate IDs are record keys, event IDs are dedupe identities, and consumers retain

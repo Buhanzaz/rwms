@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /** Loads, locks and maps repair aggregates while preserving repair-stream version fences. */
@@ -41,6 +42,7 @@ final class MaintenanceRepairModelSupport {
   private final RepairComplexityColorsService repairComplexityColors;
   private final MaintenanceCommandSupport commandSupport;
   private final MaintenanceMediaSupport mediaSupport;
+  private InventoryRepairSourceReadProjection authoritativeInventorySources;
 
   MaintenanceRepairModelSupport(
       MaintenanceRepairRepository repairs,
@@ -63,6 +65,13 @@ final class MaintenanceRepairModelSupport {
     this.repairComplexityColors = repairComplexityColors;
     this.commandSupport = commandSupport;
     this.mediaSupport = mediaSupport;
+  }
+
+  /** Installs the read-only authoritative-inventory projection used by Spring-managed reads. */
+  @Autowired
+  void configureAuthoritativeInventorySources(
+      InventoryRepairSourceReadProjection authoritativeInventorySources) {
+    this.authoritativeInventorySources = authoritativeInventorySources;
   }
 
   protected MaintenanceRepair requireRepair(UUID id) {
@@ -169,11 +178,22 @@ final class MaintenanceRepairModelSupport {
                     stage.getDeliveryAttempts(), stage.getDeliveryUpdatedAt())),
             stage.getCompletedAt()))
         .toList();
-    InventorySourceReference inventorySource = inventorySources.findByRepairId(value.getId())
-        .map(source -> new InventorySourceReference(
-            source.getInventoryId(), source.getFindingId(), source.getSourceRevision(),
-            source.getPlanFingerprint(), source.getSourceFingerprint()))
-        .orElse(null);
+    InventorySourceReference inventorySource =
+        authoritativeInventorySources
+            .findAuthoritativeSource(value.getId())
+            .or(
+                () ->
+                    inventorySources
+                        .findByRepairId(value.getId())
+                        .map(
+                            source ->
+                                new InventorySourceReference(
+                                    source.getInventoryId(),
+                                    source.getFindingId(),
+                                    source.getSourceRevision(),
+                                    source.getPlanFingerprint(),
+                                    source.getSourceFingerprint())))
+            .orElse(null);
     List<MediaReferenceInput> aggregateMedia = mediaSupport.repairMedia(value);
     RepairComplexitySnapshot complexity = repairComplexity(value, stages);
     return new RepairResponse(

@@ -26,6 +26,7 @@ public class InventoryApplicationService {
   private final InventoryPlanningService planningService;
   private final InventoryCompletionService completionService;
   private final InventoryPublicationService publicationService;
+  private final InventoryOutcomeRecoveryService outcomeRecoveryService;
 
   public InventoryApplicationService(
       InventorySessionService sessionService,
@@ -34,7 +35,8 @@ public class InventoryApplicationService {
       InventoryReviewService reviewService,
       InventoryPlanningService planningService,
       InventoryCompletionService completionService,
-      InventoryPublicationService publicationService) {
+      InventoryPublicationService publicationService,
+      InventoryOutcomeRecoveryService outcomeRecoveryService) {
     this.sessionService = sessionService;
     this.readService = readService;
     this.findingService = findingService;
@@ -42,6 +44,7 @@ public class InventoryApplicationService {
     this.planningService = planningService;
     this.completionService = completionService;
     this.publicationService = publicationService;
+    this.outcomeRecoveryService = outcomeRecoveryService;
   }
 
   public SessionView start(Jwt jwt, UUID idempotencyKey, StartSessionRequest request) {
@@ -87,6 +90,12 @@ public class InventoryApplicationService {
 
   public SessionView session(Jwt jwt, UUID inventoryId) {
     return readService.session(jwt, inventoryId);
+  }
+
+  /** Delegates a MANAGE-scoped refresh without moving membership ownership to the HTTP adapter. */
+  public SessionView refresh(
+      Jwt jwt, UUID inventoryId, UUID idempotencyKey, RefreshSessionRequest request) {
+    return sessionService.refresh(jwt, inventoryId, idempotencyKey, request);
   }
 
   public PageResponse<FindingView> findings(
@@ -213,6 +222,15 @@ public class InventoryApplicationService {
   public PublicationBatch publish(
       Jwt jwt, UUID inventoryId, UUID idempotencyKey, PublishFindingsRequest request) {
     return publicationService.publish(jwt, inventoryId, idempotencyKey, request);
+  }
+
+  /** Queues the exact completed plan for authoritative owner-by-owner recovery. */
+  public OutcomeRecalculation recalculateOutcome(
+      Jwt jwt,
+      UUID inventoryId,
+      UUID idempotencyKey,
+      RecalculateInventoryOutcomeRequest request) {
+    return outcomeRecoveryService.recalculate(jwt, inventoryId, idempotencyKey, request);
   }
 
   public PublicationView retryPublication(

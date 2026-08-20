@@ -28,7 +28,9 @@ import lombok.NoArgsConstructor;
     name = "logistics_task_reference",
     uniqueConstraints = {
       @UniqueConstraint(name = "uk_logistics_task_reference_line", columnNames = "line_id"),
-      @UniqueConstraint(name = "uk_logistics_task_reference_external", columnNames = "external_task_id")
+      @UniqueConstraint(
+          name = "uk_logistics_task_reference_external",
+          columnNames = "external_task_id")
     })
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -87,7 +89,11 @@ public class LogisticsTaskReference {
       UUID externalTaskId,
       UUID warehouseId,
       OffsetDateTime createdAt) {
-    if (document == null || line == null || externalTaskId == null || warehouseId == null || createdAt == null) {
+    if (document == null
+        || line == null
+        || externalTaskId == null
+        || warehouseId == null
+        || createdAt == null) {
       throw new IllegalArgumentException("Task reference ownership and timing are required");
     }
     LogisticsTaskReference reference = new LogisticsTaskReference();
@@ -101,7 +107,8 @@ public class LogisticsTaskReference {
     return reference;
   }
 
-  public void register(UUID nextTaskId, long nextTaskVersion, String status, OffsetDateTime nextDoneAt) {
+  public void register(
+      UUID nextTaskId, long nextTaskVersion, String status, OffsetDateTime nextDoneAt) {
     if (nextTaskId == null || nextTaskVersion < 0 || !"ACTIVE".equals(status)) {
       throw new IllegalArgumentException("Task registration result is invalid");
     }
@@ -117,7 +124,9 @@ public class LogisticsTaskReference {
   }
 
   public void markDone(long nextTaskVersion, OffsetDateTime completedAt) {
-    if (taskState != LogisticsTaskReferenceState.REGISTERED || nextTaskVersion < taskVersion || completedAt == null) {
+    if (taskState != LogisticsTaskReferenceState.REGISTERED
+        || nextTaskVersion < taskVersion
+        || completedAt == null) {
       throw new IllegalStateException("Task reference cannot become done");
     }
     taskVersion = nextTaskVersion;
@@ -135,6 +144,33 @@ public class LogisticsTaskReference {
     }
     if (taskVersion != null) taskVersion = nextTaskVersion;
     taskState = LogisticsTaskReferenceState.CANCELLED;
+    updatedAt = now();
+  }
+
+  /** Records broad source-owned cancellation after completed inventory displaced the document. */
+  public void cancelForCompletedInventory(long nextTaskVersion) {
+    if (taskState == LogisticsTaskReferenceState.DONE) {
+      throw new IllegalStateException("Completed task reference remains historical");
+    }
+    if (taskVersion != null && nextTaskVersion < taskVersion) {
+      throw new IllegalArgumentException("Task reference version moved backwards");
+    }
+    if (taskVersion != null) taskVersion = nextTaskVersion;
+    taskState = LogisticsTaskReferenceState.CANCELLED;
+    updatedAt = now();
+  }
+
+  /** Reconciles a remote DONE result without converting it into an inventory cancellation. */
+  public void preserveCompletedForInventory(long nextTaskVersion, OffsetDateTime completedAt) {
+    if (nextTaskVersion < 0 || completedAt == null) {
+      throw new IllegalArgumentException("Completed task-board snapshot is invalid");
+    }
+    if (taskVersion != null && nextTaskVersion < taskVersion) {
+      throw new IllegalArgumentException("Task reference version moved backwards");
+    }
+    taskVersion = nextTaskVersion;
+    doneAt = completedAt;
+    taskState = LogisticsTaskReferenceState.DONE;
     updatedAt = now();
   }
 

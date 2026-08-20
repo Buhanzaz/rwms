@@ -721,6 +721,27 @@ public class MaintenanceRepair {
     updatedAt = deliveryUpdatedAt;
   }
 
+  /**
+   * Closes any non-terminal repair after the durable authoritative-inventory coordinator has
+   * settled its source-owned task, movement, repair-place and lease effects. Completed evidence
+   * remains in the repair and stage rows; terminal acceptance/write-off decisions are immutable.
+   */
+  public void supersedeForAuthoritativeInventory() {
+    if (acceptanceState == RepairAcceptanceState.ACCEPTED
+        || acceptanceState == RepairAcceptanceState.WRITTEN_OFF) {
+      throw new IllegalStateException(
+          "A terminal accepted or written-off repair cannot be superseded by inventory");
+    }
+    if (executionState == RepairExecutionState.CANCELLED) return;
+    executionState = RepairExecutionState.CANCELLED;
+    acceptanceState = RepairAcceptanceState.NOT_READY;
+    taskGenerationState = "NOT_REQUIRED";
+    deliveryState = "DELIVERED";
+    reconciliationState = "RECONCILED";
+    deliveryUpdatedAt = MaintenanceTime.now();
+    updatedAt = deliveryUpdatedAt;
+  }
+
   public void enterRework() {
     if (acceptanceState != RepairAcceptanceState.PENDING) {
       throw new IllegalStateException("Repair is not pending acceptance");

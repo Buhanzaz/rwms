@@ -168,6 +168,13 @@ WORKER-only WorkerApp/DriverApp clients above. Changing a callback, scope, or
 principal type requires its own revision and coordinated client release; one
 mobile client's refresh token cannot be exchanged through the other client ID.
 
+The managed `inventory-service` machine client requests exactly one downstream
+scope per token. Revision 5 added `media.inventory` for the completed-inventory
+cabin-photo hand-off; revision 6 adds only `logistics.inventory` for authoritative
+plan-wide supersession of logistics work. Every token keeps subject and `client_id`
+equal to `inventory-service` and the `rwms-services` audience. Asset, maintenance,
+media, logistics and warehouse scopes remain separate token requests.
+
 ## Warehouse-grant validation
 
 Warehouse identity belongs to `warehouse-service`. Auth-service therefore does

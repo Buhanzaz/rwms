@@ -177,7 +177,11 @@ final class AssetLeaseService {
   }
 
   void expire(UUID rentalItemId) {
-    OffsetDateTime expiredAt = now();
+    expire(rentalItemId, now());
+  }
+
+  /** Expires rows against one fixed clock boundary shared by the surrounding recovery command. */
+  private void expire(UUID rentalItemId, OffsetDateTime expiredAt) {
     List<OperationLease> expired =
         operationLeases.findExpiredByRentalItemIdAndStateForUpdate(
             rentalItemId, OperationLeaseState.ACTIVE, expiredAt);
@@ -195,6 +199,31 @@ final class AssetLeaseService {
           fact(updated),
           snapshot(updated));
     }
+  }
+
+  /**
+   * Ends the active lease, if any, because a later completed inventory has replaced its physical
+   * cabin truth. Expired and released rows remain untouched as historical evidence.
+   */
+  List<UUID> releaseForCompletedInventory(UUID rentalItemId) {
+    lockRentalItemAndLease(rentalItemId);
+    OffsetDateTime releasedAt = now();
+    expire(rentalItemId, releasedAt);
+    List<UUID> released = new java.util.ArrayList<>();
+    for (OperationLease current : activeForUpdate(rentalItemId)) {
+      long expectedVersion = current.getVersion();
+      current.release(releasedAt);
+      OperationLeaseResponse updated = response(operationLeases.saveAndFlush(current));
+      events.append(
+          AssetAggregateType.OPERATION_LEASE,
+          current.getId(),
+          expectedVersion,
+          AssetEventType.OPERATION_LEASE_RELEASED,
+          fact(updated),
+          snapshot(updated));
+      released.add(current.getId());
+    }
+    return List.copyOf(released);
   }
 
   OperationLeaseResponse acquire(

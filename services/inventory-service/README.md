@@ -23,6 +23,26 @@ and observe or recover publication work. Mutable commands use the contract-defin
 and idempotency fields; callers must handle a canonical `409` conflict rather than send a changed
 retry.
 
+`POST /api/inventory/v1/sessions/{inventoryId}/refresh` is the MANAGE-scoped recovery command for
+an active session whose live cabin membership or derived review became stale. It checks the supplied
+session revision before a fresh read-only asset capture and again under the local apply lock. Remote
+capture reads finish before the idempotent local transaction reconciles arrivals, departures and
+current snapshots through the normal membership journal. Saved findings, inspection evidence,
+media references and movement history remain intact; only the derived furniture review is restarted
+and an existing final plan is marked stale. Furniture-review seeding reads the active client
+`quantity` observation and retains `observedQuantity` as compatibility for previously stored review
+facts. The public refresh contract adds no schema field.
+
+Finding media is immutable revision evidence. A workflow that advances a finding without editing
+its photos—live membership/snapshot reconciliation, source-asset attachment, conflict resolution,
+furniture confirmation or owner-proof closure—carries the exact immediately preceding media set
+into the new revision in the same local transaction. An inspection save remains different: it
+records exactly the submitted set, so an intentional empty set stays empty. Migration
+[`V18__carry_forward_inventory_finding_media.sql`](src/main/resources/db/migration/V18__carry_forward_inventory_finding_media.sql)
+repairs earlier revision drift only when a non-null cover photo proves that the current finding must
+have media, the current revision has none, and an earlier exact set contains that cover. It copies
+the newest such whole set without a union, deletion, media-object rewrite or finding-version change.
+
 Interactive panel and Android clients reach this namespace only through the public
 `api-gateway-service` `/api/inventory/**` route. They must not call this module host or any private
 dependency route directly.
@@ -30,6 +50,68 @@ dependency route directly.
 Inventory has no public client route for asset, warehouse, maintenance or media mutations. It calls
 their narrow private boundaries with service credentials after its own local workflow records have
 been made durable.
+
+Final-plan preparation uses maintenance's read-only publication preflight. Inventory repeats that
+request at most once, with the same body, idempotency key and service token, only after a transport
+failure or HTTP `502`, `503` or `504`. Validation, conflict, authentication, other server and
+malformed-response failures remain fail-closed and are not retried.
+
+## Authoritative completed outcome and history recovery
+
+Every completed final-plan finding has one durable publication intent, including findings without
+maintenance work. After furniture reconciliation succeeds, the recovery scheduler first applies
+the exact completed finding through asset-service: no work means `FREE`, ordinary work means
+`REPAIR`, and an explicit capital choice means `CAPITAL_REPAIR`. Asset-service owns the atomic
+release or supersession of active order-unit reservations, operation leases, presentation holds and
+transfer state. It preserves their history and rejects terminal `LOST` or `WRITTEN_OFF` cabins.
+Each final-plan publication intent also freezes the exact finding passport observation at
+completion. The source finding revision and asset must match the immutable final-plan entry.
+`ABSENT` is sent as an explicit preserve-current instruction; `PRESENT` is normalized into the six
+asset-owned facets: rental type, dimensions, finishing, category, comma-split distinct
+characteristics and nullable linoleum. A missing characteristics field becomes the exact empty
+set, and missing or non-boolean linoleum becomes `null`. The normalized observation and its
+canonical SHA-256 are part of the asset outcome and therefore of the durable publication request
+fingerprint. See
+[`InventoryPublicationIntent`](src/main/java/dev/buhanzaz/rwms/inventory/domain/InventoryPublicationIntent.java)
+and
+[`InventoryPublicationService`](src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryPublicationService.java).
+Only after that result is stored does inventory send the exact `IMAGE` references from the
+final-plan finding revision to media-service with the same publication-attempt idempotency key and
+the narrow `media.inventory` token. Media-service makes that completed-inventory folder the cabin's
+current photo set; earlier acceptance or inventory folders remain separate historical evidence
+instead of being mixed into the current set. A finding without images skips this effect. Inventory
+then sends the whole immutable final plan to logistics-service with one plan-stable key and the
+exact `logistics.inventory` token. Logistics supersedes active rental, shipment, transfer and
+driver-task state for listed cabins while retaining its audit rows. Finally, a work finding goes to
+maintenance with the effective asset version and completion timestamp; maintenance authoritatively
+supersedes older active repair work before creating the required repair or capital repair. A
+no-work finding goes to the maintenance no-work boundary, which supersedes active estimates,
+repairs, leases and tasks instead of merely changing the cabin status. The no-work payload is
+projected explicitly from the asset result and contains only the fields in the maintenance
+contract; asset-only passport observation and hash fields never cross that boundary. A rejected
+required effect prevents publication success, so recovery reasserts asset, media, the plan-wide
+logistics effect and maintenance in that order. Photos, finding evidence, domain history and media-service/MinIO
+objects are never inputs to deletion in this flow.
+
+`POST /api/inventory/v1/sessions/{inventoryId}/outcome/recalculate` is the MANAGE-scoped recovery
+command for a completed history row. It fences the exact session revision, final-plan version and
+SHA-256, performs no remote I/O and returns `202` after rebuilding durable work. It creates missing
+no-work/status intents and requeues every existing publication, including rows previously marked
+successful, because older runtime versions cannot prove that newer logistics, media and no-work
+effects ran. The same command also makes an unresolved furniture reconciliation immediately
+eligible. Attempts and prior maintenance results remain append-only audit evidence; schedulers
+apply the queued effects with stable idempotency. The compatibility
+`preservedSucceededPublicationCount` is therefore zero for the current authoritative command.
+Migration
+[`V19__authoritative_inventory_outcome_recovery.sql`](src/main/resources/db/migration/V19__authoritative_inventory_outcome_recovery.sql)
+adds the desired status and stored asset result without deleting existing publication history.
+Migration
+[`V23__freeze_inventory_outcome_passport_observation.sql`](src/main/resources/db/migration/V23__freeze_inventory_outcome_passport_observation.sql)
+backfills the frozen observation only when the publication source revision, final-plan entry and
+asset identity still match; unmatched legacy rows receive explicit `ABSENT`. History recovery
+preserves this frozen column instead of rereading the finding, increments the durable reapplication
+generation, and therefore derives a new owner-effect idempotency key. Old successful receipts can
+still replay their unchanged response, while the new generation sends the passport-bearing request.
 
 ## Security, warehouse isolation and fencing
 
@@ -48,13 +130,13 @@ same stable operation identity and owner proof.
 
 ## Internal application structure
 
-`InventoryApplicationService` is a stable seven-collaborator compatibility facade. It retains the
+`InventoryApplicationService` is a stable use-case compatibility facade. It retains the
 controller, inbox and scheduler call surface but delegates every decision to one cohesive use-case
 service:
 
 | Collaborator | Owned responsibility |
 | --- | --- |
-| `InventorySessionService` | Session start and durable capture-release recovery |
+| `InventorySessionService` | Session start, manual membership refresh and durable capture-release recovery |
 | `InventoryReadService` | Session, finding and statistics reads |
 | `InventoryFindingService` | Membership reconciliation, number resolution, source creation and inspection mutation |
 | `InventoryFindingValidationService` | Fresh finding, media and plan validation shared by exact owners |
@@ -63,11 +145,13 @@ service:
 | `InventoryCompletionService` | Preview, terminal completion/cancellation and post-commit intents |
 | `InventoryStatisticsService` | Frozen and aggregate statistics calculations |
 | `InventoryPublicationService` | Publication, retry, closure and recovery |
+| `InventoryOutcomeRecoveryService` | Completed-history rebuilding of authoritative asset and maintenance work |
 | `InventoryProjectionService` | API projections over owner-local state |
 
-`InventoryFindingPersistenceService` encapsulates only source attachments, media references/facts
-and frozen-plan persistence. Narrow abstract workflow supports expose only the repositories and
-ports required by their one concrete use case; they are not Spring beans. The shared
+`InventoryFindingPersistenceService` encapsulates only source attachments, media references/facts,
+exact non-media revision carry-forward and frozen-plan persistence. Narrow abstract workflow
+supports expose only the repositories and ports required by their one concrete use case; they are
+not Spring beans. The shared
 `InventoryTechnicalRuntimeSupport` contains JSON/canonical-hash, actor/authorization, correlation
 and transaction primitives only—no repository, remote owner, lifecycle or workflow decision. The
 dependency graph is acyclic, and no extracted collaborator owns another domain's state.
@@ -135,7 +219,7 @@ private URLs and service credentials; interactive clients use the gateway.
 ## Known audit limitations
 
 The production fail-fast checks apply only when the active Spring profile is `prod` or `production`.
-Deployment configuration must select one of those profiles; this documentation-only update does not
+Deployment configuration must select one of those profiles; the dependency retry policy does not
 turn a non-production profile into a safe live runtime.
 
 ## Executable route and security parity

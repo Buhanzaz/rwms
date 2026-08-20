@@ -59,7 +59,9 @@ class InventoryDependencyConfiguration {
                 "inventory-warehouse-lifecycle-confirm",
                 "warehouse.lifecycle.confirm"),
             registration(validated, "inventory-asset", "asset.inventory"),
-            registration(validated, "inventory-maintenance", "maintenance.inventory"));
+            registration(validated, "inventory-maintenance", "maintenance.inventory"),
+            registration(validated, "inventory-logistics", "logistics.inventory"),
+            registration(validated, "inventory-media", "media.inventory"));
     var manager =
         new AuthorizedClientServiceOAuth2AuthorizedClientManager(
             registrations, new InMemoryOAuth2AuthorizedClientService(registrations));

@@ -78,6 +78,7 @@ import dev.buhanzaz.rwms.maintenance.domain.RepairStageState;
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
 import dev.buhanzaz.rwms.maintenance.service.FurnitureEquipmentLinkReviewService;
+import dev.buhanzaz.rwms.maintenance.service.InventoryAuthoritativeOutcomeService;
 import dev.buhanzaz.rwms.maintenance.service.InventoryMaintenanceService;
 import dev.buhanzaz.rwms.maintenance.service.InventoryPublicationReconciliationService;
 import dev.buhanzaz.rwms.maintenance.service.LogisticsReturnShortageService;
@@ -148,12 +149,12 @@ class MaintenanceOpenApiParityTest {
   private static final List<OperationSpec> OPERATIONS = canonicalOperations();
 
   @Test
-  void allFiftyFivePathsAndSixtySixOperationsExactlyMatchTheApprovedAcceptanceMatrix()
+  void allFiftySixPathsAndSixtySevenOperationsExactlyMatchTheApprovedAcceptanceMatrix()
       throws Exception {
     Map<String, Object> document = openApi();
-    assertThat(child(document, "paths")).hasSize(55);
-    assertThat(openApiOperationCount(document)).isEqualTo(66);
-    assertThat(controllerOperations()).hasSize(66);
+    assertThat(child(document, "paths")).hasSize(56);
+    assertThat(openApiOperationCount(document)).isEqualTo(67);
+    assertThat(controllerOperations()).hasSize(67);
 
     for (OperationSpec expected : OPERATIONS) {
       assertOpenApiOperation(document, expected);
@@ -174,7 +175,8 @@ class MaintenanceOpenApiParityTest {
         "/api/internal/maintenance/v1/inventory/repair-snapshots",
         "/api/internal/maintenance/v1/inventory/sources/{inventoryId}/findings/{findingId}",
         "/api/internal/maintenance/v1/inventory/reconciliations/preflight",
-        "/api/internal/maintenance/v1/inventory/reconciliations/{inventoryId}/findings/{findingId}");
+        "/api/internal/maintenance/v1/inventory/reconciliations/{inventoryId}/findings/{findingId}",
+        "/api/internal/maintenance/v1/inventory/outcomes/{inventoryId}/findings/{findingId}/no-work");
     assertThat(inventoryPaths)
         .allMatch(path -> path.startsWith("/api/internal/maintenance/v1/inventory"))
         .noneMatch(path -> path.startsWith("/api/maintenance/"))
@@ -235,6 +237,40 @@ class MaintenanceOpenApiParityTest {
         .containsEntry("minItems", 1)
         .containsEntry("maxItems", 5000)
         .containsEntry("uniqueItems", true);
+  }
+
+  @Test
+  void inventoryPublicationPreflightFindingsMayBeEmptyButRemainRequiredAndBounded()
+      throws Exception {
+    Map<String, Object> document = openApi();
+    Map<String, Object> requestSchema =
+        schema(document, "InventoryPublicationPreflightRequest");
+    Map<String, Object> findings = child(child(requestSchema, "properties"), "findings");
+    assertThat(stringList(requestSchema.get("required"))).contains("findings");
+    assertThat(findings)
+        .containsEntry("minItems", 0)
+        .containsEntry("maxItems", 5000);
+
+    try (var validatorFactory = Validation.buildDefaultValidatorFactory()) {
+      var validator = validatorFactory.getValidator();
+      InventoryPublicationPreflightRequest empty = new InventoryPublicationPreflightRequest(
+          ID, ID, 1L, "a".repeat(64), List.of());
+      assertThat(validator.validate(empty)).isEmpty();
+
+      InventoryPublicationPreflightRequest missing = new InventoryPublicationPreflightRequest(
+          ID, ID, 1L, "a".repeat(64), null);
+      assertThat(validator.validate(missing))
+          .extracting(violation -> violation.getPropertyPath().toString())
+          .contains("findings");
+
+      InventoryPublicationFindingInput finding = (InventoryPublicationFindingInput)
+          sample(InventoryPublicationFindingInput.class, "inventoryPublicationFindingInput");
+      InventoryPublicationPreflightRequest oversized = new InventoryPublicationPreflightRequest(
+          ID, ID, 1L, "a".repeat(64), java.util.Collections.nCopies(5001, finding));
+      assertThat(validator.validate(oversized))
+          .extracting(violation -> violation.getPropertyPath().toString())
+          .contains("findings");
+    }
   }
 
   @Test
@@ -489,6 +525,8 @@ class MaintenanceOpenApiParityTest {
     MaintenanceApplicationService service = serviceFixture();
     InventoryMaintenanceService inventory = inventoryFixture();
     InventoryPublicationReconciliationService publications = publicationsFixture();
+    InventoryAuthoritativeOutcomeService authoritativeOutcomes =
+        authoritativeOutcomesFixture();
     LogisticsReturnShortageService logistics = logisticsFixture();
     RepairCapacitySettingsService settings = settingsFixture();
     RepairComplexitySettingsService complexitySettings = complexitySettingsFixture();
@@ -505,7 +543,8 @@ class MaintenanceOpenApiParityTest {
             new FurnitureEquipmentLinkController(furnitureLinks, authorizer),
             new MaintenanceEstimateController(service, logistics, authorizer),
             new MaintenanceRepairController(service, authorizer, dispositions),
-            new MaintenanceInventoryController(inventory, publications, service, authorizer),
+            new MaintenanceInventoryController(
+                inventory, publications, authoritativeOutcomes, service, authorizer),
             new PropertyDispositionController(dispositions, authorizer),
             new PropertyDispositionInventoryController(dispositions, authorizer),
             new WarehouseOperationMarkRecoveryController(operationMarkRecovery, authorizer),
@@ -687,6 +726,18 @@ class MaintenanceOpenApiParityTest {
         "InventoryPublicationApplyRequest",
         "200",
         "InventoryPublicationApplyResult",
+        true,
+        "400", "401", "403", "404", "409", "422", "503"));
+    result.add(op("PUT",
+        "/api/internal/maintenance/v1/inventory/outcomes/{inventoryId}/findings/{findingId}/no-work",
+        "applyInventoryNoWorkOutcome",
+        MaintenanceInventoryController.class,
+        "applyNoWorkOutcome",
+        List.of(path("inventoryId"), path("findingId"), requiredHeader("Idempotency-Key")),
+        InventoryNoWorkOutcomeRequest.class,
+        "InventoryNoWorkOutcomeRequest",
+        "200",
+        "InventoryNoWorkOutcomeResult",
         true,
         "400", "401", "403", "404", "409", "422", "503"));
     result.add(op("PUT",
@@ -1584,6 +1635,23 @@ class MaintenanceOpenApiParityTest {
     return publications;
   }
 
+  private static InventoryAuthoritativeOutcomeService authoritativeOutcomesFixture()
+      throws Exception {
+    InventoryAuthoritativeOutcomeService authoritativeOutcomes =
+        mock(InventoryAuthoritativeOutcomeService.class);
+    InventoryNoWorkOutcomeResult response =
+        (InventoryNoWorkOutcomeResult)
+            sample(InventoryNoWorkOutcomeResult.class, "inventoryNoWorkOutcomeResult");
+    when(
+            authoritativeOutcomes.applyNoWork(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any()))
+        .thenReturn(response);
+    return authoritativeOutcomes;
+  }
+
   private static LogisticsReturnShortageService logisticsFixture() throws Exception {
     LogisticsReturnShortageService logistics = mock(LogisticsReturnShortageService.class);
     ReturnEstimateSource response =
@@ -1749,6 +1817,10 @@ class MaintenanceOpenApiParityTest {
       }
       if (recordType == PrepareTransferRepairResponse.class
           && "assetStatus".equals(components[index].getName())) {
+        arguments[index] = "FREE";
+      }
+      if (recordType == InventoryNoWorkOutcomeRequest.class
+          && "desiredStatus".equals(components[index].getName())) {
         arguments[index] = "FREE";
       }
       if (recordType == WarehouseOperationMarkRecoveryResponse.class
@@ -1968,6 +2040,8 @@ class MaintenanceOpenApiParityTest {
         InventoryPublicationSuccessorStatus.class,
         "InventoryPublicationSuccessorStatus");
     values.put(InventoryPublicationApplyResult.class, "InventoryPublicationApplyResult");
+    values.put(InventoryNoWorkOutcomeRequest.class, "InventoryNoWorkOutcomeRequest");
+    values.put(InventoryNoWorkOutcomeResult.class, "InventoryNoWorkOutcomeResult");
     values.put(InventoryRepairSnapshotRequest.class, "InventoryRepairSnapshotRequest");
     values.put(InventoryRepairFact.class, "InventoryRepairFact");
     values.put(InventoryRepairSnapshot.class, "InventoryRepairSnapshot");

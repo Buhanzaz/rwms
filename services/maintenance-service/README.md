@@ -33,6 +33,82 @@ Private routes are narrow by design:
 - `/api/internal/maintenance/v1/logistics/**` supports logistics return-estimate and
   repair-place orchestration.
 
+Inventory publication preflight keeps `findings` required and bounded, accepts an empty list when
+the final inventory plan contains no maintenance work, and always returns an empty `candidates`
+array for each work finding. The latest completed inventory is authoritative, so an active estimate
+or repair is predecessor evidence rather than a collision that requires a caller-selected merge or
+replacement.
+
+Every completed-inventory finding with work targets one full frozen `REPAIR`, including
+`AFTER_RENT`; the old inventory-only estimate materialization path no longer exists. Historical
+`CREATE`, `REPLACE`, and `MERGE` values remain valid immutable request evidence, but all execute as
+full authoritative replacement. The exact no-work boundary
+`PUT /api/internal/maintenance/v1/inventory/outcomes/{inventoryId}/findings/{findingId}/no-work`
+creates no estimate or repair and leaves no non-terminal maintenance target for a `FREE` finding.
+
+Both work and no-work flows durably capture every non-terminal DRAFT estimate and active repair,
+cancel maintenance-owned task-board work and driver movement, release operation leases and repair
+places through their owners, and only then supersede local estimates, repairs, and stages. Rows,
+lines, stages, evidence, media references, and event history are retained; the workflow does not
+delete maintenance history. Terminal `ACCEPTED` or `WRITTEN_OFF` repair truth, warehouse/asset
+mismatch, and stale or ambiguous completed-inventory ordering fail before any local or remote
+effect.
+
+Apply requires `authoritativeAssetVersion`, returned by asset-service after it applies the
+inventory outcome. A lagging local asset projection is accepted only while its version is within
+the inclusive `assetVersion..authoritativeAssetVersion` range. `LOST`, `WRITTEN_OFF`, warehouse
+mismatch, and a projection outside that range remain conflicts. A completed idempotency key returns
+its frozen response without new effects. A new key for the same immutable source re-discovers and
+supersedes non-terminal predecessors created after the previous success while preserving the exact
+same-source repair and never creating a duplicate.
+For no-work reassertion, an increased `authoritativeAssetVersion` from the same immutable source is
+treated as a newer technical fence, not as a different inventory decision. The original outcome
+coordinator remains immutable, while the new idempotency key retains its exact request fingerprint
+and response in a separate receipt.
+
+Publication registrations and immutable source rows written before the V45 coordinator remain
+audit history and do not block the latest completed inventory. An operation-only row or a source
+that produced an estimate is treated as predecessor evidence. If an older repair source was
+previously frozen into an already-`APPLIED` coordinator, a new idempotency key atomically creates
+one replacement repair, supersedes that legacy repair, and binds the current generation in a new
+completed receipt without rewriting the old source, outcome, or receipt. The outcome lock
+serializes generation creation, and a repair-specific compatibility queue key cannot collide with
+the legacy repair's quarantined `QUEUE_REPAIR`. Same-key replay remains frozen; a current V45
+repair source is reasserted rather than replaced.
+Repair reads expose `inventorySource` through the read-only
+[`InventoryRepairSourceReadProjection`](src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryRepairSourceReadProjection.java).
+It resolves the newest completed receipt whose frozen response names the repair, then the
+authoritative outcome's original `targetRepairId`, and finally a legacy `InventoryRepairSource`.
+Authoritative references retain the inventory/finding identity, `findingRevision`,
+`finalPlanSha256` as the plan fingerprint, and `requestSha256` as the source fingerprint, so a
+client can address the immutable inventory-finding media owner without rewriting media rows.
+A legacy repair whose exact lease owner and fencing token remain in `RECONCILIATION_REQUIRED` is
+released through the asset owner before replacement. The asset response may prove either
+`RELEASED` or naturally `EXPIRED`; the lease ID, owner and fencing token must still match and its
+version cannot move backwards. An already locally `RELEASED` lease is not called again.
+When a newer inventory generation preserves that current repair, maintenance reasserts the
+calculated `REPAIR`/`CAPITAL_REPAIR` asset status and recreates missing execution work under
+generation-specific keys. Ordinary inbound `DELIVER_TO_REPAIR` work identifies the authoritative
+inventory finding even when the current repair was adopted from a pre-V45 source. An external
+capital repair with `movementToRepair=true` instead owns a separate outbound
+`CAPITAL_TO_PRODUCTION` task whose source is that capital repair.
+
+A work apply first persists an `INVENTORY` repair in `DRAFT` with the full frozen plan and one
+durable `ASSET/QUEUE_REPAIR` reconciliation. The existing queue reconciler acquires the lease and
+changes the asset status. For `forceCapitalRepair=true`, it uses `QUEUE_TO_CAPITAL_REPAIR`, completes
+the local repair as external capital (`COMPLETED/PENDING`, `EXTERNAL_CAPITAL`), creates no ordinary
+task-board task, and, when `movementToRepair=true`, creates its separate logistics
+`CAPITAL_TO_PRODUCTION` driver task. For ordinary work it queues the repair and either registers the
+task-board task directly or, when `movementToRepair=true`, creates the logistics
+`DELIVER_TO_REPAIR` driver task and registers repair work after delivery.
+
+Publication validates the fingerprint of the exact raw frozen snapshot before any compatibility
+adaptation. For schema version 1 only, a historical snapshot that copied the same non-empty
+aggregate media list onto every line is executed with those line copies cleared in memory; the
+aggregate evidence remains attached once. No other version-1 shape is normalized, and version 2
+continues to use the strict current validation. The raw snapshot and fingerprint are stored
+unchanged, so this requires no database rewrite or migration.
+
 Private callers use service credentials, not a forwarded user token. The authorizer checks exact
 service identity, audience and single-purpose scope for inventory and logistics. The HTTP security
 chain is stateless OAuth2/JWT; dev auth bypass is limited to the `dev` profile and rejected by the
@@ -108,7 +184,7 @@ application owners:
 | `InventoryMaintenanceService` | Stable private inventory-boundary facade over freeze, upsert and repair-snapshot projection |
 | Inventory maintenance freeze/upsert/validation/transaction collaborators | Frozen-plan admission, catalog/routing/media validation and isolated local transactions |
 | `InventoryPublicationReconciliationService` | Stable completed-inventory facade over preflight projection and durable apply |
-| Inventory publication source/pre-start/target/materialization collaborators | Source replay, replacement compensation, target selection and estimate/repair materialization |
+| Inventory authoritative outcome/source/target/materialization collaborators | Completed-at watermark, receipt replay/reassertion, predecessor compensation, local supersession and sole full-plan repair materialization |
 | `PropertyDispositionApplicationService` | Stable decision facade over creation, furniture materialization, review/recovery, reads and processing callbacks |
 | Property-disposition boundary, persistence, actor, repair-chain and finalization collaborators | Transaction/lock/hash mechanics, event parity, repair-chain validation and terminal repair effects |
 | `HttpMaintenanceDependencyGateway` | Stable private transport facade over warehouse, asset, logistics, task-board and media owners |
@@ -127,11 +203,12 @@ freeze and upsert own their separate commands, and snapshot projection is
 read-only. Routing and warehouse preflight calls run only after the short local
 transaction has rolled back and released its locks.
 
-Completed-inventory publication uses the same remote-outside-lock pattern. Its
-pre-start replacement saga owns compensation and successor state, while source,
-target, estimate, repair and plan components remain one-way dependencies of the
-apply owner. Preflight is an independent read projection and cannot initiate a
-publication effect.
+Completed-inventory publication uses the same remote-outside-lock pattern. Its authoritative
+outcome coordinator owns permanent receipts, per-asset completed-at ordering, target-effect
+ledgers, lost-response recovery, local supersession, exact-source reassertion and receipt-bound
+compatibility generations for immutable pre-coordinator source history. Source, target, repair and
+plan components remain one-way dependencies of the apply owner. Preflight is an independent read
+projection and cannot initiate a publication effect.
 
 Property disposition has five one-way application branches. Creation,
 furniture materialization and review/recovery use the same narrow command,
@@ -150,6 +227,13 @@ cases, and none refers back to the gateway facade.
 
 Flyway migrations under `src/main/resources/db/migration/` are the only schema authority. JPA uses
 `ddl-auto=validate`; do not enable Hibernate schema mutation or add cross-service foreign keys.
+
+Migration
+[`V45__authoritative_inventory_maintenance_outcomes.sql`](src/main/resources/db/migration/V45__authoritative_inventory_maintenance_outcomes.sql)
+adds permanent outcome, receipt, per-asset watermark, and predecessor-effect ledger rows. Remote
+attempts are committed before calls made outside local transactions; a lost response is resolved by
+owner readback or the same stable cancellation identity, never by fabricated success. Local domain
+rows are marked historical only after every required remote ledger is terminal.
 
 A committed aggregate fact is written to the local event stream, snapshot/checkpoint and
 transactional outbox in the same PostgreSQL transaction. Kafka delivery is at-least-once: the relay
@@ -225,6 +309,7 @@ does not drain a backlog; recovery remains an explicit reviewed operation.
 - `src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceReconciliationUseCases.java`
 - `src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryMaintenanceService.java`
 - `src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryPublicationReconciliationService.java`
+- `src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryAuthoritativeOutcomeService.java`
 - `src/main/java/dev/buhanzaz/rwms/maintenance/disposition/application/PropertyDispositionApplicationService.java`
 - `src/main/java/dev/buhanzaz/rwms/maintenance/eventing/MaintenanceEventStore.java`
 - `src/main/java/dev/buhanzaz/rwms/maintenance/eventing/transport/MaintenanceKafkaOutboxRelay.java`

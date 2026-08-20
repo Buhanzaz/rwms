@@ -3,9 +3,14 @@ package dev.buhanzaz.rwms.inventory.api;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.InventoryActorView;
+import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.RefreshSessionRequest;
+import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.RecalculateInventoryOutcomeRequest;
+import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.OutcomeRecalculation;
+import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.PublicationBatch;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.SessionView;
 import dev.buhanzaz.rwms.inventory.domain.FurnitureReconciliationState;
 import dev.buhanzaz.rwms.inventory.domain.InventoryReviewStage;
@@ -91,6 +96,53 @@ class InventoryControllerConditionalGetTest {
     String changed = active(null).getHeaders().getETag();
 
     assertThat(changed).isNotEqualTo(original);
+  }
+
+  @Test
+  void refreshReturnsTheIdempotentSessionCommandResponse() {
+    UUID inventoryId = UUID.randomUUID();
+    UUID idempotencyKey = UUID.randomUUID();
+    RefreshSessionRequest request = new RefreshSessionRequest(4L);
+    SessionView refreshed = session(5, 7);
+    when(inventory.refresh(jwt, inventoryId, idempotencyKey, request)).thenReturn(refreshed);
+
+    ResponseEntity<SessionView> response =
+        controller.refresh(jwt, inventoryId, idempotencyKey, request);
+
+    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    assertThat(response.getHeaders().getFirst("Idempotency-Replayed")).isEqualTo("false");
+    assertThat(response.getBody()).isSameAs(refreshed);
+    verify(inventory).refresh(jwt, inventoryId, idempotencyKey, request);
+  }
+
+  @Test
+  void outcomeRecoveryReturnsAcceptedIdempotentSchedulingResult() {
+    UUID inventoryId = UUID.randomUUID();
+    UUID idempotencyKey = UUID.randomUUID();
+    String sha256 = "a".repeat(64);
+    RecalculateInventoryOutcomeRequest request =
+        new RecalculateInventoryOutcomeRequest(8L, 2L, sha256);
+    OutcomeRecalculation result =
+        new OutcomeRecalculation(
+            inventoryId,
+            8,
+            2,
+            sha256,
+            FurnitureReconciliationState.PENDING,
+            10,
+            81,
+            52,
+            new PublicationBatch(inventoryId, "PENDING", List.of()));
+    when(inventory.recalculateOutcome(jwt, inventoryId, idempotencyKey, request))
+        .thenReturn(result);
+
+    ResponseEntity<OutcomeRecalculation> response =
+        controller.recalculateOutcome(jwt, inventoryId, idempotencyKey, request);
+
+    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+    assertThat(response.getHeaders().getFirst("Idempotency-Replayed")).isEqualTo("false");
+    assertThat(response.getBody()).isSameAs(result);
+    verify(inventory).recalculateOutcome(jwt, inventoryId, idempotencyKey, request);
   }
 
   private ResponseEntity<SessionView> active(String ifNoneMatch) {

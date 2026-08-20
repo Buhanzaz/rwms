@@ -90,6 +90,10 @@ public class DriverTaskService {
     return createInternal(actorSubjectId, idempotencyKey, request, admission);
   }
 
+  /**
+   * Creates scheduled maintenance movement work without bypassing the logistics queue. Ordinary
+   * repair delivery and external-capital production movement are the only accepted kinds.
+   */
   @Transactional
   public CreateResult createFromMaintenance(UUID idempotencyKey, CreateDriverTaskRequest request) {
     if (idempotencyKey == null || request == null) {
@@ -99,14 +103,16 @@ public class DriverTaskService {
     if (!List.of(
             DriverTaskSourceType.REPAIR,
             DriverTaskSourceType.ESTIMATE,
-            DriverTaskSourceType.INVENTORY)
+            DriverTaskSourceType.INVENTORY,
+            DriverTaskSourceType.CAPITAL_REPAIR)
         .contains(request.sourceType())) {
       throw new IllegalArgumentException(
-          "Maintenance intake requires a repair, estimate, or inventory source");
+          "Maintenance intake requires a repair, estimate, inventory, or capital-repair source");
     }
-    if (request.kind() != DriverTaskKind.DELIVER_TO_REPAIR) {
+    if (request.kind() != DriverTaskKind.DELIVER_TO_REPAIR
+        && request.kind() != DriverTaskKind.CAPITAL_TO_PRODUCTION) {
       throw new IllegalArgumentException(
-          "Maintenance intake cannot create removal or capital movement tasks");
+          "Maintenance intake supports only repair delivery or capital movement tasks");
     }
     if (request.activateNow()) {
       throw new IllegalArgumentException(
@@ -119,6 +125,10 @@ public class DriverTaskService {
             MAINTENANCE_ACTOR, CREATE_OPERATION, idempotencyKey, admissionRequirements(request)));
   }
 
+  /**
+   * Persists the same maintenance movement after warehouse admission has been obtained outside the
+   * domain decision.
+   */
   @Transactional
   public CreateResult createFromMaintenance(
       UUID idempotencyKey, CreateDriverTaskRequest request, AdmissionTicket admission) {
@@ -129,14 +139,16 @@ public class DriverTaskService {
     if (!List.of(
             DriverTaskSourceType.REPAIR,
             DriverTaskSourceType.ESTIMATE,
-            DriverTaskSourceType.INVENTORY)
+            DriverTaskSourceType.INVENTORY,
+            DriverTaskSourceType.CAPITAL_REPAIR)
         .contains(request.sourceType())) {
       throw new IllegalArgumentException(
-          "Maintenance intake requires a repair, estimate, or inventory source");
+          "Maintenance intake requires a repair, estimate, inventory, or capital-repair source");
     }
-    if (request.kind() != DriverTaskKind.DELIVER_TO_REPAIR) {
+    if (request.kind() != DriverTaskKind.DELIVER_TO_REPAIR
+        && request.kind() != DriverTaskKind.CAPITAL_TO_PRODUCTION) {
       throw new IllegalArgumentException(
-          "Maintenance intake cannot create removal or capital movement tasks");
+          "Maintenance intake supports only repair delivery or capital movement tasks");
     }
     if (request.activateNow()) {
       throw new IllegalArgumentException(

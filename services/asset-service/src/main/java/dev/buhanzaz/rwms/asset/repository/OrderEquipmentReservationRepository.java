@@ -33,6 +33,22 @@ public interface OrderEquipmentReservationRepository
       @Param("equipmentIds") Collection<UUID> equipmentIds,
       @Param("state") OrderEquipmentReservationState state);
 
+  /** Locks every active reservation whose absolute furniture quantity will be replaced. */
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select reservation
+      from OrderEquipmentReservation reservation
+      where reservation.warehouseId = :warehouseId
+        and reservation.equipmentId in :equipmentIds
+        and reservation.state = :state
+      order by reservation.equipmentId, reservation.orderId, reservation.id
+      """)
+  List<OrderEquipmentReservation> findAllActiveByWarehouseAndEquipmentIdsForUpdate(
+      @Param("warehouseId") UUID warehouseId,
+      @Param("equipmentIds") Collection<UUID> equipmentIds,
+      @Param("state") OrderEquipmentReservationState state);
+
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query(
       """

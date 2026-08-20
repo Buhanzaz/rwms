@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.maintenance.service;
 
 import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.*;
 
+import dev.buhanzaz.rwms.maintenance.domain.InventoryAuthoritativeOutcome;
 import dev.buhanzaz.rwms.maintenance.domain.InventoryPublicationSource;
 import dev.buhanzaz.rwms.maintenance.domain.InventoryPublicationSourceId;
 import dev.buhanzaz.rwms.maintenance.domain.InventoryPublicationSourceOperation;
@@ -24,8 +25,8 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Owns immutable inventory-publication source identity, idempotency registration, replay mapping,
- * and the durable successor relation associated with a published source.
+ * Owns immutable inventory-publication source identity, historical registration compatibility,
+ * replay mapping, and the durable successor relation associated with a published source.
  */
 @Component
 final class InventoryPublicationSourceLifecycle {
@@ -70,6 +71,10 @@ final class InventoryPublicationSourceLifecycle {
     value.put("findingRevision", request.findingRevision());
     value.put("assetId", request.assetId());
     value.put("assetVersion", request.assetVersion());
+    value.put("inventoryCompletedAt", request.inventoryCompletedAt());
+    // The effective command result is a retry-time fence, not immutable final-plan evidence. It is
+    // deliberately excluded so a durable pre-start intent created before the asset outcome can be
+    // resumed with the same source identity after the projection catches up.
     value.put("planFingerprintSha256", request.planFingerprintSha256());
     value.put("priority", request.priority());
     value.put("movementToRepair", request.movementToRepair());
@@ -85,6 +90,42 @@ final class InventoryPublicationSourceLifecycle {
     return canonicalizer.sha256(value);
   }
 
+  /**
+   * Locks source history for an authoritative outcome. A registration or immutable source that
+   * predates the V45 coordinator is predecessor evidence; the coordinator and its receipts fence
+   * the current command without rewriting that evidence.
+   */
+  InventoryPublicationRegisteredSource registerAuthoritativeAndLock(
+      InventoryPublicationSourceId sourceId,
+      String requestSha256,
+      boolean discardOnRollback,
+      InventoryAuthoritativeOutcome coordinator) {
+    registerConcurrentSafe(() -> registrar.register(sourceId, requestSha256));
+    if (discardOnRollback) {
+      discardUnpublishedOperationOnRollback(sourceId, requestSha256);
+    }
+    InventoryPublicationSourceOperation operation = requireOperation(sourceId);
+    InventoryPublicationSource replay = sources.findByIdForUpdate(sourceId).orElse(null);
+    boolean historicalReplay =
+        replay != null
+            && (coordinator == null
+                || !requestSha256.equals(replay.getRequestSha256())
+                || !"REPAIR".equals(replay.getTargetKind())
+                || replay.getRepairId() == null
+                || replay.getCreatedAt().isBefore(coordinator.getCreatedAt()));
+    if (replay != null && !historicalReplay) {
+      requireSameRequest(requestSha256, replay.getRequestSha256());
+    }
+    return new InventoryPublicationRegisteredSource(operation, replay, historicalReplay);
+  }
+
+  /**
+   * Locks the permanent source registration; the authoritative coordinator owns its fingerprint.
+   */
+  void requireAuthoritativeRegistration(InventoryPublicationSourceId sourceId) {
+    requireOperation(sourceId);
+  }
+
   InventoryPublicationRegisteredSource registerAndLock(
       InventoryPublicationSourceId sourceId, String requestSha256, boolean discardOnRollback) {
     registerConcurrentSafe(() -> registrar.register(sourceId, requestSha256));
@@ -97,13 +138,25 @@ final class InventoryPublicationSourceLifecycle {
     if (replay != null) {
       requireSameRequest(requestSha256, replay.getRequestSha256());
     }
-    return new InventoryPublicationRegisteredSource(operation, replay);
+    return new InventoryPublicationRegisteredSource(operation, replay, false);
   }
 
   InventoryPublicationSource requireReplayOrNull(
       InventoryPublicationSourceId sourceId, String requestSha256) {
     InventoryPublicationSource source = sources.findByIdForUpdate(sourceId).orElse(null);
     if (source != null) {
+      requireSameRequest(requestSha256, source.getRequestSha256());
+    }
+    return source;
+  }
+
+  /** Locks a source row, validating it only when it is the coordinator's current repair source. */
+  InventoryPublicationSource requireAuthoritativeReplayOrNull(
+      InventoryPublicationSourceId sourceId,
+      String requestSha256,
+      boolean historicalReplay) {
+    InventoryPublicationSource source = sources.findByIdForUpdate(sourceId).orElse(null);
+    if (source != null && !historicalReplay) {
       requireSameRequest(requestSha256, source.getRequestSha256());
     }
     return source;
@@ -118,6 +171,12 @@ final class InventoryPublicationSourceLifecycle {
     if (operation != null && !requestSha256.equals(operation.getRequestSha256())) return true;
     InventoryPublicationSource source = sources.findByIdForUpdate(sourceId).orElse(null);
     return source != null && !requestSha256.equals(source.getRequestSha256());
+  }
+
+  /** Locks old work registration/source rows so a FREE outcome can preserve them as history. */
+  InventoryPublicationSource lockHistoricalSourceOrNull(InventoryPublicationSourceId sourceId) {
+    operations.findByIdForUpdate(sourceId);
+    return sources.findByIdForUpdate(sourceId).orElse(null);
   }
 
   boolean abortUnpublished(
@@ -187,6 +246,44 @@ final class InventoryPublicationSourceLifecycle {
 
   InventoryPublicationWorkflowResult replay(InventoryPublicationSource source) {
     return new InventoryPublicationWorkflowResult(result(source), true);
+  }
+
+  /**
+   * Builds the current repair response while retaining a pre-coordinator immutable source row as
+   * historical evidence. The V45 outcome receipt, rather than that old row, persists this result.
+   */
+  InventoryPublicationWorkflowResult authoritativeReplacement(
+      InventoryPublicationSourceWrite write) {
+    if (write.outcome() != InventoryPublicationOutcome.CREATED
+        || write.created().kind() != InventoryPublicationTargetKind.REPAIR
+        || write.created().repairId() == null) {
+      throw new IllegalArgumentException(
+          "Authoritative historical-source replacement is incomplete");
+    }
+    InventoryPublicationSupersededTarget superseded = write.superseded();
+    InventoryPublicationSourceReference reference = new InventoryPublicationSourceReference(
+        write.sourceId().getInventoryId(),
+        write.sourceId().getFinalPlanVersion(),
+        write.sourceId().getFindingId(),
+        write.finding().findingRevision(),
+        write.request().finalPlanSha256(),
+        write.finding().planFingerprintSha256(),
+        write.request().strategy(),
+        write.request().selectedTargetKind(),
+        write.request().selectedTargetId(),
+        superseded == null ? null : superseded.kind(),
+        superseded == null ? null : superseded.id());
+    return new InventoryPublicationWorkflowResult(
+        new InventoryPublicationApplyResult(
+            reference,
+            InventoryPublicationOutcome.CREATED,
+            InventoryPublicationTargetKind.REPAIR,
+            write.created().repairId(),
+            null,
+            write.created().repairId(),
+            null,
+            write.delta()),
+        false);
   }
 
   InventoryPublicationWorkflowResult replayRequired(
@@ -311,7 +408,9 @@ final class InventoryPublicationSourceLifecycle {
 
 /** Locked source-operation state and an optional immutable replay row. */
 record InventoryPublicationRegisteredSource(
-    InventoryPublicationSourceOperation operation, InventoryPublicationSource replay) {}
+    InventoryPublicationSourceOperation operation,
+    InventoryPublicationSource replay,
+    boolean historicalReplay) {}
 
 /** Identifiers of the maintenance aggregate produced by one publication path. */
 record InventoryPublicationCreatedTarget(

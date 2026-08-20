@@ -1389,12 +1389,18 @@ public final class MaintenanceApiModels {
     }
   }
 
+  /**
+   * Immutable final-plan identity and its maintenance candidate inputs.
+   *
+   * <p>An empty findings list is valid when the completed inventory contains no maintenance work;
+   * the list itself remains required and bounded.
+   */
   public record InventoryPublicationPreflightRequest(
       @NotNull UUID inventoryId,
       @NotNull UUID warehouseId,
       @NotNull @Min(1) Long finalPlanVersion,
       @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String finalPlanSha256,
-      @NotEmpty @Size(max = 5000)
+      @NotNull @Size(max = 5000)
           List<@NotNull @Valid InventoryPublicationFindingInput> findings) {
     public InventoryPublicationPreflightRequest {
       findings = findings == null ? null : List.copyOf(findings);
@@ -1461,6 +1467,14 @@ public final class MaintenanceApiModels {
       @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String finalPlanSha256,
       @NotNull List<InventoryPublicationPreflightFinding> findings) {}
 
+  /**
+   * Applies one immutable completed-inventory finding after asset-service has made that finding's
+   * operational outcome authoritative.
+   *
+   * <p>{@code assetVersion} is the version frozen in the final inventory plan and remains source
+   * evidence. {@code authoritativeAssetVersion} is the effective asset version returned by the
+   * owning asset command and is the version attached to any newly materialized repair.
+   */
   public record InventoryPublicationApplyRequest(
       @NotNull UUID warehouseId,
       @NotNull @Min(1) Long finalPlanVersion,
@@ -1468,6 +1482,8 @@ public final class MaintenanceApiModels {
       @NotNull @Min(1) Long findingRevision,
       @NotNull UUID assetId,
       @NotNull @Min(0) Long assetVersion,
+      @NotNull @Min(0) Long authoritativeAssetVersion,
+      @NotNull OffsetDateTime inventoryCompletedAt,
       @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String planFingerprintSha256,
       @NotNull @Min(1) @Max(5) Integer priority,
       @JsonProperty(required = true) boolean movementToRepair,
@@ -1489,6 +1505,8 @@ public final class MaintenanceApiModels {
         Long findingRevision,
         UUID assetId,
         Long assetVersion,
+        Long authoritativeAssetVersion,
+        OffsetDateTime inventoryCompletedAt,
         String planFingerprintSha256,
         Integer priority,
         boolean movementToRepair,
@@ -1507,6 +1525,8 @@ public final class MaintenanceApiModels {
           findingRevision,
           assetId,
           assetVersion,
+          authoritativeAssetVersion,
+          inventoryCompletedAt,
           planFingerprintSha256,
           priority,
           movementToRepair,
@@ -1526,6 +1546,16 @@ public final class MaintenanceApiModels {
       forceCapitalRepair = Boolean.TRUE.equals(forceCapitalRepair);
     }
 
+    /** Ensures the post-command asset fence never predates the frozen inventory evidence. */
+    @AssertTrue(message = "authoritativeAssetVersion must be greater than or equal to assetVersion")
+    @JsonIgnore
+    public boolean isAuthoritativeAssetVersionValid() {
+      return assetVersion == null
+          || authoritativeAssetVersion == null
+          || authoritativeAssetVersion >= assetVersion;
+    }
+
+    /** Reconstructs the immutable finding evidence without replacing its observed asset version. */
     public InventoryPublicationFindingInput finding(UUID findingId) {
       return new InventoryPublicationFindingInput(
           findingId,
@@ -1541,6 +1571,46 @@ public final class MaintenanceApiModels {
           media,
           snapshotSchemaVersion,
           forceCapitalRepair);
+    }
+  }
+
+  /**
+   * Applies an authoritative FREE outcome without creating a maintenance estimate or repair.
+   * Existing non-terminal maintenance work is superseded through the same durable workflow used
+   * by a work-producing inventory finding.
+   */
+  public record InventoryNoWorkOutcomeRequest(
+      @NotNull UUID warehouseId,
+      @NotNull UUID assetId,
+      @NotNull OffsetDateTime inventoryCompletedAt,
+      @NotNull @Min(1) Long finalPlanVersion,
+      @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String finalPlanSha256,
+      @NotNull @Min(1) Long findingRevision,
+      @NotNull @Min(0) Long authoritativeAssetVersion,
+      @NotBlank @Pattern(regexp = "^FREE$") String desiredStatus) {}
+
+  /** Durable audit result of authoritative inventory cleanup that created no new work target. */
+  public record InventoryNoWorkOutcomeResult(
+      @NotNull UUID inventoryId,
+      @NotNull UUID findingId,
+      @NotNull UUID assetId,
+      @NotNull List<UUID> supersededEstimateIds,
+      @NotNull List<UUID> supersededRepairIds,
+      @NotNull List<UUID> cancelledExternalTaskIds,
+      @NotNull List<UUID> cancelledDriverTaskIds,
+      @NotNull List<UUID> releasedLeaseIds,
+      boolean replay) {
+    public InventoryNoWorkOutcomeResult {
+      supersededEstimateIds = sortedUnique(supersededEstimateIds);
+      supersededRepairIds = sortedUnique(supersededRepairIds);
+      cancelledExternalTaskIds = sortedUnique(cancelledExternalTaskIds);
+      cancelledDriverTaskIds = sortedUnique(cancelledDriverTaskIds);
+      releasedLeaseIds = sortedUnique(releasedLeaseIds);
+    }
+
+    private static List<UUID> sortedUnique(List<UUID> values) {
+      if (values == null) return List.of();
+      return values.stream().distinct().sorted().toList();
     }
   }
 

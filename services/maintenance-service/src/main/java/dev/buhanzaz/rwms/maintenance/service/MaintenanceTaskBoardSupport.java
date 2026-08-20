@@ -96,6 +96,19 @@ final class MaintenanceTaskBoardSupport {
             "kind", "DELIVER_TO_REPAIR"));
   }
 
+  /** Enqueues the dedicated outbound movement for an external capital repair. */
+  protected void enqueueCapitalRepairMovement(MaintenanceRepair repair, UUID driverTaskKey) {
+    if (!repair.isMovementToRepair()) return;
+    reconciliations.enqueue(
+        repair.getId(),
+        "LOGISTICS",
+        "CREATE_DRIVER_TASK",
+        driverTaskKey,
+        Map.of(
+            "repairId", repair.getId().toString(),
+            "kind", "CAPITAL_TO_PRODUCTION"));
+  }
+
   protected boolean requiresDriverDeliveryToRepair(MaintenanceRepair repair) {
     return repair.isMovementToRepair();
   }

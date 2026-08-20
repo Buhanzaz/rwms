@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Asset Service API
-  version: 1.12.0
+  version: 1.14.0
   description: >-
     Stage 5 canonical asset boundary plus narrow Stage 7 inventory-service and
     Stage 8 logistics-service private surfaces. Rental-item comments and
@@ -702,7 +702,7 @@ paths:
       description: Rechecks the exact maintenance owner and returns the original response for an identical replay.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReleaseMaintenanceOperationLeaseRequest' } } } }
       responses:
-        '200': { description: Released lease or original subject-bound replay., content: { application/json: { schema: { $ref: '#/components/schemas/OperationLease' } } } }
+        '200': { description: Released lease, original subject-bound replay, or same-owner terminal RELEASED/EXPIRED recovery with the matching fencing token., content: { application/json: { schema: { $ref: '#/components/schemas/OperationLease' } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
@@ -1733,8 +1733,14 @@ paths:
         Atomically applies one absolute count for every current active FURNITURE position and the
         selected cabins. Every item may carry an empty cabins list for a stock-only review.
         inventoryId is a permanent source identity: the exact request replays and a changed request
-        conflicts. The current snapshot, catalogue and live lease, hold and order
-        reservation guards are checked while the affected asset-owned balance streams are locked.
+        conflicts. expectedSnapshotSha256 remains mandatory immutable source evidence in that
+        request identity, but is not compared with a new full snapshot: non-terminal cabin
+        status/version and physical quantities may legitimately drift before reconciliation. Under
+        current locks the command still rejects missing, moved or terminal LOST/WRITTEN_OFF cabins,
+        cabin-scope mismatch, and an active FURNITURE catalog set/version change. It then supersedes
+        live cabin leases, presentation/order bindings, equipment reservations and allocation
+        holds while preserving their rows and normal audit events, and replaces the affected
+        asset-owned balance quantities with the reviewed absolute counts.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryFurnitureReconciliationRequest' } } } }
       responses:
         '204':
@@ -1745,6 +1751,45 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/DependencyFailure' }
+  /api/internal/asset/v1/inventory/outcomes/{inventoryId}/findings/{findingId}:
+    parameters:
+      - { name: inventoryId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: findingId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    put:
+      operationId: applyInventoryAssetOutcome
+      description: >-
+        Requires SERVICE inventory-service with exactly asset.inventory. Applies the latest
+        completed final-plan finding as authoritative current truth for one non-terminal cabin.
+        A PRESENT passport observation replaces the cabin type, dimensions, finishing, category,
+        characteristic set and linoleum with exact active catalogue values; ABSENT preserves the
+        current passport. Catalogue display names are resolved only inside asset-service and never
+        create catalogue rows. Passport and status changes are committed atomically and retain the
+        ordinary rental-item event history.
+        A first or newer FREE, REPAIR or CAPITAL_REPAIR source supersedes active order-unit
+        reservations, operation leases, presentation holds and transfer state without deleting
+        their history. Another key for the same latest immutable source reasserts status,
+        reservations, holds and transfer state but preserves the active operation lease because it
+        may already belong to this finding's repair; maintenance or logistics supersedes an
+        unrelated predecessor lease under its exact owner and fence. The exact idempotency key
+        replays its stored result, while a strictly older completed inventory is rejected
+        permanently.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InventoryOutcomeRequest' }
+      responses:
+        '200':
+          description: Applied/reasserted outcome or exact successful replay.
+          headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InventoryOutcomeResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/internal/asset/v1/inventory/source-assets:
     post:
       operationId: createInventorySourceAsset
@@ -3895,6 +3940,82 @@ components:
         validatedAt: { type: string, format: date-time }
         validationDigest: { $ref: '#/components/schemas/Sha256' }
         assets: { type: array, maxItems: 5000, items: { $ref: '#/components/schemas/InventoryValidationItem' } }
+    InventoryOutcomeStatus:
+      type: string
+      enum: [FREE, REPAIR, CAPITAL_REPAIR]
+    InventoryOutcomeRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, assetId, inventoryCompletedAt, finalPlanVersion, finalPlanSha256, findingRevision, desiredStatus, passportObservation, passportObservationSha256]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        assetId: { type: string, format: uuid }
+        inventoryCompletedAt: { type: string, format: date-time }
+        finalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        finalPlanSha256: { $ref: '#/components/schemas/Sha256' }
+        findingRevision: { type: integer, format: int64, minimum: 1 }
+        desiredStatus: { $ref: '#/components/schemas/InventoryOutcomeStatus' }
+        passportObservation: { $ref: '#/components/schemas/InventoryOutcomePassportObservation' }
+        passportObservationSha256: { $ref: '#/components/schemas/Sha256' }
+    InventoryOutcomePassportObservation:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [presence, value]
+          properties:
+            presence: { type: string, const: ABSENT }
+            value: { type: 'null' }
+        - type: object
+          additionalProperties: false
+          required: [presence, value]
+          properties:
+            presence: { type: string, const: PRESENT }
+            value:
+              type: object
+              additionalProperties: false
+              required: [rentalType, dimensions, finishing, category]
+              properties:
+                rentalType: { type: string, minLength: 1, maxLength: 255 }
+                dimensions: { type: string, minLength: 1, maxLength: 255 }
+                finishing: { type: string, minLength: 1, maxLength: 255 }
+                category: { type: string, minLength: 1, maxLength: 255 }
+                characteristics:
+                  description: >-
+                    Missing or null means the exact empty set. Every string, including each array
+                    element, is split on commas, trimmed and de-duplicated before exact active
+                    catalogue resolution.
+                  oneOf:
+                    - { type: string, maxLength: 4096 }
+                    - type: array
+                      maxItems: 100
+                      items: { type: string, maxLength: 4096 }
+                    - { type: 'null' }
+                linoleum:
+                  description: Missing or null clears the nullable canonical value.
+                  type: [boolean, 'null']
+    InventoryOutcomeResponse:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, findingId, assetId, assetVersion, status, releasedOrderUnitReservationIds, releasedOperationLeaseIds, releasedPresentationHoldIds, transferSuperseded]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        findingId: { type: string, format: uuid }
+        assetId: { type: string, format: uuid }
+        assetVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+        status: { $ref: '#/components/schemas/InventoryOutcomeStatus' }
+        releasedOrderUnitReservationIds:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        releasedOperationLeaseIds:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        releasedPresentationHoldIds:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        transferSuperseded: { type: boolean }
     InventoryFurnitureSnapshotRequest:
       type: object
       additionalProperties: false
@@ -3951,7 +4072,12 @@ components:
       required: [warehouseId, expectedSnapshotSha256, reviewSha256, items]
       properties:
         warehouseId: { type: string, format: uuid }
-        expectedSnapshotSha256: { $ref: '#/components/schemas/Sha256' }
+        expectedSnapshotSha256:
+          description: >-
+            Mandatory immutable source evidence and part of the permanent request fingerprint. It
+            is not a live full-snapshot equality fence because cabin status/version and reviewed
+            physical quantities may change before authoritative reconciliation.
+          $ref: '#/components/schemas/Sha256'
         reviewSha256: { $ref: '#/components/schemas/Sha256' }
         items:
           type: array

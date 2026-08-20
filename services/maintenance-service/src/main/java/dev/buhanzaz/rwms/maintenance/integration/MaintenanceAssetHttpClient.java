@@ -449,6 +449,11 @@ final class MaintenanceAssetHttpClient {
         response.status());
   }
 
+  /**
+   * Releases a live maintenance lease or confirms an already terminal lease after a lost or
+   * delayed reconciliation. The exact lease, owner and fencing token remain mandatory; terminal
+   * version drift may only move forward.
+   */
   void releaseLease(
       UUID key,
       UUID leaseId,
@@ -463,12 +468,23 @@ final class MaintenanceAssetHttpClient {
         LeaseResponse.class,
         ASSET_CLIENT,
         ASSET_SCOPE);
-    validateLease(response, response.rentalItemId(), ownerType, ownerId, "RELEASED");
+    validateTerminalLease(response, ownerType, ownerId);
     if (!leaseId.equals(response.id())
-        || response.version() != Math.addExact(expectedVersion, 1)
+        || response.version() < expectedVersion
         || response.fencingToken() != fencingToken) {
       throw MaintenanceHttpTransport.malformed("Asset-service did not confirm lease release");
     }
+  }
+
+  private static void validateTerminalLease(
+      LeaseResponse response, String ownerType, String ownerId) {
+    if (response == null
+        || response.rentalItemId() == null
+        || !("RELEASED".equals(response.state()) || "EXPIRED".equals(response.state()))) {
+      throw MaintenanceHttpTransport.malformed(
+          "Asset-service returned malformed terminal lease truth");
+    }
+    validateLease(response, response.rentalItemId(), ownerType, ownerId, response.state());
   }
 
   private static LeaseSnapshot lease(

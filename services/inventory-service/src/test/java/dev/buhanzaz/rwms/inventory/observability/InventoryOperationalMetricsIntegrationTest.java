@@ -357,8 +357,8 @@ class InventoryOperationalMetricsIntegrationTest {
         """
         insert into inventory_publication_intent(
           id,inventory_id,finding_id,publication_revision,state,maintenance_source_key,source_revision,
-          request_sha256,attempt_count,blocked_failure_code,created_at,updated_at)
-        values (?,?,?,0,?,?,1,?,1,?,clock_timestamp()-(? * interval '1 second'),
+          desired_asset_status,request_sha256,attempt_count,blocked_failure_code,created_at,updated_at)
+        values (?,?,?,0,?,?,1,'REPAIR',?,1,?,clock_timestamp()-(? * interval '1 second'),
           clock_timestamp()-(? * interval '1 second'))
         """,
         UUID.randomUUID(),

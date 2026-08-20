@@ -70,6 +70,10 @@ class LogisticsFlywayMigrationIntegrationTest {
             "event_stream_head",
             "flyway_schema_history",
             "inbox_message",
+            "inventory_asset_outcome_watermark",
+            "inventory_outcome_receipt",
+            "inventory_outcome_receipt_asset",
+            "inventory_outcome_task_action",
             "logistics_document",
             "logistics_document_line",
             "logistics_equipment_hold_reference",
@@ -2339,6 +2343,142 @@ class LogisticsFlywayMigrationIntegrationTest {
                 """,
                 Integer.class))
         .isEqualTo(3);
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v50AddsRecoverableInventorySupersessionWithoutRewritingHistoricalRows() {
+    Flyway beforeV50 = configuration(MIGRATIONS).target("49").load();
+    assertThat(beforeV50.migrate().migrationsExecuted).isEqualTo(49);
+    UUID warehouseId = UUID.randomUUID();
+    UUID subjectId = UUID.randomUUID();
+    UUID documentId = UUID.randomUUID();
+    UUID lineId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    UUID termId = UUID.randomUUID();
+    UUID taskId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into logistics_document(
+          id,version,document_type,state,warehouse_id,party_snapshot,driver_snapshot,
+          requested_by_subject_id,correlation_id,created_at,updated_at)
+        values (?,0,'SHIPMENT','DRAFT',?,'Клиент V50','Водитель V50',?,?,
+          clock_timestamp(),clock_timestamp())
+        """,
+        documentId,
+        warehouseId,
+        subjectId,
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into logistics_document_line(
+          id,version,document_id,line_number,asset_id,asset_version,state,created_at,updated_at)
+        values (?,0,?,1,?,0,'PENDING',clock_timestamp(),clock_timestamp())
+        """,
+        lineId,
+        documentId,
+        assetId);
+    jdbc.update(
+        """
+        insert into logistics_guard(
+          id,document_id,line_id,asset_id,guard_state,created_at,updated_at)
+        values (?,?,?,?, 'PENDING',clock_timestamp(),clock_timestamp())
+        """,
+        UUID.randomUUID(),
+        documentId,
+        lineId,
+        assetId);
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,phone,normalized_phone,
+          contact_person,responsible_manager_id,responsible_manager_display_name,
+          created_by_subject_id,creation_idempotency_key,creation_request_sha256,
+          created_at,updated_at)
+        values (?,0,'LEGAL_ENTITY','Клиент V50','клиент v50','+79990000050','+79990000050',
+          'Контакт V50',?,'Менеджер V50',?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        clientId,
+        subjectId,
+        subjectId,
+        UUID.randomUUID(),
+        "a".repeat(64));
+    jdbc.update(
+        """
+        insert into rental_order(
+          id,version,order_number,status,client_id,manager_id,manager_display_name,
+          created_by_subject_id,created_by_display_name,created_by_role,warehouse_id,
+          creation_idempotency_key,creation_request_sha256,created_at,updated_at)
+        values (?,0,'ORD-990050','DRAFT',?,?,'Менеджер V50',?,'Менеджер V50',
+          'WAREHOUSE_MANAGER',?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        orderId,
+        clientId,
+        subjectId,
+        subjectId,
+        warehouseId,
+        UUID.randomUUID(),
+        "b".repeat(64));
+    jdbc.update(
+        """
+        insert into rental_order_unit_term(
+          id,version,order_id,rental_item_id,rental_months,created_at,updated_at)
+        values (?,0,?,?,1,clock_timestamp(),clock_timestamp())
+        """,
+        termId,
+        orderId,
+        assetId);
+    insertV45LegacyShipmentLineTask(taskId, warehouseId);
+
+    Flyway upgraded = configuration(MIGRATIONS).target("50").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select inventory_superseded_by from logistics_document where id=?",
+                UUID.class,
+                documentId))
+        .isNull();
+    assertThat(
+            jdbc.queryForObject(
+                "select inventory_superseded_by from logistics_document_line where id=?",
+                UUID.class,
+                lineId))
+        .isNull();
+    assertThat(
+            jdbc.queryForObject(
+                "select inventory_superseded_by from rental_order where id=?", UUID.class, orderId))
+        .isNull();
+    assertThat(
+            jdbc.queryForObject(
+                "select inventory_superseded_by from rental_order_unit_term where id=?",
+                UUID.class,
+                termId))
+        .isNull();
+    assertThat(
+            jdbc.queryForObject(
+                "select inventory_cancelled_by from driver_logistics_task where id=?",
+                UUID.class,
+                taskId))
+        .isNull();
+    assertThat(tableNames())
+        .contains(
+            "inventory_outcome_receipt",
+            "inventory_outcome_receipt_asset",
+            "inventory_asset_outcome_watermark",
+            "inventory_outcome_task_action");
+    assertThat(jdbc.queryForObject("select count(*) from logistics_document", Long.class)).isOne();
+    assertThat(jdbc.queryForObject("select count(*) from logistics_document_line", Long.class))
+        .isOne();
+    assertThat(jdbc.queryForObject("select count(*) from logistics_guard", Long.class)).isOne();
+    assertThat(jdbc.queryForObject("select count(*) from rental_order", Long.class)).isOne();
+    assertThat(jdbc.queryForObject("select count(*) from rental_order_unit_term", Long.class))
+        .isOne();
+    assertThat(jdbc.queryForObject("select count(*) from driver_logistics_task", Long.class))
+        .isOne();
     assertJpaValidationStarts();
   }
 

@@ -7,6 +7,8 @@ import dev.buhanzaz.rwms.maintenance.disposition.repository.PropertyDispositionD
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceEventType;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceRepair;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventStore;
+import dev.buhanzaz.rwms.maintenance.service.InventoryPublicationPrestartReplacementGuard;
+import dev.buhanzaz.rwms.maintenance.service.MaintenanceConflictException;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceNotFoundException;
 import java.util.ArrayList;
 import java.util.List;
@@ -27,18 +29,21 @@ final class PropertyDispositionProcessingCallbacks {
   private final PropertyDispositionRepairChain repairChain;
   private final PropertyDispositionRepairChainFinalization finalization;
   private final MaintenanceEventStore events;
+  private final InventoryPublicationPrestartReplacementGuard inventoryReplacementGuard;
 
   PropertyDispositionProcessingCallbacks(
       PropertyDispositionDecisionRepository decisions,
       PropertyDispositionDecisionPersistence persistence,
       PropertyDispositionRepairChain repairChain,
       PropertyDispositionRepairChainFinalization finalization,
-      MaintenanceEventStore events) {
+      MaintenanceEventStore events,
+      InventoryPublicationPrestartReplacementGuard inventoryReplacementGuard) {
     this.decisions = decisions;
     this.persistence = persistence;
     this.repairChain = repairChain;
     this.finalization = finalization;
     this.events = events;
+    this.inventoryReplacementGuard = inventoryReplacementGuard;
   }
 
   void startMovement(UUID decisionId, UUID taskId) {
@@ -77,6 +82,12 @@ final class PropertyDispositionProcessingCallbacks {
     List<MaintenanceRepair> initialChain = initial.getAssetKind() == PropertyDispositionAssetKind.CABIN
         ? repairChain.repairChain(initial.getRootRepairId())
         : List.of();
+    if (initialChain.stream()
+        .anyMatch(repair -> inventoryReplacementGuard.blocksRepairExecution(repair.getId()))) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Repair is being superseded by an authoritative inventory outcome");
+    }
     List<MaintenanceEventStore.StreamRef> streams = new ArrayList<>();
     streams.add(PropertyDispositionDecisionPersistence.stream(decisionId));
     initialChain.forEach(repair -> streams.add(PropertyDispositionRepairChain.stream(repair.getId())));

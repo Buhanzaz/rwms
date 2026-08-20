@@ -114,6 +114,17 @@ public class InventoryController {
     return inventory.session(jwt, inventoryId);
   }
 
+  /** Refreshes active membership and derived review state behind one idempotent command. */
+  @PostMapping("/sessions/{inventoryId}/refresh")
+  public ResponseEntity<SessionView> refresh(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID inventoryId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody RefreshSessionRequest request) {
+    return idempotent(
+        inventory.refresh(jwt, inventoryId, idempotencyKey, request), HttpStatus.OK);
+  }
+
   @GetMapping("/sessions/{inventoryId}/findings")
   public PageResponse<FindingView> findings(
       @AuthenticationPrincipal Jwt jwt,
@@ -275,6 +286,17 @@ public class InventoryController {
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody PublishFindingsRequest request) {
     return idempotent(inventory.publish(jwt, inventoryId, idempotencyKey, request), HttpStatus.OK);
+  }
+
+  @PostMapping("/sessions/{inventoryId}/outcome/recalculate")
+  public ResponseEntity<OutcomeRecalculation> recalculateOutcome(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID inventoryId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody RecalculateInventoryOutcomeRequest request) {
+    return idempotent(
+        inventory.recalculateOutcome(jwt, inventoryId, idempotencyKey, request),
+        HttpStatus.ACCEPTED);
   }
 
   @PostMapping("/sessions/{inventoryId}/findings/{findingId}/publication/retry")

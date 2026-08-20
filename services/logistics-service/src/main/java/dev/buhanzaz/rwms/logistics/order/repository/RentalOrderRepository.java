@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.logistics.order.repository;
 
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import jakarta.persistence.LockModeType;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -37,6 +38,12 @@ public interface RentalOrderRepository
   @EntityGraph(attributePaths = "client")
   @Query("select orders from RentalOrder orders where orders.id = :id")
   Optional<RentalOrder> findForUpdate(@Param("id") UUID id);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      "select orders from RentalOrder orders join fetch orders.client where orders.id in :ids order"
+          + " by orders.id")
+  List<RentalOrder> findAllForUpdateByIdIn(@Param("ids") Collection<UUID> ids);
 
   Optional<RentalOrder> findByCreatedBySubjectIdAndCreationIdempotencyKey(
       UUID createdBySubjectId, UUID creationIdempotencyKey);

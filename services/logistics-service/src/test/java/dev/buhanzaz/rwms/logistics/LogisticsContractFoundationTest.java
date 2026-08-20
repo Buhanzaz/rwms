@@ -264,6 +264,7 @@ class LogisticsContractFoundationTest {
             "createMaintenanceDriverTask",
             "createMaintenanceEquipmentMovementTask",
             "getMaintenanceEquipmentMovementTask",
+            "applyAuthoritativeCompletedInventoryOutcome",
             "getMaintenanceDriverTaskCompensation",
             "cancelMaintenanceDriverTaskCompensation",
             "getDriverTask",
@@ -553,8 +554,7 @@ class LogisticsContractFoundationTest {
         ((List<?>) createTransfer.get("required")).stream().map(String.class::cast).toList();
     assertThat(transferRequired).contains("scheduledDate", "furnitureReplacements");
     assertThat(child(createTransfer, "properties"))
-        .doesNotContainKeys(
-            "scheduledTime", "scheduledAt", "driverSnapshot", "driverWorkerId");
+        .doesNotContainKeys("scheduledTime", "scheduledAt", "driverSnapshot", "driverWorkerId");
     assertThat(child(child(createTransfer, "properties"), "scheduledDate").get("format"))
         .isEqualTo("date");
     assertThat(cabinFurnitureTask.get("required"))
@@ -579,8 +579,7 @@ class LogisticsContractFoundationTest {
     Map<String, Object> schemas = child(child(openApi(), "components"), "schemas");
     Map<String, Object> createOrder = child(schemas, "CreateOrderRequest");
     assertThat(child(createOrder, "properties"))
-        .containsOnlyKeys(
-            "clientId", "newClient", "contactPhone", "comment")
+        .containsOnlyKeys("clientId", "newClient", "contactPhone", "comment")
         .doesNotContainKey("managerId");
     Map<String, Object> updateOrder = child(schemas, "UpdateOrderRequest");
     assertThat(child(updateOrder, "properties"))
@@ -609,8 +608,7 @@ class LogisticsContractFoundationTest {
     assertThat(desiredWindows.get("uniqueItems")).isEqualTo(true);
     Map<String, Object> desiredWindowInput = child(schemas, "DesiredDeliveryWindowInput");
     Map<String, Object> desiredWindow = child(schemas, "DesiredDeliveryWindow");
-    assertThat(child(desiredWindowInput, "properties"))
-        .containsOnlyKeys("startDate", "endDate");
+    assertThat(child(desiredWindowInput, "properties")).containsOnlyKeys("startDate", "endDate");
     assertThat(child(desiredWindow, "properties")).containsOnlyKeys("startDate", "endDate");
     assertThat(desiredWindowInput.get("required")).isEqualTo(List.of("startDate", "endDate"));
     assertThat(desiredWindow.get("required")).isEqualTo(List.of("startDate", "endDate"));

@@ -124,7 +124,19 @@ public class RentalOrder {
   @Column(name = "updated_at", nullable = false)
   private OffsetDateTime updatedAt;
 
-  /** Creates a draft with manager-owned primary contact facts but no client-confirmed delivery facts. */
+  @Column(name = "inventory_superseded_by")
+  private UUID inventorySupersededBy;
+
+  @Column(name = "inventory_superseded_at")
+  private OffsetDateTime inventorySupersededAt;
+
+  @Column(name = "inventory_completed_at")
+  private OffsetDateTime inventoryCompletedAt;
+
+  /**
+   * Creates a draft with manager-owned primary contact facts but no client-confirmed delivery
+   * facts.
+   */
   public static RentalOrder create(
       String orderNumber,
       OrderClient client,
@@ -180,7 +192,8 @@ public class RentalOrder {
     requireEditable();
     String normalizedPhone = PhoneNumberNormalizer.normalizeOptional(nextContactPhone);
     String normalizedComment = optionalText(nextComment, 2_000, "comment");
-    if (Objects.equals(contactPhone, normalizedPhone) && Objects.equals(comment, normalizedComment)) {
+    if (Objects.equals(contactPhone, normalizedPhone)
+        && Objects.equals(comment, normalizedComment)) {
       return false;
     }
     contactPhone = normalizedPhone;
@@ -224,7 +237,8 @@ public class RentalOrder {
    */
   public boolean replaceClientDesiredDeliveryWindows(List<DesiredDeliveryWindow> nextWindows) {
     requireEditable();
-    List<DesiredDeliveryWindow> normalizedWindows = normalizedClientDesiredDeliveryWindows(nextWindows);
+    List<DesiredDeliveryWindow> normalizedWindows =
+        normalizedClientDesiredDeliveryWindows(nextWindows);
     if (desiredDeliveryWindows.equals(normalizedWindows)) {
       return false;
     }
@@ -250,7 +264,9 @@ public class RentalOrder {
         throw new IllegalArgumentException("Desired delivery days must be distinct calendar days");
       }
     }
-    return uniqueDays.stream().sorted(Comparator.comparing(DesiredDeliveryWindow::getStartDate)).toList();
+    return uniqueDays.stream()
+        .sorted(Comparator.comparing(DesiredDeliveryWindow::getStartDate))
+        .toList();
   }
 
   /** Returns the ordered order-owned contacts without exposing the mutable JPA collection. */
@@ -318,13 +334,34 @@ public class RentalOrder {
     return true;
   }
 
+  /**
+   * Ends an order whose final active cabin term was displaced by completed inventory while
+   * retaining the commercial and shipment history.
+   */
+  public void supersedeByCompletedInventory(UUID inventoryId, OffsetDateTime completedAt) {
+    if (inventoryId == null || completedAt == null) {
+      throw new IllegalArgumentException("Completed inventory source is required");
+    }
+    inventorySupersededBy = inventoryId;
+    inventorySupersededAt = now();
+    inventoryCompletedAt = completedAt;
+    if (status == RentalOrderStatus.DRAFT || status == RentalOrderStatus.SAVED) {
+      status = RentalOrderStatus.CANCELLED;
+    } else if (status == RentalOrderStatus.FULFILLED) {
+      status = RentalOrderStatus.CLOSED;
+    }
+    updatedAt = nextUpdatedAt();
+  }
+
   public void requireDraft() {
     if (status != RentalOrderStatus.DRAFT) {
       throw new IllegalStateException("Order is not editable");
     }
   }
 
-  /** Enforces that the normal client confirmation supplied a receiving preference before shipment. */
+  /**
+   * Enforces that the normal client confirmation supplied a receiving preference before shipment.
+   */
   public void requireDesiredDeliveryWindows() {
     if (desiredDeliveryWindows.isEmpty()) {
       throw new IllegalStateException(
@@ -371,11 +408,12 @@ public class RentalOrder {
     return value;
   }
 
-  /** Verifies the client-confirmed address and manager primary phone required before fulfillment. */
+  /**
+   * Verifies the client-confirmed address and manager primary phone required before fulfillment.
+   */
   public void requireFulfillmentDetails() {
     if (deliveryAddress == null || contactPhone == null) {
-      throw new IllegalStateException(
-          "Order delivery address and contact phone are required");
+      throw new IllegalStateException("Order delivery address and contact phone are required");
     }
   }
 

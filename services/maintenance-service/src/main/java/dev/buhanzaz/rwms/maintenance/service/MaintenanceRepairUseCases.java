@@ -297,6 +297,11 @@ public class MaintenanceRepairUseCases {
   private WarehouseAdmissionPreflight<Void> updateRepairPlanPreflight(
       UUID id, UpdateRepairPlanRequest request) {
     MaintenanceRepair initial = repairModelSupport.requireRepair(id);
+    if (repairLifecycleSupport.blocksRepairExecution(initial.getId())) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Repair is being superseded by an authoritative inventory outcome");
+    }
     commandSupport.assertVersion(initial.getVersion(), request.expectedVersion());
     initial.requirePreStartAmendment();
     mediaSupport.validateCoverMediaSelection(request.mediaReferences(), request.coverMediaId());
@@ -314,6 +319,11 @@ public class MaintenanceRepairUseCases {
         repairs.findAllByIdForUpdate(List.of(id)).stream()
             .findFirst()
             .orElseThrow(() -> new MaintenanceNotFoundException("Repair not found"));
+    if (repairLifecycleSupport.blocksRepairExecution(repair.getId())) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Repair is being superseded by an authoritative inventory outcome");
+    }
     repairLifecycleSupport.assertStreamParity(repair, locked);
     repair.requirePreStartAmendment();
     mediaSupport.validateCoverMediaSelection(request.mediaReferences(), request.coverMediaId());
@@ -843,6 +853,11 @@ public class MaintenanceRepairUseCases {
           new CreateResult<>(commandSupport.read(replay.get(), RepairCommandResult.class), true), null, null);
     }
     MaintenanceRepair initial = repairModelSupport.requireRepair(id);
+    if (repairLifecycleSupport.blocksRepairExecution(initial.getId())) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Repair is being superseded by an authoritative inventory outcome");
+    }
     commandSupport.assertVersion(initial.getVersion(), request.expectedVersion());
     List<MaintenanceRepair> sources = repairLifecycleSupport.sourceChain(initial);
     repairLifecycleSupport.requireNoActiveRework(initial);
@@ -869,6 +884,11 @@ public class MaintenanceRepairUseCases {
       return new CreateResult<>(commandSupport.read(replay.get(), RepairCommandResult.class), true);
     }
     MaintenanceRepair initial = repairModelSupport.requireRepair(id);
+    if (repairLifecycleSupport.blocksRepairExecution(initial.getId())) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Repair is being superseded by an authoritative inventory outcome");
+    }
     commandSupport.assertVersion(initial.getVersion(), request.expectedVersion());
     LockedRepairChain lockedChain = repairLifecycleSupport.lockAndReloadRepairChain(initial, request.expectedVersion());
     MaintenanceRepair repair = lockedChain.repair();

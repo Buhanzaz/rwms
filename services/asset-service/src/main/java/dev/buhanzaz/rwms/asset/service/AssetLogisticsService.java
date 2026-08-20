@@ -8,6 +8,7 @@ import dev.buhanzaz.rwms.asset.domain.BalanceLocationKind;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCatalogItem;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
 import dev.buhanzaz.rwms.asset.domain.OperationLease;
+import dev.buhanzaz.rwms.asset.domain.OperationLeaseState;
 import dev.buhanzaz.rwms.asset.domain.OrderUnitReservation;
 import dev.buhanzaz.rwms.asset.domain.OrderUnitReservationState;
 import dev.buhanzaz.rwms.asset.domain.RentalItem;
@@ -139,6 +140,11 @@ final class AssetLogisticsService {
     return new AssetService.CreateResult<>(safe, false);
   }
 
+  /**
+   * Releases the exact logistics-owned lease or returns its already terminal state when the owner
+   * and fencing token still match. This makes a lost response and a natural expiry recoverable
+   * without weakening owner fencing.
+   */
   AssetService.CreateResult<LogisticsOperationLeaseResponse> releaseLease(
       UUID subjectId, UUID key, UUID id, LogisticsLeaseCommandRequest request) {
     OperationLease current = leases.requireForUpdate(id);
@@ -149,6 +155,24 @@ final class AssetLogisticsService {
     if (replay.isPresent()) {
       return new AssetService.CreateResult<>(
           json.read(replay.get(), LogisticsOperationLeaseResponse.class), true);
+    }
+    if (request.expectedVersion() == null || request.expectedVersion() < 0) {
+      throw new IllegalArgumentException("expectedVersion is required");
+    }
+    if (current.getState() == OperationLeaseState.RELEASED
+        || current.getState() == OperationLeaseState.EXPIRED) {
+      if (idempotency.isBoundToAnotherSubject(
+          subjectId, "logistics.operation-lease.release", key)) {
+        throw new AssetConflictException("Asset data changed concurrently");
+      }
+      if (current.getFencingToken() != request.fencingToken()) {
+        throw new AssetConflictException("Operation lease is stale or fenced");
+      }
+      LogisticsOperationLeaseResponse terminal =
+          mapper.toLogisticsLease(leases.response(current));
+      idempotency.store(
+          subjectId, "logistics.operation-lease.release", key, hash, 200, terminal);
+      return new AssetService.CreateResult<>(terminal, false);
     }
     LogisticsOperationLeaseResponse safe =
         mapper.toLogisticsLease(leases.release(id, request.expectedVersion(), request.fencingToken()));

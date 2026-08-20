@@ -66,6 +66,20 @@ public class LogisticsAuthorizer {
     requireMaintenanceServiceIntake(jwt);
   }
 
+  /** Requires the exact inventory-service machine identity and its one logistics scope. */
+  public void requireInventoryOutcome(Jwt jwt) {
+    if (developmentBypass) return;
+    if (jwt == null
+        || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
+        || !"inventory-service".equals(jwt.getSubject())
+        || !"inventory-service".equals(jwt.getClaimAsString("client_id"))
+        || !List.of("rwms-services").equals(audiences(jwt))
+        || !List.of("logistics.inventory").equals(scopes(jwt))) {
+      throw new AccessDeniedException(
+          "Exact inventory-service logistics.inventory token is required");
+    }
+  }
+
   private void requireMaintenanceServiceIntake(Jwt jwt) {
     if (developmentBypass) return;
     if (jwt == null

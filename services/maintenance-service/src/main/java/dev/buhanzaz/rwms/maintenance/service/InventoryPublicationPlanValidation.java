@@ -140,6 +140,7 @@ final class InventoryPublicationPlanValidation {
         throw invalid("Inventory snapshot schema version 1 has an invalid movementToShipment marker");
       }
       executable.remove("movementToShipment");
+      adaptLegacyV1DuplicatedAggregateMedia(executable);
     } else if (legacyOutbound != null) {
       throw invalid("Inventory snapshot schema version 2 must not contain movementToShipment");
     }
@@ -150,6 +151,35 @@ final class InventoryPublicationPlanValidation {
       return mapper.treeToValue(executable, FrozenInventoryPlanSnapshot.class);
     } catch (JacksonException exception) {
       throw invalid("Inventory publication snapshot is not a valid frozen maintenance plan");
+    }
+  }
+
+  /**
+   * Removes the exact schema-v1 producer artifact that copied the complete aggregate evidence list
+   * onto every line. Partial or differently ordered assignments remain untouched so normal strict
+   * line-media validation decides whether they are valid.
+   */
+  private void adaptLegacyV1DuplicatedAggregateMedia(ObjectNode executable) {
+    JsonNode aggregateMedia = executable.get("mediaReferences");
+    JsonNode rawLines = executable.get("lines");
+    if (aggregateMedia == null
+        || !aggregateMedia.isArray()
+        || aggregateMedia.size() == 0
+        || rawLines == null
+        || !rawLines.isArray()
+        || rawLines.size() == 0) {
+      return;
+    }
+    for (JsonNode rawLine : rawLines) {
+      if (!rawLine.isObject()
+          || !rawLine.has("mediaReferences")
+          || !rawLine.get("mediaReferences").isArray()
+          || !aggregateMedia.equals(rawLine.get("mediaReferences"))) {
+        return;
+      }
+    }
+    for (JsonNode rawLine : rawLines) {
+      ((ObjectNode) rawLine).putArray("mediaReferences");
     }
   }
 

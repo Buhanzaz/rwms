@@ -29,16 +29,20 @@ public class InventoryPublicationAttemptResult {
   @JdbcTypeCode(SqlTypes.JSON)
   @Column(name = "maintenance_result", columnDefinition = "jsonb")
   private String maintenanceResult;
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "asset_outcome_result", columnDefinition = "jsonb")
+  private String assetOutcomeResult;
   @Column(name = "finished_at", nullable = false) private OffsetDateTime finishedAt;
 
   protected InventoryPublicationAttemptResult() {}
 
   public InventoryPublicationAttemptResult(UUID attemptId, String outcome, String failureCode,
       String messageSha256, UUID repairId, MaintenancePublicationOutcome maintenanceOutcome,
-      String maintenanceResult) {
+      String maintenanceResult, String assetOutcomeResult) {
     publicationAttemptId = attemptId; this.outcome = outcome; this.failureCode = failureCode;
     this.messageSha256 = messageSha256; this.repairId = repairId;
     this.maintenanceOutcome = maintenanceOutcome; this.maintenanceResult = maintenanceResult;
+    this.assetOutcomeResult = assetOutcomeResult;
     finishedAt = OffsetDateTime.now(ZoneOffset.UTC);
   }
 }

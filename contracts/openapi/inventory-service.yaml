@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Inventory Service API
-  version: 1.5.0
+  version: 1.6.0
   x-rwms-owner: inventory-service
   x-rwms-stability: approved-stage-7
   description: >-
@@ -115,6 +115,36 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /api/inventory/v1/sessions/{inventoryId}/refresh:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+    post:
+      tags: [Sessions]
+      operationId: refreshInventorySession
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. The service rejects a
+        stale initial session revision before taking a dependency capture. It
+        then copies the fresh read-only asset capture outside the idempotent
+        local transaction, rechecks the same revision under the session lock,
+        reconciles the union of captured and currently active cabin identities
+        through the inventory membership journal, and invalidates only derived
+        furniture-review and final-plan state. Existing findings, inspection
+        evidence, media and membership history are retained.
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefreshSessionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/SessionDetailIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
   /api/inventory/v1/sessions/{inventoryId}/findings:
     parameters:
       - { $ref: '#/components/parameters/InventoryId' }
@@ -539,6 +569,32 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /api/inventory/v1/sessions/{inventoryId}/outcome/recalculate:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Publication]
+      operationId: recalculateInventoryOutcome
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. Locks the exact completed final plan,
+        creates missing asset-status outcomes, requeues every existing publication for an
+        authoritative pass through all current downstream effects, and returns after durable local scheduling.
+        A successful furniture effect is preserved; other furniture states become eligible. The completed inventory is
+        authoritative: no work means FREE, work means REPAIR, and an explicit capital choice
+        means CAPITAL_REPAIR. Evidence, photos and prior attempt history are retained.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecalculateInventoryOutcomeRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/OutcomeRecalculationAcceptedResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/publication/retry:
     parameters:
       - { $ref: '#/components/parameters/InventoryId' }
@@ -727,6 +783,10 @@ components:
       description: Per-finding publication results and derived aggregate state.
       headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }
       content: { application/json: { schema: { $ref: '#/components/schemas/PublicationBatch' } } }
+    OutcomeRecalculationAcceptedResponse:
+      description: Exact completed plan was durably queued for owner-by-owner recovery.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/OutcomeRecalculation' } } }
     PublicationIntentIdempotentResponse:
       description: Publication intent result.
       headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }
@@ -759,6 +819,7 @@ components:
     RentalItemStatus:
       type: string
       enum: [RENTED, BOOKED, REPAIR, WAITING_REPAIR_CHECK, WRITTEN_OFF, LOST, CAPITAL_REPAIR, AFTER_RENT, WAITING_ESTIMATE_CONFIRMATION, SALE, USED_SALE, RESERVED, FREE, WAREHOUSE, OWN_NEEDS, IN_TRANSFER]
+    InventoryAssetOutcomeStatus: { type: string, enum: [FREE, REPAIR, CAPITAL_REPAIR] }
     InspectionState: { type: string, enum: [NOT_INSPECTED, READY, WORK_STAGED] }
     LogisticsPlanningMode: { type: string, enum: [AUTO, FIXED_DATE] }
     ReconciliationState: { type: string, enum: [MATCHED, MISSING, CONFLICT] }
@@ -781,6 +842,12 @@ components:
       required: [warehouseId]
       properties:
         warehouseId: { type: string, format: uuid }
+    RefreshSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
     ResolveNumberRequest:
       type: object
       additionalProperties: false
@@ -1330,6 +1397,14 @@ components:
               minItems: 1
               uniqueItems: true
               items: { $ref: '#/components/schemas/PublicationExpectation' }
+    RecalculateInventoryOutcomeRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, finalPlanVersion, finalPlanSha256]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        finalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        finalPlanSha256: { $ref: '#/components/schemas/Sha256' }
     RetryPublicationRequest:
       type: object
       additionalProperties: false
@@ -1762,7 +1837,7 @@ components:
     PublicationIntent:
       type: object
       additionalProperties: false
-      required: [id, inventoryId, findingId, publicationRevision, state, sourceRevision, attemptCount, finalPlanVersion, targetKind, targetId, maintenanceEstimateId, maintenanceRepairId, maintenanceOutcome, maintenanceResult, failureCode]
+      required: [id, inventoryId, findingId, publicationRevision, state, sourceRevision, attemptCount, finalPlanVersion, targetKind, targetId, maintenanceEstimateId, maintenanceRepairId, desiredAssetStatus, effectiveAssetVersion, assetOutcomeResult, maintenanceOutcome, maintenanceResult, failureCode]
       properties:
         id: { type: string, format: uuid }
         inventoryId: { type: string, format: uuid }
@@ -1776,6 +1851,12 @@ components:
         targetId: { $ref: '#/components/schemas/NullableUuid' }
         maintenanceEstimateId: { $ref: '#/components/schemas/NullableUuid' }
         maintenanceRepairId: { $ref: '#/components/schemas/NullableUuid' }
+        desiredAssetStatus: { $ref: '#/components/schemas/InventoryAssetOutcomeStatus' }
+        effectiveAssetVersion:
+          oneOf: [{ type: integer, format: int64, minimum: 0 }, { type: 'null' }]
+        assetOutcomeResult:
+          description: Canonical response from asset-service; null before the asset outcome applies.
+          oneOf: [{ type: object, additionalProperties: true }, { type: 'null' }]
         maintenanceOutcome:
           oneOf: [{ $ref: '#/components/schemas/MaintenancePublicationOutcome' }, { type: 'null' }]
         maintenanceResult:
@@ -1836,6 +1917,23 @@ components:
         inventoryId: { type: string, format: uuid }
         aggregateState: { $ref: '#/components/schemas/AggregatePublicationState' }
         intents: { type: array, items: { $ref: '#/components/schemas/PublicationIntent' } }
+    OutcomeRecalculation:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, sessionRevision, finalPlanVersion, finalPlanSha256, furnitureReconciliationState, createdPublicationCount, requeuedPublicationCount, preservedSucceededPublicationCount, publicationBatch]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        sessionRevision: { type: integer, format: int64, minimum: 0 }
+        finalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        finalPlanSha256: { $ref: '#/components/schemas/Sha256' }
+        furnitureReconciliationState: { $ref: '#/components/schemas/FurnitureReconciliationState' }
+        createdPublicationCount: { type: integer, minimum: 0 }
+        requeuedPublicationCount: { type: integer, minimum: 0 }
+        preservedSucceededPublicationCount:
+          type: integer
+          minimum: 0
+          description: Reserved compatibility count; current authoritative recalculation requeues every existing publication and returns zero.
+        publicationBatch: { $ref: '#/components/schemas/PublicationBatch' }
     SessionStatistics:
       type: object
       additionalProperties: false

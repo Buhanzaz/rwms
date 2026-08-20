@@ -282,7 +282,7 @@ final class InventoryPublicationPrestartReplacementUseCases {
     }
 
     RentalItemFactProjection asset = requireAssetForUpdate(finding.assetId());
-    assertCurrentAsset(request.warehouseId(), finding, asset);
+    InventoryPublicationAssetFence.requireAuthoritative(request, asset);
     List<MaintenanceEstimate> lockedEstimates =
         estimates.findAllByRentalItemIdForUpdate(finding.assetId());
     List<MaintenanceRepair> lockedRepairs =
@@ -304,10 +304,6 @@ final class InventoryPublicationPrestartReplacementUseCases {
         lockedEstimates,
         lockedRepairs,
         request.warehouseId());
-    if (!"REPAIR".equals(asset.getAssetStatus()) && !"CAPITAL_REPAIR".equals(asset.getAssetStatus())) {
-      throw InventoryPublicationPlanValidation.conflict(
-          "Current rental-item status is unsafe for pre-start maintenance replacement");
-    }
     List<RepairStage> stages = repairStages.findAllByRepairIdOrderByStageNo(repair.getId());
     boolean stageTaskEffect = stages.stream().anyMatch(stage -> stage.getExternalQueueEntryId() != null);
     boolean taskGuardRequired = repair.getTaskBoardVersion() != null;
@@ -424,11 +420,7 @@ final class InventoryPublicationPrestartReplacementUseCases {
           "Stored pre-start replacement intent does not match publication ownership");
     }
     RentalItemFactProjection asset = requireAssetForUpdate(finding.assetId());
-    assertCurrentAsset(request.warehouseId(), finding, asset);
-    if (!"REPAIR".equals(asset.getAssetStatus()) && !"CAPITAL_REPAIR".equals(asset.getAssetStatus())) {
-      throw InventoryPublicationPlanValidation.conflict(
-          "Current rental-item status is unsafe for pre-start maintenance replacement");
-    }
+    InventoryPublicationAssetFence.requireAuthoritative(request, asset);
     List<MaintenanceEstimate> lockedEstimates =
         estimates.findAllByRentalItemIdForUpdate(finding.assetId());
     List<MaintenanceRepair> lockedRepairs = repairs.findAllByRentalItemIdForUpdate(finding.assetId());
@@ -461,6 +453,7 @@ final class InventoryPublicationPrestartReplacementUseCases {
         sourceId,
         request.warehouseId(),
         finding,
+        request.authoritativeAssetVersion(),
         plan,
         false,
         request.warehouseId(),
@@ -508,7 +501,7 @@ final class InventoryPublicationPrestartReplacementUseCases {
       throw new IllegalStateException("Inventory pre-start replacement is not ready to finalize");
     }
     RentalItemFactProjection asset = requireAssetForUpdate(finding.assetId());
-    assertCurrentAsset(request.warehouseId(), finding, asset);
+    InventoryPublicationAssetFence.requireAuthoritative(request, asset);
     List<MaintenanceRepair> lockedRepairs = repairs.findAllByRentalItemIdForUpdate(finding.assetId());
     MaintenanceRepair predecessor = lockedRepairs.stream()
         .filter(value -> intent.getPredecessorRepairId().equals(value.getId()))
@@ -518,6 +511,11 @@ final class InventoryPublicationPrestartReplacementUseCases {
         .filter(value -> intent.getSuccessorRepairId().equals(value.getId()))
         .findFirst()
         .orElseThrow(() -> new MaintenanceNotFoundException("Pre-start successor repair not found"));
+    if (successor.getRentalItemVersionSnapshot() > request.authoritativeAssetVersion()) {
+      throw InventoryPublicationPlanValidation.conflict(
+          "Pre-start replacement successor is newer than the authoritative inventory outcome");
+    }
+    successor.confirmRentalItemVersion(request.authoritativeAssetVersion());
     targetSelection.requirePrestartCandidate(predecessor, intent);
     if (successor.getExecutionState() != RepairExecutionState.DRAFT
         || !predecessor.getWarehouseId().equals(successor.getWarehouseId())
@@ -626,11 +624,7 @@ final class InventoryPublicationPrestartReplacementUseCases {
     if (replay != null) return sourceLifecycle.replay(replay);
     InventoryPublicationPrestartReplacement intent = requirePrestartIntent(sourceId, requestSha256);
     RentalItemFactProjection asset = requireAssetForUpdate(finding.assetId());
-    assertCurrentAsset(request.warehouseId(), finding, asset);
-    if (!"REPAIR".equals(asset.getAssetStatus()) && !"CAPITAL_REPAIR".equals(asset.getAssetStatus())) {
-      throw InventoryPublicationPlanValidation.conflict(
-          "Current rental-item status is unsafe for a started repair successor");
-    }
+    InventoryPublicationAssetFence.requireAuthoritative(request, asset);
     List<MaintenanceEstimate> lockedEstimates =
         estimates.findAllByRentalItemIdForUpdate(finding.assetId());
     List<MaintenanceRepair> lockedRepairs = repairs.findAllByRentalItemIdForUpdate(finding.assetId());
@@ -657,6 +651,7 @@ final class InventoryPublicationPrestartReplacementUseCases {
           sourceId,
           request.warehouseId(),
           finding,
+          request.authoritativeAssetVersion(),
           successorPlan.plan(),
           false,
           incomingAdmissionWarehouseId,
@@ -709,15 +704,6 @@ final class InventoryPublicationPrestartReplacementUseCases {
     return rentalItems.findByIdForUpdate(assetId).orElseThrow(
         () -> new MaintenanceDependencyException(
             HttpStatus.SERVICE_UNAVAILABLE, "Current rental-item fact is unavailable"));
-  }
-
-  private static void assertCurrentAsset(
-      UUID warehouseId, InventoryPublicationFindingInput finding, RentalItemFactProjection asset) {
-    if (!warehouseId.equals(asset.getWarehouseId())
-        || finding.assetVersion() != asset.getAggregateVersion()) {
-      throw InventoryPublicationPlanValidation.conflict(
-          "Current rental-item warehouse/version differs from completed inventory evidence");
-    }
   }
 
   private static MaintenanceDependencyException retryablePrestartConflict(

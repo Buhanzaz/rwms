@@ -36,7 +36,7 @@ class MaintenanceJpaValidationIntegrationTest {
     assertThat(entityManagerFactory.isOpen()).isTrue();
     assertThat(
             jdbc.queryForObject(
-                "select count(*) from flyway_schema_history where version='44' and success",
+                "select count(*) from flyway_schema_history where version='45' and success",
                 Integer.class))
         .isOne();
     assertThat(
@@ -102,6 +102,8 @@ class MaintenanceJpaValidationIntegrationTest {
         .contains(
             "InventoryRepairSource", "LogisticsReturnShortage", "RepairCapacitySettings",
             "RepairTaskEvidence", "RepairComplexitySettings", "RepairPlaceAllocation",
-            "InventoryPublicationSource", "InventoryPublicationSourceOperation");
+            "InventoryPublicationSource", "InventoryPublicationSourceOperation",
+            "InventoryAuthoritativeOutcome", "InventoryAuthoritativeOutcomeReceipt",
+            "InventoryAuthoritativeOutcomeWatermark", "InventoryAuthoritativeOutcomeTarget");
   }
 }

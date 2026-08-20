@@ -8,8 +8,10 @@ import dev.buhanzaz.rwms.inventory.domain.SessionLifecycle;
 import dev.buhanzaz.rwms.inventory.eventing.InventoryEventStore;
 import dev.buhanzaz.rwms.inventory.integration.InventoryDependencyGateway;
 import dev.buhanzaz.rwms.inventory.repository.FindingPlanSnapshotRepository;
+import dev.buhanzaz.rwms.inventory.repository.FindingMediaReferenceRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFinalPlanEntryRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFinalPlanRepository;
+import dev.buhanzaz.rwms.inventory.repository.InventoryFurnitureReconciliationIntentRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFindingRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryPublicationAttemptRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryPublicationAttemptResultRepository;
@@ -43,9 +45,11 @@ abstract class InventoryPublicationWorkflowSupport extends InventoryTechnicalRun
   protected final InventoryFinalPlanRepository finalPlans;
   protected final InventoryFinalPlanEntryRepository finalPlanEntries;
   protected final InventoryPublicationIntentRepository publications;
+  protected final InventoryFurnitureReconciliationIntentRepository furnitureReconciliations;
   protected final InventoryPublicationAttemptRepository publicationAttempts;
   protected final InventoryPublicationAttemptResultRepository publicationAttemptResults;
   protected final FindingPlanSnapshotRepository planSnapshots;
+  protected final FindingMediaReferenceRepository mediaReferences;
   protected final InventoryDependencyGateway dependencies;
   protected final InventoryEventStore events;
   protected final InventoryIdempotencyPort idempotency;
@@ -58,9 +62,11 @@ abstract class InventoryPublicationWorkflowSupport extends InventoryTechnicalRun
       InventoryFinalPlanRepository finalPlans,
       InventoryFinalPlanEntryRepository finalPlanEntries,
       InventoryPublicationIntentRepository publications,
+      InventoryFurnitureReconciliationIntentRepository furnitureReconciliations,
       InventoryPublicationAttemptRepository publicationAttempts,
       InventoryPublicationAttemptResultRepository publicationAttemptResults,
       FindingPlanSnapshotRepository planSnapshots,
+      FindingMediaReferenceRepository mediaReferences,
       InventoryDependencyGateway dependencies,
       InventoryEventStore events,
       InventoryIdempotencyPort idempotency,
@@ -76,9 +82,11 @@ abstract class InventoryPublicationWorkflowSupport extends InventoryTechnicalRun
     this.finalPlans = finalPlans;
     this.finalPlanEntries = finalPlanEntries;
     this.publications = publications;
+    this.furnitureReconciliations = furnitureReconciliations;
     this.publicationAttempts = publicationAttempts;
     this.publicationAttemptResults = publicationAttemptResults;
     this.planSnapshots = planSnapshots;
+    this.mediaReferences = mediaReferences;
     this.dependencies = dependencies;
     this.events = events;
     this.idempotency = idempotency;
@@ -120,6 +128,13 @@ abstract class InventoryPublicationWorkflowSupport extends InventoryTechnicalRun
   protected InventoryPublicationIntent requirePublication(UUID inventoryId, UUID findingId) {
     return publications
         .findByInventoryIdAndFindingId(inventoryId, findingId)
+        .orElseThrow(() -> InventoryException.notFound("Publication intent not found"));
+  }
+
+  protected InventoryPublicationIntent requirePublicationForUpdate(
+      UUID inventoryId, UUID findingId) {
+    return publications
+        .findByInventoryIdAndFindingIdForUpdate(inventoryId, findingId)
         .orElseThrow(() -> InventoryException.notFound("Publication intent not found"));
   }
 

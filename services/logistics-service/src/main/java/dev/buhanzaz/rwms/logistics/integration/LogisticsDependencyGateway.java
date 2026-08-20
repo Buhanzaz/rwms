@@ -395,6 +395,12 @@ public interface LogisticsDependencyGateway {
     throw unavailable("Driver task cancellation is not configured");
   }
 
+  /** Cancels source-owned work with an explicit bounded audit reason. */
+  default DriverBoardTask cancelDriverTask(
+      UUID externalTaskId, long expectedTaskVersion, String reason) {
+    return cancelDriverTask(externalTaskId, expectedTaskVersion);
+  }
+
   /**
    * Atomically cancels a source-owned driver task only if task-board still sees every route entry
    * as waiting. Unlike {@link #cancelDriverTask(UUID, long)}, this command never interrupts work

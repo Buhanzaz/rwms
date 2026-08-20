@@ -57,7 +57,9 @@ class AuthInventoryServiceClientDisabledIntegrationTest {
                         "warehouse.lifecycle.read",
                         "warehouse.lifecycle.confirm",
                         "asset.inventory",
-                        "maintenance.inventory");
+                        "maintenance.inventory",
+                        "logistics.inventory",
+                        "media.inventory");
         assertThat(configuredClients.findByClientId("inventory-service")).isNull();
         assertThat(jdbc.queryForObject(
                         "select client_secret is null from oauth2_registered_client where client_id='inventory-service'",

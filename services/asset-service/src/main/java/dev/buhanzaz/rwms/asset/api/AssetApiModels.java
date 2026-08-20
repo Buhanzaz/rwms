@@ -18,6 +18,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import tools.jackson.databind.JsonNode;
 
 /**
  * HTTP transport model container for asset.
@@ -766,6 +767,37 @@ public final class AssetApiModels {
       OffsetDateTime validatedAt,
       String validationDigest,
       List<InventoryValidationItem> assets) {}
+
+  /** Statuses that a completed inventory is permitted to impose as current cabin truth. */
+  public enum InventoryOutcomeStatus {
+    FREE,
+    REPAIR,
+    CAPITAL_REPAIR
+  }
+
+  /** Immutable final-plan evidence used to apply one authoritative found-cabin outcome. */
+  public record InventoryOutcomeRequest(
+      @NotNull UUID warehouseId,
+      @NotNull UUID assetId,
+      @NotNull OffsetDateTime inventoryCompletedAt,
+      @NotNull @Min(1) Long finalPlanVersion,
+      @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String finalPlanSha256,
+      @NotNull @Min(1) Long findingRevision,
+      @NotNull InventoryOutcomeStatus desiredStatus,
+      @NotNull JsonNode passportObservation,
+      @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String passportObservationSha256) {}
+
+  /** Durable result and operational bindings superseded by one completed-inventory command. */
+  public record InventoryOutcomeResponse(
+      UUID inventoryId,
+      UUID findingId,
+      UUID assetId,
+      long assetVersion,
+      RentalItemStatus status,
+      List<UUID> releasedOrderUnitReservationIds,
+      List<UUID> releasedOperationLeaseIds,
+      List<UUID> releasedPresentationHoldIds,
+      boolean transferSuperseded) {}
 
   /** Current active furniture and the selected cabin quantities in one deterministic snapshot. */
   public record InventoryFurnitureSnapshotRequest(

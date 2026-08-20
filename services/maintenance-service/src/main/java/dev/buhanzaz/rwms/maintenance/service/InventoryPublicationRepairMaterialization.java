@@ -10,8 +10,11 @@ import dev.buhanzaz.rwms.maintenance.domain.MaintenanceEventType;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceMediaReference;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceRepair;
 import dev.buhanzaz.rwms.maintenance.domain.MediaFactProjection;
+import dev.buhanzaz.rwms.maintenance.domain.RepairAcceptanceState;
+import dev.buhanzaz.rwms.maintenance.domain.RepairExecutionState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairLogisticsPlanningMode;
 import dev.buhanzaz.rwms.maintenance.domain.RepairOrigin;
+import dev.buhanzaz.rwms.maintenance.domain.RepairReclassificationState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStage;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventFactFactory;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventStore;
@@ -46,6 +49,7 @@ final class InventoryPublicationRepairMaterialization {
   private final MaintenanceProjectionSnapshotFactory projectionSnapshots;
   private final MaintenanceReconciliationStore reconciliations;
   private final InventoryRepairReconciliationWriter repairQueue;
+  private final MaintenanceTaskBoardSupport taskBoardSupport;
   private final WarehouseLifecycleOperations warehouseLifecycle;
   private final ObjectMapper mapper;
 
@@ -59,6 +63,7 @@ final class InventoryPublicationRepairMaterialization {
       MaintenanceProjectionSnapshotFactory projectionSnapshots,
       MaintenanceReconciliationStore reconciliations,
       InventoryRepairReconciliationWriter repairQueue,
+      MaintenanceTaskBoardSupport taskBoardSupport,
       WarehouseLifecycleOperations warehouseLifecycle,
       ObjectMapper mapper) {
     this.repairs = repairs;
@@ -70,14 +75,20 @@ final class InventoryPublicationRepairMaterialization {
     this.projectionSnapshots = projectionSnapshots;
     this.reconciliations = reconciliations;
     this.repairQueue = repairQueue;
+    this.taskBoardSupport = taskBoardSupport;
     this.warehouseLifecycle = warehouseLifecycle;
     this.mapper = mapper;
   }
 
+  /**
+   * Creates a repair from frozen finding evidence while binding its asset snapshot to the version
+   * produced by the authoritative asset outcome command.
+   */
   InventoryPublicationCreatedTarget createRepair(
       InventoryPublicationSourceId sourceId,
       UUID warehouseId,
       InventoryPublicationFindingInput finding,
+      long authoritativeAssetVersion,
       InventoryPublicationRepairPlan plan,
       boolean enqueueImmediately,
       UUID incomingAdmissionWarehouseId,
@@ -102,7 +113,7 @@ final class InventoryPublicationRepairMaterialization {
     MaintenanceRepair draft = MaintenanceRepair.primary(
         warehouseId,
         finding.assetId(),
-        finding.assetVersion(),
+        authoritativeAssetVersion,
         null,
         RepairOrigin.INVENTORY,
         finding.repairScheduledDate(),
@@ -164,6 +175,36 @@ final class InventoryPublicationRepairMaterialization {
 
   void enqueue(UUID repairId, UUID queueKey) {
     repairQueue.enqueue(repairId, queueKey);
+  }
+
+  /**
+   * Reasserts owner effects for a preserved current repair after a newer completed-inventory
+   * generation superseded its asset status or driver task. Draft targets still use their normal
+   * queue reconciliation and therefore do not enqueue these successor effects early.
+   */
+  void reassertActiveTarget(
+      UUID repairId, UUID statusKey, UUID taskRegistrationKey, UUID driverTaskKey) {
+    MaintenanceRepair repair =
+        repairs
+            .findById(repairId)
+            .orElseThrow(
+                () -> new MaintenanceNotFoundException("Inventory repair target not found"));
+    boolean ordinary =
+        (repair.getExecutionState() == RepairExecutionState.QUEUED
+                || repair.getExecutionState() == RepairExecutionState.IN_PROGRESS)
+            && repair.getReclassificationState() == RepairReclassificationState.STABLE;
+    boolean externalCapital =
+        repair.getExecutionState() == RepairExecutionState.COMPLETED
+            && repair.getAcceptanceState() == RepairAcceptanceState.PENDING
+            && repair.getReclassificationState() == RepairReclassificationState.EXTERNAL_CAPITAL;
+    if (!(ordinary || externalCapital)) return;
+    taskBoardSupport.enqueueRepairComplexityStatusSync(repair, statusKey);
+    if (ordinary && !"GENERATED".equals(repair.getTaskGenerationState())) {
+      taskBoardSupport.enqueueOrdinaryRepairExecution(
+          repair, taskRegistrationKey, driverTaskKey);
+    } else if (externalCapital) {
+      taskBoardSupport.enqueueCapitalRepairMovement(repair, driverTaskKey);
+    }
   }
 
   private void attachMedia(

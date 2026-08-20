@@ -177,11 +177,22 @@ final class LogisticsTaskBoardDependencyClient {
   }
 
   DriverBoardTask cancelDriverTask(UUID externalTaskId, long expectedTaskVersion) {
+    return cancelDriverTask(
+        externalTaskId, expectedTaskVersion, "Капитальный ремонт возвращён в отдельную очередь");
+  }
+
+  DriverBoardTask cancelDriverTask(UUID externalTaskId, long expectedTaskVersion, String reason) {
+    if (externalTaskId == null
+        || expectedTaskVersion < 0
+        || reason == null
+        || reason.isBlank()
+        || reason.length() > 1_000) {
+      throw new IllegalArgumentException("Invalid driver task cancellation command");
+    }
     CancelDriverTaskResponse cancelled =
         transport.postWithoutIdempotency(
             taskBoardTaskBase + "/" + externalTaskId + "/cancel",
-            new CancelDriverTaskRequest(
-                expectedTaskVersion, "Капитальный ремонт возвращён в отдельную очередь"),
+            new CancelDriverTaskRequest(expectedTaskVersion, reason.trim()),
             CancelDriverTaskResponse.class,
             TASK_BOARD_CLIENT,
             TASK_BOARD_SCOPE,
@@ -325,7 +336,10 @@ final class LogisticsTaskBoardDependencyClient {
 
   private WarehouseQueueCapabilitiesResponse readWarehouseQueueCapabilities(UUID warehouseId) {
     return transport.get(
-        taskBoardBase + "/api/internal/task-board/v1/warehouses/" + warehouseId + "/queue-capabilities",
+        taskBoardBase
+            + "/api/internal/task-board/v1/warehouses/"
+            + warehouseId
+            + "/queue-capabilities",
         WarehouseQueueCapabilitiesResponse.class,
         TASK_BOARD_CLIENT,
         TASK_BOARD_SCOPE,
@@ -674,8 +688,8 @@ final class LogisticsTaskBoardDependencyClient {
   }
 
   /**
-   * Completion evidence correlation that pins the task-board entry to an exact media generation
-   * and warehouse for downstream verification.
+   * Completion evidence correlation that pins the task-board entry to an exact media generation and
+   * warehouse for downstream verification.
    */
   private record DriverCompletionEvidenceResponse(
       UUID externalTaskId,

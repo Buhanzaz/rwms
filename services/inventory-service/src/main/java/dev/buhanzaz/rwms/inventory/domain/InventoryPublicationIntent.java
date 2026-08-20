@@ -55,11 +55,23 @@ public class InventoryPublicationIntent {
   @Column(name = "target_kind", length = 16)
   private FinalPlanTargetKind targetKind;
 
+  @Enumerated(EnumType.STRING)
+  @Column(name = "desired_asset_status", nullable = false, length = 24)
+  private InventoryAssetOutcomeStatus desiredAssetStatus;
+
   @Column(name = "target_id")
   private UUID targetId;
 
   @Column(name = "source_revision", nullable = false)
   private long sourceRevision;
+
+  @Column(name = "outcome_reapplication_no", nullable = false)
+  private long outcomeReapplicationNo;
+
+  /** Frozen finding passport observation used by every retry and manual reapplication. */
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "asset_passport_observation", nullable = false, columnDefinition = "jsonb")
+  private String assetPassportObservation;
 
   @Column(name = "request_sha256", length = 64)
   private String requestSha256;
@@ -72,6 +84,14 @@ public class InventoryPublicationIntent {
 
   @Column(name = "maintenance_estimate_id")
   private UUID maintenanceEstimateId;
+
+  @Column(name = "effective_asset_version")
+  private Long effectiveAssetVersion;
+
+  /** Canonical response from the asset-owned authoritative inventory command. */
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "asset_outcome_result", columnDefinition = "jsonb")
+  private String assetOutcomeResult;
 
   /** Immutable maintenance reconciliation outcome for a final-plan publication. */
   @Enumerated(EnumType.STRING)
@@ -118,6 +138,8 @@ public class InventoryPublicationIntent {
     value.state = PublicationState.READY;
     value.maintenanceSourceKey = inventoryId + ":" + findingId;
     value.sourceRevision = sourceRevision;
+    value.desiredAssetStatus = InventoryAssetOutcomeStatus.REPAIR;
+    value.assetPassportObservation = absentPassportObservation();
     return value;
   }
 
@@ -147,6 +169,147 @@ public class InventoryPublicationIntent {
     return value;
   }
 
+  /** Creates one durable final-plan outcome, including asset-only FREE results. */
+  public static InventoryPublicationIntent readyForOutcome(
+      UUID inventoryId,
+      UUID findingId,
+      long sourceRevision,
+      long finalPlanVersion,
+      String finalPlanSha256,
+      FinalPlanTargetKind targetKind,
+      InventoryAssetOutcomeStatus desiredAssetStatus) {
+    return readyForOutcome(
+        inventoryId,
+        findingId,
+        sourceRevision,
+        finalPlanVersion,
+        finalPlanSha256,
+        targetKind,
+        desiredAssetStatus,
+        0,
+        absentPassportObservation());
+  }
+
+  /** Creates one durable final-plan outcome with its immutable inventory passport observation. */
+  public static InventoryPublicationIntent readyForOutcome(
+      UUID inventoryId,
+      UUID findingId,
+      long sourceRevision,
+      long finalPlanVersion,
+      String finalPlanSha256,
+      FinalPlanTargetKind targetKind,
+      InventoryAssetOutcomeStatus desiredAssetStatus,
+      String assetPassportObservation) {
+    return readyForOutcome(
+        inventoryId,
+        findingId,
+        sourceRevision,
+        finalPlanVersion,
+        finalPlanSha256,
+        targetKind,
+        desiredAssetStatus,
+        0,
+        assetPassportObservation);
+  }
+
+  /** Creates one durable final-plan outcome in a shared manual reapplication generation. */
+  public static InventoryPublicationIntent readyForOutcome(
+      UUID inventoryId,
+      UUID findingId,
+      long sourceRevision,
+      long finalPlanVersion,
+      String finalPlanSha256,
+      FinalPlanTargetKind targetKind,
+      InventoryAssetOutcomeStatus desiredAssetStatus,
+      long outcomeReapplicationNo) {
+    return readyForOutcome(
+        inventoryId,
+        findingId,
+        sourceRevision,
+        finalPlanVersion,
+        finalPlanSha256,
+        targetKind,
+        desiredAssetStatus,
+        outcomeReapplicationNo,
+        absentPassportObservation());
+  }
+
+  /** Creates one durable final-plan outcome in a shared generation with frozen passport truth. */
+  public static InventoryPublicationIntent readyForOutcome(
+      UUID inventoryId,
+      UUID findingId,
+      long sourceRevision,
+      long finalPlanVersion,
+      String finalPlanSha256,
+      FinalPlanTargetKind targetKind,
+      InventoryAssetOutcomeStatus desiredAssetStatus,
+      long outcomeReapplicationNo,
+      String assetPassportObservation) {
+    requireOutcomeShape(targetKind, desiredAssetStatus);
+    if (outcomeReapplicationNo < 0) {
+      throw new IllegalArgumentException("Outcome reapplication number is invalid");
+    }
+    InventoryPublicationIntent value = ready(inventoryId, findingId, sourceRevision);
+    if (finalPlanVersion < 1
+        || finalPlanSha256 == null
+        || !finalPlanSha256.matches("^[0-9a-f]{64}$")) {
+      throw new IllegalArgumentException("Final-plan publication source is invalid");
+    }
+    value.finalPlanVersion = finalPlanVersion;
+    value.finalPlanSha256 = finalPlanSha256;
+    value.targetKind = targetKind;
+    value.desiredAssetStatus = desiredAssetStatus;
+    value.outcomeReapplicationNo = outcomeReapplicationNo;
+    value.assetPassportObservation = requiredJsonObject(assetPassportObservation);
+    value.maintenanceSourceKey = inventoryId + ":" + finalPlanVersion + ":" + findingId;
+    return value;
+  }
+
+  /**
+   * Reopens an outcome under an explicit history recovery command.
+   *
+   * <p>Prior attempts remain append-only evidence. Only derived delivery state is cleared so the
+   * next attempt reasserts the completed inventory through every current downstream owner. A
+   * formerly successful row is deliberately eligible because an older runtime may have completed
+   * before later authoritative effects were introduced. Every invocation advances the durable
+   * owner-effect generation exactly once; ordinary scheduler retries never call this transition.
+   */
+  public void requeueForAuthoritativeOutcome(
+      long nextSourceRevision,
+      long nextFinalPlanVersion,
+      String nextFinalPlanSha256,
+      FinalPlanTargetKind nextTargetKind,
+      InventoryAssetOutcomeStatus nextDesiredAssetStatus) {
+    if (nextSourceRevision < 1
+        || nextFinalPlanVersion < 1
+        || nextFinalPlanSha256 == null
+        || !nextFinalPlanSha256.matches("^[0-9a-f]{64}$")) {
+      throw new IllegalArgumentException("Final-plan publication source is invalid");
+    }
+    requireOutcomeShape(nextTargetKind, nextDesiredAssetStatus);
+    state = PublicationState.READY;
+    sourceRevision = nextSourceRevision;
+    finalPlanVersion = nextFinalPlanVersion;
+    finalPlanSha256 = nextFinalPlanSha256;
+    maintenanceSourceKey = inventoryId + ":" + nextFinalPlanVersion + ":" + findingId;
+    targetKind = nextTargetKind;
+    desiredAssetStatus = nextDesiredAssetStatus;
+    outcomeReapplicationNo = Math.addExact(outcomeReapplicationNo, 1);
+    targetId = null;
+    maintenanceRepairId = null;
+    maintenanceEstimateId = null;
+    maintenanceOutcome = null;
+    maintenanceResult = null;
+    effectiveAssetVersion = null;
+    assetOutcomeResult = null;
+    requestSha256 = null;
+    currentPreconditionSha256 = null;
+    blockedFailureCode = null;
+    closedReason = null;
+    closedActorRef = null;
+    closedAt = null;
+  }
+
   public void request(String requestHash, String preconditionHash) {
     if (state != PublicationState.READY && state != PublicationState.TRANSIENT_FAILED) {
       throw new IllegalStateException("Publication is not requestable");
@@ -155,6 +318,33 @@ public class InventoryPublicationIntent {
     currentPreconditionSha256 = preconditionHash == null ? null : hash(preconditionHash);
     attemptCount = Math.addExact(attemptCount, 1);
     state = PublicationState.PENDING;
+  }
+
+  /** Records the asset-owner result before the optional maintenance effect is attempted. */
+  public void recordAssetOutcome(
+      long assetVersion, InventoryAssetOutcomeStatus appliedStatus, String canonicalResult) {
+    requirePending();
+    if (assetVersion < 0
+        || appliedStatus != desiredAssetStatus
+        || canonicalResult == null
+        || canonicalResult.isBlank()
+        || !canonicalResult.trim().startsWith("{")) {
+      throw new IllegalArgumentException("Authoritative asset outcome is invalid");
+    }
+    effectiveAssetVersion = assetVersion;
+    assetOutcomeResult = canonicalResult.trim();
+  }
+
+  /** Completes a no-work finding after its authoritative FREE status was applied. */
+  public void succeedAssetOnly() {
+    requirePending();
+    if (desiredAssetStatus != InventoryAssetOutcomeStatus.FREE
+        || targetKind != null
+        || effectiveAssetVersion == null
+        || assetOutcomeResult == null) {
+      throw new IllegalStateException("Asset-only publication result is incomplete");
+    }
+    state = PublicationState.SUCCEEDED;
   }
 
   public void succeed(UUID repairId) {
@@ -170,6 +360,12 @@ public class InventoryPublicationIntent {
   public void succeed(PublicationTarget target) {
     if (state != PublicationState.PENDING || target == null || target.outcome() == null) {
       throw new IllegalStateException("Only pending publication may succeed");
+    }
+    if (finalPlanVersion != null
+        && (desiredAssetStatus == InventoryAssetOutcomeStatus.FREE
+            || effectiveAssetVersion == null
+            || assetOutcomeResult == null)) {
+      throw new IllegalStateException("Authoritative asset outcome is incomplete");
     }
     if (target.maintenanceResult() == null || target.maintenanceResult().isBlank()) {
       throw new IllegalArgumentException("Maintenance publication result is required");
@@ -267,6 +463,28 @@ public class InventoryPublicationIntent {
     return normalized;
   }
 
+  private static String requiredJsonObject(String value) {
+    String normalized = required(value, 16_384);
+    if (!normalized.startsWith("{") || !normalized.endsWith("}")) {
+      throw new IllegalArgumentException("Frozen passport observation must be a JSON object");
+    }
+    return normalized;
+  }
+
+  private static String absentPassportObservation() {
+    return "{\"presence\":\"ABSENT\",\"value\":null}";
+  }
+
+  private static void requireOutcomeShape(
+      FinalPlanTargetKind targetKind, InventoryAssetOutcomeStatus desiredAssetStatus) {
+    if (desiredAssetStatus == null
+        || (desiredAssetStatus == InventoryAssetOutcomeStatus.FREE && targetKind != null)
+        || (desiredAssetStatus != InventoryAssetOutcomeStatus.FREE
+            && targetKind != FinalPlanTargetKind.REPAIR)) {
+      throw new IllegalArgumentException("Inventory outcome target is invalid");
+    }
+  }
+
   @PrePersist
   void beforeInsert() {
     OffsetDateTime current = OffsetDateTime.now(ZoneOffset.UTC);
@@ -303,6 +521,14 @@ public class InventoryPublicationIntent {
     return sourceRevision;
   }
 
+  public long getOutcomeReapplicationNo() {
+    return outcomeReapplicationNo;
+  }
+
+  public String getAssetPassportObservation() {
+    return assetPassportObservation;
+  }
+
   public String getMaintenanceSourceKey() {
     return maintenanceSourceKey;
   }
@@ -333,6 +559,23 @@ public class InventoryPublicationIntent {
 
   public UUID getMaintenanceEstimateId() {
     return maintenanceEstimateId;
+  }
+
+  public InventoryAssetOutcomeStatus getDesiredAssetStatus() {
+    return desiredAssetStatus;
+  }
+
+  public Long getEffectiveAssetVersion() {
+    return effectiveAssetVersion;
+  }
+
+  public String getAssetOutcomeResult() {
+    return assetOutcomeResult;
+  }
+
+  /** Returns whether asset-service has durably confirmed the completed-inventory outcome. */
+  public boolean hasAuthoritativeAssetOutcome() {
+    return effectiveAssetVersion != null && assetOutcomeResult != null;
   }
 
   public MaintenancePublicationOutcome getMaintenanceOutcome() {

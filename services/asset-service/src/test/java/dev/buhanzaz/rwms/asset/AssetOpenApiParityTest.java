@@ -96,6 +96,7 @@ class AssetOpenApiParityTest {
         "/api/internal/asset/v1/inventory/validations",
         "/api/internal/asset/v1/inventory/furniture-snapshots",
         "/api/internal/asset/v1/inventory/furniture-reconciliations/{inventoryId}",
+        "/api/internal/asset/v1/inventory/outcomes/{inventoryId}/findings/{findingId}",
         "/api/internal/asset/v1/inventory/source-assets");
     assertThat(
             child(
@@ -136,6 +137,44 @@ class AssetOpenApiParityTest {
             "finishing",
             "characteristics");
     assertThat(list(inventorySourceAsset.get("oneOf"))).hasSize(2);
+    Map<String, Object> inventoryOutcomeRequest = child(schemas, "InventoryOutcomeRequest");
+    assertThat(list(inventoryOutcomeRequest.get("required")))
+        .containsExactly(
+            "warehouseId",
+            "assetId",
+            "inventoryCompletedAt",
+            "finalPlanVersion",
+            "finalPlanSha256",
+            "findingRevision",
+            "desiredStatus",
+            "passportObservation",
+            "passportObservationSha256");
+    Map<String, Object> passportObservation =
+        child(schemas, "InventoryOutcomePassportObservation");
+    assertThat(list(passportObservation.get("oneOf"))).hasSize(2);
+    assertThat(passportObservation.toString())
+        .contains(
+            "ABSENT",
+            "PRESENT",
+            "rentalType",
+            "dimensions",
+            "finishing",
+            "category",
+            "characteristics",
+            "linoleum");
+    assertThat(list(child(schemas, "InventoryOutcomeStatus").get("enum")))
+        .containsExactly("FREE", "REPAIR", "CAPITAL_REPAIR");
+    assertThat(list(child(schemas, "InventoryOutcomeResponse").get("required")))
+        .containsExactly(
+            "inventoryId",
+            "findingId",
+            "assetId",
+            "assetVersion",
+            "status",
+            "releasedOrderUnitReservationIds",
+            "releasedOperationLeaseIds",
+            "releasedPresentationHoldIds",
+            "transferSuperseded");
     assertThat(list(child(schemas, "RentalItem").get("required")))
         .contains(
             "id",

@@ -124,9 +124,9 @@ class AuthFlywayConfigurationTest {
 
     @Test
     void inventoryClientIsDisabledAndExactInBaseDevelopmentAndFocusedTestProfiles() throws IOException {
-        assertInventoryClient(load("application.yaml"), "${INVENTORY_CLIENT_REVISION:4}");
-        assertInventoryClient(load("application-dev.yaml"), "${INVENTORY_CLIENT_REVISION:4}");
-        assertInventoryClient(load("application-inventory-client.yaml"), 4);
+        assertInventoryClient(load("application.yaml"), "${INVENTORY_CLIENT_REVISION:6}");
+        assertInventoryClient(load("application-dev.yaml"), "${INVENTORY_CLIENT_REVISION:6}");
+        assertInventoryClient(load("application-inventory-client.yaml"), 6);
     }
 
     @Test
@@ -201,7 +201,9 @@ class AuthFlywayConfigurationTest {
         assertThat(source.getProperty(prefix + ".scopes[3]")).isEqualTo("warehouse.lifecycle.confirm");
         assertThat(source.getProperty(prefix + ".scopes[4]")).isEqualTo("asset.inventory");
         assertThat(source.getProperty(prefix + ".scopes[5]")).isEqualTo("maintenance.inventory");
-        assertThat(source.getProperty(prefix + ".scopes[6]")).isNull();
+        assertThat(source.getProperty(prefix + ".scopes[6]")).isEqualTo("logistics.inventory");
+        assertThat(source.getProperty(prefix + ".scopes[7]")).isEqualTo("media.inventory");
+        assertThat(source.getProperty(prefix + ".scopes[8]")).isNull();
         assertThat(source.getProperty(prefix + ".audiences[0]")).isEqualTo("rwms-services");
         assertThat(source.getProperty(prefix + ".audiences[1]")).isNull();
         assertThat(source.getProperty(prefix + ".secret-environment")).isEqualTo("INVENTORY_CLIENT_SECRET");

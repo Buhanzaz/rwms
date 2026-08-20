@@ -29,66 +29,6 @@ public interface InventoryFurnitureReconciliationRepository
   @Query(
       value =
           """
-          select lease.id
-          from operation_lease lease
-          where lease.rental_item_id in (:assetIds)
-            and lease.state = 'ACTIVE'
-            and lease.expires_at > :now
-          order by lease.id
-          for update
-          """,
-      nativeQuery = true)
-  List<UUID> lockLiveOperationLeaseIds(
-      @Param("assetIds") Collection<UUID> assetIds, @Param("now") OffsetDateTime now);
-
-  @Query(
-      value =
-          """
-          select reservation.id
-          from order_unit_reservation reservation
-          where reservation.rental_item_id in (:assetIds)
-            and reservation.state = 'ACTIVE'
-          order by reservation.id
-          for update
-          """,
-      nativeQuery = true)
-  List<UUID> lockActiveOrderUnitReservationIds(
-      @Param("assetIds") Collection<UUID> assetIds);
-
-  @Query(
-      value =
-          """
-          select hold.id
-          from presentation_unit_hold hold
-          where hold.rental_item_id in (:assetIds)
-            and hold.state = 'ACTIVE'
-            and hold.expires_at > :now
-          order by hold.id
-          for update
-          """,
-      nativeQuery = true)
-  List<UUID> lockLivePresentationHoldIds(
-      @Param("assetIds") Collection<UUID> assetIds, @Param("now") OffsetDateTime now);
-
-  @Query(
-      value =
-          """
-          select reservation.id
-          from order_equipment_reservation reservation
-          where reservation.warehouse_id = :warehouseId
-            and reservation.equipment_id in (:equipmentIds)
-            and reservation.state = 'ACTIVE'
-          order by reservation.id
-          for update
-          """,
-      nativeQuery = true)
-  List<UUID> lockActiveOrderEquipmentReservationIds(
-      @Param("warehouseId") UUID warehouseId,
-      @Param("equipmentIds") Collection<UUID> equipmentIds);
-
-  @Query(
-      value =
-          """
           select hold.id
           from equipment_allocation_hold hold
           where hold.warehouse_id = :warehouseId

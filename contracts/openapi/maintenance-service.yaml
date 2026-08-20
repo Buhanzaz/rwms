@@ -340,12 +340,13 @@ paths:
       operationId: preflightInventoryPublicationReconciliation
       description: >-
         Private exact maintenance.inventory SERVICE boundary. Validates the completed inventory
-        evidence without mutating maintenance state, resolves AFTER_RENT to ESTIMATE and every
-        other current status to REPAIR, and returns deterministic active and historical target
-        candidates for each finding that has a frozen work plan.
+        evidence without mutating maintenance state and targets every accepted non-terminal
+        current status as REPAIR. Each work finding has an empty candidates array because the
+        latest completed inventory is authoritative and no active estimate/repair requires a
+        caller-selected merge or replacement decision.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryPublicationPreflightRequest' } } } }
       responses:
-        '200': { description: Current target candidates and immutable plan summaries., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryPublicationPreflightResponse' } } } }
+        '200': { description: Immutable work-finding identities with no collision candidates., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryPublicationPreflightResponse' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -361,17 +362,44 @@ paths:
       tags: [Inventory Integration]
       operationId: applyInventoryPublicationReconciliation
       description: >-
-        Private exact maintenance.inventory SERVICE boundary. Stores the raw schema-versioned
-        completed plan under inventoryId:finalPlanVersion:findingId. CREATE refuses unresolved
-        active targets. REPLACE and MERGE supersede only an unstarted DRAFT target. MERGE of an
-        IN_PROGRESS or proven-completed repair creates a local successor from the semantic delta;
-        it has no task-board effect until the predecessor's terminal fact. REPLACE never alters
-        started work. A MATCHED result proves that every submitted line is already assigned to
-        the predecessor and creates no new task. AFTER_RENT creates a DRAFT estimate only; it
-        never schedules repair tasks or inbound logistics.
+        Private exact maintenance.inventory SERVICE boundary. The latest immutable completed
+        inventory source is authoritative for this asset: maintenance durably cancels or
+        supersedes every non-terminal predecessor estimate, repair, task, driver movement, lease
+        and repair-place guard, then materializes exactly one full frozen REPAIR target. Historical
+        CREATE, REPLACE and MERGE selections remain accepted as immutable source evidence but do
+        not weaken full replacement semantics. Terminal accepted/written-off truth and stale,
+        ambiguous or cross-warehouse source ordering fail before an external effect. A completed
+        Idempotency-Key replays its frozen response; a new key for the same immutable source
+        re-discovers and supersedes later non-terminal predecessors while preserving the exact
+        source repair and never creating a duplicate.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryPublicationApplyRequest' } } } }
       responses:
         '200': { description: Created or idempotently replayed completed-inventory publication., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryPublicationApplyResult' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/internal/maintenance/v1/inventory/outcomes/{inventoryId}/findings/{findingId}/no-work:
+    parameters:
+      - { name: inventoryId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: findingId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    put:
+      tags: [Inventory Integration]
+      operationId: applyInventoryNoWorkOutcome
+      description: >-
+        Private exact maintenance.inventory SERVICE boundary. Applies the latest completed FREE
+        finding without creating an estimate or repair. All non-terminal maintenance predecessors
+        and their owned external effects are durably superseded while every row, stage, evidence,
+        media reference and event remains audit history. A completed Idempotency-Key replays; a
+        new key for the same immutable source re-discovers and supersedes later predecessors. An
+        older source or a different source at the same completion time is rejected.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryNoWorkOutcomeRequest' } } } }
+      responses:
+        '200': { description: Authoritative no-work cleanup result., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryNoWorkOutcomeResult' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -2783,8 +2811,12 @@ components:
     InventoryPublicationSnapshot:
       description: >-
         Raw inventory-owned frozen plan. snapshotSchemaVersion=1 may additionally retain the
-        historical movementToShipment boolean; maintenance stores and hashes that exact raw
-        document before adapting it to the current executable schema. Version 2 omits it.
+        historical movementToShipment boolean. A legacy version-1 producer may also have copied
+        the same non-empty aggregate mediaReferences array onto every line; after verifying the
+        exact raw fingerprint, maintenance interprets only that complete duplication as aggregate
+        media and clears the line copies in memory. No other version-1 shape is normalized, and
+        current validation still applies. Maintenance stores and hashes the exact raw document;
+        version 2 uses the strict current executable schema and omits movementToShipment.
       type: object
       additionalProperties: true
       properties:
@@ -2843,8 +2875,11 @@ components:
         finalPlanVersion: { type: integer, format: int64, minimum: 1 }
         finalPlanSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
         findings:
+          description: >-
+            Completed findings that can produce maintenance candidates. An empty list is valid
+            when the final inventory plan contains no maintenance work.
           type: array
-          minItems: 1
+          minItems: 0
           maxItems: 5000
           items: { $ref: '#/components/schemas/InventoryPublicationFindingInput' }
     InventoryPublicationPlanSummary:
@@ -2879,6 +2914,10 @@ components:
         planSummary: { $ref: '#/components/schemas/InventoryPublicationPlanSummary' }
         forceCapitalRepair: { type: boolean }
     InventoryPublicationPreflightFinding:
+      description: >-
+        Collision-free projection for one completed-inventory work finding. targetKind is always
+        REPAIR and candidates is always empty; existing active maintenance is superseded during
+        authoritative apply without a caller-selected merge or replacement.
       type: object
       additionalProperties: false
       required: [findingId, targetKind, candidates]
@@ -2896,16 +2935,36 @@ components:
         finalPlanSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
         findings: { type: array, items: { $ref: '#/components/schemas/InventoryPublicationPreflightFinding' } }
     InventoryPublicationApplyRequest:
+      description: >-
+        Immutable completed-inventory evidence plus the effective asset version returned by the
+        authoritative asset outcome command. Maintenance creates a REPAIR for every accepted
+        non-terminal source status; LOST and WRITTEN_OFF remain terminal conflicts.
       type: object
       additionalProperties: false
-      required: [warehouseId, finalPlanVersion, finalPlanSha256, findingRevision, assetId, assetVersion, planFingerprintSha256, priority, movementToRepair, movementScheduledDate, repairScheduledDate, snapshot, media, snapshotSchemaVersion, strategy, selectedTargetKind, selectedTargetId]
+      required: [warehouseId, finalPlanVersion, finalPlanSha256, findingRevision, assetId, assetVersion, authoritativeAssetVersion, inventoryCompletedAt, planFingerprintSha256, priority, movementToRepair, movementScheduledDate, repairScheduledDate, snapshot, media, snapshotSchemaVersion, strategy, selectedTargetKind, selectedTargetId]
       properties:
         warehouseId: { type: string, format: uuid }
         finalPlanVersion: { type: integer, format: int64, minimum: 1 }
         finalPlanSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
         findingRevision: { type: integer, format: int64, minimum: 1 }
         assetId: { type: string, format: uuid }
-        assetVersion: { type: integer, format: int64, minimum: 0 }
+        assetVersion:
+          description: Immutable asset version observed by the completed inventory final plan.
+          type: integer
+          format: int64
+          minimum: 0
+        authoritativeAssetVersion:
+          description: >-
+            Effective version returned after asset-service applied the authoritative inventory
+            outcome. It must be greater than or equal to assetVersion and is persisted on a new or
+            successor repair.
+          type: integer
+          format: int64
+          minimum: 0
+        inventoryCompletedAt:
+          description: Immutable completion time used to order authoritative inventory sources.
+          type: string
+          format: date-time
         planFingerprintSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
         priority: { type: integer, minimum: 1, maximum: 5 }
         movementToRepair: { type: boolean }
@@ -2924,6 +2983,48 @@ components:
           description: Must equal the frozen snapshot value; omitted means false.
           type: boolean
           default: false
+    InventoryNoWorkOutcomeRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, assetId, inventoryCompletedAt, finalPlanVersion, finalPlanSha256, findingRevision, authoritativeAssetVersion, desiredStatus]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        assetId: { type: string, format: uuid }
+        inventoryCompletedAt: { type: string, format: date-time }
+        finalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        finalPlanSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        findingRevision: { type: integer, format: int64, minimum: 1 }
+        authoritativeAssetVersion: { type: integer, format: int64, minimum: 0 }
+        desiredStatus: { type: string, enum: [FREE] }
+    InventoryNoWorkOutcomeResult:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, findingId, assetId, supersededEstimateIds, supersededRepairIds, cancelledExternalTaskIds, cancelledDriverTaskIds, releasedLeaseIds, replay]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        findingId: { type: string, format: uuid }
+        assetId: { type: string, format: uuid }
+        supersededEstimateIds:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        supersededRepairIds:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        cancelledExternalTaskIds:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        cancelledDriverTaskIds:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        releasedLeaseIds:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        replay: { type: boolean }
     InventoryPublicationSourceReference:
       type: object
       additionalProperties: false

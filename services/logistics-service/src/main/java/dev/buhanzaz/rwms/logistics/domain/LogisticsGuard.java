@@ -24,8 +24,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 /**
- * Local record of an asset-owned operation lease. An ACTIVE row is written only
- * after asset-service has confirmed an active lease and fencing token.
+ * Local record of an asset-owned operation lease. An ACTIVE row is written only after asset-service
+ * has confirmed an active lease and fencing token.
  */
 @Entity
 @Table(name = "logistics_guard")
@@ -86,6 +86,12 @@ public class LogisticsGuard {
   @Column(name = "updated_at", nullable = false)
   private OffsetDateTime updatedAt;
 
+  @Column(name = "inventory_superseded_by")
+  private UUID inventorySupersededBy;
+
+  @Column(name = "inventory_superseded_at")
+  private OffsetDateTime inventorySupersededAt;
+
   public static LogisticsGuard active(
       LogisticsDocument document,
       LogisticsDocumentLine line,
@@ -140,6 +146,33 @@ public class LogisticsGuard {
     }
     guardState = LogisticsGuardState.RELEASED;
     releasedAt = currentTime();
+  }
+
+  /** Marks this lease as displaced and prevents ordinary workflow continuation until release. */
+  public void supersedeByCompletedInventory(UUID inventoryId) {
+    if (inventoryId == null) {
+      throw new IllegalArgumentException("inventoryId is required");
+    }
+    inventorySupersededBy = inventoryId;
+    inventorySupersededAt = currentTime();
+    if (guardState == LogisticsGuardState.ACTIVE) {
+      guardState = LogisticsGuardState.RECONCILIATION_REQUIRED;
+    }
+  }
+
+  /**
+   * Closes the local guard only after asset-service returned the exact terminal lease capability.
+   */
+  public void confirmInventoryLeaseTerminal(UUID inventoryId, long terminalLeaseVersion) {
+    if (inventoryId == null
+        || !inventoryId.equals(inventorySupersededBy)
+        || leaseVersion == null
+        || terminalLeaseVersion < leaseVersion) {
+      throw new IllegalArgumentException("Inventory lease terminal result is stale or mismatched");
+    }
+    leaseVersion = terminalLeaseVersion;
+    guardState = LogisticsGuardState.RELEASED;
+    if (releasedAt == null) releasedAt = currentTime();
   }
 
   @PrePersist

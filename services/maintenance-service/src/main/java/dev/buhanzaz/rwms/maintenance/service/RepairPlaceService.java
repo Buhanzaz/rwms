@@ -270,6 +270,40 @@ public class RepairPlaceService {
     allocations.saveAndFlush(allocation);
   }
 
+  /**
+   * Releases every non-released place guard owned by a repair that the latest completed
+   * inventory made historical. An occupied place is first made ready in the same transaction.
+   */
+  @Transactional
+  public void releaseForAuthoritativeInventory(
+      UUID warehouseId,
+      UUID repairId,
+      UUID expectedAllocationId,
+      Long expectedAllocationVersion) {
+    if (warehouseId == null
+        || repairId == null
+        || (expectedAllocationId == null) != (expectedAllocationVersion == null)
+        || (expectedAllocationVersion != null && expectedAllocationVersion < 0)) {
+      throw new IllegalArgumentException("Authoritative inventory repair-place identity is required");
+    }
+    lockWarehouse(warehouseId);
+    RepairPlaceAllocation allocation = allocations.findByRepairIdForUpdate(repairId).orElse(null);
+    if (expectedAllocationId != null
+        && (allocation == null
+            || !expectedAllocationId.equals(allocation.getId())
+            || expectedAllocationVersion.longValue() != allocation.getVersion())) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_VERSION_CONFLICT",
+          "Completed inventory driver allocation does not match the local repair place");
+    }
+    if (allocation == null || allocation.getState() == RepairPlaceAllocationState.RELEASED) return;
+    if (allocation.getState() == RepairPlaceAllocationState.OCCUPIED) {
+      allocation.readyToRelease();
+    }
+    allocation.release();
+    allocations.saveAndFlush(allocation);
+  }
+
   @Transactional
   public TransitionResult reserve(
       UUID warehouseId, UUID repairId, long expectedVersion, UUID idempotencyKey) {

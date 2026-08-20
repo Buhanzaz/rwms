@@ -1167,6 +1167,24 @@ class AssetJpaValidationIntegrationTest {
             MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR, ownerId));
     assertThat(released.response().state()).isEqualTo("RELEASED");
     assertThat(releasedReplay.replayed()).isTrue();
+    var terminalRelease = service.releaseMaintenanceLease(
+        subjectId,
+        UUID.randomUUID(),
+        lease.id(),
+        new ReleaseMaintenanceOperationLeaseRequest(
+            renewed.response().version(), lease.fencingToken(),
+            MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR, ownerId));
+    assertThat(terminalRelease.replayed()).isFalse();
+    assertThat(terminalRelease.response()).isEqualTo(released.response());
+    assertThatThrownBy(() -> service.releaseMaintenanceLease(
+        subjectId,
+        UUID.randomUUID(),
+        lease.id(),
+        new ReleaseMaintenanceOperationLeaseRequest(
+            renewed.response().version(), lease.fencingToken() + 1,
+            MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR, ownerId)))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("stale or fenced");
     assertThatThrownBy(() -> service.releaseMaintenanceLease(
         UUID.randomUUID(),
         releaseKey,

@@ -777,6 +777,9 @@ final class InventoryProjectionService extends InventoryProjectionWorkflowSuppor
         value.getTargetId(),
         value.getMaintenanceEstimateId(),
         value.getMaintenanceRepairId(),
+        value.getDesiredAssetStatus(),
+        value.getEffectiveAssetVersion(),
+        value.getAssetOutcomeResult() == null ? null : read(value.getAssetOutcomeResult()),
         value.getMaintenanceOutcome(),
         value.getMaintenanceResult() == null ? null : read(value.getMaintenanceResult()),
         value.getBlockedFailureCode());

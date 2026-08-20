@@ -33,8 +33,8 @@ Private boundaries are deliberately limited to:
   furniture custody;
 - `/api/internal/asset/v1/logistics/**` for logistics leases, holds, reservations, movement plans
   and asset effects; and
-- `/api/internal/asset/v1/inventory/**` for inventory capture, validation, source-asset and
-  furniture-reconciliation work.
+- `/api/internal/asset/v1/inventory/**` for inventory capture, validation, source-asset,
+  furniture-reconciliation and completed-outcome work.
 
 Private callers use service credentials, not a forwarded user token. The security chain requires
 the exact service identity and single-purpose scope for each of those namespaces.
@@ -88,6 +88,55 @@ reservation. A live replacement furniture hold blocks maintenance acquisition un
 movement executes (an expired hold is not treated as live); its furniture reservation remains
 order-wide and is not released during replacement.
 
+## Completed inventory authority
+
+`PUT /api/internal/asset/v1/inventory/outcomes/{inventoryId}/findings/{findingId}` accepts only the
+exact `inventory-service` credential and immutable completed-plan evidence. For a found,
+non-terminal cabin, the latest completed inventory is authoritative: a first or newer `FREE`,
+`REPAIR` or `CAPITAL_REPAIR` source releases active operation leases, order-unit reservations and
+presentation holds, clears transfer state and then becomes the current cabin status. Rows and
+ordinary lease/asset events are preserved; media metadata and object storage are not part of this
+command.
+
+The same command carries the inventory finding's frozen passport observation. `ABSENT` preserves
+the current passport. `PRESENT` authoritatively replaces cabin type, compatible dimensions,
+finishing, category, characteristics and nullable linoleum even when the requested status already
+matches. Names must resolve exactly to active asset-service catalog rows; no catalog value is
+created. Every characteristic string and every array element is comma-split, trimmed and
+de-duplicated; a missing characteristic field clears the set, while missing or non-boolean
+linoleum clears that nullable value. Catalog resolution happens before any binding is released, so
+an unknown, inactive or incompatible value rolls the whole command back. Passport relation rows,
+the rental item version, ordinary passport/status events, watermark and receipt commit in one
+asset-owned transaction. See the canonical
+[`InventoryOutcomeRequest`](../../contracts/openapi/asset-service.yaml) and
+[`InventoryAssetOutcomeService`](src/main/java/dev/buhanzaz/rwms/asset/service/InventoryAssetOutcomeService.java).
+
+Flyway V38 adds a permanent successful idempotency receipt and a per-cabin completed-at watermark.
+The same key and request return the frozen result. A new key for the same latest final-plan finding
+reasserts status, reservations, holds and transfer state, but preserves the active operation lease
+because it may already belong to the repair created by this finding. Maintenance or logistics
+releases an unrelated predecessor lease with its exact owner and fence. A strictly older completed
+inventory and a conflicting equal-time source return `409`. `LOST`, `WRITTEN_OFF` and a wrong
+warehouse always reject without a partial status or receipt.
+
+Flyway
+[`V39__inventory_outcome_passport_watermark.sql`](src/main/resources/db/migration/V39__inventory_outcome_passport_watermark.sql)
+adds a nullable passport-observation hash to the watermark without changing the V38 receipt or
+response shape. `NULL` identifies a pre-V39 status-only watermark and permits one adoption only
+when every original source/status field is identical. The successful reapplication stores the
+hash; later equal-time payload drift conflicts.
+
+Furniture reconciliation keeps `expectedSnapshotSha256` as mandatory immutable source evidence in
+the permanent request identity, but does not compare it with a new full snapshot: non-terminal
+cabin status/version and physical quantities may legitimately drift before reconciliation. Under
+current locks it still requires every selected cabin to exist in the requested warehouse and be
+non-terminal, the cabin scope to match exactly, and the active FURNITURE catalog set/version to stay
+unchanged. It ends conflicting cabin leases, order and presentation bindings, order-wide furniture
+reservations and live allocation holds, preserves their audit rows/events, and then overwrites the
+current quantities with reviewed absolute counts. A maintenance or logistics lease-release retry
+may read the same-owner `RELEASED` or `EXPIRED` terminal lease with the original fencing token; a
+wrong owner or token remains fenced.
+
 ## Internal application structure
 
 `AssetService` is a stable controller-facing facade with five exact application
@@ -103,8 +152,8 @@ independently changing workflow separate:
 | `AssetClassifierService` | Classifier aggregate commands and event facts |
 | Lease, catalog, ledger and hold services | Exact locking, fencing, catalog binding, physical balances and allocation expiry |
 | `AssetJsonCodec` and `AssetBalanceRow` | Canonical JSON/idempotency decoding and an immutable physical-balance carrier only |
-| `InventoryAssetService` | Stable private inventory facade over capture, projection, furniture reconciliation and source creation |
-| Inventory capture/projection/furniture/source services | Frozen capture lifecycle, current validation reads, reviewed absolute furniture counts and permanent source identity |
+| `InventoryAssetService` | Stable private inventory facade over capture, projection, furniture reconciliation, completed outcomes and source creation |
+| Inventory capture/projection/furniture/outcome/source services | Frozen capture lifecycle, current validation reads, reviewed absolute furniture counts, completed-at outcome ordering and permanent source identity |
 | `InventoryAssetSnapshotTransaction` and `InventoryAssetCodec` | Repeatable-read snapshot boundary and canonical inventory JSON/hash mechanics only |
 | `RentalItemHtmlImportService` | Stable HTML-import facade over read projection, plan decisions, commit recovery and media recovery |
 | HTML-import projection, plan, commit and media services | Raw intake/read mapping, durable row decisions, materialization and retry/replace/skip workflows |

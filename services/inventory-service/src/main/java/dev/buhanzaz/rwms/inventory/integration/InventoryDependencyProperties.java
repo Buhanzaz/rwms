@@ -16,6 +16,8 @@ public record InventoryDependencyProperties(
     String warehouseBaseUrl,
     String assetBaseUrl,
     String maintenanceBaseUrl,
+    String logisticsBaseUrl,
+    String mediaBaseUrl,
     Duration connectTimeout,
     Duration readTimeout) {
 
@@ -32,6 +34,8 @@ public record InventoryDependencyProperties(
         uri(warehouseBaseUrl, "warehouse-base-url"),
         uri(assetBaseUrl, "asset-base-url"),
         uri(maintenanceBaseUrl, "maintenance-base-url"),
+        uri(logisticsBaseUrl, "logistics-base-url"),
+        uri(mediaBaseUrl, "media-base-url"),
         positive(connectTimeout, "connect-timeout"),
         positive(readTimeout, "read-timeout"));
   }
@@ -65,6 +69,8 @@ public record InventoryDependencyProperties(
       URI warehouseBaseUrl,
       URI assetBaseUrl,
       URI maintenanceBaseUrl,
+      URI logisticsBaseUrl,
+      URI mediaBaseUrl,
       Duration connectTimeout,
       Duration readTimeout) {}
 }

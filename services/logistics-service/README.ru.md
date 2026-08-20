@@ -147,7 +147,33 @@ reservations, затем обновляет тот же заказ, document mem
 
 `/api/internal/logistics/v1/maintenance/**` — узкая private boundary для maintenance-owned repair
 work, которому нужна logistics driver/equipment orchestration. Она использует service credentials и
-не является client route.
+не является client route. Её driver-task intake принимает обычную входящую работу
+`DELIVER_TO_REPAIR` и отдельное исходящее задание `CAPITAL_TO_PRODUCTION`, источником которого
+является внешний капремонт; обе работы принадлежат logistics и не обходят упорядоченную очередь
+водителей.
+
+`PUT /api/internal/logistics/v1/inventory/outcomes/{inventoryId}` применяет последнюю завершённую
+инвентаризацию как авторитетную logistics-истину по точным canonical `assetId`. Маршрут принимает
+только exact SERVICE token `inventory-service` с audience `rwms-services` и единственным scope
+`logistics.inventory`, а также UUID `Idempotency-Key`. Весь batch отклоняется с `409` до mutation,
+если он устарел, имеет неоднозначный equal-time source, пересекает ownership другого склада или
+выбирает лишь часть nonterminal document. Иначе выбранные document lines и rental terms остаются в
+истории, получают inventory-superseded marker и исключаются из active rental/shipment reads. Полностью
+выбранные nonterminal documents становятся `CANCELLED`; документы `ACCEPTED`,
+`ESTIMATE_REQUESTED`, `SHIPPED`, `COMPLETED` и уже `CANCELLED` сохраняют terminal state. Заказы без
+active terms переходят из `DRAFT`/`SAVED` в `CANCELLED` или из `FULFILLED` в `CLOSED`; уже terminal
+orders сохраняют status. Незавершённые logistics-owned driver/document tasks отменяются через
+source-owned general cancellation task-board даже после старта, а завершённая работа сохраняется.
+Сам batch не создаёт работу ремонта или капремонта: maintenance запускается после него через
+существующие integrations, а same-source reassertion защищает `INVENTORY` movement, чей `sourceId`
+является finding текущего batch, продолжая отменять более старый inventory-source movement.
+Inventory-displaced logistics guard остаётся в reconciliation, пока asset-service не подтвердит его
+exact typed document-line lease как `RELEASED` или `EXPIRED`; release выполняется вне database
+transaction со стабильным dependency idempotency key, а несовпадение owner/fence работает fail closed.
+Equipment work в `EXECUTING` или `RECONCILIATION_REQUIRED` работает fail closed; более ранняя работа
+переходит в существующий durable cancellation path. Постоянный receipt, per-asset source watermark и
+task-action checkpoints сохраняют каждую строку и возобновляют uncertain remote result; inventory
+outcome path ничего не удаляет из logistics history.
 
 `/api/logistics/public/v1/client-presentations/**` намеренно anonymous, но доступ ограничивают
 signed presentation token, его revision и current viewability. Media access также проверяет, что
@@ -184,6 +210,8 @@ port. Его неизменённый constructor собирает шесть ow
 | `RentalOrderUnitReplacementService` | Direct и presentation replacement через ordered batch checkpoints, pre-start отмену driver task и сходимость order/document members |
 | `ShipmentFurnitureTaskService` | Полный состав мебели всех active units заказа, readiness существующих movement tasks и replacement recovery checkpoints |
 | Rental-order command store, editability и problem/outcome leaves | Row/receipt replay, saved-draft synchronization и canonical local problem mapping; `LogisticsTransactionLock` владеет узким transaction advisory-lock access |
+| `InventoryOutcomeService` | Non-transactional orchestration завершённой инвентаризации и frozen successful replay |
+| `InventoryOutcomePreparationStore`, `InventoryOutcomeTaskStore`, `InventoryOutcomeTaskProcessor` | Атомарные supersession склада/documents/orders, durable task/asset-lease checkpoints и reconciliation task-board/asset/repair-place вне database transactions |
 
 Owner clients зависят только от общего transport и настроенного private base
 URL; они не зависят от peers и не ссылаются обратно на facade. Domain- и
@@ -318,6 +346,13 @@ delivery address normal-confirmation, необязательную пару ко
 Она не создаёт второй источник истины заказа, не переписывает historical строки и не удаляет
 исторические колонки desired window и scheduled time: legacy значения остаются физически только для
 persistence и сравнения старых receipt, но никогда не входят в публичные команды или проекции.
+
+Migration
+[`V50__authoritative_inventory_outcomes.sql`](src/main/resources/db/migration/V50__authoritative_inventory_outcomes.sql)
+добавляет nullable supersession markers в сохранённые строки document, line, guard, rental-order,
+rental-term и driver-task; active-read indexes для несуперседированных lines/terms; постоянные command
+receipts; per-asset completed-source watermarks и recoverable task/asset-lease action checkpoints.
+Это additive migration без backfill, rewrite или удаления исторических строк.
 
 Logistics вместе фиксирует facts, projection checkpoints и transactional outbox. Kafka delivery —
 at-least-once: aggregate IDs являются record keys, event IDs — dedupe identities, а consumers хранят

@@ -304,6 +304,25 @@ public class RentalItem {
   }
 
   /**
+   * Applies the latest completed-inventory truth after the owning service has superseded all live
+   * operational bindings. Terminal loss and write-off remain irreversible.
+   */
+  public boolean applyCompletedInventoryOutcome(RentalItemStatus next) {
+    if (next != RentalItemStatus.FREE
+        && next != RentalItemStatus.REPAIR
+        && next != RentalItemStatus.CAPITAL_REPAIR) {
+      throw new IllegalArgumentException("Completed inventory outcome status is invalid");
+    }
+    if (status.isTerminalDispositionStatus()) {
+      throw new IllegalStateException("Terminal rental item cannot change status");
+    }
+    boolean changed = status != next || transferOriginStatus != null;
+    status = next;
+    transferOriginStatus = null;
+    return changed;
+  }
+
+  /**
    * Applies the terminal cabin truth after the asset service has verified a
    * durable maintenance disposition fence.  This method deliberately accepts
    * only the two terminal dispositions; it does not create a generic status

@@ -105,7 +105,9 @@ public class DriverLogisticsTask {
   @Column(name = "trip_number")
   private Integer tripNumber;
 
-  /** Historical physical column retained for old rows; new date-only trips never read or write it. */
+  /**
+   * Historical physical column retained for old rows; new date-only trips never read or write it.
+   */
   @Getter(AccessLevel.NONE)
   @Column(name = "scheduled_time")
   private java.time.LocalTime legacyScheduledTime;
@@ -209,6 +211,12 @@ public class DriverLogisticsTask {
 
   @Column(name = "completed_at")
   private OffsetDateTime completedAt;
+
+  @Column(name = "inventory_cancelled_by")
+  private UUID inventoryCancelledBy;
+
+  @Column(name = "inventory_cancelled_at")
+  private OffsetDateTime inventoryCancelledAt;
 
   /**
    * Cabin members are present only for the document-owned grouped trip form; legacy document-line
@@ -655,6 +663,33 @@ public class DriverLogisticsTask {
       repairPlaceAllocationId = null;
       repairPlaceAllocationVersion = null;
     }
+    clearRetryFailure();
+    nextAttemptAt = null;
+    touch();
+  }
+
+  /**
+   * Records task-board's authoritative broad cancellation for completed inventory. Unlike ordinary
+   * maintenance compensation, this transition may follow STARTED work; completed work remains
+   * immutable and must never call this method.
+   */
+  public void cancelForCompletedInventory(UUID inventoryId, Long observedTaskVersion) {
+    if (inventoryId == null || state == DriverTaskState.COMPLETED) {
+      throw new IllegalStateException("Only unfinished driver work can be inventory-cancelled");
+    }
+    if (observedTaskVersion != null) {
+      if (observedTaskVersion < 0
+          || (taskBoardTaskVersion != null && observedTaskVersion < taskBoardTaskVersion)) {
+        throw new IllegalArgumentException("Task-board version moved backwards");
+      }
+      taskBoardTaskVersion = observedTaskVersion;
+    }
+    inventoryCancelledBy = inventoryId;
+    inventoryCancelledAt = now();
+    state = DriverTaskState.CANCELLED;
+    manualPromotionHoldUntil = null;
+    repairPlaceAllocationId = null;
+    repairPlaceAllocationVersion = null;
     clearRetryFailure();
     nextAttemptAt = null;
     touch();

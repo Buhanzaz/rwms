@@ -18,14 +18,14 @@ class LogisticsAuthorizerTest {
   private static final UUID DESTINATION = UUID.fromString("00000000-0000-0000-0000-000000000202");
   private static final UUID SUBJECT = UUID.fromString("00000000-0000-0000-0000-000000000203");
 
-  private final LogisticsAuthorizer authorizer = new LogisticsAuthorizer(new MockEnvironment(), false);
+  private final LogisticsAuthorizer authorizer =
+      new LogisticsAuthorizer(new MockEnvironment(), false);
 
   @Test
   void grantsEditAtTheExactWarehouseOnly() {
     Jwt jwt =
         userJwt(
-            "rwms.write",
-            List.of(Map.of("warehouseId", WAREHOUSE.toString(), "level", "EDIT")));
+            "rwms.write", List.of(Map.of("warehouseId", WAREHOUSE.toString(), "level", "EDIT")));
 
     assertThatCode(() -> authorizer.requireEdit(jwt, WAREHOUSE)).doesNotThrowAnyException();
     assertThatThrownBy(() -> authorizer.requireEdit(jwt, DESTINATION))
@@ -96,6 +96,45 @@ class LogisticsAuthorizerTest {
   }
 
   @Test
+  void grantsOnlyTheExactInventoryServiceIdentityAudienceAndScope() {
+    Jwt exact =
+        serviceJwt(
+            "inventory-service",
+            "inventory-service",
+            List.of("logistics.inventory"),
+            List.of("rwms-services"));
+
+    assertThatCode(() -> authorizer.requireInventoryOutcome(exact)).doesNotThrowAnyException();
+    assertThatThrownBy(
+            () ->
+                authorizer.requireInventoryOutcome(
+                    serviceJwt(
+                        "inventory-service",
+                        "inventory-service",
+                        List.of("logistics.inventory", "rwms.write"),
+                        List.of("rwms-services"))))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(
+            () ->
+                authorizer.requireInventoryOutcome(
+                    serviceJwt(
+                        "inventory-service",
+                        "other-service",
+                        List.of("logistics.inventory"),
+                        List.of("rwms-services"))))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(
+            () ->
+                authorizer.requireInventoryOutcome(
+                    serviceJwt(
+                        "inventory-service",
+                        "inventory-service",
+                        List.of("logistics.inventory"),
+                        List.of("rwms-services", "other-audience"))))
+        .isInstanceOf(AccessDeniedException.class);
+  }
+
+  @Test
   void warehouseOperationRecoveryRequiresWriteScopedGlobalAdministrator() {
     Jwt administrator =
         userJwt(
@@ -131,8 +170,7 @@ class LogisticsAuthorizerTest {
     Jwt workerApp = workerJwt(UUID.randomUUID(), SUBJECT, "worker.tasks");
     Jwt formerUserShape =
         userJwt(
-            "worker.tasks",
-            List.of(Map.of("warehouseId", WAREHOUSE.toString(), "level", "VIEW")));
+            "worker.tasks", List.of(Map.of("warehouseId", WAREHOUSE.toString(), "level", "VIEW")));
 
     assertThat(authorizer.isExactAssignedDriver(workerApp, "ASSIGNED_DRIVER", SUBJECT)).isFalse();
     assertThat(
@@ -159,13 +197,13 @@ class LogisticsAuthorizerTest {
       String scope, String globalRole, List<Map<String, String>> warehouseAccess) {
     Jwt.Builder builder =
         Jwt.withTokenValue("token")
-        .header("alg", "none")
-        .subject(SUBJECT.toString())
-        .issuedAt(Instant.now())
-        .expiresAt(Instant.now().plusSeconds(60))
-        .claim("principal_type", "USER")
-        .claim("scope", scope)
-        .claim("warehouse_access", warehouseAccess);
+            .header("alg", "none")
+            .subject(SUBJECT.toString())
+            .issuedAt(Instant.now())
+            .expiresAt(Instant.now().plusSeconds(60))
+            .claim("principal_type", "USER")
+            .claim("scope", scope)
+            .claim("warehouse_access", warehouseAccess);
     if (globalRole != null) builder.claim("global_role", globalRole);
     return builder.build();
   }

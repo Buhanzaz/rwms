@@ -132,6 +132,17 @@ public class InventoryFurnitureReconciliationIntent {
     nextAttemptAt = completedAt;
   }
 
+  /** Makes a failed authoritative furniture hand-off immediately eligible for recovery. */
+  public void requeueForAuthoritativeRecovery() {
+    if (state == FurnitureReconciliationState.SUCCEEDED) {
+      return;
+    }
+    state = FurnitureReconciliationState.PENDING;
+    failureCode = null;
+    completedAt = null;
+    nextAttemptAt = now();
+  }
+
   private static String sha256(String value) {
     if (value == null || !value.matches("^[0-9a-f]{64}$")) {
       throw new IllegalArgumentException("Canonical SHA-256 is required");

@@ -562,6 +562,12 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   }
 
   @Override
+  public DriverBoardTask cancelDriverTask(
+      UUID externalTaskId, long expectedTaskVersion, String reason) {
+    return taskBoard.cancelDriverTask(externalTaskId, expectedTaskVersion, reason);
+  }
+
+  @Override
   public DriverTaskPreStartCancellation cancelDriverTaskIfPreStart(
       UUID externalTaskId, long expectedTaskVersion, String reason) {
     return taskBoard.cancelDriverTaskIfPreStart(externalTaskId, expectedTaskVersion, reason);

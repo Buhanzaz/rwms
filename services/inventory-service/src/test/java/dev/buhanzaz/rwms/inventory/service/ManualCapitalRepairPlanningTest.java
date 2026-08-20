@@ -3,16 +3,20 @@ package dev.buhanzaz.rwms.inventory.service;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.FinalPlanEntryUpdate;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.inventory.domain.FinalPlanTargetKind;
 import dev.buhanzaz.rwms.inventory.domain.FindingPlanSnapshot;
 import dev.buhanzaz.rwms.inventory.domain.InspectionState;
+import dev.buhanzaz.rwms.inventory.domain.InventoryAssetOutcomeStatus;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlan;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlanEntry;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinding;
 import dev.buhanzaz.rwms.inventory.domain.InventoryPublicationIntent;
 import dev.buhanzaz.rwms.inventory.domain.InventorySession;
+import dev.buhanzaz.rwms.inventory.domain.ObservationPresence;
 import dev.buhanzaz.rwms.inventory.eventing.InventoryEventStore;
 import dev.buhanzaz.rwms.inventory.integration.InventoryDependencyGateway;
 import dev.buhanzaz.rwms.inventory.repository.FindingMediaReferenceRepository;
@@ -27,6 +31,7 @@ import dev.buhanzaz.rwms.inventory.repository.InventoryPublicationIntentReposito
 import dev.buhanzaz.rwms.inventory.repository.InventorySessionRepository;
 import dev.buhanzaz.rwms.inventory.security.InventoryAuthorizer;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -96,7 +101,7 @@ class ManualCapitalRepairPlanningTest {
             7L,
             PLAN_HASH,
             true,
-            FinalPlanTargetKind.ESTIMATE,
+            FinalPlanTargetKind.REPAIR,
             0,
             4,
             false,
@@ -108,14 +113,23 @@ class ManualCapitalRepairPlanningTest {
     InventorySession session = mock(InventorySession.class);
     when(session.getId()).thenReturn(inventoryId);
     when(session.getWarehouseId()).thenReturn(warehouseId);
+    when(session.getCompletedAt()).thenReturn(OffsetDateTime.parse("2026-08-19T10:00:00Z"));
     InventoryPublicationIntent intent =
-        InventoryPublicationIntent.ready(
+        InventoryPublicationIntent.readyForOutcome(
             inventoryId,
             findingId,
             2,
             3,
             FINAL_PLAN_HASH,
-            FinalPlanTargetKind.ESTIMATE);
+            FinalPlanTargetKind.REPAIR,
+            InventoryAssetOutcomeStatus.CAPITAL_REPAIR,
+            """
+            {"presence":"PRESENT","value":{"rentalType":" БК-2 ",
+             "dimensions":"2.4x6","finishing":"ЛДСП","category":"Обычная",
+             "characteristics":["Электрика КК, Пластиковое окно","Электрика КК"],
+             "linoleum":null}}
+            """);
+    String frozenPassport = intent.getAssetPassportObservation();
     InventoryFinalPlan plan = mock(InventoryFinalPlan.class);
     when(plan.getFinalPlanVersion()).thenReturn(3L);
     when(plan.getFinalPlanSha256()).thenReturn(FINAL_PLAN_HASH);
@@ -129,6 +143,8 @@ class ManualCapitalRepairPlanningTest {
     when(finalPlans.findById(inventoryId)).thenReturn(Optional.of(plan));
     when(entries.findByInventoryIdAndFinalPlanVersionAndFindingId(inventoryId, 3, findingId))
         .thenReturn(Optional.of(entry));
+    when(entries.findByInventoryIdAndFinalPlanVersionOrderByOrderAscFindingIdAsc(inventoryId, 3))
+        .thenReturn(List.of(entry));
     when(findings.findByIdAndInventoryIdAndMembershipActiveTrue(findingId, inventoryId))
         .thenReturn(Optional.of(finding));
     when(snapshots.findFirstByFindingIdAndFingerprintOrderByFindingRevisionDesc(
@@ -142,8 +158,48 @@ class ManualCapitalRepairPlanningTest {
 
     JsonNode request = service.finalPlanPublicationRequest(session, intent);
 
-    assertThat(request.path("forceCapitalRepair").isBoolean()).isTrue();
-    assertThat(request.path("forceCapitalRepair").booleanValue()).isTrue();
+    assertThat(request.path("assetOutcome").path("desiredStatus").asText())
+        .isEqualTo("CAPITAL_REPAIR");
+    assertThat(request.path("assetOutcome").path("passportObservation").path("presence").asText())
+        .isEqualTo("PRESENT");
+    assertThat(
+            request
+                .path("assetOutcome")
+                .path("passportObservation")
+                .path("value")
+                .path("rentalType")
+                .asText())
+        .isEqualTo("БК-2");
+    assertThat(
+            request
+                .path("assetOutcome")
+                .path("passportObservation")
+                .path("value")
+                .path("characteristics")
+                .toString())
+        .isEqualTo("[\"Электрика КК\",\"Пластиковое окно\"]");
+    assertThat(request.path("assetOutcome").path("passportObservationSha256").asText())
+        .matches("^[0-9a-f]{64}$");
+    assertThat(request.path("maintenance").path("forceCapitalRepair").isBoolean()).isTrue();
+    assertThat(request.path("maintenance").path("forceCapitalRepair").booleanValue()).isTrue();
+
+    intent.requeueForAuthoritativeOutcome(
+        2,
+        3,
+        FINAL_PLAN_HASH,
+        FinalPlanTargetKind.REPAIR,
+        InventoryAssetOutcomeStatus.CAPITAL_REPAIR);
+    when(finding.getPassportObservationState()).thenReturn(ObservationPresence.ABSENT);
+    when(finding.getPassportObservation()).thenReturn(null);
+    JsonNode reapplied = service.finalPlanPublicationRequest(session, intent);
+    assertThat(intent.getAssetPassportObservation()).isEqualTo(frozenPassport);
+    assertThat(intent.getOutcomeReapplicationNo()).isEqualTo(1);
+    assertThat(reapplied.path("assetOutcome").path("passportObservation"))
+        .isEqualTo(request.path("assetOutcome").path("passportObservation"));
+    assertThat(reapplied.path("assetOutcome").path("passportObservationSha256"))
+        .isEqualTo(request.path("assetOutcome").path("passportObservationSha256"));
+    verify(finding, never()).getPassportObservationState();
+    verify(finding, never()).getPassportObservation();
   }
 
   private InventoryFinding stagedFinding(UUID inventoryId, UUID findingId, long revision) {
@@ -202,22 +258,25 @@ class ManualCapitalRepairPlanningTest {
       InventoryFindingRepository findings,
       FindingPlanSnapshotRepository snapshots,
       InventoryPlanningService planning) {
+    JsonMapper mapper = JsonMapper.builder().findAndAddModules().build();
     return new InventoryPublicationService(
         mock(InventorySessionRepository.class),
         findings,
         finalPlans,
         entries,
         mock(InventoryPublicationIntentRepository.class),
+        mock(dev.buhanzaz.rwms.inventory.repository.InventoryFurnitureReconciliationIntentRepository.class),
         mock(InventoryPublicationAttemptRepository.class),
         mock(InventoryPublicationAttemptResultRepository.class),
         snapshots,
+        mock(FindingMediaReferenceRepository.class),
         mock(InventoryDependencyGateway.class),
         mock(InventoryEventStore.class),
         mock(InventoryIdempotencyPort.class),
         planning,
         mock(InventoryProjectionService.class),
-        JsonMapper.builder().findAndAddModules().build(),
-        mock(InventoryCanonicalJsonPort.class),
+        mapper,
+        new InventoryCanonicalJsonService(mapper),
         mock(InventoryAuthorizer.class),
         mock(PlatformTransactionManager.class));
   }

@@ -23,17 +23,20 @@ public class InventoryAssetService {
   private final InventoryAssetProjectionService projections;
   private final InventoryFurnitureReconciliationService furniture;
   private final InventoryAssetSourceService sources;
+  private final InventoryAssetOutcomeService outcomes;
 
   @Autowired
   public InventoryAssetService(
       InventoryAssetCaptureService captureLifecycle,
       InventoryAssetProjectionService projections,
       InventoryFurnitureReconciliationService furniture,
-      InventoryAssetSourceService sources) {
+      InventoryAssetSourceService sources,
+      InventoryAssetOutcomeService outcomes) {
     this.captureLifecycle = captureLifecycle;
     this.projections = projections;
     this.furniture = furniture;
     this.sources = sources;
+    this.outcomes = outcomes;
   }
 
   @Transactional
@@ -83,6 +86,22 @@ public class InventoryAssetService {
         furniture.reconcile(inventoryId, idempotencyKey, request));
   }
 
+  /**
+   * Applies the latest completed-inventory final-plan outcome in one serializable asset-owned
+   * transaction. The returned replay flag is true only for the same idempotency key.
+   */
+  @Transactional(isolation = Isolation.SERIALIZABLE)
+  public OutcomeResult applyOutcome(
+      UUID actorSubjectId,
+      UUID inventoryId,
+      UUID findingId,
+      UUID idempotencyKey,
+      InventoryOutcomeRequest request) {
+    InventoryAssetOutcomeService.OutcomeResult result =
+        outcomes.apply(actorSubjectId, inventoryId, findingId, idempotencyKey, request);
+    return new OutcomeResult(result.response(), result.replayed());
+  }
+
   @Transactional
   public CreateResult<InventorySourceAssetResponse> createSourceAsset(
       InventorySourceAssetRequest request) {
@@ -99,4 +118,7 @@ public class InventoryAssetService {
   public record CreateResult<T>(T response, boolean replayed) {}
 
   public record FurnitureReconciliationResult(boolean replayed) {}
+
+  /** Public facade result for one authoritative inventory outcome command. */
+  public record OutcomeResult(InventoryOutcomeResponse response, boolean replayed) {}
 }

@@ -27,7 +27,10 @@ class InventoryClientCredentialsValidatorTest {
                 "resource", "rwms-services");
 
         assertThatCode(() -> AuthorizationServerConfiguration.validateInventoryDownstreamRequest(
-                        context("inventory-service", Set.of("asset.inventory"), exactOverrides)))
+                        context("inventory-service", Set.of("media.inventory"), exactOverrides)))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> AuthorizationServerConfiguration.validateInventoryDownstreamRequest(
+                        context("inventory-service", Set.of("logistics.inventory"), exactOverrides)))
                 .doesNotThrowAnyException();
     }
 

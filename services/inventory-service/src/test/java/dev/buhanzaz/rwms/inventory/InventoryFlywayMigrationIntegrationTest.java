@@ -48,7 +48,7 @@ class InventoryFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsNoSeedOrImporter() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(17);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(23);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames())
@@ -117,9 +117,16 @@ class InventoryFlywayMigrationIntegrationTest {
             "snapshot_schema_version");
     assertThat(columns("inventory_final_plan_entry")).contains("force_capital_repair");
     assertThat(columns("inventory_publication_intent"))
-        .contains("maintenance_outcome", "maintenance_result");
+        .contains(
+            "maintenance_outcome",
+            "maintenance_result",
+            "desired_asset_status",
+            "effective_asset_version",
+            "asset_outcome_result",
+            "outcome_reapplication_no",
+            "asset_passport_observation");
     assertThat(columns("inventory_publication_attempt_result"))
-        .contains("maintenance_outcome", "maintenance_result");
+        .contains("maintenance_outcome", "maintenance_result", "asset_outcome_result");
   }
 
   @Test
@@ -181,7 +188,7 @@ class InventoryFlywayMigrationIntegrationTest {
         findingId);
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(7);
     upgraded.validate();
 
     assertThat(
@@ -201,6 +208,549 @@ class InventoryFlywayMigrationIntegrationTest {
                 jdbc.update(
                     "update inventory_final_plan_entry set force_capital_repair=true where finding_id=?",
                     findingId))
+        .isInstanceOf(DataIntegrityViolationException.class);
+  }
+
+  @Test
+  void v18CarriesOneExactPriorMediaRevisionOnlyWhenCurrentEvidenceIsEmpty() {
+    Flyway beforeV18 =
+        Flyway.configure()
+            .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+            .locations(MIGRATIONS)
+            .target("17")
+            .baselineOnMigrate(false)
+            .cleanDisabled(true)
+            .validateOnMigrate(true)
+            .load();
+    assertThat(beforeV18.migrate().migrationsExecuted).isEqualTo(17);
+
+    UUID inventoryId = UUID.randomUUID();
+    insertActiveSession(inventoryId, UUID.randomUUID(), UUID.randomUUID());
+    UUID repairedFindingId = UUID.randomUUID();
+    UUID intentionalEmptyFindingId = UUID.randomUUID();
+    UUID alreadyCurrentFindingId = UUID.randomUUID();
+    insertFinding(inventoryId, repairedFindingId, UUID.randomUUID(), "V18-REPAIRED");
+    insertFinding(inventoryId, intentionalEmptyFindingId, UUID.randomUUID(), "V18-EMPTY");
+    insertFinding(inventoryId, alreadyCurrentFindingId, UUID.randomUUID(), "V18-CURRENT");
+
+    UUID coverMediaId = UUID.randomUUID();
+    UUID oldestOnlyMediaId = UUID.randomUUID();
+    UUID interveningMediaId = UUID.randomUUID();
+    UUID newestOnlyMediaId = UUID.randomUUID();
+    OffsetDateTime oldestAttachedAt = OffsetDateTime.parse("2026-08-01T10:00:00Z");
+    OffsetDateTime newestAttachedAt = OffsetDateTime.parse("2026-08-03T12:00:00Z");
+    jdbc.update(
+        "update inventory_finding set finding_revision=4,cover_media_id=? where id=?",
+        coverMediaId,
+        repairedFindingId);
+    insertFindingMedia(
+        repairedFindingId, 1, coverMediaId, 1, "IMAGE", oldestAttachedAt);
+    insertFindingMedia(
+        repairedFindingId, 1, oldestOnlyMediaId, 1, "VIDEO", oldestAttachedAt.plusMinutes(1));
+    insertFindingMedia(
+        repairedFindingId, 2, interveningMediaId, 2, "IMAGE", oldestAttachedAt.plusDays(1));
+    insertFindingMedia(
+        repairedFindingId, 3, coverMediaId, 3, "IMAGE", newestAttachedAt);
+    insertFindingMedia(
+        repairedFindingId, 3, newestOnlyMediaId, 4, "VIDEO", newestAttachedAt.plusMinutes(1));
+
+    UUID intentionalHistoricalMediaId = UUID.randomUUID();
+    jdbc.update(
+        "update inventory_finding set finding_revision=2,cover_media_id=null where id=?",
+        intentionalEmptyFindingId);
+    insertFindingMedia(
+        intentionalEmptyFindingId,
+        1,
+        intentionalHistoricalMediaId,
+        1,
+        "IMAGE",
+        oldestAttachedAt);
+
+    UUID currentCoverMediaId = UUID.randomUUID();
+    UUID historicalExtraMediaId = UUID.randomUUID();
+    jdbc.update(
+        "update inventory_finding set finding_revision=2,cover_media_id=? where id=?",
+        currentCoverMediaId,
+        alreadyCurrentFindingId);
+    insertFindingMedia(
+        alreadyCurrentFindingId, 1, currentCoverMediaId, 1, "IMAGE", oldestAttachedAt);
+    insertFindingMedia(
+        alreadyCurrentFindingId,
+        1,
+        historicalExtraMediaId,
+        1,
+        "VIDEO",
+        oldestAttachedAt.plusMinutes(1));
+    insertFindingMedia(
+        alreadyCurrentFindingId, 2, currentCoverMediaId, 2, "IMAGE", newestAttachedAt);
+    assertThat(count("finding_media_reference")).isEqualTo(9);
+
+    Flyway upgraded = flyway(MIGRATIONS);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(6);
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForList(
+                """
+                select media_id from finding_media_reference
+                 where finding_id=? and finding_revision=4
+                """,
+                UUID.class,
+                repairedFindingId))
+        .containsExactlyInAnyOrder(coverMediaId, newestOnlyMediaId);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select generation from finding_media_reference
+                 where finding_id=? and finding_revision=4 and media_id=?
+                """,
+                Long.class,
+                repairedFindingId,
+                coverMediaId))
+        .isEqualTo(3L);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select attached_at from finding_media_reference
+                 where finding_id=? and finding_revision=4 and media_id=?
+                """,
+                OffsetDateTime.class,
+                repairedFindingId,
+                coverMediaId))
+        .isEqualTo(newestAttachedAt);
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select generation,media_kind,media_status
+                  from finding_media_reference
+                 where finding_id=? and finding_revision=4 and media_id=?
+                """,
+                repairedFindingId,
+                newestOnlyMediaId))
+        .containsEntry("generation", 4L)
+        .containsEntry("media_kind", "VIDEO")
+        .containsEntry("media_status", "READY");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select attached_at from finding_media_reference
+                 where finding_id=? and finding_revision=4 and media_id=?
+                """,
+                OffsetDateTime.class,
+                repairedFindingId,
+                newestOnlyMediaId))
+        .isEqualTo(newestAttachedAt.plusMinutes(1));
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from finding_media_reference
+                 where finding_id=? and finding_revision=4
+                   and media_id in (?, ?)
+                """,
+                Integer.class,
+                repairedFindingId,
+                oldestOnlyMediaId,
+                interveningMediaId))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from finding_media_reference
+                 where finding_id=? and finding_revision=2
+                """,
+                Integer.class,
+                intentionalEmptyFindingId))
+        .isZero();
+    assertThat(
+            jdbc.queryForList(
+                """
+                select media_id from finding_media_reference
+                 where finding_id=? and finding_revision=2
+                """,
+                UUID.class,
+                alreadyCurrentFindingId))
+        .containsExactly(currentCoverMediaId);
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select generation,media_kind,media_status
+                  from finding_media_reference
+                 where finding_id=? and finding_revision=2 and media_id=?
+                """,
+                alreadyCurrentFindingId,
+                currentCoverMediaId))
+        .containsEntry("generation", 2L)
+        .containsEntry("media_kind", "IMAGE")
+        .containsEntry("media_status", "READY");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select attached_at from finding_media_reference
+                 where finding_id=? and finding_revision=2 and media_id=?
+                """,
+                OffsetDateTime.class,
+                alreadyCurrentFindingId,
+                currentCoverMediaId))
+        .isEqualTo(newestAttachedAt);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from finding_media_reference
+                 where finding_id=? and finding_revision < 4
+                """,
+                Integer.class,
+                repairedFindingId))
+        .isEqualTo(5);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from finding_media_reference
+                 where finding_id=? and finding_revision=1
+                """,
+                Integer.class,
+                intentionalEmptyFindingId))
+        .isOne();
+    assertThat(count("finding_media_reference")).isEqualTo(11);
+    assertThat(upgraded.migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
+  void v19BackfillsAuthoritativeStatusWithoutRewritingSuccessfulPublicationEvidence() {
+    Flyway beforeV19 =
+        Flyway.configure()
+            .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+            .locations(MIGRATIONS)
+            .target("18")
+            .baselineOnMigrate(false)
+            .cleanDisabled(true)
+            .validateOnMigrate(true)
+            .load();
+    assertThat(beforeV19.migrate().migrationsExecuted).isEqualTo(18);
+
+    UUID inventoryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID capitalFindingId = UUID.randomUUID();
+    UUID repairFindingId = UUID.randomUUID();
+    UUID capitalAssetId = UUID.randomUUID();
+    UUID repairAssetId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    String finalPlanSha256 = "e".repeat(64);
+    insertActiveSession(inventoryId, warehouseId, UUID.randomUUID());
+    insertFinding(inventoryId, capitalFindingId, capitalAssetId, "V19-CAPITAL");
+    insertFinding(inventoryId, repairFindingId, repairAssetId, "V19-REPAIR");
+    jdbc.update(
+        """
+        insert into inventory_final_plan(
+          inventory_id,row_revision,final_plan_version,state,basis_session_revision,
+          planning_settings_revision,final_plan_sha256,movement_schedule_mode,
+          repair_schedule_mode,created_at,updated_at)
+        values (?,0,1,'DRAFT',0,0,?,'AUTO','AUTO',?,?)
+        """,
+        inventoryId,
+        finalPlanSha256,
+        now(),
+        now());
+    insertV19WorkPlanEntry(
+        inventoryId, capitalFindingId, capitalAssetId, 0, true, "a".repeat(64));
+    insertV19WorkPlanEntry(
+        inventoryId, repairFindingId, repairAssetId, 1, false, "b".repeat(64));
+
+    UUID blockedIntentId = UUID.randomUUID();
+    UUID succeededIntentId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into inventory_publication_intent(
+          id,inventory_id,finding_id,publication_revision,state,maintenance_source_key,
+          source_revision,final_plan_version,final_plan_sha256,attempt_count,
+          blocked_failure_code,created_at,updated_at)
+        values (?,?,?,0,'BLOCKED',?,1,1,?,1,'SOURCE_PRECONDITION_CONFLICT',?,?)
+        """,
+        blockedIntentId,
+        inventoryId,
+        capitalFindingId,
+        inventoryId + ":1:" + capitalFindingId,
+        finalPlanSha256,
+        now(),
+        now());
+    jdbc.update(
+        """
+        insert into inventory_publication_intent(
+          id,inventory_id,finding_id,publication_revision,state,maintenance_source_key,
+          source_revision,final_plan_version,final_plan_sha256,target_kind,target_id,
+          maintenance_repair_id,attempt_count,created_at,updated_at)
+        values (?,?,?,0,'SUCCEEDED',?,1,1,?,'REPAIR',?,?,1,?,?)
+        """,
+        succeededIntentId,
+        inventoryId,
+        repairFindingId,
+        inventoryId + ":1:" + repairFindingId,
+        finalPlanSha256,
+        repairId,
+        repairId,
+        now(),
+        now());
+    UUID attemptId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into inventory_publication_attempt(
+          id,publication_intent_id,attempt_no,idempotency_key,transition_kind,
+          request_sha256,started_at)
+        values (?,?,1,?,'REQUEST',?,?)
+        """,
+        attemptId,
+        succeededIntentId,
+        UUID.randomUUID(),
+        "c".repeat(64),
+        now());
+    jdbc.update(
+        """
+        insert into inventory_publication_attempt_result(
+          publication_attempt_id,outcome,repair_id,finished_at)
+        values (?,'SUCCEEDED',?,?)
+        """,
+        attemptId,
+        repairId,
+        now());
+
+    Flyway upgraded = flyway(MIGRATIONS);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(5);
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select desired_asset_status from inventory_publication_intent where id=?",
+                String.class,
+                blockedIntentId))
+        .isEqualTo("CAPITAL_REPAIR");
+    assertThat(
+            jdbc.queryForObject(
+                "select desired_asset_status from inventory_publication_intent where id=?",
+                String.class,
+                succeededIntentId))
+        .isEqualTo("REPAIR");
+    assertThat(
+            jdbc.queryForObject(
+                "select target_id from inventory_publication_intent where id=?",
+                UUID.class,
+                succeededIntentId))
+        .isEqualTo(repairId);
+    assertThat(
+            jdbc.queryForObject(
+                "select repair_id from inventory_publication_attempt_result where publication_attempt_id=?",
+                UUID.class,
+                attemptId))
+        .isEqualTo(repairId);
+    assertThat(
+            jdbc.queryForObject(
+                "select asset_outcome_result is null from inventory_publication_attempt_result where publication_attempt_id=?",
+                Boolean.class,
+                attemptId))
+        .isTrue();
+  }
+
+  @Test
+  void v20BackfillsStableGenerationAndRequeuesOnlyCompletedObsoleteFurnitureConflict() {
+    Flyway beforeV20 =
+        Flyway.configure()
+            .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+            .locations(MIGRATIONS)
+            .target("19")
+            .baselineOnMigrate(false)
+            .cleanDisabled(true)
+            .validateOnMigrate(true)
+            .load();
+    assertThat(beforeV20.migrate().migrationsExecuted).isEqualTo(19);
+
+    UUID recoveredInventoryId = UUID.randomUUID();
+    UUID otherFailureInventoryId = UUID.randomUUID();
+    UUID activeInventoryId = UUID.randomUUID();
+    insertActiveSession(recoveredInventoryId, UUID.randomUUID(), UUID.randomUUID());
+    insertActiveSession(otherFailureInventoryId, UUID.randomUUID(), UUID.randomUUID());
+    insertActiveSession(activeInventoryId, UUID.randomUUID(), UUID.randomUUID());
+    completeSession(recoveredInventoryId);
+    completeSession(otherFailureInventoryId);
+
+    UUID findingId = UUID.randomUUID();
+    insertFinding(recoveredInventoryId, findingId, UUID.randomUUID(), "V20-OUTCOME");
+    UUID publicationId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into inventory_publication_intent(
+          id,inventory_id,finding_id,publication_revision,state,maintenance_source_key,
+          source_revision,desired_asset_status,attempt_count,created_at,updated_at)
+        values (?,?,?,0,'READY',?,1,'REPAIR',0,?,?)
+        """,
+        publicationId,
+        recoveredInventoryId,
+        findingId,
+        recoveredInventoryId + ":" + findingId,
+        now(),
+        now());
+
+    UUID recoveredKey = UUID.randomUUID();
+    insertFurnitureReconciliation(
+        recoveredInventoryId, recoveredKey, "ASSET_SNAPSHOT_CONFLICT", 4);
+    insertFurnitureReconciliation(
+        otherFailureInventoryId, UUID.randomUUID(), "CATALOG_VERSION_CONFLICT", 5);
+    insertFurnitureReconciliation(
+        activeInventoryId, UUID.randomUUID(), "ASSET_SNAPSHOT_CONFLICT", 6);
+
+    Flyway upgraded = flyway(MIGRATIONS);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(4);
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select outcome_reapplication_no from inventory_publication_intent where id=?",
+                Long.class,
+                publicationId))
+        .isZero();
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update inventory_publication_intent set outcome_reapplication_no=-1 where id=?",
+                    publicationId))
+        .isInstanceOf(DataIntegrityViolationException.class);
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select state,intent_revision,idempotency_key,asset_snapshot_sha256,
+                       review_sha256,request_sha256,request_body::text as request_body,
+                       attempt_count,failure_code,completed_at
+                from inventory_furniture_reconciliation_intent
+                where inventory_id=?
+                """,
+                recoveredInventoryId))
+        .containsEntry("state", "PENDING")
+        .containsEntry("intent_revision", 8L)
+        .containsEntry("idempotency_key", recoveredKey)
+        .containsEntry("asset_snapshot_sha256", "a".repeat(64))
+        .containsEntry("review_sha256", "b".repeat(64))
+        .containsEntry("request_sha256", "c".repeat(64))
+        .containsEntry("request_body", "{}")
+        .containsEntry("attempt_count", 4)
+        .containsEntry("failure_code", null)
+        .containsEntry("completed_at", null);
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select state,intent_revision,attempt_count,failure_code,completed_at
+                from inventory_furniture_reconciliation_intent
+                where inventory_id=?
+                """,
+                otherFailureInventoryId))
+        .containsEntry("state", "BLOCKED")
+        .containsEntry("intent_revision", 7L)
+        .containsEntry("attempt_count", 5)
+        .containsEntry("failure_code", "CATALOG_VERSION_CONFLICT")
+        .matches(row -> row.get("completed_at") != null);
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select state,intent_revision,attempt_count,failure_code,completed_at
+                from inventory_furniture_reconciliation_intent
+                where inventory_id=?
+                """,
+                activeInventoryId))
+        .containsEntry("state", "BLOCKED")
+        .containsEntry("intent_revision", 7L)
+        .containsEntry("attempt_count", 6)
+        .containsEntry("failure_code", "ASSET_SNAPSHOT_CONFLICT")
+        .matches(row -> row.get("completed_at") != null);
+  }
+
+  @Test
+  void v23FreezesOnlyExactFinalPlanFindingRevisionAndAssetEvidence() {
+    Flyway beforeV23 =
+        Flyway.configure()
+            .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+            .locations(MIGRATIONS)
+            .target("22")
+            .baselineOnMigrate(false)
+            .cleanDisabled(true)
+            .validateOnMigrate(true)
+            .load();
+    assertThat(beforeV23.migrate().migrationsExecuted).isEqualTo(22);
+
+    UUID inventoryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID exactFindingId = UUID.randomUUID();
+    UUID staleFindingId = UUID.randomUUID();
+    UUID exactAssetId = UUID.randomUUID();
+    UUID staleAssetId = UUID.randomUUID();
+    String finalPlanSha = "f".repeat(64);
+    insertActiveSession(inventoryId, warehouseId, UUID.randomUUID());
+    insertFinding(inventoryId, exactFindingId, exactAssetId, "V23-EXACT");
+    insertFinding(inventoryId, staleFindingId, staleAssetId, "V23-STALE");
+    String exactPassport =
+        """
+        {"rentalType":"БК-2","dimensions":"2.4x6","finishing":"ЛДСП",
+         "category":"Обычная","characteristics":["Электрика КК, Пластиковое окно"],
+         "linoleum":false}
+        """;
+    jdbc.update(
+        """
+        update inventory_finding
+        set finding_revision=2,passport_observation_state='PRESENT',
+            passport_observation=?::jsonb
+        where id=?
+        """,
+        exactPassport,
+        exactFindingId);
+    jdbc.update(
+        """
+        update inventory_finding
+        set finding_revision=3,passport_observation_state='PRESENT',
+            passport_observation='{"rentalType":"changed"}'::jsonb
+        where id=?
+        """,
+        staleFindingId);
+    jdbc.update(
+        """
+        insert into inventory_final_plan(
+          inventory_id,row_revision,final_plan_version,state,basis_session_revision,
+          planning_settings_revision,final_plan_sha256,movement_schedule_mode,
+          repair_schedule_mode,created_at,updated_at)
+        values (?,0,1,'DRAFT',0,0,?,'AUTO','AUTO',clock_timestamp(),clock_timestamp())
+        """,
+        inventoryId,
+        finalPlanSha);
+    insertV23NoWorkPlanEntry(inventoryId, exactFindingId, exactAssetId, 2, 0);
+    insertV23NoWorkPlanEntry(inventoryId, staleFindingId, staleAssetId, 2, 1);
+    UUID exactIntentId = insertV23Publication(inventoryId, exactFindingId, finalPlanSha, 2);
+    UUID staleIntentId = insertV23Publication(inventoryId, staleFindingId, finalPlanSha, 2);
+
+    Flyway upgraded = flyway(MIGRATIONS);
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select asset_passport_observation->>'presence' as presence,
+                       asset_passport_observation#>>'{value,rentalType}' as rental_type,
+                       asset_passport_observation#>>'{value,characteristics,0}' as characteristics
+                from inventory_publication_intent where id=?
+                """,
+                exactIntentId))
+        .containsEntry("presence", "PRESENT")
+        .containsEntry("rental_type", "БК-2")
+        .containsEntry("characteristics", "Электрика КК, Пластиковое окно");
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select asset_passport_observation->>'presence' as presence,
+                       asset_passport_observation->'value' = 'null'::jsonb as null_value
+                from inventory_publication_intent where id=?
+                """,
+                staleIntentId))
+        .containsEntry("presence", "ABSENT")
+        .containsEntry("null_value", true);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update inventory_publication_intent set asset_passport_observation='{}'::jsonb where id=?",
+                    exactIntentId))
         .isInstanceOf(DataIntegrityViolationException.class);
   }
 
@@ -357,7 +907,7 @@ class InventoryFlywayMigrationIntegrationTest {
         UUID.randomUUID());
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(6);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(12);
     upgraded.validate();
 
     assertThat(
@@ -458,7 +1008,7 @@ class InventoryFlywayMigrationIntegrationTest {
     insertFinding(inventoryId, findingId, UUID.randomUUID(), "V10-COVER");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(8);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(14);
     upgraded.validate();
     assertThat(columns("inventory_finding")).contains("cover_media_id");
     assertThat(
@@ -515,7 +1065,7 @@ class InventoryFlywayMigrationIntegrationTest {
             + "\"queueCode\":\"REPAIR\"}");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(9);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(15);
     upgraded.validate();
     assertThat(columns("finding_plan_stage"))
         .contains(
@@ -617,7 +1167,7 @@ class InventoryFlywayMigrationIntegrationTest {
         technicalOnlyExpectedId);
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(12);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(18);
     latest.validate();
 
     assertThat(jdbc.queryForObject(
@@ -782,7 +1332,7 @@ class InventoryFlywayMigrationIntegrationTest {
         current.plusDays(7));
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(10);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(16);
     latest.validate();
 
     assertThat(
@@ -1026,7 +1576,7 @@ class InventoryFlywayMigrationIntegrationTest {
         .containsEntry("expected_item_id", null)
         .containsEntry("membership_active", true);
 
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(13);
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(19);
     assertThat(
             jdbc.queryForObject(
                 "select expected_population_count from inventory_session where id=?",
@@ -1383,8 +1933,8 @@ class InventoryFlywayMigrationIntegrationTest {
         """
         insert into inventory_publication_intent(
           id,inventory_id,finding_id,publication_revision,state,maintenance_source_key,
-          source_revision,attempt_count,created_at,updated_at)
-        values (?,?,?,0,'READY',?,1,0,clock_timestamp(),clock_timestamp())
+          source_revision,desired_asset_status,attempt_count,created_at,updated_at)
+        values (?,?,?,0,'READY',?,1,'REPAIR',0,clock_timestamp(),clock_timestamp())
         """,
         intentId,
         inventoryId,
@@ -1435,6 +1985,108 @@ class InventoryFlywayMigrationIntegrationTest {
         .hasMessageContaining("append-only");
   }
 
+  private void insertV19WorkPlanEntry(
+      UUID inventoryId,
+      UUID findingId,
+      UUID assetId,
+      int planOrder,
+      boolean forceCapitalRepair,
+      String planFingerprintSha256) {
+    jdbc.update(
+        """
+        insert into inventory_final_plan_entry(
+          inventory_id,final_plan_version,finding_id,finding_revision,asset_id,asset_version,
+          plan_fingerprint_sha256,has_work,target_kind,plan_order,priority,movement_to_repair,
+          movement_scheduled_date,repair_scheduled_date,collision_candidates,
+          reconciliation_decision,force_capital_repair)
+        values (?,1,?,0,?,7,?,true,'REPAIR',?,3,false,null,?,'[]'::jsonb,null,?)
+        """,
+        inventoryId,
+        findingId,
+        assetId,
+        planFingerprintSha256,
+        planOrder,
+        LocalDate.of(2026, 8, 25),
+        forceCapitalRepair);
+  }
+
+  private void insertV23NoWorkPlanEntry(
+      UUID inventoryId, UUID findingId, UUID assetId, long findingRevision, int planOrder) {
+    jdbc.update(
+        """
+        insert into inventory_final_plan_entry(
+          inventory_id,final_plan_version,finding_id,finding_revision,asset_id,asset_version,
+          plan_fingerprint_sha256,has_work,target_kind,plan_order,priority,movement_to_repair,
+          movement_scheduled_date,repair_scheduled_date,collision_candidates,
+          reconciliation_decision,force_capital_repair)
+        values (?,1,?,?,?,7,null,false,null,?,null,false,null,null,'[]'::jsonb,null,false)
+        """,
+        inventoryId,
+        findingId,
+        findingRevision,
+        assetId,
+        planOrder);
+  }
+
+  private UUID insertV23Publication(
+      UUID inventoryId, UUID findingId, String finalPlanSha, long sourceRevision) {
+    UUID publicationId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into inventory_publication_intent(
+          id,inventory_id,finding_id,publication_revision,state,maintenance_source_key,
+          final_plan_version,final_plan_sha256,target_kind,desired_asset_status,source_revision,
+          outcome_reapplication_no,attempt_count,created_at,updated_at)
+        values (?,?,?,0,'READY',?,1,?,null,'FREE',?,0,0,clock_timestamp(),clock_timestamp())
+        """,
+        publicationId,
+        inventoryId,
+        findingId,
+        inventoryId + ":1:" + findingId,
+        finalPlanSha,
+        sourceRevision);
+    return publicationId;
+  }
+
+  private void completeSession(UUID inventoryId) {
+    jdbc.update(
+        """
+        update inventory_session
+           set lifecycle='COMPLETED',session_revision=session_revision+1,
+               completion_validation_sha256=?,completion_acknowledgement_sha256=?,
+               validated_at=started_at,completed_by_actor_ref=started_actor_ref,
+               completed_at=started_at,updated_at=started_at
+         where id=?
+        """,
+        "d".repeat(64),
+        "e".repeat(64),
+        inventoryId);
+  }
+
+  private void insertFurnitureReconciliation(
+      UUID inventoryId, UUID idempotencyKey, String failureCode, int attemptCount) {
+    OffsetDateTime current = now();
+    jdbc.update(
+        """
+        insert into inventory_furniture_reconciliation_intent(
+          inventory_id,intent_revision,state,idempotency_key,asset_snapshot_sha256,
+          review_sha256,request_sha256,request_body,attempt_count,next_attempt_at,
+          failure_code,created_at,updated_at,completed_at)
+        values (?,7,'BLOCKED',?,?,?,?,'{}'::jsonb,?,?,?,?,?,?)
+        """,
+        inventoryId,
+        idempotencyKey,
+        "a".repeat(64),
+        "b".repeat(64),
+        "c".repeat(64),
+        attemptCount,
+        current,
+        failureCode,
+        current,
+        current,
+        current);
+  }
+
   private void insertActiveSession(UUID id, UUID warehouseId, UUID idempotencyKey) {
     OffsetDateTime current = now();
     jdbc.update(
@@ -1478,6 +2130,27 @@ class InventoryFlywayMigrationIntegrationTest {
         actor(),
         now(),
         now());
+  }
+
+  private void insertFindingMedia(
+      UUID findingId,
+      long findingRevision,
+      UUID mediaId,
+      long generation,
+      String mediaKind,
+      OffsetDateTime attachedAt) {
+    jdbc.update(
+        """
+        insert into finding_media_reference(
+          finding_id,finding_revision,media_id,generation,media_kind,media_status,attached_at)
+        values (?,?,?,?,?,'READY',?)
+        """,
+        findingId,
+        findingRevision,
+        mediaId,
+        generation,
+        mediaKind,
+        attachedAt);
   }
 
   private void insertExpectedFinding(

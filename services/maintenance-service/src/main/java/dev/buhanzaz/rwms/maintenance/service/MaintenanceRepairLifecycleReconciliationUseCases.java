@@ -288,7 +288,12 @@ final class MaintenanceRepairLifecycleReconciliationUseCases {
         repair.queueUnderExistingRepair();
       }
       MaintenanceRepair saved = repairs.saveAndFlush(repair);
-      if (!current.capital()) {
+      if (current.capital()) {
+        taskBoardSupport.enqueueCapitalRepairMovement(
+            saved,
+            commandSupport.stableOperationKey(
+                "capital-driver-logistics-task", saved.getId(), 0));
+      } else {
         taskBoardSupport.enqueueOrdinaryRepairExecution(
             saved,
             commandSupport.stableOperationKey("register-task", saved.getExternalTaskId(), 0),
@@ -332,7 +337,12 @@ final class MaintenanceRepairLifecycleReconciliationUseCases {
       repair.queue(lease.leaseId(), lease.version(), lease.fencingToken(), lease.expiresAt());
     }
     MaintenanceRepair saved = repairs.saveAndFlush(repair);
-    if (!current.capital()) {
+    if (current.capital()) {
+      taskBoardSupport.enqueueCapitalRepairMovement(
+          saved,
+          commandSupport.stableOperationKey(
+              "capital-driver-logistics-task", saved.getId(), 0));
+    } else {
       taskBoardSupport.enqueueOrdinaryRepairExecution(
           saved,
           commandSupport.stableOperationKey("register-task", saved.getExternalTaskId(), 0),
@@ -888,6 +898,14 @@ final class MaintenanceRepairLifecycleReconciliationUseCases {
               .sorted(Comparator.comparing(value -> value.getId().toString()))
               .toList());
       for (MaintenanceRepair value : saved) {
+        if (value.getExecutionState() == RepairExecutionState.COMPLETED
+            && value.getAcceptanceState() == RepairAcceptanceState.PENDING
+            && value.getReclassificationState() == RepairReclassificationState.EXTERNAL_CAPITAL) {
+          taskBoardSupport.enqueueCapitalRepairMovement(
+              value,
+              commandSupport.stableOperationKey(
+                  "capital-driver-logistics-task", value.getId(), 0));
+        }
         long expectedVersion = streamVersions.get(repairLifecycleSupport.stream(value.getId()));
         events.append(
             MaintenanceAggregateType.REPAIR,

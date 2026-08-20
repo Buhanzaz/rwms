@@ -3,11 +3,14 @@ package dev.buhanzaz.rwms.maintenance.service;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceAggregateType;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceEventType;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceRepair;
+import dev.buhanzaz.rwms.maintenance.domain.RepairAcceptanceState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairExecutionState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairLogisticsPlanningMode;
 import dev.buhanzaz.rwms.maintenance.domain.RepairReclassificationState;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventStore;
 import dev.buhanzaz.rwms.maintenance.integration.MaintenanceDependencyGateway;
+import dev.buhanzaz.rwms.maintenance.repository.InventoryAuthoritativeOutcomeRepository;
+import dev.buhanzaz.rwms.maintenance.repository.InventoryPublicationSourceRepository;
 import dev.buhanzaz.rwms.maintenance.repository.InventoryRepairSourceRepository;
 import dev.buhanzaz.rwms.maintenance.repository.MaintenanceRepairRepository;
 import java.time.Duration;
@@ -31,6 +34,8 @@ final class MaintenanceTaskReconciliationUseCases {
   private final MaintenanceEventStore events;
   private final MaintenanceReconciliationStore reconciliations;
   private final InventoryRepairSourceRepository inventorySources;
+  private final InventoryPublicationSourceRepository publicationSources;
+  private final InventoryAuthoritativeOutcomeRepository authoritativeOutcomes;
   private final RepairCapacitySettingsService repairCapacitySettings;
   private final RepairPlaceService repairPlaces;
   private final InventoryPublicationPrestartReplacementGuard prestartReplacementGuard;
@@ -48,6 +53,8 @@ final class MaintenanceTaskReconciliationUseCases {
       MaintenanceEventStore events,
       MaintenanceReconciliationStore reconciliations,
       InventoryRepairSourceRepository inventorySources,
+      InventoryPublicationSourceRepository publicationSources,
+      InventoryAuthoritativeOutcomeRepository authoritativeOutcomes,
       RepairCapacitySettingsService repairCapacitySettings,
       RepairPlaceService repairPlaces,
       InventoryPublicationPrestartReplacementGuard prestartReplacementGuard,
@@ -63,6 +70,8 @@ final class MaintenanceTaskReconciliationUseCases {
     this.events = events;
     this.reconciliations = reconciliations;
     this.inventorySources = inventorySources;
+    this.publicationSources = publicationSources;
+    this.authoritativeOutcomes = authoritativeOutcomes;
     this.repairCapacitySettings = repairCapacitySettings;
     this.repairPlaces = repairPlaces;
     this.prestartReplacementGuard = prestartReplacementGuard;
@@ -165,9 +174,14 @@ final class MaintenanceTaskReconciliationUseCases {
         });
   }
 
+  /**
+   * Rehydrates either the ordinary inbound route or the dedicated external-capital outbound route
+   * from one durable reconciliation intent.
+   */
   private DriverTaskPlan prepareDriverTaskPlan(MaintenanceReconciliationStore.WorkItem work) {
+    String kind = work.payload().path("kind").asText();
     if (!"LOGISTICS".equals(work.dependency())
-        || !"DELIVER_TO_REPAIR".equals(work.payload().path("kind").asText())) {
+        || !Set.of("DELIVER_TO_REPAIR", "CAPITAL_TO_PRODUCTION").contains(kind)) {
       throw new IllegalStateException("Stored maintenance driver-task intent is invalid");
     }
     MaintenanceRepair repair = taskBoardSupport.requireWorkRepair(work);
@@ -175,24 +189,51 @@ final class MaintenanceTaskReconciliationUseCases {
       throw new MaintenanceConflictException(
           "MAINTENANCE_STATE_CONFLICT", "Repair is blocked by a pre-start replacement");
     }
-    if (repair.getExecutionState() != RepairExecutionState.QUEUED
-        || repair.getReclassificationState()
-            == dev.buhanzaz.rwms.maintenance.domain.RepairReclassificationState.EXTERNAL_CAPITAL) {
+    if (!repair.isMovementToRepair()) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Repair no longer requires the stored movement task");
+    }
+    boolean capitalMovement = "CAPITAL_TO_PRODUCTION".equals(kind);
+    if (capitalMovement) {
+      if (repair.getExecutionState() != RepairExecutionState.COMPLETED
+          || repair.getAcceptanceState() != RepairAcceptanceState.PENDING
+          || repair.getReclassificationState() != RepairReclassificationState.EXTERNAL_CAPITAL) {
+        throw new MaintenanceConflictException(
+            "MAINTENANCE_STATE_CONFLICT",
+            "Only pending external capital repair can create a production movement");
+      }
+    } else if (repair.getExecutionState() != RepairExecutionState.QUEUED
+        || repair.getReclassificationState() == RepairReclassificationState.EXTERNAL_CAPITAL) {
       throw new MaintenanceConflictException(
           "MAINTENANCE_STATE_CONFLICT",
           "Only queued ordinary repair work can create a delivery task");
     }
-    if (!repair.isMovementToRepair()) {
-      throw new MaintenanceConflictException(
-          "MAINTENANCE_STATE_CONFLICT",
-          "Repair no longer requires delivery to a repair place");
-    }
+    UUID inventoryFindingId =
+        capitalMovement
+            ? null
+            : authoritativeOutcomes
+                .findByTargetRepairId(repair.getId())
+                .map(value -> value.getId().getFindingId())
+                .or(
+                    () ->
+                        publicationSources
+                            .findByRepairId(repair.getId())
+                            .map(value -> value.getId().getFindingId()))
+                .or(
+                    () ->
+                        inventorySources
+                            .findByRepairId(repair.getId())
+                            .map(value -> value.getFindingId()))
+                .orElse(null);
     String sourceType;
     UUID sourceId;
-    var inventorySource = inventorySources.findByRepairId(repair.getId()).orElse(null);
-    if (inventorySource != null) {
+    if (capitalMovement) {
+      sourceType = "CAPITAL_REPAIR";
+      sourceId = repair.getId();
+    } else if (inventoryFindingId != null) {
       sourceType = "INVENTORY";
-      sourceId = inventorySource.getFindingId();
+      sourceId = inventoryFindingId;
     } else if (repair.getEstimateId() != null) {
       sourceType = "ESTIMATE";
       sourceId = repair.getEstimateId();
@@ -208,7 +249,7 @@ final class MaintenanceTaskReconciliationUseCases {
             repair.getId(),
             sourceType,
             sourceId,
-            "DELIVER_TO_REPAIR",
+            kind,
             repair.getLogisticsPlanningMode(),
             repair.getLogisticsScheduledDate(),
             repair.getPriority(),

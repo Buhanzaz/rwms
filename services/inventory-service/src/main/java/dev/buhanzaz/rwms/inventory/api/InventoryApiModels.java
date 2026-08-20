@@ -11,6 +11,7 @@ import dev.buhanzaz.rwms.inventory.domain.FinalPlanState;
 import dev.buhanzaz.rwms.inventory.domain.FinalPlanTargetKind;
 import dev.buhanzaz.rwms.inventory.domain.InspectionState;
 import dev.buhanzaz.rwms.inventory.domain.InventoryMembershipMovementType;
+import dev.buhanzaz.rwms.inventory.domain.InventoryAssetOutcomeStatus;
 import dev.buhanzaz.rwms.inventory.domain.InventoryReviewStage;
 import dev.buhanzaz.rwms.inventory.domain.LogisticsPlanningMode;
 import dev.buhanzaz.rwms.inventory.domain.MaintenancePublicationOutcome;
@@ -47,6 +48,10 @@ public final class InventoryApiModels {
   private InventoryApiModels() {}
 
   public record StartSessionRequest(@NotNull UUID warehouseId) {}
+
+  /** Optimistic fence supplied before refreshing one active session from asset truth. */
+  public record RefreshSessionRequest(
+      @JsonProperty(required = true) @NotNull @Min(0) Long expectedSessionRevision) {}
 
   public record ResolveNumberRequest(
       @Min(0) long expectedSessionRevision, @NotBlank @Size(max = 128) String submittedNumber) {}
@@ -310,6 +315,15 @@ public final class InventoryApiModels {
       @Min(0) long expectedSessionRevision,
       boolean allEligible,
       @NotNull List<@Valid PublicationExpectation> findings) {}
+
+  /** Exact completed-plan fence for a durable history recovery command. */
+  public record RecalculateInventoryOutcomeRequest(
+      @JsonProperty(required = true) @NotNull @Min(0) Long expectedSessionRevision,
+      @JsonProperty(required = true) @NotNull @Min(1) Long finalPlanVersion,
+      @JsonProperty(required = true)
+          @NotBlank
+          @Pattern(regexp = "^[0-9a-f]{64}$")
+          String finalPlanSha256) {}
 
   public record RetryPublicationRequest(
       @Min(0) long expectedPublicationRevision,
@@ -710,6 +724,9 @@ public final class InventoryApiModels {
       UUID targetId,
       UUID maintenanceEstimateId,
       UUID maintenanceRepairId,
+      InventoryAssetOutcomeStatus desiredAssetStatus,
+      Long effectiveAssetVersion,
+      JsonNode assetOutcomeResult,
       MaintenancePublicationOutcome maintenanceOutcome,
       JsonNode maintenanceResult,
       String failureCode) {
@@ -736,6 +753,9 @@ public final class InventoryApiModels {
           maintenanceRepairId,
           null,
           maintenanceRepairId,
+          InventoryAssetOutcomeStatus.REPAIR,
+          null,
+          null,
           null,
           null,
           failureCode);
@@ -744,6 +764,18 @@ public final class InventoryApiModels {
 
   public record PublicationBatch(
       UUID inventoryId, String aggregateState, List<PublicationView> intents) {}
+
+  /** Durable scheduling result returned before downstream owner commands finish. */
+  public record OutcomeRecalculation(
+      UUID inventoryId,
+      long sessionRevision,
+      long finalPlanVersion,
+      String finalPlanSha256,
+      FurnitureReconciliationState furnitureReconciliationState,
+      int createdPublicationCount,
+      int requeuedPublicationCount,
+      int preservedSucceededPublicationCount,
+      PublicationBatch publicationBatch) {}
 
   public record SessionStatistics(
       UUID inventoryId,

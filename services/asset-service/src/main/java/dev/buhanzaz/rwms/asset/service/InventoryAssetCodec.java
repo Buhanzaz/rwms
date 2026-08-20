@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import org.springframework.stereotype.Service;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.SerializationFeature;
 
@@ -32,6 +33,15 @@ final class InventoryAssetCodec {
       return AssetChecksum.sha256(canonical.getBytes(StandardCharsets.UTF_8));
     } catch (JacksonException exception) {
       throw new IllegalArgumentException("Inventory asset value cannot be canonicalized", exception);
+    }
+  }
+
+  /** Hashes JSON tree content independently of transport or PostgreSQL object-key order. */
+  String canonicalJsonHash(JsonNode value) {
+    try {
+      return canonicalHash(mapper.treeToValue(value, Object.class));
+    } catch (JacksonException exception) {
+      throw new IllegalArgumentException("Inventory asset JSON cannot be canonicalized", exception);
     }
   }
 

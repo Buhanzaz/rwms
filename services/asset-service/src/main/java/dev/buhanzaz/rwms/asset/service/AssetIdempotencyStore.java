@@ -69,6 +69,28 @@ public class AssetIdempotencyStore {
     }
   }
 
+  /**
+   * Returns whether another service subject already owns the same command key. Terminal recovery
+   * uses this check to avoid turning a subject-bound historical key into a cross-subject replay.
+   */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public boolean isBoundToAnotherSubject(UUID subjectId, String scope, UUID key) {
+    Boolean bound =
+        jdbc.queryForObject(
+            """
+            select exists(
+              select 1 from asset_idempotency_record
+              where command_scope=? and idempotency_key=? and subject_id<>?
+                and expires_at>clock_timestamp()
+            )
+            """,
+            Boolean.class,
+            scope,
+            key,
+            subjectId);
+    return Boolean.TRUE.equals(bound);
+  }
+
   public int cleanupExpired() {
     return jdbc.update(
         "delete from asset_idempotency_record where ctid in (select ctid from asset_idempotency_record where expires_at <= clock_timestamp() order by expires_at limit ?)",

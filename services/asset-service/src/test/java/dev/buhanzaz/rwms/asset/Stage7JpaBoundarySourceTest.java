@@ -19,6 +19,7 @@ class Stage7JpaBoundarySourceTest {
         sourceRoot.resolve("service/InventoryAssetBoundaryRegistrar.java"),
         sourceRoot.resolve("service/InventoryAssetCaptureService.java"),
         sourceRoot.resolve("service/InventoryAssetProjectionService.java"),
+        sourceRoot.resolve("service/InventoryAssetOutcomeService.java"),
         sourceRoot.resolve("service/InventoryFurnitureReconciliationService.java"),
         sourceRoot.resolve("service/InventoryAssetSourceService.java"));
     Path snapshotTransaction =

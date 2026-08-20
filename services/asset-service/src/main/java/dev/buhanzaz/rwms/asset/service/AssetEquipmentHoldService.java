@@ -134,6 +134,49 @@ final class AssetEquipmentHoldService {
     expired.forEach(this::expire);
   }
 
+  /**
+   * Releases the already locked live or committed holds superseded by an authoritative completed
+   * inventory. Each changed hold retains its row and emits the ordinary release fact.
+   */
+  List<UUID> releaseForCompletedInventory(List<UUID> holdIds) {
+    if (holdIds == null || holdIds.isEmpty()) return List.of();
+    List<UUID> released = new java.util.ArrayList<>();
+    holdIds.stream()
+        .distinct()
+        .sorted(java.util.Comparator.comparing(UUID::toString))
+        .forEach(
+            id -> {
+              EquipmentHoldResponse current = forUpdate(id);
+              if (!"ACTIVE".equals(current.state()) && !"COMMITTED".equals(current.state())) {
+                return;
+              }
+              int changed =
+                  jdbc.update(
+                      """
+                      update equipment_allocation_hold
+                      set version=version+1,state='RELEASED',released_at=clock_timestamp(),
+                          updated_at=clock_timestamp()
+                      where id=? and version=? and state in ('ACTIVE','COMMITTED')
+                      """,
+                      id,
+                      current.version());
+              if (changed != 1) {
+                throw new AssetConflictException(
+                    "Equipment hold changed concurrently during inventory supersession");
+              }
+              EquipmentHoldResponse updated = forUpdate(id);
+              events.append(
+                  AssetAggregateType.EQUIPMENT_ALLOCATION_HOLD,
+                  id,
+                  current.version(),
+                  AssetEventType.EQUIPMENT_HOLD_RELEASED,
+                  fact(updated),
+                  snapshot(updated));
+              released.add(id);
+            });
+    return List.copyOf(released);
+  }
+
   Map<String, ?> fact(EquipmentHoldResponse value) {
     // Facts must stay compatible with holds emitted before V7. The concrete source balance is
     // durable reservation state and belongs in the snapshot, not replay-verification facts.

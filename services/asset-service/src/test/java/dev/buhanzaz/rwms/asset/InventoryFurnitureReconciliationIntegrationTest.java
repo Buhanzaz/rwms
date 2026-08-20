@@ -23,20 +23,31 @@ import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryFurnitureReconciliati
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryFurnitureReconciliationItem;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryFurnitureReconciliationRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryFurnitureSnapshot;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryFurnitureSnapshotCabin;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryFurnitureSnapshotItem;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryFurnitureSnapshotRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryOutcomeRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryOutcomeResponse;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryOutcomeStatus;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.TransferEquipmentRequest;
 import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
 import dev.buhanzaz.rwms.asset.domain.BalanceLocationKind;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
+import dev.buhanzaz.rwms.asset.domain.OrderEquipmentReservation;
 import dev.buhanzaz.rwms.asset.domain.OrderUnitReservation;
+import dev.buhanzaz.rwms.asset.domain.PresentationUnitHold;
+import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import dev.buhanzaz.rwms.asset.eventing.AssetEventStore;
+import dev.buhanzaz.rwms.asset.repository.OrderEquipmentReservationRepository;
 import dev.buhanzaz.rwms.asset.repository.OrderUnitReservationRepository;
+import dev.buhanzaz.rwms.asset.repository.PresentationUnitHoldRepository;
 import dev.buhanzaz.rwms.asset.service.AssetConflictException;
 import dev.buhanzaz.rwms.asset.service.AssetService;
 import dev.buhanzaz.rwms.asset.service.InventoryAssetService;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -82,6 +93,8 @@ class InventoryFurnitureReconciliationIntegrationTest {
   @Autowired InventoryAssetService inventory;
   @Autowired AssetEventStore events;
   @Autowired OrderUnitReservationRepository orderReservations;
+  @Autowired OrderEquipmentReservationRepository orderEquipmentReservations;
+  @Autowired PresentationUnitHoldRepository presentationHolds;
   @Autowired JdbcTemplate jdbc;
   @Autowired MockMvc mvc;
   @Autowired ObjectMapper objectMapper;
@@ -272,12 +285,12 @@ class InventoryFurnitureReconciliationIntegrationTest {
   }
 
   @Test
-  void rejectsAStaleFurnitureSnapshotBeforeChangingAnyBalance() {
-    FurnitureFixture fixture = furnitureFixture("STALE");
-    InventoryFurnitureSnapshot before = snapshot(
+  void appliesAuthoritativeCountsAfterNonTerminalCabinAndBalanceDrift() {
+    FurnitureFixture fixture = furnitureFixture("AUTHORITATIVE-DRIFT");
+    InventoryFurnitureSnapshot captured = snapshot(
         fixture.warehouseId(), List.of(fixture.firstCabin().id(), fixture.secondCabin().id()));
     InventoryFurnitureReconciliationRequest request = reconciliationRequest(
-        before,
+        captured,
         fixture.equipment().id(),
         4L,
         Map.of(fixture.firstCabin().id(), 3L, fixture.secondCabin().id(), 1L),
@@ -305,15 +318,117 @@ class InventoryFurnitureReconciliationIntegrationTest {
                 fixture.firstCabin().id(),
                 BalanceLocationKind.CABIN_NON_RENTED),
             1L));
+    var repair =
+        applyInventoryOutcome(
+            fixture.warehouseId(),
+            fixture.firstCabin().id(),
+            InventoryOutcomeStatus.REPAIR,
+            "d".repeat(64));
+    var capitalRepair =
+        applyInventoryOutcome(
+            fixture.warehouseId(),
+            fixture.secondCabin().id(),
+            InventoryOutcomeStatus.CAPITAL_REPAIR,
+            "e".repeat(64));
+    assertThat(repair.assetVersion())
+        .isGreaterThan(
+            cabin(captured, fixture.equipment().id(), repair.assetId()).assetVersion());
+    assertThat(capitalRepair.assetVersion())
+        .isGreaterThan(
+            cabin(captured, fixture.equipment().id(), capitalRepair.assetId()).assetVersion());
+    assertThat(
+            snapshot(
+                    fixture.warehouseId(),
+                    List.of(fixture.firstCabin().id(), fixture.secondCabin().id()))
+                .snapshotSha256())
+        .isNotEqualTo(captured.snapshotSha256());
+    OrderUnitReservation guard =
+        orderReservations.saveAndFlush(
+            OrderUnitReservation.create(
+                UUID.randomUUID(),
+                fixture.secondCabin().id(),
+                fixture.warehouseId(),
+                UUID.randomUUID(),
+                "WMS_ADMIN"));
 
-    assertThatThrownBy(
-            () -> inventory.reconcileFurniture(UUID.randomUUID(), UUID.randomUUID(), request))
-        .isInstanceOf(AssetConflictException.class)
-        .hasMessageContaining("snapshot is stale");
+    assertThat(
+            inventory.reconcileFurniture(UUID.randomUUID(), UUID.randomUUID(), request).replayed())
+        .isFalse();
+    InventoryFurnitureSnapshot reconciled =
+        snapshot(
+            fixture.warehouseId(),
+            List.of(fixture.firstCabin().id(), fixture.secondCabin().id()));
+    InventoryFurnitureSnapshotItem reconciledItem = item(reconciled, fixture.equipment().id());
+    assertThat(reconciledItem.currentStockQuantity()).isEqualTo(4L);
+    assertThat(cabinQuantity(reconciledItem, fixture.firstCabin().id())).isEqualTo(3L);
+    assertThat(cabinQuantity(reconciledItem, fixture.secondCabin().id())).isEqualTo(1L);
+    assertThat(assets.rentalItem(fixture.firstCabin().id()).status())
+        .isEqualTo(RentalItemStatus.REPAIR);
+    assertThat(assets.rentalItem(fixture.secondCabin().id()).status())
+        .isEqualTo(RentalItemStatus.CAPITAL_REPAIR);
+    assertThat(orderReservations.findById(guard.getId()).orElseThrow().isActive()).isFalse();
   }
 
   @Test
-  void rejectsLiveOperationLeasesOrderReservationsAndEquipmentHolds() {
+  void rejectsTerminalCabinsBeforeSupersedingGuardsOrCounts() {
+    for (RentalItemStatus terminalStatus :
+        List.of(RentalItemStatus.LOST, RentalItemStatus.WRITTEN_OFF)) {
+      FurnitureFixture fixture =
+          furnitureFixture(
+              terminalStatus == RentalItemStatus.LOST ? "TERMINAL-L" : "TERMINAL-W");
+      InventoryFurnitureSnapshot captured =
+          snapshot(
+              fixture.warehouseId(),
+              List.of(fixture.firstCabin().id(), fixture.secondCabin().id()));
+      InventoryFurnitureReconciliationRequest request =
+          reconciliationRequest(
+              captured,
+              fixture.equipment().id(),
+              1L,
+              Map.of(fixture.firstCabin().id(), 1L, fixture.secondCabin().id(), 1L),
+              terminalStatus == RentalItemStatus.LOST ? "9".repeat(64) : "0".repeat(64));
+      // Terminal transitions are disposition-owned; this narrow fixture creates their persisted
+      // post-snapshot state without invoking a second workflow under test.
+      assertThat(
+              jdbc.update(
+                  """
+                  update rental_item
+                  set status=?,version=version+1,transfer_origin_status=null,
+                      updated_at=clock_timestamp()
+                  where id=?
+                  """,
+                  terminalStatus.name(),
+                  fixture.firstCabin().id()))
+          .isOne();
+      OrderUnitReservation guard =
+          orderReservations.saveAndFlush(
+              OrderUnitReservation.create(
+                  UUID.randomUUID(),
+                  fixture.secondCabin().id(),
+                  fixture.warehouseId(),
+                  UUID.randomUUID(),
+                  "WMS_ADMIN"));
+      InventoryFurnitureSnapshot terminalState =
+          snapshot(
+              fixture.warehouseId(),
+              List.of(fixture.firstCabin().id(), fixture.secondCabin().id()));
+
+      assertThatThrownBy(
+              () -> inventory.reconcileFurniture(UUID.randomUUID(), UUID.randomUUID(), request))
+          .isInstanceOf(AssetConflictException.class)
+          .hasMessageContaining("Lost or written-off cabin");
+      assertThat(
+              snapshot(
+                  fixture.warehouseId(),
+                  List.of(fixture.firstCabin().id(), fixture.secondCabin().id())))
+          .isEqualTo(terminalState);
+      assertThat(orderReservations.findById(guard.getId()).orElseThrow().isActive()).isTrue();
+      assertThat(assets.rentalItem(fixture.firstCabin().id()).status()).isEqualTo(terminalStatus);
+    }
+  }
+
+  @Test
+  void supersedesLiveOperationLeasesOrderReservationsAndEquipmentHolds() {
     FurnitureFixture leased = furnitureFixture("LEASE");
     InventoryFurnitureSnapshot leasedSnapshot = snapshot(
         leased.warehouseId(), List.of(leased.firstCabin().id(), leased.secondCabin().id()));
@@ -322,18 +437,21 @@ class InventoryFurnitureReconciliationIntegrationTest {
         UUID.randomUUID(),
         new AcquireOperationLeaseRequest(
             leased.firstCabin().id(), "INVENTORY_TEST", "lease", leased.firstCabin().version()));
-    assertThatThrownBy(
-            () -> inventory.reconcileFurniture(
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                reconciliationRequest(
-                    leasedSnapshot,
-                    leased.equipment().id(),
-                    item(leasedSnapshot, leased.equipment().id()).currentStockQuantity(),
-                    Map.of(),
-                    "d".repeat(64))))
-        .isInstanceOf(AssetConflictException.class)
-        .hasMessageContaining("active operation lease");
+    inventory.reconcileFurniture(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        reconciliationRequest(
+            leasedSnapshot,
+            leased.equipment().id(),
+            item(leasedSnapshot, leased.equipment().id()).currentStockQuantity(),
+            Map.of(),
+            "d".repeat(64)));
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from operation_lease where rental_item_id=? and state='ACTIVE'",
+                Integer.class,
+                leased.firstCabin().id()))
+        .isZero();
 
     FurnitureFixture reserved = furnitureFixture("RESERVATION");
     InventoryFurnitureSnapshot reservedSnapshot = snapshot(
@@ -344,18 +462,33 @@ class InventoryFurnitureReconciliationIntegrationTest {
         reserved.warehouseId(),
         UUID.randomUUID(),
         "WMS_ADMIN"));
-    assertThatThrownBy(
-            () -> inventory.reconcileFurniture(
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                reconciliationRequest(
-                    reservedSnapshot,
-                    reserved.equipment().id(),
-                    item(reservedSnapshot, reserved.equipment().id()).currentStockQuantity(),
-                    Map.of(),
-                    "e".repeat(64))))
-        .isInstanceOf(AssetConflictException.class)
-        .hasMessageContaining("active order reservation");
+    inventory.reconcileFurniture(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        reconciliationRequest(
+            reservedSnapshot,
+            reserved.equipment().id(),
+            item(reservedSnapshot, reserved.equipment().id()).currentStockQuantity(),
+            Map.of(),
+            "e".repeat(64)));
+    InventoryFurnitureSnapshot reservedAfter =
+        snapshot(
+            reserved.warehouseId(),
+            List.of(reserved.firstCabin().id(), reserved.secondCabin().id()));
+    assertThat(item(reservedAfter, reserved.equipment().id()).currentStockQuantity())
+        .isEqualTo(item(reservedSnapshot, reserved.equipment().id()).currentStockQuantity());
+    assertThat(item(reservedAfter, reserved.equipment().id()).cabins())
+        .extracting(InventoryFurnitureReconciliationIntegrationTest::quantityView)
+        .containsExactlyElementsOf(
+            item(reservedSnapshot, reserved.equipment().id()).cabins().stream()
+                .map(InventoryFurnitureReconciliationIntegrationTest::quantityView)
+                .toList());
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from order_unit_reservation where rental_item_id=? and state='ACTIVE'",
+                Integer.class,
+                reserved.secondCabin().id()))
+        .isZero();
 
     FurnitureFixture held = furnitureFixture("HOLD");
     InventoryFurnitureSnapshot heldSnapshot = snapshot(
@@ -370,19 +503,83 @@ class InventoryFurnitureReconciliationIntegrationTest {
             "hold",
             1L,
             version(held.equipment().id(), held.warehouseId(), null, BalanceLocationKind.STOCK)));
-    // A hold does not alter the snapshot hash; the reconciliation must still reject it while locked.
-    assertThatThrownBy(
-            () -> inventory.reconcileFurniture(
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                reconciliationRequest(
-                    heldSnapshot,
-                    held.equipment().id(),
-                    item(heldSnapshot, held.equipment().id()).currentStockQuantity(),
-                    Map.of(),
-                    "f".repeat(64))))
-        .isInstanceOf(AssetConflictException.class)
-        .hasMessageContaining("active hold");
+    // A hold does not alter the snapshot hash; the reviewed inventory supersedes it after the
+    // stable scope/catalog checks and keeps its released row as audit evidence.
+    inventory.reconcileFurniture(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        reconciliationRequest(
+            heldSnapshot,
+            held.equipment().id(),
+            item(heldSnapshot, held.equipment().id()).currentStockQuantity(),
+            Map.of(),
+            "f".repeat(64)));
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from equipment_allocation_hold where warehouse_id=? and state in ('ACTIVE','COMMITTED')",
+                Integer.class,
+                held.warehouseId()))
+        .isZero();
+
+    FurnitureFixture presented = furnitureFixture("PRESENTATION");
+    InventoryFurnitureSnapshot presentedSnapshot =
+        snapshot(
+            presented.warehouseId(),
+            List.of(presented.firstCabin().id(), presented.secondCabin().id()));
+    OffsetDateTime createdAt = OffsetDateTime.now(ZoneOffset.UTC);
+    presentationHolds.saveAndFlush(
+        PresentationUnitHold.create(
+            UUID.randomUUID(),
+            presented.firstCabin().id(),
+            presented.warehouseId(),
+            createdAt.plusMinutes(30),
+            UUID.randomUUID(),
+            "WMS_ADMIN",
+            createdAt));
+    inventory.reconcileFurniture(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        reconciliationRequest(
+            presentedSnapshot,
+            presented.equipment().id(),
+            item(presentedSnapshot, presented.equipment().id()).currentStockQuantity(),
+            Map.of(),
+            "7".repeat(64)));
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from presentation_unit_hold where rental_item_id=? and state='ACTIVE'",
+                Integer.class,
+                presented.firstCabin().id()))
+        .isZero();
+
+    FurnitureFixture equipmentReserved = furnitureFixture("EQUIPMENT-RESERVATION");
+    InventoryFurnitureSnapshot equipmentReservedSnapshot =
+        snapshot(
+            equipmentReserved.warehouseId(),
+            List.of(
+                equipmentReserved.firstCabin().id(), equipmentReserved.secondCabin().id()));
+    orderEquipmentReservations.saveAndFlush(
+        OrderEquipmentReservation.create(
+            UUID.randomUUID(),
+            equipmentReserved.equipment().id(),
+            equipmentReserved.warehouseId(),
+            1L));
+    inventory.reconcileFurniture(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        reconciliationRequest(
+            equipmentReservedSnapshot,
+            equipmentReserved.equipment().id(),
+            item(equipmentReservedSnapshot, equipmentReserved.equipment().id())
+                .currentStockQuantity(),
+            Map.of(),
+            "8".repeat(64)));
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from order_equipment_reservation where warehouse_id=? and state='ACTIVE'",
+                Integer.class,
+                equipmentReserved.warehouseId()))
+        .isZero();
   }
 
   @Test
@@ -551,7 +748,8 @@ class InventoryFurnitureReconciliationIntegrationTest {
             .toList());
   }
 
-  private InventoryFurnitureSnapshotItem item(InventoryFurnitureSnapshot snapshot, UUID equipmentId) {
+  private static InventoryFurnitureSnapshotItem item(
+      InventoryFurnitureSnapshot snapshot, UUID equipmentId) {
     return snapshot.items().stream()
         .filter(item -> item.equipmentId().equals(equipmentId))
         .findFirst()
@@ -564,6 +762,45 @@ class InventoryFurnitureReconciliationIntegrationTest {
         .findFirst()
         .orElseThrow()
         .currentQuantity();
+  }
+
+  private static InventoryFurnitureSnapshotCabin cabin(
+      InventoryFurnitureSnapshot snapshot, UUID equipmentId, UUID assetId) {
+    return item(snapshot, equipmentId).cabins().stream()
+        .filter(cabin -> cabin.assetId().equals(assetId))
+        .findFirst()
+        .orElseThrow();
+  }
+
+  private InventoryOutcomeResponse applyInventoryOutcome(
+      UUID warehouseId,
+      UUID assetId,
+      InventoryOutcomeStatus status,
+      String finalPlanSha256) {
+    return inventory
+        .applyOutcome(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            new InventoryOutcomeRequest(
+                warehouseId,
+                assetId,
+                OffsetDateTime.now(ZoneOffset.UTC),
+                1L,
+                finalPlanSha256,
+                1L,
+                status,
+                objectMapper
+                    .createObjectNode()
+                    .put("presence", "ABSENT")
+                    .putNull("value"),
+                "61a7ce0bfd5097c09f79252071264127229f73b876984eae80271c474e7126a7"))
+        .response();
+  }
+
+  private static String quantityView(InventoryFurnitureSnapshotCabin cabin) {
+    return cabin.assetId() + ":" + cabin.currentQuantity();
   }
 
   private UUID seedBalance(

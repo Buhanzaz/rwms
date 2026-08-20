@@ -12,6 +12,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import jakarta.persistence.Version;
+import java.sql.Types;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -21,6 +22,7 @@ import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.proxy.HibernateProxy;
 
 /**
@@ -78,6 +80,28 @@ public class RentalOrderUnitTerm {
 
   @Column(name = "updated_at", nullable = false)
   private OffsetDateTime updatedAt;
+
+  @Column(name = "inventory_superseded_by")
+  private UUID inventorySupersededBy;
+
+  @Column(name = "inventory_finding_id")
+  private UUID inventoryFindingId;
+
+  @Column(name = "inventory_desired_status", length = 24)
+  private String inventoryDesiredStatus;
+
+  @Column(name = "inventory_superseded_at")
+  private OffsetDateTime inventorySupersededAt;
+
+  @Column(name = "inventory_completed_at")
+  private OffsetDateTime inventoryCompletedAt;
+
+  @Column(name = "inventory_final_plan_version")
+  private Long inventoryFinalPlanVersion;
+
+  @JdbcTypeCode(Types.CHAR)
+  @Column(name = "inventory_final_plan_sha256", length = 64)
+  private String inventoryFinalPlanSha256;
 
   public static RentalOrderUnitTerm create(
       RentalOrder order, UUID rentalItemId, long rentalMonths) {
@@ -173,6 +197,33 @@ public class RentalOrderUnitTerm {
     returnDate = calculateReturnDate(returnDate, additional);
     touch();
     return true;
+  }
+
+  /** Excludes this retained commercial term from every active order and shipment selection. */
+  public void supersedeByCompletedInventory(
+      UUID inventoryId,
+      UUID findingId,
+      String desiredStatus,
+      OffsetDateTime completedAt,
+      long finalPlanVersion,
+      String finalPlanSha256) {
+    if (inventoryId == null
+        || findingId == null
+        || !java.util.Set.of("FREE", "REPAIR", "CAPITAL_REPAIR").contains(desiredStatus)
+        || completedAt == null
+        || finalPlanVersion < 1
+        || finalPlanSha256 == null
+        || !finalPlanSha256.matches("[0-9a-f]{64}")) {
+      throw new IllegalArgumentException("Completed inventory rental term source is invalid");
+    }
+    inventorySupersededBy = inventoryId;
+    inventoryFindingId = findingId;
+    inventoryDesiredStatus = desiredStatus;
+    inventorySupersededAt = now();
+    inventoryCompletedAt = completedAt;
+    inventoryFinalPlanVersion = finalPlanVersion;
+    inventoryFinalPlanSha256 = finalPlanSha256;
+    touch();
   }
 
   private static long requirePositiveMonths(long value) {

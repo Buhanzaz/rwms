@@ -19,6 +19,7 @@ import dev.buhanzaz.rwms.inventory.eventing.InventoryMediaInboxProcessor;
 import dev.buhanzaz.rwms.inventory.integration.InventoryDependencyGateway;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFindingRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryMediaFactProjectionRepository;
+import dev.buhanzaz.rwms.inventory.service.InventoryApplicationService;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -81,6 +82,7 @@ class InventoryInspectionApiContractIntegrationTest {
   @Autowired InventoryMediaFactProjectionRepository mediaFacts;
   @Autowired InventoryEventStore events;
   @Autowired InventoryMediaInboxProcessor mediaInbox;
+  @Autowired InventoryApplicationService inventory;
 
   @MockitoBean InventoryDependencyGateway dependencies;
   @MockitoBean JwtDecoder jwtDecoder;
@@ -201,6 +203,17 @@ class InventoryInspectionApiContractIntegrationTest {
                 .required("coverMediaId")
                 .asText())
         .isEqualTo(fixture.mediaId().toString());
+  }
+
+  @Test
+  void refreshRejectsAnOmittedSessionRevisionBeforeCallingDependencies() throws Exception {
+    HttpResponse<String> response =
+        post(
+            "/api/inventory/v1/sessions/" + UUID.randomUUID() + "/refresh",
+            "{}");
+
+    assertThat(response.statusCode()).withFailMessage(response.body()).isEqualTo(400);
+    verify(dependencies, never()).createCapture(any(), any());
   }
 
   @Test
@@ -709,6 +722,8 @@ class InventoryInspectionApiContractIntegrationTest {
             completeRequest.toString());
 
     assertThat(completed.statusCode()).withFailMessage(completed.body()).isEqualTo(200);
+    inventory.recoverFurnitureLosses();
+    inventory.recoverFurnitureReconciliations();
     verify(dependencies)
         .createInventoryLossDisposition(
             any(),

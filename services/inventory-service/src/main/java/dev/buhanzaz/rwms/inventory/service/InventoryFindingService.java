@@ -26,10 +26,12 @@ import dev.buhanzaz.rwms.inventory.repository.InventorySessionRepository;
 import dev.buhanzaz.rwms.inventory.security.InventoryAuthorizer;
 import dev.buhanzaz.rwms.platform.contracts.OpaqueActorReference;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -42,6 +44,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ArrayNode;
@@ -127,6 +130,100 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
                 occurredAt));
   }
 
+  /**
+   * Reconciles one complete warehouse capture inside the caller's fenced local transaction.
+   *
+   * <p>The capture is authoritative for eligible membership: active target-session assets absent
+   * from it are journalled as departures, while every captured member follows the same local
+   * arrival/snapshot transition as an asset membership event. No remote dependency is called and
+   * no finding, inspection, media reference or movement history is deleted.
+   */
+  void reconcileCapturedMembership(
+      InventorySession targetSession,
+      List<InventoryDependencyGateway.CaptureMember> capturedMembers,
+      OpaqueActorReference sourceActor,
+      UUID correlationId,
+      UUID operationId,
+      OffsetDateTime occurredAt) {
+    if (targetSession == null
+        || targetSession.getLifecycle() != SessionLifecycle.ACTIVE
+        || capturedMembers == null
+        || correlationId == null
+        || operationId == null
+        || occurredAt == null) {
+      throw new IllegalArgumentException("Captured inventory membership input is incomplete");
+    }
+    if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+      throw new IllegalStateException(
+          "Captured inventory membership requires the fenced command transaction");
+    }
+    Map<UUID, InventoryDependencyGateway.CaptureMember> capturedByAsset =
+        new LinkedHashMap<>();
+    Set<String> capturedMatchKeys = new HashSet<>();
+    for (InventoryDependencyGateway.CaptureMember member :
+        capturedMembers.stream()
+            .sorted(Comparator.comparing(InventoryDependencyGateway.CaptureMember::assetId))
+            .toList()) {
+      if (member == null
+          || member.assetId() == null
+          || !targetSession.getWarehouseId().equals(member.warehouseId())
+          || !CAPTURE_STATUSES.contains(member.status())
+          || member.identityMatchKey() == null
+          || member.identityMatchKey().isBlank()
+          || capturedByAsset.put(member.assetId(), member) != null
+          || !capturedMatchKeys.add(member.identityMatchKey())) {
+        throw InventoryException.dependency("Asset capture membership is invalid");
+      }
+    }
+
+    OpaqueActorReference actor = normalizedAssetActor(sourceActor);
+    List<UUID> activeAssetIds =
+        findings.findAllByInventoryIdForUpdateOrderById(targetSession.getId()).stream()
+            .filter(InventoryFinding::isMembershipActive)
+            .map(InventoryFinding::getAssetId)
+            .filter(java.util.Objects::nonNull)
+            .distinct()
+            .sorted()
+            .toList();
+    for (UUID assetId : activeAssetIds) {
+      if (!capturedByAsset.containsKey(assetId)) {
+        reconcileAssetMembership(
+            assetId,
+            null,
+            actor,
+            correlationId,
+            capturedMembershipCausation(operationId, assetId),
+            occurredAt,
+            targetSession.getId());
+      }
+    }
+    for (InventoryDependencyGateway.CaptureMember member : capturedByAsset.values()) {
+      reconcileAssetMembership(
+          member.assetId(),
+          new InventoryDependencyGateway.LiveAssetSnapshot(
+              member.assetId(),
+              member.version(),
+              member.warehouseId(),
+              member.status(),
+              member.displayCanonicalNumber(),
+              member.identityMatchKey(),
+              tenantSnapshot(member.passportSnapshot()),
+              member.passportSnapshot(),
+              member.contentsSnapshot()),
+          actor,
+          correlationId,
+          capturedMembershipCausation(operationId, member.assetId()),
+          occurredAt,
+          null);
+    }
+  }
+
+  private UUID capturedMembershipCausation(UUID operationId, UUID assetId) {
+    return UUID.nameUUIDFromBytes(
+        ("rwms:inventory:refresh:" + operationId + ":" + assetId)
+            .getBytes(StandardCharsets.UTF_8));
+  }
+
   private void reconcileAssetMembership(
       UUID assetId,
       InventoryDependencyGateway.LiveAssetSnapshot current,
@@ -134,17 +231,34 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
       UUID correlationId,
       UUID causationId,
       OffsetDateTime occurredAt) {
+    reconcileAssetMembership(
+        assetId, current, actor, correlationId, causationId, occurredAt, null);
+  }
+
+  private void reconcileAssetMembership(
+      UUID assetId,
+      InventoryDependencyGateway.LiveAssetSnapshot current,
+      OpaqueActorReference actor,
+      UUID correlationId,
+      UUID causationId,
+      OffsetDateTime occurredAt,
+      UUID departureInventoryId) {
     UUID currentWarehouseId = current == null ? null : current.warehouseId();
     boolean eligible = current != null && CAPTURE_STATUSES.contains(current.status());
 
     for (InventoryFinding finding :
         findings.findInActiveSessionsByAssetIdForUpdate(assetId)) {
+      if (departureInventoryId != null
+          && !departureInventoryId.equals(finding.getInventoryId())) {
+        continue;
+      }
       InventorySession session =
           sessions
               .findByIdAndLifecycleForUpdate(
                   finding.getInventoryId(), SessionLifecycle.ACTIVE)
               .orElse(null);
       if (session == null) continue;
+      long mediaSourceRevision = finding.getRevision();
       boolean departed =
           current == null
               || !eligible
@@ -225,7 +339,9 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
       // evidence, but every active projection and completion barrier must see them as gone.
       boolean membershipChanged = departed && finding.changeMembership(false);
       if (!snapshotRefreshed && !membershipChanged) continue;
-      findings.saveAndFlush(finding);
+      InventoryFinding savedFinding = findings.saveAndFlush(finding);
+      findingPersistence.carryForwardMediaReferences(
+          savedFinding.getId(), mediaSourceRevision, savedFinding.getRevision());
       if (membershipChanged && finding.getOrigin() == FindingOrigin.EXPECTED) {
         session.changeExpectedPopulation(-1);
       }
@@ -288,6 +404,7 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
               || !java.util.Objects.equals(
                   existing.getCurrentTenantSnapshot(), current.tenantSnapshot());
       if (!snapshotChanged) return;
+      long mediaSourceRevision = existing.getRevision();
       existing.refreshCurrentAsset(
           current.version(),
           current.warehouseId(),
@@ -300,7 +417,9 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
               ? "[]"
               : existing.getCurrentRepairsSnapshot(),
           ReconciliationState.MATCHED);
-      findings.saveAndFlush(existing);
+      InventoryFinding savedFinding = findings.saveAndFlush(existing);
+      findingPersistence.carryForwardMediaReferences(
+          savedFinding.getId(), mediaSourceRevision, savedFinding.getRevision());
       reviewService.invalidateFurnitureReviewAfterCabinChange(session);
       planningService.invalidateFinalPlan(session);
       session.touch();
@@ -618,13 +737,16 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
                     != dev.buhanzaz.rwms.inventory.domain.MutationState.SOURCE_CREATE_PENDING) {
                   throw InventoryException.conflict("Finding source-create state is inconsistent");
                 }
+                long mediaSourceRevision = finding.getRevision();
                 finding.attachCreatedAsset(
                     remote.asset().assetId(),
                     remote.asset().version(),
                     remote.asset().warehouseId(),
                     remote.asset().status(),
                     remote.asset().tenantSnapshot());
-                findings.saveAndFlush(finding);
+                InventoryFinding savedFinding = findings.saveAndFlush(finding);
+                findingPersistence.carryForwardMediaReferences(
+                    savedFinding.getId(), mediaSourceRevision, savedFinding.getRevision());
               }
               InventorySourceAttachment attachment =
                   findingPersistence
@@ -758,6 +880,10 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
     return projectionService.findingView(saved, currentTruth);
   }
 
+  /**
+   * Resolves reconciliation state and carries the finding's exact prior-revision media set across
+   * the resulting non-media revision bump in the same transaction.
+   */
   public FindingView resolveConflict(
       Jwt jwt, UUID inventoryId, UUID findingId, ResolveConflictRequest request) {
     InventorySession session =
@@ -799,6 +925,7 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
               InventoryFinding lockedFinding = requireFinding(inventoryId, findingId);
               expectRevision(lockedSession.getRevision(), request.expectedSessionRevision());
               expectRevision(lockedFinding.getRevision(), request.expectedFindingRevision());
+              long mediaSourceRevision = lockedFinding.getRevision();
               lockedFinding.refreshCurrentAsset(
                   current == null ? null : current.assetVersion(),
                   current == null ? null : current.warehouseId(),
@@ -812,6 +939,8 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
               lockedFinding.resolveConflict(
                   request.strategy(), fingerprint, request.reason(), actorJson(jwt));
               InventoryFinding result = findings.saveAndFlush(lockedFinding);
+              findingPersistence.carryForwardMediaReferences(
+                  result.getId(), mediaSourceRevision, result.getRevision());
               reviewService.invalidateFurnitureReviewAfterCabinChange(lockedSession);
               planningService.invalidateFinalPlan(lockedSession);
               appendFindingFacts(

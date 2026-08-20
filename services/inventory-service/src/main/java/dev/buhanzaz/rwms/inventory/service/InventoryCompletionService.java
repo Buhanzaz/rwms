@@ -25,21 +25,21 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * Owns preview acknowledgement, terminal completion/cancellation and post-commit effect handoff.
+ * Owns preview acknowledgement and terminal completion/cancellation.
  *
  * <p>It validates fresh remote truth before changing session lifecycle, persists recovery intents
- * inside that transaction, then dispatches furniture and publication effects after commit.
+ * inside that transaction; durable schedulers perform every downstream effect after commit.
  */
 @Service
 final class InventoryCompletionService extends InventoryCompletionWorkflowSupport {
+  private final InventoryFindingPersistenceService findingPersistence;
+
   InventoryCompletionService(
       InventorySessionRepository sessions,
       InventoryFindingRepository findings,
@@ -54,6 +54,7 @@ final class InventoryCompletionService extends InventoryCompletionWorkflowSuppor
       InventoryReviewService reviewService,
       InventoryStatisticsService statisticsService,
       InventoryFindingService findingService,
+      InventoryFindingPersistenceService findingPersistence,
       InventoryPublicationService publicationService,
       InventoryProjectionService projectionService,
       ObjectMapper mapper,
@@ -80,6 +81,7 @@ final class InventoryCompletionService extends InventoryCompletionWorkflowSuppor
         canonicalJson,
         authorizer,
         transactionManager);
+    this.findingPersistence = findingPersistence;
   }
 
   public CompletionPreview preview(
@@ -286,31 +288,13 @@ final class InventoryCompletionService extends InventoryCompletionWorkflowSuppor
                   actor(jwt));
               return result;
             });
-    dispatchCompletionEffectsAfterCommit(completed.getId());
     return projectionService.sessionView(requireSession(completed.getId()));
   }
 
-  /** Schedules durable effect dispatch only after the terminal inventory transaction commits. */
-  private void dispatchCompletionEffectsAfterCommit(UUID inventoryId) {
-    Runnable dispatch =
-        () -> {
-          reviewService.dispatchFurnitureLosses(inventoryId);
-          reviewService.dispatchFurnitureReconciliation(inventoryId);
-          publicationService.dispatchReadyPublications(inventoryId);
-        };
-    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-      dispatch.run();
-      return;
-    }
-    TransactionSynchronizationManager.registerSynchronization(
-        new TransactionSynchronization() {
-          @Override
-          public void afterCommit() {
-            dispatch.run();
-          }
-        });
-  }
-
+  /**
+   * Cancels the session and carries every affected finding's exact prior-revision media set across
+   * the owner-proof revision bump in the same transaction.
+   */
   public SessionView cancel(
       Jwt jwt, UUID inventoryId, UUID idempotencyKey, CancelSessionRequest request) {
     requireScopedSession(inventoryId, authorizer.manageScope(jwt));
@@ -339,11 +323,17 @@ final class InventoryCompletionService extends InventoryCompletionWorkflowSuppor
               InventorySession result = sessions.saveAndFlush(locked);
               List<InventoryFinding> cancelledFindings =
                   findings.findAllByInventoryIdForUpdateOrderById(inventoryId);
+              Map<UUID, Long> mediaSourceRevisions = new LinkedHashMap<>();
               for (InventoryFinding finding : cancelledFindings) {
+                mediaSourceRevisions.put(finding.getId(), finding.getRevision());
                 finding.transitionOwnerProof(false);
               }
               findings.saveAllAndFlush(cancelledFindings);
               for (InventoryFinding finding : cancelledFindings) {
+                findingPersistence.carryForwardMediaReferences(
+                    finding.getId(),
+                    mediaSourceRevisions.get(finding.getId()),
+                    finding.getRevision());
                 findingService.appendOwnerProof(finding, result.getWarehouseId(), actor(jwt));
               }
               events.append(

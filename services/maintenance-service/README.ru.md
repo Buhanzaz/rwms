@@ -33,6 +33,82 @@
 - `/api/internal/maintenance/v1/logistics/**` обслуживает оркестрацию смет возврата и
   ремонтных мест для logistics.
 
+Preflight публикации инвентаризации по-прежнему требует ограниченный список `findings`, принимает
+пустой список, когда итоговый план не содержит maintenance work, и всегда возвращает пустой массив
+`candidates` для каждого finding с работами. Последняя completed inventory является авторитетной,
+поэтому активная смета или ремонт — это predecessor evidence, а не collision, требующий выбранного
+caller-ом merge или replacement.
+
+Каждый finding completed inventory с работами направляется в один полный замороженный `REPAIR`,
+включая `AFTER_RENT`; старого inventory-only пути materialization сметы больше нет. Исторические
+значения `CREATE`, `REPLACE` и `MERGE` остаются допустимым immutable request evidence, но все
+исполняются как полная авторитетная замена. Точная no-work граница
+`PUT /api/internal/maintenance/v1/inventory/outcomes/{inventoryId}/findings/{findingId}/no-work`
+не создаёт смету или ремонт и не оставляет non-terminal maintenance target для finding со статусом
+`FREE`.
+
+Work- и no-work-потоки durable фиксируют каждую non-terminal DRAFT смету и активный ремонт,
+отменяют принадлежащие maintenance задания task-board и перемещение водителя, освобождают operation
+leases и ремонтные места через их владельцев и только затем supersede локальные сметы, ремонты и
+этапы. Rows, lines, stages, evidence, media references и event history сохраняются; workflow не
+удаляет maintenance history. Terminal truth ремонта `ACCEPTED` или `WRITTEN_OFF`, несовпадение
+warehouse/asset и устаревший либо неоднозначный порядок completed inventory отклоняются до любого
+local или remote effect.
+
+Apply требует `authoritativeAssetVersion`, который asset-service возвращает после применения
+результата inventory. Отстающая local asset projection принимается только тогда, когда её версия
+входит во включительный диапазон `assetVersion..authoritativeAssetVersion`. `LOST`, `WRITTEN_OFF`,
+несовпадение warehouse и projection вне этого диапазона остаются конфликтами. Завершённый
+idempotency key возвращает замороженный ответ без новых эффектов. Новый ключ для того же immutable
+source заново обнаруживает и supersede non-terminal predecessors, созданные после предыдущего
+успеха, сохраняя exact same-source repair и никогда не создавая дубликат.
+Для no-work reassertion увеличенный `authoritativeAssetVersion` от того же immutable source
+считается новым техническим fence, а не другим решением инвентаризации. Исходный outcome
+coordinator остаётся неизменным, а новый idempotency key сохраняет точный fingerprint запроса и
+ответ в отдельном receipt.
+
+Регистрации публикации и immutable source rows, записанные до V45 coordinator, остаются audit
+history и не блокируют последнюю completed inventory. Operation-only row или source, создавший
+смету, считается predecessor evidence. Если старый repair source ранее был заморожен в уже
+`APPLIED` coordinator, новый idempotency key атомарно создаёт один replacement repair, supersede
+этот legacy repair и связывает текущую generation в новой completed receipt без перезаписи старых
+source, outcome или receipt. Outcome lock сериализует создание generation, а repair-specific
+compatibility queue key не конфликтует с quarantined `QUEUE_REPAIR` старого ремонта. Same-key
+replay остаётся замороженным; текущий V45 repair source reassert, а не заменяется.
+Repair reads публикуют `inventorySource` через read-only
+[`InventoryRepairSourceReadProjection`](src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryRepairSourceReadProjection.java).
+Он сначала разрешает новейший completed receipt, в замороженном ответе которого указан repair,
+затем исходный `targetRepairId` authoritative outcome и, наконец, legacy
+`InventoryRepairSource`. Authoritative reference сохраняет identity inventory/finding,
+`findingRevision`, `finalPlanSha256` как plan fingerprint и `requestSha256` как source fingerprint,
+чтобы клиент мог адресовать immutable media owner inventory finding без перезаписи media rows.
+Legacy repair с точными lease owner и fencing token в `RECONCILIATION_REQUIRED` освобождается через
+asset owner до replacement. Ответ asset может подтвердить как `RELEASED`, так и естественный
+`EXPIRED`; lease ID, owner и fencing token по-прежнему обязаны совпасть, а версия не может
+уменьшиться. Для уже локально `RELEASED` lease повторный вызов не выполняется.
+Когда новая inventory generation сохраняет этот current repair, maintenance повторно утверждает
+вычисленный asset-статус `REPAIR`/`CAPITAL_REPAIR` и пересоздаёт отсутствующую работу с
+generation-specific ключами. Обычная входящая работа `DELIVER_TO_REPAIR` указывает authoritative
+inventory finding, даже если current repair был принят из source до V45. Внешний капремонт с
+`movementToRepair=true` вместо неё получает отдельное исходящее задание
+`CAPITAL_TO_PRODUCTION`, источником которого является этот капремонт.
+
+Work apply сначала сохраняет `INVENTORY` repair в `DRAFT` с полным замороженным планом и одной
+durable reconciliation `ASSET/QUEUE_REPAIR`. Существующий queue reconciler получает lease и меняет
+статус asset. При `forceCapitalRepair=true` он использует `QUEUE_TO_CAPITAL_REPAIR`, завершает local
+repair как внешний капитальный (`COMPLETED/PENDING`, `EXTERNAL_CAPITAL`), не создаёт обычное
+task-board задание и при `movementToRepair=true` создаёт отдельное logistics driver task
+`CAPITAL_TO_PRODUCTION`. Для обычных работ он ставит repair в очередь и либо сразу регистрирует
+задание task-board, либо при `movementToRepair=true` создаёт logistics driver task
+`DELIVER_TO_REPAIR` и регистрирует ремонтную работу после доставки.
+
+Публикация проверяет fingerprint точного raw frozen snapshot до любой compatibility adaptation.
+Только для schema version 1 исторический snapshot, в котором один и тот же непустой список
+aggregate media скопирован в каждую строку, исполняется с очищенными в памяти line-копиями;
+aggregate evidence прикрепляется один раз. Никакая другая форма version 1 не нормализуется, а
+version 2 по-прежнему проходит строгую текущую validation. Raw snapshot и fingerprint сохраняются
+без изменений, поэтому перезапись БД или миграция не требуется.
+
 Внутренние вызовы используют service credentials, а не проброшенный пользовательский token.
 Authorizer проверяет точные identity сервиса, audience и single-purpose scope для inventory и
 logistics. HTTP security chain — stateless OAuth2/JWT; dev auth bypass ограничен профилем `dev` и
@@ -110,7 +186,7 @@ workflow замены бытовки.
 | `InventoryMaintenanceService` | Стабильный фасад private inventory boundary над freeze, upsert и repair-snapshot projection |
 | Collaborators freeze/upsert/validation/transaction для inventory maintenance | Admission замороженного плана, validation каталога/routing/media и изолированные local transactions |
 | `InventoryPublicationReconciliationService` | Стабильный фасад completed inventory над preflight projection и durable apply |
-| Collaborators source/pre-start/target/materialization для inventory publication | Source replay, replacement compensation, выбор target и materialization сметы/ремонта |
+| Collaborators authoritative outcome/source/target/materialization для inventory | Completed-at watermark, replay/reassertion receipt, compensation predecessors, local supersession и materialization единственного full-plan repair |
 | `PropertyDispositionApplicationService` | Стабильный decision facade над creation, furniture materialization, review/recovery, reads и processing callbacks |
 | Collaborators property-disposition boundary, persistence, actor, repair-chain и finalization | Механика transaction/lock/hash, event parity, validation repair chain и terminal repair effects |
 | `HttpMaintenanceDependencyGateway` | Стабильный private transport facade над владельцами warehouse, asset, logistics, task-board и media |
@@ -129,11 +205,12 @@ freeze и upsert владеют отдельными командами, а snap
 только для чтения. Routing- и warehouse-preflight calls выполняются лишь после
 rollback короткой local transaction и освобождения её locks.
 
-Публикация completed inventory использует тот же remote-outside-lock pattern.
-Pre-start replacement saga владеет compensation и successor state, а source,
-target, estimate, repair и plan components остаются однонаправленными
-зависимостями apply owner. Preflight является независимой read projection и не
-может инициировать эффект публикации.
+Публикация completed inventory использует тот же remote-outside-lock pattern. Её authoritative
+outcome coordinator владеет permanent receipts, per-asset completed-at ordering, target-effect
+ledgers, восстановлением lost response, local supersession, exact-source reassertion и
+receipt-bound compatibility generations для immutable source history до coordinator. Source,
+target, repair и plan components остаются однонаправленными зависимостями apply owner. Preflight
+является независимой read projection и не может инициировать эффект публикации.
 
 У property disposition пять однонаправленных application branches. Creation,
 furniture materialization и review/recovery используют одинаковые узкие leaves
@@ -153,6 +230,13 @@ error policy. Owner clients не вызывают peers или application use c
 Flyway-миграции в `src/main/resources/db/migration/` — единственный источник схемы. JPA использует
 `ddl-auto=validate`; нельзя включать Hibernate schema mutation или добавлять межсервисные foreign
 keys.
+
+Миграция
+[`V45__authoritative_inventory_maintenance_outcomes.sql`](src/main/resources/db/migration/V45__authoritative_inventory_maintenance_outcomes.sql)
+добавляет permanent rows результата, receipt, per-asset watermark и ledger эффектов predecessor.
+Remote attempts фиксируются до вызовов вне local transactions; lost response разрешается через
+owner readback или тот же stable cancellation identity, а не через fabricated success. Local domain
+rows помечаются historical только после terminal-состояния каждого обязательного remote ledger.
 
 Зафиксированный факт агрегата записывается в local event stream, snapshot/checkpoint и
 transactional outbox в одной PostgreSQL-транзакции. Доставка Kafka — at-least-once: relay повторно
@@ -228,6 +312,7 @@ recovery остаётся явной reviewed operation.
 - `src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceReconciliationUseCases.java`
 - `src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryMaintenanceService.java`
 - `src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryPublicationReconciliationService.java`
+- `src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryAuthoritativeOutcomeService.java`
 - `src/main/java/dev/buhanzaz/rwms/maintenance/disposition/application/PropertyDispositionApplicationService.java`
 - `src/main/java/dev/buhanzaz/rwms/maintenance/eventing/MaintenanceEventStore.java`
 - `src/main/java/dev/buhanzaz/rwms/maintenance/eventing/transport/MaintenanceKafkaOutboxRelay.java`

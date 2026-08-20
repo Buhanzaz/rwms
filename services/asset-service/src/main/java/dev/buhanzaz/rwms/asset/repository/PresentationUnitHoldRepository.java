@@ -47,6 +47,34 @@ public interface PresentationUnitHoldRepository
       @Param("rentalItemId") UUID rentalItemId,
       @Param("state") PresentationUnitHoldState state);
 
+  /** Locks all active presentation bindings for one cabin. */
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select hold
+      from PresentationUnitHold hold
+      where hold.rentalItemId = :rentalItemId
+        and hold.state = :state
+      order by hold.id
+      """)
+  List<PresentationUnitHold> findAllByRentalItemIdAndStateForUpdate(
+      @Param("rentalItemId") UUID rentalItemId,
+      @Param("state") PresentationUnitHoldState state);
+
+  /** Locks active presentation bindings for a completed-inventory furniture cabin scope. */
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select hold
+      from PresentationUnitHold hold
+      where hold.rentalItemId in :rentalItemIds
+        and hold.state = :state
+      order by hold.rentalItemId, hold.id
+      """)
+  List<PresentationUnitHold> findAllByRentalItemIdsAndStateForUpdate(
+      @Param("rentalItemIds") Collection<UUID> rentalItemIds,
+      @Param("state") PresentationUnitHoldState state);
+
   @Query(
       """
       select hold

@@ -7,7 +7,8 @@ import java.util.UUID;
 import tools.jackson.databind.JsonNode;
 
 /**
- * Private integration boundary from inventory workflow to warehouse, asset and maintenance owners.
+ * Private integration boundary from inventory workflow to warehouse, asset, logistics, media and
+ * maintenance owners.
  */
 public interface InventoryDependencyGateway {
   WarehouseOperation beginWarehouseOperation(
@@ -46,6 +47,17 @@ public interface InventoryDependencyGateway {
   void reconcileFurniture(
       UUID inventoryId, UUID idempotencyKey, FurnitureReconciliationRequest request);
 
+  /** Applies one completed-inventory status through the asset-owned authoritative boundary. */
+  InventoryAssetOutcome applyInventoryOutcome(
+      UUID inventoryId, UUID findingId, UUID idempotencyKey, JsonNode request);
+
+  /** Replaces the cabin's current photo folder with exact completed-finding image references. */
+  InventoryCabinPhotoOutcome publishInventoryCabinPhotos(
+      UUID inventoryId, UUID findingId, UUID idempotencyKey, JsonNode request);
+
+  /** Supersedes logistics-owned work for the exact completed inventory plan. */
+  JsonNode applyLogisticsOutcomes(UUID inventoryId, UUID idempotencyKey, JsonNode request);
+
   InventoryLossDisposition createInventoryLossDisposition(
       UUID idempotencyKey, InventoryLossDispositionRequest request);
 
@@ -60,6 +72,10 @@ public interface InventoryDependencyGateway {
 
   /** Applies one already-selected final-plan reconciliation using a stable idempotency key. */
   JsonNode applyReconciliation(
+      UUID inventoryId, UUID findingId, UUID idempotencyKey, JsonNode request);
+
+  /** Supersedes maintenance-owned work when the authoritative finding requires no work. */
+  JsonNode applyNoWorkDisposition(
       UUID inventoryId, UUID findingId, UUID idempotencyKey, JsonNode request);
 
   RepairUpsert upsertRepair(
@@ -257,6 +273,30 @@ public interface InventoryDependencyGateway {
       List<FurnitureReconciliationCabin> cabins) {}
 
   record FurnitureReconciliationCabin(UUID assetId, long quantity) {}
+
+  /** Validated asset-owner receipt retained by the inventory publication attempt. */
+  record InventoryAssetOutcome(
+      UUID inventoryId,
+      UUID findingId,
+      UUID assetId,
+      long assetVersion,
+      String status,
+      List<UUID> releasedOrderUnitReservationIds,
+      List<UUID> releasedOperationLeaseIds,
+      List<UUID> releasedPresentationHoldIds,
+      boolean transferSuperseded,
+      JsonNode result) {}
+
+  /** Validated media-owner receipt for one completed inventory finding photo publication. */
+  record InventoryCabinPhotoOutcome(
+      UUID inventoryId,
+      UUID findingId,
+      UUID cabinId,
+      UUID folderId,
+      UUID coverMediaId,
+      long photoCount,
+      long libraryVersion,
+      boolean replay) {}
 
   record InventoryLossDispositionRequest(
       UUID inventorySessionId,

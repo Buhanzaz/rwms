@@ -259,6 +259,31 @@ public class CabinCompositionService {
         legacyCharacteristicIds(characteristics));
   }
 
+  /**
+   * Resolves a completed-inventory passport using exact active catalogue names. Every raw
+   * characteristic value is split on commas because supported manager revisions persisted both
+   * comma-delimited strings and arrays containing comma-delimited elements. Empty input is the
+   * authoritative empty characteristic set; no catalogue row is ever created here.
+   */
+  @Transactional(readOnly = true)
+  public CabinSelection requireInventoryOutcomeSelection(
+      String rentalType,
+      String dimensions,
+      String finishing,
+      List<String> characteristics) {
+    CabinCatalogItem type =
+        requireActiveCatalogItemByName(CabinCatalogKind.TYPE, rentalType, "rentalType");
+    CabinCatalogItem dimension =
+        requireActiveCatalogItemByName(CabinCatalogKind.DIMENSION, dimensions, "dimensions");
+    CabinCatalogItem finishingItem =
+        requireActiveCatalogItemByName(CabinCatalogKind.FINISHING, finishing, "finishing");
+    return requireSelection(
+        type.getId(),
+        dimension.getId(),
+        finishingItem.getId(),
+        inventoryOutcomeCharacteristicIds(characteristics));
+  }
+
   /** Replaces only the relation rows, preserving each characteristic as an individual UUID. */
   @Transactional
   public boolean replaceRentalItemCharacteristics(
@@ -441,6 +466,30 @@ public class CabinCompositionService {
     }
     return orderedDistinct(
         splitItems.stream().map(CabinCatalogItem::getId).toList(), "characteristics");
+  }
+
+  private List<UUID> inventoryOutcomeCharacteristicIds(List<String> values) {
+    if (values == null || values.isEmpty()) return List.of();
+    Set<String> names = new LinkedHashSet<>();
+    for (String value : values) {
+      if (value == null) {
+        throw new IllegalArgumentException("characteristics must not contain null");
+      }
+      for (String part : value.split(",", -1)) {
+        if (part.isBlank()) continue;
+        names.add(normalizedLegacyName(part, "characteristics"));
+      }
+    }
+    if (names.size() > 100) {
+      throw new IllegalArgumentException("characteristics must contain at most 100 values");
+    }
+    return names.stream()
+        .map(
+            name ->
+                requireActiveCatalogItemByName(
+                        CabinCatalogKind.CHARACTERISTIC, name, "characteristics")
+                    .getId())
+        .toList();
   }
 
   private static List<String> splitLegacyCharacteristicNames(String value) {

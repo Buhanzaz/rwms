@@ -60,6 +60,34 @@ public interface OrderUnitReservationRepository
       @Param("rentalItemId") UUID rentalItemId,
       @Param("state") OrderUnitReservationState state);
 
+  /** Locks every active order binding for one cabin in deterministic ID order. */
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select reservation
+      from OrderUnitReservation reservation
+      where reservation.rentalItemId = :rentalItemId
+        and reservation.state = :state
+      order by reservation.id
+      """)
+  List<OrderUnitReservation> findAllByRentalItemIdAndStateForUpdate(
+      @Param("rentalItemId") UUID rentalItemId,
+      @Param("state") OrderUnitReservationState state);
+
+  /** Locks active order bindings for a completed-inventory furniture cabin scope. */
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select reservation
+      from OrderUnitReservation reservation
+      where reservation.rentalItemId in :rentalItemIds
+        and reservation.state = :state
+      order by reservation.rentalItemId, reservation.id
+      """)
+  List<OrderUnitReservation> findAllByRentalItemIdsAndStateForUpdate(
+      @Param("rentalItemIds") List<UUID> rentalItemIds,
+      @Param("state") OrderUnitReservationState state);
+
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query(
       """

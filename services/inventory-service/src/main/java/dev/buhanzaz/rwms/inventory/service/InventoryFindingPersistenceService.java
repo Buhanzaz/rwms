@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Repository-only persistence collaborator for finding source, media and frozen-plan facts.
@@ -67,6 +68,68 @@ final class InventoryFindingPersistenceService {
 
   FindingMediaReference saveMediaReference(FindingMediaReference reference) {
     return mediaReferences.save(reference);
+  }
+
+  /**
+   * Copies one finding revision's exact media set to its immediately succeeding non-media
+   * revision. An already identical target is idempotent, while any different target set fails the
+   * surrounding transaction instead of mixing evidence from two revisions.
+   */
+  void carryForwardMediaReferences(
+      UUID findingId, long sourceRevision, long targetRevision) {
+    if (findingId == null || sourceRevision < 0 || targetRevision < 0) {
+      throw new IllegalArgumentException("Finding media revision identity is invalid");
+    }
+    if (sourceRevision == targetRevision) {
+      return;
+    }
+    if (targetRevision != Math.addExact(sourceRevision, 1)) {
+      throw new IllegalArgumentException(
+          "Finding media may only be carried to the immediately succeeding revision");
+    }
+    if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+      throw new IllegalStateException("Finding media carry-forward requires a transaction");
+    }
+    List<FindingMediaReference> source = findingMediaReferences(findingId, sourceRevision);
+    if (source.isEmpty()) {
+      return;
+    }
+    List<FindingMediaReference> target = findingMediaReferences(findingId, targetRevision);
+    if (!target.isEmpty()) {
+      if (sameMediaSet(source, target)) {
+        return;
+      }
+      throw new IllegalStateException(
+          "Target finding revision already contains different media evidence");
+    }
+    mediaReferences.saveAllAndFlush(
+        source.stream()
+            .map(
+                reference ->
+                    new FindingMediaReference(
+                        findingId,
+                        targetRevision,
+                        reference.getMediaId(),
+                        reference.getGeneration(),
+                        reference.getMediaKind()))
+            .toList());
+  }
+
+  private boolean sameMediaSet(
+      List<FindingMediaReference> source, List<FindingMediaReference> target) {
+    if (source.size() != target.size()) {
+      return false;
+    }
+    for (int index = 0; index < source.size(); index++) {
+      FindingMediaReference sourceReference = source.get(index);
+      FindingMediaReference targetReference = target.get(index);
+      if (!sourceReference.getMediaId().equals(targetReference.getMediaId())
+          || sourceReference.getGeneration() != targetReference.getGeneration()
+          || !sourceReference.getMediaKind().equals(targetReference.getMediaKind())) {
+        return false;
+      }
+    }
+    return true;
   }
 
   Optional<InventoryMediaFactProjection> findLatestFindingMediaFact(

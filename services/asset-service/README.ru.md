@@ -33,8 +33,8 @@ streaming и operator-reviewed outbox recovery. Изменяющие коман�
   furniture custody;
 - `/api/internal/asset/v1/logistics/**` — logistics leases, holds, reservations, movement plans и
   asset effects; и
-- `/api/internal/asset/v1/inventory/**` — inventory capture, validation, source-asset и
-  furniture-reconciliation work.
+- `/api/internal/asset/v1/inventory/**` — inventory capture, validation, source-asset,
+  furniture-reconciliation и completed-outcome work.
 
 Внутренние вызывающие стороны используют service credentials, а не проброшенный пользовательский
 token. Security chain требует точные identity сервиса и single-purpose scope для каждого namespace.
@@ -89,6 +89,55 @@ reserve мебели. Ошибка в любой паре откатывает �
 перемещения мебели блокирует maintenance acquisition до выполнения существующего movement
 (истёкший hold не считается live); order-wide furniture reservation при замене не освобождается.
 
+## Авторитет завершённой инвентаризации
+
+`PUT /api/internal/asset/v1/inventory/outcomes/{inventoryId}/findings/{findingId}` принимает только
+точный credential `inventory-service` и immutable evidence завершённого плана. Для найденной
+нетерминальной бытовки последняя завершённая инвентаризация является истиной: первый или более новый
+source `FREE`, `REPAIR` или `CAPITAL_REPAIR` освобождает active operation leases, order-unit
+reservations и presentation holds, очищает transfer state и затем становится текущим статусом
+бытовки. Rows и обычные lease/asset events сохраняются; media metadata и object storage не входят в
+эту команду.
+
+Та же команда передаёт замороженное наблюдение паспорта finding. `ABSENT` сохраняет текущий
+паспорт. `PRESENT` авторитетно заменяет тип бытовки, совместимые габариты, отделку, категорию,
+характеристики и nullable-линолеум, даже если запрошенный статус уже совпадает. Имена должны точно
+разрешаться в active catalog rows asset-service; новые значения каталога не создаются. Каждая
+строка характеристик и каждый элемент массива делятся по запятым, обрезаются и дедуплицируются;
+отсутствующее поле характеристик очищает набор, а отсутствующий или не-boolean линолеум очищает
+nullable-значение. Catalog resolution выполняется до освобождения любых bindings, поэтому
+неизвестное, inactive или несовместимое значение откатывает всю команду. Relation rows
+характеристик, версия rental item, обычные passport/status events, watermark и receipt фиксируются
+в одной asset-owned transaction. См. канонический
+[`InventoryOutcomeRequest`](../../contracts/openapi/asset-service.yaml) и
+[`InventoryAssetOutcomeService`](src/main/java/dev/buhanzaz/rwms/asset/service/InventoryAssetOutcomeService.java).
+
+Flyway V38 добавляет permanent successful idempotency receipt и per-cabin completed-at watermark.
+Тот же key и request возвращают замороженный результат. Новый key для того же latest final-plan
+finding повторно применяет статус, reservations, holds и transfer state, но сохраняет active
+operation lease: он уже может принадлежать ремонту, созданному этим finding. Посторонний predecessor
+lease освобождает maintenance или logistics по точному owner и fence. Строго более старая
+завершённая инвентаризация и конфликтующий equal-time source возвращают `409`. `LOST`,
+`WRITTEN_OFF` и неверный warehouse всегда отклоняются без частичного статуса или receipt.
+
+Flyway
+[`V39__inventory_outcome_passport_watermark.sql`](src/main/resources/db/migration/V39__inventory_outcome_passport_watermark.sql)
+добавляет nullable hash наблюдения паспорта в watermark, не меняя V38 receipt или response shape.
+`NULL` обозначает status-only watermark до V39 и разрешает единственное принятие только при полном
+совпадении исходных source/status полей. Успешное повторное применение сохраняет hash; последующий
+equal-time payload drift становится конфликтом.
+
+Furniture reconciliation сохраняет `expectedSnapshotSha256` как обязательное immutable source
+evidence в permanent request identity, но не сравнивает его с новым full snapshot: non-terminal
+status/version бытовки и physical quantities могут штатно измениться до reconciliation. Под
+текущими locks она всё ещё требует, чтобы каждая выбранная бытовка существовала на указанном
+warehouse и была non-terminal, cabin scope совпадал точно, а active FURNITURE catalog set/version
+оставался неизменным. Она завершает конфликтующие cabin leases, order и presentation bindings,
+order-wide furniture reservations и live allocation holds, сохраняет их audit rows/events и затем
+перезаписывает текущие quantities проверенными абсолютными counts. Повтор release maintenance или
+logistics lease может прочитать тот же terminal lease `RELEASED` или `EXPIRED` того же owner с
+исходным fencing token; неверный owner или token остаётся fenced.
+
 ## Внутренняя структура приложения
 
 `AssetService` — стабильный controller-facing фасад с пятью точными application
@@ -104,8 +153,8 @@ collaborators. Он сохраняет публичные transaction boundaries
 | `AssetClassifierService` | Команды classifier aggregate и event facts |
 | Сервисы lease, catalog, ledger и hold | Точные locking, fencing, catalog binding, physical balances и expiry allocations |
 | `AssetJsonCodec` и `AssetBalanceRow` | Только canonical JSON/idempotency decoding и immutable carrier физического остатка |
-| `InventoryAssetService` | Стабильный private inventory facade над capture, projection, furniture reconciliation и source creation |
-| Сервисы inventory capture/projection/furniture/source | Lifecycle замороженного capture, current validation reads, проверенные абсолютные furniture counts и permanent source identity |
+| `InventoryAssetService` | Стабильный private inventory facade над capture, projection, furniture reconciliation, completed outcomes и source creation |
+| Сервисы inventory capture/projection/furniture/outcome/source | Lifecycle замороженного capture, current validation reads, проверенные абсолютные furniture counts, completed-at outcome ordering и permanent source identity |
 | `InventoryAssetSnapshotTransaction` и `InventoryAssetCodec` | Только repeatable-read snapshot boundary и canonical inventory JSON/hash mechanics |
 | `RentalItemHtmlImportService` | Стабильный HTML-import фасад над read projection, plan decisions, commit recovery и media recovery |
 | Сервисы HTML-import projection, plan, commit и media | Raw intake/read mapping, durable row decisions, materialization и retry/replace/skip workflows |

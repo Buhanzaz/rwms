@@ -6,7 +6,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import dev.buhanzaz.rwms.maintenance.domain.InventoryAuthoritativeOutcome;
+import dev.buhanzaz.rwms.maintenance.domain.InventoryAuthoritativeOutcomeReceipt;
+import dev.buhanzaz.rwms.maintenance.domain.InventoryPublicationSourceId;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceReconciliation;
+import dev.buhanzaz.rwms.maintenance.domain.MaintenanceEstimate;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceRepair;
 import dev.buhanzaz.rwms.maintenance.domain.MediaFactProjection;
 import dev.buhanzaz.rwms.maintenance.domain.RepairExecutionState;
@@ -17,12 +21,16 @@ import dev.buhanzaz.rwms.maintenance.domain.RepairStageKind;
 import dev.buhanzaz.rwms.maintenance.domain.RentalItemFactProjection;
 import dev.buhanzaz.rwms.maintenance.integration.MaintenanceDependencyGateway;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceJsonbCanonicalizer;
+import dev.buhanzaz.rwms.maintenance.repository.InventoryAuthoritativeOutcomeReceiptRepository;
+import dev.buhanzaz.rwms.maintenance.repository.InventoryAuthoritativeOutcomeRepository;
 import dev.buhanzaz.rwms.maintenance.repository.MaintenanceReconciliationRepository;
+import dev.buhanzaz.rwms.maintenance.repository.MaintenanceEstimateRepository;
 import dev.buhanzaz.rwms.maintenance.repository.MaintenanceRepairRepository;
 import dev.buhanzaz.rwms.maintenance.repository.MediaFactProjectionRepository;
 import dev.buhanzaz.rwms.maintenance.repository.RepairStageRepository;
 import dev.buhanzaz.rwms.maintenance.repository.RentalItemFactProjectionRepository;
 import dev.buhanzaz.rwms.maintenance.service.InventoryMaintenanceService;
+import dev.buhanzaz.rwms.maintenance.service.InventoryAuthoritativeOutcomeService;
 import dev.buhanzaz.rwms.maintenance.service.InventoryPublicationReconciliationService;
 import dev.buhanzaz.rwms.maintenance.service.InventoryPublicationSuccessorActivator;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
@@ -40,6 +48,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -75,13 +85,17 @@ class MaintenanceInventoryBoundaryIntegrationTest {
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
   @Autowired InventoryMaintenanceService inventory;
+  @Autowired InventoryAuthoritativeOutcomeService authoritativeOutcomes;
   @Autowired InventoryPublicationReconciliationService publications;
   @Autowired MaintenanceApplicationService maintenance;
   @Autowired InventoryPublicationSuccessorActivator successorActivator;
   @Autowired MaintenanceJsonbCanonicalizer canonicalizer;
   @Autowired ObjectMapper mapper;
+  @Autowired InventoryAuthoritativeOutcomeRepository authoritativeOutcomeRepository;
+  @Autowired InventoryAuthoritativeOutcomeReceiptRepository authoritativeOutcomeReceipts;
   @Autowired RentalItemFactProjectionRepository rentalItems;
   @Autowired MaintenanceRepairRepository repairs;
+  @Autowired MaintenanceEstimateRepository estimates;
   @Autowired RepairStageRepository repairStages;
   @Autowired MaintenanceReconciliationRepository inventoryReconciliations;
   @Autowired MediaFactProjectionRepository mediaFacts;
@@ -1203,7 +1217,788 @@ class MaintenanceInventoryBoundaryIntegrationTest {
   }
 
   @Test
-  void afterRentPublicationCreatesOneDraftEstimateFromRawV1EvidenceWithoutRepairWork() {
+  void emptyPublicationPreflightPreservesFinalPlanIdentityWithoutMaintenanceCandidates() {
+    UUID inventoryId = UUID.randomUUID();
+    long finalPlanVersion = 7L;
+    String finalPlanSha256 = finalPlanSha(finalPlanVersion);
+
+    InventoryPublicationPreflightResponse preflight = publications.preflight(
+        new InventoryPublicationPreflightRequest(
+            inventoryId,
+            warehouseId,
+            finalPlanVersion,
+            finalPlanSha256,
+            List.of()));
+
+    assertThat(preflight.inventoryId()).isEqualTo(inventoryId);
+    assertThat(preflight.finalPlanVersion()).isEqualTo(finalPlanVersion);
+    assertThat(preflight.finalPlanSha256()).isEqualTo(finalPlanSha256);
+    assertThat(preflight.findings()).isEmpty();
+  }
+
+  @Test
+  void authoritativeNoWorkCancelsStartedTaskDriverLeaseAndEveryLocalPredecessor() {
+    AuthoritativeActiveRepair active = authoritativeActiveRepair(true, true);
+    MaintenanceEstimate estimate = estimates.saveAndFlush(MaintenanceEstimate.create(
+        warehouseId,
+        active.assetId(),
+        active.assetVersion(),
+        catalogId,
+        LocalDate.of(2026, 8, 5),
+        "Before inventory",
+        "Preserved predecessor",
+        "{}"));
+    insertEventHead("ESTIMATE", estimate.getId(), estimate.getVersion());
+    UUID driverTaskId = UUID.randomUUID();
+
+    when(dependencies.getTask(active.externalTaskId()))
+        .thenAnswer(invocation -> {
+          assertNoRemoteTransaction();
+          return new MaintenanceDependencyGateway.TaskSnapshot(
+              active.externalTaskId(), 4L, "IN_PROGRESS", List.of());
+        });
+    when(dependencies.cancelTask(any(), eq(active.externalTaskId()), eq(4L)))
+        .thenAnswer(invocation -> {
+          assertNoRemoteTransaction();
+          return new MaintenanceDependencyGateway.TaskSnapshot(
+              active.externalTaskId(), 5L, "CANCELLED", List.of());
+        });
+    when(dependencies.maintenanceDriverTaskCompensation(
+            active.repairId(),
+            MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR))
+        .thenAnswer(invocation -> {
+          assertNoRemoteTransaction();
+          return driverCompensation(
+              active.repairId(),
+              MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR,
+              MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome.PENDING);
+        });
+    when(dependencies.cancelMaintenanceDriverTaskCompensation(
+            any(),
+            eq(active.repairId()),
+            eq(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR)))
+        .thenAnswer(invocation -> {
+          assertNoRemoteTransaction();
+          return new MaintenanceDependencyGateway.MaintenanceDriverTaskCompensation(
+              active.repairId(),
+              MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR,
+              MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome.CANCELLED,
+              driverTaskId,
+              1L,
+              "CANCELLED",
+              null,
+              null,
+              null,
+              null,
+              null);
+        });
+    doAnswer(invocation -> {
+      assertNoRemoteTransaction();
+      return null;
+    }).when(dependencies).releaseLease(
+        any(),
+        eq(active.leaseId()),
+        eq(0L),
+        eq(13L),
+        eq("MAINTENANCE_REPAIR"),
+        eq(active.repairId().toString()));
+
+    InventoryNoWorkOutcomeResult result = authoritativeOutcomes.applyNoWork(
+        active.inventoryId(),
+        active.findingId(),
+        UUID.randomUUID(),
+        noWorkRequest(active, 2L, active.completedAt().plusMinutes(1)));
+
+    assertThat(result.replay()).isFalse();
+    assertThat(result.supersededEstimateIds()).containsExactly(estimate.getId());
+    assertThat(result.supersededRepairIds()).containsExactly(active.repairId());
+    assertThat(result.cancelledExternalTaskIds()).containsExactly(active.externalTaskId());
+    assertThat(result.cancelledDriverTaskIds()).containsExactly(driverTaskId);
+    assertThat(result.releasedLeaseIds()).containsExactly(active.leaseId());
+    assertThat(jdbc.queryForMap(
+        "select execution_state,acceptance_state,lease_reconciliation_state "
+            + "from maintenance_repair where id=?",
+        active.repairId()))
+        .containsEntry("execution_state", "CANCELLED")
+        .containsEntry("acceptance_state", "NOT_READY")
+        .containsEntry("lease_reconciliation_state", "RELEASED");
+    assertThat(jdbc.queryForObject(
+        "select inventory_superseded_at is not null from maintenance_estimate where id=?",
+        Boolean.class,
+        estimate.getId())).isTrue();
+    assertThat(jdbc.queryForObject(
+        "select state from repair_place_allocation where repair_id=?",
+        String.class,
+        active.repairId())).isEqualTo("RELEASED");
+    assertThat(jdbc.queryForObject(
+        "select count(*) from maintenance_repair where rental_item_id=? "
+            + "and execution_state<>'CANCELLED' and acceptance_state not in ('ACCEPTED','WRITTEN_OFF')",
+        Integer.class,
+        active.assetId())).isZero();
+    assertThat(jdbc.queryForObject(
+        "select count(*) from maintenance_repair where id=?", Integer.class, active.repairId()))
+        .isOne();
+    verify(dependencies).cancelTask(any(), eq(active.externalTaskId()), eq(4L));
+    verify(dependencies).cancelMaintenanceDriverTaskCompensation(
+        any(),
+        eq(active.repairId()),
+        eq(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR));
+    verify(dependencies).releaseLease(
+        any(),
+        eq(active.leaseId()),
+        eq(0L),
+        eq(13L),
+        eq("MAINTENANCE_REPAIR"),
+        eq(active.repairId().toString()));
+  }
+
+  @Test
+  void authoritativeNoWorkRecoversLostRemoteResponseWithTheSameDurableAttempts() {
+    AuthoritativeActiveRepair active = authoritativeActiveRepair(true, false);
+    UUID key = UUID.randomUUID();
+    InventoryNoWorkOutcomeRequest request =
+        noWorkRequest(active, 2L, active.completedAt().plusMinutes(1));
+    AtomicReference<Integer> driverReads = new AtomicReference<>(0);
+
+    when(dependencies.getTask(active.externalTaskId()))
+        .thenReturn(new MaintenanceDependencyGateway.TaskSnapshot(
+            active.externalTaskId(), 0L, "WAITING", List.of()));
+    when(dependencies.cancelTask(any(), eq(active.externalTaskId()), eq(0L)))
+        .thenReturn(new MaintenanceDependencyGateway.TaskSnapshot(
+            active.externalTaskId(), 1L, "CANCELLED", List.of()));
+    when(dependencies.maintenanceDriverTaskCompensation(
+            active.repairId(),
+            MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR))
+        .thenAnswer(invocation -> {
+          assertNoRemoteTransaction();
+          int read = driverReads.updateAndGet(value -> value + 1);
+          return driverCompensation(
+              active.repairId(),
+              MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR,
+              read == 1
+                  ? MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome.PENDING
+                  : MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome.CANCELLED);
+        });
+    when(dependencies.cancelMaintenanceDriverTaskCompensation(
+            any(),
+            eq(active.repairId()),
+            eq(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR)))
+        .thenThrow(new MaintenanceDependencyException(
+            HttpStatus.SERVICE_UNAVAILABLE,
+            "response lost after logistics committed cancellation"));
+
+    assertThatThrownBy(() -> authoritativeOutcomes.applyNoWork(
+        active.inventoryId(), active.findingId(), key, request))
+        .isInstanceOf(MaintenanceDependencyException.class);
+    assertThat(jdbc.queryForObject(
+        "select execution_state from maintenance_repair where id=?",
+        String.class,
+        active.repairId())).isEqualTo("QUEUED");
+    assertThat(jdbc.queryForMap(
+        "select task_attempt_count,driver_attempt_count,lease_attempt_count "
+            + "from inventory_authoritative_outcome_target where target_id=?",
+        active.repairId()))
+        .containsEntry("task_attempt_count", 1L)
+        .containsEntry("driver_attempt_count", 1L)
+        .containsEntry("lease_attempt_count", 0L);
+
+    InventoryNoWorkOutcomeResult recovered = authoritativeOutcomes.applyNoWork(
+        active.inventoryId(), active.findingId(), key, request);
+
+    assertThat(recovered.replay()).isFalse();
+    assertThat(recovered.supersededRepairIds()).containsExactly(active.repairId());
+    assertThat(jdbc.queryForMap(
+        "select task_attempt_count,driver_attempt_count,lease_attempt_count,local_superseded "
+            + "from inventory_authoritative_outcome_target where target_id=?",
+        active.repairId()))
+        .containsEntry("task_attempt_count", 1L)
+        .containsEntry("driver_attempt_count", 2L)
+        .containsEntry("lease_attempt_count", 1L)
+        .containsEntry("local_superseded", true);
+    verify(dependencies, times(1)).cancelTask(any(), eq(active.externalTaskId()), eq(0L));
+    verify(dependencies, times(1)).cancelMaintenanceDriverTaskCompensation(
+        any(),
+        eq(active.repairId()),
+        eq(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR));
+  }
+
+  @Test
+  void authoritativeWatermarkAndReceiptRejectMismatchesAndReplayTheLatestSource() {
+    UUID assetId = UUID.randomUUID();
+    rentalItems.saveAndFlush(
+        RentalItemFactProjection.create(assetId, warehouseId, "FREE", 7L));
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID key = UUID.randomUUID();
+    OffsetDateTime completedAt =
+        OffsetDateTime.of(2026, 8, 19, 8, 0, 0, 0, ZoneOffset.UTC);
+    InventoryNoWorkOutcomeRequest request = noWorkRequest(
+        assetId, 7L, 1L, completedAt);
+
+    InventoryNoWorkOutcomeResult first =
+        authoritativeOutcomes.applyNoWork(inventoryId, findingId, key, request);
+    InventoryNoWorkOutcomeResult sameKey =
+        authoritativeOutcomes.applyNoWork(inventoryId, findingId, key, request);
+    InventoryNoWorkOutcomeResult newKey =
+        authoritativeOutcomes.applyNoWork(inventoryId, findingId, UUID.randomUUID(), request);
+
+    assertThat(first.replay()).isFalse();
+    assertThat(sameKey.replay()).isTrue();
+    assertThat(newKey.replay()).isFalse();
+    assertThatThrownBy(() -> authoritativeOutcomes.applyNoWork(
+        inventoryId,
+        findingId,
+        key,
+        new InventoryNoWorkOutcomeRequest(
+            warehouseId,
+            assetId,
+            completedAt,
+            1L,
+            "f".repeat(64),
+            1L,
+            7L,
+            "FREE")))
+        .isInstanceOf(MaintenanceConflictException.class)
+        .hasMessageContaining("Idempotency-Key");
+    assertThatThrownBy(() -> authoritativeOutcomes.applyNoWork(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        noWorkRequest(assetId, 7L, 1L, completedAt.minusSeconds(1))))
+        .isInstanceOf(MaintenanceConflictException.class)
+        .hasMessageContaining("older completed inventory");
+    assertThatThrownBy(() -> authoritativeOutcomes.applyNoWork(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        noWorkRequest(assetId, 7L, 1L, completedAt)))
+        .isInstanceOf(MaintenanceConflictException.class)
+        .hasMessageContaining("same completion time");
+    InventoryNoWorkOutcomeResult newer = authoritativeOutcomes.applyNoWork(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        noWorkRequest(assetId, 7L, 1L, completedAt.plusSeconds(1)));
+    assertThat(newer.replay()).isFalse();
+    assertThat(jdbc.queryForObject(
+        "select count(*) from inventory_authoritative_outcome_watermark where asset_id=?",
+        Integer.class,
+        assetId)).isOne();
+  }
+
+  @Test
+  void authoritativeNoWorkNewKeyReassertsNewPredecessorWhileSameKeyStaysFrozen() {
+    UUID assetId = UUID.randomUUID();
+    rentalItems.saveAndFlush(
+        RentalItemFactProjection.create(assetId, warehouseId, "FREE", 7L));
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID firstKey = UUID.randomUUID();
+    InventoryNoWorkOutcomeRequest request = noWorkRequest(
+        assetId,
+        7L,
+        1L,
+        OffsetDateTime.of(2026, 8, 19, 8, 30, 0, 0, ZoneOffset.UTC));
+
+    authoritativeOutcomes.applyNoWork(inventoryId, findingId, firstKey, request);
+    MaintenanceRepair concurrent = directDraftRepair(assetId, 7L, "After first FREE outcome");
+
+    InventoryNoWorkOutcomeResult sameKey =
+        authoritativeOutcomes.applyNoWork(inventoryId, findingId, firstKey, request);
+
+    assertThat(sameKey.replay()).isTrue();
+    assertThat(repairs.findById(concurrent.getId()).orElseThrow().getExecutionState())
+        .isEqualTo(RepairExecutionState.DRAFT);
+
+    InventoryNoWorkOutcomeResult reasserted = authoritativeOutcomes.applyNoWork(
+        inventoryId, findingId, UUID.randomUUID(), request);
+
+    assertThat(reasserted.replay()).isFalse();
+    assertThat(reasserted.supersededRepairIds()).containsExactly(concurrent.getId());
+    assertThat(repairs.findById(concurrent.getId()).orElseThrow().getExecutionState())
+        .isEqualTo(RepairExecutionState.CANCELLED);
+    assertThat(jdbc.queryForObject(
+        "select count(*) from inventory_authoritative_outcome where inventory_id=?",
+        Integer.class,
+        inventoryId)).isOne();
+    assertThat(jdbc.queryForObject(
+        "select count(*) from inventory_authoritative_outcome_receipt where inventory_id=?",
+        Integer.class,
+        inventoryId)).isEqualTo(2);
+  }
+
+  @Test
+  void authoritativeWorkFullyReplacesMultipleActiveTargetsAndKeepsFullFrozenPlan() {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    ObjectNode rawSnapshot = (ObjectNode) mapper.valueToTree(inventory.freeze(
+        autoRequest(inventoryId, findingId, List.of())).response().snapshot());
+    rentalItems.saveAndFlush(
+        RentalItemFactProjection.create(assetId, warehouseId, "FREE", 11L));
+    InventoryPublicationFindingInput finding = publicationFinding(
+        findingId, assetId, 11L, rawSnapshot, 2, 3, false, null);
+    UUID firstRepairId = publications.apply(
+        inventoryId,
+        findingId,
+        UUID.randomUUID(),
+        publicationApplyRequest(
+            finding, 1L, InventoryPublicationStrategy.CREATE, null, null))
+        .response()
+        .repairId();
+    MaintenanceRepair secondRepair = repairs.saveAndFlush(MaintenanceRepair.primary(
+        warehouseId,
+        assetId,
+        11L,
+        null,
+        RepairOrigin.DIRECT_REPAIR,
+        LocalDate.of(2026, 8, 5),
+        "Concurrent predecessor",
+        "{}"));
+    insertEventHead("REPAIR", secondRepair.getId(), secondRepair.getVersion());
+    MaintenanceEstimate estimate = estimates.saveAndFlush(MaintenanceEstimate.create(
+        warehouseId,
+        assetId,
+        11L,
+        catalogId,
+        LocalDate.of(2026, 8, 5),
+        "Concurrent estimate",
+        null,
+        "{}"));
+    insertEventHead("ESTIMATE", estimate.getId(), estimate.getVersion());
+
+    ObjectNode changed = rawSnapshot.deepCopy();
+    ((ObjectNode) changed.withArray("lines").get(0)).put("quantity", "7.500000");
+    InventoryPublicationFindingInput latest = publicationFinding(
+        findingId, assetId, 11L, changed, 2, 5, false, null);
+    InventoryPublicationReconciliationService.PublicationResult replaced = publications.apply(
+        inventoryId,
+        findingId,
+        UUID.randomUUID(),
+        publicationApplyRequest(
+            latest,
+            2L,
+            InventoryPublicationStrategy.MERGE,
+            InventoryPublicationTargetKind.REPAIR,
+            firstRepairId));
+
+    assertThat(replaced.response().outcome()).isEqualTo(InventoryPublicationOutcome.CREATED);
+    assertThat(replaced.response().repairId())
+        .isNotIn(firstRepairId, secondRepair.getId());
+    assertThat(jdbc.queryForObject(
+        "select count(*) from maintenance_repair where rental_item_id=? "
+            + "and execution_state<>'CANCELLED' and acceptance_state not in ('ACCEPTED','WRITTEN_OFF')",
+        Integer.class,
+        assetId)).isOne();
+    assertThat(jdbc.queryForObject(
+        "select count(*) from maintenance_repair where id in (?,?) and execution_state='CANCELLED'",
+        Integer.class,
+        firstRepairId,
+        secondRepair.getId())).isEqualTo(2);
+    assertThat(jdbc.queryForObject(
+        "select inventory_superseded_at is not null from maintenance_estimate where id=?",
+        Boolean.class,
+        estimate.getId())).isTrue();
+    assertThat(jdbc.queryForObject(
+        "select work_lines->0->>'quantity' from repair_stage where repair_id=?",
+        String.class,
+        replaced.response().repairId())).isEqualTo("7.5");
+    assertThat(replaced.response().delta().lines())
+        .allMatch(line -> line.disposition() == InventoryPublicationDeltaDisposition.RETAINED);
+  }
+
+  @Test
+  void authoritativeWorkNewKeyReassertsWithoutReplacingItsExactSourceRepair() {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    ObjectNode rawSnapshot = (ObjectNode) mapper.valueToTree(inventory.freeze(
+        autoRequest(inventoryId, findingId, List.of())).response().snapshot());
+    rentalItems.saveAndFlush(
+        RentalItemFactProjection.create(assetId, warehouseId, "FREE", 11L));
+    InventoryPublicationFindingInput finding = publicationFinding(
+        findingId, assetId, 11L, rawSnapshot, 2, 3, false, null);
+    InventoryPublicationApplyRequest request = publicationApplyRequest(
+        finding, 1L, InventoryPublicationStrategy.CREATE, null, null);
+    UUID firstKey = UUID.randomUUID();
+    InventoryPublicationReconciliationService.PublicationResult first = publications.apply(
+        inventoryId, findingId, firstKey, request);
+    UUID exactRepairId = first.response().repairId();
+    MaintenanceRepair firstConcurrent =
+        directDraftRepair(assetId, 11L, "After first WORK outcome");
+    UUID secondKey = UUID.randomUUID();
+
+    InventoryPublicationReconciliationService.PublicationResult reasserted = publications.apply(
+        inventoryId, findingId, secondKey, request);
+
+    assertThat(reasserted.replayed()).isTrue();
+    assertThat(reasserted.response().repairId()).isEqualTo(exactRepairId);
+    assertThat(repairs.findById(exactRepairId).orElseThrow().getExecutionState())
+        .isEqualTo(RepairExecutionState.DRAFT);
+    assertThat(repairs.findById(firstConcurrent.getId()).orElseThrow().getExecutionState())
+        .isEqualTo(RepairExecutionState.CANCELLED);
+    assertThat(jdbc.queryForObject(
+        "select count(*) from maintenance_repair where rental_item_id=? "
+            + "and execution_state<>'CANCELLED' and acceptance_state not in ('ACCEPTED','WRITTEN_OFF')",
+        Integer.class,
+        assetId)).isOne();
+    assertThat(jdbc.queryForObject(
+        "select count(*) from inventory_publication_source where inventory_id=? "
+            + "and final_plan_version=1 and finding_id=?",
+        Integer.class,
+        inventoryId,
+        findingId)).isOne();
+    assertThat(jdbc.queryForObject(
+        "select count(*) from integration_reconciliation where repair_id=? "
+            + "and dependency_type='ASSET' and operation_type='QUEUE_REPAIR'",
+        Integer.class,
+        exactRepairId)).isOne();
+
+    MaintenanceRepair secondConcurrent =
+        directDraftRepair(assetId, 11L, "After first same-source reassertion");
+    InventoryPublicationReconciliationService.PublicationResult frozen = publications.apply(
+        inventoryId, findingId, secondKey, request);
+
+    assertThat(frozen.replayed()).isTrue();
+    assertThat(repairs.findById(secondConcurrent.getId()).orElseThrow().getExecutionState())
+        .isEqualTo(RepairExecutionState.DRAFT);
+
+    InventoryPublicationReconciliationService.PublicationResult recovered = publications.apply(
+        inventoryId, findingId, UUID.randomUUID(), request);
+
+    assertThat(recovered.replayed()).isTrue();
+    assertThat(recovered.response().repairId()).isEqualTo(exactRepairId);
+    assertThat(repairs.findById(secondConcurrent.getId()).orElseThrow().getExecutionState())
+        .isEqualTo(RepairExecutionState.CANCELLED);
+    assertThat(jdbc.queryForObject(
+        "select count(*) from maintenance_repair where rental_item_id=? "
+            + "and execution_state<>'CANCELLED' and acceptance_state not in ('ACCEPTED','WRITTEN_OFF')",
+        Integer.class,
+        assetId)).isOne();
+    assertThat(jdbc.queryForObject(
+        "select count(*) from inventory_authoritative_outcome_receipt where inventory_id=?",
+        Integer.class,
+        inventoryId)).isEqualTo(3);
+  }
+
+  @Test
+  void repairSourceResolvesDirectOutcomeAndNewestReceiptBoundReplacement() {
+    UUID directAssetId = UUID.randomUUID();
+    MaintenanceRepair directRepair =
+        directDraftRepair(directAssetId, 11L, "Direct authoritative repair");
+    InventoryPublicationSourceId directSource =
+        new InventoryPublicationSourceId(UUID.randomUUID(), 3L, UUID.randomUUID());
+    String directPlanSha256 = "1".repeat(64);
+    String directRequestSha256 = "2".repeat(64);
+    saveAuthoritativeWorkOutcome(
+        directSource,
+        directAssetId,
+        directRepair.getId(),
+        4L,
+        directPlanSha256,
+        directRequestSha256);
+
+    UUID replacementAssetId = UUID.randomUUID();
+    MaintenanceRepair oldTarget =
+        directDraftRepair(replacementAssetId, 12L, "Old receipt target");
+    MaintenanceRepair newestTarget =
+        directDraftRepair(replacementAssetId, 12L, "Newest receipt target");
+    MaintenanceRepair replacement =
+        directDraftRepair(replacementAssetId, 12L, "Receipt-bound replacement");
+    InventoryPublicationSourceId oldSource =
+        new InventoryPublicationSourceId(UUID.randomUUID(), 7L, UUID.randomUUID());
+    InventoryPublicationSourceId newestSource =
+        new InventoryPublicationSourceId(UUID.randomUUID(), 8L, UUID.randomUUID());
+    String oldRequestSha256 = "3".repeat(64);
+    String newestPlanSha256 = "4".repeat(64);
+    String newestRequestSha256 = "5".repeat(64);
+    saveAuthoritativeWorkOutcome(
+        oldSource,
+        replacementAssetId,
+        oldTarget.getId(),
+        6L,
+        "6".repeat(64),
+        oldRequestSha256);
+    saveAuthoritativeWorkOutcome(
+        newestSource,
+        replacementAssetId,
+        newestTarget.getId(),
+        9L,
+        newestPlanSha256,
+        newestRequestSha256);
+
+    UUID oldReceiptKey = UUID.randomUUID();
+    UUID newestReceiptKey = UUID.randomUUID();
+    String replacementSnapshot =
+        "{\"repairId\":\"" + replacement.getId() + "\"}";
+    InventoryAuthoritativeOutcomeReceipt oldReceipt =
+        InventoryAuthoritativeOutcomeReceipt.register(
+            oldReceiptKey, oldSource, oldRequestSha256);
+    oldReceipt.complete(replacementSnapshot);
+    authoritativeOutcomeReceipts.saveAndFlush(oldReceipt);
+    InventoryAuthoritativeOutcomeReceipt newestReceipt =
+        InventoryAuthoritativeOutcomeReceipt.register(
+            newestReceiptKey, newestSource, newestRequestSha256);
+    newestReceipt.complete(replacementSnapshot);
+    authoritativeOutcomeReceipts.saveAndFlush(newestReceipt);
+    jdbc.update(
+        "update inventory_authoritative_outcome_receipt set completed_at=? where idempotency_key=?",
+        OffsetDateTime.of(2026, 8, 19, 9, 0, 0, 0, ZoneOffset.UTC),
+        oldReceiptKey);
+    jdbc.update(
+        "update inventory_authoritative_outcome_receipt set completed_at=? where idempotency_key=?",
+        OffsetDateTime.of(2026, 8, 19, 10, 0, 0, 0, ZoneOffset.UTC),
+        newestReceiptKey);
+
+    assertThat(maintenance.repair(directRepair.getId()).inventorySource())
+        .isEqualTo(
+            new InventorySourceReference(
+                directSource.getInventoryId(),
+                directSource.getFindingId(),
+                4L,
+                directPlanSha256,
+                directRequestSha256));
+    assertThat(maintenance.repair(replacement.getId()).inventorySource())
+        .isEqualTo(
+            new InventorySourceReference(
+                newestSource.getInventoryId(),
+                newestSource.getFindingId(),
+                9L,
+                newestPlanSha256,
+                newestRequestSha256));
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from inventory_repair_source where repair_id in (?,?)",
+                Integer.class,
+                directRepair.getId(),
+                replacement.getId()))
+        .isZero();
+  }
+
+  @Test
+  void terminalSelectedRepairAndWarehouseVersionGuardsRollbackBeforeAnyEffect() {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    ObjectNode rawSnapshot = (ObjectNode) mapper.valueToTree(inventory.freeze(
+        autoRequest(inventoryId, findingId, List.of())).response().snapshot());
+    rentalItems.saveAndFlush(
+        RentalItemFactProjection.create(assetId, warehouseId, "FREE", 7L));
+    InventoryPublicationFindingInput finding = publicationFinding(
+        findingId, assetId, 7L, rawSnapshot, 2, 3, false, null);
+    UUID repairId = publications.apply(
+        inventoryId,
+        findingId,
+        UUID.randomUUID(),
+        publicationApplyRequest(
+            finding, 1L, InventoryPublicationStrategy.CREATE, null, null))
+        .response()
+        .repairId();
+    MaintenanceRepair terminal = repairs.findById(repairId).orElseThrow();
+    terminal.writeOff("terminal truth", "{}");
+    terminal = repairs.saveAndFlush(terminal);
+    jdbc.update(
+        "update event_stream_head set current_version=? where aggregate_type='REPAIR' "
+            + "and aggregate_id=?",
+        terminal.getVersion(),
+        repairId.toString());
+    clearInvocations(dependencies);
+
+    assertThatThrownBy(() -> publications.apply(
+        inventoryId,
+        findingId,
+        UUID.randomUUID(),
+        publicationApplyRequest(
+            finding,
+            2L,
+            InventoryPublicationStrategy.REPLACE,
+            InventoryPublicationTargetKind.REPAIR,
+            repairId)))
+        .isInstanceOf(MaintenanceConflictException.class)
+        .hasMessageContaining("Terminal accepted or written-off");
+    assertThat(jdbc.queryForObject(
+        "select count(*) from inventory_authoritative_outcome "
+            + "where inventory_id=? and final_plan_version=2 and finding_id=?",
+        Integer.class,
+        inventoryId,
+        findingId)).isZero();
+    assertThat(jdbc.queryForObject(
+        "select count(*) from inventory_publication_source_operation "
+            + "where inventory_id=? and final_plan_version=2 and finding_id=?",
+        Integer.class,
+        inventoryId,
+        findingId)).isZero();
+    verifyNoInteractions(dependencies);
+
+    UUID noWorkInventoryId = UUID.randomUUID();
+    UUID noWorkFindingId = UUID.randomUUID();
+    assertThatThrownBy(() -> authoritativeOutcomes.applyNoWork(
+        noWorkInventoryId,
+        noWorkFindingId,
+        UUID.randomUUID(),
+        new InventoryNoWorkOutcomeRequest(
+            UUID.randomUUID(),
+            assetId,
+            OffsetDateTime.of(2026, 8, 20, 8, 0, 0, 0, ZoneOffset.UTC),
+            1L,
+            finalPlanSha(1L),
+            1L,
+            6L,
+            "FREE")))
+        .isInstanceOf(MaintenanceConflictException.class)
+        .hasMessageContaining("warehouse/version");
+    assertThat(jdbc.queryForObject(
+        "select count(*) from inventory_authoritative_outcome where inventory_id=?",
+        Integer.class,
+        noWorkInventoryId)).isZero();
+  }
+
+  @Test
+  void exactV1AggregateMediaDuplicationAdaptsWithoutRewritingEvidence() throws Exception {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    UUID mediaId = UUID.randomUUID();
+    MediaReferenceInput media = new MediaReferenceInput(mediaId, 3L);
+    mediaFacts.saveAndFlush(MediaFactProjection.create(
+        mediaId, 3, "INVENTORY_FINDING", findingId, warehouseId, "READY", "{}", 5));
+    FrozenInventoryPlanResponse frozen = inventory.freeze(new FreezeInventoryPlanRequest(
+        warehouseId,
+        inventoryId,
+        findingId,
+        1L,
+        InventoryPlanMode.MANUAL,
+        List.of(
+            manualLine(
+                "Legacy work", InventoryPlanLineType.WORK, "h", "1", 100L, "30"),
+            manualLine(
+                "Legacy material", InventoryPlanLineType.MATERIAL, "pcs", "2", 50L, "0")),
+        List.of(new InventoryPlanStageSelection(workNodeId, RepairStageKind.REPAIR_WORK, 0)),
+        List.of(media),
+        3,
+        mediaId)).response();
+    ObjectNode rawSnapshot = (ObjectNode) mapper.valueToTree(frozen.snapshot());
+    rawSnapshot.put("movementToShipment", false);
+    var aggregateMedia = rawSnapshot.required("mediaReferences");
+    rawSnapshot.withArray("lines").forEach(
+        line -> ((ObjectNode) line).set("mediaReferences", aggregateMedia.deepCopy()));
+    String rawFingerprint = canonicalizer.sha256(rawSnapshot);
+    InventoryPublicationFindingInput finding = new InventoryPublicationFindingInput(
+        findingId,
+        1L,
+        assetId,
+        7L,
+        rawFingerprint,
+        3,
+        false,
+        null,
+        LocalDate.of(2026, 8, 5),
+        rawSnapshot,
+        List.of(media),
+        1);
+    rentalItems.saveAndFlush(
+        RentalItemFactProjection.create(assetId, warehouseId, "FREE", 7));
+
+    InventoryPublicationPreflightResponse preflight = publications.preflight(
+        new InventoryPublicationPreflightRequest(
+            inventoryId, warehouseId, 1L, finalPlanSha(1), List.of(finding)));
+    assertThat(preflight.findings()).singleElement().satisfies(value ->
+        assertThat(value.targetKind()).isEqualTo(InventoryPublicationTargetKind.REPAIR));
+    InventoryPublicationReconciliationService.PublicationResult published = publications.apply(
+        inventoryId,
+        findingId,
+        UUID.randomUUID(),
+        publicationApplyRequest(
+            finding, 1L, InventoryPublicationStrategy.CREATE, null, null));
+    UUID repairId = published.response().repairId();
+
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from maintenance_media_reference
+         where aggregate_type='REPAIR' and aggregate_id=? and media_id=?
+        """, Integer.class, repairId, mediaId)).isOne();
+    String workLines = jdbc.queryForObject(
+        "select work_lines::text from repair_stage where repair_id=?",
+        String.class,
+        repairId);
+    String materialLines = jdbc.queryForObject(
+        "select material_lines::text from repair_stage where repair_id=?",
+        String.class,
+        repairId);
+    assertThat(mapper.readTree(workLines)).singleElement().satisfies(line ->
+        assertThat(line.required("mediaReferences")).isEmpty());
+    assertThat(mapper.readTree(materialLines)).singleElement().satisfies(line ->
+        assertThat(line.required("mediaReferences")).isEmpty());
+    String storedRaw = jdbc.queryForObject(
+        """
+        select plan_snapshot::text from inventory_publication_source
+         where inventory_id=? and final_plan_version=1 and finding_id=?
+        """,
+        String.class,
+        inventoryId,
+        findingId);
+    assertThat(jdbc.queryForObject(
+        """
+        select plan_snapshot = ?::jsonb from inventory_publication_source
+         where inventory_id=? and final_plan_version=1 and finding_id=?
+        """,
+        Boolean.class,
+        mapper.writeValueAsString(rawSnapshot),
+        inventoryId,
+        findingId)).isTrue();
+    assertThat(jdbc.queryForObject(
+        """
+        select plan_fingerprint_sha256 from inventory_publication_source
+         where inventory_id=? and final_plan_version=1 and finding_id=?
+        """,
+        String.class,
+        inventoryId,
+        findingId)).isEqualTo(rawFingerprint);
+    assertThat(canonicalizer.sha256(mapper.readTree(storedRaw))).isEqualTo(rawFingerprint);
+
+    ObjectNode schemaTwoSnapshot = rawSnapshot.deepCopy();
+    schemaTwoSnapshot.remove("movementToShipment");
+    InventoryPublicationFindingInput schemaTwoFinding = new InventoryPublicationFindingInput(
+        findingId,
+        1L,
+        assetId,
+        7L,
+        canonicalizer.sha256(schemaTwoSnapshot),
+        3,
+        false,
+        null,
+        LocalDate.of(2026, 8, 5),
+        schemaTwoSnapshot,
+        List.of(media),
+        2);
+    assertThatThrownBy(() -> publications.preflight(new InventoryPublicationPreflightRequest(
+        UUID.randomUUID(), warehouseId, 1L, finalPlanSha(1), List.of(schemaTwoFinding))))
+        .isInstanceOf(MaintenanceValidationException.class)
+        .hasMessageContaining("Inventory photos can only be assigned to work lines");
+
+    ObjectNode partialV1Snapshot = rawSnapshot.deepCopy();
+    ((ObjectNode) partialV1Snapshot.withArray("lines").get(0)).putArray("mediaReferences");
+    InventoryPublicationFindingInput partialV1Finding = new InventoryPublicationFindingInput(
+        findingId,
+        1L,
+        assetId,
+        7L,
+        canonicalizer.sha256(partialV1Snapshot),
+        3,
+        false,
+        null,
+        LocalDate.of(2026, 8, 5),
+        partialV1Snapshot,
+        List.of(media),
+        1);
+    assertThatThrownBy(() -> publications.preflight(new InventoryPublicationPreflightRequest(
+        UUID.randomUUID(), warehouseId, 1L, finalPlanSha(1), List.of(partialV1Finding))))
+        .isInstanceOf(MaintenanceValidationException.class)
+        .hasMessageContaining("Inventory photos can only be assigned to work lines");
+  }
+
+  @Test
+  void afterRentPublicationCreatesRepairFromRawV1EvidenceAndAuthoritativelyReplacesIt() {
     UUID inventoryId = UUID.randomUUID();
     UUID findingId = UUID.randomUUID();
     UUID assetId = UUID.randomUUID();
@@ -1237,7 +2032,7 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         new InventoryPublicationPreflightRequest(
             inventoryId, warehouseId, 1L, finalPlanSha(1), List.of(finding)));
     assertThat(preflight.findings()).singleElement().satisfies(value -> {
-      assertThat(value.targetKind()).isEqualTo(InventoryPublicationTargetKind.ESTIMATE);
+      assertThat(value.targetKind()).isEqualTo(InventoryPublicationTargetKind.REPAIR);
       assertThat(value.candidates()).isEmpty();
     });
 
@@ -1251,30 +2046,23 @@ class MaintenanceInventoryBoundaryIntegrationTest {
     assertThat(created.replayed()).isFalse();
     assertThat(replayed.replayed()).isTrue();
     assertThat(replayed.response()).isEqualTo(created.response());
-    assertThat(created.response().targetKind()).isEqualTo(InventoryPublicationTargetKind.ESTIMATE);
-    assertThat(created.response().estimateId()).isNotNull();
-    assertThat(created.response().repairId()).isNull();
-    UUID estimateId = created.response().estimateId();
+    assertThat(created.response().targetKind()).isEqualTo(InventoryPublicationTargetKind.REPAIR);
+    assertThat(created.response().estimateId()).isNull();
+    assertThat(created.response().repairId()).isNotNull();
+    UUID repairId = created.response().repairId();
     assertThat(jdbc.queryForMap(
-        "select state,priority,movement_to_repair,repair_id from maintenance_estimate where id=?",
-        estimateId))
-        .containsEntry("state", "DRAFT")
+        "select execution_state,priority,movement_to_repair from maintenance_repair where id=?",
+        repairId))
+        .containsEntry("execution_state", "DRAFT")
         .containsEntry("priority", 4)
-        .containsEntry("movement_to_repair", false)
-        .containsEntry("repair_id", null);
+        .containsEntry("movement_to_repair", false);
     assertThat(jdbc.queryForObject(
-        "select count(*) from estimate_line where estimate_id=?", Integer.class, estimateId)).isOne();
-    assertThat(jdbc.queryForObject(
-        "select count(*) from estimate_plan_stage where estimate_id=?", Integer.class, estimateId)).isOne();
-    assertThat(jdbc.queryForObject(
-        "select count(*) from estimate_revision where estimate_id=?", Integer.class, estimateId)).isOne();
-    assertThat(jdbc.queryForObject(
-        "select count(*) from maintenance_repair", Integer.class)).isZero();
+        "select count(*) from repair_stage where repair_id=?", Integer.class, repairId)).isOne();
     assertThat(jdbc.queryForObject(
         """
         select count(*) from integration_reconciliation
-         where dependency_type='ASSET' and operation_type='QUEUE_REPAIR'
-        """, Integer.class)).isZero();
+         where repair_id=? and dependency_type='ASSET' and operation_type='QUEUE_REPAIR'
+        """, Integer.class, repairId)).isOne();
     assertThat(jdbc.queryForObject(
         """
         select jsonb_exists(plan_snapshot, 'movementToShipment')
@@ -1289,31 +2077,20 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         """, inventoryId, findingId))
         .hasMessageContaining("inventory publication sources are immutable");
 
-    InventoryPublicationApplyRequest unresolvedCreate = publicationApplyRequest(
+    InventoryPublicationApplyRequest authoritativeCreate = publicationApplyRequest(
         finding, 2L, InventoryPublicationStrategy.CREATE, null, null);
-    assertThatThrownBy(
-        () -> publications.apply(inventoryId, findingId, UUID.randomUUID(), unresolvedCreate))
-        .isInstanceOf(MaintenanceConflictException.class)
-        .hasMessageContaining("active maintenance target");
-
-    InventoryPublicationApplyRequest replacement = publicationApplyRequest(
-        finding,
-        2L,
-        InventoryPublicationStrategy.REPLACE,
-        InventoryPublicationTargetKind.ESTIMATE,
-        estimateId);
     InventoryPublicationReconciliationService.PublicationResult replaced = publications.apply(
-        inventoryId, findingId, UUID.randomUUID(), replacement);
-    assertThat(replaced.response().estimateId()).isNotEqualTo(estimateId);
+        inventoryId, findingId, UUID.randomUUID(), authoritativeCreate);
+    assertThat(replaced.response().repairId()).isNotEqualTo(repairId);
     assertThat(jdbc.queryForObject(
-        "select inventory_superseded_at is not null from maintenance_estimate where id=?",
-        Boolean.class,
-        estimateId)).isTrue();
+        "select execution_state from maintenance_repair where id=?", String.class, repairId))
+        .isEqualTo("CANCELLED");
     assertThat(jdbc.queryForObject(
-        "select count(*) from maintenance_estimate", Integer.class)).isEqualTo(2);
-    assertThat(replaced.response().source().supersededTargetKind())
-        .isEqualTo(InventoryPublicationTargetKind.ESTIMATE);
-    assertThat(replaced.response().source().supersededTargetId()).isEqualTo(estimateId);
+        "select count(*) from maintenance_repair", Integer.class)).isEqualTo(2);
+    assertThat(replaced.response().source().strategy())
+        .isEqualTo(InventoryPublicationStrategy.CREATE);
+    assertThat(replaced.response().source().supersededTargetKind()).isNull();
+    assertThat(replaced.response().source().supersededTargetId()).isNull();
   }
 
   @Test
@@ -1368,6 +2145,199 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         select count(*) from integration_reconciliation
          where repair_id=? and dependency_type='ASSET' and operation_type='QUEUE_REPAIR'
         """, Integer.class, repairId)).isOne();
+  }
+
+  @ParameterizedTest(name = "authoritative inventory accepts non-terminal asset status {0}")
+  @ValueSource(strings = {
+      "BOOKED",
+      "USED_SALE",
+      "RESERVED",
+      "RENTED",
+      "IN_TRANSFER",
+      "REPAIR",
+      "CAPITAL_REPAIR",
+      "WAREHOUSE",
+      "OWN_NEEDS"
+  })
+  void authoritativePublicationAcceptsEveryNonTerminalOperationalStatus(String assetStatus) {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    ObjectNode rawSnapshot = (ObjectNode) mapper.valueToTree(inventory.freeze(
+        autoRequest(inventoryId, findingId, List.of())).response().snapshot());
+    rentalItems.saveAndFlush(
+        RentalItemFactProjection.create(assetId, warehouseId, assetStatus, 7L));
+    InventoryPublicationFindingInput finding = publicationFinding(
+        findingId, assetId, 7L, rawSnapshot, 2, 3, false, null);
+
+    InventoryPublicationPreflightResponse preflight = publications.preflight(
+        new InventoryPublicationPreflightRequest(
+            inventoryId, warehouseId, 1L, finalPlanSha(1L), List.of(finding)));
+    assertThat(preflight.findings()).singleElement().satisfies(value ->
+        assertThat(value.targetKind()).isEqualTo(InventoryPublicationTargetKind.REPAIR));
+
+    InventoryPublicationReconciliationService.PublicationResult published = publications.apply(
+        inventoryId,
+        findingId,
+        UUID.randomUUID(),
+        publicationApplyRequest(
+            finding, 7L, 1L, InventoryPublicationStrategy.CREATE, null, null));
+
+    assertThat(published.response().targetKind()).isEqualTo(InventoryPublicationTargetKind.REPAIR);
+    assertThat(repairs.findById(published.response().repairId()).orElseThrow()
+        .getRentalItemVersionSnapshot()).isEqualTo(7L);
+  }
+
+  @Test
+  void laggingAssetProjectionWithinAuthorityFenceCreatesRepairAtAuthoritativeVersion() {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    ObjectNode rawSnapshot = (ObjectNode) mapper.valueToTree(inventory.freeze(
+        autoRequest(inventoryId, findingId, List.of())).response().snapshot());
+    RentalItemFactProjection asset =
+        RentalItemFactProjection.create(assetId, warehouseId, "BOOKED", 7L);
+    rentalItems.saveAndFlush(asset);
+    InventoryPublicationFindingInput finding = publicationFinding(
+        findingId, assetId, 7L, rawSnapshot, 2, 3, false, null);
+    publications.preflight(new InventoryPublicationPreflightRequest(
+        inventoryId, warehouseId, 1L, finalPlanSha(1L), List.of(finding)));
+    asset.apply(warehouseId, "REPAIR", 8L);
+    rentalItems.saveAndFlush(asset);
+
+    InventoryPublicationReconciliationService.PublicationResult published = publications.apply(
+        inventoryId,
+        findingId,
+        UUID.randomUUID(),
+        publicationApplyRequest(
+            finding, 10L, 1L, InventoryPublicationStrategy.CREATE, null, null));
+
+    assertThat(repairs.findById(published.response().repairId()).orElseThrow()
+        .getRentalItemVersionSnapshot()).isEqualTo(10L);
+    assertThat(jdbc.queryForObject(
+        """
+        select asset_version_snapshot from inventory_publication_source
+         where inventory_id=? and final_plan_version=1 and finding_id=?
+        """,
+        Long.class,
+        inventoryId,
+        findingId)).isEqualTo(7L);
+
+    InventoryPublicationReconciliationService.PublicationResult replayed = publications.apply(
+        inventoryId,
+        findingId,
+        UUID.randomUUID(),
+        publicationApplyRequest(
+            finding, 11L, 1L, InventoryPublicationStrategy.CREATE, null, null));
+    assertThat(replayed.replayed()).isTrue();
+    assertThat(replayed.response()).isEqualTo(published.response());
+    assertThat(repairs.findById(published.response().repairId()).orElseThrow()
+        .getRentalItemVersionSnapshot()).isEqualTo(10L);
+  }
+
+  @Test
+  void projectionNewerThanAuthoritativeOutcomeIsRejected() {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    ObjectNode rawSnapshot = (ObjectNode) mapper.valueToTree(inventory.freeze(
+        autoRequest(inventoryId, findingId, List.of())).response().snapshot());
+    rentalItems.saveAndFlush(
+        RentalItemFactProjection.create(assetId, warehouseId, "REPAIR", 11L));
+    InventoryPublicationFindingInput finding = publicationFinding(
+        findingId, assetId, 7L, rawSnapshot, 2, 3, false, null);
+
+    assertThatThrownBy(() -> publications.apply(
+        inventoryId,
+        findingId,
+        UUID.randomUUID(),
+        publicationApplyRequest(
+            finding, 10L, 1L, InventoryPublicationStrategy.CREATE, null, null)))
+        .isInstanceOf(MaintenanceConflictException.class)
+        .hasMessageContaining("outside the completed inventory authority fence");
+  }
+
+  @Test
+  void projectionOlderThanFrozenObservationIsRejected() {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    ObjectNode rawSnapshot = (ObjectNode) mapper.valueToTree(inventory.freeze(
+        autoRequest(inventoryId, findingId, List.of())).response().snapshot());
+    rentalItems.saveAndFlush(
+        RentalItemFactProjection.create(assetId, warehouseId, "BOOKED", 6L));
+    InventoryPublicationFindingInput finding = publicationFinding(
+        findingId, assetId, 7L, rawSnapshot, 2, 3, false, null);
+
+    assertThatThrownBy(() -> publications.apply(
+        inventoryId,
+        findingId,
+        UUID.randomUUID(),
+        publicationApplyRequest(
+            finding, 10L, 1L, InventoryPublicationStrategy.CREATE, null, null)))
+        .isInstanceOf(MaintenanceConflictException.class)
+        .hasMessageContaining("outside the completed inventory authority fence");
+  }
+
+  @Test
+  void projectionWarehouseMismatchAndBackwardAuthorityAreRejected() {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    ObjectNode rawSnapshot = (ObjectNode) mapper.valueToTree(inventory.freeze(
+        autoRequest(inventoryId, findingId, List.of())).response().snapshot());
+    rentalItems.saveAndFlush(
+        RentalItemFactProjection.create(assetId, UUID.randomUUID(), "REPAIR", 7L));
+    InventoryPublicationFindingInput finding = publicationFinding(
+        findingId, assetId, 7L, rawSnapshot, 2, 3, false, null);
+
+    assertThatThrownBy(() -> publications.apply(
+        inventoryId,
+        findingId,
+        UUID.randomUUID(),
+        publicationApplyRequest(
+            finding, 10L, 1L, InventoryPublicationStrategy.CREATE, null, null)))
+        .isInstanceOf(MaintenanceConflictException.class)
+        .hasMessageContaining("outside the completed inventory authority fence");
+
+    RentalItemFactProjection asset = rentalItems.findById(assetId).orElseThrow();
+    asset.apply(warehouseId, "REPAIR", 8L);
+    rentalItems.saveAndFlush(asset);
+    assertThatThrownBy(() -> publications.apply(
+        inventoryId,
+        findingId,
+        UUID.randomUUID(),
+        publicationApplyRequest(
+            finding, 6L, 1L, InventoryPublicationStrategy.CREATE, null, null)))
+        .isInstanceOf(MaintenanceValidationException.class)
+        .hasMessageContaining("must not predate");
+  }
+
+  @ParameterizedTest(name = "terminal asset status {0} cannot be revived by inventory")
+  @ValueSource(strings = {"LOST", "WRITTEN_OFF"})
+  void terminalAssetStatusIsRejectedByPreflightAndApply(String assetStatus) {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    ObjectNode rawSnapshot = (ObjectNode) mapper.valueToTree(inventory.freeze(
+        autoRequest(inventoryId, findingId, List.of())).response().snapshot());
+    rentalItems.saveAndFlush(
+        RentalItemFactProjection.create(assetId, warehouseId, assetStatus, 7L));
+    InventoryPublicationFindingInput finding = publicationFinding(
+        findingId, assetId, 7L, rawSnapshot, 2, 3, false, null);
+
+    assertThatThrownBy(() -> publications.preflight(new InventoryPublicationPreflightRequest(
+        inventoryId, warehouseId, 1L, finalPlanSha(1L), List.of(finding))))
+        .isInstanceOf(MaintenanceConflictException.class)
+        .hasMessageContaining("Terminal rental-item status");
+    assertThatThrownBy(() -> publications.apply(
+        inventoryId,
+        findingId,
+        UUID.randomUUID(),
+        publicationApplyRequest(
+            finding, 7L, 1L, InventoryPublicationStrategy.CREATE, null, null)))
+        .isInstanceOf(MaintenanceConflictException.class)
+        .hasMessageContaining("Terminal rental-item status");
   }
 
   @Test
@@ -1445,803 +2415,8 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         .hasMessageContaining("ambiguous");
   }
 
-  @Test
-  void deniedIncomingAdmissionDoesNotBeginNewPrestartCompensation() {
-    QueuedPrestartRepair queued = queuedPrestartRepair(false);
-    InventoryPublicationApplyRequest replacement = publicationApplyRequest(
-        changedPublicationFinding(queued, "3.500000"),
-        2L,
-        InventoryPublicationStrategy.REPLACE,
-        InventoryPublicationTargetKind.REPAIR,
-        queued.repairId());
-    when(dependencies.productionReady()).thenReturn(true);
-    when(dependencies.warehouseAdmission(
-        warehouseId,
-        MaintenanceDependencyGateway.WarehouseOperationDirection.INCOMING))
-        .thenAnswer(invocation -> {
-          assertNoRemoteTransaction();
-          return new MaintenanceDependencyGateway.WarehouseOperationAdmission(
-              warehouseId,
-              1L,
-              MaintenanceDependencyGateway.WarehouseLifecycleState.DRAINING,
-              MaintenanceDependencyGateway.WarehouseOperationDirection.INCOMING,
-              false);
-        });
-
-    assertThatThrownBy(() -> publications.apply(
-        queued.inventoryId(), queued.findingId(), UUID.randomUUID(), replacement))
-        .isInstanceOfSatisfying(
-            MaintenanceConflictException.class,
-            failure -> assertThat(failure.code()).isEqualTo("WAREHOUSE_OPERATION_NOT_ADMITTED"));
-
-    assertPrestartIntent(queued, "PREPARED", 0L);
-    assertThat(publicationSourceCount(queued.inventoryId(), 2L, queued.findingId())).isZero();
-    assertThat(repairs.findById(queued.repairId()).orElseThrow().getExecutionState())
-        .isEqualTo(RepairExecutionState.QUEUED);
-    verify(dependencies, never()).cancelTaskIfPreStart(any(), any(), anyLong());
-    verify(dependencies, never()).maintenanceDriverTaskCompensation(
-        any(), any(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.class));
-    verify(dependencies, never()).cancelMaintenanceDriverTaskCompensation(
-        any(), any(), any(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.class));
-    verify(dependencies, never()).releaseLease(any(), any(), anyLong(), anyLong(), any(), any());
-  }
-
-  @Test
-  void queuedPrestartReplacementReplaysLostDriverResponseOutsideTransaction() {
-    QueuedPrestartRepair queued = queuedPrestartRepair(false);
-    InventoryPublicationFindingInput laterFinding = changedPublicationFinding(queued, "3.500000");
-    InventoryPublicationApplyRequest replacement = publicationApplyRequest(
-        laterFinding,
-        2L,
-        InventoryPublicationStrategy.REPLACE,
-        InventoryPublicationTargetKind.REPAIR,
-        queued.repairId());
-    AtomicReference<Integer> taskCalls = new AtomicReference<>(0);
-    when(dependencies.cancelTaskIfPreStart(
-        any(), eq(queued.externalTaskId()), eq(0L)))
-        .thenAnswer(invocation -> {
-          assertNoRemoteTransaction();
-          int call = taskCalls.updateAndGet(value -> value + 1);
-          return taskCancellation(
-              call == 1
-                  ? MaintenanceDependencyGateway.PreStartTaskCancellationOutcome.CANCELLED
-                  : MaintenanceDependencyGateway.PreStartTaskCancellationOutcome.ALREADY_CANCELLED,
-              queued.externalTaskId(),
-              1L);
-        });
-    AtomicReference<Integer> driverReads = new AtomicReference<>(0);
-    when(dependencies.maintenanceDriverTaskCompensation(
-        eq(queued.repairId()),
-        eq(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR)))
-        .thenAnswer(invocation -> {
-          assertNoRemoteTransaction();
-          int call = driverReads.updateAndGet(value -> value + 1);
-          return driverCompensation(
-              queued.repairId(),
-              MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR,
-              call == 1
-                  ? MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome.PENDING
-                  : MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome.CANCELLED);
-        });
-    when(dependencies.cancelMaintenanceDriverTaskCompensation(
-        any(),
-        eq(queued.repairId()),
-        eq(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR)))
-        .thenAnswer(invocation -> {
-          assertNoRemoteTransaction();
-          throw new MaintenanceDependencyException(
-              HttpStatus.SERVICE_UNAVAILABLE,
-              "response lost after logistics committed its cancellation");
-        });
-
-    assertThatThrownBy(() -> publications.apply(
-        queued.inventoryId(), queued.findingId(), UUID.randomUUID(), replacement))
-        .isInstanceOfSatisfying(
-            MaintenanceDependencyException.class,
-            exception -> assertThat(exception.status()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
-    assertPrestartIntent(queued, "PREPARED", 1L);
-    assertThat(publicationSourceCount(queued.inventoryId(), 2L, queued.findingId())).isZero();
-
-    InventoryPublicationApplyRequest differentPayload = publicationApplyRequest(
-        changedPublicationFinding(queued, "4.500000"),
-        2L,
-        InventoryPublicationStrategy.REPLACE,
-        InventoryPublicationTargetKind.REPAIR,
-        queued.repairId());
-    assertThatThrownBy(() -> publications.apply(
-        queued.inventoryId(), queued.findingId(), UUID.randomUUID(), differentPayload))
-        .isInstanceOf(MaintenanceConflictException.class)
-        .isNotInstanceOf(MaintenanceDependencyException.class)
-        .hasMessageContaining("already bound to different publication input");
-    assertPrestartIntent(queued, "PREPARED", 1L);
-
-    InventoryPublicationReconciliationService.PublicationResult applied = publications.apply(
-        queued.inventoryId(), queued.findingId(), UUID.randomUUID(), replacement);
-    assertThat(applied.replayed()).isFalse();
-    assertThat(applied.response().outcome()).isEqualTo(InventoryPublicationOutcome.CREATED);
-    assertThat(applied.response().source().strategy()).isEqualTo(InventoryPublicationStrategy.REPLACE);
-    assertThat(repairs.findById(queued.repairId()).orElseThrow().getExecutionState())
-        .isEqualTo(RepairExecutionState.CANCELLED);
-    assertThat(jdbc.queryForObject(
-        """
-        select count(*) from integration_reconciliation
-         where repair_id=? and operation_type='QUEUE_REPAIR'
-        """, Integer.class, applied.response().repairId())).isOne();
-    assertPrestartIntent(queued, "APPLIED", 2L);
-
-    InventoryPublicationReconciliationService.PublicationResult replayed = publications.apply(
-        queued.inventoryId(), queued.findingId(), UUID.randomUUID(), replacement);
-    assertThat(replayed.replayed()).isTrue();
-    assertThat(replayed.response()).isEqualTo(applied.response());
-    assertThat(taskCalls.get()).isEqualTo(2);
-    assertThat(driverReads.get()).isEqualTo(2);
-    verify(dependencies, times(1)).cancelMaintenanceDriverTaskCompensation(
-        any(),
-        eq(queued.repairId()),
-        eq(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR));
-    verify(dependencies, never()).registerTask(
-        any(), any(), any(), any(), any(), any(), any(), anyInt(), anyInt(), anyList());
-    verify(dependencies, never()).createDriverTask(any(), any());
-  }
-
-  @Test
-  void firstTaskVersionConflictAbortsOnlyTheUnpublishedPrestartIntent() {
-    QueuedPrestartRepair queued = queuedPrestartRepair(false);
-    InventoryPublicationApplyRequest replacement = publicationApplyRequest(
-        changedPublicationFinding(queued, "3.500000"),
-        2L,
-        InventoryPublicationStrategy.REPLACE,
-        InventoryPublicationTargetKind.REPAIR,
-        queued.repairId());
-    when(dependencies.cancelTaskIfPreStart(
-        any(), eq(queued.externalTaskId()), eq(0L)))
-        .thenAnswer(invocation -> {
-          assertNoRemoteTransaction();
-          return taskCancellation(
-              MaintenanceDependencyGateway.PreStartTaskCancellationOutcome.VERSION_CONFLICT,
-              queued.externalTaskId(),
-              1L);
-        });
-
-    assertThatThrownBy(() -> publications.apply(
-        queued.inventoryId(), queued.findingId(), UUID.randomUUID(), replacement))
-        .isInstanceOf(MaintenanceConflictException.class)
-        .hasMessageContaining("Task-board version changed");
-    assertThat(publicationSourceCount(queued.inventoryId(), 2L, queued.findingId())).isZero();
-    assertThat(prestartIntentCount(queued.inventoryId(), 2L, queued.findingId())).isZero();
-    assertThat(jdbc.queryForObject(
-        """
-        select count(*) from inventory_publication_source_operation
-         where inventory_id=? and final_plan_version=2 and finding_id=?
-        """, Integer.class, queued.inventoryId(), queued.findingId())).isZero();
-    verify(dependencies, never()).maintenanceDriverTaskCompensation(
-        any(), any(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.class));
-  }
-
-  @Test
-  void postTaskCancellationReconciliationConflictRemainsRetryableAndGuarded() {
-    QueuedPrestartRepair queued = queuedPrestartRepair(false);
-    InventoryPublicationApplyRequest replacement = publicationApplyRequest(
-        changedPublicationFinding(queued, "3.500000"),
-        2L,
-        InventoryPublicationStrategy.REPLACE,
-        InventoryPublicationTargetKind.REPAIR,
-        queued.repairId());
-    when(dependencies.cancelTaskIfPreStart(
-        any(), eq(queued.externalTaskId()), eq(0L)))
-        .thenAnswer(invocation -> {
-          assertNoRemoteTransaction();
-          return taskCancellation(
-              MaintenanceDependencyGateway.PreStartTaskCancellationOutcome.CANCELLED,
-              queued.externalTaskId(),
-              1L);
-        });
-    when(dependencies.maintenanceDriverTaskCompensation(
-        eq(queued.repairId()),
-        eq(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR)))
-        .thenAnswer(invocation -> {
-          assertNoRemoteTransaction();
-          return driverCompensation(
-              queued.repairId(),
-              MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR,
-              MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome
-                  .RECONCILIATION_REQUIRED);
-        });
-
-    assertThatThrownBy(() -> publications.apply(
-        queued.inventoryId(), queued.findingId(), UUID.randomUUID(), replacement))
-        .isInstanceOfSatisfying(
-            MaintenanceDependencyException.class,
-            exception -> assertThat(exception.status()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
-    assertPrestartIntent(queued, "PREPARED", 1L);
-    assertThat(publicationSourceCount(queued.inventoryId(), 2L, queued.findingId())).isZero();
-    verify(dependencies, never()).cancelMaintenanceDriverTaskCompensation(
-        any(), any(), any(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.class));
-  }
-
-  @Test
-  void inboundDriverStartIsRetryableUntilCompletedOccupiedAllocationTruthExists() {
-    QueuedPrestartRepair queued = queuedPrestartRepair(false);
-    InventoryPublicationApplyRequest replacement = publicationApplyRequest(
-        changedPublicationFinding(queued, "3.500000"),
-        2L,
-        InventoryPublicationStrategy.REPLACE,
-        InventoryPublicationTargetKind.REPAIR,
-        queued.repairId());
-    when(dependencies.cancelTaskIfPreStart(
-        any(), eq(queued.externalTaskId()), eq(0L)))
-        .thenReturn(taskCancellation(
-            MaintenanceDependencyGateway.PreStartTaskCancellationOutcome.CANCELLED,
-            queued.externalTaskId(),
-            1L));
-    when(dependencies.maintenanceDriverTaskCompensation(
-        eq(queued.repairId()),
-        eq(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR)))
-        .thenReturn(driverCompensation(
-            queued.repairId(),
-            MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR,
-            MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome.STARTED));
-
-    assertThatThrownBy(() -> publications.apply(
-        queued.inventoryId(), queued.findingId(), UUID.randomUUID(), replacement))
-        .isInstanceOfSatisfying(
-            MaintenanceDependencyException.class,
-            exception -> {
-              assertThat(exception.status()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
-              assertThat(exception).hasMessageContaining("Inbound delivery has started");
-            });
-    assertPrestartIntent(queued, "PREPARED", 1L);
-    assertThat(repairs.findById(queued.repairId()).orElseThrow().getExecutionState())
-        .isEqualTo(RepairExecutionState.QUEUED);
-    verify(dependencies, never()).cancelMaintenanceDriverTaskCompensation(
-        any(), any(), any(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.class));
-  }
-
-  @Test
-  void taskStartAfterReplacePreflightFallsBackToResidualSuccessorWithoutDriverCancellation() {
-    QueuedPrestartRepair queued = queuedPrestartRepair(false);
-    InventoryPublicationApplyRequest replacement = publicationApplyRequest(
-        changedPublicationFinding(queued, "3.500000"),
-        2L,
-        InventoryPublicationStrategy.REPLACE,
-        InventoryPublicationTargetKind.REPAIR,
-        queued.repairId());
-    when(dependencies.cancelTaskIfPreStart(
-        any(), eq(queued.externalTaskId()), eq(0L)))
-        .thenAnswer(invocation -> {
-          assertNoRemoteTransaction();
-          return taskCancellation(
-              MaintenanceDependencyGateway.PreStartTaskCancellationOutcome.STARTED,
-              queued.externalTaskId(),
-              1L);
-        });
-
-    InventoryPublicationReconciliationService.PublicationResult result = publications.apply(
-        queued.inventoryId(), queued.findingId(), UUID.randomUUID(), replacement);
-    assertThat(result.replayed()).isFalse();
-    assertThat(result.response().source().strategy()).isEqualTo(InventoryPublicationStrategy.REPLACE);
-    assertThat(result.response().outcome()).isEqualTo(InventoryPublicationOutcome.SUCCESSOR);
-    assertThat(result.response().successor().state())
-        .isEqualTo(InventoryPublicationSuccessorState.WAITING_PREDECESSOR);
-    assertThat(result.response().delta().lines())
-        .allMatch(line -> line.disposition()
-            == InventoryPublicationDeltaDisposition.RETAINED_AFTER_DEDUCTION);
-    assertPrestartIntent(queued, "APPLIED", 1L);
-    verify(dependencies, never()).maintenanceDriverTaskCompensation(
-        any(), any(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.class));
-    verify(dependencies, never()).cancelMaintenanceDriverTaskCompensation(
-        any(), any(), any(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.class));
-  }
-
-  @Test
-  void taskCancellationEventBetweenRemoteGuardAndFinalizationIsAdoptedByTheSaga() {
-    QueuedPrestartRepair queued = queuedPrestartRepair(true);
-    InventoryPublicationApplyRequest replacement = publicationApplyRequest(
-        changedPublicationFinding(queued, "3.500000"),
-        2L,
-        InventoryPublicationStrategy.REPLACE,
-        InventoryPublicationTargetKind.REPAIR,
-        queued.repairId());
-    when(dependencies.cancelTaskIfPreStart(
-        any(), eq(queued.externalTaskId()), eq(0L)))
-        .thenAnswer(invocation -> {
-          assertNoRemoteTransaction();
-          new TransactionTemplate(transactionManager).executeWithoutResult(status ->
-              maintenance.applyInboundTaskOutcome(
-                  UUID.randomUUID(),
-                  "task-board.task.cancelled.v1",
-                  queued.externalTaskId(),
-                  queued.queueEntryId(),
-                  1L,
-                  OffsetDateTime.now(ZoneOffset.UTC)));
-          return taskCancellation(
-              MaintenanceDependencyGateway.PreStartTaskCancellationOutcome.CANCELLED,
-              queued.externalTaskId(),
-              1L);
-        });
-    when(dependencies.maintenanceDriverTaskCompensation(
-        eq(queued.repairId()),
-        eq(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR)))
-        .thenAnswer(invocation -> {
-          assertNoRemoteTransaction();
-          return driverCompensation(
-              queued.repairId(),
-              MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR,
-              MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome.CANCELLED);
-        });
-
-    InventoryPublicationReconciliationService.PublicationResult result = publications.apply(
-        queued.inventoryId(), queued.findingId(), UUID.randomUUID(), replacement);
-    assertThat(result.response().outcome()).isEqualTo(InventoryPublicationOutcome.CREATED);
-    assertThat(repairs.findById(queued.repairId()).orElseThrow().getExecutionState())
-        .isEqualTo(RepairExecutionState.CANCELLED);
-    assertThat(jdbc.queryForObject(
-        """
-        select state from repair_stage where external_queue_entry_id=?
-        """, String.class, queued.queueEntryId())).isEqualTo("CANCELLED");
-    assertThat(jdbc.queryForObject(
-        """
-        select count(*) from integration_reconciliation
-         where repair_id=? and operation_type='CANCELLED_PRIMARY_RECONCILIATION'
-        """, Integer.class, queued.repairId())).isZero();
-  }
-
-  @Test
-  void completionBetweenStartedGuardAndSuccessorInsertReleasesResidualImmediately() {
-    QueuedPrestartRepair queued = queuedPrestartRepair(true);
-    InventoryPublicationApplyRequest replacement = publicationApplyRequest(
-        changedPublicationFinding(queued, "3.500000"),
-        2L,
-        InventoryPublicationStrategy.REPLACE,
-        InventoryPublicationTargetKind.REPAIR,
-        queued.repairId());
-    UUID completionEventId = UUID.randomUUID();
-    OffsetDateTime completionAt = OffsetDateTime.now(ZoneOffset.UTC);
-    when(dependencies.cancelTaskIfPreStart(
-        any(), eq(queued.externalTaskId()), eq(0L)))
-        .thenAnswer(invocation -> {
-          assertNoRemoteTransaction();
-          new TransactionTemplate(transactionManager).executeWithoutResult(status ->
-              maintenance.applyInboundTaskOutcome(
-                  completionEventId,
-                  "task-board.task.completed.v1",
-                  queued.externalTaskId(),
-                  queued.queueEntryId(),
-                  1L,
-                  completionAt));
-          return taskCancellation(
-              MaintenanceDependencyGateway.PreStartTaskCancellationOutcome.STARTED,
-              queued.externalTaskId(),
-              1L);
-        });
-
-    InventoryPublicationReconciliationService.PublicationResult result = publications.apply(
-        queued.inventoryId(), queued.findingId(), UUID.randomUUID(), replacement);
-    assertThat(result.response().outcome()).isEqualTo(InventoryPublicationOutcome.SUCCESSOR);
-    assertThat(result.response().successor()).satisfies(successor -> {
-      assertThat(successor.state()).isEqualTo(InventoryPublicationSuccessorState.RELEASED);
-      assertThat(successor.terminalFact())
-          .isEqualTo(InventoryPublicationTerminalFact.TASK_BOARD_COMPLETION);
-      assertThat(successor.terminalFactEventId()).isEqualTo(completionEventId);
-    });
-    assertThat(jdbc.queryForObject(
-        """
-        select count(*) from integration_reconciliation
-         where repair_id=? and operation_type='QUEUE_REPAIR'
-        """, Integer.class, result.response().repairId())).isOne();
-    assertPrestartIntent(queued, "APPLIED", 1L);
-    verify(dependencies, never()).maintenanceDriverTaskCompensation(
-        any(), any(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.class));
-  }
-
-  @Test
-  void publicationMergeKeepsStartedWorkAndReleasesARealMaterialOnlySuccessor() {
-    UUID inventoryId = UUID.randomUUID();
-    UUID findingId = UUID.randomUUID();
-    UUID assetId = UUID.randomUUID();
-    FrozenInventoryPlanResponse frozen = inventory.freeze(
-        autoRequest(inventoryId, findingId, List.of())).response();
-    ObjectNode rawSnapshot = (ObjectNode) mapper.valueToTree(frozen.snapshot());
-    rentalItems.saveAndFlush(
-        RentalItemFactProjection.create(assetId, warehouseId, "FREE", 11));
-    InventoryPublicationFindingInput finding = publicationFinding(
-        findingId,
-        assetId,
-        11L,
-        rawSnapshot,
-        2,
-        3,
-        false,
-        null);
-
-    UUID firstRepairId = publications.apply(
-        inventoryId,
-        findingId,
-        UUID.randomUUID(),
-        publicationApplyRequest(
-            finding, 1L, InventoryPublicationStrategy.CREATE, null, null))
-        .response()
-        .repairId();
-    MaintenanceRepair started = repairs.findById(firstRepairId).orElseThrow();
-    started.queueUnderExistingRepair();
-    started.begin();
-    repairs.saveAndFlush(started);
-    RentalItemFactProjection activeAsset = rentalItems.findById(assetId).orElseThrow();
-    activeAsset.apply(warehouseId, "REPAIR", 12L);
-    rentalItems.saveAndFlush(activeAsset);
-
-    InventoryPublicationFindingInput activeFinding = publicationFinding(
-        findingId,
-        assetId,
-        12L,
-        rawSnapshot,
-        2,
-        3,
-        false,
-        null);
-
-    assertThatThrownBy(() -> publications.apply(
-        inventoryId,
-        findingId,
-        UUID.randomUUID(),
-        publicationApplyRequest(
-            activeFinding,
-            2L,
-            InventoryPublicationStrategy.REPLACE,
-            InventoryPublicationTargetKind.REPAIR,
-            firstRepairId)))
-        .isInstanceOf(MaintenanceConflictException.class)
-        .hasMessageContaining("REPLACE cannot alter started repair work");
-    assertThat(jdbc.queryForObject(
-        """
-        select count(*) from inventory_publication_source_operation
-         where inventory_id=? and final_plan_version=2 and finding_id=?
-        """, Integer.class, inventoryId, findingId)).isZero();
-
-    InventoryPublicationReconciliationService.PublicationResult matched = publications.apply(
-        inventoryId,
-        findingId,
-        UUID.randomUUID(),
-        publicationApplyRequest(
-            activeFinding,
-            2L,
-            InventoryPublicationStrategy.MERGE,
-            InventoryPublicationTargetKind.REPAIR,
-            firstRepairId));
-    assertThat(matched.response().outcome()).isEqualTo(InventoryPublicationOutcome.MATCHED);
-    assertThat(matched.response().targetId()).isNull();
-    assertThat(matched.response().repairId()).isNull();
-    assertThat(matched.response().delta().lines())
-        .allMatch(line -> line.disposition()
-            == InventoryPublicationDeltaDisposition.REMOVED_AS_ALREADY_PRESENT);
-
-    UUID materialNodeId = insertCatalogNode("MATERIAL", true);
-    FrozenInventoryPlanResponse materialPlan = inventory.freeze(new FreezeInventoryPlanRequest(
-        warehouseId,
-        UUID.randomUUID(),
-        UUID.randomUUID(),
-        1L,
-        InventoryPlanMode.MANUAL,
-        List.of(
-            catalogLine(workNodeId, "2.500", null, List.of()),
-            catalogLine(materialNodeId, "3", null, List.of())),
-        List.of(
-            new InventoryPlanStageSelection(workNodeId, RepairStageKind.REPAIR_WORK, 0),
-            new InventoryPlanStageSelection(materialNodeId, RepairStageKind.REPAIR_WORK, 1)),
-        List.of(),
-        3,
-        null)).response();
-    ObjectNode materialSnapshot = (ObjectNode) mapper.valueToTree(materialPlan.snapshot());
-    InventoryPublicationFindingInput materialFinding = publicationFinding(
-        findingId,
-        assetId,
-        12L,
-        materialSnapshot,
-        2,
-        3,
-        false,
-        null);
-
-    InventoryPublicationReconciliationService.PublicationResult successor = publications.apply(
-        inventoryId,
-        findingId,
-        UUID.randomUUID(),
-        publicationApplyRequest(
-            materialFinding,
-            3L,
-            InventoryPublicationStrategy.MERGE,
-            InventoryPublicationTargetKind.REPAIR,
-            firstRepairId));
-    UUID successorId = successor.response().repairId();
-
-    assertThat(successor.response().outcome()).isEqualTo(InventoryPublicationOutcome.SUCCESSOR);
-    assertThat(successor.response().targetKind()).isEqualTo(InventoryPublicationTargetKind.REPAIR);
-    assertThat(successorId).isNotEqualTo(firstRepairId);
-    assertThat(successor.response().successor())
-        .satisfies(value -> {
-          assertThat(value.predecessorRepairId()).isEqualTo(firstRepairId);
-          assertThat(value.state()).isEqualTo(InventoryPublicationSuccessorState.WAITING_PREDECESSOR);
-          assertThat(value.terminalFact()).isNull();
-        });
-    assertThat(successor.response().delta().lines()).anySatisfy(line -> {
-      assertThat(line.lineType()).isEqualTo(InventoryPlanLineType.WORK);
-      assertThat(line.disposition())
-          .isEqualTo(InventoryPublicationDeltaDisposition.REMOVED_AS_ALREADY_PRESENT);
-    });
-    assertThat(successor.response().delta().lines()).anySatisfy(line -> {
-      assertThat(line.lineType()).isEqualTo(InventoryPlanLineType.MATERIAL);
-      assertThat(line.disposition()).isEqualTo(InventoryPublicationDeltaDisposition.RETAINED);
-      assertThat(line.retainedQuantity()).isEqualTo("3");
-    });
-    assertThat(jdbc.queryForMap(
-        """
-        select jsonb_array_length(work_lines) as work_count,
-               jsonb_array_length(material_lines) as material_count,
-               primary_line_id
-          from repair_stage
-         where repair_id=?
-        """, successorId))
-        .containsEntry("work_count", 0)
-        .containsEntry("material_count", 1)
-        .containsEntry("primary_line_id", null);
-    assertThat(jdbc.queryForObject(
-        """
-        select count(*) from integration_reconciliation
-         where repair_id=? and operation_type='QUEUE_REPAIR'
-        """, Integer.class, successorId)).isZero();
-
-    InventoryPublicationReconciliationService.PublicationResult replayed = publications.apply(
-        inventoryId,
-        findingId,
-        UUID.randomUUID(),
-        publicationApplyRequest(
-            materialFinding,
-            3L,
-            InventoryPublicationStrategy.MERGE,
-            InventoryPublicationTargetKind.REPAIR,
-            firstRepairId));
-    assertThat(replayed.replayed()).isTrue();
-    assertThat(replayed.response()).isEqualTo(successor.response());
-
-    UUID terminalEventId = UUID.randomUUID();
-    OffsetDateTime terminalAt = OffsetDateTime.now(ZoneOffset.UTC);
-    new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
-      MaintenanceRepair predecessor = repairs.findById(firstRepairId).orElseThrow();
-      predecessor.completeForAcceptance();
-      repairs.saveAndFlush(predecessor);
-      successorActivator.releaseAfterTaskBoardCompletion(predecessor, terminalEventId, terminalAt);
-    });
-    assertThat(jdbc.queryForMap(
-        """
-        select state,terminal_fact,terminal_fact_event_id
-          from inventory_publication_successor
-         where successor_repair_id=?
-        """, successorId))
-        .containsEntry("state", "RELEASED")
-        .containsEntry("terminal_fact", "TASK_BOARD_COMPLETION")
-        .containsEntry("terminal_fact_event_id", terminalEventId);
-    assertThat(jdbc.queryForObject(
-        """
-        select count(*) from integration_reconciliation
-         where repair_id=? and operation_type='QUEUE_REPAIR'
-        """, Integer.class, successorId)).isOne();
-
-    jdbc.update("""
-        update integration_reconciliation
-           set state='CONFIRMED'
-         where repair_id<>? and state in ('PENDING','RETRY_PENDING','RECONCILIATION_REQUIRED')
-        """, successorId);
-    AtomicReference<List<MaintenanceDependencyGateway.TaskStage>> registeredStages =
-        new AtomicReference<>();
-    when(dependencies.getRentalItemSnapshot(assetId)).thenReturn(
-        new MaintenanceDependencyGateway.AssetSnapshot(assetId, 12L, warehouseId, "A-101", "REPAIR"));
-    when(dependencies.acquireLease(
-        any(), eq(assetId), eq(12L), eq("MAINTENANCE_REPAIR"), eq(successorId.toString())))
-        .thenReturn(new MaintenanceDependencyGateway.LeaseSnapshot(
-            UUID.randomUUID(), 0L, assetId, "MAINTENANCE_REPAIR", successorId, 1L,
-            OffsetDateTime.now(ZoneOffset.UTC).plusHours(1)));
-    when(dependencies.fencedStatus(
-        any(), eq(assetId), eq(warehouseId), eq(12L), any(), anyLong(),
-        eq("MAINTENANCE_REPAIR"), eq(successorId.toString()),
-        eq("QUEUE_TO_REPAIR"), eq(false)))
-        .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
-            assetId, 12L, warehouseId, "A-101", "REPAIR"));
-    when(dependencies.registerTask(
-        any(), any(), eq(successorId), eq(warehouseId), eq(assetId), eq("A-101"), any(),
-        anyInt(), anyInt(), anyList()))
-        .thenAnswer(invocation -> {
-          UUID externalTaskId = invocation.getArgument(1);
-          @SuppressWarnings("unchecked")
-          List<MaintenanceDependencyGateway.TaskStage> stages = invocation.getArgument(9);
-          registeredStages.set(stages);
-          return new MaintenanceDependencyGateway.TaskSnapshot(
-              externalTaskId,
-              1L,
-              "ACTIVE",
-              List.of(new MaintenanceDependencyGateway.TaskStageSnapshot(
-                  1, UUID.randomUUID(), 1L)));
-        });
-
-    assertThat(maintenance.reconcileOneTask()).isTrue();
-    for (int attempt = 0; attempt < 3 && registeredStages.get() == null; attempt++) {
-      maintenance.reconcileOneTask();
-    }
-    assertThat(registeredStages.get()).singleElement().satisfies(stage -> {
-      assertThat(stage.works()).isEmpty();
-      assertThat(stage.materials()).singleElement().satisfies(material -> {
-        assertThat(material.name()).isEqualTo("Catalog node");
-        assertThat(material.quantity()).isEqualTo(3.0d);
-        assertThat(material.unit()).isEqualTo("pcs");
-      });
-      assertThat(stage.plannedDurationMinutes()).isNull();
-    });
-  }
-
-  @Test
-  void externalCapitalInventorySuccessorWaitsForAcceptanceInsteadOfLocalCompletion() {
-    UUID inventoryId = UUID.randomUUID();
-    UUID findingId = UUID.randomUUID();
-    UUID assetId = UUID.randomUUID();
-    ObjectNode rawSnapshot = (ObjectNode) mapper.valueToTree(inventory.freeze(
-        autoRequest(inventoryId, findingId, List.of())).response().snapshot());
-    rentalItems.saveAndFlush(
-        RentalItemFactProjection.create(assetId, warehouseId, "FREE", 21L));
-    InventoryPublicationFindingInput finding = publicationFinding(
-        findingId, assetId, 21L, rawSnapshot, 2, 3, false, null);
-    UUID predecessorId = publications.apply(
-        inventoryId,
-        findingId,
-        UUID.randomUUID(),
-        publicationApplyRequest(
-            finding, 1L, InventoryPublicationStrategy.CREATE, null, null))
-        .response()
-        .repairId();
-
-    MaintenanceRepair predecessor = repairs.findById(predecessorId).orElseThrow();
-    predecessor.queueExternalCapitalUnderExistingRepair();
-    repairs.saveAndFlush(predecessor);
-    RentalItemFactProjection capitalAsset = rentalItems.findById(assetId).orElseThrow();
-    capitalAsset.apply(warehouseId, "CAPITAL_REPAIR", 22L);
-    rentalItems.saveAndFlush(capitalAsset);
-
-    ObjectNode laterSnapshot = rawSnapshot.deepCopy();
-    ((ObjectNode) laterSnapshot.withArray("lines").get(0)).put("quantity", "3.500000");
-    InventoryPublicationFindingInput laterFinding = publicationFinding(
-        findingId, assetId, 22L, laterSnapshot, 2, 3, false, null);
-    when(dependencies.maintenanceDriverTaskCompensation(
-        eq(predecessorId),
-        eq(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.CAPITAL_TO_PRODUCTION)))
-        .thenReturn(new MaintenanceDependencyGateway.MaintenanceDriverTaskCompensation(
-            predecessorId,
-            MaintenanceDependencyGateway.MaintenanceDriverTaskKind.CAPITAL_TO_PRODUCTION,
-            MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome.STARTED,
-            UUID.randomUUID(),
-            0L,
-            "STARTED",
-            null,
-            null,
-            null,
-            null,
-            null));
-    InventoryPublicationReconciliationService.PublicationResult successor = publications.apply(
-        inventoryId,
-        findingId,
-        UUID.randomUUID(),
-        publicationApplyRequest(
-            laterFinding,
-            2L,
-            InventoryPublicationStrategy.MERGE,
-            InventoryPublicationTargetKind.REPAIR,
-            predecessorId));
-    UUID successorId = successor.response().repairId();
-    assertThat(successor.response().outcome()).isEqualTo(InventoryPublicationOutcome.SUCCESSOR);
-    assertThat(successor.response().successor().state())
-        .isEqualTo(InventoryPublicationSuccessorState.WAITING_PREDECESSOR);
-
-    new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
-      MaintenanceRepair capitalPredecessor = repairs.findById(predecessorId).orElseThrow();
-      successorActivator.releaseAfterTaskBoardCompletion(
-          capitalPredecessor, UUID.randomUUID(), OffsetDateTime.now(ZoneOffset.UTC));
-    });
-    assertThat(jdbc.queryForObject(
-        "select state from inventory_publication_successor where successor_repair_id=?",
-        String.class,
-        successorId)).isEqualTo("WAITING_PREDECESSOR");
-    assertThat(jdbc.queryForObject(
-        """
-        select count(*) from integration_reconciliation
-         where repair_id=? and operation_type='QUEUE_REPAIR'
-        """, Integer.class, successorId)).isZero();
-
-    UUID acceptanceEventId = UUID.randomUUID();
-    new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
-      MaintenanceRepair capitalPredecessor = repairs.findById(predecessorId).orElseThrow();
-      capitalPredecessor.accept("inventory acceptance", "{}");
-      repairs.saveAndFlush(capitalPredecessor);
-      successorActivator.releaseAfterAcceptance(
-          capitalPredecessor, acceptanceEventId, OffsetDateTime.now(ZoneOffset.UTC));
-    });
-    assertThat(jdbc.queryForMap(
-        """
-        select state,terminal_fact,terminal_fact_event_id
-          from inventory_publication_successor
-         where successor_repair_id=?
-        """, successorId))
-        .containsEntry("state", "RELEASED")
-        .containsEntry("terminal_fact", "REPAIR_ACCEPTANCE")
-        .containsEntry("terminal_fact_event_id", acceptanceEventId);
-    assertThat(jdbc.queryForObject(
-        """
-        select count(*) from integration_reconciliation
-         where repair_id=? and operation_type='QUEUE_REPAIR'
-        """, Integer.class, successorId)).isOne();
-  }
-
-  @Test
-  void replacementDoesNotSilentlyLeaveAnotherActiveRepairForTheSameCabin() {
-    UUID inventoryId = UUID.randomUUID();
-    UUID findingId = UUID.randomUUID();
-    UUID assetId = UUID.randomUUID();
-    FrozenInventoryPlanResponse frozen = inventory.freeze(
-        autoRequest(inventoryId, findingId, List.of())).response();
-    ObjectNode rawSnapshot = (ObjectNode) mapper.valueToTree(frozen.snapshot());
-    rentalItems.saveAndFlush(
-        RentalItemFactProjection.create(assetId, warehouseId, "FREE", 11));
-    InventoryPublicationFindingInput finding = publicationFinding(
-        findingId,
-        assetId,
-        11L,
-        rawSnapshot,
-        2,
-        3,
-        false,
-        null);
-
-    UUID selectedRepairId = publications.apply(
-        inventoryId,
-        findingId,
-        UUID.randomUUID(),
-        publicationApplyRequest(
-            finding, 1L, InventoryPublicationStrategy.CREATE, null, null))
-        .response()
-        .repairId();
-    MaintenanceRepair unrelatedActiveRepair = MaintenanceRepair.primary(
-        warehouseId,
-        assetId,
-        11L,
-        null,
-        RepairOrigin.DIRECT_REPAIR,
-        LocalDate.of(2026, 8, 5),
-        "Direct maintenance",
-        "{}");
-    repairs.saveAndFlush(unrelatedActiveRepair);
-
-    assertThatThrownBy(
-        () -> publications.apply(
-            inventoryId,
-            findingId,
-            UUID.randomUUID(),
-            publicationApplyRequest(
-                finding,
-                2L,
-                InventoryPublicationStrategy.REPLACE,
-                InventoryPublicationTargetKind.REPAIR,
-                selectedRepairId)))
-        .isInstanceOf(MaintenanceConflictException.class)
-        .hasMessageContaining("only active maintenance target");
-    assertThat(repairs.findById(selectedRepairId).orElseThrow().getExecutionState())
-        .isEqualTo(RepairExecutionState.DRAFT);
-    assertThat(jdbc.queryForObject(
-        """
-        select count(*) from inventory_publication_source_operation
-         where inventory_id=? and final_plan_version=2 and finding_id=?
-        """,
-        Integer.class,
-        inventoryId,
-        findingId)).isZero();
-  }
-
-  private QueuedPrestartRepair queuedPrestartRepair(boolean registerTaskBoardStage) {
+  private AuthoritativeActiveRepair authoritativeActiveRepair(
+      boolean movementToRepair, boolean createRepairPlace) {
     UUID inventoryId = UUID.randomUUID();
     UUID findingId = UUID.randomUUID();
     UUID assetId = UUID.randomUUID();
@@ -2249,86 +2424,134 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         autoRequest(inventoryId, findingId, List.of())).response().snapshot());
     rentalItems.saveAndFlush(
         RentalItemFactProjection.create(assetId, warehouseId, "FREE", 11L));
-    InventoryPublicationFindingInput initialFinding = publicationFinding(
-        findingId, assetId, 11L, rawSnapshot, 2, 3, false, null);
-    UUID repairId = publications.apply(
-        inventoryId,
+    InventoryPublicationFindingInput finding = publicationFinding(
         findingId,
-        UUID.randomUUID(),
-        publicationApplyRequest(
-            initialFinding, 1L, InventoryPublicationStrategy.CREATE, null, null))
-        .response()
-        .repairId();
-    QueuedPrestartRepair queued = new TransactionTemplate(transactionManager).execute(status -> {
-      MaintenanceRepair repair = repairs.findById(repairId).orElseThrow();
-      RepairStage stage = repairStages.findAllByRepairIdOrderByStageNo(repairId).getFirst();
-      repair.queueUnderExistingRepair();
-      repair.markTaskGenerated(0L);
-      UUID queueEntryId = null;
-      if (registerTaskBoardStage) {
-        stage.queued();
-        queueEntryId = UUID.randomUUID();
-        stage.confirmTaskBoardRegistration(queueEntryId, 0L);
-        repairStages.saveAndFlush(stage);
-      }
-      MaintenanceRepair saved = repairs.saveAndFlush(repair);
-      jdbc.update(
-          """
-          update event_stream_head
-             set current_version=?
-           where aggregate_type='REPAIR' and aggregate_id=?
-          """,
-          saved.getVersion(),
-          saved.getId().toString());
-      return new QueuedPrestartRepair(
-          inventoryId,
-          findingId,
-          assetId,
-          saved.getId(),
-          saved.getExternalTaskId(),
-          queueEntryId,
-          rawSnapshot.deepCopy());
-    });
-    if (queued == null) throw new IllegalStateException("Queued pre-start test repair was not created");
-    RentalItemFactProjection active = rentalItems.findById(assetId).orElseThrow();
-    active.apply(warehouseId, "REPAIR", 12L);
-    rentalItems.saveAndFlush(active);
-    return queued;
-  }
-
-  private InventoryPublicationFindingInput changedPublicationFinding(
-      QueuedPrestartRepair queued, String quantity) {
-    ObjectNode changed = queued.rawSnapshot().deepCopy();
-    ((ObjectNode) changed.withArray("lines").get(0)).put("quantity", quantity);
-    return publicationFinding(
-        queued.findingId(),
-        queued.assetId(),
-        12L,
-        changed,
+        assetId,
+        11L,
+        rawSnapshot,
         2,
         3,
-        false,
-        null);
+        movementToRepair,
+        movementToRepair ? LocalDate.of(2026, 8, 21) : null);
+    InventoryPublicationApplyRequest request = publicationApplyRequest(
+        finding, 1L, InventoryPublicationStrategy.CREATE, null, null);
+    UUID repairId = publications.apply(
+        inventoryId, findingId, UUID.randomUUID(), request).response().repairId();
+    UUID leaseId = UUID.randomUUID();
+    MaintenanceRepair queued = new TransactionTemplate(transactionManager).execute(status -> {
+      MaintenanceRepair repair = repairs.findById(repairId).orElseThrow();
+      repair.queue(
+          leaseId,
+          0L,
+          13L,
+          OffsetDateTime.now(ZoneOffset.UTC).plusHours(1));
+      repair.markTaskGenerated(0L);
+      RepairStage stage = repairStages.findAllByRepairIdOrderByStageNo(repairId).getFirst();
+      stage.queued();
+      repairStages.saveAndFlush(stage);
+      return repairs.saveAndFlush(repair);
+    });
+    if (queued == null) {
+      throw new IllegalStateException("Authoritative active repair fixture was not queued");
+    }
+    jdbc.update(
+        "update event_stream_head set current_version=? where aggregate_type='REPAIR' "
+            + "and aggregate_id=?",
+        queued.getVersion(),
+        repairId.toString());
+    if (createRepairPlace) {
+      jdbc.update(
+          "insert into repair_place_allocation(id,version,warehouse_id,repair_id,state,created_at,updated_at) "
+              + "values (?,0,?,?,'RESERVED',clock_timestamp(),clock_timestamp())",
+          UUID.randomUUID(),
+          warehouseId,
+          repairId);
+    }
+    RentalItemFactProjection projected = rentalItems.findById(assetId).orElseThrow();
+    projected.apply(warehouseId, "REPAIR", 12L);
+    rentalItems.saveAndFlush(projected);
+    return new AuthoritativeActiveRepair(
+        inventoryId,
+        findingId,
+        assetId,
+        12L,
+        repairId,
+        queued.getExternalTaskId(),
+        leaseId,
+        request.inventoryCompletedAt());
   }
 
-  private void assertPrestartIntent(
-      QueuedPrestartRepair queued, String phase, long remoteAttemptCount) {
-    assertThat(jdbc.queryForMap(
-        """
-        select phase,remote_attempt_count
-          from inventory_publication_prestart_replacement
-         where inventory_id=? and final_plan_version=2 and finding_id=?
-        """, queued.inventoryId(), queued.findingId()))
-        .containsEntry("phase", phase)
-        .containsEntry("remote_attempt_count", remoteAttemptCount);
+  private InventoryNoWorkOutcomeRequest noWorkRequest(
+      AuthoritativeActiveRepair active, long finalPlanVersion, OffsetDateTime completedAt) {
+    return noWorkRequest(
+        active.assetId(), active.assetVersion(), finalPlanVersion, completedAt);
   }
 
-  private int prestartIntentCount(UUID inventoryId, long planVersion, UUID findingId) {
-    return jdbc.queryForObject(
-        """
-        select count(*) from inventory_publication_prestart_replacement
-         where inventory_id=? and final_plan_version=? and finding_id=?
-        """, Integer.class, inventoryId, planVersion, findingId);
+  private InventoryNoWorkOutcomeRequest noWorkRequest(
+      UUID assetId,
+      long authoritativeAssetVersion,
+      long finalPlanVersion,
+      OffsetDateTime completedAt) {
+    return new InventoryNoWorkOutcomeRequest(
+        warehouseId,
+        assetId,
+        completedAt,
+        finalPlanVersion,
+        finalPlanSha(finalPlanVersion),
+        1L,
+        authoritativeAssetVersion,
+        "FREE");
+  }
+
+  private void insertEventHead(String aggregateType, UUID aggregateId, long currentVersion) {
+    jdbc.update(
+        "insert into event_stream_head(aggregate_type,aggregate_id,current_version,last_event_id,updated_at) "
+            + "values (?,?,?,?,clock_timestamp())",
+        aggregateType,
+        aggregateId.toString(),
+        currentVersion,
+        UUID.randomUUID());
+  }
+
+  private MaintenanceRepair directDraftRepair(
+      UUID assetId, long assetVersion, String comment) {
+    MaintenanceRepair repair = repairs.saveAndFlush(MaintenanceRepair.primary(
+        warehouseId,
+        assetId,
+        assetVersion,
+        null,
+        RepairOrigin.DIRECT_REPAIR,
+        LocalDate.of(2026, 8, 5),
+        comment,
+        "{}"));
+    insertEventHead("REPAIR", repair.getId(), repair.getVersion());
+    return repair;
+  }
+
+  private void saveAuthoritativeWorkOutcome(
+      InventoryPublicationSourceId sourceId,
+      UUID assetId,
+      UUID targetRepairId,
+      long findingRevision,
+      String finalPlanSha256,
+      String requestSha256) {
+    InventoryAuthoritativeOutcome outcome =
+        InventoryAuthoritativeOutcome.prepare(
+            sourceId,
+            requestSha256,
+            "{}",
+            warehouseId,
+            assetId,
+            OffsetDateTime.of(2026, 8, 19, 8, 0, 0, 0, ZoneOffset.UTC),
+            finalPlanSha256,
+            findingRevision,
+            12L,
+            "REPAIR",
+            "WORK");
+    outcome.markEffectsSettled();
+    outcome.attachTarget(targetRepairId);
+    outcome.apply("{\"repairId\":\"" + targetRepairId + "\"}");
+    authoritativeOutcomeRepository.saveAndFlush(outcome);
   }
 
   private int publicationSourceCount(UUID inventoryId, long planVersion, UUID findingId) {
@@ -2341,19 +2564,6 @@ class MaintenanceInventoryBoundaryIntegrationTest {
 
   private static void assertNoRemoteTransaction() {
     assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
-  }
-
-  private static MaintenanceDependencyGateway.PreStartTaskCancellation taskCancellation(
-      MaintenanceDependencyGateway.PreStartTaskCancellationOutcome outcome,
-      UUID externalTaskId,
-      long taskVersion) {
-    String state = switch (outcome) {
-      case CANCELLED, ALREADY_CANCELLED -> "CANCELLED";
-      case STARTED -> "IN_PROGRESS";
-      case VERSION_CONFLICT -> "WAITING";
-    };
-    return new MaintenanceDependencyGateway.PreStartTaskCancellation(
-        outcome, UUID.randomUUID(), externalTaskId, taskVersion, state, OffsetDateTime.now(ZoneOffset.UTC));
   }
 
   private static MaintenanceDependencyGateway.MaintenanceDriverTaskCompensation driverCompensation(
@@ -2378,14 +2588,15 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         null);
   }
 
-  private record QueuedPrestartRepair(
+  private record AuthoritativeActiveRepair(
       UUID inventoryId,
       UUID findingId,
       UUID assetId,
+      long assetVersion,
       UUID repairId,
       UUID externalTaskId,
-      UUID queueEntryId,
-      ObjectNode rawSnapshot) {}
+      UUID leaseId,
+      OffsetDateTime completedAt) {}
 
   private InventoryPublicationFindingInput publicationFinding(
       UUID findingId,
@@ -2417,6 +2628,22 @@ class MaintenanceInventoryBoundaryIntegrationTest {
       InventoryPublicationStrategy strategy,
       InventoryPublicationTargetKind selectedTargetKind,
       UUID selectedTargetId) {
+    return publicationApplyRequest(
+        finding,
+        finding.assetVersion(),
+        finalPlanVersion,
+        strategy,
+        selectedTargetKind,
+        selectedTargetId);
+  }
+
+  private InventoryPublicationApplyRequest publicationApplyRequest(
+      InventoryPublicationFindingInput finding,
+      long authoritativeAssetVersion,
+      long finalPlanVersion,
+      InventoryPublicationStrategy strategy,
+      InventoryPublicationTargetKind selectedTargetKind,
+      UUID selectedTargetId) {
     return new InventoryPublicationApplyRequest(
         warehouseId,
         finalPlanVersion,
@@ -2424,6 +2651,9 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         finding.findingRevision(),
         finding.assetId(),
         finding.assetVersion(),
+        authoritativeAssetVersion,
+        OffsetDateTime.of(2026, 8, 19, 10, 0, 0, 0, ZoneOffset.UTC)
+            .plusSeconds(finalPlanVersion),
         finding.planFingerprintSha256(),
         finding.priority(),
         finding.movementToRepair(),
@@ -2434,7 +2664,8 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         finding.snapshotSchemaVersion(),
         strategy,
         selectedTargetKind,
-        selectedTargetId);
+        selectedTargetId,
+        finding.forceCapitalRepair());
   }
 
   private static String finalPlanSha(long version) {

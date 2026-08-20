@@ -165,6 +165,14 @@ WORKER-only WorkerApp/DriverApp clients. Изменение callback, scope ил
 type требует собственной revision и согласованного client release; refresh
 token одного mobile client нельзя обменять через client ID другого.
 
+Managed machine client `inventory-service` запрашивает ровно один downstream
+scope на токен. Revision 5 добавила `media.inventory` для передачи фотографий
+бытовки из завершённой инвентаризации; revision 6 добавляет только
+`logistics.inventory` для авторитетного замещения логистической работы по всему
+итоговому плану. Subject и `client_id` каждого токена остаются равны
+`inventory-service`, audience — `rwms-services`. Asset, maintenance, media,
+logistics и warehouse scopes по-прежнему запрашиваются отдельными токенами.
+
 ## Проверка warehouse grants
 
 Идентичностью склада владеет `warehouse-service`, поэтому auth-service не

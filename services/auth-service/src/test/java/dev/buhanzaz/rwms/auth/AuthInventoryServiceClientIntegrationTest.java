@@ -48,6 +48,8 @@ class AuthInventoryServiceClientIntegrationTest {
         assertExactToken("warehouse.lifecycle.confirm");
         assertExactToken("asset.inventory");
         assertExactToken("maintenance.inventory");
+        assertExactToken("logistics.inventory");
+        assertExactToken("media.inventory");
     }
 
     @Test

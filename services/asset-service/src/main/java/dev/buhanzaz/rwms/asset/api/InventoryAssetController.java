@@ -106,6 +106,26 @@ public class InventoryAssetController {
     return response.build();
   }
 
+  /** Applies one final-plan found-cabin outcome using inventory-service-only credentials. */
+  @PutMapping("/outcomes/{inventoryId}/findings/{findingId}")
+  public ResponseEntity<InventoryOutcomeResponse> applyOutcome(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID inventoryId,
+      @PathVariable UUID findingId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody InventoryOutcomeRequest request) {
+    InventoryAssetService.OutcomeResult result =
+        service.applyOutcome(
+            access.inventorySubjectId(jwt),
+            inventoryId,
+            findingId,
+            idempotencyKey,
+            request);
+    ResponseEntity.BodyBuilder response = ResponseEntity.ok();
+    if (result.replayed()) response.header("Idempotency-Replayed", "true");
+    return response.body(result.response());
+  }
+
   @PostMapping("/source-assets")
   public ResponseEntity<InventorySourceAssetResponse> createSourceAsset(
       @AuthenticationPrincipal Jwt jwt,

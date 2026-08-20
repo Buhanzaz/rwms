@@ -30,6 +30,8 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
       "inventory-warehouse-lifecycle-confirm";
   private static final String ASSET_CLIENT = "inventory-asset";
   private static final String MAINTENANCE_CLIENT = "inventory-maintenance";
+  private static final String LOGISTICS_CLIENT = "inventory-logistics";
+  private static final String MEDIA_CLIENT = "inventory-media";
   private static final String WAREHOUSE_TIME_ZONE_SCOPE = "warehouse.timezone.read";
   private static final String WAREHOUSE_OPERATION_SCOPE = "warehouse.operation.mark";
   private static final String WAREHOUSE_LIFECYCLE_READ_SCOPE = "warehouse.lifecycle.read";
@@ -37,12 +39,16 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
       "warehouse.lifecycle.confirm";
   private static final String ASSET_SCOPE = "asset.inventory";
   private static final String MAINTENANCE_SCOPE = "maintenance.inventory";
+  private static final String LOGISTICS_SCOPE = "logistics.inventory";
+  private static final String MEDIA_SCOPE = "media.inventory";
 
   private final RestClient client;
   private final OAuth2AuthorizedClientManager authorizedClients;
   private final String warehouseBase;
   private final String assetBase;
   private final String maintenanceBase;
+  private final String logisticsBase;
+  private final String mediaBase;
 
   HttpInventoryDependencyGateway(
       RestClient client,
@@ -53,6 +59,8 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
     warehouseBase = strip(properties.warehouseBaseUrl().toString());
     assetBase = strip(properties.assetBaseUrl().toString());
     maintenanceBase = strip(properties.maintenanceBaseUrl().toString());
+    logisticsBase = strip(properties.logisticsBaseUrl().toString());
+    mediaBase = strip(properties.mediaBaseUrl().toString());
   }
 
   @Override
@@ -558,7 +566,7 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
   public FrozenPlan freezePlan(UUID idempotencyKey, JsonNode request) {
     String authorization = bearer(MAINTENANCE_CLIENT, MAINTENANCE_SCOPE);
     JsonNode response =
-        postFreezePlan(
+        postIdempotentWithSingleTransientRetry(
             maintenanceBase + "/api/internal/maintenance/v1/inventory/plans",
             idempotencyKey,
             request,
@@ -578,27 +586,27 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
   }
 
   /**
-   * Freezing a plan is idempotent at maintenance-service, so one immediate retry is safe when the
-   * first request did not receive a usable response from that dependency. The request body and
-   * idempotency key deliberately remain unchanged.
+   * Executes an explicitly idempotent maintenance request with one immediate retry after a
+   * transport failure or HTTP 502/503/504. The request body, idempotency key, and bearer token
+   * deliberately remain unchanged across both attempts.
    */
-  private <T> T postFreezePlan(
+  private <T> T postIdempotentWithSingleTransientRetry(
       String uri, UUID key, Object body, Class<T> type, String authorization) {
     try {
-      return postFreezePlanAttempt(uri, key, body, type, authorization);
+      return postIdempotentAttempt(uri, key, body, type, authorization);
     } catch (RuntimeException firstFailure) {
-      if (!retryableFreezePlanFailure(firstFailure)) {
+      if (!retryableTransientFailure(firstFailure)) {
         throw dependencyFailure(firstFailure);
       }
     }
     try {
-      return postFreezePlanAttempt(uri, key, body, type, authorization);
+      return postIdempotentAttempt(uri, key, body, type, authorization);
     } catch (RuntimeException retryFailure) {
       throw dependencyFailure(retryFailure);
     }
   }
 
-  private <T> T postFreezePlanAttempt(
+  private <T> T postIdempotentAttempt(
       String uri, UUID key, Object body, Class<T> type, String authorization) {
     RestClient.RequestBodySpec request =
         client
@@ -615,7 +623,7 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
     return value;
   }
 
-  private static boolean retryableFreezePlanFailure(RuntimeException failure) {
+  private static boolean retryableTransientFailure(RuntimeException failure) {
     if (failure instanceof ResourceAccessException) {
       return true;
     }
@@ -628,15 +636,15 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
 
   @Override
   public JsonNode preflightReconciliation(UUID idempotencyKey, JsonNode request) {
+    String authorization = bearer(MAINTENANCE_CLIENT, MAINTENANCE_SCOPE);
     JsonNode response =
-        post(
+        postIdempotentWithSingleTransientRetry(
             maintenanceBase
                 + "/api/internal/maintenance/v1/inventory/reconciliations/preflight",
             idempotencyKey,
             request,
             JsonNode.class,
-            MAINTENANCE_CLIENT,
-            MAINTENANCE_SCOPE);
+            authorization);
     if (!response.isObject()
         || !sha256(response.path("finalPlanSha256").asText())
         || response.path("finalPlanVersion").asLong(-1) < 1
@@ -665,6 +673,166 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
       throw malformed("Maintenance-service returned malformed reconciliation result");
     }
     return response;
+  }
+
+  @Override
+  public JsonNode applyNoWorkDisposition(
+      UUID inventoryId, UUID findingId, UUID idempotencyKey, JsonNode request) {
+    JsonNode response =
+        put(
+            maintenanceBase
+                + "/api/internal/maintenance/v1/inventory/outcomes/"
+                + inventoryId
+                + "/findings/"
+                + findingId
+                + "/no-work",
+            idempotencyKey,
+            request,
+            JsonNode.class,
+            MAINTENANCE_CLIENT,
+            MAINTENANCE_SCOPE);
+    try {
+      List<UUID> estimateIds = uuidList(response, "supersededEstimateIds");
+      List<UUID> repairIds = uuidList(response, "supersededRepairIds");
+      List<UUID> externalTaskIds = uuidList(response, "cancelledExternalTaskIds");
+      List<UUID> driverTaskIds = uuidList(response, "cancelledDriverTaskIds");
+      List<UUID> leaseIds = uuidList(response, "releasedLeaseIds");
+      if (!response.path("replay").isBoolean()
+          || hasDuplicates(estimateIds)
+          || hasDuplicates(repairIds)
+          || hasDuplicates(externalTaskIds)
+          || hasDuplicates(driverTaskIds)
+          || hasDuplicates(leaseIds)) {
+        throw new IllegalArgumentException();
+      }
+      uuid(response, "inventoryId");
+      uuid(response, "findingId");
+      uuid(response, "assetId");
+      return response;
+    } catch (RuntimeException exception) {
+      if (exception instanceof InventoryException inventoryException) {
+        throw inventoryException;
+      }
+      throw malformed("Maintenance-service returned malformed no-work inventory outcome");
+    }
+  }
+
+  @Override
+  public InventoryAssetOutcome applyInventoryOutcome(
+      UUID inventoryId, UUID findingId, UUID idempotencyKey, JsonNode request) {
+    JsonNode response =
+        put(
+            assetBase
+                + "/api/internal/asset/v1/inventory/outcomes/"
+                + inventoryId
+                + "/findings/"
+                + findingId,
+            idempotencyKey,
+            request,
+            JsonNode.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE);
+    try {
+      List<UUID> orderReservations = uuidList(response, "releasedOrderUnitReservationIds");
+      List<UUID> operationLeases = uuidList(response, "releasedOperationLeaseIds");
+      List<UUID> presentationHolds = uuidList(response, "releasedPresentationHoldIds");
+      if (!response.path("transferSuperseded").isBoolean()
+          || response.path("assetVersion").asLong(-1) < 0
+          || response.path("status").asText().isBlank()) {
+        throw new IllegalArgumentException();
+      }
+      return new InventoryAssetOutcome(
+          uuid(response, "inventoryId"),
+          uuid(response, "findingId"),
+          uuid(response, "assetId"),
+          response.path("assetVersion").asLong(),
+          response.path("status").asText(),
+          orderReservations,
+          operationLeases,
+          presentationHolds,
+          response.path("transferSuperseded").asBoolean(),
+          response);
+    } catch (RuntimeException exception) {
+      if (exception instanceof InventoryException inventoryException) {
+        throw inventoryException;
+      }
+      throw malformed("Asset-service returned malformed inventory outcome");
+    }
+  }
+
+  @Override
+  public InventoryCabinPhotoOutcome publishInventoryCabinPhotos(
+      UUID inventoryId, UUID findingId, UUID idempotencyKey, JsonNode request) {
+    JsonNode response =
+        put(
+            mediaBase
+                + "/api/internal/media/v1/inventory/outcomes/"
+                + inventoryId
+                + "/findings/"
+                + findingId
+                + "/cabin-photos",
+            idempotencyKey,
+            request,
+            JsonNode.class,
+            MEDIA_CLIENT,
+            MEDIA_SCOPE);
+    try {
+      long photoCount = response.path("photoCount").asLong(-1);
+      long libraryVersion = response.path("libraryVersion").asLong(-1);
+      if (photoCount < 1 || libraryVersion < 1 || !response.path("replay").isBoolean()) {
+        throw new IllegalArgumentException();
+      }
+      return new InventoryCabinPhotoOutcome(
+          uuid(response, "inventoryId"),
+          uuid(response, "findingId"),
+          uuid(response, "cabinId"),
+          uuid(response, "folderId"),
+          uuid(response, "coverMediaId"),
+          photoCount,
+          libraryVersion,
+          response.path("replay").asBoolean());
+    } catch (RuntimeException exception) {
+      if (exception instanceof InventoryException inventoryException) {
+        throw inventoryException;
+      }
+      throw malformed("Media-service returned malformed inventory cabin photo result");
+    }
+  }
+
+  @Override
+  public JsonNode applyLogisticsOutcomes(
+      UUID inventoryId, UUID idempotencyKey, JsonNode request) {
+    JsonNode response =
+        put(
+            logisticsBase
+                + "/api/internal/logistics/v1/inventory/outcomes/"
+                + inventoryId,
+            idempotencyKey,
+            request,
+            JsonNode.class,
+            LOGISTICS_CLIENT,
+            LOGISTICS_SCOPE);
+    try {
+      List<UUID> documentIds = uuidList(response, "supersededDocumentIds");
+      List<UUID> rentalOrderIds = uuidList(response, "supersededRentalOrderIds");
+      List<UUID> driverTaskIds = uuidList(response, "cancelledDriverTaskIds");
+      if (response.path("finalPlanVersion").asLong(-1) < 1
+          || response.path("supersededLineCount").asLong(-1) < 0
+          || response.path("supersededRentalUnitCount").asLong(-1) < 0
+          || !response.path("replay").isBoolean()
+          || hasDuplicates(documentIds)
+          || hasDuplicates(rentalOrderIds)
+          || hasDuplicates(driverTaskIds)) {
+        throw new IllegalArgumentException();
+      }
+      uuid(response, "inventoryId");
+      return response;
+    } catch (RuntimeException exception) {
+      if (exception instanceof InventoryException inventoryException) {
+        throw inventoryException;
+      }
+      throw malformed("Logistics-service returned malformed inventory outcomes");
+    }
   }
 
   @Override
@@ -867,6 +1035,27 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
     } catch (IllegalArgumentException exception) {
       throw malformed("Dependency response has invalid " + field);
     }
+  }
+
+  private static List<UUID> uuidList(JsonNode node, String field) {
+    JsonNode values = node.get(field);
+    if (values == null || !values.isArray()) {
+      throw malformed("Dependency response has invalid " + field);
+    }
+    java.util.ArrayList<UUID> result = new java.util.ArrayList<>();
+    for (JsonNode value : values) {
+      if (!value.isTextual()) throw malformed("Dependency response has invalid " + field);
+      try {
+        result.add(UUID.fromString(value.asText()));
+      } catch (IllegalArgumentException exception) {
+        throw malformed("Dependency response has invalid " + field);
+      }
+    }
+    return List.copyOf(result);
+  }
+
+  private static boolean hasDuplicates(List<UUID> values) {
+    return Set.copyOf(values).size() != values.size();
   }
 
   private record FurnitureSnapshotRequest(UUID warehouseId, List<UUID> assetIds) {}

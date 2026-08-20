@@ -129,6 +129,23 @@ final class AssetMaintenanceService {
     if (replay.isPresent()) {
       return new AssetService.CreateResult<>(json.read(replay.get(), OperationLeaseResponse.class), true);
     }
+    if (request.expectedVersion() == null || request.expectedVersion() < 0) {
+      throw new IllegalArgumentException("expectedVersion is required");
+    }
+    if (current.getState() == dev.buhanzaz.rwms.asset.domain.OperationLeaseState.RELEASED
+        || current.getState() == dev.buhanzaz.rwms.asset.domain.OperationLeaseState.EXPIRED) {
+      if (idempotency.isBoundToAnotherSubject(
+          subjectId, "maintenance.operation-lease.release", key)) {
+        throw new AssetConflictException("Asset data changed concurrently");
+      }
+      if (current.getFencingToken() != request.fencingToken()) {
+        throw new AssetConflictException("Operation lease is stale or fenced");
+      }
+      OperationLeaseResponse terminal = leases.response(current);
+      idempotency.store(
+          subjectId, "maintenance.operation-lease.release", key, hash, 200, terminal);
+      return new AssetService.CreateResult<>(terminal, false);
+    }
     OperationLeaseResponse updated = leases.release(id, request.expectedVersion(), request.fencingToken());
     idempotency.store(subjectId, "maintenance.operation-lease.release", key, hash, 200, updated);
     return new AssetService.CreateResult<>(updated, false);

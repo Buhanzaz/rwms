@@ -11,6 +11,7 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
+import java.sql.Types;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -20,6 +21,7 @@ import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.proxy.HibernateProxy;
 
 /**
@@ -78,7 +80,10 @@ public class LogisticsDocument {
   @Column(name = "scheduled_date")
   private LocalDate scheduledDate;
 
-  /** Historical physical column retained for old rows; new date-only logistics never reads or writes it. */
+  /**
+   * Historical physical column retained for old rows; new date-only logistics never reads or writes
+   * it.
+   */
   @Getter(AccessLevel.NONE)
   @Column(name = "scheduled_time")
   private java.time.LocalTime legacyScheduledTime;
@@ -107,6 +112,23 @@ public class LogisticsDocument {
 
   @Column(name = "updated_at", nullable = false)
   private OffsetDateTime updatedAt;
+
+  /** Completed inventory that displaced this document from active logistics state. */
+  @Column(name = "inventory_superseded_by")
+  private UUID inventorySupersededBy;
+
+  @Column(name = "inventory_superseded_at")
+  private OffsetDateTime inventorySupersededAt;
+
+  @Column(name = "inventory_completed_at")
+  private OffsetDateTime inventoryCompletedAt;
+
+  @Column(name = "inventory_final_plan_version")
+  private Long inventoryFinalPlanVersion;
+
+  @JdbcTypeCode(Types.CHAR)
+  @Column(name = "inventory_final_plan_sha256", length = 64)
+  private String inventoryFinalPlanSha256;
 
   public static LogisticsDocument createReturn(
       UUID warehouseId, UUID subjectId, UUID correlationId) {
@@ -638,6 +660,34 @@ public class LogisticsDocument {
           "Document cannot be cancelled in its current lifecycle state");
     }
     state = LogisticsDocumentState.CANCELLED;
+  }
+
+  /**
+   * Makes a completed inventory the active truth without rewriting terminal transport history.
+   * Every nonterminal document becomes cancelled even when physical execution had started; the
+   * caller is responsible for cancelling its task-board work through the recoverable owner saga.
+   */
+  public void supersedeByCompletedInventory(
+      UUID inventoryId, OffsetDateTime completedAt, long finalPlanVersion, String finalPlanSha256) {
+    if (inventoryId == null
+        || completedAt == null
+        || finalPlanVersion < 1
+        || finalPlanSha256 == null
+        || !finalPlanSha256.matches("[0-9a-f]{64}")) {
+      throw new IllegalArgumentException("Completed inventory source is invalid");
+    }
+    inventorySupersededBy = inventoryId;
+    inventorySupersededAt = currentTime();
+    inventoryCompletedAt = completedAt;
+    inventoryFinalPlanVersion = finalPlanVersion;
+    inventoryFinalPlanSha256 = finalPlanSha256;
+    if (state != LogisticsDocumentState.ACCEPTED
+        && state != LogisticsDocumentState.ESTIMATE_REQUESTED
+        && state != LogisticsDocumentState.SHIPPED
+        && state != LogisticsDocumentState.COMPLETED
+        && state != LogisticsDocumentState.CANCELLED) {
+      state = LogisticsDocumentState.CANCELLED;
+    }
   }
 
   public void requireReconciliation() {

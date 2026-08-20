@@ -150,4 +150,21 @@ public interface DriverLogisticsTaskRepository extends JpaRepository<DriverLogis
       """)
   List<DriverLogisticsTask> findRecentByWarehouseAndState(
       @Param("warehouseId") UUID warehouseId, @Param("state") DriverTaskState state);
+
+  @EntityGraph(attributePaths = "members")
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select distinct task
+      from DriverLogisticsTask task
+      left join task.members member
+      where task.state not in (
+          dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState.COMPLETED,
+          dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState.CANCELLED)
+        and (task.cabinId in :assetIds or member.cabinId in :assetIds or task.sourceId in :documentIds)
+      order by task.id
+      """)
+  List<DriverLogisticsTask> findInventoryCandidatesForUpdate(
+      @Param("assetIds") Collection<UUID> assetIds,
+      @Param("documentIds") Collection<UUID> documentIds);
 }

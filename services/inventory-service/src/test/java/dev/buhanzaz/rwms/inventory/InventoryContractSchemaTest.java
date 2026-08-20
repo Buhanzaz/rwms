@@ -35,6 +35,7 @@ class InventoryContractSchemaTest {
             "POST /api/inventory/v1/sessions",
             "GET /api/inventory/v1/sessions/active",
             "GET /api/inventory/v1/sessions/{inventoryId}",
+            "POST /api/inventory/v1/sessions/{inventoryId}/refresh",
             "GET /api/inventory/v1/sessions/{inventoryId}/findings",
             "POST /api/inventory/v1/sessions/{inventoryId}/registry-review",
             "GET /api/inventory/v1/sessions/{inventoryId}/statistics-preview",
@@ -54,6 +55,7 @@ class InventoryContractSchemaTest {
             "POST /api/inventory/v1/sessions/{inventoryId}/complete",
             "POST /api/inventory/v1/sessions/{inventoryId}/cancel",
             "POST /api/inventory/v1/sessions/{inventoryId}/publications",
+            "POST /api/inventory/v1/sessions/{inventoryId}/outcome/recalculate",
             "POST /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/publication/retry",
             "POST /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/publication/close",
             "GET /api/inventory/v1/statistics/sessions",
@@ -100,6 +102,42 @@ class InventoryContractSchemaTest {
             "displayCanonicalNumber,asc",
             "displayCanonicalNumber,desc");
     assertAllLocalReferencesResolve(document, document);
+  }
+
+  @Test
+  void refreshContractCarriesTheManageFenceAndIdempotentSessionResponse() throws Exception {
+    Map<String, Object> document = yaml("openapi/inventory-service.yaml");
+    Map<String, Object> operation =
+        child(
+            child(
+                child(document, "paths"),
+                "/api/inventory/v1/sessions/{inventoryId}/refresh"),
+            "post");
+
+    assertThat(operation.get("operationId")).isEqualTo("refreshInventorySession");
+    assertThat(operation.get("description").toString())
+        .contains("USER", "rwms.write", "MANAGE", "retained");
+    assertThat((List<?>) operation.get("parameters"))
+        .anySatisfy(
+            parameter ->
+                assertThat(map(parameter).get("$ref"))
+                    .isEqualTo("#/components/parameters/IdempotencyKey"));
+    assertThat(
+            child(
+                    child(child(child(operation, "requestBody"), "content"), "application/json"),
+                    "schema")
+                .get("$ref"))
+        .isEqualTo("#/components/schemas/RefreshSessionRequest");
+    assertThat(child(child(operation, "responses"), "200").get("$ref"))
+        .isEqualTo("#/components/responses/SessionDetailIdempotentResponse");
+
+    Map<String, Object> request =
+        child(child(child(document, "components"), "schemas"), "RefreshSessionRequest");
+    assertThat(request.get("additionalProperties")).isEqualTo(false);
+    assertThat(stringList(request.get("required"))).containsExactly("expectedSessionRevision");
+    assertThat(
+            child(child(request, "properties"), "expectedSessionRevision").get("minimum"))
+        .isEqualTo(0);
   }
 
   @Test
@@ -212,6 +250,28 @@ class InventoryContractSchemaTest {
   }
 
   @Test
+  void authoritativeOutcomeRecoveryRequiresEveryImmutableFence() throws Exception {
+    JsonSchema request = openApiSchema("RecalculateInventoryOutcomeRequest");
+    ObjectNode valid =
+        (ObjectNode)
+            JSON.readTree(
+                """
+                {"expectedSessionRevision":7,"finalPlanVersion":2,
+                 "finalPlanSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+                """);
+    assertThat(request.validate(valid)).isEmpty();
+    for (String required :
+        List.of("expectedSessionRevision", "finalPlanVersion", "finalPlanSha256")) {
+      ObjectNode missing = valid.deepCopy();
+      missing.remove(required);
+      assertThat(request.validate(missing)).isNotEmpty();
+    }
+    ObjectNode extra = valid.deepCopy();
+    extra.put("force", true);
+    assertThat(request.validate(extra)).isNotEmpty();
+  }
+
+  @Test
   void publicationSessionDetailAndStatisticsSchemasRejectImpossibleCombinations()
       throws Exception {
     JsonSchema publish = openApiSchema("PublishFindingsRequest");
@@ -294,7 +354,10 @@ class InventoryContractSchemaTest {
               "publicationRevision":2,"state":"SUCCEEDED","sourceRevision":1,
               "attemptCount":1,"finalPlanVersion":1,
               "targetKind":null,"targetId":null,"maintenanceEstimateId":null,
-              "maintenanceRepairId":null,"maintenanceOutcome":"MATCHED",
+              "maintenanceRepairId":null,"desiredAssetStatus":"REPAIR",
+              "effectiveAssetVersion":8,
+              "assetOutcomeResult":{"assetVersion":8,"status":"REPAIR"},
+              "maintenanceOutcome":"MATCHED",
               "maintenanceResult":{
                 "source":{"inventoryId":"00000000-0000-0000-0000-000000000762"},
                 "outcome":"MATCHED","targetKind":null,"targetId":null,

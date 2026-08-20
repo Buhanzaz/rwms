@@ -47,6 +47,8 @@ import tools.jackson.databind.node.ObjectNode;
  */
 @Service
 final class InventoryReviewService extends InventoryReviewWorkflowSupport {
+  private final InventoryFindingPersistenceService findingPersistence;
+
   InventoryReviewService(
       InventorySessionRepository sessions,
       InventoryFindingRepository findings,
@@ -55,6 +57,7 @@ final class InventoryReviewService extends InventoryReviewWorkflowSupport {
       InventoryDependencyGateway dependencies,
       InventoryIdempotencyPort idempotency,
       InventoryFindingValidationService validationService,
+      InventoryFindingPersistenceService findingPersistence,
       ObjectMapper mapper,
       InventoryCanonicalJsonPort canonicalJson,
       InventoryAuthorizer authorizer,
@@ -71,6 +74,7 @@ final class InventoryReviewService extends InventoryReviewWorkflowSupport {
         canonicalJson,
         authorizer,
         transactionManager);
+    this.findingPersistence = findingPersistence;
   }
 
   public RegistryReviewView registryReview(
@@ -153,6 +157,10 @@ final class InventoryReviewService extends InventoryReviewWorkflowSupport {
     return furnitureReviewView(session);
   }
 
+  /**
+   * Saves furniture observations and carries each finding's exact prior-revision media set to the
+   * resulting non-media revision in the same transaction.
+   */
   public FurnitureReviewView saveFurnitureReview(
       Jwt jwt, UUID inventoryId, SaveFurnitureReviewRequest request) {
     InventorySession session =
@@ -191,21 +199,30 @@ final class InventoryReviewService extends InventoryReviewWorkflowSupport {
                   throw InventoryException.conflict("Furniture review finding revision is stale");
                 }
               }
+              Map<UUID, Long> mediaSourceRevisions = new LinkedHashMap<>();
               for (Map.Entry<UUID, FurnitureObservation> observation :
                   submission.equipmentObservationByFinding().entrySet()) {
                 InventoryFinding finding = byId.get(observation.getKey());
                 if (finding == null) {
                   throw InventoryException.conflict("Furniture review finding is no longer active");
                 }
+                mediaSourceRevisions.put(finding.getId(), finding.getRevision());
                 finding.saveFurnitureObservation(
                     observation.getValue().presence(),
                     observation.getValue().body(),
                     actorJson(jwt));
               }
-              findings.saveAllAndFlush(
+              List<InventoryFinding> reviewedFindings =
                   submission.equipmentObservationByFinding().keySet().stream()
                       .map(byId::get)
-                      .toList());
+                      .toList();
+              findings.saveAllAndFlush(reviewedFindings);
+              for (InventoryFinding finding : reviewedFindings) {
+                findingPersistence.carryForwardMediaReferences(
+                    finding.getId(),
+                    mediaSourceRevisions.get(finding.getId()),
+                    finding.getRevision());
+              }
               locked.confirmFurnitureReview(
                   request.assetSnapshotSha256(),
                   submission.reviewSha256(),
@@ -546,7 +563,10 @@ final class InventoryReviewService extends InventoryReviewWorkflowSupport {
     for (JsonNode observation : observations) {
       if (equipmentId.toString().equals(observation.path("equipmentId").asText())
           && catalogVersion == observation.path("catalogVersion").asLong(Long.MIN_VALUE)) {
-        return nonNegativeLong(observation.path("observedQuantity"));
+        JsonNode canonicalQuantity = observation.get("quantity");
+        return canonicalQuantity == null || canonicalQuantity.isNull()
+            ? nonNegativeLong(observation.path("observedQuantity"))
+            : nonNegativeLong(canonicalQuantity);
       }
     }
     return Optional.empty();

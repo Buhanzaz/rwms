@@ -110,6 +110,8 @@ rwms:
       warehouse-base-url: ${WAREHOUSE_INTERNAL_BASE_URL:}
       asset-base-url: ${ASSET_INTERNAL_BASE_URL:}
       maintenance-base-url: ${MAINTENANCE_INTERNAL_BASE_URL:}
+      logistics-base-url: ${LOGISTICS_INTERNAL_BASE_URL:}
+      media-base-url: ${MEDIA_INTERNAL_BASE_URL:}
       connect-timeout: ${INVENTORY_CONNECT_TIMEOUT:2s}
       read-timeout: ${INVENTORY_READ_TIMEOUT:5s}
     eventing:

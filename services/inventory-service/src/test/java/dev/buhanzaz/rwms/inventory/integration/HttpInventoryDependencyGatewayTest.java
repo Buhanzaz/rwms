@@ -55,6 +55,26 @@ class HttpInventoryDependencyGatewayTest {
   private final AtomicReference<String> secondFreezePlanIdempotencyKey = new AtomicReference<>();
   private final AtomicReference<String> firstFreezePlanBody = new AtomicReference<>();
   private final AtomicReference<String> secondFreezePlanBody = new AtomicReference<>();
+  private final AtomicInteger preflightCalls = new AtomicInteger();
+  private final AtomicReference<Integer> firstPreflightStatus = new AtomicReference<>();
+  private final AtomicReference<String> firstPreflightResponse = new AtomicReference<>();
+  private final AtomicReference<String> firstPreflightIdempotencyKey = new AtomicReference<>();
+  private final AtomicReference<String> secondPreflightIdempotencyKey = new AtomicReference<>();
+  private final AtomicReference<String> firstPreflightAuthorization = new AtomicReference<>();
+  private final AtomicReference<String> secondPreflightAuthorization = new AtomicReference<>();
+  private final AtomicReference<String> firstPreflightBody = new AtomicReference<>();
+  private final AtomicReference<String> secondPreflightBody = new AtomicReference<>();
+  private final AtomicInteger mediaPublicationCalls = new AtomicInteger();
+  private final AtomicReference<Integer> mediaPublicationStatus = new AtomicReference<>();
+  private final AtomicReference<String> mediaPublicationAuthorization = new AtomicReference<>();
+  private final AtomicReference<String> mediaPublicationIdempotencyKey = new AtomicReference<>();
+  private final AtomicReference<String> mediaPublicationBody = new AtomicReference<>();
+  private final AtomicReference<String> logisticsAuthorization = new AtomicReference<>();
+  private final AtomicReference<String> logisticsIdempotencyKey = new AtomicReference<>();
+  private final AtomicReference<String> logisticsBody = new AtomicReference<>();
+  private final AtomicReference<String> noWorkAuthorization = new AtomicReference<>();
+  private final AtomicReference<String> noWorkIdempotencyKey = new AtomicReference<>();
+  private final AtomicReference<String> noWorkBody = new AtomicReference<>();
   private final UUID cabinId = UUID.randomUUID();
   private HttpServer server;
   private HttpInventoryDependencyGateway gateway;
@@ -68,6 +88,26 @@ class HttpInventoryDependencyGatewayTest {
     secondFreezePlanIdempotencyKey.set(null);
     firstFreezePlanBody.set(null);
     secondFreezePlanBody.set(null);
+    preflightCalls.set(0);
+    firstPreflightStatus.set(null);
+    firstPreflightResponse.set(null);
+    firstPreflightIdempotencyKey.set(null);
+    secondPreflightIdempotencyKey.set(null);
+    firstPreflightAuthorization.set(null);
+    secondPreflightAuthorization.set(null);
+    firstPreflightBody.set(null);
+    secondPreflightBody.set(null);
+    mediaPublicationCalls.set(0);
+    mediaPublicationStatus.set(null);
+    mediaPublicationAuthorization.set(null);
+    mediaPublicationIdempotencyKey.set(null);
+    mediaPublicationBody.set(null);
+    logisticsAuthorization.set(null);
+    logisticsIdempotencyKey.set(null);
+    logisticsBody.set(null);
+    noWorkAuthorization.set(null);
+    noWorkIdempotencyKey.set(null);
+    noWorkBody.set(null);
     server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     server.createContext(
         "/api/internal/asset/v1/inventory/number-resolutions", this::resolveNumber);
@@ -76,9 +116,20 @@ class HttpInventoryDependencyGatewayTest {
     server.createContext(
         "/api/internal/asset/v1/inventory/validations", this::validateAssets);
     server.createContext(
+        "/api/internal/asset/v1/inventory/outcomes", this::applyInventoryOutcome);
+    server.createContext(
+        "/api/internal/media/v1/inventory/outcomes", this::publishInventoryCabinPhotos);
+    server.createContext(
+        "/api/internal/logistics/v1/inventory/outcomes", this::applyLogisticsOutcomes);
+    server.createContext(
+        "/api/internal/maintenance/v1/inventory/outcomes", this::applyNoWorkDisposition);
+    server.createContext(
         "/api/internal/maintenance/v1/inventory/repair-snapshots", this::repairSnapshots);
     server.createContext(
         "/api/internal/maintenance/v1/inventory/reconciliations", this::applyReconciliation);
+    server.createContext(
+        "/api/internal/maintenance/v1/inventory/reconciliations/preflight",
+        this::preflightReconciliation);
     server.createContext(
         "/api/internal/maintenance/v1/inventory/dispositions", this::createLossDisposition);
     server.createContext(
@@ -108,6 +159,18 @@ class HttpInventoryDependencyGatewayTest {
                         "inventory-maintenance",
                         "inventory-maintenance-token",
                         "maintenance.inventory");
+                case "inventory-logistics" ->
+                    authorizedClient(
+                        base,
+                        "inventory-logistics",
+                        "inventory-logistics-token",
+                        "logistics.inventory");
+                case "inventory-media" ->
+                    authorizedClient(
+                        base,
+                        "inventory-media",
+                        "inventory-media-token",
+                        "media.inventory");
                 case "inventory-warehouse-lifecycle-read" ->
                     authorizedClient(
                         base,
@@ -142,6 +205,8 @@ class HttpInventoryDependencyGatewayTest {
             URI.create(base + "/oauth2/token"),
             "inventory-service",
             "secret",
+            URI.create(base),
+            URI.create(base),
             URI.create(base),
             URI.create(base),
             URI.create(base),
@@ -298,6 +363,151 @@ class HttpInventoryDependencyGatewayTest {
   }
 
   @Test
+  void appliesAuthoritativeAssetOutcomeWithExactPrivateIdentity() throws Exception {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    UUID key = UUID.randomUUID();
+    JsonNode request =
+        mapper.readTree(
+            """
+            {"warehouseId":"00000000-0000-0000-0000-000000000701",
+             "assetId":"%s","inventoryCompletedAt":"2026-08-19T08:00:00Z",
+             "finalPlanVersion":2,"finalPlanSha256":"%s","findingRevision":4,
+             "desiredStatus":"CAPITAL_REPAIR",
+             "passportObservation":{"presence":"ABSENT","value":null},
+             "passportObservationSha256":"%s"}
+            """.formatted(assetId, "a".repeat(64), "b".repeat(64)));
+
+    InventoryDependencyGateway.InventoryAssetOutcome result =
+        gateway.applyInventoryOutcome(inventoryId, findingId, key, request);
+
+    assertThat(result.inventoryId()).isEqualTo(inventoryId);
+    assertThat(result.findingId()).isEqualTo(findingId);
+    assertThat(result.assetId()).isEqualTo(assetId);
+    assertThat(result.assetVersion()).isEqualTo(12);
+    assertThat(result.status()).isEqualTo("CAPITAL_REPAIR");
+    assertThat(result.releasedOrderUnitReservationIds()).hasSize(1);
+    assertThat(result.releasedOperationLeaseIds()).isEmpty();
+    assertThat(result.releasedPresentationHoldIds()).isEmpty();
+    assertThat(result.transferSuperseded()).isTrue();
+    assertThat(idempotencyKey.get()).isEqualTo(key.toString());
+    assertThat(authorization.get()).isEqualTo("Bearer inventory-asset-token");
+    assertThat(mapper.readTree(requestBody.get())).isEqualTo(request);
+  }
+
+  @Test
+  void publishesExactCompletedFindingPhotosWithMediaInventoryIdentity() throws Exception {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID mediaId = UUID.randomUUID();
+    UUID key = UUID.randomUUID();
+    JsonNode request =
+        mapper.readTree(
+            """
+            {"warehouseId":"%s","cabinId":"%s","completedAt":"2026-08-19T08:00:00Z",
+             "sourceRevision":4,"finalPlanVersion":2,"finalPlanSha256":"%s",
+             "coverMediaId":"%s","mediaReferences":[{"mediaId":"%s","generation":3}]}
+            """
+                .formatted(warehouseId, cabinId, "a".repeat(64), mediaId, mediaId));
+
+    InventoryDependencyGateway.InventoryCabinPhotoOutcome result =
+        gateway.publishInventoryCabinPhotos(inventoryId, findingId, key, request);
+
+    assertThat(result.inventoryId()).isEqualTo(inventoryId);
+    assertThat(result.findingId()).isEqualTo(findingId);
+    assertThat(result.cabinId()).isEqualTo(cabinId);
+    assertThat(result.folderId()).isNotNull();
+    assertThat(result.coverMediaId()).isEqualTo(mediaId);
+    assertThat(result.photoCount()).isOne();
+    assertThat(result.libraryVersion()).isEqualTo(7);
+    assertThat(result.replay()).isFalse();
+    assertThat(mediaPublicationCalls.get()).isOne();
+    assertThat(mediaPublicationAuthorization.get()).isEqualTo("Bearer inventory-media-token");
+    assertThat(mediaPublicationIdempotencyKey.get()).isEqualTo(key.toString());
+    assertThat(mapper.readTree(mediaPublicationBody.get())).isEqualTo(request);
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {400, 409, 422, 500})
+  void mapsInventoryCabinPhotoPublicationProblemsWithoutFabricatingSuccess(int status) {
+    mediaPublicationStatus.set(status);
+    String expectedMessage =
+        switch (status) {
+          case 409 -> "Dependency rejected stale inventory state";
+          case 400, 422 -> "Dependency rejected invalid inventory input";
+          default -> "Mandatory inventory dependency is unavailable";
+        };
+
+    assertThatThrownBy(
+            () ->
+                gateway.publishInventoryCabinPhotos(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    mapper.createObjectNode()))
+        .isInstanceOf(InventoryException.class)
+        .hasMessage(expectedMessage);
+
+    assertThat(mediaPublicationCalls.get()).isOne();
+    assertThat(mediaPublicationAuthorization.get()).isEqualTo("Bearer inventory-media-token");
+  }
+
+  @Test
+  void appliesExactCompletedPlanToLogisticsWithOneScopedIdentity() throws Exception {
+    UUID inventoryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    UUID key = UUID.randomUUID();
+    JsonNode request =
+        mapper.readTree(
+            """
+            {"warehouseId":"%s","inventoryCompletedAt":"2026-08-19T08:00:00Z",
+             "finalPlanVersion":2,"finalPlanSha256":"%s","outcomes":[
+               {"findingId":"%s","assetId":"%s","desiredStatus":"REPAIR"}]}
+            """
+                .formatted(warehouseId, "a".repeat(64), findingId, assetId));
+
+    JsonNode result = gateway.applyLogisticsOutcomes(inventoryId, key, request);
+
+    assertThat(result.path("inventoryId").asText()).isEqualTo(inventoryId.toString());
+    assertThat(result.path("finalPlanVersion").asLong()).isEqualTo(2);
+    assertThat(result.path("supersededLineCount").asLong()).isOne();
+    assertThat(logisticsAuthorization.get()).isEqualTo("Bearer inventory-logistics-token");
+    assertThat(logisticsIdempotencyKey.get()).isEqualTo(key.toString());
+    assertThat(mapper.readTree(logisticsBody.get())).isEqualTo(request);
+  }
+
+  @Test
+  void appliesFreeOutcomeToMaintenanceNoWorkBoundary() throws Exception {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    UUID key = UUID.randomUUID();
+    JsonNode request =
+        mapper.readTree(
+            """
+            {"warehouseId":"00000000-0000-0000-0000-000000000701",
+             "assetId":"%s","inventoryCompletedAt":"2026-08-19T08:00:00Z",
+             "finalPlanVersion":2,"finalPlanSha256":"%s","findingRevision":4,
+             "authoritativeAssetVersion":13,"desiredStatus":"FREE"}
+            """
+                .formatted(assetId, "a".repeat(64)));
+
+    JsonNode result =
+        gateway.applyNoWorkDisposition(inventoryId, findingId, key, request);
+
+    assertThat(result.path("inventoryId").asText()).isEqualTo(inventoryId.toString());
+    assertThat(result.path("findingId").asText()).isEqualTo(findingId.toString());
+    assertThat(result.path("assetId").asText()).isEqualTo(assetId.toString());
+    assertThat(noWorkAuthorization.get()).isEqualTo("Bearer inventory-maintenance-token");
+    assertThat(noWorkIdempotencyKey.get()).isEqualTo(key.toString());
+    assertThat(mapper.readTree(noWorkBody.get())).isEqualTo(request);
+  }
+
+  @Test
   void acceptsMatchedReconciliationWithoutATargetAndRejectsAnyMatchedTarget() {
     UUID inventoryId = UUID.randomUUID();
     UUID findingId = UUID.randomUUID();
@@ -431,6 +641,62 @@ class HttpInventoryDependencyGatewayTest {
 
     assertThat(freezePlanCalls.get()).isEqualTo(1);
     assertThat(secondFreezePlanIdempotencyKey.get()).isNull();
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {502, 503, 504})
+  void retriesOneTransientPreflightFailureWithTheSameRequestIdentityAndAuthorization(
+      int transientStatus) throws Exception {
+    UUID idempotencyKey = UUID.randomUUID();
+    firstPreflightStatus.set(transientStatus);
+    JsonNode request =
+        mapper.createObjectNode().put("inventoryId", UUID.randomUUID().toString());
+
+    JsonNode response = gateway.preflightReconciliation(idempotencyKey, request);
+
+    assertThat(response.path("finalPlanVersion").asLong()).isEqualTo(1);
+    assertThat(preflightCalls.get()).isEqualTo(2);
+    assertThat(firstPreflightIdempotencyKey.get()).isEqualTo(idempotencyKey.toString());
+    assertThat(secondPreflightIdempotencyKey.get()).isEqualTo(idempotencyKey.toString());
+    assertThat(firstPreflightAuthorization.get())
+        .isEqualTo("Bearer inventory-maintenance-token");
+    assertThat(secondPreflightAuthorization.get())
+        .isEqualTo("Bearer inventory-maintenance-token");
+    assertThat(mapper.readTree(firstPreflightBody.get())).isEqualTo(request);
+    assertThat(mapper.readTree(secondPreflightBody.get())).isEqualTo(request);
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {400, 422, 500})
+  void doesNotRetryNonTransientPreflightFailures(int status) {
+    firstPreflightStatus.set(status);
+    JsonNode request =
+        mapper.createObjectNode().put("inventoryId", UUID.randomUUID().toString());
+
+    assertThatThrownBy(
+            () -> gateway.preflightReconciliation(UUID.randomUUID(), request))
+        .isInstanceOf(InventoryException.class);
+
+    assertThat(preflightCalls.get()).isEqualTo(1);
+    assertThat(secondPreflightIdempotencyKey.get()).isNull();
+  }
+
+  @Test
+  void doesNotRetryMalformedSuccessfulPreflightResponse() {
+    firstPreflightResponse.set(
+        """
+        {"finalPlanSha256":"not-a-sha256","finalPlanVersion":1,"findings":[]}
+        """);
+
+    assertThatThrownBy(
+            () ->
+                gateway.preflightReconciliation(
+                    UUID.randomUUID(), mapper.createObjectNode()))
+        .isInstanceOf(InventoryException.class)
+        .hasMessage("Maintenance-service returned malformed reconciliation preflight");
+
+    assertThat(preflightCalls.get()).isEqualTo(1);
+    assertThat(secondPreflightIdempotencyKey.get()).isNull();
   }
 
   private OAuth2AuthorizedClient authorizedClient(
@@ -585,10 +851,136 @@ class HttpInventoryDependencyGatewayTest {
             .formatted(cabinId, repairId, repairId, "a".repeat(64)));
   }
 
+  private void applyInventoryOutcome(HttpExchange exchange) throws IOException {
+    authorization.set(exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+    idempotencyKey.set(exchange.getRequestHeaders().getFirst("Idempotency-Key"));
+    requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+    JsonNode request = mapper.readTree(requestBody.get());
+    String[] path = exchange.getRequestURI().getPath().split("/");
+    respond(
+        exchange,
+        200,
+        """
+        {"inventoryId":"%s","findingId":"%s","assetId":"%s","assetVersion":12,
+         "status":"%s","releasedOrderUnitReservationIds":["%s"],
+         "releasedOperationLeaseIds":[],"releasedPresentationHoldIds":[],
+         "transferSuperseded":true}
+        """
+            .formatted(
+                path[7],
+                path[9],
+                request.path("assetId").asText(),
+                request.path("desiredStatus").asText(),
+                UUID.randomUUID()));
+  }
+
+  private void publishInventoryCabinPhotos(HttpExchange exchange) throws IOException {
+    mediaPublicationCalls.incrementAndGet();
+    mediaPublicationAuthorization.set(
+        exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+    mediaPublicationIdempotencyKey.set(
+        exchange.getRequestHeaders().getFirst("Idempotency-Key"));
+    String body =
+        new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+    mediaPublicationBody.set(body);
+    Integer status = mediaPublicationStatus.get();
+    if (status != null) {
+      respond(exchange, status, "{}");
+      return;
+    }
+    JsonNode request = mapper.readTree(body);
+    String[] path = exchange.getRequestURI().getPath().split("/");
+    respond(
+        exchange,
+        200,
+        """
+        {"inventoryId":"%s","findingId":"%s","cabinId":"%s","folderId":"%s",
+         "coverMediaId":"%s","photoCount":%d,"libraryVersion":7,"replay":false}
+        """
+            .formatted(
+                path[7],
+                path[9],
+                request.path("cabinId").asText(),
+                UUID.randomUUID(),
+                request.path("coverMediaId").asText(),
+                request.path("mediaReferences").size()));
+  }
+
+  private void applyLogisticsOutcomes(HttpExchange exchange) throws IOException {
+    logisticsAuthorization.set(exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+    logisticsIdempotencyKey.set(exchange.getRequestHeaders().getFirst("Idempotency-Key"));
+    String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+    logisticsBody.set(body);
+    JsonNode request = mapper.readTree(body);
+    String[] path = exchange.getRequestURI().getPath().split("/");
+    respond(
+        exchange,
+        200,
+        """
+        {"inventoryId":"%s","finalPlanVersion":%d,"supersededDocumentIds":["%s"],
+         "supersededRentalOrderIds":[],"cancelledDriverTaskIds":[],
+         "supersededLineCount":1,"supersededRentalUnitCount":0,"replay":false}
+        """
+            .formatted(
+                path[7], request.path("finalPlanVersion").asLong(), UUID.randomUUID()));
+  }
+
+  private void applyNoWorkDisposition(HttpExchange exchange) throws IOException {
+    noWorkAuthorization.set(exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+    noWorkIdempotencyKey.set(exchange.getRequestHeaders().getFirst("Idempotency-Key"));
+    String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+    noWorkBody.set(body);
+    JsonNode request = mapper.readTree(body);
+    String[] path = exchange.getRequestURI().getPath().split("/");
+    respond(
+        exchange,
+        200,
+        """
+        {"inventoryId":"%s","findingId":"%s","assetId":"%s",
+         "supersededEstimateIds":[],"supersededRepairIds":["%s"],
+         "cancelledExternalTaskIds":[],"cancelledDriverTaskIds":[],
+         "releasedLeaseIds":[],"replay":false}
+        """
+            .formatted(
+                path[7], path[9], request.path("assetId").asText(), UUID.randomUUID()));
+  }
+
   private void applyReconciliation(HttpExchange exchange) throws IOException {
     authorization.set(exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION));
     requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
     respond(exchange, 200, reconciliationResponse.get());
+  }
+
+  private void preflightReconciliation(HttpExchange exchange) throws IOException {
+    int call = preflightCalls.incrementAndGet();
+    String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+    String key = exchange.getRequestHeaders().getFirst("Idempotency-Key");
+    String bearer = exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION);
+    if (call == 1) {
+      firstPreflightIdempotencyKey.set(key);
+      firstPreflightAuthorization.set(bearer);
+      firstPreflightBody.set(body);
+      Integer status = firstPreflightStatus.get();
+      if (status != null) {
+        respond(exchange, status, "{}");
+        return;
+      }
+      String response = firstPreflightResponse.get();
+      if (response != null) {
+        respond(exchange, 200, response);
+        return;
+      }
+    } else {
+      secondPreflightIdempotencyKey.set(key);
+      secondPreflightAuthorization.set(bearer);
+      secondPreflightBody.set(body);
+    }
+    respond(
+        exchange,
+        200,
+        """
+        {"finalPlanSha256":"%s","finalPlanVersion":1,"findings":[]}
+        """.formatted("a".repeat(64)));
   }
 
   private void createLossDisposition(HttpExchange exchange) throws IOException {

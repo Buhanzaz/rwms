@@ -5,6 +5,7 @@ import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.*;
 import dev.buhanzaz.rwms.inventory.domain.InventoryExpectedItem;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinding;
 import dev.buhanzaz.rwms.inventory.domain.InventorySession;
+import dev.buhanzaz.rwms.inventory.domain.SessionLifecycle;
 import dev.buhanzaz.rwms.inventory.eventing.InventoryEventStore;
 import dev.buhanzaz.rwms.inventory.integration.InventoryDependencyGateway;
 import dev.buhanzaz.rwms.inventory.repository.InventoryExpectedItemRepository;
@@ -17,7 +18,9 @@ import dev.buhanzaz.rwms.platform.contracts.OpaqueActorReference;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -53,6 +56,8 @@ final class InventorySessionService extends InventorySessionWorkflowSupport {
       InventoryIdempotencyPort idempotency,
       InventoryStartPersistencePort startPersistence,
       InventoryFindingService findingService,
+      InventoryReviewService reviewService,
+      InventoryPlanningService planningService,
       InventoryProjectionService projectionService,
       ObjectMapper mapper,
       InventoryCanonicalJsonPort canonicalJson,
@@ -72,7 +77,12 @@ final class InventorySessionService extends InventorySessionWorkflowSupport {
         canonicalJson,
         authorizer,
         transactionManager);
+    this.reviewService = reviewService;
+    this.planningService = planningService;
   }
+
+  private final InventoryReviewService reviewService;
+  private final InventoryPlanningService planningService;
 
   public SessionView start(Jwt jwt, UUID idempotencyKey, StartSessionRequest request) {
     authorizer.requireEdit(jwt, request.warehouseId());
@@ -84,6 +94,146 @@ final class InventorySessionService extends InventorySessionWorkflowSupport {
         HttpStatus.CREATED.value(),
         SessionView.class,
         () -> doStart(jwt, idempotencyKey, request));
+  }
+
+  /**
+   * Rebuilds one active session's membership from a fresh read-only asset capture.
+   *
+   * <p>The initial revision is checked before the remote capture, then checked again under the
+   * idempotent local transaction's session lock. Captured and locally active asset identities pass
+   * through the same membership transitions as asset events, preserving findings, inspections,
+   * media and movement history.
+   */
+  public SessionView refresh(
+      Jwt jwt, UUID inventoryId, UUID idempotencyKey, RefreshSessionRequest request) {
+    if (request == null
+        || request.expectedSessionRevision() == null
+        || request.expectedSessionRevision() < 0) {
+      throw new IllegalArgumentException("Inventory refresh revision is required");
+    }
+    InventorySession initial = requireScopedSession(inventoryId, authorizer.manageScope(jwt));
+    authorizer.requireManage(jwt, initial.getWarehouseId());
+    Map<String, Object> command = Map.of("inventoryId", inventoryId, "request", request);
+    String initialConflict =
+        initial.getLifecycle() != SessionLifecycle.ACTIVE
+            ? "Inventory session is not active"
+            : initial.getRevision() != request.expectedSessionRevision()
+                ? "Inventory revision is stale"
+                : null;
+    if (initialConflict != null) {
+      return idempotency.execute(
+          authorizer.subjectId(jwt),
+          "session.refresh",
+          idempotencyKey,
+          command,
+          HttpStatus.OK.value(),
+          SessionView.class,
+          () -> {
+            throw InventoryException.conflict(initialConflict);
+          });
+    }
+
+    UUID operationId = UUID.randomUUID();
+    String requestFingerprint = canonicalHash(command);
+    InventoryDependencyGateway.Capture capture =
+        dependencies.createCapture(
+            UUID.randomUUID(),
+            new InventoryDependencyGateway.CaptureRequest(
+                operationId, 1, requestFingerprint, initial.getWarehouseId()));
+    try {
+      requireRefreshCapture(capture, operationId, initial.getWarehouseId());
+      List<InventoryDependencyGateway.CaptureMember> capturedMembers = copyCapture(capture);
+      return idempotency.execute(
+          authorizer.subjectId(jwt),
+          "session.refresh",
+          idempotencyKey,
+          command,
+          HttpStatus.OK.value(),
+          SessionView.class,
+          () ->
+              applyRefresh(
+                  jwt,
+                  inventoryId,
+                  request,
+                  operationId,
+                  capturedMembers));
+    } finally {
+      releaseRefreshCapture(capture == null ? null : capture.captureId());
+    }
+  }
+
+  private SessionView applyRefresh(
+      Jwt jwt,
+      UUID inventoryId,
+      RefreshSessionRequest request,
+      UUID operationId,
+      List<InventoryDependencyGateway.CaptureMember> capturedMembers) {
+    InventorySession locked = requireActiveForUpdate(inventoryId);
+    authorizer.requireManage(jwt, locked.getWarehouseId());
+    expectRevision(locked.getRevision(), request.expectedSessionRevision());
+    findingService.reconcileCapturedMembership(
+        locked,
+        capturedMembers,
+        actor(jwt),
+        correlationId(),
+        operationId,
+        OffsetDateTime.now(ZoneOffset.UTC));
+    reviewService.invalidateFurnitureReviewAfterCabinChange(locked);
+    planningService.invalidateFinalPlan(locked);
+    locked.touch();
+    return projectionService.sessionView(sessions.saveAndFlush(locked));
+  }
+
+  private InventorySession requireScopedSession(
+      UUID inventoryId, InventoryAuthorizer.WarehouseScope scope) {
+    if (!scope.unrestricted() && scope.warehouseIds().isEmpty()) {
+      throw InventoryException.notFound("Inventory session not found");
+    }
+    return (scope.unrestricted()
+            ? sessions.findById(inventoryId)
+            : sessions.findByIdAndWarehouseIdIn(inventoryId, scope.warehouseIds()))
+        .orElseThrow(() -> InventoryException.notFound("Inventory session not found"));
+  }
+
+  private InventorySession requireActiveForUpdate(UUID inventoryId) {
+    return sessions
+        .findByIdAndLifecycleForUpdate(inventoryId, SessionLifecycle.ACTIVE)
+        .orElseThrow(
+            () ->
+                sessions.existsById(inventoryId)
+                    ? InventoryException.conflict("Inventory session is not active")
+                    : InventoryException.notFound("Inventory session not found"));
+  }
+
+  private void expectRevision(long actual, long expected) {
+    if (actual != expected) {
+      throw InventoryException.conflict("Inventory revision is stale");
+    }
+  }
+
+  private void requireRefreshCapture(
+      InventoryDependencyGateway.Capture capture, UUID operationId, UUID warehouseId) {
+    if (capture == null
+        || capture.captureId() == null
+        || !operationId.equals(capture.operationId())
+        || capture.technicalAttempt() != 1
+        || !warehouseId.equals(capture.warehouseId())
+        || capture.totalCount() < 0
+        || capture.membershipDigest() == null
+        || !capture.membershipDigest().matches("^[0-9a-f]{64}$")) {
+      throw InventoryException.dependency("Asset-service returned malformed refresh capture");
+    }
+  }
+
+  private void releaseRefreshCapture(UUID captureId) {
+    if (captureId == null) {
+      return;
+    }
+    try {
+      dependencies.releaseCapture(captureId);
+    } catch (RuntimeException exception) {
+      log.warn("Could not release read-only refresh capture {}", captureId, exception);
+    }
   }
 
   private SessionView doStart(Jwt jwt, UUID idempotencyKey, StartSessionRequest request) {

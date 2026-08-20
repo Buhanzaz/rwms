@@ -94,6 +94,24 @@ final class DisabledInventoryDependencyGateway implements InventoryDependencyGat
   }
 
   @Override
+  public InventoryAssetOutcome applyInventoryOutcome(
+      UUID inventoryId, UUID findingId, UUID idempotencyKey, JsonNode request) {
+    throw unavailable();
+  }
+
+  @Override
+  public InventoryCabinPhotoOutcome publishInventoryCabinPhotos(
+      UUID inventoryId, UUID findingId, UUID idempotencyKey, JsonNode request) {
+    throw unavailable();
+  }
+
+  @Override
+  public JsonNode applyLogisticsOutcomes(
+      UUID inventoryId, UUID idempotencyKey, JsonNode request) {
+    throw unavailable();
+  }
+
+  @Override
   public InventoryLossDisposition createInventoryLossDisposition(
       UUID idempotencyKey, InventoryLossDispositionRequest request) {
     throw unavailable();
@@ -111,6 +129,12 @@ final class DisabledInventoryDependencyGateway implements InventoryDependencyGat
 
   @Override
   public JsonNode applyReconciliation(
+      UUID inventoryId, UUID findingId, UUID key, JsonNode request) {
+    throw unavailable();
+  }
+
+  @Override
+  public JsonNode applyNoWorkDisposition(
       UUID inventoryId, UUID findingId, UUID key, JsonNode request) {
     throw unavailable();
   }

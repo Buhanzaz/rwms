@@ -23,6 +23,28 @@ completion/statistics, final planning, а также publication intent, attempt
 команды используют определённые контрактом expected-version и idempotency fields; вызывающая
 сторона должна обработать канонический конфликт `409`, а не отправлять изменившийся повтор.
 
+`POST /api/inventory/v1/sessions/{inventoryId}/refresh` — MANAGE-команда восстановления активной
+сессии, в которой устарел живой состав бытовок или производная сверка. Она проверяет переданную
+ревизию сессии до свежего read-only asset capture и повторно под локальной блокировкой применения.
+Удалённое чтение capture завершается до idempotent local transaction, которая проводит приходы,
+уходы и текущие snapshots через штатный membership journal. Сохранённые findings, inspection
+evidence, ссылки на media и история перемещений остаются без изменений; перезапускается только
+производная сверка мебели, а существующий итоговый план помечается устаревшим. При построении
+сверки читается активное клиентское наблюдение `quantity`, а `observedQuantity` сохраняется для
+совместимости с уже записанными фактами сверки. Публичный refresh-контракт не добавляет поле схемы.
+
+Media finding — неизменяемое evidence конкретной ревизии. Workflow, который повышает ревизию
+finding без редактирования фотографий — сверка membership/current snapshot,
+привязка созданного source asset, разрешение конфликта, подтверждение мебели или закрытие owner proof — в той же
+local transaction переносит в новую ревизию точный набор media из непосредственно предыдущей ревизии.
+Сохранение осмотра остаётся отдельным случаем: оно записывает ровно переданный набор, поэтому намеренно
+пустой набор остаётся пустым. Миграция
+[`V18__carry_forward_inventory_finding_media.sql`](src/main/resources/db/migration/V18__carry_forward_inventory_finding_media.sql)
+исправляет прежний сдвиг ревизий только когда ненулевое cover photo доказывает, что у текущего
+finding должны быть media, у текущей ревизии их нет, а предыдущий точный набор содержит это cover.
+Она копирует целиком самый новый такой набор без union, удаления, перезаписи media objects или
+изменения версии finding.
+
 Интерактивные panel и Android-клиенты обращаются к этому namespace только через публичный маршрут
 `/api/inventory/**` в `api-gateway-service`. Им нельзя напрямую вызывать host этого модуля или
 любой private dependency route.
@@ -30,6 +52,70 @@ completion/statistics, final planning, а также publication intent, attempt
 У inventory нет публичного client route для asset, warehouse, maintenance или media mutations. Он
 вызывает их узкие private boundaries с service credentials после того, как собственные local workflow
 records стали durable.
+
+Подготовка итогового плана использует read-only preflight публикации maintenance. Inventory
+повторяет этот запрос не более одного раза, с теми же body, idempotency key и service token, только
+после transport failure либо HTTP `502`, `503` или `504`. Validation, conflict, authentication,
+прочие server и malformed-response failures остаются fail-closed и не повторяются.
+
+## Авторитетный итог завершённой инвентаризации и восстановление из истории
+
+Каждый finding завершённого итогового плана имеет durable publication intent, включая findings без
+ремонтных работ. После успешной сверки мебели recovery scheduler сначала применяет точный итог
+через asset-service: отсутствие работ означает `FREE`, обычные работы — `REPAIR`, а явный выбор
+капремонта — `CAPITAL_REPAIR`. Asset-service единолично атомарно освобождает или замещает active
+order-unit reservations, operation leases, presentation holds и transfer state. Их история
+сохраняется, а терминальные бытовки `LOST` и `WRITTEN_OFF` отклоняются.
+Каждый publication intent итогового плана также замораживает точное наблюдение паспорта finding при
+завершении. Revision исходного finding и asset должны совпадать с immutable entry итогового плана.
+`ABSENT` отправляется как явная команда сохранить текущий паспорт; `PRESENT` нормализуется в шесть
+asset-owned facets: тип аренды, габариты, отделку, категорию, разделённые по запятым уникальные
+характеристики и nullable-линолеум. Отсутствующее поле характеристик становится точным пустым
+набором, а отсутствующий или не-boolean линолеум — `null`. Нормализованное наблюдение и его
+канонический SHA-256 входят в asset outcome и поэтому в durable fingerprint запроса публикации.
+См.
+[`InventoryPublicationIntent`](src/main/java/dev/buhanzaz/rwms/inventory/domain/InventoryPublicationIntent.java)
+и
+[`InventoryPublicationService`](src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryPublicationService.java).
+Только после сохранения этого результата inventory отправляет в media-service точные `IMAGE`
+references ревизии finding
+из итогового плана, используя тот же idempotency key попытки публикации и узкий токен
+`media.inventory`. Media-service делает папку завершённой инвентаризации текущим набором фото
+бытовки; прежние папки приёмки или инвентаризаций остаются отдельным историческим evidence и не
+смешиваются с текущим набором. Для finding без изображений этот эффект пропускается. Затем
+inventory передаёт весь неизменяемый итоговый план в logistics-service с одним стабильным для
+плана key и точным токеном `logistics.inventory`. Logistics замещает active rental, shipment,
+transfer и driver-task state перечисленных бытовок, сохраняя audit rows. В конце finding с работами
+передаётся в maintenance вместе с эффективной версией asset и временем завершения: maintenance
+авторитетно замещает прежние active ремонтные работы перед созданием требуемого ремонта или
+капремонта. Finding без работ идёт в отдельную no-work границу maintenance, которая замещает active
+estimates, repairs, leases и tasks, а не только меняет статус бытовки. No-work payload явно
+проецируется из результата asset и содержит только поля maintenance-контракта; asset-only поля
+наблюдения паспорта и его hash через эту границу не передаются. Отказ любого обязательного
+эффекта не позволяет отметить публикацию успешной, поэтому recovery повторно подтверждает asset,
+media, общий эффект logistics и maintenance именно в таком порядке. Этот поток никогда не удаляет
+фотографии, evidence finding, доменную историю и объекты media-service/MinIO.
+
+`POST /api/inventory/v1/sessions/{inventoryId}/outcome/recalculate` — MANAGE-команда восстановления
+для строки истории завершённых инвентаризаций. Она проверяет точные revision session, version
+итогового плана и SHA-256, не делает remote I/O и возвращает `202` после восстановления durable
+работы. Команда создаёт недостающие intents для статуса/бытовок без работ и повторно ставит в
+очередь каждую существующую публикацию, включая ранее помеченные successful: старые версии runtime
+не могут доказать выполнение более новых logistics, media и no-work эффектов. Она также делает
+незавершённую сверку мебели немедленно доступной для повтора. Attempts и прежние результаты
+maintenance остаются append-only audit evidence; schedulers применяют очередь со стабильной
+idempotency. Поэтому compatibility-поле `preservedSucceededPublicationCount` для текущей
+авторитетной команды равно нулю. Миграция
+[`V19__authoritative_inventory_outcome_recovery.sql`](src/main/resources/db/migration/V19__authoritative_inventory_outcome_recovery.sql)
+добавляет желаемый статус и сохранённый asset result без удаления прежней истории публикации.
+Миграция
+[`V23__freeze_inventory_outcome_passport_observation.sql`](src/main/resources/db/migration/V23__freeze_inventory_outcome_passport_observation.sql)
+backfill-ит замороженное наблюдение только при совпадении source revision публикации, entry
+итогового плана и asset identity; несовпавшие legacy rows получают явный `ABSENT`. Recovery из
+истории сохраняет эту frozen column вместо повторного чтения finding, увеличивает durable
+generation повторного применения и тем самым получает новый owner-effect idempotency key. Старые
+успешные receipts по-прежнему могут replay-ить неизменённый response, а новая generation отправляет
+запрос с паспортом.
 
 ## Безопасность, изоляция складов и fencing
 
@@ -48,13 +134,13 @@ attempts fence retries. Нельзя делать вывод о completed remote
 
 ## Внутренняя структура приложения
 
-`InventoryApplicationService` — стабильный compatibility facade над семью collaborators. Он
+`InventoryApplicationService` — стабильный compatibility facade над use-case collaborators. Он
 сохраняет поверхность вызовов controllers, inbox и schedulers, но делегирует каждое решение одному
 связному use-case service:
 
 | Компонент | Владеющая ответственность |
 | --- | --- |
-| `InventorySessionService` | Запуск session и durable recovery освобождения capture |
+| `InventorySessionService` | Запуск session, ручной refresh состава и durable recovery освобождения capture |
 | `InventoryReadService` | Чтения sessions, findings и statistics |
 | `InventoryFindingService` | Membership reconciliation, разрешение номера, создание source и изменение inspection |
 | `InventoryFindingValidationService` | Fresh-валидация finding, media и plan для точных владельцев |
@@ -63,12 +149,14 @@ attempts fence retries. Нельзя делать вывод о completed remote
 | `InventoryCompletionService` | Preview, terminal completion/cancellation и post-commit intents |
 | `InventoryStatisticsService` | Расчёт frozen и aggregate statistics |
 | `InventoryPublicationService` | Publication, retry, closure и recovery |
+| `InventoryOutcomeRecoveryService` | Восстановление авторитетной asset/maintenance работы из завершённой истории |
 | `InventoryProjectionService` | API-проекции над owner-local state |
 
 `InventoryFindingPersistenceService` инкапсулирует только source attachments, media
-references/facts и persistence frozen plan. Узкие abstract workflow supports открывают только
-repositories и ports, необходимые их единственному concrete use case; Spring beans из них не
-создаются. Общий `InventoryTechnicalRuntimeSupport` содержит только JSON/canonical-hash,
+references/facts, точный carry-forward для non-media ревизий и persistence frozen plan. Узкие
+abstract workflow supports открывают только repositories и ports, необходимые их единственному
+concrete use case; Spring beans из них не создаются. Общий `InventoryTechnicalRuntimeSupport`
+содержит только JSON/canonical-hash,
 actor/authorization, correlation и transaction primitives — без repository, удалённого владельца,
 lifecycle или workflow-решения. Dependency graph ацикличен, и ни один extracted collaborator не
 владеет состоянием другого домена.
@@ -138,8 +226,8 @@ integrations используют private URLs и service credentials; interacti
 ## Известные ограничения аудита
 
 Production fail-fast checks применяются, только когда активный Spring profile — `prod` или
-`production`. Deployment configuration обязана выбрать один из этих profiles; эта
-documentation-only правка не делает non-production profile безопасным live runtime.
+`production`. Deployment configuration обязана выбрать один из этих profiles; dependency retry
+policy не делает non-production profile безопасным live runtime.
 
 ## Исполняемый parity маршрутов и безопасности
 

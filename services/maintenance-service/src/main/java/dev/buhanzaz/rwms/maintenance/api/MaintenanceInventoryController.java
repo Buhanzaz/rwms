@@ -4,6 +4,7 @@ import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.*;
 
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
 import dev.buhanzaz.rwms.maintenance.service.InventoryMaintenanceService;
+import dev.buhanzaz.rwms.maintenance.service.InventoryAuthoritativeOutcomeService;
 import dev.buhanzaz.rwms.maintenance.service.InventoryPublicationReconciliationService;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
 import jakarta.validation.Valid;
@@ -29,6 +30,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class MaintenanceInventoryController {
   private final InventoryMaintenanceService inventory;
   private final InventoryPublicationReconciliationService publications;
+  private final InventoryAuthoritativeOutcomeService authoritativeOutcomes;
   private final MaintenanceApplicationService maintenance;
   private final MaintenanceAuthorizer access;
 
@@ -72,6 +74,22 @@ public class MaintenanceInventoryController {
     ResponseEntity.BodyBuilder response = ResponseEntity.ok();
     if (result.replayed()) response.header("Idempotency-Replayed", "true");
     return response.body(result.response());
+  }
+
+  /** Applies an authoritative completed-inventory FREE outcome without creating work. */
+  @PutMapping("/outcomes/{inventoryId}/findings/{findingId}/no-work")
+  public ResponseEntity<InventoryNoWorkOutcomeResult> applyNoWorkOutcome(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID inventoryId,
+      @PathVariable UUID findingId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody InventoryNoWorkOutcomeRequest request) {
+    access.requireInventoryService(jwt);
+    InventoryNoWorkOutcomeResult result =
+        authoritativeOutcomes.applyNoWork(inventoryId, findingId, idempotencyKey, request);
+    ResponseEntity.BodyBuilder response = ResponseEntity.ok();
+    if (result.replay()) response.header("Idempotency-Replayed", "true");
+    return response.body(result);
   }
 
   @PutMapping("/sources/{inventoryId}/findings/{findingId}")

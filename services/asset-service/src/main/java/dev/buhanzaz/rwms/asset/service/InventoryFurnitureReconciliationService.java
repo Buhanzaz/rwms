@@ -9,6 +9,12 @@ import dev.buhanzaz.rwms.asset.domain.EquipmentBalance;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCatalogItem;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
 import dev.buhanzaz.rwms.asset.domain.InventoryFurnitureReconciliation;
+import dev.buhanzaz.rwms.asset.domain.OrderEquipmentReservation;
+import dev.buhanzaz.rwms.asset.domain.OrderEquipmentReservationState;
+import dev.buhanzaz.rwms.asset.domain.OrderUnitReservation;
+import dev.buhanzaz.rwms.asset.domain.OrderUnitReservationState;
+import dev.buhanzaz.rwms.asset.domain.PresentationUnitHold;
+import dev.buhanzaz.rwms.asset.domain.PresentationUnitHoldState;
 import dev.buhanzaz.rwms.asset.domain.RentalItem;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import dev.buhanzaz.rwms.asset.eventing.AssetEventStore;
@@ -16,6 +22,9 @@ import dev.buhanzaz.rwms.asset.integration.warehouse.WarehouseRegistryClient;
 import dev.buhanzaz.rwms.asset.repository.EquipmentBalanceRepository;
 import dev.buhanzaz.rwms.asset.repository.EquipmentCatalogItemRepository;
 import dev.buhanzaz.rwms.asset.repository.InventoryFurnitureReconciliationRepository;
+import dev.buhanzaz.rwms.asset.repository.OrderEquipmentReservationRepository;
+import dev.buhanzaz.rwms.asset.repository.OrderUnitReservationRepository;
+import dev.buhanzaz.rwms.asset.repository.PresentationUnitHoldRepository;
 import dev.buhanzaz.rwms.asset.repository.RentalItemRepository;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -41,8 +50,8 @@ import org.springframework.stereotype.Service;
  * Owns inventory's absolute FURNITURE count snapshot and reconciliation transaction work.
  *
  * <p>The caller supplies the serializable transaction. This collaborator preserves the asset lock
- * order, rejects every live conflicting lease/reservation/hold, fences event streams, and appends
- * one fact for each changed physical balance.
+ * order, validates immutable request identity plus the current cabin/catalog scope, supersedes live
+ * bindings, fences event streams, and appends one fact for each changed physical balance.
  */
 @Service
 final class InventoryFurnitureReconciliationService {
@@ -53,6 +62,9 @@ final class InventoryFurnitureReconciliationService {
           BalanceLocationKind.CABIN_RENTED);
   /** Placeholder used only to keep a native IN predicate valid when no bucket exists yet. */
   private static final UUID ABSENT_BALANCE_ID = new UUID(0L, 0L);
+  private static final UUID INVENTORY_SERVICE_ACTOR =
+      UUID.nameUUIDFromBytes(
+          "service:inventory-service".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
   private final RentalItemRepository rentalItems;
   private final EquipmentBalanceRepository equipmentBalances;
@@ -63,6 +75,11 @@ final class InventoryFurnitureReconciliationService {
   private final WarehouseRegistryClient warehouses;
   private final InventoryAssetSnapshotTransaction snapshotTransaction;
   private final InventoryAssetCodec codec;
+  private final AssetLeaseService leases;
+  private final OrderUnitReservationRepository orderReservations;
+  private final PresentationUnitHoldRepository presentationHolds;
+  private final OrderEquipmentReservationRepository orderEquipmentReservations;
+  private final AssetEquipmentHoldService equipmentHolds;
 
   InventoryFurnitureReconciliationService(
       RentalItemRepository rentalItems,
@@ -73,7 +90,12 @@ final class InventoryFurnitureReconciliationService {
       AssetEventStore events,
       WarehouseRegistryClient warehouses,
       InventoryAssetSnapshotTransaction snapshotTransaction,
-      InventoryAssetCodec codec) {
+      InventoryAssetCodec codec,
+      AssetLeaseService leases,
+      OrderUnitReservationRepository orderReservations,
+      PresentationUnitHoldRepository presentationHolds,
+      OrderEquipmentReservationRepository orderEquipmentReservations,
+      AssetEquipmentHoldService equipmentHolds) {
     this.rentalItems = rentalItems;
     this.equipmentBalances = equipmentBalances;
     this.equipmentCatalog = equipmentCatalog;
@@ -83,6 +105,11 @@ final class InventoryFurnitureReconciliationService {
     this.warehouses = warehouses;
     this.snapshotTransaction = snapshotTransaction;
     this.codec = codec;
+    this.leases = leases;
+    this.orderReservations = orderReservations;
+    this.presentationHolds = presentationHolds;
+    this.orderEquipmentReservations = orderEquipmentReservations;
+    this.equipmentHolds = equipmentHolds;
   }
 
   /**
@@ -100,8 +127,9 @@ final class InventoryFurnitureReconciliationService {
   }
 
   /**
-   * Applies one reviewed absolute furniture count after durable registration, locks, current-state
-   * comparison, and event-stream fencing. A completed durable identity is an immutable replay.
+   * Applies one reviewed absolute furniture count after durable registration, stable scope checks,
+   * guard supersession, and event-stream fencing. The source snapshot hash remains immutable
+   * request evidence but is not compared with mutable cabin status/version or balance fields.
    */
   boolean reconcile(
       UUID inventoryId,
@@ -133,11 +161,8 @@ final class InventoryFurnitureReconciliationService {
     }
 
     FurnitureSnapshotState current = lockedFurnitureSnapshot(plan.warehouseId(), plan.assetIds());
-    if (!current.snapshotSha256().equals(plan.expectedSnapshotSha256())) {
-      throw new AssetConflictException("Furniture snapshot is stale");
-    }
-    assertFurnitureReconciliationMatchesCurrent(plan, current);
-    assertNoLiveFurnitureReconciliationGuard(current);
+    assertFurnitureReconciliationScopeAndCatalog(plan, current);
+    supersedeLiveFurnitureReconciliationGuards(current);
 
     Map<UUID, Long> streamVersions = lockFurnitureBalanceStreams(current);
     applyFurnitureReconciliation(plan, current, streamVersions);
@@ -392,11 +417,21 @@ final class InventoryFurnitureReconciliationService {
     return value != null && value.matches("[0-9a-f]{64}");
   }
 
-  private void assertFurnitureReconciliationMatchesCurrent(
+  /**
+   * Rejects only changes that invalidate the reviewed scope: terminal/missing/moved cabins or a
+   * changed active furniture catalog. Non-terminal cabin and physical-balance drift is expected
+   * because completed inventory counts replace that mutable state.
+   */
+  private void assertFurnitureReconciliationScopeAndCatalog(
       FurnitureReconciliationPlan plan, FurnitureSnapshotState current) {
     if (plan.items().size() != current.items().size()) {
       throw new AssetConflictException(
           "Furniture reconciliation must contain every active FURNITURE position");
+    }
+    if (current.cabins().stream()
+        .anyMatch(cabin -> cabin.getStatus().isTerminalDispositionStatus())) {
+      throw new AssetConflictException(
+          "Lost or written-off cabin cannot be overwritten by furniture reconciliation");
     }
     Map<UUID, InventoryFurnitureSnapshotItem> currentByEquipment =
         current.items().stream()
@@ -427,42 +462,57 @@ final class InventoryFurnitureReconciliationService {
     }
   }
 
-  /** Locks and rejects every live source that could make an absolute count unsafe. */
-  private void assertNoLiveFurnitureReconciliationGuard(FurnitureSnapshotState current) {
-    List<UUID> assetIds = current.cabins().stream().map(RentalItem::getId).toList();
-    List<UUID> equipmentIds = current.catalog().stream().map(EquipmentCatalogItem::getId).toList();
+  /**
+   * Ends every live binding invalidated by the reviewed absolute count while preserving its
+   * durable row and ordinary lease/hold event history.
+   */
+  private void supersedeLiveFurnitureReconciliationGuards(FurnitureSnapshotState current) {
+    List<UUID> assetIds =
+        current.cabins().stream()
+            .map(RentalItem::getId)
+            .sorted(Comparator.comparing(UUID::toString))
+            .toList();
+    List<UUID> equipmentIds =
+        current.catalog().stream()
+            .map(EquipmentCatalogItem::getId)
+            .sorted(Comparator.comparing(UUID::toString))
+            .toList();
     OffsetDateTime timestamp = now();
     if (!assetIds.isEmpty()) {
-      if (!furnitureReconciliations.lockLiveOperationLeaseIds(assetIds, timestamp).isEmpty()) {
-        throw new AssetConflictException(
-            "Furniture reconciliation cannot overwrite a cabin with an active operation lease");
+      for (UUID assetId : assetIds) {
+        leases.releaseForCompletedInventory(assetId);
       }
-      if (!furnitureReconciliations.lockActiveOrderUnitReservationIds(assetIds).isEmpty()) {
-        throw new AssetConflictException(
-            "Furniture reconciliation cannot overwrite a cabin with an active order reservation");
+      List<OrderUnitReservation> unitReservations =
+          orderReservations.findAllByRentalItemIdsAndStateForUpdate(
+              assetIds, OrderUnitReservationState.ACTIVE);
+      for (OrderUnitReservation reservation : unitReservations) {
+        reservation.release(INVENTORY_SERVICE_ACTOR, "SYSTEM_ADMIN");
       }
-      if (!furnitureReconciliations.lockLivePresentationHoldIds(assetIds, timestamp).isEmpty()) {
-        throw new AssetConflictException(
-            "Furniture reconciliation cannot overwrite a cabin with an active presentation hold");
+      orderReservations.saveAllAndFlush(unitReservations);
+      List<PresentationUnitHold> holds =
+          presentationHolds.findAllByRentalItemIdsAndStateForUpdate(
+              assetIds, PresentationUnitHoldState.ACTIVE);
+      for (PresentationUnitHold hold : holds) {
+        hold.release(timestamp);
       }
+      presentationHolds.saveAllAndFlush(holds);
     }
-    if (!furnitureReconciliations
-        .lockActiveOrderEquipmentReservationIds(current.warehouseId(), equipmentIds)
-        .isEmpty()) {
-      throw new AssetConflictException(
-          "Furniture reconciliation cannot overwrite an active equipment reservation");
+    if (equipmentIds.isEmpty()) return;
+    List<OrderEquipmentReservation> equipmentReservations =
+        orderEquipmentReservations.findAllActiveByWarehouseAndEquipmentIdsForUpdate(
+            current.warehouseId(), equipmentIds, OrderEquipmentReservationState.ACTIVE);
+    for (OrderEquipmentReservation reservation : equipmentReservations) {
+      reservation.release();
     }
+    orderEquipmentReservations.saveAllAndFlush(equipmentReservations);
     List<UUID> balanceIds =
         current.balancesByKey().values().stream().map(EquipmentBalance::getId).toList();
     if (balanceIds.isEmpty()) {
       balanceIds = List.of(ABSENT_BALANCE_ID);
     }
-    if (!furnitureReconciliations
-        .lockLiveEquipmentHoldIds(current.warehouseId(), equipmentIds, balanceIds, timestamp)
-        .isEmpty()) {
-      throw new AssetConflictException(
-          "Furniture reconciliation cannot overwrite quantities protected by an active hold");
-    }
+    equipmentHolds.releaseForCompletedInventory(
+        furnitureReconciliations.lockLiveEquipmentHoldIds(
+            current.warehouseId(), equipmentIds, balanceIds, timestamp));
   }
 
   private Map<UUID, Long> lockFurnitureBalanceStreams(FurnitureSnapshotState current) {

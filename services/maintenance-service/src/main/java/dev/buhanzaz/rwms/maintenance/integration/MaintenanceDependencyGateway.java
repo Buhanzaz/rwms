@@ -889,6 +889,7 @@ public interface MaintenanceDependencyGateway {
     }
   }
 
+  /** Exact logistics command for an ordinary inbound or external-capital outbound movement. */
   record DriverTaskCommand(
       UUID warehouseId,
       UUID cabinId,
@@ -904,10 +905,11 @@ public interface MaintenanceDependencyGateway {
       if (warehouseId == null
           || cabinId == null
           || repairId == null
-          || !Set.of("REPAIR", "ESTIMATE", "INVENTORY")
+          || !Set.of("REPAIR", "ESTIMATE", "INVENTORY", "CAPITAL_REPAIR")
               .contains(sourceType)
           || sourceId == null
-          || !"DELIVER_TO_REPAIR".equals(kind)
+          || !Set.of("DELIVER_TO_REPAIR", "CAPITAL_TO_PRODUCTION").contains(kind)
+          || ("CAPITAL_TO_PRODUCTION".equals(kind) != "CAPITAL_REPAIR".equals(sourceType))
           || planningMode == null
           || (planningMode == RepairLogisticsPlanningMode.FIXED_DATE)
               != (scheduledDate != null)
@@ -920,6 +922,7 @@ public interface MaintenanceDependencyGateway {
     }
   }
 
+  /** Logistics-owned movement truth returned for a maintenance command. */
   record DriverTaskSnapshot(
       UUID id,
       long version,
@@ -939,10 +942,11 @@ public interface MaintenanceDependencyGateway {
           || warehouseId == null
           || cabinId == null
           || repairId == null
-          || !Set.of("REPAIR", "ESTIMATE", "INVENTORY")
+          || !Set.of("REPAIR", "ESTIMATE", "INVENTORY", "CAPITAL_REPAIR")
               .contains(sourceType)
           || sourceId == null
-          || !"DELIVER_TO_REPAIR".equals(kind)
+          || !Set.of("DELIVER_TO_REPAIR", "CAPITAL_TO_PRODUCTION").contains(kind)
+          || ("CAPITAL_TO_PRODUCTION".equals(kind) != "CAPITAL_REPAIR".equals(sourceType))
           || planningMode == null
           || scheduledDate == null
           || priority < 1

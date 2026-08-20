@@ -58,7 +58,9 @@ public record OAuthClientProperties(List<Client> clients) {
                     "warehouse.lifecycle.read",
                     "warehouse.lifecycle.confirm",
                     "asset.inventory",
-                    "maintenance.inventory");
+                    "maintenance.inventory",
+                    "logistics.inventory",
+                    "media.inventory");
     static final String LOGISTICS_CLIENT_ID = "logistics-service";
     static final String LOGISTICS_AUDIENCE = "rwms-services";
     static final String LOGISTICS_SECRET_ENVIRONMENT = "LOGISTICS_CLIENT_SECRET";

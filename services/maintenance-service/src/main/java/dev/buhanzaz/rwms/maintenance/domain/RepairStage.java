@@ -271,6 +271,18 @@ public class RepairStage {
     deliveryUpdatedAt = MaintenanceTime.now();
   }
 
+  /**
+   * Makes unfinished stage work historical after task-board's source-owned authoritative
+   * cancellation. A DONE stage remains immutable completed evidence.
+   */
+  public void supersedeForAuthoritativeInventory() {
+    if (state == RepairStageState.DONE || state == RepairStageState.CANCELLED) return;
+    state = RepairStageState.CANCELLED;
+    taskGenerationState = "NOT_REQUIRED";
+    deliveryState = "DELIVERED";
+    deliveryUpdatedAt = MaintenanceTime.now();
+  }
+
   public UUID getId() { return id; }
   public UUID getRepairId() { return repairId; }
   public int getStageNo() { return stageNo; }
