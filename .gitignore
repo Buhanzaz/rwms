@@ -52,10 +52,14 @@ PROMPT_PANEL_RENTAL_TABLE_MIGRATION.md
 
 ### Playwright CLI ###
 /\.playwright-cli/
+/panel/.playwright-cli/
 /\.playwright-mcp/
 /services/auth-service/ui/.playwright-cli/
 /page-*.yml
 /tmp/
+
+### Gradle Kotlin DSL local state ###
+/build-logic/.kotlin/
 
 ### Local IDE and legacy runtime artifacts ###
 /amplicode.xml
