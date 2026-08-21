@@ -158,22 +158,27 @@ entry-scoped. Task-board changes no maintenance repair state directly.
 The ordinary repair board is one warehouse-wide queue projection, not a dated
 queue or a second maintenance-owned repair table. Persisted scheduling metadata
 does not partition or order ordinary queue positions. Registration priority is
-materialized into the persisted position once. Every queue exposes all
-active/paused REAL cards and only the first pinned/position-ordered waiting REAL
-window configured by `availableTaskLimit` (default `6`, range `1..50`); the
-database bounds that actionable window before JPA hydration. Future SHADOW
-stages remain visible after REAL cards without consuming the limit and cannot be
-taken. Promotion preserves their queue position, so an earlier shadow moves
-ahead of a later unpinned REAL; pinning is the explicit exception. A route
-uses one mandatory phase sequence: SES, welding, exterior, interior,
+materialized into the persisted position once. The manager snapshot returns
+every unfinished `REAL` and `SHADOW` entry in canonical active, pin and persisted
+position order. `availableTaskLimit` (default `6`, range `1..50`) marks only the
+first waiting `REAL` cards in each queue as the visual daily plan; it neither
+truncates the projection nor fences `TAKE`. Every current `REAL` route gate can
+be taken, while every `SHADOW` remains read-only. Promotion preserves the
+persisted position, so an earlier shadow moves ahead of later unpinned work;
+pinning is the explicit exception. The panel hides shadows by default, can show
+all future subtasks with one checkbox, and can reveal and highlight one task's
+complete route across queues from its `REAL` card.
+
+A route uses one mandatory phase sequence: SES, welding, exterior, interior,
 electrical, then plumbing. The first existing unfinished phase is the only
-REAL stage; absent or completed phases are skipped and all later work remains
-SHADOW. SES is the exclusive holding phase even for retained queue definitions
-whose historical type is `REPAIR`: no repair shadow for the cabin appears in
-another ordinary column until treatment completes. Public date selection,
-ordinary move/date-swap commands, maintenance daily-capacity placement and
-overdue rollover are absent. Driver movement and external capital-repair routes
-remain on their owning surfaces.
+`REAL` stage; absent or completed phases are skipped and all later work remains
+`SHADOW`. SES is the exclusive executable holding phase even for retained queue
+definitions whose historical type is `REPAIR`. Manager reads retain the later
+shadows for explicit route inspection, while WorkerApp receives only the SES
+entry until treatment completes. Public date selection, ordinary
+move/date-swap commands, maintenance daily-capacity placement and overdue
+rollover are absent. The visual daily plan creates no dated schedule. Driver
+movement and external capital-repair routes remain on their owning surfaces.
 Maintenance applies this sequence before plan persistence, repair reads and
 task publication in
 [`RepairPhaseSequence`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/RepairPhaseSequence.java).

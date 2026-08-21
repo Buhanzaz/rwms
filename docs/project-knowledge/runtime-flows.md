@@ -845,23 +845,31 @@ and
 ### Maintenance repair package to worker completion
 
 The ordinary panel board is one aggregate warehouse projection with a single persisted ordering
-partition per ordinary queue; task scheduling metadata neither partitions nor orders it. For each
-queue, PostgreSQL selects every real `IN_PROGRESS`/`PAUSED` entry and only the first
-`availableTaskLimit` real `WAITING` entries in pinned/aggregate-position/identity order before JPA
-hydration. Priority has already chosen the persisted insertion position and is not applied again by
-the read. Active work stays first, followed by waiting `REAL` cards and then the visible future
-`SHADOW` cards at their reserved positions; a shadow never consumes the actionable limit, whose
-default is six. Thus a route whose first unfinished work is electricity exposes a takeable
-electricity card immediately only when SES, welding, exterior and interior work is absent or
-complete. The fixed route sequence is SES, welding, exterior, interior, electrical and plumbing;
-the first existing unfinished phase is REAL and every later phase is SHADOW. When an earlier
-shadow is promoted,
-it regains its earlier position ahead of later unpinned real work; a manager-pinned real card keeps
-its slot. The same real-card eligibility window fences `TAKE`, and both panel and WorkerApp refuse
-mutations for shadows. When a route contains unfinished SES work, that gate is the only
-ordinary card for the cabin and no repair shadow is exposed until SES completes. The ordinary
-public boundary has no date/shadow selector, move/date-swap command, maintenance daily-capacity
-scheduling or rollover scan. Driver movements and external capital work stay outside this board.
+partition per ordinary queue; task scheduling metadata neither partitions nor orders it. One
+warehouse-fenced JPA fetch loads every unfinished entry with its task, queue and definition, after
+which source references and assignments are loaded in bounded batches. Active work stays first,
+followed by waiting `REAL` cards and future `SHADOW` cards in canonical pin, persisted-position and
+identity order. Priority has already chosen the persisted insertion position and is not applied
+again by the read. `availableTaskLimit` defaults to six and marks the first waiting `REAL` cards in
+each queue as the visual daily plan; it neither removes later cards nor fences `TAKE`.
+
+The fixed route sequence is SES, welding, exterior, interior, electrical and plumbing. The first
+existing unfinished phase is `REAL` and every later phase is `SHADOW`, so a route whose first work
+is electricity exposes a takeable electricity card immediately only when every preceding phase is
+absent or complete. Every current `REAL` route gate is executable; shadows are never executable.
+When an earlier shadow is promoted, it regains its persisted position ahead of later unpinned work;
+a manager-pinned real card keeps its slot. The manager snapshot retains the whole unfinished route,
+including future shadows after SES. WorkerApp applies the narrower safety audience and receives only
+the SES entry until treatment completes.
+
+The panel initially renders all current `REAL` cards and hides shadows. “Show future subtasks”
+renders every shadow. “Full route” on a real card renders and highlights every entry with that task
+identity across all queues even when the global shadow checkbox is off, and expands route queues.
+The panel derives daily-plan badges from the first configured number of waiting real entries in the
+server order. It resolves repair complexity only for entries currently rendered. The ordinary
+public boundary has no date/shadow query dimension, move/date-swap command, maintenance
+daily-capacity scheduling or rollover scan. Driver movements and external capital work stay outside
+this board.
 
 Maintenance first canonicalizes new plan persistence and every task snapshot. Task-board repeats
 that normalization for maintenance-owned registration and pre-start replacement, persists route
