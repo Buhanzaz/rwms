@@ -222,8 +222,9 @@ class InventoryAssetOutcomeIntegrationTest {
     assertThat(recovered.response().status()).isEqualTo(RentalItemStatus.FREE);
     assertThat(recovered.response().releasedOrderUnitReservationIds())
         .containsExactly(laterReservation.getId());
-    assertThat(recovered.response().releasedOperationLeaseIds()).isEmpty();
-    assertThat(state("operation_lease", currentInventoryRepairLease.id())).isEqualTo("ACTIVE");
+    assertThat(recovered.response().releasedOperationLeaseIds())
+        .containsExactly(currentInventoryRepairLease.id());
+    assertThat(state("operation_lease", currentInventoryRepairLease.id())).isEqualTo("RELEASED");
 
     InventoryOutcomeRequest older =
         request(
@@ -252,6 +253,107 @@ class InventoryAssetOutcomeIntegrationTest {
         .isInstanceOf(AssetConflictException.class)
         .hasMessageContaining("Equal-time inventory outcome conflicts");
     assertThat(currentStatus(cabin.id())).isEqualTo(RentalItemStatus.FREE);
+  }
+
+  @Test
+  void acceptsHigherPlanCorrectionAndRetainsOnlyItsMaintenanceRepairLease() {
+    UUID warehouseId = UUID.randomUUID();
+    RentalItemResponse cabin = rentalItem(warehouseId, "OUTCOME-PLAN-CORRECTION-");
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    OffsetDateTime completedAt = now();
+    InventoryOutcomeRequest initial =
+        requestWithPlan(
+            warehouseId, cabin.id(), completedAt, 2L, "a".repeat(64), InventoryOutcomeStatus.FREE);
+    InventoryAssetService.OutcomeResult initiallyApplied =
+        inventory.applyOutcome(
+            UUID.randomUUID(), inventoryId, findingId, UUID.randomUUID(), initial);
+
+    setStatus(cabin.id(), RentalItemStatus.RENTED, null);
+    var staleLogisticsLease =
+        assets
+            .acquireLease(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                new AcquireOperationLeaseRequest(
+                    cabin.id(),
+                    "LOGISTICS_SHIPMENT",
+                    UUID.randomUUID().toString(),
+                    initiallyApplied.response().assetVersion()))
+            .response();
+    InventoryOutcomeRequest corrected =
+        requestWithPlan(
+            warehouseId,
+            cabin.id(),
+            completedAt,
+            3L,
+            "b".repeat(64),
+            InventoryOutcomeStatus.CAPITAL_REPAIR);
+    UUID correctedKey = UUID.randomUUID();
+    InventoryAssetService.OutcomeResult correction =
+        inventory.applyOutcome(UUID.randomUUID(), inventoryId, findingId, correctedKey, corrected);
+
+    assertThat(correction.replayed()).isFalse();
+    assertThat(correction.response().status()).isEqualTo(RentalItemStatus.CAPITAL_REPAIR);
+    assertThat(correction.response().releasedOperationLeaseIds())
+        .containsExactly(staleLogisticsLease.id());
+    assertThat(state("operation_lease", staleLogisticsLease.id())).isEqualTo("RELEASED");
+    assertThat(watermarkPlanVersion(cabin.id())).isEqualTo(3L);
+    assertThat(watermarkPlanHash(cabin.id())).isEqualTo("b".repeat(64));
+
+    InventoryAssetService.OutcomeResult replay =
+        inventory.applyOutcome(UUID.randomUUID(), inventoryId, findingId, correctedKey, corrected);
+    assertThat(replay.replayed()).isTrue();
+    assertThat(replay.response()).isEqualTo(correction.response());
+
+    var repairLease =
+        assets
+            .acquireLease(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                new AcquireOperationLeaseRequest(
+                    cabin.id(),
+                    "MAINTENANCE_REPAIR",
+                    UUID.randomUUID().toString(),
+                    correction.response().assetVersion()))
+            .response();
+    InventoryAssetService.OutcomeResult reasserted =
+        inventory.applyOutcome(
+            UUID.randomUUID(), inventoryId, findingId, UUID.randomUUID(), corrected);
+    assertThat(reasserted.replayed()).isFalse();
+    assertThat(reasserted.response().releasedOperationLeaseIds()).isEmpty();
+    assertThat(state("operation_lease", repairLease.id())).isEqualTo("ACTIVE");
+
+    InventoryOutcomeRequest lowerPlan =
+        requestWithPlan(
+            warehouseId, cabin.id(), completedAt, 2L, "c".repeat(64), InventoryOutcomeStatus.FREE);
+    assertThatThrownBy(
+            () ->
+                inventory.applyOutcome(
+                    UUID.randomUUID(), inventoryId, findingId, UUID.randomUUID(), lowerPlan))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("Equal-time inventory outcome conflicts");
+
+    InventoryOutcomeRequest sameVersionHashDrift =
+        requestWithPlan(
+            warehouseId,
+            cabin.id(),
+            completedAt,
+            3L,
+            "d".repeat(64),
+            InventoryOutcomeStatus.CAPITAL_REPAIR);
+    assertThatThrownBy(
+            () ->
+                inventory.applyOutcome(
+                    UUID.randomUUID(),
+                    inventoryId,
+                    findingId,
+                    UUID.randomUUID(),
+                    sameVersionHashDrift))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("Equal-time inventory outcome conflicts");
+    assertThat(currentStatus(cabin.id())).isEqualTo(RentalItemStatus.CAPITAL_REPAIR);
+    assertThat(watermarkPlanVersion(cabin.id())).isEqualTo(3L);
   }
 
   @Test
@@ -603,12 +705,44 @@ class InventoryAssetOutcomeIntegrationTest {
       OffsetDateTime completedAt,
       InventoryOutcomeStatus desiredStatus,
       JsonNode passportObservation) {
+    return requestWithPlan(
+        warehouseId, assetId, completedAt, 2L, "a".repeat(64), desiredStatus, passportObservation);
+  }
+
+  private InventoryOutcomeRequest requestWithPlan(
+      UUID warehouseId,
+      UUID assetId,
+      OffsetDateTime completedAt,
+      long finalPlanVersion,
+      String finalPlanSha256,
+      InventoryOutcomeStatus desiredStatus) {
+    ObjectNode absent = objectMapper.createObjectNode();
+    absent.put("presence", "ABSENT");
+    absent.putNull("value");
+    return requestWithPlan(
+        warehouseId,
+        assetId,
+        completedAt,
+        finalPlanVersion,
+        finalPlanSha256,
+        desiredStatus,
+        absent);
+  }
+
+  private InventoryOutcomeRequest requestWithPlan(
+      UUID warehouseId,
+      UUID assetId,
+      OffsetDateTime completedAt,
+      long finalPlanVersion,
+      String finalPlanSha256,
+      InventoryOutcomeStatus desiredStatus,
+      JsonNode passportObservation) {
     return new InventoryOutcomeRequest(
         warehouseId,
         assetId,
         completedAt,
-        2L,
-        "a".repeat(64),
+        finalPlanVersion,
+        finalPlanSha256,
         3L,
         desiredStatus,
         passportObservation,
@@ -667,6 +801,20 @@ class InventoryAssetOutcomeIntegrationTest {
   private String watermarkPassportHash(UUID assetId) {
     return jdbc.queryForObject(
         "select passport_observation_sha256 from inventory_asset_outcome_watermark where asset_id=?",
+        String.class,
+        assetId);
+  }
+
+  private long watermarkPlanVersion(UUID assetId) {
+    return jdbc.queryForObject(
+        "select final_plan_version from inventory_asset_outcome_watermark where asset_id=?",
+        Long.class,
+        assetId);
+  }
+
+  private String watermarkPlanHash(UUID assetId) {
+    return jdbc.queryForObject(
+        "select final_plan_sha256 from inventory_asset_outcome_watermark where asset_id=?",
         String.class,
         assetId);
   }

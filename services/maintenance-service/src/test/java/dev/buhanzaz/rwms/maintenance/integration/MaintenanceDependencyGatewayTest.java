@@ -136,6 +136,98 @@ class MaintenanceDependencyGatewayTest {
   }
 
   @Test
+  void overdueFixedDriverResponseMayReturnLaterEffectiveDate() {
+    UUID key = UUID.randomUUID();
+    UUID taskId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    UUID sourceId = UUID.randomUUID();
+    LocalDate requestedDate = LocalDate.of(2026, 8, 19);
+    LocalDate effectiveDate = LocalDate.of(2026, 8, 20);
+    authorize("logistics-token", "logistics.maintenance");
+    server
+        .expect(
+            requestTo(
+                "http://logistics.test/api/internal/logistics/v1/maintenance/driver-tasks"))
+        .andExpect(method(HttpMethod.POST))
+        .andRespond(
+            withSuccess(
+                """
+                {"id":"%s","version":4,"warehouseId":"%s","cabinId":"%s","repairId":"%s","sourceType":"INVENTORY","sourceId":"%s","kind":"DELIVER_TO_REPAIR","planningMode":"FIXED_DATE","scheduledDate":"%s","priority":2,"state":"SCHEDULED"}
+                """
+                    .formatted(
+                        taskId,
+                        warehouseId,
+                        cabinId,
+                        repairId,
+                        sourceId,
+                        effectiveDate),
+                MediaType.APPLICATION_JSON));
+
+    var response =
+        gateway.createDriverTask(
+            key,
+            new MaintenanceDependencyGateway.DriverTaskCommand(
+                warehouseId,
+                cabinId,
+                repairId,
+                "INVENTORY",
+                sourceId,
+                "DELIVER_TO_REPAIR",
+                RepairLogisticsPlanningMode.FIXED_DATE,
+                requestedDate,
+                2,
+                false));
+
+    assertThat(response.scheduledDate()).isEqualTo(effectiveDate);
+    server.verify();
+  }
+
+  @Test
+  void fixedDriverResponseBeforeRequestedDateIsRejected() {
+    UUID key = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    UUID sourceId = UUID.randomUUID();
+    LocalDate requestedDate = LocalDate.of(2026, 8, 19);
+    authorize("logistics-token", "logistics.maintenance");
+    server
+        .expect(
+            requestTo(
+                "http://logistics.test/api/internal/logistics/v1/maintenance/driver-tasks"))
+        .andExpect(method(HttpMethod.POST))
+        .andRespond(
+            withSuccess(
+                """
+                {"id":"%s","version":4,"warehouseId":"%s","cabinId":"%s","repairId":"%s","sourceType":"INVENTORY","sourceId":"%s","kind":"DELIVER_TO_REPAIR","planningMode":"FIXED_DATE","scheduledDate":"2026-08-18","priority":2,"state":"SCHEDULED"}
+                """
+                    .formatted(
+                        UUID.randomUUID(), warehouseId, cabinId, repairId, sourceId),
+                MediaType.APPLICATION_JSON));
+
+    assertThatThrownBy(
+            () ->
+                gateway.createDriverTask(
+                    key,
+                    new MaintenanceDependencyGateway.DriverTaskCommand(
+                        warehouseId,
+                        cabinId,
+                        repairId,
+                        "INVENTORY",
+                        sourceId,
+                        "DELIVER_TO_REPAIR",
+                        RepairLogisticsPlanningMode.FIXED_DATE,
+                        requestedDate,
+                        2,
+                        false)))
+        .isInstanceOf(MaintenanceDependencyException.class)
+        .hasMessageContaining("another driver-task truth");
+    server.verify();
+  }
+
+  @Test
   void rentalItemSnapshotUsesTheExactPrivateGetAndAssetBearer() {
     UUID rentalItemId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();

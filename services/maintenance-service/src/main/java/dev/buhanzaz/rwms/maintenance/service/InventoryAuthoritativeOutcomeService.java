@@ -250,12 +250,18 @@ public class InventoryAuthoritativeOutcomeService {
           store.historicalReplacementView(outcome, currentRepairId);
       List<InventoryAuthoritativeOutcomeTarget> targetRows =
           store.targetsForUpdate(preparation.sourceId());
-      localSupersession.apply(replacementView, targetRows);
+      AuthoritativeSupersessionResult superseded =
+          localSupersession.apply(replacementView, targetRows);
       repairMaterialization.enqueue(
           currentRepairId,
           stableKey(
               "queue-repair-legacy-replacement", preparation.sourceId(), currentRepairId));
-      reassertWorkTarget(preparation, idempotencyKey, currentRepairId);
+      reassertWorkTarget(
+          preparation,
+          idempotencyKey,
+          currentRepairId,
+          superseded.cancelledExternalTaskIds(),
+          superseded.releasedLeaseIds());
       store.completeReceipt(
           preparation.sourceId(),
           preparation.requestSha256(),
@@ -383,7 +389,7 @@ public class InventoryAuthoritativeOutcomeService {
     }
     List<InventoryAuthoritativeOutcomeTarget> targetRows =
         store.targetsForUpdate(preparation.sourceId());
-    localSupersession.apply(outcome, targetRows);
+    AuthoritativeSupersessionResult superseded = localSupersession.apply(outcome, targetRows);
     InventoryPublicationSource existing =
         sourceLifecycle.requireAuthoritativeReplayOrNull(
             preparation.sourceId(),
@@ -398,7 +404,13 @@ public class InventoryAuthoritativeOutcomeService {
                   outcome.getResponseSnapshot(), InventoryPublicationApplyResult.class),
               true)
           : sourceLifecycle.authoritativeReplacement(sourceWrite);
-      enqueueWorkTarget(preparation, idempotencyKey, finding.assetId(), targetRepairId);
+      enqueueWorkTarget(
+          preparation,
+          idempotencyKey,
+          finding.assetId(),
+          targetRepairId,
+          superseded.cancelledExternalTaskIds(),
+          superseded.releasedLeaseIds());
       if ("APPLIED".equals(outcome.getPhase())) {
         store.completeReceipt(
             preparation.sourceId(),
@@ -421,7 +433,13 @@ public class InventoryAuthoritativeOutcomeService {
                   outcome.getResponseSnapshot(), InventoryPublicationApplyResult.class),
               true)
           : sourceLifecycle.replay(existing);
-      enqueueWorkTarget(preparation, idempotencyKey, finding.assetId(), targetRepairId);
+      enqueueWorkTarget(
+          preparation,
+          idempotencyKey,
+          finding.assetId(),
+          targetRepairId,
+          superseded.cancelledExternalTaskIds(),
+          superseded.releasedLeaseIds());
       if (preparation.reassertion()) {
         store.completeReceipt(
             preparation.sourceId(),
@@ -437,8 +455,45 @@ public class InventoryAuthoritativeOutcomeService {
       }
       return replay;
     }
+    if (sourceLifecycle.repairBoundToDifferentSource(
+        preparation.sourceId(), targetRepairId)) {
+      boolean applied = "APPLIED".equals(outcome.getPhase());
+      InventoryPublicationWorkflowResult result = applied
+          ? new InventoryPublicationWorkflowResult(
+              store.read(
+                  outcome.getResponseSnapshot(), InventoryPublicationApplyResult.class),
+              true)
+          : sourceLifecycle.authoritativeReplacement(sourceWrite);
+      enqueueWorkTarget(
+          preparation,
+          idempotencyKey,
+          finding.assetId(),
+          targetRepairId,
+          superseded.cancelledExternalTaskIds(),
+          superseded.releasedLeaseIds());
+      if (applied) {
+        store.completeReceipt(
+            preparation.sourceId(),
+            preparation.requestSha256(),
+            idempotencyKey,
+            store.write(result.response()));
+      } else {
+        store.complete(
+            preparation.sourceId(),
+            preparation.requestSha256(),
+            idempotencyKey,
+            store.write(result.response()));
+      }
+      return result;
+    }
     InventoryPublicationWorkflowResult result = sourceLifecycle.persist(sourceWrite);
-    enqueueWorkTarget(preparation, idempotencyKey, finding.assetId(), targetRepairId);
+    enqueueWorkTarget(
+        preparation,
+        idempotencyKey,
+        finding.assetId(),
+        targetRepairId,
+        superseded.cancelledExternalTaskIds(),
+        superseded.releasedLeaseIds());
     store.complete(
         preparation.sourceId(),
         preparation.requestSha256(),
@@ -451,14 +506,25 @@ public class InventoryAuthoritativeOutcomeService {
       AuthoritativePreparation preparation,
       UUID idempotencyKey,
       UUID assetId,
-      UUID targetRepairId) {
+      UUID targetRepairId,
+      List<UUID> cancelledExternalTaskIds,
+      List<UUID> releasedLeaseIds) {
     repairMaterialization.enqueue(
         targetRepairId, stableKey("queue-repair", preparation.sourceId(), assetId));
-    reassertWorkTarget(preparation, idempotencyKey, targetRepairId);
+    reassertWorkTarget(
+        preparation,
+        idempotencyKey,
+        targetRepairId,
+        cancelledExternalTaskIds,
+        releasedLeaseIds);
   }
 
   private void reassertWorkTarget(
-      AuthoritativePreparation preparation, UUID idempotencyKey, UUID targetRepairId) {
+      AuthoritativePreparation preparation,
+      UUID idempotencyKey,
+      UUID targetRepairId,
+      List<UUID> cancelledExternalTaskIds,
+      List<UUID> releasedLeaseIds) {
     repairMaterialization.reassertActiveTarget(
         targetRepairId,
         stableKey(
@@ -472,7 +538,9 @@ public class InventoryAuthoritativeOutcomeService {
         stableKey(
             "reassert-repair-driver:" + idempotencyKey,
             preparation.sourceId(),
-            targetRepairId));
+            targetRepairId),
+        cancelledExternalTaskIds,
+        releasedLeaseIds);
   }
 
   private InventoryNoWorkOutcomeResult finalizeNoWork(

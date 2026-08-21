@@ -180,31 +180,127 @@ final class InventoryPublicationRepairMaterialization {
   /**
    * Reasserts owner effects for a preserved current repair after a newer completed-inventory
    * generation superseded its asset status or driver task. Draft targets still use their normal
-   * queue reconciliation and therefore do not enqueue these successor effects early.
+   * queue reconciliation and therefore do not enqueue these successor effects early. Historical
+   * inventory capital rows whose publication fabricated completion are restored to the active
+   * capital route before their status is reasserted. A retained local lease already fenced as
+   * {@code RECONCILIATION_REQUIRED} is reacquired even when its release ledger belongs to an older
+   * completed plan version and is absent from the current reassertion.
    */
   void reassertActiveTarget(
-      UUID repairId, UUID statusKey, UUID taskRegistrationKey, UUID driverTaskKey) {
+      UUID repairId,
+      UUID statusKey,
+      UUID taskRegistrationKey,
+      UUID driverTaskKey,
+      List<UUID> cancelledExternalTaskIds,
+      List<UUID> releasedLeaseIds) {
     MaintenanceRepair repair =
         repairs
             .findById(repairId)
             .orElseThrow(
                 () -> new MaintenanceNotFoundException("Inventory repair target not found"));
+    UUID previousExternalTaskId = repair.getExternalTaskId();
+    repair = reconcileReleasedOwnerEffects(
+        repair, cancelledExternalTaskIds, releasedLeaseIds);
+    boolean taskRotated = !previousExternalTaskId.equals(repair.getExternalTaskId());
+    boolean releasedLeaseRecovery = repair.getLeaseId() != null
+        && "RECONCILIATION_REQUIRED".equals(repair.getLeaseReconciliationState());
+    boolean legacyPublicationCompletion =
+        repair.getOrigin() == RepairOrigin.INVENTORY
+            && repair.getExecutionState() == RepairExecutionState.COMPLETED
+            && repair.getAcceptanceState() == RepairAcceptanceState.PENDING
+            && repair.getReclassificationState() == RepairReclassificationState.EXTERNAL_CAPITAL
+            && repair.getTaskBoardVersion() == null;
+    if (legacyPublicationCompletion) {
+      long expectedVersion =
+          events.lockCurrentVersion(MaintenanceAggregateType.REPAIR, repair.getId());
+      List<RepairStage> stages = repairStages.findAllByRepairIdOrderByStageNo(repair.getId());
+      stages.forEach(RepairStage::routeToExternalCapital);
+      repairStages.saveAllAndFlush(stages);
+      repair.routeInventoryToExternalCapital();
+      repair = repairs.saveAndFlush(repair);
+      Map<String, Object> state = projectionSnapshots.repair(repair);
+      events.append(
+          MaintenanceAggregateType.REPAIR,
+          repair.getId(),
+          expectedVersion,
+          MaintenanceEventType.REPAIR_PLAN_CHANGED,
+          state,
+          eventFacts.repairPayload(MaintenanceEventType.REPAIR_PLAN_CHANGED, repair, stages),
+          state);
+    }
     boolean ordinary =
         (repair.getExecutionState() == RepairExecutionState.QUEUED
                 || repair.getExecutionState() == RepairExecutionState.IN_PROGRESS)
             && repair.getReclassificationState() == RepairReclassificationState.STABLE;
     boolean externalCapital =
-        repair.getExecutionState() == RepairExecutionState.COMPLETED
-            && repair.getAcceptanceState() == RepairAcceptanceState.PENDING
+        repair.getExecutionState() == RepairExecutionState.QUEUED
+            && repair.getAcceptanceState() == RepairAcceptanceState.NOT_READY
             && repair.getReclassificationState() == RepairReclassificationState.EXTERNAL_CAPITAL;
     if (!(ordinary || externalCapital)) return;
-    taskBoardSupport.enqueueRepairComplexityStatusSync(repair, statusKey);
-    if (ordinary && !"GENERATED".equals(repair.getTaskGenerationState())) {
+    if (releasedLeaseRecovery) {
+      taskBoardSupport.enqueueRepairComplexityStatusSyncAfterLeaseRelease(repair, statusKey);
+    } else {
+      taskBoardSupport.enqueueRepairComplexityStatusSync(repair, statusKey);
+    }
+    if (taskRotated) {
+      taskBoardSupport.enqueueTaskRegistration(repair, taskRegistrationKey);
+    } else if (ordinary && !"GENERATED".equals(repair.getTaskGenerationState())) {
       taskBoardSupport.enqueueOrdinaryRepairExecution(
           repair, taskRegistrationKey, driverTaskKey);
     } else if (externalCapital) {
       taskBoardSupport.enqueueCapitalRepairMovement(repair, driverTaskKey);
     }
+  }
+
+  private MaintenanceRepair reconcileReleasedOwnerEffects(
+      MaintenanceRepair repair,
+      List<UUID> cancelledExternalTaskIds,
+      List<UUID> releasedLeaseIds) {
+    boolean cancelledTaskMentioned = cancelledExternalTaskIds != null
+        && cancelledExternalTaskIds.contains(repair.getExternalTaskId());
+    List<RepairStage> stages = cancelledTaskMentioned
+        ? repairStages.findAllByRepairIdOrderByStageNo(repair.getId())
+        : List.of();
+    boolean taskMappingCanRotate = cancelledTaskMentioned
+        && !stages.isEmpty()
+        && stages.stream().allMatch(RepairStage::hasConfirmedQueuedTaskMapping);
+    boolean releasedLeaseMentioned = repair.getLeaseId() != null
+        && releasedLeaseIds != null
+        && releasedLeaseIds.contains(repair.getLeaseId());
+    if (!taskMappingCanRotate && !releasedLeaseMentioned) {
+      return repair;
+    }
+    long expectedVersion =
+        events.lockCurrentVersion(MaintenanceAggregateType.REPAIR, repair.getId());
+    if (expectedVersion != repair.getVersion()) {
+      throw InventoryPublicationPlanValidation.conflict(
+          "Inventory owner-effect recovery event stream changed");
+    }
+    boolean taskRotated = taskMappingCanRotate
+        && repair.rotateCancelledInventoryTask(repair.getExternalTaskId());
+    boolean leaseInvalidated = releasedLeaseMentioned
+        && repair.markReleasedLeaseReconciliationRequired(repair.getLeaseId());
+    if (!taskRotated && !leaseInvalidated) {
+      return repair;
+    }
+    if (taskRotated) {
+      stages.forEach(RepairStage::resetCancelledInventoryTaskMapping);
+      repairStages.saveAllAndFlush(stages);
+    }
+    List<RepairStage> eventStages = stages.isEmpty()
+        ? repairStages.findAllByRepairIdOrderByStageNo(repair.getId())
+        : stages;
+    MaintenanceRepair saved = repairs.saveAndFlush(repair);
+    Map<String, Object> state = projectionSnapshots.repair(saved);
+    events.append(
+        MaintenanceAggregateType.REPAIR,
+        saved.getId(),
+        expectedVersion,
+        MaintenanceEventType.REPAIR_PLAN_CHANGED,
+        state,
+        eventFacts.repairPayload(MaintenanceEventType.REPAIR_PLAN_CHANGED, saved, eventStages),
+        state);
+    return saved;
   }
 
   private void attachMedia(

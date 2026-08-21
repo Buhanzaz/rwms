@@ -380,6 +380,190 @@ class InventoryOutcomeIntegrationTest {
   }
 
   @Test
+  void acceptsOnlyAForwardPlanCorrectionForTheSameCompletedInventorySource() {
+    UUID asset = UUID.randomUUID();
+    UUID finding = UUID.randomUUID();
+    String correctedPlanSha256 = "e".repeat(64);
+    ApplyInventoryOutcomeRequest original =
+        request(COMPLETED_AT, 20, PLAN_SHA256, finding, asset, InventoryDesiredStatus.FREE);
+    ApplyInventoryOutcomeRequest corrected =
+        request(
+            COMPLETED_AT, 21, correctedPlanSha256, finding, asset, InventoryDesiredStatus.REPAIR);
+    outcomes.apply(INVENTORY, UUID.randomUUID(), original);
+
+    ApplyInventoryOutcomeResponse advanced =
+        outcomes.apply(INVENTORY, UUID.randomUUID(), corrected);
+    ApplyInventoryOutcomeResponse exactReassertion =
+        outcomes.apply(INVENTORY, UUID.randomUUID(), corrected);
+
+    assertThat(advanced.finalPlanVersion()).isEqualTo(21);
+    assertThat(advanced.replay()).isFalse();
+    assertThat(exactReassertion.replay()).isFalse();
+
+    assertThatThrownBy(() -> outcomes.apply(INVENTORY, UUID.randomUUID(), original))
+        .isInstanceOf(LogisticsConflictException.class)
+        .hasMessageContaining("same completion time");
+    assertThatThrownBy(
+            () ->
+                outcomes.apply(
+                    INVENTORY,
+                    UUID.randomUUID(),
+                    request(
+                        COMPLETED_AT,
+                        21,
+                        "f".repeat(64),
+                        finding,
+                        asset,
+                        InventoryDesiredStatus.REPAIR)))
+        .isInstanceOf(LogisticsConflictException.class)
+        .hasMessageContaining("same completion time");
+    UUID anotherInventory = UUID.randomUUID();
+    assertThatThrownBy(
+            () ->
+                outcomes.apply(
+                    anotherInventory,
+                    UUID.randomUUID(),
+                    request(
+                        COMPLETED_AT,
+                        22,
+                        "1".repeat(64),
+                        finding,
+                        asset,
+                        InventoryDesiredStatus.REPAIR)))
+        .isInstanceOf(LogisticsConflictException.class)
+        .hasMessageContaining("same completion time");
+    assertThatThrownBy(
+            () ->
+                outcomes.apply(
+                    INVENTORY,
+                    UUID.randomUUID(),
+                    new ApplyInventoryOutcomeRequest(
+                        OTHER_WAREHOUSE,
+                        COMPLETED_AT,
+                        22,
+                        "2".repeat(64),
+                        List.of(
+                            new InventoryAssetOutcome(
+                                finding, asset, InventoryDesiredStatus.REPAIR)))))
+        .isInstanceOf(LogisticsConflictException.class)
+        .hasMessageContaining("same completion time");
+
+    assertThat(count("inventory_outcome_receipt")).isEqualTo(3);
+    assertThat(
+            jdbc.queryForObject(
+                "select final_plan_version from inventory_asset_outcome_watermark where asset_id=?",
+                Long.class,
+                asset))
+        .isEqualTo(21);
+    assertThat(
+            jdbc.queryForObject(
+                "select final_plan_sha256 from inventory_asset_outcome_watermark where asset_id=?",
+                String.class,
+                asset))
+        .isEqualTo(correctedPlanSha256);
+  }
+
+  @Test
+  void correctedPlanSupersedesNewlyIncludedRentalAndShipmentStateForEveryOutcomeStatus() {
+    UUID carriedAsset = UUID.randomUUID();
+    UUID carriedFinding = UUID.randomUUID();
+    List<UUID> restoredAssets = List.of(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID());
+    List<UUID> restoredFindings = List.of(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID());
+    OrderClient client = createClient();
+    RentalOrder order = createOrder(client, RentalOrderStatus.SAVED, restoredAssets, 91);
+    List<LogisticsDocumentLine> shipmentLines =
+        restoredAssets.stream()
+            .map(asset -> createShipmentLine(asset, LogisticsDocumentState.DRAFT, WAREHOUSE))
+            .toList();
+    outcomes.apply(
+        INVENTORY,
+        UUID.randomUUID(),
+        request(
+            COMPLETED_AT,
+            30,
+            PLAN_SHA256,
+            carriedFinding,
+            carriedAsset,
+            InventoryDesiredStatus.FREE));
+    String correctedPlanSha256 = "3".repeat(64);
+    ApplyInventoryOutcomeRequest corrected =
+        new ApplyInventoryOutcomeRequest(
+            WAREHOUSE,
+            COMPLETED_AT,
+            31,
+            correctedPlanSha256,
+            List.of(
+                new InventoryAssetOutcome(
+                    carriedFinding, carriedAsset, InventoryDesiredStatus.FREE),
+                new InventoryAssetOutcome(
+                    restoredFindings.get(0), restoredAssets.get(0), InventoryDesiredStatus.FREE),
+                new InventoryAssetOutcome(
+                    restoredFindings.get(1), restoredAssets.get(1), InventoryDesiredStatus.REPAIR),
+                new InventoryAssetOutcome(
+                    restoredFindings.get(2),
+                    restoredAssets.get(2),
+                    InventoryDesiredStatus.CAPITAL_REPAIR)));
+    UUID correctionKey = UUID.randomUUID();
+
+    ApplyInventoryOutcomeResponse applied = outcomes.apply(INVENTORY, correctionKey, corrected);
+    ApplyInventoryOutcomeResponse replayed = outcomes.apply(INVENTORY, correctionKey, corrected);
+
+    assertThat(applied.finalPlanVersion()).isEqualTo(31);
+    assertThat(applied.supersededLineCount()).isEqualTo(3);
+    assertThat(applied.supersededRentalUnitCount()).isEqualTo(3);
+    assertThat(applied.supersededDocumentIds())
+        .containsExactlyInAnyOrderElementsOf(
+            shipmentLines.stream().map(line -> line.getDocument().getId()).toList());
+    assertThat(applied.supersededRentalOrderIds()).containsExactly(order.getId());
+    assertThat(applied.replay()).isFalse();
+    assertThat(replayed.replay()).isTrue();
+    assertThat(orderStatus(order)).isEqualTo(RentalOrderStatus.CANCELLED.name());
+    assertThat(
+            jdbc.queryForList(
+                "select distinct state from logistics_document where inventory_superseded_by=?",
+                String.class,
+                INVENTORY))
+        .containsExactly(LogisticsDocumentState.CANCELLED.name());
+    assertThat(
+            jdbc.queryForList(
+                "select inventory_desired_status from rental_order_unit_term where order_id=? order"
+                    + " by inventory_desired_status",
+                String.class,
+                order.getId()))
+        .containsExactly("CAPITAL_REPAIR", "FREE", "REPAIR");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from rental_order_unit_term where order_id=? and"
+                    + " inventory_superseded_by=? and inventory_final_plan_version=? and"
+                    + " inventory_final_plan_sha256=?",
+                Long.class,
+                order.getId(),
+                INVENTORY,
+                31L,
+                correctedPlanSha256))
+        .isEqualTo(3);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_document_line where inventory_superseded_by=? and"
+                    + " inventory_final_plan_version=? and inventory_final_plan_sha256=?",
+                Long.class,
+                INVENTORY,
+                31L,
+                correctedPlanSha256))
+        .isEqualTo(3);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from inventory_asset_outcome_watermark where inventory_id=? and"
+                    + " final_plan_version=? and final_plan_sha256=?",
+                Long.class,
+                INVENTORY,
+                31L,
+                correctedPlanSha256))
+        .isEqualTo(4);
+    assertThat(count("inventory_outcome_receipt")).isEqualTo(2);
+  }
+
+  @Test
   void sameSourceReassertionDoesNotCancelTheMovementCreatedByThatInventoryFinding() {
     UUID asset = UUID.randomUUID();
     UUID finding = UUID.randomUUID();

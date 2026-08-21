@@ -747,6 +747,7 @@ public class MaintenanceRepairUseCases {
     }
     MaintenanceRepair initialSource = repairModelSupport.requireRepair(sourceId);
     commandSupport.assertVersion(initialSource.getVersion(), request.expectedVersion());
+    requireInventoryExecutionCompletion(initialSource);
     mediaSupport.validateCoverMediaSelection(request.mediaReferences(), request.coverMediaId());
     estimateSupport.validatePlan(
         request.plan(), request.lines() == null || request.lines().isEmpty());
@@ -770,6 +771,7 @@ public class MaintenanceRepairUseCases {
     MaintenanceRepair source = Optional.ofNullable(current.get(sourceId))
         .orElseThrow(() -> new MaintenanceNotFoundException("Repair not found"));
     commandSupport.assertVersion(source.getVersion(), request.expectedVersion());
+    requireInventoryExecutionCompletion(source);
     repairLifecycleSupport.assertStreamParity(source, locked);
     if (source.getRootRepairId() != null) {
       MaintenanceRepair root = Optional.ofNullable(current.get(source.getRootRepairId()))
@@ -859,6 +861,7 @@ public class MaintenanceRepairUseCases {
           "Repair is being superseded by an authoritative inventory outcome");
     }
     commandSupport.assertVersion(initial.getVersion(), request.expectedVersion());
+    requireInventoryExecutionCompletion(initial);
     List<MaintenanceRepair> sources = repairLifecycleSupport.sourceChain(initial);
     repairLifecycleSupport.requireNoActiveRework(initial);
     return new AcceptanceCommandPreflight(
@@ -893,6 +896,7 @@ public class MaintenanceRepairUseCases {
     LockedRepairChain lockedChain = repairLifecycleSupport.lockAndReloadRepairChain(initial, request.expectedVersion());
     MaintenanceRepair repair = lockedChain.repair();
     List<MaintenanceRepair> sourceChain = lockedChain.sources();
+    requireInventoryExecutionCompletion(repair);
     repairLifecycleSupport.requireNoActiveRework(repair);
     repairLifecycleSupport.requireMatchingLeaseRefreshPlan(expectedLeasePlan, repair, sourceChain);
     mediaSupport.replaceMedia(
@@ -935,6 +939,7 @@ public class MaintenanceRepairUseCases {
     return repairs.findAllByWarehouseIdOrderByCreatedAtDesc(warehouseId).stream()
         .filter(value -> value.getAcceptanceState() == RepairAcceptanceState.PENDING
             || value.getAcceptanceState() == RepairAcceptanceState.IN_REWORK)
+        .filter(this::hasInventoryExecutionCompletion)
         // A source repair is not actionable while a child rework is still being
         // planned, executed or awaiting its own acceptance. Returning both
         // chain nodes made clients offer a terminal action that must be rejected.
@@ -943,6 +948,24 @@ public class MaintenanceRepairUseCases {
             value.getId(), commandSupport.rootId(value), value.getWarehouseId(), value.getRentalItemId(),
             value.getExecutionState(), value.getAcceptanceState(), value.getVersion(), value.getUpdatedAt()))
         .toList();
+  }
+
+  /**
+   * Rejects historical inventory rows whose publication was previously mistaken for work
+   * completion. An inventory repair can enter acceptance or rework only after task-board has
+   * registered and completed its execution route.
+   */
+  private void requireInventoryExecutionCompletion(MaintenanceRepair repair) {
+    if (!hasInventoryExecutionCompletion(repair)) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Inventory publication is not proof that repair execution completed");
+    }
+  }
+
+  /** Returns whether inventory-origin work has task-board execution evidence. */
+  private boolean hasInventoryExecutionCompletion(MaintenanceRepair repair) {
+    return repair.getOrigin() != RepairOrigin.INVENTORY || repair.getTaskBoardVersion() != null;
   }
 
 }

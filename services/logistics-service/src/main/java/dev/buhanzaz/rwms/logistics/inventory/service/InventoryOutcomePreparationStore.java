@@ -88,7 +88,11 @@ public class InventoryOutcomePreparationStore {
   private final LogisticsTransactionLock transactionLock;
   private final ObjectMapper json;
 
-  /** Validates the entire batch and persists every local marker or rolls everything back. */
+  /**
+   * Validates the entire batch and persists every local marker or rolls everything back. An equal
+   * completion time can advance only the same warehouse/inventory source to a strictly greater
+   * immutable final-plan version.
+   */
   @Transactional
   public Preparation prepare(
       UUID idempotencyKey,
@@ -281,13 +285,20 @@ public class InventoryOutcomePreparationStore {
         throw new LogisticsConflictException(
             "A newer completed inventory already owns asset " + assetId);
       }
-      if (comparison == 0
-          && !watermark.sameSource(
+      boolean exactSource =
+          watermark.sameSource(
               command.warehouseId(),
               command.inventoryCompletedAt(),
               command.inventoryId(),
               command.finalPlanVersion(),
-              command.finalPlanSha256())) {
+              command.finalPlanSha256());
+      boolean correctedSource =
+          watermark.isStrictlyNewerPlanForSameCompletedInventory(
+              command.warehouseId(),
+              command.inventoryCompletedAt(),
+              command.inventoryId(),
+              command.finalPlanVersion());
+      if (comparison == 0 && !exactSource && !correctedSource) {
         throw new LogisticsConflictException(
             "Another immutable inventory source has the same completion time for asset " + assetId);
       }

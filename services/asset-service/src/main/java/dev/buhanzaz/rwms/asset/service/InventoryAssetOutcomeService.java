@@ -44,6 +44,7 @@ import tools.jackson.databind.JsonNode;
  */
 @Service
 final class InventoryAssetOutcomeService {
+  private static final String MAINTENANCE_REPAIR_LEASE_OWNER = "MAINTENANCE_REPAIR";
   private static final Set<String> OBSERVATION_FIELDS = Set.of("presence", "value");
   private static final Set<String> PASSPORT_FIELDS =
       Set.of(
@@ -136,13 +137,11 @@ final class InventoryAssetOutcomeService {
     InventoryAssetOutcomeWatermark watermark =
         watermarks.findByAssetIdForUpdate(plan.assetId()).orElse(null);
     assertLatest(plan, watermark);
-    boolean sameSourceReassertion = sameSource(plan, watermark);
     ResolvedPassport passport = resolvePassport(plan.passport());
 
     List<UUID> releasedLeaseIds =
-        sameSourceReassertion
-            ? List.of()
-            : leases.releaseForCompletedInventory(plan.assetId());
+        leases.releaseForCompletedInventory(
+            plan.assetId(), retainedLeaseOwnerTypes(plan.desiredStatus()));
     List<OrderUnitReservation> activeOrderReservations =
         orderReservations.findAllByRentalItemIdAndStateForUpdate(
             plan.assetId(), OrderUnitReservationState.ACTIVE);
@@ -246,23 +245,40 @@ final class InventoryAssetOutcomeService {
           "An older completed inventory cannot replace the current cabin outcome");
     }
     if (ordering == 0
-        && !sameOrLegacySource(plan, watermark)) {
+        && !sameSourceOrCorrection(plan, watermark)) {
       throw new AssetConflictException(
           "Equal-time inventory outcome conflicts with the accepted final-plan source");
     }
   }
 
   /**
-   * Identifies a deliberate new-key reassertion of the current immutable finding.
+   * Identifies a deliberate new-key reassertion or higher-plan correction of the current finding.
    *
-   * <p>The first or a newer inventory source ends the previously active operation lease. A
-   * same-source reassertion preserves it because it may already belong to the repair created by
-   * this outcome; the downstream maintenance or logistics owner still supersedes any unrelated
-   * predecessor under its exact owner/fencing proof.
+   * <p>An equal completion time permits only the exact immutable source, its one-time legacy
+   * adoption, or a strictly higher plan version of the same inventory and finding. Equal and lower
+   * plan-version drift remains fenced.
    */
-  private static boolean sameSource(
+  private static boolean sameSourceOrCorrection(
       OutcomePlan plan, InventoryAssetOutcomeWatermark watermark) {
-    return watermark != null && sameOrLegacySource(plan, watermark);
+    return watermark != null
+        && (sameOrLegacySource(plan, watermark)
+            || watermark.isNewerPlanRevisionOfSameCompletedFinding(
+                plan.inventoryId(),
+                plan.findingId(),
+                plan.inventoryCompletedAt(),
+                plan.finalPlanVersion()));
+  }
+
+  /**
+   * Retains only maintenance repair custody while physical inventory still routes the cabin to a
+   * repair state. Free outcomes release every active lease, including obsolete repair custody.
+   */
+  private static Set<String> retainedLeaseOwnerTypes(RentalItemStatus desiredStatus) {
+    if (desiredStatus == RentalItemStatus.REPAIR
+        || desiredStatus == RentalItemStatus.CAPITAL_REPAIR) {
+      return Set.of(MAINTENANCE_REPAIR_LEASE_OWNER);
+    }
+    return Set.of();
   }
 
   private static boolean sameOrLegacySource(

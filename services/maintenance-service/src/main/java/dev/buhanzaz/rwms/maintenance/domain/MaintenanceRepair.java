@@ -11,6 +11,7 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -343,6 +344,34 @@ public class MaintenanceRepair {
     taskBoardVersion = null;
   }
 
+  /**
+   * Routes an inventory repair to capital execution without treating publication as completion.
+   *
+   * <p>The route intentionally has no ordinary task-board task and remains non-actionable for
+   * acceptance until a future authoritative capital-execution completion is recorded.
+   */
+  public void routeInventoryToExternalCapital() {
+    if (origin != RepairOrigin.INVENTORY
+        || !((executionState == RepairExecutionState.QUEUED
+                && acceptanceState == RepairAcceptanceState.NOT_READY)
+            || executionState == RepairExecutionState.IN_PROGRESS
+            || (executionState == RepairExecutionState.COMPLETED
+                && acceptanceState == RepairAcceptanceState.PENDING
+                && reclassificationState == RepairReclassificationState.EXTERNAL_CAPITAL))) {
+      throw new IllegalStateException(
+          "Only an active or legacy publication-completed inventory repair can be routed to "
+              + "external capital execution");
+    }
+    executionState = RepairExecutionState.QUEUED;
+    acceptanceState = RepairAcceptanceState.NOT_READY;
+    taskGenerationState = "NOT_REQUIRED";
+    deliveryState = "DELIVERED";
+    reconciliationState = "RECONCILED";
+    reclassificationState = RepairReclassificationState.EXTERNAL_CAPITAL;
+    deliveryUpdatedAt = MaintenanceTime.now();
+    taskBoardVersion = null;
+  }
+
   public void markReclassifyingCapital() {
     if (executionState != RepairExecutionState.QUEUED
         && executionState != RepairExecutionState.IN_PROGRESS) {
@@ -576,6 +605,42 @@ public class MaintenanceRepair {
   }
 
   /**
+   * Rotates a cancelled inventory-owned task identity without reopening started or moved work.
+   *
+   * <p>The caller must first prove that every repair stage still has its confirmed queued mapping.
+   * A different or historical cancellation identity is a harmless no-op, which makes exact
+   * corrected-plan replays stable.
+   */
+  public boolean rotateCancelledInventoryTask(UUID cancelledExternalTaskId) {
+    if (cancelledExternalTaskId == null
+        || !cancelledExternalTaskId.equals(externalTaskId)
+        || id == null
+        || origin != RepairOrigin.INVENTORY
+        || kind != RepairKind.PRIMARY
+        || executionState != RepairExecutionState.QUEUED
+        || acceptanceState != RepairAcceptanceState.NOT_READY
+        || reclassificationState != RepairReclassificationState.STABLE
+        || movementToRepair
+        || taskBoardVersion == null) {
+      return false;
+    }
+    UUID replacementTaskId = UUID.nameUUIDFromBytes(
+        ("inventory-cancelled-task-replacement:" + id + ":" + cancelledExternalTaskId)
+            .getBytes(StandardCharsets.UTF_8));
+    if (replacementTaskId.equals(cancelledExternalTaskId)) {
+      throw new IllegalStateException("Inventory replacement task identity did not advance");
+    }
+    externalTaskId = replacementTaskId;
+    taskBoardVersion = null;
+    taskGenerationState = "PENDING_GENERATION";
+    deliveryState = "RETRY_PENDING";
+    reconciliationState = "RECONCILIATION_REQUIRED";
+    deliveryUpdatedAt = MaintenanceTime.now();
+    updatedAt = deliveryUpdatedAt;
+    return true;
+  }
+
+  /**
    * Restores only an ordinary queued inbound delivery after its exact durable logistics intent
    * has been reviewed and resumed. This intentionally does not share the draft-only movement
    * selector: recovery must not broaden ordinary plan editing after queueing.
@@ -702,12 +767,12 @@ public class MaintenanceRepair {
   }
 
   /**
-   * Cancels an external-capital handoff only after logistics has atomically cancelled its pending
-   * capital movement. A completed/started capital movement is intentionally not eligible here.
+   * Cancels an inventory-origin external-capital route only after remote guards prove that no
+   * capital work has started. The route remains queued until that external work actually finishes.
    */
   public void supersedeExternalCapitalForInventoryPublication() {
-    if (executionState != RepairExecutionState.COMPLETED
-        || acceptanceState != RepairAcceptanceState.PENDING
+    if (executionState != RepairExecutionState.QUEUED
+        || acceptanceState != RepairAcceptanceState.NOT_READY
         || reclassificationState != RepairReclassificationState.EXTERNAL_CAPITAL) {
       throw new IllegalStateException(
           "Only a pending external-capital handoff can be superseded after compensation");
@@ -807,6 +872,21 @@ public class MaintenanceRepair {
     reconciliationState = "RECONCILIATION_REQUIRED";
     deliveryState = "RETRY_PENDING";
     deliveryUpdatedAt = MaintenanceTime.now();
+  }
+
+  /**
+   * Invalidates the exact local lease fence that authoritative inventory durably released.
+   * Replays after the fence has already been invalidated are side-effect free.
+   */
+  public boolean markReleasedLeaseReconciliationRequired(UUID releasedLeaseId) {
+    if (releasedLeaseId == null || !releasedLeaseId.equals(leaseId)) {
+      return false;
+    }
+    if ("RECONCILIATION_REQUIRED".equals(leaseReconciliationState)) {
+      return false;
+    }
+    markLeaseReconciliationRequired();
+    return true;
   }
 
   public void renewLease(long leaseVersion, OffsetDateTime expiresAt) {

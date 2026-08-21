@@ -2,8 +2,10 @@ package dev.buhanzaz.rwms.maintenance.repository;
 
 import dev.buhanzaz.rwms.maintenance.domain.InventoryAuthoritativeOutcomeReceipt;
 import jakarta.persistence.LockModeType;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -44,6 +46,26 @@ public interface InventoryAuthoritativeOutcomeReceiptRepository
           + " where value.idempotencyKey = :idempotencyKey")
   Optional<InventoryAuthoritativeOutcomeReceipt> findByIdForUpdate(
       @Param("idempotencyKey") UUID idempotencyKey);
+
+  /** Locks a bounded newest completed receipt for one immutable inventory source request. */
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select value from InventoryAuthoritativeOutcomeReceipt value
+       where value.inventoryId = :inventoryId
+         and value.finalPlanVersion = :finalPlanVersion
+         and value.findingId = :findingId
+         and value.requestSha256 = :requestSha256
+         and value.completedAt is not null
+         and value.responseSnapshot is not null
+       order by value.completedAt desc, value.idempotencyKey asc
+      """)
+  List<InventoryAuthoritativeOutcomeReceipt> findNewestCompletedForUpdate(
+      @Param("inventoryId") UUID inventoryId,
+      @Param("finalPlanVersion") long finalPlanVersion,
+      @Param("findingId") UUID findingId,
+      @Param("requestSha256") String requestSha256,
+      Pageable page);
 
   /** Immutable authoritative-inventory fields required by the public repair read model. */
   interface AuthoritativeRepairSourceEvidence {

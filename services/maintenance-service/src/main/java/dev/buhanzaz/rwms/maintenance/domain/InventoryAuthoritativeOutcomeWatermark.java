@@ -74,6 +74,20 @@ public class InventoryAuthoritativeOutcomeWatermark {
         && Objects.equals(desiredStatus, source.getDesiredStatus());
   }
 
+  /**
+   * Returns true for a strictly newer immutable plan version of this exact completed finding.
+   * Content compatibility is checked by the owning application service before replacement.
+   */
+  public boolean isStrictlyNewerPlanVersionOfSameFinding(
+      InventoryAuthoritativeOutcome source) {
+    return source != null
+        && Objects.equals(warehouseId, source.getWarehouseId())
+        && Objects.equals(inventoryCompletedAt, source.getInventoryCompletedAt())
+        && Objects.equals(inventoryId, source.getId().getInventoryId())
+        && source.getId().getFinalPlanVersion() > finalPlanVersion
+        && Objects.equals(findingId, source.getId().getFindingId());
+  }
+
   /** Advances the pointer only after the caller has proved strict completed-time ordering. */
   public void replaceWith(InventoryAuthoritativeOutcome source) {
     if (source == null) {

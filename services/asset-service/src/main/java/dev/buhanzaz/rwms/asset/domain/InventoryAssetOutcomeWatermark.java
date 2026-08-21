@@ -21,8 +21,8 @@ import java.util.UUID;
 import org.hibernate.proxy.HibernateProxy;
 
 /**
- * Per-cabin high-water mark that prevents an older completed inventory from replacing newer
- * physical truth.
+ * Per-cabin high-water mark that prevents an older completed inventory or final-plan revision from
+ * replacing newer physical truth.
  */
 @Entity
 @Table(name = "inventory_asset_outcome_watermark")
@@ -201,6 +201,24 @@ public class InventoryAssetOutcomeWatermark {
             finalPlanSha256,
             findingRevision,
             desiredStatus);
+  }
+
+  /**
+   * Returns whether an equal-time source is a strictly newer final-plan revision of the same
+   * completed inventory finding.
+   *
+   * <p>The final-plan hash and finding payload may change in that revision. Equal and lower plan
+   * versions remain fenced by the caller unless the complete immutable source matches exactly.
+   */
+  public boolean isNewerPlanRevisionOfSameCompletedFinding(
+      UUID inventoryId,
+      UUID findingId,
+      OffsetDateTime inventoryCompletedAt,
+      long finalPlanVersion) {
+    return Objects.equals(this.inventoryId, inventoryId)
+        && Objects.equals(this.findingId, findingId)
+        && Objects.equals(this.inventoryCompletedAt, inventoryCompletedAt)
+        && finalPlanVersion > this.finalPlanVersion;
   }
 
   private boolean isSameBaseSource(

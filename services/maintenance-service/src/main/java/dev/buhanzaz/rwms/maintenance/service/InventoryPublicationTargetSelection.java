@@ -136,8 +136,8 @@ final class InventoryPublicationTargetSelection {
         && repair.getReclassificationState() == RepairReclassificationState.STABLE) {
       return new InventoryPublicationPrestartCandidate("ORDINARY", "DELIVER_TO_REPAIR");
     }
-    if (repair.getExecutionState() == RepairExecutionState.COMPLETED
-        && repair.getAcceptanceState() == RepairAcceptanceState.PENDING
+    if (repair.getExecutionState() == RepairExecutionState.QUEUED
+        && repair.getAcceptanceState() == RepairAcceptanceState.NOT_READY
         && repair.getReclassificationState() == RepairReclassificationState.EXTERNAL_CAPITAL) {
       return new InventoryPublicationPrestartCandidate("EXTERNAL_CAPITAL", "CAPITAL_TO_PRODUCTION");
     }

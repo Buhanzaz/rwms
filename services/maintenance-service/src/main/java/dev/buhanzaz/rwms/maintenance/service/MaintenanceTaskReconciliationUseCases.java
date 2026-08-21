@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.maintenance.domain.MaintenanceRepair;
 import dev.buhanzaz.rwms.maintenance.domain.RepairAcceptanceState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairExecutionState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairLogisticsPlanningMode;
+import dev.buhanzaz.rwms.maintenance.domain.RepairOrigin;
 import dev.buhanzaz.rwms.maintenance.domain.RepairReclassificationState;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventStore;
 import dev.buhanzaz.rwms.maintenance.integration.MaintenanceDependencyGateway;
@@ -43,8 +44,6 @@ final class MaintenanceTaskReconciliationUseCases {
   private final WarehouseLifecycleOperations warehouseLifecycle;
   private final MaintenanceCommandSupport commandSupport;
   private final MaintenanceEventPayloadSupport eventPayloadSupport;
-  private final MaintenanceReconciliationSupport reconciliationSupport;
-  private final MaintenanceRepairModelSupport repairModelSupport;
   private final MaintenanceTaskBoardSupport taskBoardSupport;
   private final TransactionTemplate transactions;
 
@@ -62,8 +61,6 @@ final class MaintenanceTaskReconciliationUseCases {
       WarehouseLifecycleOperations warehouseLifecycle,
       MaintenanceCommandSupport commandSupport,
       MaintenanceEventPayloadSupport eventPayloadSupport,
-      MaintenanceReconciliationSupport reconciliationSupport,
-      MaintenanceRepairModelSupport repairModelSupport,
       MaintenanceTaskBoardSupport taskBoardSupport,
       PlatformTransactionManager transactionManager) {
     this.repairs = repairs;
@@ -79,8 +76,6 @@ final class MaintenanceTaskReconciliationUseCases {
     this.warehouseLifecycle = warehouseLifecycle;
     this.commandSupport = commandSupport;
     this.eventPayloadSupport = eventPayloadSupport;
-    this.reconciliationSupport = reconciliationSupport;
-    this.repairModelSupport = repairModelSupport;
     this.taskBoardSupport = taskBoardSupport;
     this.transactions = new TransactionTemplate(transactionManager);
   }
@@ -150,12 +145,18 @@ final class MaintenanceTaskReconciliationUseCases {
     return Boolean.TRUE.equals(ready);
   }
 
+  /**
+   * Creates or replays logistics work without a maintenance transaction, resolves the current
+   * warehouse-local day after that response and confirms only the still-current durable intent.
+   */
   void reconcileDriverLogisticsTaskClaim(MaintenanceReconciliationStore.WorkItem work) {
     DriverTaskPlan plan = commandSupport.requireReconciliationResult(
         transactions.execute(status -> prepareDriverTaskPlan(work)));
     MaintenanceDependencyGateway.DriverTaskSnapshot task =
         dependencies.createDriverTask(work.idempotencyKey(), plan.command());
-    validateDriverTaskTruth(plan.command(), task);
+    LocalDate currentWarehouseDate = warehouseLifecycle.localDateAt(
+        plan.command().warehouseId(), OffsetDateTime.now(java.time.ZoneOffset.UTC));
+    validateDriverTaskTruth(plan.command(), task, currentWarehouseDate);
     transactions.executeWithoutResult(
         status -> {
           DriverTaskPlan current = prepareDriverTaskPlan(work);
@@ -170,13 +171,15 @@ final class MaintenanceTaskReconciliationUseCases {
                   "repairId", plan.repairId().toString(),
                   "driverTaskId", task.id().toString(),
                   "driverTaskVersion", task.version(),
+                  "scheduledDate", task.scheduledDate().toString(),
                   "state", task.state()));
         });
   }
 
   /**
-   * Rehydrates either the ordinary inbound route or the dedicated external-capital outbound route
-   * from one durable reconciliation intent.
+   * Rehydrates either the ordinary inbound route or the dedicated external-capital movement from
+   * one durable reconciliation intent. Inventory-origin capital work remains queued and outside
+   * acceptance while its selected movement is active.
    */
   private DriverTaskPlan prepareDriverTaskPlan(MaintenanceReconciliationStore.WorkItem work) {
     String kind = work.payload().path("kind").asText();
@@ -196,12 +199,15 @@ final class MaintenanceTaskReconciliationUseCases {
     }
     boolean capitalMovement = "CAPITAL_TO_PRODUCTION".equals(kind);
     if (capitalMovement) {
-      if (repair.getExecutionState() != RepairExecutionState.COMPLETED
-          || repair.getAcceptanceState() != RepairAcceptanceState.PENDING
+      if (!((repair.getExecutionState() == RepairExecutionState.COMPLETED
+                  && repair.getAcceptanceState() == RepairAcceptanceState.PENDING)
+              || (repair.getOrigin() == RepairOrigin.INVENTORY
+                  && repair.getExecutionState() == RepairExecutionState.QUEUED
+                  && repair.getAcceptanceState() == RepairAcceptanceState.NOT_READY))
           || repair.getReclassificationState() != RepairReclassificationState.EXTERNAL_CAPITAL) {
         throw new MaintenanceConflictException(
             "MAINTENANCE_STATE_CONFLICT",
-            "Only pending external capital repair can create a production movement");
+            "Only active external capital repair can create its selected movement");
       }
     } else if (repair.getExecutionState() != RepairExecutionState.QUEUED
         || repair.getReclassificationState() == RepairReclassificationState.EXTERNAL_CAPITAL) {
@@ -213,7 +219,7 @@ final class MaintenanceTaskReconciliationUseCases {
         capitalMovement
             ? null
             : authoritativeOutcomes
-                .findByTargetRepairId(repair.getId())
+                .findNewestAppliedByTargetRepairId(repair.getId())
                 .map(value -> value.getId().getFindingId())
                 .or(
                     () ->
@@ -256,9 +262,17 @@ final class MaintenanceTaskReconciliationUseCases {
             false));
   }
 
+  /**
+   * Fences logistics-owned effective scheduling before the reconciliation is confirmed. An
+   * overdue fixed request retains its original date in maintenance while logistics may return a
+   * stored effective date through the current warehouse-local day; a current or future request
+   * must still match exactly. The caller resolves {@code currentWarehouseDate} without a local
+   * transaction or maintenance lock.
+   */
   private static void validateDriverTaskTruth(
       MaintenanceDependencyGateway.DriverTaskCommand command,
-      MaintenanceDependencyGateway.DriverTaskSnapshot task) {
+      MaintenanceDependencyGateway.DriverTaskSnapshot task,
+      LocalDate currentWarehouseDate) {
     if (task == null
         || task.id() == null
         || task.version() < 0
@@ -269,8 +283,7 @@ final class MaintenanceTaskReconciliationUseCases {
         || !command.sourceId().equals(task.sourceId())
         || !command.kind().equals(task.kind())
         || command.planningMode() != task.planningMode()
-        || (command.planningMode() == RepairLogisticsPlanningMode.FIXED_DATE
-            && !command.scheduledDate().equals(task.scheduledDate()))
+        || !effectiveDriverDateMatches(command, task, currentWarehouseDate)
         || command.priority() != task.priority()
         || !Set.of("REGISTERING", "SCHEDULED", "CURRENT", "FINALIZING", "COMPLETED")
             .contains(task.state())) {
@@ -278,6 +291,21 @@ final class MaintenanceTaskReconciliationUseCases {
           org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
           "Logistics-service returned mismatched driver-task truth");
     }
+  }
+
+  /** Applies the exact-current/future and inclusive-overdue effective-date fence. */
+  private static boolean effectiveDriverDateMatches(
+      MaintenanceDependencyGateway.DriverTaskCommand command,
+      MaintenanceDependencyGateway.DriverTaskSnapshot task,
+      LocalDate currentWarehouseDate) {
+    if (task.scheduledDate() == null || currentWarehouseDate == null) return false;
+    if (command.planningMode() == RepairLogisticsPlanningMode.AUTO) return true;
+    LocalDate requestedDate = command.scheduledDate();
+    if (!requestedDate.isBefore(currentWarehouseDate)) {
+      return requestedDate.equals(task.scheduledDate());
+    }
+    return !task.scheduledDate().isBefore(requestedDate)
+        && !task.scheduledDate().isAfter(currentWarehouseDate);
   }
 
   void reconcileTaskClaim(MaintenanceReconciliationStore.WorkItem work, boolean update) {
@@ -325,7 +353,10 @@ final class MaintenanceTaskReconciliationUseCases {
             throw new MaintenanceConflictException(
                 "MAINTENANCE_STATE_CONFLICT", "Task reconciliation changed before finalization");
           }
-          MaintenanceRepair repair = repairModelSupport.requireRepair(plan.repairId());
+          MaintenanceRepair repair =
+              repairs
+                  .findById(plan.repairId())
+                  .orElseThrow(() -> new MaintenanceNotFoundException("Repair not found"));
           long expectedVersion =
               events.lockCurrentVersion(MaintenanceAggregateType.REPAIR, repair.getId());
           commandSupport.assertVersion(repair.getVersion(), expectedVersion);

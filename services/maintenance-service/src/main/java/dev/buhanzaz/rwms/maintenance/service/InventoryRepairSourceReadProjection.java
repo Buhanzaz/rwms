@@ -27,7 +27,7 @@ final class InventoryRepairSourceReadProjection {
 
   /**
    * Returns the immutable source bound to {@code repairId}, preferring the newest completed
-   * receipt generation over the coordinator's original target.
+   * receipt generation over the newest applied coordinator target.
    */
   Optional<InventorySourceReference> findAuthoritativeSource(UUID repairId) {
     return receipts
@@ -36,7 +36,7 @@ final class InventoryRepairSourceReadProjection {
         .or(
             () ->
                 outcomes
-                    .findByTargetRepairId(repairId)
+                    .findNewestAppliedByTargetRepairId(repairId)
                     .map(InventoryRepairSourceReadProjection::reference));
   }
 

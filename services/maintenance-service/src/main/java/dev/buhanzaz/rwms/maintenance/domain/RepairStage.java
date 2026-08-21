@@ -179,6 +179,31 @@ public class RepairStage {
     completedAt = MaintenanceTime.now();
   }
 
+  /**
+   * Routes an inventory stage to capital repair without fabricating local work completion.
+   *
+   * <p>Capital execution has no task-board entry, but publishing an inventory result is not proof
+   * that the external work finished. The stage therefore remains active and cannot feed repair
+   * acceptance.
+   */
+  public void routeToExternalCapital() {
+    if (state == RepairStageState.QUEUED && "NOT_REQUIRED".equals(taskGenerationState)) {
+      return;
+    }
+    if (state != RepairStageState.PLANNED
+        && state != RepairStageState.QUEUED
+        && state != RepairStageState.IN_PROGRESS
+        && !(state == RepairStageState.DONE && "NOT_REQUIRED".equals(taskGenerationState))) {
+      throw new IllegalStateException(
+          "Only an active repair stage can be routed to external capital execution");
+    }
+    state = RepairStageState.QUEUED;
+    taskGenerationState = "NOT_REQUIRED";
+    deliveryState = "DELIVERED";
+    deliveryUpdatedAt = MaintenanceTime.now();
+    completedAt = null;
+  }
+
   public void confirmTaskBoardRegistration(
       UUID taskBoardEntryId, long entryVersion) {
     if (taskBoardEntryId == null || entryVersion < 0) {
@@ -199,6 +224,28 @@ public class RepairStage {
     deliveryAttempts = Math.addExact(deliveryAttempts, 1);
     deliveryState = quarantined ? "QUARANTINED" : "RETRY_PENDING";
     taskGenerationState = quarantined ? "FAILED" : "PENDING_GENERATION";
+    deliveryUpdatedAt = MaintenanceTime.now();
+  }
+
+  /** Returns true when this queued stage still mirrors a confirmed task-board entry. */
+  public boolean hasConfirmedQueuedTaskMapping() {
+    return state == RepairStageState.QUEUED
+        && externalQueueEntryId != null
+        && taskBoardVersion != null;
+  }
+
+  /**
+   * Clears only the cancelled task-board mapping while retaining the frozen stage plan and state.
+   */
+  public void resetCancelledInventoryTaskMapping() {
+    if (!hasConfirmedQueuedTaskMapping()) {
+      throw new IllegalStateException(
+          "Only a queued stage with confirmed task-board mapping can be reset");
+    }
+    externalQueueEntryId = null;
+    taskBoardVersion = null;
+    taskGenerationState = "PENDING_GENERATION";
+    deliveryState = "RETRY_PENDING";
     deliveryUpdatedAt = MaintenanceTime.now();
   }
 
@@ -260,9 +307,9 @@ public class RepairStage {
     deliveryUpdatedAt = MaintenanceTime.now();
   }
 
-  /** External-capital stages have no ordinary task-board route to preserve. */
+  /** Cancels a queued external-capital stage after remote guards prove work has not started. */
   public void supersedeExternalCapitalForInventoryPublication() {
-    if (state != RepairStageState.DONE || !"NOT_REQUIRED".equals(taskGenerationState)) {
+    if (state != RepairStageState.QUEUED || !"NOT_REQUIRED".equals(taskGenerationState)) {
       throw new IllegalStateException(
           "Only an unaccepted external-capital stage can be superseded");
     }

@@ -551,7 +551,10 @@ paths:
         the logistics.maintenance scope. It creates the same logistics-owned
         driver task as the public board: DELIVER_TO_REPAIR for ordinary work or
         CAPITAL_TO_PRODUCTION for an external-capital repair. It never bypasses
-        repair-place capacity or the ordered CURRENT queue.
+        repair-place capacity or the ordered CURRENT queue. For FIXED_DATE the
+        request date remains immutable idempotency input; when that date is
+        overdue, the returned DriverTask.scheduledDate is the logistics-owned
+        effective warehouse-local date and may be later than the request.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -2593,7 +2596,10 @@ components:
         kind: { $ref: "#/components/schemas/DriverTaskKind" }
         planningMode: { $ref: "#/components/schemas/DriverTaskPlanningMode" }
         scheduledDate:
-          description: Required only for FIXED_DATE and forbidden for AUTO.
+          description: >-
+            Required only for FIXED_DATE and forbidden for AUTO. This is the
+            immutable requested date; private maintenance intake can return a
+            later effective date for an overdue request.
           type: [string, "null"]
           format: date
         priority: { type: integer, minimum: 1, maximum: 5 }
@@ -2655,7 +2661,13 @@ components:
         sourceId: { type: string, format: uuid }
         kind: { $ref: "#/components/schemas/DriverTaskKind" }
         planningMode: { $ref: "#/components/schemas/DriverTaskPlanningMode" }
-        scheduledDate: { type: string, format: date }
+        scheduledDate:
+          type: string
+          format: date
+          description: >-
+            Logistics-owned effective execution date. For an overdue private
+            maintenance FIXED_DATE create or replay it may be later than the
+            immutable date in the request.
         priority: { type: integer, minimum: 1, maximum: 5 }
         comment: { type: [string, "null"], maxLength: 1000 }
         unitNumber: { type: string, minLength: 1, maxLength: 64 }

@@ -889,7 +889,11 @@ public interface MaintenanceDependencyGateway {
     }
   }
 
-  /** Exact logistics command for an ordinary inbound or external-capital outbound movement. */
+  /**
+   * Exact logistics command for an ordinary inbound or external-capital outbound movement.
+   * {@code scheduledDate} remains the immutable requested date for {@code FIXED_DATE}; logistics
+   * may normalize an overdue request only in its returned effective task truth.
+   */
   record DriverTaskCommand(
       UUID warehouseId,
       UUID cabinId,
@@ -922,7 +926,10 @@ public interface MaintenanceDependencyGateway {
     }
   }
 
-  /** Logistics-owned movement truth returned for a maintenance command. */
+  /**
+   * Logistics-owned movement truth returned for a maintenance command. Its {@code scheduledDate}
+   * is the effective execution date and can therefore be later than an overdue fixed request.
+   */
   record DriverTaskSnapshot(
       UUID id,
       long version,

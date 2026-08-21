@@ -24,7 +24,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /** Loads, locks and maps repair aggregates while preserving repair-stream version fences. */
@@ -42,7 +41,7 @@ final class MaintenanceRepairModelSupport {
   private final RepairComplexityColorsService repairComplexityColors;
   private final MaintenanceCommandSupport commandSupport;
   private final MaintenanceMediaSupport mediaSupport;
-  private InventoryRepairSourceReadProjection authoritativeInventorySources;
+  private final InventoryRepairSourceReadProjection authoritativeInventorySources;
 
   MaintenanceRepairModelSupport(
       MaintenanceRepairRepository repairs,
@@ -54,7 +53,8 @@ final class MaintenanceRepairModelSupport {
       RepairComplexitySettingsService repairComplexitySettings,
       RepairComplexityColorsService repairComplexityColors,
       MaintenanceCommandSupport commandSupport,
-      MaintenanceMediaSupport mediaSupport) {
+      MaintenanceMediaSupport mediaSupport,
+      InventoryRepairSourceReadProjection authoritativeInventorySources) {
     this.repairs = repairs;
     this.inventorySources = inventorySources;
     this.repairStages = repairStages;
@@ -65,12 +65,6 @@ final class MaintenanceRepairModelSupport {
     this.repairComplexityColors = repairComplexityColors;
     this.commandSupport = commandSupport;
     this.mediaSupport = mediaSupport;
-  }
-
-  /** Installs the read-only authoritative-inventory projection used by Spring-managed reads. */
-  @Autowired
-  void configureAuthoritativeInventorySources(
-      InventoryRepairSourceReadProjection authoritativeInventorySources) {
     this.authoritativeInventorySources = authoritativeInventorySources;
   }
 

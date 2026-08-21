@@ -27,7 +27,9 @@ import org.springframework.stereotype.Component;
 
 /**
  * Applies local historical supersession after every remote task, movement and lease effect has
- * reached replay-safe terminal truth.
+ * reached replay-safe terminal truth. An interrupted equivalent plan correction may have already
+ * compensated the repair it must retain; that ledger is settled without cancelling the retained
+ * local aggregate so generation-specific reassertion can restore its external work.
  */
 @Component
 final class InventoryAuthoritativeLocalSupersession {
@@ -86,7 +88,11 @@ final class InventoryAuthoritativeLocalSupersession {
 
     boolean allocationReassigned = false;
     for (InventoryAuthoritativeOutcomeTarget target : targetRows) {
-      if (target.isLocalSuperseded() || !"REPAIR".equals(target.getTargetKind())) continue;
+      if (target.isLocalSuperseded()
+          || !"REPAIR".equals(target.getTargetKind())
+          || retainedRepair(outcome, target)) {
+        continue;
+      }
       if ("WORK".equals(outcome.getOutcomeKind())
           && !allocationReassigned
           && target.getRepairPlaceAllocationId() != null) {
@@ -111,6 +117,10 @@ final class InventoryAuthoritativeLocalSupersession {
     for (InventoryAuthoritativeOutcomeTarget target : targetRows) {
       if (target.isLocalSuperseded()) {
         collect(target, supersededEstimateIds, supersededRepairIds);
+        continue;
+      }
+      if (retainedRepair(outcome, target)) {
+        target.markLocalSuperseded();
         continue;
       }
       if ("ESTIMATE".equals(target.getTargetKind())) {
@@ -142,6 +152,14 @@ final class InventoryAuthoritativeLocalSupersession {
           "Authoritative inventory left an uncaptured active maintenance target");
     }
     return result(targetRows, supersededEstimateIds, supersededRepairIds);
+  }
+
+  private static boolean retainedRepair(
+      InventoryAuthoritativeOutcome outcome, InventoryAuthoritativeOutcomeTarget target) {
+    return "WORK".equals(outcome.getOutcomeKind())
+        && "REPAIR".equals(target.getTargetKind())
+        && outcome.getTargetRepairId() != null
+        && outcome.getTargetRepairId().equals(target.getTargetId());
   }
 
   private void supersedeEstimate(MaintenanceEstimate estimate) {

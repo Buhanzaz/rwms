@@ -358,6 +358,7 @@ record RepairSyncSignature(
       Long leaseVersion,
       Long fencingToken,
       OffsetDateTime leaseExpiresAt,
+      String leaseReconciliationState,
       boolean movementToRepair) {}
 
 /** Immutable service-local complexity sync plan snapshot. */
@@ -372,7 +373,9 @@ record ComplexitySyncPlan(
       String ownerType,
       String ownerId,
       MaintenanceDependencyGateway.LeaseSnapshot lease,
+      boolean reacquireReleasedLease,
       UUID leaseOwnerRepairId,
       List<UUID> complexityRepairIds,
+      List<UUID> externalCapitalCompletionRepairIds,
       List<RepairSyncSignature> signatures,
       List<TaskCancellationPlan> taskCancellations) {}

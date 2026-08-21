@@ -179,6 +179,18 @@ final class InventoryPublicationSourceLifecycle {
     return sources.findByIdForUpdate(sourceId).orElse(null);
   }
 
+  /**
+   * Returns whether an immutable older publication source already owns the repair adopted by a
+   * corrected final-plan version. Such a repair is referenced through the authoritative outcome
+   * and receipt instead of violating the one-source-per-repair history constraint.
+   */
+  boolean repairBoundToDifferentSource(
+      InventoryPublicationSourceId sourceId, UUID repairId) {
+    if (repairId == null) return false;
+    InventoryPublicationSource source = sources.findByRepairId(repairId).orElse(null);
+    return source != null && !sourceId.equals(source.getId());
+  }
+
   boolean abortUnpublished(
       InventoryPublicationSourceId sourceId, String requestSha256, BooleanSupplier canDeleteIntent) {
     InventoryPublicationSourceOperation operation = operations.findByIdForUpdate(sourceId).orElse(null);

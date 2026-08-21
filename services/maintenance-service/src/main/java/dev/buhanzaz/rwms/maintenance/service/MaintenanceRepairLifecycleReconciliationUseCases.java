@@ -279,13 +279,19 @@ final class MaintenanceRepairLifecycleReconciliationUseCases {
         throw new MaintenanceConflictException(
             "MAINTENANCE_STATE_CONFLICT", "Repair lifecycle owner disappeared before finalization");
       }
-      taskBoardSupport.prepareStagesForQueue(stages, current.capital());
+      boolean completesExternally =
+          current.capital() && current.origin() != RepairOrigin.INVENTORY;
+      taskBoardSupport.prepareStagesForQueue(stages, completesExternally);
+      if (current.capital() && !completesExternally) {
+        stages.forEach(RepairStage::routeToExternalCapital);
+      }
       repairStages.saveAllAndFlush(stages);
       repair.confirmRentalItemVersion(remote.liveAsset().version());
-      if (current.capital()) {
+      if (completesExternally) {
         repair.queueExternalCapitalUnderExistingRepair();
       } else {
         repair.queueUnderExistingRepair();
+        if (current.capital()) repair.routeInventoryToExternalCapital();
       }
       MaintenanceRepair saved = repairs.saveAndFlush(repair);
       if (current.capital()) {
@@ -327,14 +333,20 @@ final class MaintenanceRepairLifecycleReconciliationUseCases {
     }
     MaintenanceReconciliationSupport.validateLeaseTruth(repair, lease, current.ownerType(), current.ownerId());
     validateQueueTransitionTruth(current, remote.liveAsset(), asset);
-    taskBoardSupport.prepareStagesForQueue(stages, current.capital());
+    boolean completesExternally =
+        current.capital() && current.origin() != RepairOrigin.INVENTORY;
+    taskBoardSupport.prepareStagesForQueue(stages, completesExternally);
+    if (current.capital() && !completesExternally) {
+      stages.forEach(RepairStage::routeToExternalCapital);
+    }
     repairStages.saveAllAndFlush(stages);
     repair.confirmRentalItemVersion(asset.version());
-    if (current.capital()) {
+    if (completesExternally) {
       repair.queueExternalCapital(
           lease.leaseId(), lease.version(), lease.fencingToken(), lease.expiresAt());
     } else {
       repair.queue(lease.leaseId(), lease.version(), lease.fencingToken(), lease.expiresAt());
+      if (current.capital()) repair.routeInventoryToExternalCapital();
     }
     MaintenanceRepair saved = repairs.saveAndFlush(repair);
     if (current.capital()) {
@@ -447,7 +459,7 @@ final class MaintenanceRepairLifecycleReconciliationUseCases {
     AssetTransitionPlan plan = commandSupport.requireReconciliationResult(
         transactions.execute(status -> prepareAssetTransitionPlan(work)));
     MaintenanceDependencyGateway.LeaseSnapshot lease = plan.localLease();
-    if (lease == null) {
+    if (lease == null || commandSupport.leaseHasExpired(lease.expiresAt())) {
       lease = dependencies.acquireLease(
           commandSupport.derived(work.idempotencyKey(), "acquire"),
           plan.rentalItemId(),
@@ -666,10 +678,30 @@ final class MaintenanceRepairLifecycleReconciliationUseCases {
     validateComplexityAssetTruth(plan, currentAsset);
     MaintenanceDependencyGateway.AssetSnapshot synchronizedAsset = currentAsset;
     MaintenanceDependencyGateway.LeaseSnapshot lease = plan.lease();
-    if (!plan.desiredStatus().equals(currentAsset.status())) {
+    MaintenanceReconciliationSupport.validateLeaseTruth(
+        plan.rentalItemId(), lease, plan.ownerType(), plan.ownerId());
+    if (plan.reacquireReleasedLease()) {
+      RepairSyncSignature leaseOwner = plan.signatures().stream()
+          .filter(signature -> signature.id().equals(plan.leaseOwnerRepairId()))
+          .findFirst()
+          .orElseThrow(() -> new IllegalStateException("Repair lifecycle owner is missing"));
+      if (!"RECONCILIATION_REQUIRED".equals(leaseOwner.leaseReconciliationState())) {
+        throw new MaintenanceConflictException(
+            "MAINTENANCE_LEASE_CONFLICT",
+            "Released inventory correction lease is not marked for reconciliation");
+      }
+      lease = dependencies.acquireLease(
+          commandSupport.derived(work.idempotencyKey(), "reacquire-released-lease"),
+          plan.rentalItemId(),
+          currentAsset.version(),
+          plan.ownerType(),
+          plan.ownerId());
       MaintenanceReconciliationSupport.validateLeaseTruth(
           plan.rentalItemId(), lease, plan.ownerType(), plan.ownerId());
-      if (!commandSupport.leaseIsFresh(lease.expiresAt())) {
+      commandSupport.requireFreshDependencyLease(lease);
+    }
+    if (!plan.desiredStatus().equals(currentAsset.status())) {
+      if (!plan.reacquireReleasedLease() && !commandSupport.leaseIsFresh(lease.expiresAt())) {
         lease = dependencies.renewLease(
             commandSupport.derived(work.idempotencyKey(), "renew"),
             lease.leaseId(),
@@ -765,6 +797,13 @@ final class MaintenanceRepairLifecycleReconciliationUseCases {
     boolean capital = complexityRepairs.stream().map(
         repairModelSupport::repairComplexityFromStoredStages)
         .anyMatch(complexity -> complexity.type() == RepairComplexity.CAPITAL);
+    List<UUID> externalCapitalCompletionRepairIds = capital
+        ? complexityRepairs.stream()
+            .filter(value -> value.getOrigin() != RepairOrigin.INVENTORY)
+            .map(MaintenanceRepair::getId)
+            .sorted(Comparator.comparing(UUID::toString))
+            .toList()
+        : List.of();
     List<TaskCancellationPlan> cancellations = capital
         ? complexityRepairs.stream()
             .filter(value -> value.getExecutionState() == RepairExecutionState.QUEUED
@@ -804,9 +843,11 @@ final class MaintenanceRepairLifecycleReconciliationUseCases {
         ownerType,
         ownerId,
         lease,
+        work.payload().path("reacquireReleasedLease").asBoolean(false),
         leaseOwner.getId(),
         complexityRepairs.stream().map(MaintenanceRepair::getId).sorted(
             Comparator.comparing(UUID::toString)).toList(),
+        externalCapitalCompletionRepairIds,
         signatures,
         List.copyOf(cancellations));
   }
@@ -852,11 +893,21 @@ final class MaintenanceRepairLifecycleReconciliationUseCases {
           continue;
         }
         List<RepairStage> stages = repairStages.findAllByRepairIdOrderByStageNo(value.getId());
-        stages.forEach(RepairStage::completeAsExternalCapital);
+        boolean completesExternally =
+            plan.externalCapitalCompletionRepairIds().contains(value.getId());
+        if (completesExternally) {
+          stages.forEach(RepairStage::completeAsExternalCapital);
+        } else {
+          stages.forEach(RepairStage::routeToExternalCapital);
+        }
         repairStages.saveAllAndFlush(stages);
-        value.completeAsExternalCapital();
-        repairPlaces.completeAfterRepair(
-            value.getWarehouseId(), value.getId(), value.isMovementToRepair());
+        if (completesExternally) {
+          value.completeAsExternalCapital();
+          repairPlaces.completeAfterRepair(
+              value.getWarehouseId(), value.getId(), value.isMovementToRepair());
+        } else {
+          value.routeInventoryToExternalCapital();
+        }
         changed.put(value.getId(), value);
       }
     } else {
@@ -879,7 +930,9 @@ final class MaintenanceRepairLifecycleReconciliationUseCases {
         .filter(signature -> signature.id().equals(plan.leaseOwnerRepairId()))
         .findFirst()
         .orElseThrow(() -> new IllegalStateException("Repair lifecycle owner is missing"));
-    if (lease.version() != ownerSignature.leaseVersion()
+    if (!lease.leaseId().equals(ownerSignature.leaseId())
+        || lease.fencingToken() != ownerSignature.fencingToken()
+        || lease.version() != ownerSignature.leaseVersion()
         || !lease.expiresAt().equals(ownerSignature.leaseExpiresAt())) {
       UUID previousLeaseId = ownerSignature.leaseId();
       long previousFencingToken = ownerSignature.fencingToken();
@@ -888,6 +941,15 @@ final class MaintenanceRepairLifecycleReconciliationUseCases {
             && value.getFencingToken() != null
             && value.getFencingToken() == previousFencingToken) {
           repairLifecycleSupport.applyLeaseSnapshot(value, lease);
+          if (plan.reacquireReleasedLease()
+              && !value.isMovementToRepair()
+              && ("GENERATED".equals(value.getTaskGenerationState())
+                  || value.getReclassificationState()
+                      == RepairReclassificationState.EXTERNAL_CAPITAL)) {
+            // Task registration and movement reconciliation own their remaining effects. When
+            // neither is pending, replacement of the invalid lease is the last recovery fence.
+            value.markReconciled();
+          }
           changed.put(value.getId(), value);
         }
       }
@@ -939,6 +1001,7 @@ final class MaintenanceRepairLifecycleReconciliationUseCases {
         value.getLeaseVersion(),
         value.getFencingToken(),
         value.getLeaseExpiresAt(),
+        value.getLeaseReconciliationState(),
         value.isMovementToRepair());
   }
 

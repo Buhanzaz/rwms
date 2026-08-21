@@ -34,9 +34,11 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import tools.jackson.core.JacksonException;
@@ -133,8 +135,23 @@ final class InventoryAuthoritativeOutcomeStore {
           request.findingRevision());
     }
     RentalItemFactProjection asset = requireAssetForUpdate(request.assetId());
-    InventoryPublicationAssetFence.requireAuthoritative(request, asset);
+    boolean appliedWorkReassertion =
+        asset.getAggregateVersion() > outcome.getAuthoritativeAssetVersion()
+            && exactAppliedWorkReassertion(outcome, registered);
+    if (appliedWorkReassertion) {
+      InventoryPublicationAssetFence.requireAppliedWorkReassertion(
+          request,
+          asset,
+          outcome.getAuthoritativeAssetVersion(),
+          outcome.getDesiredStatus());
+    } else {
+      InventoryPublicationAssetFence.requireAuthoritative(request, asset);
+    }
     fenceWatermark(outcome);
+    if (appliedWorkReassertion) {
+      requireAppliedWorkTarget(outcome, registered.replay(), asset);
+    }
+    UUID correctedRepairId = retainedCorrectionRepairId(outcome);
     boolean newInvocation = existingReceipt == null;
     InventoryAuthoritativeOutcomeReceipt currentReceipt = newInvocation
         ? registerReceipt(idempotencyKey, sourceId, requestSha256)
@@ -223,10 +240,32 @@ final class InventoryAuthoritativeOutcomeStore {
             true,
             true);
       }
+      if (outcome.getResponseSnapshot() != null
+          && outcome.getTargetRepairId() != null
+          && sourceLifecycle.repairBoundToDifferentSource(
+              sourceId, outcome.getTargetRepairId())) {
+        discoverTargets(
+            outcome,
+            request.selectedTargetKind(),
+            request.selectedTargetId(),
+            outcome.getTargetRepairId(),
+            false);
+        return AuthoritativePreparation.pending(
+            sourceId,
+            requestSha256,
+            outcome.getPhase(),
+            outcome.getTargetRepairId(),
+            outcome.getTargetRepairId(),
+            true,
+            false,
+            false);
+      }
       throw InventoryPublicationPlanValidation.conflict(
           "Applied authoritative inventory work outcome has no immutable source response");
     }
-    UUID adoptedRepairId = adoptedLegacySuccessor(sourceId);
+    UUID adoptedRepairId = correctedRepairId == null
+        ? adoptedLegacySuccessor(sourceId)
+        : correctedRepairId;
     discoverTargets(
         outcome,
         request.selectedTargetKind(),
@@ -604,6 +643,11 @@ final class InventoryAuthoritativeOutcomeStore {
     }
   }
 
+  /**
+   * Advances the per-asset ordering fence after proving that a corrected version has an applied,
+   * non-terminal predecessor. Target retention is resolved separately so an interrupted correction
+   * can recover after the watermark already points at its own source.
+   */
   private void fenceWatermark(InventoryAuthoritativeOutcome outcome) {
     InventoryAuthoritativeOutcomeWatermark watermark =
         watermarks.findByAssetIdForUpdate(outcome.getAssetId()).orElse(null);
@@ -615,27 +659,182 @@ final class InventoryAuthoritativeOutcomeStore {
       throw InventoryPublicationPlanValidation.conflict(
           "Authoritative inventory watermark belongs to another warehouse");
     }
+    if (watermark.sameSource(outcome)) {
+      return;
+    }
+    boolean sameCompletedFinding =
+        Objects.equals(watermark.getInventoryId(), outcome.getId().getInventoryId())
+            && Objects.equals(watermark.getFindingId(), outcome.getId().getFindingId());
+    if (sameCompletedFinding) {
+      if (!Objects.equals(
+          watermark.getInventoryCompletedAt(), outcome.getInventoryCompletedAt())) {
+        throw InventoryPublicationPlanValidation.conflict(
+            "Corrected final-plan version changed the inventory completion time");
+      }
+      if (!watermark.isStrictlyNewerPlanVersionOfSameFinding(outcome)) {
+        throw InventoryPublicationPlanValidation.conflict(
+            "Corrected final-plan version must advance strictly");
+      }
+      InventoryAuthoritativeOutcome previous = requireAppliedWatermarkOutcome(watermark);
+      UUID currentRepairId = currentCorrectionRepairId(previous);
+      requireNonTerminalCorrectionTarget(previous, currentRepairId);
+      watermark.replaceWith(outcome);
+      watermarks.saveAndFlush(watermark);
+      return;
+    }
     if (watermark.getInventoryCompletedAt().isAfter(outcome.getInventoryCompletedAt())) {
       throw InventoryPublicationPlanValidation.conflict(
           "An older completed inventory cannot replace the latest maintenance outcome");
     }
     if (watermark.getInventoryCompletedAt().isEqual(outcome.getInventoryCompletedAt())) {
-      if (!watermark.sameSource(outcome)) {
-        throw InventoryPublicationPlanValidation.conflict(
-            "Different inventory sources have the same completion time for this asset");
-      }
-      return;
+      throw InventoryPublicationPlanValidation.conflict(
+          "Different inventory sources have the same completion time for this asset");
     }
-    InventoryPublicationSourceId previousId = new InventoryPublicationSourceId(
-        watermark.getInventoryId(), watermark.getFinalPlanVersion(), watermark.getFindingId());
-    InventoryAuthoritativeOutcome previous = outcomes.findByIdForUpdate(previousId).orElse(null);
-    if (previous != null && !"APPLIED".equals(previous.getPhase())) {
+    requireAppliedWatermarkOutcome(watermark);
+    watermark.replaceWith(outcome);
+    watermarks.saveAndFlush(watermark);
+  }
+
+  /**
+   * Resolves the live repair behind the newest completed receipt of an equivalent predecessor.
+   * The receipt may supersede the predecessor coordinator's original, now historical target.
+   */
+  private UUID retainedCorrectionRepairId(InventoryAuthoritativeOutcome corrected) {
+    InventoryAuthoritativeOutcome previous = previousCompletedCorrection(corrected);
+    if (previous == null || !sameMaterializedOutcome(previous, corrected)) return null;
+    UUID repairId = currentCorrectionRepairId(previous);
+    return requireNonTerminalCorrectionTarget(previous, repairId) ? repairId : null;
+  }
+
+  /** Finds and locks the newest lower plan version for interrupted correction recovery. */
+  private InventoryAuthoritativeOutcome previousCompletedCorrection(
+      InventoryAuthoritativeOutcome corrected) {
+    InventoryAuthoritativeOutcome previous = outcomes.findPreviousForUpdate(
+            corrected.getId().getInventoryId(),
+            corrected.getId().getFindingId(),
+            corrected.getId().getFinalPlanVersion(),
+            PageRequest.of(0, 1))
+        .stream()
+        .findFirst()
+        .orElse(null);
+    if (previous == null) return null;
+    if (!Objects.equals(previous.getWarehouseId(), corrected.getWarehouseId())
+        || !Objects.equals(previous.getAssetId(), corrected.getAssetId())
+        || !Objects.equals(previous.getInventoryCompletedAt(), corrected.getInventoryCompletedAt())) {
+      return null;
+    }
+    if (!"APPLIED".equals(previous.getPhase())) {
       throw new MaintenanceDependencyException(
           HttpStatus.SERVICE_UNAVAILABLE,
           "The preceding authoritative inventory outcome is still recovering");
     }
-    watermark.replaceWith(outcome);
-    watermarks.saveAndFlush(watermark);
+    return previous;
+  }
+
+  private UUID currentCorrectionRepairId(InventoryAuthoritativeOutcome previous) {
+    AuthoritativeReplacementReceipt replacement = receipts.findNewestCompletedForUpdate(
+            previous.getId().getInventoryId(),
+            previous.getId().getFinalPlanVersion(),
+            previous.getId().getFindingId(),
+            previous.getRequestSha256(),
+            PageRequest.of(0, 1))
+        .stream()
+        .map(value -> replacementReceipt(previous, value))
+        .filter(Objects::nonNull)
+        .findFirst()
+        .orElse(null);
+    return replacement == null ? previous.getTargetRepairId() : replacement.repairId();
+  }
+
+  private InventoryAuthoritativeOutcome requireAppliedWatermarkOutcome(
+      InventoryAuthoritativeOutcomeWatermark watermark) {
+    InventoryPublicationSourceId previousId = new InventoryPublicationSourceId(
+        watermark.getInventoryId(), watermark.getFinalPlanVersion(), watermark.getFindingId());
+    InventoryAuthoritativeOutcome previous =
+        outcomes.findByIdForUpdate(previousId).orElse(null);
+    if (previous == null) {
+      throw InventoryPublicationPlanValidation.conflict(
+          "Authoritative inventory watermark source is missing");
+    }
+    if (!"APPLIED".equals(previous.getPhase())) {
+      throw new MaintenanceDependencyException(
+          HttpStatus.SERVICE_UNAVAILABLE,
+          "The preceding authoritative inventory outcome is still recovering");
+    }
+    return previous;
+  }
+
+  private boolean sameMaterializedOutcome(
+      InventoryAuthoritativeOutcome previous, InventoryAuthoritativeOutcome corrected) {
+    boolean compatible = Objects.equals(previous.getWarehouseId(), corrected.getWarehouseId())
+        && Objects.equals(previous.getAssetId(), corrected.getAssetId())
+        && Objects.equals(previous.getInventoryCompletedAt(), corrected.getInventoryCompletedAt())
+        && previous.getFindingRevision() == corrected.getFindingRevision()
+        && Objects.equals(previous.getDesiredStatus(), corrected.getDesiredStatus())
+        && Objects.equals(previous.getOutcomeKind(), corrected.getOutcomeKind());
+    if (compatible && "WORK".equals(corrected.getOutcomeKind())) {
+      compatible = samePlanFinding(
+          read(previous.getRequestSnapshot(), InventoryPublicationApplyRequest.class),
+          read(corrected.getRequestSnapshot(), InventoryPublicationApplyRequest.class));
+    } else if (compatible && "NO_WORK".equals(corrected.getOutcomeKind())) {
+      compatible = sameNoWorkFinding(
+          read(previous.getRequestSnapshot(), InventoryNoWorkOutcomeRequest.class),
+          read(corrected.getRequestSnapshot(), InventoryNoWorkOutcomeRequest.class));
+    }
+    return compatible;
+  }
+
+  /** Rejects a correction that would rewrite terminal maintenance work and reports liveness. */
+  private boolean requireNonTerminalCorrectionTarget(
+      InventoryAuthoritativeOutcome previous, UUID repairId) {
+    if (repairId == null) return false;
+    MaintenanceRepair repair = repairs.findAllByIdForUpdate(List.of(repairId))
+        .stream()
+        .findFirst()
+        .orElseThrow(() -> InventoryPublicationPlanValidation.conflict(
+            "Corrected final-plan predecessor repair is missing"));
+    if (!Objects.equals(previous.getWarehouseId(), repair.getWarehouseId())
+        || !Objects.equals(previous.getAssetId(), repair.getRentalItemId())) {
+      throw InventoryPublicationPlanValidation.conflict(
+          "Corrected final-plan predecessor repair has another asset or warehouse");
+    }
+    if (terminal(repair)) {
+      throw InventoryPublicationPlanValidation.conflict(
+          "Terminal accepted or written-off repair cannot be corrected by inventory");
+    }
+    return InventoryPublicationTargetSelection.active(repair);
+  }
+
+  private static boolean samePlanFinding(
+      InventoryPublicationApplyRequest previous,
+      InventoryPublicationApplyRequest corrected) {
+    return Objects.equals(previous.warehouseId(), corrected.warehouseId())
+        && Objects.equals(previous.findingRevision(), corrected.findingRevision())
+        && Objects.equals(previous.assetId(), corrected.assetId())
+        && Objects.equals(previous.assetVersion(), corrected.assetVersion())
+        && Objects.equals(previous.inventoryCompletedAt(), corrected.inventoryCompletedAt())
+        && Objects.equals(previous.planFingerprintSha256(), corrected.planFingerprintSha256())
+        && Objects.equals(previous.priority(), corrected.priority())
+        && previous.movementToRepair() == corrected.movementToRepair()
+        && Objects.equals(previous.movementScheduledDate(), corrected.movementScheduledDate())
+        && Objects.equals(previous.repairScheduledDate(), corrected.repairScheduledDate())
+        && Objects.equals(previous.snapshot(), corrected.snapshot())
+        && Objects.equals(previous.media(), corrected.media())
+        && Objects.equals(previous.snapshotSchemaVersion(), corrected.snapshotSchemaVersion())
+        && previous.strategy() == corrected.strategy()
+        && previous.selectedTargetKind() == corrected.selectedTargetKind()
+        && Objects.equals(previous.selectedTargetId(), corrected.selectedTargetId())
+        && Objects.equals(previous.forceCapitalRepair(), corrected.forceCapitalRepair());
+  }
+
+  private static boolean sameNoWorkFinding(
+      InventoryNoWorkOutcomeRequest previous,
+      InventoryNoWorkOutcomeRequest corrected) {
+    return Objects.equals(previous.warehouseId(), corrected.warehouseId())
+        && Objects.equals(previous.assetId(), corrected.assetId())
+        && Objects.equals(previous.inventoryCompletedAt(), corrected.inventoryCompletedAt())
+        && Objects.equals(previous.findingRevision(), corrected.findingRevision())
+        && Objects.equals(previous.desiredStatus(), corrected.desiredStatus());
   }
 
   private void discoverTargets(
@@ -794,6 +993,59 @@ final class InventoryAuthoritativeOutcomeStore {
     InventoryPublicationPrestartReplacement legacy =
         legacyReplacements.findByIdForUpdate(sourceId).orElse(null);
     return legacy == null ? null : legacy.getSuccessorRepairId();
+  }
+
+  /**
+   * Identifies an exact applied coordinator eligible for the narrow recovery fence. A missing
+   * current source remains provisional until the retained-repair branch proves that an immutable
+   * different source owns the coordinator target.
+   */
+  private static boolean exactAppliedWorkReassertion(
+      InventoryAuthoritativeOutcome outcome, InventoryPublicationRegisteredSource registered) {
+    return "APPLIED".equals(outcome.getPhase())
+        && outcome.getResponseSnapshot() != null
+        && !registered.historicalReplay();
+  }
+
+  /**
+   * Locks and validates the sole repair bound by an exact already-applied outcome. When a current
+   * source exists it must name that target; when absent, the later retained-source proof remains
+   * mandatory before any effects are discovered.
+   */
+  private void requireAppliedWorkTarget(
+      InventoryAuthoritativeOutcome outcome,
+      InventoryPublicationSource source,
+      RentalItemFactProjection asset) {
+    UUID repairId = outcome.getTargetRepairId();
+    if (repairId == null || (source != null && !repairId.equals(source.getRepairId()))) {
+      throw InventoryPublicationPlanValidation.conflict(
+          "Applied authoritative inventory source has no exact bound repair");
+    }
+    MaintenanceRepair repair =
+        repairs
+            .findAllByIdForUpdate(List.of(repairId))
+            .stream()
+            .findFirst()
+            .orElseThrow(
+                () ->
+                    InventoryPublicationPlanValidation.conflict(
+                        "Applied authoritative inventory repair target is missing"));
+    if (!outcome.getWarehouseId().equals(repair.getWarehouseId())
+        || !outcome.getAssetId().equals(repair.getRentalItemId())
+        || !InventoryPublicationTargetSelection.active(repair)) {
+      throw InventoryPublicationPlanValidation.conflict(
+          "Applied authoritative inventory repair target is no longer compatible");
+    }
+    String repairStatus =
+        switch (repair.getReclassificationState()) {
+          case STABLE -> "REPAIR";
+          case EXTERNAL_CAPITAL -> "CAPITAL_REPAIR";
+          case RECLASSIFYING_CAPITAL -> null;
+        };
+    if (!Objects.equals(repairStatus, asset.getAssetStatus())) {
+      throw InventoryPublicationPlanValidation.conflict(
+          "Applied authoritative inventory repair target does not match current asset truth");
+    }
   }
 
   private UUID exactSourceRepairId(

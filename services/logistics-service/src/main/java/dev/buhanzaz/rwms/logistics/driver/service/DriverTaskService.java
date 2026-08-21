@@ -87,7 +87,7 @@ public class DriverTaskService {
       throw new IllegalArgumentException(
           "Driver task actor, request and Idempotency-Key are required");
     }
-    return createInternal(actorSubjectId, idempotencyKey, request, admission);
+    return createInternal(actorSubjectId, idempotencyKey, request, admission, false);
   }
 
   /**
@@ -154,7 +154,7 @@ public class DriverTaskService {
       throw new IllegalArgumentException(
           "Maintenance intake cannot bypass the logistics scheduler");
     }
-    return createInternal(MAINTENANCE_ACTOR, idempotencyKey, request, admission);
+    return createInternal(MAINTENANCE_ACTOR, idempotencyKey, request, admission, true);
   }
 
   @Transactional
@@ -209,7 +209,8 @@ public class DriverTaskService {
             priority,
             false,
             null),
-        admission);
+        admission,
+        false);
   }
 
   private static void requireMatchingReleaseContext(
@@ -312,19 +313,21 @@ public class DriverTaskService {
             repair.priority(),
             true,
             null),
-        admission);
+        admission,
+        false);
   }
 
   /**
    * Resolves an existing immutable task before applying today's warehouse-local date gate. Replay
-   * uses the task's persisted scheduled date, while only a fresh create derives AUTO scheduling
-   * from a remote admission ticket.
+   * validates the original fixed-date intent before returning the persisted effective date, while
+   * only a fresh create derives AUTO scheduling from a remote admission ticket.
    */
   private CreateResult createInternal(
       UUID actorSubjectId,
       UUID idempotencyKey,
       CreateDriverTaskRequest request,
-      AdmissionTicket admission) {
+      AdmissionTicket admission,
+      boolean maintenanceIntake) {
     validateSource(request);
     validatePlanning(request);
     List<AdmissionRequirement> expectedAdmission = admissionRequirements(request);
@@ -332,7 +335,6 @@ public class DriverTaskService {
       throw new LogisticsConflictException(
           "Warehouse admission ticket does not match the driver task");
     }
-
     transactionLock.acquire(
         "driver-task:create:"
             + request.sourceType()
@@ -352,15 +354,9 @@ public class DriverTaskService {
               .orElse(null);
     }
     if (replay != null) {
-      if (request.planningMode() == DriverTaskPlanningMode.FIXED_DATE
-          && !request.scheduledDate().equals(replay.getScheduledDate())) {
-        throw new LogisticsConflictException(
-            "Источник или Idempotency-Key уже использован для другого логистического задания");
-      }
       String replayChecksum =
           checksum(
               request,
-              replay.getScheduledDate(),
               replay.getUnitNumber(),
               replay.getDriverQueueDefinitionId());
       if (!replay.matchesRequest(replayChecksum)) {
@@ -371,8 +367,10 @@ public class DriverTaskService {
     }
 
     LocalDate today = admission.localDate(request.warehouseId());
+    LocalDate effectiveScheduledDate =
+        effectiveScheduledDate(maintenanceIntake, request, today);
     LocalDate scheduledDate =
-        request.planningMode() == DriverTaskPlanningMode.AUTO ? today : request.scheduledDate();
+        request.planningMode() == DriverTaskPlanningMode.AUTO ? today : effectiveScheduledDate;
     if (scheduledDate.isBefore(today)) {
       throw new IllegalArgumentException("Дата логистического задания не может быть в прошлом");
     }
@@ -388,7 +386,7 @@ public class DriverTaskService {
       throw new LogisticsConflictException(
           "Бытовка не принадлежит выбранному складу или не имеет номера");
     }
-    String checksum = checksum(request, scheduledDate, cabin.number(), queue.queueDefinitionId());
+    String checksum = checksum(request, cabin.number(), queue.queueDefinitionId());
 
     warehouseLifecycle.consume(admission);
 
@@ -416,6 +414,27 @@ public class DriverTaskService {
         admission.occurredAt(),
         admission.evidenceFor(task.getWarehouseId()).orElse(null));
     return new CreateResult(mapper.toResponse(task), false, request.activateNow());
+  }
+
+  /**
+   * Normalizes only a fresh overdue fixed-date maintenance intake to today's warehouse date.
+   * The request remains fixed-date and its original day stays in the checksum, while the task
+   * persists today's effective date and returns it on an exact replay.
+   */
+  private static LocalDate effectiveScheduledDate(
+      boolean maintenanceIntake, CreateDriverTaskRequest request, LocalDate today) {
+    if (isOverdueMaintenance(maintenanceIntake, request, today)) {
+      return today;
+    }
+    return request.scheduledDate();
+  }
+
+  /** Identifies the private recovery case without weakening the public past-date gate. */
+  private static boolean isOverdueMaintenance(
+      boolean maintenanceIntake, CreateDriverTaskRequest request, LocalDate today) {
+    return maintenanceIntake
+        && request.planningMode() == DriverTaskPlanningMode.FIXED_DATE
+        && request.scheduledDate().isBefore(today);
   }
 
   public static List<AdmissionRequirement> admissionRequirements(CreateDriverTaskRequest request) {
@@ -478,7 +497,6 @@ public class DriverTaskService {
 
   private static String checksum(
       CreateDriverTaskRequest request,
-      LocalDate scheduledDate,
       String unitNumber,
       UUID queueDefinitionId) {
     return DriverTaskChecksum.sha256(
@@ -493,7 +511,7 @@ public class DriverTaskService {
             request.planningMode().name(),
             request.planningMode() == DriverTaskPlanningMode.AUTO
                 ? "<auto>"
-                : scheduledDate.toString(),
+                : request.scheduledDate().toString(),
             request.priority().toString(),
             normalizedComment(request.comment()),
             unitNumber,

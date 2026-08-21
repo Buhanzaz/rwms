@@ -49,7 +49,8 @@ class ManualCapitalRepairServiceTest {
             settings,
             colors,
             mock(MaintenanceCommandSupport.class),
-            mock(MaintenanceMediaSupport.class));
+            mock(MaintenanceMediaSupport.class),
+            mock(InventoryRepairSourceReadProjection.class));
 
     var ordinary = support.repairComplexityForLines(WAREHOUSE_ID, List.of(), false);
     var forced = support.repairComplexityForLines(WAREHOUSE_ID, List.of(), true);

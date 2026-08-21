@@ -15,7 +15,11 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.JdbcTypeCode;
 
-/** Per-cabin fence that rejects stale or ambiguous equal-time inventory sources. */
+/**
+ * Per-cabin fence that rejects stale or ambiguous inventory sources while allowing a completed
+ * inventory to publish a strictly newer immutable final-plan version for the same warehouse and
+ * completion instant.
+ */
 @Entity
 @Table(name = "inventory_asset_outcome_watermark")
 @Getter
@@ -75,7 +79,25 @@ public class InventoryAssetOutcomeWatermark {
         && finalPlanSha256.equals(nextFinalPlanSha256);
   }
 
-  /** Advances this fence only after the complete batch passed stale/equal-time validation. */
+  /**
+   * Returns whether the source is a forward-only correction of this exact completed inventory.
+   * Equal and lower plan versions are not corrections, even when their payload hash differs.
+   */
+  public boolean isStrictlyNewerPlanForSameCompletedInventory(
+      UUID nextWarehouseId,
+      OffsetDateTime nextCompletedAt,
+      UUID nextInventoryId,
+      long nextFinalPlanVersion) {
+    return warehouseId.equals(nextWarehouseId)
+        && inventoryCompletedAt.equals(nextCompletedAt)
+        && inventoryId.equals(nextInventoryId)
+        && nextFinalPlanVersion > finalPlanVersion;
+  }
+
+  /**
+   * Advances this fence only after the complete batch passed stale/equal-time correction
+   * validation.
+   */
   public void replace(
       UUID nextWarehouseId,
       OffsetDateTime nextCompletedAt,

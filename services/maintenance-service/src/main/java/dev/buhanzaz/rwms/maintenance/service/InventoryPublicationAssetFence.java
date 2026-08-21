@@ -70,6 +70,44 @@ final class InventoryPublicationAssetFence {
     requireNonTerminal(asset);
   }
 
+  /**
+   * Allows only a compatible repair-state projection to advance beyond an already-applied work
+   * outcome's original asset fence. The immutable coordinator remains authoritative for source
+   * identity; this exception exists solely so a new receipt can recover its bound local effects.
+   */
+  static void requireAppliedWorkReassertion(
+      InventoryPublicationApplyRequest request,
+      RentalItemFactProjection asset,
+      long appliedAuthoritativeVersion,
+      String desiredStatus) {
+    Long observedVersion = request.assetVersion();
+    Long requestedAuthoritativeVersion = request.authoritativeAssetVersion();
+    if (observedVersion == null
+        || requestedAuthoritativeVersion == null
+        || requestedAuthoritativeVersion < observedVersion
+        || requestedAuthoritativeVersion < appliedAuthoritativeVersion) {
+      throw InventoryPublicationPlanValidation.invalid(
+          "Authoritative asset version must not predate completed inventory evidence");
+    }
+    if (!request.warehouseId().equals(asset.getWarehouseId())
+        || asset.getAggregateVersion() < observedVersion) {
+      throw InventoryPublicationPlanValidation.conflict(
+          "Current rental-item warehouse/version/status is outside the applied inventory repair "
+              + "reassertion fence");
+    }
+    requireNonTerminal(asset);
+    if (!compatibleAppliedStatus(desiredStatus, asset.getAssetStatus())) {
+      throw InventoryPublicationPlanValidation.conflict(
+          "Current rental-item warehouse/version/status is outside the applied inventory repair "
+              + "reassertion fence");
+    }
+  }
+
+  private static boolean compatibleAppliedStatus(String desiredStatus, String currentStatus) {
+    return desiredStatus.equals(currentStatus)
+        || ("REPAIR".equals(desiredStatus) && "CAPITAL_REPAIR".equals(currentStatus));
+  }
+
   private static void requireNonTerminal(RentalItemFactProjection asset) {
     if (TERMINAL_STATUSES.contains(asset.getAssetStatus())) {
       throw InventoryPublicationPlanValidation.conflict(

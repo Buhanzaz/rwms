@@ -134,6 +134,21 @@ final class MaintenanceTaskBoardSupport {
         Map.of("repairId", repair.getId().toString()));
   }
 
+  /**
+   * Reasserts repair complexity after a completed-inventory correction released the retained
+   * repair's exact operation lease. The durable flag tells the worker to acquire a replacement
+   * fence before it treats an already-matching asset status as reconciled.
+   */
+  protected void enqueueRepairComplexityStatusSyncAfterLeaseRelease(
+      MaintenanceRepair repair, UUID key) {
+    reconciliations.enqueue(
+        repair.getId(),
+        "ASSET",
+        "SYNC_REPAIR_COMPLEXITY_STATUS",
+        key,
+        Map.of("repairId", repair.getId().toString(), "reacquireReleasedLease", true));
+  }
+
   protected void enqueueTerminalAsset(
       MaintenanceRepair repair, String transition, UUID key) {
     reconciliations.enqueue(

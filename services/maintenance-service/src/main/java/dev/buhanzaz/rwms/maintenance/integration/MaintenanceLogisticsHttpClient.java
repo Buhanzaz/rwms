@@ -79,6 +79,11 @@ final class MaintenanceLogisticsHttpClient {
     }
   }
 
+  /**
+   * Accepts logistics' effective schedule at or after an immutable fixed request. The
+   * warehouse-local upper fence is deliberately applied by the reconciliation owner immediately
+   * before it confirms the durable work item.
+   */
   DriverTaskSnapshot createDriverTask(UUID key, DriverTaskCommand command) {
     DriverTaskResponse response = transport.post(
         driverTaskIntakeUrl,
@@ -99,7 +104,7 @@ final class MaintenanceLogisticsHttpClient {
         || response.scheduledDate() == null
         || (command.planningMode()
                     == dev.buhanzaz.rwms.maintenance.domain.RepairLogisticsPlanningMode.FIXED_DATE
-            && !command.scheduledDate().equals(response.scheduledDate()))
+            && response.scheduledDate().isBefore(command.scheduledDate()))
         || command.priority() != response.priority()
         || response.state() == null
         || response.state().isBlank()) {

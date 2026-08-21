@@ -17,6 +17,7 @@ import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionSourc
 import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairPlaceAllocationState;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceMediaReference;
+import dev.buhanzaz.rwms.maintenance.domain.MaintenanceRepair;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceEventType;
 import dev.buhanzaz.rwms.maintenance.domain.MediaFactProjection;
 import dev.buhanzaz.rwms.maintenance.domain.RepairAcceptanceState;
@@ -513,6 +514,7 @@ class MaintenanceCorePostgresIntegrationTest {
     UUID warehouseId = UUID.randomUUID();
     UUID rentalItemId = UUID.randomUUID();
     LocalDate scheduledDate = LocalDate.of(2026, 8, 4);
+    LocalDate effectiveScheduledDate = LocalDate.of(2026, 8, 20);
     rentalItemFacts.saveAndFlush(
         RentalItemFactProjection.create(
             rentalItemId, warehouseId, "FREE", 7));
@@ -622,6 +624,7 @@ class MaintenanceCorePostgresIntegrationTest {
                         .class)))
         .thenAnswer(
             invocation -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
               MaintenanceDependencyGateway.DriverTaskCommand command =
                   invocation.getArgument(1);
               return new MaintenanceDependencyGateway.DriverTaskSnapshot(
@@ -634,7 +637,7 @@ class MaintenanceCorePostgresIntegrationTest {
                   command.sourceId(),
                   command.kind(),
                   command.planningMode(),
-                  command.scheduledDate(),
+                  effectiveScheduledDate,
                   command.priority(),
                   "SCHEDULED");
             });
@@ -663,14 +666,24 @@ class MaintenanceCorePostgresIntegrationTest {
               assertThat(command.activateNow()).isFalse();
             });
     assertThat(
-            jdbc.queryForObject(
+            jdbc.queryForMap(
                 """
-                select state from integration_reconciliation
+                select state,attempt_count,last_error_code,
+                       response_snapshot->>'scheduledDate' as effective_scheduled_date
+                from integration_reconciliation
                 where repair_id=? and operation_type='CREATE_DRIVER_TASK'
                 """,
-                String.class,
                 created.id()))
-        .isEqualTo("CONFIRMED");
+        .containsEntry("state", "CONFIRMED")
+        .containsEntry("attempt_count", 1)
+        .containsEntry("last_error_code", null)
+        .containsEntry("effective_scheduled_date", effectiveScheduledDate.toString());
+    assertThat(repairs.findById(created.id()).orElseThrow())
+        .satisfies(
+            repair -> {
+              assertThat(repair.getLogisticsScheduledDate()).isEqualTo(scheduledDate);
+              assertThat(repair.getDeliveryState()).isNotEqualTo("QUARANTINED");
+            });
 
     service.activateQueuedRepairAfterDelivery(warehouseId, created.id());
     assertThat(
@@ -5493,6 +5506,79 @@ class MaintenanceCorePostgresIntegrationTest {
     assertThat(service.acceptance(fixture.repair().warehouseId()))
         .extracting(AcceptanceProjection::repairId)
         .doesNotContain(fixture.repair().repairId());
+  }
+
+  @Test
+  void taskCompletionReacquiresExpiredLeaseBeforePendingAcceptanceStatus() {
+    RegisteredRepairFixture registered = createRegisteredPrimaryRepair();
+    RepairFixture fixture = registered.repair();
+    MaintenanceRepair queued = repairs.findById(fixture.repairId()).orElseThrow();
+    UUID expiredLeaseId = queued.getLeaseId();
+    long expiredFence = queued.getFencingToken();
+    setLeaseExpiry(fixture.repairId(), "-1 second");
+    clearInvocations(dependencies);
+
+    applyTaskOutcome(fixture, registered.queueEntryId(), "task-board.queue-entry.completed.v1");
+
+    MaintenanceRepair pending = repairs.findById(fixture.repairId()).orElseThrow();
+    UUID replacementLeaseId = UUID.randomUUID();
+    long replacementFence = expiredFence + 1;
+    OffsetDateTime replacementExpiresAt = OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15);
+    when(dependencies.acquireLease(
+            any(),
+            eq(fixture.rentalItemId()),
+            eq(pending.getRentalItemVersionSnapshot()),
+            eq("MAINTENANCE_REPAIR"),
+            eq(fixture.repairId().toString())))
+        .thenReturn(
+            new MaintenanceDependencyGateway.LeaseSnapshot(
+                replacementLeaseId,
+                0,
+                fixture.rentalItemId(),
+                "MAINTENANCE_REPAIR",
+                fixture.repairId(),
+                replacementFence,
+                replacementExpiresAt));
+    when(dependencies.fencedStatus(
+            any(),
+            eq(fixture.rentalItemId()),
+            eq(fixture.warehouseId()),
+            eq(pending.getRentalItemVersionSnapshot()),
+            eq(replacementLeaseId),
+            eq(replacementFence),
+            eq("MAINTENANCE_REPAIR"),
+            eq(fixture.repairId().toString()),
+            eq("PENDING_ACCEPTANCE"),
+            eq(false)))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                fixture.rentalItemId(),
+                pending.getRentalItemVersionSnapshot() + 1,
+                fixture.warehouseId(),
+                "WAITING_REPAIR_CHECK"));
+
+    assertThat(service.reconcileOneTask()).isTrue();
+
+    assertThat(repairs.findById(fixture.repairId()).orElseThrow())
+        .satisfies(
+            reconciled -> {
+              assertThat(reconciled.getExecutionState()).isEqualTo(RepairExecutionState.COMPLETED);
+              assertThat(reconciled.getAcceptanceState()).isEqualTo(RepairAcceptanceState.PENDING);
+              assertThat(reconciled.getLeaseId()).isEqualTo(replacementLeaseId);
+              assertThat(reconciled.getLeaseVersion()).isZero();
+              assertThat(reconciled.getFencingToken()).isEqualTo(replacementFence);
+              assertThat(reconciled.getLeaseReconciliationState()).isEqualTo("ACTIVE");
+            });
+    verify(dependencies, times(1))
+        .acquireLease(
+            any(),
+            eq(fixture.rentalItemId()),
+            eq(pending.getRentalItemVersionSnapshot()),
+            eq("MAINTENANCE_REPAIR"),
+            eq(fixture.repairId().toString()));
+    verify(dependencies, never())
+        .renewLease(
+            any(), eq(expiredLeaseId), anyLong(), eq(expiredFence), anyString(), anyString());
   }
 
   @Test

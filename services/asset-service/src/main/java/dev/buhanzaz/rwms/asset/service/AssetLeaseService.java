@@ -16,6 +16,8 @@ import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -206,11 +208,25 @@ final class AssetLeaseService {
    * cabin truth. Expired and released rows remain untouched as historical evidence.
    */
   List<UUID> releaseForCompletedInventory(UUID rentalItemId) {
+    return releaseForCompletedInventory(rentalItemId, Set.of());
+  }
+
+  /**
+   * Ends every active lease except an explicitly retained owner type during a completed-inventory
+   * reassertion. Expired and released rows remain historical evidence and each transition emits the
+   * ordinary lease event.
+   */
+  List<UUID> releaseForCompletedInventory(UUID rentalItemId, Set<String> retainedOwnerTypes) {
+    Set<String> retained =
+        Set.copyOf(Objects.requireNonNull(retainedOwnerTypes, "retainedOwnerTypes"));
     lockRentalItemAndLease(rentalItemId);
     OffsetDateTime releasedAt = now();
     expire(rentalItemId, releasedAt);
     List<UUID> released = new java.util.ArrayList<>();
     for (OperationLease current : activeForUpdate(rentalItemId)) {
+      if (retained.contains(current.getOwnerType())) {
+        continue;
+      }
       long expectedVersion = current.getVersion();
       current.release(releasedAt);
       OperationLeaseResponse updated = response(operationLeases.saveAndFlush(current));

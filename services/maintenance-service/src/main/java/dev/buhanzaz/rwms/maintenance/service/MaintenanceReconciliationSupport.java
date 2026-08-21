@@ -133,7 +133,15 @@ final class MaintenanceReconciliationSupport {
       boolean released,
       MaintenanceEventType eventType) {
     repair.confirmRentalItemVersion(assetVersion);
-    if (repair.getLeaseId() != null) repair.renewLease(lease.version(), lease.expiresAt());
+    if (repair.getLeaseId() != null) {
+      if (!repair.getLeaseId().equals(lease.leaseId())
+          || repair.getFencingToken() != lease.fencingToken()) {
+        repair.replaceExpiredLease(
+            lease.leaseId(), lease.version(), lease.fencingToken(), lease.expiresAt());
+      } else {
+        repair.renewLease(lease.version(), lease.expiresAt());
+      }
+    }
     if (released) {
       repair.releaseLease();
     } else {
