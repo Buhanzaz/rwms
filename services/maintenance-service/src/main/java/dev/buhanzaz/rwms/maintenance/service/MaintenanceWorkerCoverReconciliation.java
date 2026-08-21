@@ -35,6 +35,8 @@ public class MaintenanceWorkerCoverReconciliation {
       LoggerFactory.getLogger(MaintenanceWorkerCoverReconciliation.class);
   private static final int PAGE_SIZE = 100;
   private static final String RECONCILIATION_VERSION = "worker-presentation-v2";
+  private static final String QUARANTINED_RECONCILIATION_CODE =
+      "MAINTENANCE_RECONCILIATION_QUARANTINED";
 
   private final MaintenanceRepairRepository repairs;
   private final RepairStageRepository repairStages;
@@ -54,7 +56,9 @@ public class MaintenanceWorkerCoverReconciliation {
 
   /**
    * Enqueues one idempotent pre-start task update per eligible repair after application startup.
-   * No remote dependency is contacted on the application-ready thread.
+   * No remote dependency is contacted on the application-ready thread. An existing quarantined
+   * stable update remains quarantined for reviewed resume and is skipped without failing startup;
+   * every other conflict still fails closed.
    */
   @EventListener(ApplicationReadyEvent.class)
   public void enqueueWorkerPresentationSnapshots() {
@@ -82,17 +86,26 @@ public class MaintenanceWorkerCoverReconciliation {
     } while (hasNext);
 
     int enqueued = 0;
+    int quarantined = 0;
     for (UUID repairId : candidates) {
-      Boolean accepted =
-          transactions.execute(status -> enqueueIfStillEligible(repairId));
-      if (Boolean.TRUE.equals(accepted)) {
-        enqueued++;
+      try {
+        Boolean accepted =
+            transactions.execute(status -> enqueueIfStillEligible(repairId));
+        if (Boolean.TRUE.equals(accepted)) {
+          enqueued++;
+        }
+      } catch (MaintenanceConflictException conflict) {
+        if (!QUARANTINED_RECONCILIATION_CODE.equals(conflict.code())) {
+          throw conflict;
+        }
+        quarantined++;
       }
     }
     log.info(
-        "Worker task snapshot reconciliation inspected {} candidates and accepted {}",
+        "Worker task snapshot reconciliation inspected {} candidates, accepted {}, and retained {} quarantined",
         candidates.size(),
-        enqueued);
+        enqueued,
+        quarantined);
   }
 
   private boolean enqueueIfStillEligible(UUID repairId) {

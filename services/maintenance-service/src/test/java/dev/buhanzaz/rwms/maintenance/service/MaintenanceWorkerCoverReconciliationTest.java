@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.maintenance.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -102,6 +103,46 @@ class MaintenanceWorkerCoverReconciliationTest {
 
     verify(reconciliations, never())
         .enqueue(any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void retainsQuarantinedStableRefreshAndContinuesStartupPass() {
+    UUID quarantinedRepairId = UUID.randomUUID();
+    UUID acceptedRepairId = UUID.randomUUID();
+    MaintenanceRepair quarantinedRepair = eligibleRepair(quarantinedRepairId);
+    MaintenanceRepair acceptedRepair = eligibleRepair(acceptedRepairId);
+    RepairStage queuedStage = mock(RepairStage.class);
+    when(queuedStage.getState()).thenReturn(RepairStageState.QUEUED);
+    when(queuedStage.getTaskGenerationState()).thenReturn("GENERATED");
+    when(queuedStage.getExternalQueueEntryId()).thenReturn(UUID.randomUUID());
+    when(repairs.findAll(any(Pageable.class)))
+        .thenReturn(new PageImpl<>(List.of(quarantinedRepair, acceptedRepair)));
+    when(repairs.findById(quarantinedRepairId))
+        .thenReturn(Optional.of(quarantinedRepair));
+    when(repairs.findById(acceptedRepairId)).thenReturn(Optional.of(acceptedRepair));
+    when(repairStages.findAllByRepairIdOrderByStageNo(any()))
+        .thenReturn(List.of(queuedStage));
+    doThrow(
+            new MaintenanceConflictException(
+                "MAINTENANCE_RECONCILIATION_QUARANTINED",
+                "Stable reconciliation work is quarantined and requires reviewed resume"))
+        .when(reconciliations)
+        .enqueue(
+            eq(quarantinedRepairId),
+            eq("TASK_BOARD"),
+            eq("REFRESH_WORKER_MEDIA"),
+            any(),
+            any());
+
+    reconciliation.enqueueWorkerPresentationSnapshots();
+
+    verify(reconciliations)
+        .enqueue(
+            eq(acceptedRepairId),
+            eq("TASK_BOARD"),
+            eq("REFRESH_WORKER_MEDIA"),
+            any(),
+            eq(Map.of("repairId", acceptedRepairId.toString())));
   }
 
   @Test

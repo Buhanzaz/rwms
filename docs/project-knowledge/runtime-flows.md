@@ -884,9 +884,11 @@ and is covered by adopted-V4, Flyway-upgrade and eventing-runtime integration te
    reconciliation boundary; task-board does not merge or replace source stage IDs. On deployment,
    an idempotent owner-local startup pass enqueues the existing pre-start update workflow for
    already registered queued repairs, so their old snapshots converge without cross-database
-   writes or remote calls in the startup transaction. If a worker starts one during this bounded
-   recovery race, task-board rejects the pre-start refresh and maintenance retains the repair's
-   delivery state instead of turning a presentation refresh into a domain failure.
+   writes or remote calls in the startup transaction. A stable refresh already quarantined for
+   reviewed resume is counted and skipped without failing application startup; other stable-key
+   conflicts remain fail-closed. If a worker starts one during this bounded recovery race,
+   task-board rejects the pre-start refresh and maintenance retains the repair's delivery state
+   instead of turning a presentation refresh into a domain failure.
 2. For a `MAINTENANCE_REPAIR`, task-board treats each maximal consecutive route segment that uses
    the same physical work queue as one worker execution package. Opening any current member returns
    the ordered, de-duplicated works, materials, comments and source media from the complete segment.
