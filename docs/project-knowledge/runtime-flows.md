@@ -845,25 +845,32 @@ and
 ### Maintenance repair package to worker completion
 
 The ordinary panel board is one aggregate warehouse projection with a single persisted ordering
-partition per ordinary queue; task scheduling metadata neither partitions nor orders it. For each queue, PostgreSQL selects all real
-`IN_PROGRESS`/`PAUSED` entries and only the first `availableTaskLimit` real
-`WAITING` entries in priority/aggregate-position/identity order before JPA hydration. The owner
-then keeps active work first in aggregate-position order and follows it with that bounded waiting
-window;
-the default limit is six. The same eligibility window fences `TAKE`. When a
-route contains an unfinished `HOLDING`/SES gate, that gate is the only real
-ordinary card for the cabin and all other route entries stay shadowed until it
-completes. The ordinary public boundary has no date/shadow selector, move/date-swap command,
-maintenance daily-capacity scheduling or rollover scan. Driver movements and external capital work
-stay outside this board.
+partition per ordinary queue; task scheduling metadata neither partitions nor orders it. For each
+queue, PostgreSQL selects every real `IN_PROGRESS`/`PAUSED` entry and only the first
+`availableTaskLimit` real `WAITING` entries in pinned/aggregate-position/identity order before JPA
+hydration. Priority has already chosen the persisted insertion position and is not applied again by
+the read. Active work stays first, followed by waiting `REAL` cards and then the visible future
+`SHADOW` cards at their reserved positions; a shadow never consumes the actionable limit, whose
+default is six. Thus a route whose first unfinished work is electricity exposes a takeable
+electricity card immediately despite earlier inactive shadows. When an earlier shadow is promoted,
+it regains its earlier position ahead of later unpinned real work; a manager-pinned real card keeps
+its slot. The same real-card eligibility window fences `TAKE`, and both panel and WorkerApp refuse
+mutations for shadows. When a route contains an unfinished `HOLDING`/SES gate, that gate is the only
+ordinary card for the cabin and no repair shadow is exposed until SES completes. The ordinary
+public boundary has no date/shadow selector, move/date-swap command, maintenance daily-capacity
+scheduling or rollover scan. Driver movements and external capital work stay outside this board.
 
-The panel derives the distinct maintenance repair IDs from the currently rendered aggregate board
-and resolves complexity through the public repair collection in chunks of at most 200 IDs.
+The panel renders ordinary queues as side-by-side columns with vertically stacked cards. It derives
+the distinct maintenance repair IDs from the currently rendered aggregate board and resolves
+complexity through the public repair collection in chunks of at most 200 IDs.
 Maintenance applies that optional `repairIds` filter, the warehouse fence, state filters and
 pagination in PostgreSQL before mapping repair DTOs. Board refresh therefore scales with visible
 cards instead of the warehouse's complete repair history; the ordinary unfiltered repair read
-remains paged. Evidence:
+remains paged. The separate `/repairs` menu remains available as a paged repair registry without
+schedule-date columns or a duplicate queue view; cabin numbers are resolved from asset-service in
+bounded batches. Evidence:
 [`task-board page`](../../panel/src/features/task-board/task-board-page.tsx),
+[`repairs registry`](../../panel/src/features/repairs/repairs-page.tsx),
 [`maintenance OpenAPI`](../../contracts/openapi/maintenance-service.yaml), and
 [`MaintenanceRepairUseCases.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceRepairUseCases.java).
 
@@ -879,14 +886,16 @@ and is covered by adopted-V4, Flyway-upgrade and eventing-runtime integration te
 1. Maintenance freezes the ordered repair plan and registers one task-board route entry per repair
    stage. It puts the selected repair cover first in each stage's source-media snapshot and records
    every line photo in that work's `sourceMediaIds`. The existing task title carries the
-   maintenance-calculated worker label for light, medium, complex or capital repair instead of the
+   maintenance-calculated worker label for light, medium, heavy or capital repair instead of the
    technical `Maintenance repair`; no transport field is added. That one-to-one identity remains the
    reconciliation boundary; task-board does not merge or replace source stage IDs. On deployment,
-   an idempotent owner-local startup pass enqueues the existing pre-start update workflow for
+   an idempotent owner-local `worker-presentation-v3` startup pass enqueues the existing pre-start
+   update workflow for
    already registered queued repairs, so their old snapshots converge without cross-database
-   writes or remote calls in the startup transaction. A stable refresh already quarantined for
-   reviewed resume is counted and skipped without failing application startup; other stable-key
-   conflicts remain fail-closed. If a worker starts one during this bounded recovery race,
+   writes or remote calls in the startup transaction. Earlier-generation work, including a
+   quarantined v2 refresh, keeps its state and identity; a current-generation stable refresh already
+   quarantined for reviewed resume is counted and skipped without failing application startup;
+   other stable-key conflicts remain fail-closed. If a worker starts one during this bounded recovery race,
    task-board rejects the pre-start refresh and maintenance retains the repair's delivery state
    instead of turning a presentation refresh into a domain failure.
 2. For a `MAINTENANCE_REPAIR`, task-board treats each maximal consecutive route segment that uses
@@ -985,7 +994,12 @@ and
    It then presents general source photos, materials, ordered works with their
    exact work-bound photos, comments and result evidence in execution order.
    Selecting a thumbnail opens that exact index in the authenticated paged and
-   zoomable viewer. Task-board publishes that same feed/detail-visible audience
+   zoomable viewer. The viewer first reuses the already displayed preview, loads the authenticated
+   original independently for each page and retains bounded preview/original LRU entries, so a
+   slow original does not blank the page and swiping back does not restart every download.
+   Task-board publishes `entryType` and `pinned` in the worker feed, and WorkerApp mirrors the
+   server's active/real/pinned/position order while keeping shadows visible and read-only. The task
+   complexity label remains visible on the main card. Task-board publishes that same feed/detail-visible audience
    as `readerWorkerIds`; `allowedWorkerIds` remains limited to assigned workers
    and evidence reservers, so viewing a waiting task never grants result-upload
    authority. Task creation emits the initial proof in its local transaction.

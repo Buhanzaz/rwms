@@ -105,15 +105,20 @@ and
 warehouse-wide aggregate ordinary board with no date or shadow query dimensions. Each queue
 definition/request, work queue and board column carries required `availableTaskLimit` (`1..50`,
 default `6`). An ordinary column contains every real `IN_PROGRESS`/`PAUSED` card plus only that many
-priority-first real `WAITING` cards. The same server-owned window fences `TAKE`; future route stages
-remain internal until promotion. Public ordinary entry movement, date swapping, maintenance daily
-capacity scheduling and overdue rollover are absent. Dated driver and shipment planning remains on
-the separate logistics surface.
+pinned/position-ordered real `WAITING` cards. Registration priority is already represented by the
+persisted queue position and is not reapplied during reads. The same server-owned REAL window
+fences `TAKE`; visible future `SHADOW` cards follow without consuming that limit and remain
+non-actionable. Promotion restores the persisted shadow position ahead of a later unpinned REAL,
+while pinning keeps that later REAL ahead. Public ordinary entry movement, date swapping,
+maintenance daily-capacity scheduling and overdue rollover are absent. Dated driver and shipment
+planning remains on the separate logistics surface.
 
 `HOLDING` remains the canonical SES gate rather than an extra duplicated table. While a repair
 route has an unfinished holding stage, only that entry is real and visible; all non-SES stages stay
-shadowed and cannot be taken until the gate completes. The ordinary board contract does not absorb
-driver movement or external capital-repair ownership.
+shadowed and are omitted from panel and WorkerApp feeds until the gate completes. `WorkerFeedEntry`
+now carries required `entryType` and `pinned`, so native clients render the same order and do not
+infer actionability. The ordinary board contract does not absorb driver movement or external
+capital-repair ownership.
 
 ### Native Driver And Slinger Task Surfaces
 

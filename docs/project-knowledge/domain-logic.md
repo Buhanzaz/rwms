@@ -157,16 +157,19 @@ entry-scoped. Task-board changes no maintenance repair state directly.
 
 The ordinary repair board is one warehouse-wide queue projection, not a dated
 queue or a second maintenance-owned repair table. Persisted scheduling metadata
-does not partition or order ordinary queue positions. Every queue exposes all active/paused real cards and only the
-first priority-ordered waiting window configured by `availableTaskLimit`
-(default `6`, range `1..50`); the database bounds that window before JPA
-hydration. `TAKE` uses the same window, so a hidden backlog item cannot bypass
-the visible order. A route containing a `HOLDING`/SES stage exposes only that
-gate until it completes: no copy of the cabin appears in another ordinary
-column, and the next eligible stage is promoted afterwards. Public date/shadow
-selection, ordinary move/date-swap commands, maintenance daily-capacity placement and overdue
-rollover are absent. Driver movement and external capital-repair routes remain on their owning
-surfaces.
+does not partition or order ordinary queue positions. Registration priority is
+materialized into the persisted position once. Every queue exposes all
+active/paused REAL cards and only the first pinned/position-ordered waiting REAL
+window configured by `availableTaskLimit` (default `6`, range `1..50`); the
+database bounds that actionable window before JPA hydration. Future SHADOW
+stages remain visible after REAL cards without consuming the limit and cannot be
+taken. Promotion preserves their queue position, so an earlier shadow moves
+ahead of a later unpinned REAL; pinning is the explicit exception. A route
+containing an unfinished `HOLDING`/SES stage exposes only that gate: no repair
+shadow for the cabin appears in another ordinary column until treatment
+completes. Public date selection, ordinary move/date-swap commands, maintenance
+daily-capacity placement and overdue rollover are absent. Driver movement and
+external capital-repair routes remain on their owning surfaces.
 
 A workforce group command may replace membership and version-fenced current
 group assignments atomically. Current assignment still requires active
