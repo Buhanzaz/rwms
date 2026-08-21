@@ -99,6 +99,22 @@ Evidence:
 and
 [`task-board-events-v1.schema.json`](../../contracts/events/task-board/task-board-events-v1.schema.json).
 
+### Aggregate Ordinary Task Board
+
+[`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml) defines one
+warehouse-wide aggregate ordinary board with no date or shadow query dimensions. Each queue
+definition/request, work queue and board column carries required `availableTaskLimit` (`1..50`,
+default `6`). An ordinary column contains every real `IN_PROGRESS`/`PAUSED` card plus only that many
+priority-first real `WAITING` cards. The same server-owned window fences `TAKE`; future route stages
+remain internal until promotion. Public ordinary entry movement, date swapping, maintenance daily
+capacity scheduling and overdue rollover are absent. Dated driver and shipment planning remains on
+the separate logistics surface.
+
+`HOLDING` remains the canonical SES gate rather than an extra duplicated table. While a repair
+route has an unfinished holding stage, only that entry is real and visible; all non-SES stages stay
+shadowed and cannot be taken until the gate completes. The ordinary board contract does not absorb
+driver movement or external capital-repair ownership.
+
 ### Native Driver And Slinger Task Surfaces
 
 [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml)
@@ -122,6 +138,21 @@ verb `Взять задание` still sends `JOIN` with the current `workerGrou
 `LOGISTICS_DRIVER` completion requires at least one result photo linked to a
 `READY` media generation from either active participant and closes the same
 entry for both.
+
+The same Worker detail/action schemas carry one additive server-owned execution semantic for
+`MAINTENANCE_REPAIR`. Consecutive route entries with the same physical queue are presented as one
+package: detail arrays cover the complete segment, and the displayed duration/timer cover its
+unfinished members. The representative entry ID and version remain the command fence. One COMPLETE
+atomically closes that entry and every later unfinished shadow member, while the existing
+`QUEUE_ENTRY_COMPLETED` event is still emitted separately for every route entry so maintenance can
+advance its one-to-one repair-stage mappings. No HTTP or event field was added, and every other
+source remains entry-scoped.
+
+Source-media order is also meaningful at this boundary. When an owning source has a selected cover,
+the registration places that reference first and task-board preserves it in
+`WorkerTaskDetail.sourceMedia`. `WorkerWork.sourceMediaIds` is the canonical per-work association;
+WorkerApp removes those references from the general gallery and renders them inside the matching
+work card. No object-storage coordinate or duplicate media owner is introduced.
 
 Native device registration remains wire-compatible: omitted `targetKind`
 means legacy `TOKEN`, while current clients send `FID` and put the Firebase
@@ -148,6 +179,9 @@ Evidence:
 [`logistics OpenAPI`](../../contracts/openapi/logistics-service.yaml),
 [`media OpenAPI`](../../contracts/openapi/media-service.yaml),
 [`task-board reader projection`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardEntryOwnerProofService.java),
+[`maintenance package owner`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/MaintenanceTaskExecutionPackageService.java),
+[`maintenance worker snapshot`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceTaskBoardSupport.java),
+[`WorkerApp task detail`](../../worker-app/feature-task-detail/src/main/java/dev/buhanzaz/rwms/worker/feature/taskdetail/TaskDetailScreen.kt),
 [`media V14`](../../services/media-service/db/migration/V14__task_board_reader_audience.sql),
 [`MobileTaskSurfacePolicy.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/MobileTaskSurfacePolicy.java),
 [`LogisticsAuthorizer.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/security/LogisticsAuthorizer.java),
@@ -266,14 +300,43 @@ Inventory's read-only call to this preflight has one same-request retry only for
 or HTTP `502`, `503` and `504`; semantic, authorization, other server and malformed-response
 failures are not retried.
 
+### Inventory Cabin Disposition Review
+
+[`inventory-service.yaml`](../../contracts/openapi/inventory-service.yaml) defines a MANAGE-only,
+version-fenced review before furniture reconciliation. The server derives immutable return and
+missing candidate sets from current finding revisions. `RETURNS` requires the complete set of
+physically found former-rental cabins with actual return date and existing client identity;
+`SHIPMENTS` accepts only missing cabins confirmed as departed, with actual date, client snapshot
+and zero or more unique catalog-versioned furniture quantities. Any missing candidate omitted from
+that second command becomes `WRITE_OFF`; an empty shipment list is valid and means all missing
+cabins. The completed decision is copied into each final-plan entry as `LOCAL`, `SHIPMENT` or
+`WRITE_OFF`. Only `LOCAL` entries enter furniture review.
+
+The private plan-wide operation in
+[`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml) preserves those meanings.
+A former-rental `LOCAL` row creates a terminal historical return without acceptance/estimate
+creation. `SHIPMENT` creates a terminal driverless historical shipment whose line exposes nullable
+`inventoryShipmentFurniture`; this frozen furniture never reserves or decrements `STOCK`.
+`WRITE_OFF` records only a logistics release marker. The matching asset inventory outcome supports
+`RENTED` plus required `shipmentContents` and exact-replaces the cabin contents without touching
+stock.
+
+Only after the exact logistics generation succeeds does inventory call
+`POST /api/internal/maintenance/v1/inventory/cabin-write-offs`. The service-token-only command
+creates or replays one ordinary `PENDING_APPROVAL` `WRITE_OFF` decision. Maintenance loads the
+current asset snapshot and freezes its contents as `DISPOSE_WITH_CABIN`; the existing administrator
+approval/recovery API remains the only terminal path.
+
 ### Authoritative Completed-Inventory Outcome Recovery
 
 [`inventory-service.yaml`](../../contracts/openapi/inventory-service.yaml) defines the public
 MANAGE command `POST /api/inventory/v1/sessions/{inventoryId}/outcome/recalculate`. Its request
 requires the session revision plus the completed final-plan version and SHA-256, and its successful
-`202` response reports created, requeued and already-authoritative publication counts. The command
-only schedules owner-local durable work; it does not report a downstream status or repair as
-applied before the existing publication records settle. If the server restores an explicit finding
+`202` response reports the authoritative session/plan fences, furniture reconciliation state and
+created/requeued publication counts. It intentionally does not embed the complete publication
+batch; clients invalidate and reread that separate projection. The command only schedules
+owner-local durable work; it does not report a downstream status or repair as applied before the
+existing publication records settle. If the server restores an explicit finding
 omitted by the obsolete membership rule, the same response identifies the strictly newer corrected
 final-plan version/SHA; clients must accept that authoritative successor while rejecting a lower
 version or same-version hash drift.
@@ -302,7 +365,14 @@ The plan-wide logistics command
 [`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml) carries every final-plan
 asset and desired status under one immutable plan identity and the exact `logistics.inventory`
 service credential. A complete selected non-terminal document/order can be superseded, but a
-document with an unrelated active line rejects the whole batch before local or remote effects.
+document with an unrelated active line rejects the whole batch before local or remote effects. Its
+outcomes carry exact `LOCAL`, `SHIPMENT` or `WRITE_OFF` disposition evidence; the corresponding
+desired statuses are `FREE`/`REPAIR`/`CAPITAL_REPAIR`, `RENTED` and `WRITE_OFF_PENDING`
+respectively, with the last value remaining logistics evidence rather than an asset status.
+Inventory freezes this command once per final-plan version and reapplication generation in
+[`InventoryPlanLogisticsEffect`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/domain/InventoryPlanLogisticsEffect.java).
+Per-finding publication retries consume the shared result and never resend the full plan after it
+has succeeded.
 
 The private maintenance work request in
 [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml) requires both the
@@ -363,6 +433,18 @@ its private logistics projection in
 The panel must not call that private route or infer status from browser state;
 `logistics-service` validates and republishes the needed fields through the
 public driver-board response.
+
+### Estimate Creation Window
+
+[`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml) exposes
+warehouse-MANAGE GET/PUT settings at
+`/api/maintenance/v1/settings/estimate-creation-window/{warehouseId}`. The version-fenced `days`
+value is bounded to `1..3650`; a missing row is the non-persisted version-0 default of seven days.
+For manual creation, maintenance obtains the latest physical return arrival from the private
+logistics boundary. Both manual and logistics-origin automatic estimate creation evaluate an
+inclusive warehouse-local deadline; expiration returns the exact Problem Details code
+`ESTIMATE_CREATION_WINDOW_EXPIRED`. The contract does not remove or redirect the separate direct
+repair operation.
 
 ### Return Estimate Sources And Legacy Furniture
 

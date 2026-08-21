@@ -389,26 +389,41 @@ while repair work exists:
    omits it because the physical warehouse finding is authoritative inventory evidence.
 2. An inspection moves from `NOT_INSPECTED` to `READY` or `WORK_STAGED` and
    stores a proposal only. Saving a finding does not yet mutate another owner.
-3. Review builds a server-owned final plan in `DRAFT`; source changes make it
-   `STALE`.
-4. Completing the exact plan version changes it to `COMPLETED` and records a
-   durable idempotent outcome for every found cabin. After furniture
-   reconciliation, asset-service applies the final finding as current truth:
-   no work becomes `FREE`, ordinary work becomes `REPAIR`, and the explicit
-   capital choice becomes `CAPITAL_REPAIR`. Active rental/transfer holds,
-   reservations and leases are superseded without deleting their history.
-5. The exact finding images become the current media-service inventory folder;
+3. Before furniture review, a server-owned cabin-disposition review runs in
+   `RETURNS` then `SHIPMENTS`. Every physically found cabin whose snapshot was
+   `RENTED` requires its actual return date and client and becomes `LOCAL`.
+   Every missing cabin explicitly selected as departed records its actual date,
+   client and arbitrary physical furniture quantities as `SHIPMENT`; every
+   remaining missing cabin deterministically becomes `WRITE_OFF`. Only `LOCAL`
+   cabins enter furniture reconciliation.
+4. Review builds a server-owned final plan in `DRAFT`; source changes make it
+   `STALE`. The exact `LOCAL`, `SHIPMENT` or `WRITE_OFF` decision and its
+   evidence are frozen in every entry.
+5. Completing the exact plan version changes it to `COMPLETED` and records
+   durable idempotent effects. After furniture reconciliation, asset-service
+   applies each `LOCAL` finding as current truth: no work becomes `FREE`,
+   ordinary work becomes `REPAIR`, and the explicit capital choice becomes
+   `CAPITAL_REPAIR`. A `SHIPMENT` becomes `RENTED` with the exact reviewed cabin
+   contents, without reserving or decrementing warehouse `STOCK`. A
+   `WRITE_OFF` does not publish an immediate asset status.
+6. The exact finding images become the current media-service inventory folder;
    older cabin folders remain historical and their MinIO objects are unchanged.
-6. One plan-wide logistics command supersedes active rental/document lines and
-   their cancellable tasks. A mixed document with an unrelated active line
-   fails the batch before any effect instead of partially changing it.
-7. A work finding then supersedes non-terminal maintenance predecessors and
+7. One plan-wide logistics command supersedes active rental/document lines and
+   their cancellable tasks. It records a terminal historical return for a found
+   former rental, a terminal driverless shipment with the frozen furniture for
+   `SHIPMENT`, or only a release marker for `WRITE_OFF`. A mixed document with
+   an unrelated active line fails the batch before any effect instead of
+   partially changing it.
+8. A local work finding then supersedes non-terminal maintenance predecessors and
    creates the reviewed repair using the effective asset version; `AFTER_RENT`
    is not a separate estimate branch for completed inventory. A no-work finding
    explicitly cleans up non-terminal maintenance work before settling as
-   `FREE`. Publication progresses through `READY`, `PENDING`, `SUCCEEDED`,
-   retryable failure, or an explicit blocked state. Terminal `LOST` and
-   `WRITTEN_OFF` cabins remain rejected.
+   `FREE`. After the exact logistics generation succeeds, each `WRITE_OFF`
+   creates the normal maintenance `PENDING_APPROVAL` decision with current
+   contents frozen as disposed with the cabin; the asset remains non-terminal
+   until global-administrator approval. Publication progresses through
+   `READY`, `PENDING`, `SUCCEEDED`, retryable failure, or an explicit blocked
+   state. Terminal `LOST` and `WRITTEN_OFF` cabins remain rejected.
 
 Variants include:
 

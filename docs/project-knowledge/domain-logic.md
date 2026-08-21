@@ -144,6 +144,30 @@ share one evidence set and terminal transition. Completion by the driver or
 joined slinger requires at least one result photo whose media generation is
 `READY`, then removes the task for both.
 
+Maintenance preserves one task-board route entry per repair stage so every source stage has an
+independent completion fact. Consecutive entries for the same physical work queue nevertheless
+form one worker execution package. Worker detail aggregates all work, material, comment and source
+media snapshots from that complete segment, while its duration, countdown and KPI budget cover
+only the unfinished members. TAKE assigns the representative once. Its version-fenced COMPLETE
+atomically closes the representative plus all later unfinished shadow members, records audit facts
+for each and publishes their existing completion events; maintenance therefore advances every
+mapped stage and reaches pending acceptance without requiring the worker to take the same queue
+repeatedly. A different queue starts a different package, and non-maintenance sources remain
+entry-scoped. Task-board changes no maintenance repair state directly.
+
+The ordinary repair board is one warehouse-wide queue projection, not a dated
+queue or a second maintenance-owned repair table. Persisted scheduling metadata
+does not partition or order ordinary queue positions. Every queue exposes all active/paused real cards and only the
+first priority-ordered waiting window configured by `availableTaskLimit`
+(default `6`, range `1..50`); the database bounds that window before JPA
+hydration. `TAKE` uses the same window, so a hidden backlog item cannot bypass
+the visible order. A route containing a `HOLDING`/SES stage exposes only that
+gate until it completes: no copy of the cabin appears in another ordinary
+column, and the next eligible stage is promoted afterwards. Public date/shadow
+selection, ordinary move/date-swap commands, maintenance daily-capacity placement and overdue
+rollover are absent. Driver movement and external capital-repair routes remain on their owning
+surfaces.
+
 A workforce group command may replace membership and version-fenced current
 group assignments atomically. Current assignment still requires active
 membership, an available active group, and no conflicting active task; a failed
@@ -153,9 +177,10 @@ continues to require an active entry proof. For an open entry,
 `readerWorkerIds` is the exact union of WorkerApp/DriverApp feed/detail-visible
 workers, while `allowedWorkerIds` remains the assigned/evidence upload
 audience. Task creation publishes that initial proof transactionally. A bounded
-idempotent reconciliation pass repairs legacy proofs and converges later
-workforce or queue-policy changes without a browser-owned authorization
-fallback.
+idempotent reconciliation pass runs at startup and only after a warehouse audience-revision
+change; it repairs legacy proofs and converges later workforce or queue-policy changes without
+idle full-table polling or a browser-owned authorization fallback. A failed pass does not advance
+its revision watermark.
 
 Evidence: [`services/task-board-service/`](../../services/task-board-service/),
 [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
@@ -165,6 +190,9 @@ Evidence: [`services/task-board-service/`](../../services/task-board-service/),
 [`TaskBoardExternalRegistrationService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardExternalRegistrationService.java),
 [`TaskBoardEntryOwnerProofReconciler.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardEntryOwnerProofReconciler.java),
 [`TaskBoardWorkerExecutionService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardWorkerExecutionService.java),
+[`MaintenanceTaskExecutionPackageService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/MaintenanceTaskExecutionPackageService.java),
+[`OrdinaryQueueAvailabilityPolicy.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/OrdinaryQueueAvailabilityPolicy.java),
+[`V31__ordinary_queue_availability_and_holding_gate.sql`](../../services/task-board-service/src/main/resources/db/migration/V31__ordinary_queue_availability_and_holding_gate.sql),
 and
 [`WorkerPushDispatcher.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/push/WorkerPushDispatcher.java).
 
@@ -188,6 +216,16 @@ and become effective without an asset-service custody or warehouse-balance
 effect. If contents appear before queuing the repair, the unaccounted path
 fails closed rather than bypassing normal accounting.
 
+Each warehouse has a version-fenced estimate-creation window setting, default
+`7` days and bounded to `1..3650`. Maintenance evaluates the inclusive deadline
+from logistics-owned physical return time in the warehouse timezone; with an
+arrival on 1 August and a seven-day setting, 8 August is the last creation day
+and 9 August returns `ESTIMATE_CREATION_WINDOW_EXPIRED`. The rule guards both
+manual estimate creation and logistics-origin automatic registration. It does
+not block the separate direct-repair workflow. Logistics freezes the normal
+intake transition as immutable `returnArrivedAt`; inventory-created historical
+returns have no intake timestamp and are not estimate sources.
+
 Cabin and additional-equipment write-off/loss use one property-decision model.
 One list row is one decision/root asset; a repair chain remains visible in the
 detail. A warehouse manager or administrator may create a mandatory-reason
@@ -197,6 +235,14 @@ disposing the remainder, or disposing all contents with the cabin. An empty
 cabin has no contents choice. Asset mutation and logistics movement are
 asynchronous, durable effects whose pending/quarantined state remains visible
 and can be recovered only by a version-fenced administrator review.
+
+A missing cabin left out of the completed-inventory shipment selection enters
+that same decision model. Inventory first waits for the exact plan-wide
+logistics generation to release predecessor rental state, then calls the
+service-only idempotent boundary. Maintenance rereads and freezes current cabin
+contents as `DISPOSE_WITH_CABIN` and creates `PENDING_APPROVAL`; it never trusts
+browser-supplied balance versions and does not make the cabin terminal before
+global-administrator approval.
 
 Automatic furniture-catalog linking first persists a stable node-UUID intent,
 then calls asset-service outside the catalog transaction, and finally confirms
@@ -249,6 +295,8 @@ route.
 Evidence: [`services/maintenance-service/`](../../services/maintenance-service/),
 [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml),
 [`PropertyDispositionApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/disposition/application/PropertyDispositionApplicationService.java),
+[`PropertyDispositionCreationUseCases.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/disposition/application/PropertyDispositionCreationUseCases.java),
+[`EstimateCreationWindowPolicy.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/EstimateCreationWindowPolicy.java),
 [`FurnitureEquipmentLinkStore.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/FurnitureEquipmentLinkStore.java),
 [`MaintenanceApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceApplicationService.java),
 [`MaintenanceEstimateModelSupport.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceEstimateModelSupport.java),
@@ -256,6 +304,7 @@ Evidence: [`services/maintenance-service/`](../../services/maintenance-service/)
 [`V38__durable_furniture_equipment_links.sql`](../../services/maintenance-service/src/main/resources/db/migration/V38__durable_furniture_equipment_links.sql),
 [`V43__backfill_furniture_equipment_link_intents.sql`](../../services/maintenance-service/src/main/resources/db/migration/V43__backfill_furniture_equipment_link_intents.sql),
 [`V44__manual_capital_repair_selection.sql`](../../services/maintenance-service/src/main/resources/db/migration/V44__manual_capital_repair_selection.sql),
+[`V46__estimate_creation_window.sql`](../../services/maintenance-service/src/main/resources/db/migration/V46__estimate_creation_window.sql),
 [`repair-estimate-catalog-picker.tsx`](../../panel/src/features/repair-estimates/repair-estimate-catalog-picker.tsx),
 [`MaintenanceScreen.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/screens/MaintenanceScreen.kt).
 
@@ -276,6 +325,15 @@ reviewed version. The manager Android app is field-only: it reopens or creates
 one finding, records passport facts, photos, furniture, works/materials and the
 proposed repair priority/movement choice. It does not start or complete the
 session and does not publish operational tasks.
+
+Before furniture review, inventory owns an exact two-phase cabin-disposition
+review. `RETURNS` requires an actual return date and existing client for every
+physically found cabin whose captured status was `RENTED`. `SHIPMENTS` accepts
+only the missing cabins confirmed as departed, with actual departure date,
+client and zero or more catalog-versioned furniture quantities; every omitted
+missing candidate becomes `WRITE_OFF`. The final plan freezes `LOCAL`,
+`SHIPMENT` or `WRITE_OFF` and their evidence. Only local cabins participate in
+the warehouse furniture reconciliation.
 
 The field proposal may explicitly force capital repair. Inventory preserves
 that boolean in the finding plan snapshot, every reviewed final-plan candidate
@@ -355,11 +413,14 @@ backfills only revision-fenced finding/final-plan evidence, and asset migration
 does not rewrite existing cabin passports.
 
 Publication then projects the finding's exact image set as the current
-media-service cabin folder, applies one plan-wide logistics outcome and finally
+media-service cabin folder, applies one persisted plan-wide logistics outcome per final-plan
+reapplication generation and finally
 calls maintenance for either the reviewed work or an explicit no-work cleanup.
-Media keeps every older association and MinIO object as an archive, while
-current covers and presentation resolve only from the latest inventory folder.
-Logistics supersedes active rental/document lines and their cancellable tasks;
+Media keeps every older association and MinIO object as an archive. Its public
+cabin-cover projection counts all retained archive images and puts the current
+canonical cover first; folder boundaries stay on the archive list, while the
+private logistics presentation remains current-folder scoped. Logistics
+supersedes active rental/document lines and their cancellable tasks;
 maintenance supersedes non-terminal estimates, repairs, task/driver effects and
 leases before materializing the selected repair/capital-repair successor, or
 before confirming `FREE` has no current maintenance work. All three owners keep
@@ -398,6 +459,14 @@ Asset preserves an active operation lease on that same-source reassertion
 because it can already belong to the exact inventory repair; maintenance and
 logistics supersede unrelated predecessor work and release its lease using the
 stored owner and fencing token.
+
+The plan-wide logistics request is immutable local state, not a value rebuilt by each finding. Its
+canonical body, SHA-256, generation-stable idempotency key, attempt count and lease/retry/result
+state are stored before remote I/O. The first eligible finding claims and applies it in a short
+transaction; every other finding observes the shared success. A semantic owner `4xx` blocks the
+effect with its bounded Problem Details code, while transport failure releases it for stable-key
+retry. This prevents an `N`-finding plan from generating or dispatching the same `N`-row command
+`N` times.
 
 A MANAGE command on completed inventory history fences the exact session revision and final-plan
 version/SHA. Before rebuilding durable work it restores every inspected explicit observation that
@@ -496,6 +565,8 @@ If logistics reports any existing or uncertain task, recovery fails closed.
 
 Evidence: [`services/inventory-service/`](../../services/inventory-service/),
 [`inventory-service.yaml`](../../contracts/openapi/inventory-service.yaml),
+[`InventoryCabinDispositionService.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryCabinDispositionService.java),
+[`InventoryCabinWriteOffService.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryCabinWriteOffService.java),
 [`asset-service.yaml`](../../contracts/openapi/asset-service.yaml),
 [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml),
 [`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml),

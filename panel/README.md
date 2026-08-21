@@ -33,6 +33,21 @@ contexts and screens are usable.
   version-fenced current-brigade changes in one group command. The panel does
   not offer a second worker-table assignment action; task-board commits or
   rejects the complete change atomically.
+- `/task-board` renders one ordinary board across server-internal dates, with
+  one horizontal row per queue. It does not own date routing or drag-and-drop
+  queue decisions. Each row shows all active/paused cards and the server-owned
+  priority-first waiting window configured by `availableTaskLimit` (six by
+  default). A cabin gated by SES/HOLDING appears only in that row until the
+  gate completes; driver movement and external capital work remain on their
+  existing surfaces. The panel resolves complexity only for the visible
+  maintenance repair IDs, in bounded batches of at most 200; it never hydrates
+  the warehouse's complete repair collection for the board. The obsolete Repairs queue table, its sidebar entry, and
+  its collection read are removed. `/repairs` is now only the create,
+  detail, and edit workspace reached through `?create=1`, `?repairId=...`, or
+  `?repairId=...&edit=1`; bare `/repairs` and the old `?view=queue` route
+  replace-redirect to `/task-board`. Closing, saving, or going back returns to
+  the safe in-panel origin when one was recorded, with `/task-board` as the
+  direct-link fallback.
 - A verified authenticated subject and its bearer-grant revision own a fresh
   nested TanStack Query client. A logout, subject change, or grant change
   remounts the protected subtree so effect-owned realtime streams stop, cancels
@@ -76,7 +91,7 @@ contexts and screens are usable.
   stage, including repeated catalog work IDs. A new rework inherits the capital
   choice because its create contract does not authorize replacing it.
   Calculated CAPITAL repairs continue to use the existing separate
-  capital-repair and acceptance surfaces rather than the ordinary repair table.
+  capital-repair and acceptance surfaces rather than the ordinary task board.
   Their driver-board cards load the authoritative repair plan only when
   expanded and render its ordered queues as separate work and material columns
   with exact quantities and units.
@@ -87,13 +102,15 @@ contexts and screens are usable.
   byte progress directly below that preview; cover/delete actions appear only
   after the server item is ready. Only an image can be selected as the cover,
   and protected blob URLs are released when their generation or owner scope
-  changes. A cabin detail carousel reads only the media-service current-folder
-  projection; its photo archive still lists every historical folder. If that
+  changes. A cabin detail carousel reads the media-service cabin-cover
+  projection across retained archive associations; its photo archive still
+  lists every historical folder. If that
   auxiliary cover projection fails while owner media loaded successfully, the
   detail falls back to those loaded photos and does not report the whole photo
-  service unavailable. Warehouse cards, booking cards, the passport carousel
-  and the active archive folder put the explicit cover first while preserving
-  stable association order for every remaining photo; the client also applies
+  service unavailable. Warehouse cards, booking cards and the passport
+  carousel count the complete retained archive and put the current explicit
+  cover first in the bounded preview; archive folders preserve their own stable
+  association order. The client also applies
   this ordering to an older media response whose cover appears later. The
   passport Photo tab lists retained media-owned folders before their photos and
   shows source, occurrence time, actor and photo count on each folder. It reads
@@ -250,6 +267,12 @@ contexts and screens are usable.
   asset-service contents and shows a text-labelled required, action-needed,
   loaded, empty, or unavailable state. Scheduling dialogs repeat the furniture
   summary for exactly the cabins in the pending command.
+- A direct historical shipment created by completed inventory has no order,
+  driver, address or stock-allocation workflow. Its expanded row instead shows
+  the frozen inventory client/date and the exact
+  `inventoryShipmentFurniture` quantities, including a valid empty list. It
+  never compares those facts with an order or shows a false action-required
+  furniture warning.
 - The warehouse-transfer adapter validates the complete current logistics
   document shape. Transfer-only responses require null driver and rental
   shipment fields and are rejected explicitly when required fields are missing
@@ -312,6 +335,16 @@ An inventory inspection save rereads the current session and uses that broad
 session revision, while retaining the finding revision captured when the editor
 opened. An unrelated cabin update therefore does not block a supplement, but a
 concurrent edit of the same cabin still fails closed with `409`.
+
+Before furniture review, the MANAGE completion flow shows the server-owned
+`RETURNS` and `SHIPMENTS` phases. Every found former-rental cabin requires its
+actual return date and client. The shipment phase submits only missing cabins
+known to have departed, with actual date, existing client and arbitrary
+catalog-versioned furniture quantities; every unselected missing cabin is
+explicitly shown as an automatic write-off proposal. Confirming an empty
+shipment list is valid and sends all remaining missing cabins to the ordinary
+administrator-approved write-off flow. Only local cabins proceed to furniture
+reconciliation.
 
 The MANAGE-only inventory finish surface exposes **Recalculate session changes** in both cabin and
 furniture review. It is disabled while a review/plan draft is dirty or a competing finish command is

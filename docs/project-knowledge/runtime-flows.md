@@ -66,6 +66,16 @@ flowchart LR
     Acceptance -->|approved disposition| Terminal[asset: WRITTEN_OFF or LOST]
 ```
 
+For a new post-return estimate, maintenance reads the latest physical arrival
+from logistics and evaluates the warehouse-local inclusive deadline from the
+versioned `estimateCreationWindowDays` setting (default seven). Arrival on
+1 August therefore permits creation through 8 August and rejects a new estimate
+from 9 August with `ESTIMATE_CREATION_WINDOW_EXPIRED`; direct repair remains a
+separate supported command. A normal return freezes that instant once as
+logistics-owned `returnArrivedAt`; inventory-created historical returns bypass
+intake and deliberately have no such source. The same policy fences
+logistics-origin automatic estimate registration.
+
 The detailed state machines, owner handoffs, recovery rules and supported
 variants are maintained in the bilingual
 [`Cabin Operational Lifecycle`](cabin-lifecycle.md) /
@@ -185,6 +195,15 @@ repairs older missing-current-revision rows only when the finding still names a 
 prior exact set contains it; it appends that newest whole set without combining older revisions or
 touching MinIO objects.
 
+Before furniture review, inventory freezes the current finding revision vector into a
+server-owned cabin-disposition review. In `RETURNS`, every physically found candidate captured as
+`RENTED` requires its actual return date and existing client. In `SHIPMENTS`, the manager submits
+only missing cabins known to have departed, with actual date, client and zero or more exact
+catalog-versioned furniture quantities. Every omitted missing candidate becomes `WRITE_OFF`; an
+empty shipment submission therefore sends all missing cabins to write-off review. Only `LOCAL`
+rows proceed into warehouse furniture reconciliation. Final-plan preparation then freezes each
+row's `LOCAL`, `SHIPMENT` or `WRITE_OFF` evidence and rejects stale session/review/finding fences.
+
 Preparing that final plan calls maintenance's read-only publication preflight. Inventory retries it
 once with the identical request and idempotency key only after a transport failure or HTTP
 `502/503/504`; semantic, authorization, other server and malformed-response failures remain
@@ -194,12 +213,15 @@ was copied onto every line, clears only those executable line copies and retains
 evidence. The raw inventory snapshot and fingerprint remain unchanged. No other version-1 shape is
 normalized, and version 2 is never adapted.
 
-Exact completion now persists one publication intent per final-plan finding and performs no remote
-effect inside the completion transaction. Durable recovery first waits for the furniture intent.
-It then sends the immutable completed-at/plan/finding identity to asset-service, which rejects an
-older watermark or terminal cabin, otherwise releases/supersedes active reservations, holds,
-leases and transfer state and applies `FREE`, `REPAIR` or `CAPITAL_REPAIR`. Inventory stores the
-canonical asset result and effective version before the remaining owner effects:
+Exact completion persists immutable recovery work for every final-plan entry and performs no remote
+effect inside the completion transaction. For `LOCAL` and `SHIPMENT`, durable publication waits for
+the local-furniture reconciliation generation when applicable and sends the immutable
+completed-at/plan/finding identity to asset-service. Asset rejects an older watermark or terminal
+cabin, otherwise releases/supersedes active reservations, holds, leases and transfer state and
+applies `FREE`, `REPAIR`, `CAPITAL_REPAIR` or `RENTED`. `RENTED` exact-replaces the cabin's reviewed
+contents without reading, reserving or decrementing `STOCK`. A `WRITE_OFF` entry skips this status
+command and remains non-terminal. Inventory stores each canonical asset result and effective
+version before the remaining owner effects:
 
 0. The request carries the exact passport observation frozen on that publication intent and its
    canonical SHA-256. For `PRESENT`, asset-service resolves required names only against active
@@ -211,10 +233,13 @@ canonical asset result and effective version before the remaining owner effects:
 1. If the exact finding revision has images, media-service projects their immutable IDs and
    generations into the deterministic inventory folder and makes that folder the current cabin
    presentation. Older folders and objects remain available as history.
-2. Inventory submits the whole immutable final plan to logistics-service under one plan-stable
-   idempotency key. Logistics supersedes active rental/document lines and cancellable tasks for
-   every listed asset while retaining their rows and audit facts.
-3. A work finding asks maintenance to supersede non-terminal predecessor work and materialize the
+2. Inventory submits the whole immutable final plan to logistics-service once per plan/version
+   reapplication generation under one stable idempotency key. Logistics supersedes active
+   rental/document lines and cancellable tasks for every listed asset while retaining their rows
+   and audit facts. `LOCAL` with former-rental evidence creates a terminal historical return;
+   `SHIPMENT` creates a terminal driverless shipment and stores the exact reviewed furniture on
+   its line; `WRITE_OFF` records only the release marker needed by the downstream decision owner.
+3. A local work finding asks maintenance to supersede non-terminal predecessor work and materialize the
    reviewed ordinary/capital repair, including a former `AFTER_RENT` cabin. A no-work finding sends
    an explicit cleanup command, so stale estimates, repairs, tasks, driver effects and leases do not
    survive a `FREE` result. If the preceding asset command changed only the cabin's technical
@@ -223,7 +248,12 @@ canonical asset result and effective version before the remaining owner effects:
    recoverable reassertion, not a different inventory decision. Inventory projects this command
    explicitly to the maintenance schema; the asset-only passport observation and hash remain on
    the asset boundary.
-4. Maintenance routes the materialized result without manufacturing completion: ordinary work
+4. After that exact logistics generation succeeds, every `WRITE_OFF` recovery intent calls the
+   service-only maintenance boundary with one stable finding identity. Maintenance rereads the
+   cabin, freezes its current contents as `DISPOSE_WITH_CABIN` and creates or replays the ordinary
+   `PENDING_APPROVAL` property decision. A global administrator remains the only actor who can
+   advance the existing disposition saga to terminal asset state.
+5. Maintenance routes the materialized result without manufacturing completion: ordinary work
    without inbound movement registers on task-board; selected movement creates the logistics
    delivery and registers ordinary work after arrival; catalog-enforced capital work with the same
    frozen movement choice creates or reuses `CAPITAL_TO_PRODUCTION` while remaining active as
@@ -243,8 +273,9 @@ repair owner proof. Only worker-result evidence uses the task-board entry proof.
 the exact `mediaId`/generation references from the current projections; it neither substitutes the
 repair-wide gallery nor changes media or MinIO ownership. Each exact work-line set uses the shared
 compact carousel with an in-image count and always-visible previous/next controls; aggregate and
-result-evidence sets retain the standard gallery presentation. The cabin projection puts its
-explicit cover first and retains stable association order for the remaining current-folder images;
+result-evidence sets retain the standard gallery presentation. The public cabin-cover projection
+puts its explicit cover first, counts every retained archive association and retains stable
+association order for the remaining bounded archive previews;
 the panel repeats that ordering defensively during a mixed-version rollout. The passport photo
 archive groups every retained CABIN association by its media-owned folder and shows the folder's
 source, occurrence time, actor and photo count before opening its images. Folder provenance comes
@@ -362,12 +393,19 @@ the authoritative successor. Inventory then advances one shared plan reapplicati
 requeues every existing intent, including an
 earlier `SUCCEEDED` result, and makes a failed furniture
 reconciliation immediately eligible. Replaying every row is deliberate: an old success cannot prove
-that owner effects introduced later in the chain were applied. The public command returns `202`
-after this local scheduling step; the existing schedulers perform remote effects and keep every
-prior attempt/result as audit evidence. Finding media references and MinIO objects are not mutated
+that owner effects introduced later in the chain were applied. The public command returns a slim
+`202` containing only the authoritative fences, furniture state and created/requeued counts after
+this local scheduling step. It does not serialize every publication intent; the panel invalidates
+and rereads the publication projection. The existing schedulers perform remote effects and keep
+every prior attempt/result as audit evidence. Finding media references and MinIO objects are not mutated
 by either scheduling or outcome apply; media-service reasserts the exact completed batch as the
 current folder and the selected cover as that folder's first presentation image. Earlier folders
 and their objects remain in the passport archive.
+One immutable logistics request is stored for the whole final-plan/reapplication generation. A
+short claim sends it once with one stable key, and later finding publications reuse its durable
+success; they do not rebuild and resend the complete outcomes array. A bounded semantic downstream
+Problem Details code remains visible on the blocked publication, whereas unavailable dependencies
+remain retryable.
 Migration
 [`V22__retry_legacy_maintenance_source_outcomes.sql`](../../services/inventory-service/src/main/resources/db/migration/V22__retry_legacy_maintenance_source_outcomes.sql)
 advances the whole affected completed plan, rather than only its blocked rows, when a partially
@@ -804,6 +842,80 @@ Evidence:
 and
 [`order dossier evidence`](../../panel/src/features/orders/components/order-unit-dossier-evidence.tsx).
 
+### Maintenance repair package to worker completion
+
+The ordinary panel board is one aggregate warehouse projection with a single persisted ordering
+partition per ordinary queue; task scheduling metadata neither partitions nor orders it. For each queue, PostgreSQL selects all real
+`IN_PROGRESS`/`PAUSED` entries and only the first `availableTaskLimit` real
+`WAITING` entries in priority/aggregate-position/identity order before JPA hydration. The owner
+then keeps active work first in aggregate-position order and follows it with that bounded waiting
+window;
+the default limit is six. The same eligibility window fences `TAKE`. When a
+route contains an unfinished `HOLDING`/SES gate, that gate is the only real
+ordinary card for the cabin and all other route entries stay shadowed until it
+completes. The ordinary public boundary has no date/shadow selector, move/date-swap command,
+maintenance daily-capacity scheduling or rollover scan. Driver movements and external capital work
+stay outside this board.
+
+The panel derives the distinct maintenance repair IDs from the currently rendered aggregate board
+and resolves complexity through the public repair collection in chunks of at most 200 IDs.
+Maintenance applies that optional `repairIds` filter, the warehouse fence, state filters and
+pagination in PostgreSQL before mapping repair DTOs. Board refresh therefore scales with visible
+cards instead of the warehouse's complete repair history; the ordinary unfiltered repair read
+remains paged. Evidence:
+[`task-board page`](../../panel/src/features/task-board/task-board-page.tsx),
+[`maintenance OpenAPI`](../../contracts/openapi/maintenance-service.yaml), and
+[`MaintenanceRepairUseCases.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceRepairUseCases.java).
+
+V31 is a projection cutover: it normalizes the existing ordinary queue positions into the aggregate
+sequence and corrects the real/shadow shape of a fully waiting holding route without rewriting
+append-only `domain_event` facts. Replay verification uses the successful V31 installation time as
+the boundary and tolerates only the migrated `queuePosition` and `entryType` fields for queue-entry
+tails recorded at or before that boundary. Post-cutover tails and every other field remain exact.
+This compatibility is owned by
+[`TaskBoardReplayVerifier.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/eventing/TaskBoardReplayVerifier.java)
+and is covered by adopted-V4, Flyway-upgrade and eventing-runtime integration tests.
+
+1. Maintenance freezes the ordered repair plan and registers one task-board route entry per repair
+   stage. It puts the selected repair cover first in each stage's source-media snapshot and records
+   every line photo in that work's `sourceMediaIds`. The existing task title carries the
+   maintenance-calculated worker label for light, medium, complex or capital repair instead of the
+   technical `Maintenance repair`; no transport field is added. That one-to-one identity remains the
+   reconciliation boundary; task-board does not merge or replace source stage IDs. On deployment,
+   an idempotent owner-local startup pass enqueues the existing pre-start update workflow for
+   already registered queued repairs, so their old snapshots converge without cross-database
+   writes or remote calls in the startup transaction. If a worker starts one during this bounded
+   recovery race, task-board rejects the pre-start refresh and maintenance retains the repair's
+   delivery state instead of turning a presentation refresh into a domain failure.
+2. For a `MAINTENANCE_REPAIR`, task-board treats each maximal consecutive route segment that uses
+   the same physical work queue as one worker execution package. Opening any current member returns
+   the ordered, de-duplicated works, materials, comments and source media from the complete segment.
+   Already completed earlier members remain visible as part of the package, while the presented
+   duration, countdown and KPI budget include only unfinished members. WorkerApp keeps the first
+   general reference as the task cover and renders each work-linked reference inside the matching
+   work card rather than as an anonymous task-level gallery. Its collapsed board card omits the
+   schedule date and task totals; expansion and detail both show the source queue as stage, numeric
+   priority and source-owned repair complexity. TAKE/RESUME stays in a full-width static footer.
+3. The worker takes only the current real representative. Task-board records the one assignment and
+   responsibility timer against the combined remaining package budget; shadow members cannot be
+   taken separately.
+4. One photo-gated, version-fenced COMPLETE transaction closes the representative and every later
+   unfinished shadow member in the segment. Task-board records assignment/time audit for each,
+   emits the existing `QUEUE_ENTRY_COMPLETED` fact once per route entry and promotes only the next
+   different segment, or marks the board task done when none remains.
+5. Maintenance consumes those ordinary per-entry facts idempotently and marks every mapped repair
+   stage done. The final fact moves the repair to pending acceptance. The transport payload and
+   service/database owners do not change; logistics and other task sources remain entry-scoped.
+
+Evidence:
+[`MaintenanceTaskBoardSupport.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceTaskBoardSupport.java),
+[`MaintenanceWorkerCoverReconciliation.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceWorkerCoverReconciliation.java),
+[`MaintenanceTaskExecutionPackageService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/MaintenanceTaskExecutionPackageService.java),
+[`TaskBoardWorkerExecutionService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardWorkerExecutionService.java),
+[`MaintenanceInboundUseCases.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceInboundUseCases.java),
+and
+[`task-board OpenAPI`](../../contracts/openapi/task-board-service.yaml).
+
 ### Logistics document to driver work
 
 1. A manager schedules a shipment, return or transfer with an actual calendar
@@ -837,8 +949,15 @@ and
    pre-start check runs before task-board; after version-fenced remote success
    logistics synchronizes the owning document date while preserving the desired
    delivery date. A lost local confirmation converges from the
-   existing task status poll. Members cannot be reordered independently and
-   the move never changes audience.
+   task status poll. The relay reads at most 100 due tasks per pass and defers an
+   unchanged active snapshot for 30 seconds without advancing the driver-task
+   business version; immediate logistics command processing is unchanged. This
+   keeps missed-event recovery while preventing an idle active task from issuing
+   one private HTTP read every relay second. Members cannot be reordered
+   independently and the move never changes audience. Evidence:
+   [`DriverTaskRelay`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverTaskRelay.java),
+   [`DriverTaskWorkflowStore`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverTaskWorkflowStore.java), and
+   [`DriverLogisticsTaskRepository`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/repository/DriverLogisticsTaskRepository.java).
 6. DriverApp feed reads are filtered in task-board. Assigned work reaches only
    its selected driver; unassigned work reaches none; an unclaimed shared
    Current entry reaches every qualified warehouse driver and becomes
@@ -868,8 +987,10 @@ and
    as `readerWorkerIds`; `allowedWorkerIds` remains limited to assigned workers
    and evidence reservers, so viewing a waiting task never grants result-upload
    authority. Task creation emits the initial proof in its local transaction.
-   The bounded owner-proof reconciler republishes only a changed audience and
-   also repairs proofs created before the reader field existed.
+   The bounded owner-proof reconciler runs at startup and after a warehouse audience-revision
+   change, republishes only a changed audience and also repairs proofs created before the reader
+   field existed. It does not scan all entries while idle, and a failed pass does not advance its
+   watermark.
 9. Slinger participation is optional. The driver may close before anyone joins,
    while a joined driver and slinger share one task-board entry and evidence
    set. At least one result photo from either active participant must have

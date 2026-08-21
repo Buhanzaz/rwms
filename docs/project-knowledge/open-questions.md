@@ -31,34 +31,31 @@ work.
 
 ## Missing Cabin At Inventory: Rental Or Write-Off
 
-- Status: `Open`
+- Status: `Resolved` on 2026-08-21.
 - Affected owner and consumers: inventory-service as session/finding owner;
   logistics-service as rental/order/shipment owner; maintenance-service as
   write-off-decision owner; asset-service as cabin/custody owner; panel and
   ManagerApp as clients.
-- Requested behavior: at inventory completion, a cabin not found at the
-  warehouse should be resolvable either as rented (client, address, driver and
-  actual shipment date, without deducting its contents from warehouse stock)
-  or as written off.
-- Conflicting contract or invariant: current inventory publication has no
-  rental-creation command. Logistics creates rental state through its canonical
-  inquiry/order/document transitions, while maintenance requires a proposal
-  with reason and global-administrator approval before a write-off becomes
-  effective. Treating either option as an immediate inventory mutation would
-  bypass the owning aggregate, custody/accounting rules and audit trail.
+- Resolved behavior: the shipment review records a historical direct shipment
+  with the actual departure date, an existing client identity/snapshot and any
+  physical furniture quantities. It deliberately creates no order, address,
+  driver, hold or stock allocation and does not decrement warehouse `STOCK`.
+  Every missing cabin omitted from that shipment submission automatically
+  becomes `WRITE_OFF`; after logistics has released predecessor rental leases,
+  inventory asks maintenance to create the normal `PENDING_APPROVAL` cabin
+  write-off decision. Maintenance freezes the current cabin contents as
+  `DISPOSE_WITH_CABIN`; only the existing global-administrator approval saga
+  may make the asset terminal.
 - Evidence:
   [`inventory-service.yaml`](../../contracts/openapi/inventory-service.yaml),
   [`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml),
   [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml),
-  [`InventoryPublicationService.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryPublicationService.java),
-  and [`PropertyDispositionApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/disposition/application/PropertyDispositionApplicationService.java).
-- Smallest decision needed: confirm whether “rented” must create a full
-  retroactive logistics order/shipment against an existing client and driver,
-  including the authoritative actual date and furniture-custody rule; confirm
-  that “write off” creates the normal approval proposal rather than applying an
-  immediate terminal status.
-- Resolution and date: none. The current task does not fabricate either owner
-  transition until this meaning is confirmed.
+  [`InventoryCabinDispositionService.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryCabinDispositionService.java),
+  [`InventoryOutcomeService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inventory/service/InventoryOutcomeService.java),
+  and [`PropertyDispositionCreationUseCases.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/disposition/application/PropertyDispositionCreationUseCases.java).
+- Smallest decision needed: none.
+- Resolution and date: direct historical shipment and ordinary pending
+  write-off approval were confirmed by the user on 2026-08-21.
 
 ## Cabin Dossier Detail And Historical Snapshot Boundary
 
