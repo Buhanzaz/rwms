@@ -460,8 +460,9 @@ Evidence:
 and
 [`AssistantDltRecoveryService`](../../services/assistant-service/src/main/java/dev/buhanzaz/rwms/assistant/eventing/AssistantDltRecoveryService.java).
 
-Media processing remains entirely inside the existing `media-service`. Its
-PostgreSQL job/inbox/outbox state is authoritative before Kafka acknowledgement.
+Media state and processing remain entirely inside the existing
+`media-service`. Its PostgreSQL job/inbox/outbox state is authoritative before
+Kafka acknowledgement.
 The worker claims a four-attempt fenced cycle, records append-only terminal and
 review evidence, and treats a successful database replay as an idempotent
 duplicate. Persistence and offset-commit retries are bounded; shutdown or
@@ -472,15 +473,27 @@ public media API. The exporter caps partition series and exposes no topic,
 identity, payload or free-form error labels. No second media deployable or
 cross-service recovery table is added.
 
-That same deployable now derives a bounded MP4 `PLAYBACK` object for accepted
-video originals. Both ffmpeg and ffprobe dependencies are resolved at startup,
-transformation time and output bytes are explicitly capped, and the original
-remains immutable in private object storage. Client-side parallel transfer
-limits do not change processing ownership or add another media scheduler.
+ManagerApp and WorkerApp physically orient a still image and encode exactly
+`SMALL`, `MEDIUM` and `LARGE` WebP parts with an aggregate one-MiB ceiling. The
+phone-only original is never uploaded. Each authenticated same-origin PUT is
+streamed through the gateway and `media-service` into private MinIO; the Go
+service verifies immutable metadata and promotes the supplied parts without
+decoding or transforming image bytes. A compatible legacy source upload is
+represented by aliases to that same immutable object rather than a second
+image-processing path. The deployable still derives a bounded MP4 `PLAYBACK`
+object for accepted video originals. Both ffmpeg and ffprobe dependencies are
+resolved at startup, transformation time and output bytes are explicitly
+capped, and the video original remains immutable in private object storage.
+Client-side parallel transfer limits do not change media ownership or add
+another scheduler.
 
 Evidence:
 [`consumer.go`](../../services/media-service/internal/worker/consumer.go),
 [`worker.go`](../../services/media-service/internal/persistence/worker.go),
+[`media upload API`](../../services/media-service/internal/api/server.go),
+[`V16__client_image_variants.sql`](../../services/media-service/db/migration/V16__client_image_variants.sql),
+[`Manager image bundle encoder`](../../app/src/main/java/dev/buhanzaz/rwms/manager/media/ImageUploadBundleEncoder.kt),
+[`Worker image bundle preparer`](../../worker-app/core-media/src/main/java/dev/buhanzaz/rwms/worker/core/media/WorkerEvidenceBundlePreparer.kt),
 [`video_transcoder.go`](../../services/media-service/internal/media/video_transcoder.go),
 [`video_probe.go`](../../services/media-service/internal/media/video_probe.go),
 [`media-service startup`](../../services/media-service/cmd/media-service/main.go),

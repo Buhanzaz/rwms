@@ -129,6 +129,7 @@ class TaskBoardControllerConditionalGetTest {
             2,
             TASK,
             0,
+            1,
             "Покраска",
             "БТ-1",
             "Покраска суриком",
@@ -147,6 +148,7 @@ class TaskBoardControllerConditionalGetTest {
             0,
             1);
     var feedJson = mapper.valueToTree(feedEntry);
+    assertThat(feedJson.required("routeStepCount").asInt()).isOne();
     assertThat(feedJson.has("driverAudience")).isTrue();
     assertThat(feedJson.required("driverAudience").isNull()).isTrue();
   }

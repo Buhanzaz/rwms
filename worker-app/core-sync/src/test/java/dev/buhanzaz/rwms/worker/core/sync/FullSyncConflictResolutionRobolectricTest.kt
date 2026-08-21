@@ -165,6 +165,46 @@ class FullSyncConflictResolutionRobolectricTest {
             .containsExactly("electric")
     }
 
+    @Test
+    fun fullFeedPersistsRouteSizeAcrossAuthoritativeDetailRefresh() = runTest {
+        val repairs = category("repair", "Ремонты", sortOrder = 10)
+        val entry = WorkerFeedEntryDto(
+            entryId = ENTRY_ID,
+            version = 11,
+            taskId = "task",
+            routeIndex = 1,
+            routeStepCount = 3,
+            title = "Средний ремонт",
+            unitNumber = "БТ-42",
+            taskText = null,
+            scheduledDate = "2026-07-26",
+            deadlineAt = null,
+            priority = 2,
+            queuePosition = 0,
+            status = "WAITING",
+            availabilityMode = "AVAILABLE",
+            plannedDurationMinutes = 90,
+            activeStartedAt = null,
+            activeWorkSeconds = 0,
+            assignments = emptyList(),
+            readyEvidenceCount = 2,
+            resultPhotoMinCount = 1,
+        )
+
+        writer.commitContextAndFeed(
+            context = context(categories = listOf(repairs)),
+            revision = 11,
+            serverTime = "2026-07-26T10:00:00Z",
+            categories = listOf(WorkerFeedCategoryDto(repairs, entries = listOf(entry))),
+            etag = "\"feed-11\"",
+        )
+        writer.applyDetail(USER_ID, authoritativeDetail().copy(routeIndex = 2))
+
+        val persisted = database.taskDao().task(USER_ID, ENTRY_ID)
+        assertThat(persisted?.routeIndex).isEqualTo(2)
+        assertThat(persisted?.routeStepCount).isEqualTo(3)
+    }
+
     private fun context(
         categories: List<WorkerCategoryDto> = emptyList(),
         revision: Long = 11,

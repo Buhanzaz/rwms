@@ -24,6 +24,7 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.hilt.android)
     implementation(libs.coroutines.android)
+    implementation(libs.serialization.json)
     implementation("androidx.exifinterface:exifinterface:1.4.2")
     ksp(libs.hilt.compiler)
     testImplementation(libs.junit)

@@ -241,9 +241,9 @@ internal fun taskTimingPresentation(
         activeElapsed = elapsedDurationLabel(projected.countedActiveSeconds),
         activeLabel = when (projected.timerState) {
             "WORKING" -> "В работе"
-            "BREAK" -> "Перерыв · таймер остановлен"
-            "OFF_SHIFT" -> "Вне смены · таймер остановлен"
-            "PAUSED" -> "Пауза · таймер остановлен"
+            "BREAK" -> "Перерыв"
+            "OFF_SHIFT" -> "Вне смены"
+            "PAUSED" -> "Пауза"
             "DONE" -> "Фактическое время"
             else -> "Серверный таймер"
         },

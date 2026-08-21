@@ -69,7 +69,7 @@ class WorkerGalleryJpegImporterTest {
             assertThat(bitmap.width).isEqualTo(40)
             assertThat(bitmap.height).isEqualTo(60)
             assertThat(bitmap.width.toLong() * bitmap.height.toLong()).isAtMost(8_000_000L)
-            assertThat(output.length()).isAtMost(EncryptedEvidenceFileStore.MAX_JPEG_BYTES)
+            assertThat(output.length()).isAtMost(EncryptedEvidenceFileStore.MAX_SOURCE_IMAGE_BYTES)
             assertThat(
                 ExifInterface(output).getAttributeInt(
                     ExifInterface.TAG_ORIENTATION,

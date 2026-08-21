@@ -70,7 +70,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
   void cumulativeVersionFourEventSourcingAndTaskSyncMigrateCleanDatabaseAndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(28);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(29);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -343,6 +343,14 @@ class TaskBoardFlywayMigrationIntegrationTest {
             "script", "V31__ordinary_queue_availability_and_holding_gate.sql")
         .containsEntry("success", true);
     assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='32'"))
+        .containsEntry("version", "32")
+        .containsEntry(
+            "script", "V32__support_worker_evidence_webp_bundles.sql")
+        .containsEntry("success", true);
+    assertThat(
             jdbc.queryForObject(
                 "select to_regprocedure('public.task_board_request_fingerprint_v4(jsonb)')",
                 String.class))
@@ -357,6 +365,37 @@ class TaskBoardFlywayMigrationIntegrationTest {
                     + "where table_schema='public' and table_name='queue_entry' "
                     + "and column_name='queue_id'"))
         .containsEntry("is_nullable", "NO");
+  }
+
+  @Test
+  void versionThirtyTwoWidensOnlyTheEvidenceBundleDeclarationConstraint() {
+    configuration(MIGRATION_LOCATION).target("31").load().migrate();
+    String previousDefinition =
+        jdbc.queryForObject(
+            """
+            select pg_get_constraintdef(oid)
+              from pg_constraint
+             where conrelid='public.worker_task_evidence'::regclass
+               and conname='ck_worker_task_evidence_upload'
+            """,
+            String.class);
+    assertThat(previousDefinition).contains("image/jpeg", "15728640").doesNotContain("image/webp");
+
+    Flyway upgraded = flyway(MIGRATION_LOCATION);
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    String upgradedDefinition =
+        jdbc.queryForObject(
+            """
+            select pg_get_constraintdef(oid)
+              from pg_constraint
+             where conrelid='public.worker_task_evidence'::regclass
+               and conname='ck_worker_task_evidence_upload'
+            """,
+            String.class);
+    assertThat(upgradedDefinition)
+        .contains("image/jpeg", "15728640", "image/webp", "1048576", "sha256");
   }
 
   @Test
@@ -1477,7 +1516,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(27);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(28);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
 

@@ -119,6 +119,7 @@ audience под общим task/entry version fence; публичная обыч
 | `DriverTaskAudienceService` | Shape аудитории logistics-driver, qualification, visibility и execution authorization |
 | `MobileTaskSurfacePolicy` | Непересекающиеся DriverApp primary и WorkerApp secondary capabilities |
 | `WorkerTaskAccessService` | Общая worker/group/qualification аудитория очередей для native task reads и media proofs |
+| `WorkerFeedCountProjection` | Однозапросные route cardinality и READY-evidence counts для bounded native feed page |
 | `TaskBoardEntryOwnerProofReconciler` | Bounded idempotent восстановление legacy или workforce-stale аудиторий media proof |
 | `WorkerPushOutbox` / `WorkerPushDispatcher` | Transactional уведомление стропальщика, leased FCM delivery и bounded recovery |
 | `WorkforceService` | Стабильный фасад worker/group API над тремя владельцами lifecycle |
@@ -213,11 +214,21 @@ audit для каждого, выдаёт существующий queue-entry c
 первой позиции. Каждый `WorkerWork.sourceMediaIds` является точной связью строки работы с её
 собственными references в этом массиве; task-board не выравнивает и не угадывает эту связь.
 
+Каждый `WorkerFeedEntry` возвращает zero-based `routeIndex` и положительный `routeStepCount`.
+Последний считается по полному сохранённому в `queue_entry` маршруту задачи, включая скрытые от
+текущего работника этапы. Route cardinality и число READY evidence загружаются для выбранной
+страницы feed одной database projection, а не отдельным запросом для каждой карточки.
+
 Worker action проверяет identity работника, current assignment, entry version,
 action/status transition и offline lease, где он нужен. Evidence сначала
 резервируется со stable client reference, затем загружается в media-service.
 Media fact связывает обработанную generation с reservation до использования в
-completion.
+completion. Legacy-декларация `image/jpeg` может занимать не более 15 MiB; логический клиентский
+bundle `image/webp` — не более 1 MiB, а его `sha256` является детерминированным checksum manifest
+пакета. Оба формата сохраняют одну логическую evidence row, а replay reservation обязан совпадать
+с исходными entry, operation, route step, capture time, MIME type, size и checksum. Те же ограничения
+формата и числа байт enforced миграцией
+[`V32__support_worker_evidence_webp_bundles.sql`](src/main/resources/db/migration/V32__support_worker_evidence_webp_bundles.sql).
 
 Текущий OpenAPI упоминает `Last-Event-ID`, но controller и client не реализуют
 durable replay. Reconnect сейчас безопасен благодаря fresh invalidation и

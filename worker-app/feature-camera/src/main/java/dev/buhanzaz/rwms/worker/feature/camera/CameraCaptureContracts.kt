@@ -43,7 +43,7 @@ internal sealed interface CameraXSaveResult {
 internal fun validateCameraXSave(target: File): CameraXSaveResult = when {
     !target.isFile -> CameraXSaveResult.Failed("Камера не сохранила фотографию")
     target.length() <= 0L -> CameraXSaveResult.Failed("Камера сохранила пустую фотографию")
-    target.length() > EncryptedEvidenceFileStore.MAX_JPEG_BYTES ->
+    target.length() > EncryptedEvidenceFileStore.MAX_SOURCE_IMAGE_BYTES ->
         CameraXSaveResult.Failed("Фотография больше 15 МБ. Снимите её ещё раз")
     else -> CameraXSaveResult.Saved(target)
 }

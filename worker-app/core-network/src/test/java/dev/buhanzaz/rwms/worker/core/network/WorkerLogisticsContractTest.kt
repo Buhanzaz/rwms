@@ -45,6 +45,7 @@ class WorkerLogisticsContractTest {
               "version":4,
               "taskId":"task",
               "routeIndex":0,
+              "routeStepCount":3,
               "title":"Погрузить бытовку",
               "unitNumber":"БТ-1",
               "taskText":null,
@@ -80,6 +81,7 @@ class WorkerLogisticsContractTest {
         assertThat(entry.status).isEqualTo("IN_PROGRESS")
         assertThat(entry.availabilityMode).isEqualTo("OPTIONAL_JOIN")
         assertThat(entry.assignments).hasSize(1)
+        assertThat(entry.routeStepCount).isEqualTo(3)
         assertThat(entry.resultPhotoMinCount).isEqualTo(1)
     }
 

@@ -76,10 +76,12 @@ caption or routine sync-progress text. Its refresh icon rotates while a current
 sync stage is active, while offline and blocked-evidence failures remain
 explicit. Group and queue headers show their disclosure controls without an
 aggregate task count. A task-card header vertically aligns the cabin number,
-status and disclosure icon; the scheduled date is absent. Expanding the card
-shows the source queue as its stage, the numeric priority and the
-maintenance-owned repair complexity (`Лёгкий`, `Средний`, `Сложный` or
-`Капитальный ремонт`). A task card never renders the technical maintenance
+status and disclosure icon; the scheduled date is absent. A waiting card shows
+`Выделенное время` and the bare maintenance-owned difficulty (`Легкий ремонт`,
+`Средний ремонт` or `Тяжелый ремонт`) once. An active card instead shows `Время работы`
+with KPI on the right. Expansion shows `Этап X из Y`, `Приоритет N`, and one
+integer uploaded-photo count; it never renders a required-photo fraction or a
+`таймер остановлен` suffix. A task card never renders the technical maintenance
 title. These behaviors are owned by
 [`TasksScreen.kt`](feature-tasks/src/main/java/dev/buhanzaz/rwms/worker/feature/tasks/TasksScreen.kt).
 
@@ -87,8 +89,8 @@ title. These behaviors are owned by
 tablets and unfolded devices. Its app bar contains only the cabin number. The
 content starts with a swipeable general-photo pager; when the task source
 defines a cover, that title image is the first frame. A full-width
-elapsed/remaining/KPI timer is followed immediately by the task stage,
-priority and maintenance-owned repair complexity; the result-photo collection
+elapsed/remaining/KPI timer is followed immediately by `Этап X/Y`, priority and
+the bare maintenance-owned repair complexity without a `Ремонт:` prefix; the result-photo collection
 follows. Every work is a single card with quantity opposite its name and only that work's
 `sourceMediaIds` photos directly below it under `Фото к работе`; materials
 follow in the same readable form. Task descriptions and manager comments are
@@ -103,9 +105,11 @@ scrolling with task content. Its button spans the available width, and the
 ordinary TAKE label is `Взять задание`.
 
 Authenticated full-screen media keeps only the selected image and its immediate
-neighbours, each decoded to at most four million pixels. Task-detail thumbnails
-are decoded to at most 256,000 pixels and the ViewModel retains no more than 16
-recent entries. Camera confirmation uses a separate two-million-pixel preview.
+neighbours, loads at most two concurrently, and decodes each to at most four
+million pixels. Task-detail thumbnails
+are decoded to at most 256,000 pixels, at most three are fetched/decoded in
+parallel, and the ViewModel retains no more than 16 recent entries while
+recycling evicted bitmaps. Camera confirmation uses a separate two-million-pixel preview.
 These bounds prevent a large retained inventory archive from becoming an
 Android heap-sized bitmap cache. Evidence:
 [`PhotoViewModel.kt`](app/src/main/java/dev/buhanzaz/rwms/worker/PhotoViewModel.kt),
@@ -120,13 +124,15 @@ Other task sources retain entry-level execution.
 
 Completing a task opens three equal-width, vertically stacked actions: CameraX,
 Android photo picker, and cancel. The picker accepts up to ten images. Every
-selected image is normalized to a bounded upright JPEG, encrypted, and durably
-queued in selection order before the completion callback is emitted; the final
+selected image is physically oriented, converted to a local WebP original plus
+SMALL/MEDIUM/LARGE WebP upload parts, encrypted, and durably queued in selection
+order before the completion callback is emitted. The three upload parts total
+at most 1 MiB; only the original is visible in the UI. The final
 saved evidence ID is attached only where the logistics completion contract
 requires a selected photo. The sync coordinator never sends `COMPLETE` until
 the queued evidence has been processed and required evidence is server-`READY`.
 Downloads remains the recovery surface for failed or pending uploads and
-explicit retry. The task screen records a work result and JPEG evidence but
+explicit retry. The task screen records a work result and WebP evidence but
 never decides a task transition locally.
 
 Server-provided KPI ranges determine colors; no local green/yellow/red policy
@@ -137,9 +143,10 @@ is invented. Worker-facing work data does not expose price/cost fields.
 - Room is the UI source of truth for account-scoped feed projections, task
   detail, sync progress, conflicts, invalidations, and the outbox. An action and
   its outbox row are written in one local transaction.
-- Sensitive unsent command/conflict bodies are separately encrypted; captured
-  evidence is encrypted in app-private files. These records are client recovery
-  state, not backend persistence.
+- Sensitive unsent command/conflict bodies are separately encrypted; the local
+  original and three upload parts are encrypted in app-private files. They are
+  deleted only after task-board authoritatively reports evidence `READY`.
+  These records are client recovery state, not backend persistence.
 - A 24-hour offline lease is anchored to server time and 'elapsedRealtime'.
   Unique connected WorkManager work sends actions, reserves/uploads/finalizes
   evidence, waits for 'READY', then refreshes the feed.
@@ -171,18 +178,28 @@ trigger may enqueue a new job with the same durable operation identities.
 
 Every mutable action uses the contract's version fence and a stable operation
 ID/idempotency key where defined. Evidence uses the ordered
-reservation → upload/finalize → 'READY' flow. Retries reuse durable operation
-identity; the client must not duplicate an effect just because a network
-response was lost.
+reservation → upload/finalize → 'READY' flow. Reservations keep outbox order;
+up to two evidence photos and up to three WebP parts are transferred
+concurrently with stable per-part keys. Upload paths are exact same-origin media
+API paths and never MinIO credentials or internal storage URLs. Retries reuse
+durable operation identity; the client must not duplicate an effect just
+because a network response was lost.
 
 ## Camera and evidence
 
-Worker evidence is JPEG-only. The camera normalizes physical orientation into
-pixels and writes EXIF 'Orientation=1' before encryption; it limits normalized
-images to 8 MP and the evidence contract to 15 MB. Ultra HDR is not used.
+Worker evidence is client-produced WebP. Camera/gallery input is bounded to 8 MP
+and 15 MB, then physical orientation is applied to pixels before WebP encoding.
+One encrypted original remains locally visible while three encrypted
+SMALL/MEDIUM/LARGE variants form the upload payload; their deterministic
+manifest and aggregate length are reserved with task-board, and their total is
+at most 1 MiB. Ultra HDR is not used.
+An encrypted JPEG captured before the Room 8→9 upgrade retains its original
+reservation and may finish once through the compatible source-upload shape;
+media-service pins that exact object without rotating, decoding or compressing
+it. New evidence never enters this recovery path.
 Gallery images use Android's multi-select photo picker with a ten-image limit.
 They are copied sequentially into transient private cache and pass through the
-same orientation, 8 MP, 15 MB and encrypted evidence pipeline before each
+same orientation, 8 MP, 15 MB, WebP and encrypted evidence pipeline before each
 temporary copy is removed. A partial batch keeps and schedules already durable
 evidence while reporting the exact saved count; it is never reported as full
 success. The capture/import behavior is owned by

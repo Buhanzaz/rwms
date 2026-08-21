@@ -135,6 +135,7 @@ data class WorkerFeedEntryDto(
     val version: Long,
     val taskId: String,
     val routeIndex: Int,
+    val routeStepCount: Int,
     val title: String,
     val unitNumber: String?,
     val taskText: String?,
@@ -371,7 +372,7 @@ data class EvidenceReservationRequestDto(
     val routeIndex: Int,
     val capturedAt: String,
     val offlineLeaseId: String,
-    val contentType: String = "image/jpeg",
+    val contentType: String = "image/webp",
     val sizeBytes: Long,
     val sha256: String,
 )
@@ -426,10 +427,21 @@ data class CreateUploadSessionRequestDto(
     val context: String = "WORK_RESULT",
     val clientReferenceId: String,
     val fileName: String,
-    val contentType: String = "image/jpeg",
+    val contentType: String? = null,
+    val contentLength: Long? = null,
+    val checksumSha256: String? = null,
+    val imageVariants: List<ImageVariantUploadRequestDto>? = null,
+    val sortOrder: Int = 0,
+)
+
+/** Declares one complete client-produced still-image WebP part before direct upload. */
+@Serializable
+data class ImageVariantUploadRequestDto(
+    val kind: String,
     val contentLength: Long,
     val checksumSha256: String,
-    val sortOrder: Int = 0,
+    val width: Int,
+    val height: Int,
 )
 
 @Serializable
@@ -440,6 +452,14 @@ data class UploadSessionDto(
     val uploadSessionId: String,
     val mediaId: String,
     val expiresAt: String,
+    val contentUploadUrl: String? = null,
+    val variantUploadUrls: List<VariantUploadUrlDto>,
+)
+
+/** Same-origin presigned gateway path for one declared image variant. */
+@Serializable
+data class VariantUploadUrlDto(
+    val kind: String,
     val contentUploadUrl: String,
 )
 
@@ -458,6 +478,16 @@ data class UploadedObjectDto(
  * Public-worker-gateway response/read payload for FinalizeUploadRequestDto. It is a transport boundary model, not persisted domain state.
  */
 data class FinalizeUploadRequestDto(
+    val objectVersionId: String? = null,
+    val etag: String? = null,
+    val checksumSha256: String? = null,
+    val variants: List<FinalizeImageVariantDto>? = null,
+)
+
+/** Immutable object-store acknowledgement used to finalize one uploaded WebP part. */
+@Serializable
+data class FinalizeImageVariantDto(
+    val kind: String,
     val objectVersionId: String,
     val etag: String,
     val checksumSha256: String,

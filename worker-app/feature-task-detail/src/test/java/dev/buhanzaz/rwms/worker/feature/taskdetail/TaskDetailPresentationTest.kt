@@ -310,9 +310,9 @@ class TaskDetailPresentationTest {
                 TaskTimingPresentation(
                     activeElapsed = "0:20:00",
                     activeLabel = if (timerState == "BREAK") {
-                        "Перерыв · таймер остановлен"
+                        "Перерыв"
                     } else {
-                        "Вне смены · таймер остановлен"
+                        "Вне смены"
                     },
                     remaining = "0:40:00",
                     remainingPercent = "66,7%",

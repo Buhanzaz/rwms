@@ -22,6 +22,7 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -46,8 +47,13 @@ public class WorkerTaskBoardService {
   private static final String OPTIONAL_JOIN = "OPTIONAL_JOIN";
   private static final String SECONDARY_PENDING = "SECONDARY_PENDING";
   private static final int MAX_LIMIT = 50;
+  private static final String LEGACY_EVIDENCE_CONTENT_TYPE = "image/jpeg";
+  private static final String BUNDLE_EVIDENCE_CONTENT_TYPE = "image/webp";
+  private static final long LEGACY_EVIDENCE_MAX_BYTES = 15_728_640;
+  private static final long BUNDLE_EVIDENCE_MAX_BYTES = 1_048_576;
 
   private final TaskBoardService taskBoard;
+  private final WorkerFeedCountProjection feedCounts;
   private final WorkforceService workforce;
   private final RegistryService registry;
   private final WorkerTaskAccessService taskAccess;
@@ -62,6 +68,7 @@ public class WorkerTaskBoardService {
 
   public WorkerTaskBoardService(
       TaskBoardService taskBoard,
+      WorkerFeedCountProjection feedCounts,
       WorkforceService workforce,
       RegistryService registry,
       WorkerTaskAccessService taskAccess,
@@ -74,6 +81,7 @@ public class WorkerTaskBoardService {
       MobileTaskSurfacePolicy surfacePolicy,
       WorkerPushOutbox pushOutbox) {
     this.taskBoard = taskBoard;
+    this.feedCounts = feedCounts;
     this.workforce = workforce;
     this.registry = registry;
     this.taskAccess = taskAccess;
@@ -175,7 +183,7 @@ public class WorkerTaskBoardService {
         .categories()
         .forEach(queue -> categories.put(queue.id(), category(surface, queue, access)));
     TaskBoardSnapshot snapshot = taskBoard.workerSnapshot(surface, warehouseId, workerId);
-    List<CategoryEntry> visible = new ArrayList<>();
+    List<VisibleEntry> visible = new ArrayList<>();
     for (BoardColumnDto column : snapshot.columns()) {
       WorkerCategory workerCategory = categories.get(column.queueId());
       if (workerCategory == null) continue;
@@ -186,15 +194,25 @@ public class WorkerTaskBoardService {
                 .findFirst()
                 .orElseThrow();
         if (!surfacePolicy.includesFeedEntry(surface, queue, entry)) continue;
-        visible.add(new CategoryEntry(workerCategory, feedEntry(entry, workerCategory)));
+        visible.add(new VisibleEntry(workerCategory, entry));
       }
     }
     int start = Math.min(cursor.offset(), visible.size());
     int end = Math.min(start + limit, visible.size());
+    List<VisibleEntry> page = visible.subList(start, end);
+    Map<UUID, UUID> taskIdsByEntry = new LinkedHashMap<>();
+    page.forEach(item -> taskIdsByEntry.put(item.entry().id(), item.entry().taskId()));
+    Map<UUID, WorkerFeedCountProjection.Counts> countsByEntry =
+        feedCounts.load(taskIdsByEntry);
     Map<UUID, List<WorkerFeedEntry>> selected = new LinkedHashMap<>();
-    for (CategoryEntry item : visible.subList(start, end)) {
+    for (VisibleEntry item : page) {
+      WorkerFeedCountProjection.Counts counts = countsByEntry.get(item.entry().id());
+      if (counts == null || counts.routeStepCount() < 1) {
+        throw new IllegalStateException(
+            "Маршрут задания не содержит текущий шаг " + item.entry().id());
+      }
       selected.computeIfAbsent(item.category().queueId(), ignored -> new ArrayList<>())
-          .add(item.entry());
+          .add(feedEntry(item.entry(), item.category(), counts));
     }
 
     List<WorkerFeedCategory> pageCategories = new ArrayList<>();
@@ -405,7 +423,10 @@ public class WorkerTaskBoardService {
                 surface, queue.purpose(), workerId, assignmentSnapshots));
   }
 
-  /** Reserves WorkerApp-compatible task evidence. */
+  /**
+   * Reserves WorkerApp-compatible JPEG evidence or one logical WebP client bundle under the
+   * surface-neutral limits enforced by the native reservation path.
+   */
   @Transactional
   public TaskEvidence reserveEvidence(
       UUID workerId,
@@ -422,7 +443,12 @@ public class WorkerTaskBoardService {
         request);
   }
 
-  /** Reserves an idempotent media-evidence upload for an authorized native surface. */
+  /**
+   * Reserves an idempotent media-evidence upload for an authorized native surface.
+   *
+   * <p>Legacy JPEG declarations are limited to 15 MiB. Logical WebP bundle declarations are
+   * limited to 1 MiB and carry the deterministic bundle-manifest checksum in {@code sha256}.
+   */
   @Transactional
   public TaskEvidence reserveEvidence(
       MobileTaskSurface surface,
@@ -432,12 +458,10 @@ public class WorkerTaskBoardService {
       String idempotencyKey,
       EvidenceReservationRequest request) {
     requireIdempotencyKey(idempotencyKey, request.operationId());
+    requireSupportedEvidenceDeclaration(request);
     WorkerTaskDetail current = detail(surface, workerId, warehouseId, entryId);
     if (request.routeIndex() != current.routeIndex()) {
       throw new ConflictException("Фотография относится к другому шагу задания");
-    }
-    if (!"image/jpeg".equalsIgnoreCase(request.contentType())) {
-      throw new IllegalArgumentException("Для результата поддерживаются только JPEG-фотографии");
     }
     leases.requireValid(
         request.offlineLeaseId(), workerId, warehouseId, request.capturedAt(), now());
@@ -506,7 +530,7 @@ public class WorkerTaskBoardService {
           workerGroupId,
           request.capturedAt().truncatedTo(ChronoUnit.MICROS),
           recordedAt,
-          request.contentType().toLowerCase(java.util.Locale.ROOT),
+          request.contentType().toLowerCase(Locale.ROOT),
           request.sizeBytes(),
           request.sha256(),
           sourceType,
@@ -925,12 +949,16 @@ public class WorkerTaskBoardService {
         palette.overdueColor());
   }
 
-  private WorkerFeedEntry feedEntry(BoardEntryDto entry, WorkerCategory category) {
+  private WorkerFeedEntry feedEntry(
+      BoardEntryDto entry,
+      WorkerCategory category,
+      WorkerFeedCountProjection.Counts counts) {
     return new WorkerFeedEntry(
         entry.id(),
         entry.version(),
         entry.taskId(),
         entry.routeIndex(),
+        counts.routeStepCount(),
         entry.title(),
         entry.unitNumber(),
         entry.taskText(),
@@ -946,7 +974,7 @@ public class WorkerTaskBoardService {
         entry.activeWorkSeconds(),
         entry.timerSnapshot(),
         assignments(entry),
-        readyEvidenceCount(entry.id()),
+        counts.readyEvidenceCount(),
         category.resultPhotoMinCount());
   }
 
@@ -1093,19 +1121,6 @@ public class WorkerTaskBoardService {
         entryId);
   }
 
-  private int readyEvidenceCount(UUID entryId) {
-    Integer value =
-        jdbc.queryForObject(
-            """
-            select count(*)::integer
-              from worker_task_evidence
-             where entry_id=? and state='READY'
-            """,
-            Integer.class,
-            entryId);
-    return value == null ? 0 : value;
-  }
-
   private Optional<EvidenceRow> findEvidence(UUID evidenceId, UUID operationId) {
     List<EvidenceRow> rows =
         jdbc.query(
@@ -1190,6 +1205,27 @@ public class WorkerTaskBoardService {
     if (!same) {
       throw new ConflictException(
           "operationId или evidenceId уже использован другой фотографией");
+    }
+  }
+
+  /** Enforces the media declaration limits before any evidence reservation is persisted. */
+  private void requireSupportedEvidenceDeclaration(EvidenceReservationRequest request) {
+    long maximumBytes;
+    if (LEGACY_EVIDENCE_CONTENT_TYPE.equalsIgnoreCase(request.contentType())) {
+      maximumBytes = LEGACY_EVIDENCE_MAX_BYTES;
+    } else if (BUNDLE_EVIDENCE_CONTENT_TYPE.equalsIgnoreCase(request.contentType())) {
+      maximumBytes = BUNDLE_EVIDENCE_MAX_BYTES;
+    } else {
+      throw new IllegalArgumentException(
+          "Для результата поддерживаются только image/jpeg и image/webp");
+    }
+    if (request.sizeBytes() < 1 || request.sizeBytes() > maximumBytes) {
+      throw new IllegalArgumentException(
+          "Размер "
+              + request.contentType().toLowerCase(Locale.ROOT)
+              + " должен быть от 1 до "
+              + maximumBytes
+              + " байт");
     }
   }
 
@@ -1323,7 +1359,8 @@ public class WorkerTaskBoardService {
 
   private record Cursor(long revision, int offset, long serverTimeMillis) {}
 
-  private record CategoryEntry(WorkerCategory category, WorkerFeedEntry entry) {}
+  /** One authorized entry retained until feed pagination has selected its page. */
+  private record VisibleEntry(WorkerCategory category, BoardEntryDto entry) {}
 
   private record ActionReplay(UUID entryId, String eventType) {}
 

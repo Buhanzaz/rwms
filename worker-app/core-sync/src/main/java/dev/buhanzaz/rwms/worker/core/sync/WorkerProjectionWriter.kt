@@ -400,6 +400,8 @@ class WorkerProjectionWriter @Inject constructor(
         timerState = timerSnapshot?.timerState,
         timerNextTransitionAt = timerSnapshot?.nextTransitionAt,
         timerServerTime = timerSnapshot?.serverTime,
+        routeIndex = routeIndex,
+        routeStepCount = routeStepCount,
     )
 
     private fun WorkerAssignmentDto.toEntity(userId: String, entryId: String) =
@@ -445,6 +447,7 @@ class WorkerProjectionWriter @Inject constructor(
         timerState = detail.timerSnapshot?.timerState,
         timerNextTransitionAt = detail.timerSnapshot?.nextTransitionAt,
         timerServerTime = detail.timerSnapshot?.serverTime,
+        routeIndex = detail.routeIndex,
     )
 
     private fun String.toEpochMillis(field: String): Long =

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Task Board Service API
-  version: 1.7.0
+  version: 1.8.0
   description: >-
     Canonical F2 inventory of the active task-board, workforce and queue
     registry HTTP API. All warehouse-scoped operations validate the warehouse
@@ -2836,12 +2836,16 @@ components:
       additionalProperties: false
     WorkerFeedEntry:
       type: object
-      required: [entryId, version, taskId, routeIndex, title, unitNumber, taskText, scheduledDate, deadlineAt, priority, queuePosition, status, availabilityMode, driverAudience, plannedDurationMinutes, activeStartedAt, activeWorkSeconds, timerSnapshot, assignments, readyEvidenceCount, resultPhotoMinCount]
+      required: [entryId, version, taskId, routeIndex, routeStepCount, title, unitNumber, taskText, scheduledDate, deadlineAt, priority, queuePosition, status, availabilityMode, driverAudience, plannedDurationMinutes, activeStartedAt, activeWorkSeconds, timerSnapshot, assignments, readyEvidenceCount, resultPhotoMinCount]
       properties:
         entryId: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         taskId: { type: string, format: uuid }
         routeIndex: { type: integer, minimum: 0 }
+        routeStepCount:
+          description: Authoritative total number of route steps for the task.
+          type: integer
+          minimum: 1
         title: { type: string, minLength: 1 }
         unitNumber: { oneOf: [{ type: string }, { type: 'null' }] }
         taskText: { oneOf: [{ type: string }, { type: 'null' }] }
@@ -3109,9 +3113,21 @@ components:
         routeIndex: { type: integer, minimum: 0 }
         capturedAt: { type: string, format: date-time }
         offlineLeaseId: { type: string, format: uuid }
-        contentType: { type: string, const: image/jpeg }
+        contentType: { type: string, enum: [image/jpeg, image/webp] }
         sizeBytes: { type: integer, format: int64, minimum: 1, maximum: 15728640 }
-        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        sha256:
+          description: >-
+            Exact JPEG checksum for a source upload, or the deterministic
+            client-variant manifest checksum for an image/webp logical bundle.
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+      oneOf:
+        - properties:
+            contentType: { const: image/jpeg }
+            sizeBytes: { type: integer, format: int64, minimum: 1, maximum: 15728640 }
+        - properties:
+            contentType: { const: image/webp }
+            sizeBytes: { type: integer, format: int64, minimum: 1, maximum: 1048576 }
       additionalProperties: false
     WorkerInvalidationEvent:
       type: object

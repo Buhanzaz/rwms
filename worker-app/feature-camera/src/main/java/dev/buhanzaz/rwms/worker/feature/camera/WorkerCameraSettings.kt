@@ -145,7 +145,7 @@ internal data class WorkerCameraModeSelection(
     val message: String?,
 )
 
-/** Worker evidence is JPEG-only; the visible 0.3.29 Video tab cannot create an MP4 payload. */
+/** Worker evidence is still-image WebP; the visible Video tab cannot create an MP4 payload. */
 internal fun selectWorkerCameraMode(requested: WorkerCameraMode): WorkerCameraModeSelection =
     if (requested == WorkerCameraMode.Video) {
         WorkerCameraModeSelection(

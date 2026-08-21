@@ -407,8 +407,8 @@ private fun WorkerCameraExperience(
                             .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
                             .build(),
                     )
-                // Ultra HDR's gain map cannot survive the mandatory pixel rewrite below. Worker
-                // evidence is deliberately one ordinary JPEG with Orientation=1.
+                // Ultra HDR's gain map cannot survive the mandatory pixel rewrite below. CameraX
+                // therefore emits a transient ordinary JPEG that is physically oriented before WebP.
                 captureBuilder.setOutputFormat(ImageCapture.OUTPUT_FORMAT_JPEG)
                 val capture = captureBuilder.build()
                 val bound = runCatching {
@@ -962,7 +962,7 @@ private fun workerCameraJpegBytes(image: ImageProxy): ByteArray? {
 
 /** Rejects an oversized CameraX buffer before allocating a second byte array of the same size. */
 internal fun workerCameraJpegSizeAllowed(byteCount: Int): Boolean =
-    byteCount in 4..EncryptedEvidenceFileStore.MAX_JPEG_BYTES.toInt()
+    byteCount in 4..EncryptedEvidenceFileStore.MAX_SOURCE_IMAGE_BYTES.toInt()
 
 private fun ByteArray.isWorkerCameraJpeg(): Boolean =
     size >= 4 &&

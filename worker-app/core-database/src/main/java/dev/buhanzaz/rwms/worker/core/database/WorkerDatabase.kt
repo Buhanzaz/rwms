@@ -27,7 +27,7 @@ import javax.inject.Singleton
         WorkerConflictEntity::class,
         WorkerInvalidationEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 /**
@@ -411,6 +411,21 @@ abstract class WorkerDatabase : RoomDatabase() {
                 )
             }
         }
+
+        /** Adds task-board route position without invalidating existing offline projections. */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `worker_task` ADD COLUMN `routeIndex` INTEGER NOT NULL DEFAULT 0",
+                )
+                db.execSQL(
+                    "ALTER TABLE `worker_task` ADD COLUMN `routeStepCount` INTEGER NOT NULL DEFAULT 1",
+                )
+                db.execSQL(
+                    "ALTER TABLE `task_evidence` ADD COLUMN `variantManifestJson` TEXT NOT NULL DEFAULT '[]'",
+                )
+            }
+        }
     }
 }
 
@@ -432,6 +447,7 @@ object WorkerDatabaseModule {
                 WorkerDatabase.MIGRATION_5_6,
                 WorkerDatabase.MIGRATION_6_7,
                 WorkerDatabase.MIGRATION_7_8,
+                WorkerDatabase.MIGRATION_8_9,
             )
             .build()
 }

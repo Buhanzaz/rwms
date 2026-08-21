@@ -163,6 +163,7 @@ class WorkerLocalStore @Inject constructor(
         capturedAt: String,
         sizeBytes: Long,
         sha256: String,
+        variantManifestJson: String,
         reservationPayload: String,
     ) {
         requireActiveLease(userId)
@@ -178,7 +179,7 @@ class WorkerLocalStore @Inject constructor(
                     capturedAt = capturedAt,
                     encryptedFilePath = encryptedFilePath,
                     fileName = fileName,
-                    contentType = "image/jpeg",
+                    contentType = "image/webp",
                     sizeBytes = sizeBytes,
                     sha256 = sha256,
                     reservationOperationId = operationId,
@@ -193,6 +194,7 @@ class WorkerLocalStore @Inject constructor(
                     lastError = null,
                     createdAtEpochMillis = now,
                     updatedAtEpochMillis = now,
+                    variantManifestJson = variantManifestJson,
                 ),
             )
             database.outboxDao().insert(

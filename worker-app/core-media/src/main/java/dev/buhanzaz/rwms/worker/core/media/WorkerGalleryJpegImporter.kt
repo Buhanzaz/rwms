@@ -19,9 +19,8 @@ import kotlinx.coroutines.withContext
 
 /**
  * Copies one image selected through Android's photo picker into private cache and normalizes it
- * into an upright, bounded JPEG suitable for [EncryptedEvidenceFileStore.persistJpeg]. The
- * returned file is intentionally short-lived: its caller transfers ownership to the encrypted
- * evidence store, which deletes it after persistence.
+ * into an upright, bounded transient JPEG. The bundle preparer then converts its pixels to WebP;
+ * the returned source never becomes durable evidence and is deleted after encrypted persistence.
  */
 @Singleton
 class WorkerGalleryJpegImporter @Inject constructor(
@@ -64,7 +63,7 @@ class WorkerGalleryJpegImporter @Inject constructor(
                         val normalized = File.createTempFile("gallery-", ".jpg", importDirectory)
                         output = normalized
                         workerWriteBoundedGalleryJpeg(upright, normalized)
-                        require(normalized.length() in 1..EncryptedEvidenceFileStore.MAX_JPEG_BYTES) {
+                        require(normalized.length() in 1..EncryptedEvidenceFileStore.MAX_SOURCE_IMAGE_BYTES) {
                             "Normalized gallery JPEG exceeds 15 MiB"
                         }
                         require(workerGalleryExifOrientation(normalized) == ExifInterface.ORIENTATION_NORMAL) {
@@ -190,7 +189,7 @@ private fun workerWriteBoundedGalleryJpeg(bitmap: Bitmap, output: File) {
             }
         }
         workerWriteNormalExifOrientation(output)
-        if (output.length() in 1..EncryptedEvidenceFileStore.MAX_JPEG_BYTES) return
+        if (output.length() in 1..EncryptedEvidenceFileStore.MAX_SOURCE_IMAGE_BYTES) return
     }
     error("Normalized gallery JPEG exceeds 15 MiB")
 }

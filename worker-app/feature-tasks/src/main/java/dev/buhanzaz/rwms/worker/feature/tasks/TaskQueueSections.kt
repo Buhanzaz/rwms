@@ -31,9 +31,7 @@ internal data class WorkBoardColumn(
  */
 internal data class QueueTaskTimerPresentation(
     val elapsed: String,
-    val remaining: String?,
     val percent: String?,
-    val state: String,
 )
 
 /**
@@ -41,21 +39,12 @@ internal data class QueueTaskTimerPresentation(
  * extrapolating time on the client.
  */
 internal fun queueTaskTimerPresentation(task: WorkerTaskEntity): QueueTaskTimerPresentation? {
-    val state = task.timerState ?: return null
+    if (task.timerState == null) return null
     val countedActiveSeconds = task.timerCountedActiveSeconds ?: return null
     if (task.timerServerTime == null) return null
     return QueueTaskTimerPresentation(
         elapsed = unsignedQueueDurationLabel(countedActiveSeconds),
-        remaining = task.timerRemainingSeconds?.let(::signedQueueDurationLabel),
         percent = task.timerRemainingPercent?.let { "%.1f%%".format(java.util.Locale.ROOT, it) },
-        state = when (state) {
-            "WORKING" -> "В работе"
-            "BREAK" -> "Перерыв · таймер остановлен"
-            "OFF_SHIFT" -> "Вне смены · таймер остановлен"
-            "PAUSED" -> "Пауза · таймер остановлен"
-            "DONE" -> "Завершено"
-            else -> "По данным сервера"
-        },
     )
 }
 

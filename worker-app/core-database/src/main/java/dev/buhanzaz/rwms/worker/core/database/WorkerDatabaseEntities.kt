@@ -4,6 +4,7 @@ import androidx.room.Entity
 import androidx.room.ColumnInfo
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import kotlinx.serialization.Serializable
 
 /** All user-visible projections are tenant-scoped by [userId]. */
 @Entity(tableName = "worker_session")
@@ -111,6 +112,12 @@ data class WorkerTaskEntity(
     val timerState: String? = null,
     val timerNextTransitionAt: String? = null,
     val timerServerTime: String? = null,
+    /** Zero-based task route stage supplied by task-board. */
+    @ColumnInfo(defaultValue = "0")
+    val routeIndex: Int = 0,
+    /** Total stages in the task route supplied by task-board. */
+    @ColumnInfo(defaultValue = "1")
+    val routeStepCount: Int = 1,
 )
 
 @Entity(tableName = "worker_assignment", indices = [Index(value = ["userId", "entryId"])])
@@ -190,6 +197,20 @@ data class TaskEvidenceEntity(
     val lastError: String?,
     val createdAtEpochMillis: Long,
     val updatedAtEpochMillis: Long,
+    /** Encrypted SMALL/MEDIUM/LARGE WebP metadata required to resume an interrupted upload. */
+    @ColumnInfo(defaultValue = "'[]'")
+    val variantManifestJson: String = "[]",
+)
+
+/** One encrypted client-produced WebP part persisted until task-board confirms evidence READY. */
+@Serializable
+data class EncryptedEvidenceVariantPart(
+    val kind: String,
+    val encryptedPath: String,
+    val contentLength: Long,
+    val checksumSha256: String,
+    val width: Int,
+    val height: Int,
 )
 
 @Entity(tableName = "worker_sync_progress")

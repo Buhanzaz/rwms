@@ -24,7 +24,12 @@ import dev.buhanzaz.rwms.worker.core.network.gatewayFailureDisposition
 import dev.buhanzaz.rwms.worker.core.network.isProvenGatewayTransportFailure
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -93,6 +98,14 @@ private data class EvidenceSyncResult(
     val completedUnits: Int,
 )
 
+/** Captures one independently uploaded evidence outcome without cancelling sibling transfers. */
+private data class EvidenceUploadAttempt(
+    val index: Int,
+    val evidenceId: String,
+    val result: EvidenceUploadResult?,
+    val error: Throwable?,
+)
+
 /**
  * Executes the only permitted ordering for offline work: prerequisite actions,
  * evidence reservations, media upload/finalization, then completion actions.
@@ -107,6 +120,8 @@ class WorkerSyncCoordinator @Inject constructor(
     private val mediaUploadPipeline: WorkerEvidenceUploader,
     private val json: Json,
 ) {
+    private val evidenceUploadPermits = Semaphore(MAX_PARALLEL_EVIDENCE_UPLOADS)
+
     /**
      * Runs one authenticated recovery pass in the fixed command/evidence/feed order and returns a
      * durable outcome; it never activates a new offline lease from a partial sync.
@@ -431,42 +446,65 @@ class WorkerSyncCoordinator @Inject constructor(
         completed: Int,
         total: Int,
         expectedMediaCount: Int,
-    ): EvidenceSyncResult {
+    ): EvidenceSyncResult = supervisorScope {
         val evidence = database.evidenceDao().pending(userId)
-        evidence.forEachIndexed { index, item ->
-            updateProgress(
-                userId,
-                "UPLOAD",
-                completed + index,
-                total,
-                item.evidenceId,
-                item.uploadPercent,
-                "Загружаем фото ${index + 1} из ${evidence.size}",
-            )
-            when (val result = mediaUploadPipeline.uploadReservedEvidence(userId, item)) {
-                EvidenceUploadResult.WaitingForReservation -> return EvidenceSyncResult(
-                    WorkerSyncOutcome.Deferred("Ожидается резервирование фотографии"),
-                    completed + index,
-                )
-                EvidenceUploadResult.Processing -> return EvidenceSyncResult(
-                    WorkerSyncOutcome.Deferred("Фотография ещё обрабатывается"),
-                    completed + index,
-                )
-                is EvidenceUploadResult.Ready,
-                is EvidenceUploadResult.ReviewRequired,
-                -> Unit
+        val attempts = evidence.mapIndexed { index, item ->
+            async {
+                evidenceUploadPermits.withPermit {
+                    updateProgress(
+                        userId,
+                        "UPLOAD",
+                        completed + index,
+                        total,
+                        item.evidenceId,
+                        item.uploadPercent,
+                        "Загружаем фото ${index + 1} из ${evidence.size}",
+                    )
+                    try {
+                        val result = mediaUploadPipeline.uploadReservedEvidence(userId, item)
+                        if (result is EvidenceUploadResult.Ready ||
+                            result is EvidenceUploadResult.ReviewRequired
+                        ) {
+                            updateProgress(
+                                userId,
+                                "UPLOAD",
+                                completed + index + 1,
+                                total,
+                                item.evidenceId,
+                                100,
+                                "Фотография ${index + 1} обработана",
+                            )
+                        }
+                        EvidenceUploadAttempt(index, item.evidenceId, result, null)
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Throwable) {
+                        EvidenceUploadAttempt(index, item.evidenceId, null, error)
+                    }
+                }
             }
-            updateProgress(
-                userId,
-                "UPLOAD",
-                completed + index + 1,
-                total,
-                item.evidenceId,
-                100,
-                "Фотография ${index + 1} обработана",
+        }.awaitAll().sortedBy(EvidenceUploadAttempt::index)
+
+        attempts.firstOrNull { it.error != null }?.let { failed ->
+            throw requireNotNull(failed.error)
+        }
+        val completedUploads = attempts.count { attempt ->
+            attempt.result is EvidenceUploadResult.Ready ||
+                attempt.result is EvidenceUploadResult.ReviewRequired
+        }
+        attempts.firstOrNull { it.result is EvidenceUploadResult.WaitingForReservation }?.let {
+            return@supervisorScope EvidenceSyncResult(
+                WorkerSyncOutcome.Deferred("Ожидается резервирование фотографии"),
+                completed + completedUploads,
             )
         }
-        return EvidenceSyncResult(outcome = null, completedUnits = completed + expectedMediaCount)
+        attempts.firstOrNull { it.result is EvidenceUploadResult.Processing }?.let {
+            return@supervisorScope EvidenceSyncResult(
+                WorkerSyncOutcome.Deferred("Фотография ещё обрабатывается"),
+                completed + completedUploads,
+            )
+        }
+        EvidenceSyncResult(outcome = null, completedUnits = completed + expectedMediaCount)
     }
 
     private suspend fun fetchFeed(userId: String, context: WorkerContextDto): FetchedFeed {
@@ -674,3 +712,4 @@ internal fun cachedFeedMatchesContext(
 }
 
 private const val MAX_FEED_PAGES = 100
+private const val MAX_PARALLEL_EVIDENCE_UPLOADS = 2

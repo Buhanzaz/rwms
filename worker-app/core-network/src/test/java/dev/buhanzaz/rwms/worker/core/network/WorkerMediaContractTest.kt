@@ -1,9 +1,14 @@
 package dev.buhanzaz.rwms.worker.core.network
 
 import com.google.common.truth.Truth.assertThat
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import org.junit.Test
 
 class WorkerMediaContractTest {
+    private val json = Json { explicitNulls = false; encodeDefaults = true }
+
     @Test
     fun `worker evidence upload is bound to task board work result owner`() {
         val evidenceId = "123e4567-e89b-12d3-a456-426614174000"
@@ -11,15 +16,46 @@ class WorkerMediaContractTest {
             ownerId = "223e4567-e89b-12d3-a456-426614174000",
             warehouseId = "323e4567-e89b-12d3-a456-426614174000",
             clientReferenceId = evidenceId,
-            fileName = "$evidenceId.jpg",
-            contentLength = 42,
-            checksumSha256 = "a".repeat(64),
+            fileName = "$evidenceId.webp",
+            imageVariants = listOf(
+                ImageVariantUploadRequestDto("SMALL", 10, "a".repeat(64), 320, 240),
+                ImageVariantUploadRequestDto("MEDIUM", 14, "b".repeat(64), 960, 720),
+                ImageVariantUploadRequestDto("LARGE", 18, "c".repeat(64), 1_600, 1_200),
+            ),
         )
 
         assertThat(request.ownerType).isEqualTo("TASK_BOARD_ENTRY")
         assertThat(request.context).isEqualTo("WORK_RESULT")
         assertThat(request.clientReferenceId).isEqualTo(evidenceId)
+        assertThat(requireNotNull(request.imageVariants).map { it.kind })
+            .containsExactly("SMALL", "MEDIUM", "LARGE").inOrder()
+    }
+
+    @Test
+    fun `pre-upgrade encrypted JPEG remains representable for bounded recovery`() {
+        val request = CreateUploadSessionRequestDto(
+            ownerId = "223e4567-e89b-12d3-a456-426614174000",
+            warehouseId = "323e4567-e89b-12d3-a456-426614174000",
+            clientReferenceId = "123e4567-e89b-12d3-a456-426614174000",
+            fileName = "evidence.jpg",
+            contentType = "image/jpeg",
+            contentLength = 128,
+            checksumSha256 = "a".repeat(64),
+        )
+
+        assertThat(request.imageVariants).isNull()
         assertThat(request.contentType).isEqualTo("image/jpeg")
+        assertThat(request.contentLength).isEqualTo(128)
+        assertThat(json.parseToJsonElement(json.encodeToString(request)).jsonObject.keys)
+            .doesNotContain("imageVariants")
+
+        val finalize = FinalizeUploadRequestDto(
+            objectVersionId = "opaque-version",
+            etag = "opaque-etag",
+            checksumSha256 = "a".repeat(64),
+        )
+        assertThat(json.parseToJsonElement(json.encodeToString(finalize)).jsonObject.keys)
+            .doesNotContain("variants")
     }
 
     @Test

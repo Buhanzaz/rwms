@@ -589,6 +589,55 @@ class WorkerDatabaseCreateOpenRobolectricTest {
         context.deleteDatabase(name)
     }
 
+    @Test
+    fun migrationEightToNineAddsRouteAndDurableVariantManifestDefaults() {
+        val context = RuntimeEnvironment.getApplication()
+        val name = "worker-room-webp-migration.db"
+        context.deleteDatabase(name)
+        val versionEight = openHelper(
+            context = context,
+            name = name,
+            version = 8,
+            onCreate = { database ->
+                database.execSQL(
+                    "CREATE TABLE `worker_task` (`localId` TEXT NOT NULL PRIMARY KEY)",
+                )
+                database.execSQL(
+                    "CREATE TABLE `task_evidence` (`evidenceId` TEXT NOT NULL PRIMARY KEY)",
+                )
+                database.execSQL("INSERT INTO `worker_task` VALUES ('worker:entry')")
+                database.execSQL("INSERT INTO `task_evidence` VALUES ('evidence')")
+            },
+        )
+        versionEight.writableDatabase
+        versionEight.close()
+
+        val versionNine = openHelper(
+            context = context,
+            name = name,
+            version = 9,
+            onCreate = { error("Expected the version 8 database to exist") },
+            onUpgrade = { database -> WorkerDatabase.MIGRATION_8_9.migrate(database) },
+        )
+        val database = versionNine.writableDatabase
+
+        database.query(
+            "SELECT `routeIndex`, `routeStepCount` FROM `worker_task` WHERE `localId`='worker:entry'",
+        ).use { cursor ->
+            assertThat(cursor.moveToFirst()).isTrue()
+            assertThat(cursor.getInt(0)).isEqualTo(0)
+            assertThat(cursor.getInt(1)).isEqualTo(1)
+        }
+        database.query(
+            "SELECT `variantManifestJson` FROM `task_evidence` WHERE `evidenceId`='evidence'",
+        ).use { cursor ->
+            assertThat(cursor.moveToFirst()).isTrue()
+            assertThat(cursor.getString(0)).isEqualTo("[]")
+        }
+        versionNine.close()
+        context.deleteDatabase(name)
+    }
+
     private fun columns(database: SupportSQLiteDatabase, table: String): List<String> =
         database.query("PRAGMA table_info(`$table`)").use { cursor ->
             buildList {

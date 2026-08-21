@@ -30,7 +30,10 @@ import dev.buhanzaz.rwms.worker.core.network.WorkerTaskDetailDto
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okhttp3.RequestBody
 import okhttp3.ResponseBody
@@ -154,6 +157,37 @@ class BlockedMediaFeedReconciliationRobolectricTest {
         assertThat(api.feedCalls.get()).isEqualTo(0)
     }
 
+    @Test
+    fun `evidence uploads run concurrently within the global bound`() = runTest {
+        val now = System.currentTimeMillis()
+        listOf("evidence-1", "evidence-2", "evidence-3").forEach { evidenceId ->
+            database.evidenceDao().upsert(
+                reservedEvidence(now).copy(
+                    evidenceId = evidenceId,
+                    reservationOperationId = evidenceId,
+                    uploadOperationId = evidenceId,
+                ),
+            )
+        }
+        val uploader = ConcurrencyTrackingUploader()
+        val coordinator = WorkerSyncCoordinator(
+            gateway = WorkerGatewayClient(FreshEmptyFeedApi(), json),
+            database = database,
+            localStore = WorkerLocalStore(
+                database,
+                PendingPayloadCipher(RuntimeEnvironment.getApplication()),
+                json,
+            ),
+            projections = WorkerProjectionWriter(database, json),
+            mediaUploadPipeline = uploader,
+            json = json,
+        )
+
+        assertThat(coordinator.sync(USER_ID)).isEqualTo(WorkerSyncOutcome.Complete)
+        assertThat(uploader.calls.get()).isEqualTo(3)
+        assertThat(uploader.maximumConcurrent.get()).isEqualTo(2)
+    }
+
     private fun inProgressTask(now: Long) = WorkerTaskEntity(
         localId = "$USER_ID:$ENTRY_ID",
         userId = USER_ID,
@@ -189,8 +223,8 @@ class BlockedMediaFeedReconciliationRobolectricTest {
         routeIndex = 0,
         capturedAt = "2026-07-26T16:50:00Z",
         encryptedFilePath = "/not-used-in-this-test",
-        fileName = "$EVIDENCE_ID.jpg",
-        contentType = "image/jpeg",
+        fileName = "$EVIDENCE_ID.webp",
+        contentType = "image/webp",
         sizeBytes = 128,
         sha256 = "a".repeat(64),
         reservationOperationId = EVIDENCE_ID,
@@ -234,6 +268,28 @@ class BlockedMediaFeedReconciliationRobolectricTest {
             userId: String,
             evidence: TaskEvidenceEntity,
         ): EvidenceUploadResult = throw CancellationException("worker cancelled")
+    }
+
+    /** Records the real coordinator concurrency while returning deterministic READY results. */
+    private class ConcurrencyTrackingUploader : WorkerEvidenceUploader {
+        val calls = AtomicInteger()
+        val maximumConcurrent = AtomicInteger()
+        private val active = AtomicInteger()
+
+        override suspend fun uploadReservedEvidence(
+            userId: String,
+            evidence: TaskEvidenceEntity,
+        ): EvidenceUploadResult = withContext(Dispatchers.Default) {
+            calls.incrementAndGet()
+            val concurrent = active.incrementAndGet()
+            maximumConcurrent.updateAndGet { current -> maxOf(current, concurrent) }
+            try {
+                delay(100)
+                EvidenceUploadResult.Ready("media-${evidence.evidenceId}", 1)
+            } finally {
+                active.decrementAndGet()
+            }
+        }
     }
 
     private class FreshEmptyFeedApi : WorkerGatewayApi {

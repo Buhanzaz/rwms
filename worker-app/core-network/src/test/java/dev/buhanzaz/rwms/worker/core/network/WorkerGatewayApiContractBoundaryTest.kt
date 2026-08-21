@@ -214,7 +214,7 @@ class WorkerGatewayApiContractBoundaryTest {
         )
         assertThat(actionJson).contains("\"workerGroupId\":null")
         assertThat(actionJson).contains("\"evidenceId\":null")
-        assertThat(evidenceJson).contains("\"contentType\":\"image/jpeg\"")
+        assertThat(evidenceJson).contains("\"contentType\":\"image/webp\"")
         assertThat(evidenceJson).contains("\"sha256\":\"${"a".repeat(64)}\"")
     }
 
@@ -255,7 +255,12 @@ class WorkerGatewayApiContractBoundaryTest {
               "uploadSessionId":"99999999-9999-9999-9999-999999999999",
               "mediaId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
               "expiresAt":"2026-08-09T09:00:00Z",
-              "contentUploadUrl":"/api/media/v1/upload-sessions/99999999-9999-9999-9999-999999999999/content"
+              "contentUploadUrl":null,
+              "variantUploadUrls":[
+                {"kind":"SMALL","contentUploadUrl":"/api/media/v1/upload-sessions/99999999-9999-9999-9999-999999999999/variants/SMALL/content"},
+                {"kind":"MEDIUM","contentUploadUrl":"/api/media/v1/upload-sessions/99999999-9999-9999-9999-999999999999/variants/MEDIUM/content"},
+                {"kind":"LARGE","contentUploadUrl":"/api/media/v1/upload-sessions/99999999-9999-9999-9999-999999999999/variants/LARGE/content"}
+              ]
             }
             """.trimIndent(),
         )
@@ -298,29 +303,45 @@ class WorkerGatewayApiContractBoundaryTest {
             ownerId = "44444444-4444-4444-4444-444444444444",
             warehouseId = "22222222-2222-2222-2222-222222222222",
             clientReferenceId = "66666666-6666-6666-6666-666666666666",
-            fileName = "evidence.jpg",
-            contentLength = 128,
-            checksumSha256 = "b".repeat(64),
+            fileName = "evidence.webp",
+            imageVariants = listOf(
+                ImageVariantUploadRequestDto("SMALL", 32, "a".repeat(64), 320, 180),
+                ImageVariantUploadRequestDto("MEDIUM", 40, "b".repeat(64), 960, 540),
+                ImageVariantUploadRequestDto("LARGE", 56, "c".repeat(64), 1_600, 900),
+            ),
         )
         val finalizeRequest = FinalizeUploadRequestDto(
-            objectVersionId = uploaded.objectVersionId,
-            etag = uploaded.etag,
-            checksumSha256 = uploaded.checksumSha256,
+            variants = listOf("SMALL", "MEDIUM", "LARGE").map { kind ->
+                FinalizeImageVariantDto(
+                    kind = kind,
+                    objectVersionId = uploaded.objectVersionId,
+                    etag = uploaded.etag,
+                    checksumSha256 = uploaded.checksumSha256,
+                )
+            },
         )
         val createJson = json.encodeToString(createRequest)
         val finalizeJson = json.encodeToString(finalizeRequest)
 
-        assertThat(session.contentUploadUrl).startsWith("/api/media/v1/upload-sessions/")
+        assertThat(session.contentUploadUrl).isNull()
+        assertThat(session.variantUploadUrls.map { it.kind })
+            .containsExactly("SMALL", "MEDIUM", "LARGE").inOrder()
         assertThat(asset.variants.single().contentPath).startsWith("/api/media/v1/assets/")
         assertThat(createJson).contains("\"ownerType\":\"TASK_BOARD_ENTRY\"")
         assertThat(createJson).contains("\"context\":\"WORK_RESULT\"")
+        assertThat(createJson).contains("\"imageVariants\"")
+        assertThat(json.parseToJsonElement(createJson).jsonObject.keys)
+            .containsNoneOf("contentType", "contentLength", "checksumSha256")
+        assertThat(finalizeJson).contains("\"variants\"")
+        assertThat(requireNotNull(finalizeRequest.variants).map { it.kind })
+            .containsExactly("SMALL", "MEDIUM", "LARGE").inOrder()
         assertThat(finalizeJson).contains("\"objectVersionId\":\"opaque-object-version\"")
     }
 
     @Test
     fun `dynamic media client calls reject private and foreign paths before Retrofit`() = runTest {
         val uploadPath =
-            "/api/media/v1/upload-sessions/99999999-9999-9999-9999-999999999999/content"
+            "/api/media/v1/upload-sessions/99999999-9999-9999-9999-999999999999/variants/LARGE/content"
         val originalPath =
             "/api/media/v1/assets/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/original?generation=1"
         assertThat(requireSameOriginApiPath(uploadPath)).isEqualTo(uploadPath)
@@ -336,7 +357,7 @@ class WorkerGatewayApiContractBoundaryTest {
             client.uploadMediaContent(
                 sameOriginContentPath = "https://media-service:8080/private/object",
                 idempotencyKey = "77777777-7777-7777-7777-777777777777",
-                content = byteArrayOf(1).toRequestBody("image/jpeg".toMediaType()),
+                content = byteArrayOf(1).toRequestBody("image/webp".toMediaType()),
             )
         }.exceptionOrNull()
         val readFailure = runCatching {
@@ -412,7 +433,11 @@ private fun expectedWorkerRoutes(): Map<String, WorkerContractRoute> {
         "registerDevice" to route("PUT", "/api/task-board/worker/v1/devices/{installationId}", "$taskBoard /worker/v1/devices/{installationId}"),
         "unregisterDevice" to route("DELETE", "/api/task-board/worker/v1/devices/{installationId}", "$taskBoard /worker/v1/devices/{installationId}"),
         "createUploadSession" to route("POST", "/api/media/v1/upload-sessions", "$media /api/media/v1/upload-sessions"),
-        "uploadMediaContent" to route("PUT", "", "$media /api/media/v1/upload-sessions/{uploadSessionId}/content via guarded @Url"),
+        "uploadMediaContent" to route(
+            "PUT",
+            "",
+            "$media /api/media/v1/upload-sessions/{uploadSessionId}/variants/{kind}/content via guarded @Url",
+        ),
         "finalizeUploadSession" to route("POST", "/api/media/v1/upload-sessions/{uploadSessionId}/complete", "$media /api/media/v1/upload-sessions/{uploadSessionId}/complete"),
         "mediaContent" to route("GET", "", "$media /api/media/v1/assets/{mediaId}/(original|variants/{variant}/content) via guarded @Url"),
     )

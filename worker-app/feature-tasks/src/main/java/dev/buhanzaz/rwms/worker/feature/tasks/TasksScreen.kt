@@ -56,6 +56,7 @@ import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
 import dev.buhanzaz.rwms.worker.core.ui.cabinNumberForDisplay
 import dev.buhanzaz.rwms.worker.core.ui.workerRepairComplexityLabel
 import dev.buhanzaz.rwms.worker.core.ui.workerKpiTimeColor
+import dev.buhanzaz.rwms.worker.core.ui.workerTaskStageOrdinal
 import dev.buhanzaz.rwms.worker.core.ui.workerTaskStageLabel
 import kotlinx.coroutines.delay
 
@@ -420,59 +421,63 @@ private fun TaskRow(
                 )
             }
             val timer = queueTaskTimerPresentation(task)
-            val elapsed = timer?.elapsed ?: queueTaskElapsedLabel(task)
-            elapsed?.let {
+            val complexity = workerRepairComplexityLabel(task.title)
+            val kpiColor = workerKpiTimeColor(
+                remainingPercent = task.timerRemainingPercent,
+                ranges = kpiPalette?.ranges.orEmpty().map { range ->
+                    WorkerKpiColorRange(range.fromPercent, range.toPercent, range.color)
+                },
+                overdueColor = kpiPalette?.overdueColor,
+            )
+            if (task.status == "WAITING") {
                 Text(
-                    "Время работы: $it",
+                    "Выделенное время: ${allocatedQueueDurationLabel(task.plannedDurationMinutes)}",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
-            if (expanded) {
-                Text(
-                    "Этап: ${workerTaskStageLabel(task.categoryName) ?: "—"}",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Text(
-                    "Приоритет: ${task.priority}",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                workerRepairComplexityLabel(task.title)?.let { complexity ->
+                complexity?.let {
+                    Text(it, style = MaterialTheme.typography.labelMedium)
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Text(
-                        "Ремонт: $complexity",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                task.deadlineAt?.let {
-                    Text("Срок: $it", style = MaterialTheme.typography.bodyMedium)
-                }
-                Text(
-                    "Фото результата: ${task.readyEvidenceCount}/${task.resultPhotoMinCount}",
-                    style = MaterialTheme.typography.labelMedium,
-                )
-                timer?.let {
-                    val kpiColor = workerKpiTimeColor(
-                        remainingPercent = task.timerRemainingPercent,
-                        ranges = kpiPalette?.ranges.orEmpty().map { range ->
-                            WorkerKpiColorRange(
-                                range.fromPercent,
-                                range.toPercent,
-                                range.color,
-                            )
-                        },
-                        overdueColor = kpiPalette?.overdueColor,
+                        "Время работы: ${timer?.elapsed ?: queueTaskElapsedLabel(task)}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
-                        listOfNotNull(
-                            it.state,
-                            it.remaining?.let { remaining -> "осталось $remaining" },
-                            it.percent,
-                        ).joinToString(" · "),
+                        "KPI: ${timer?.percent ?: "—"}",
                         style = MaterialTheme.typography.labelMedium,
                         color = kpiColor ?: MaterialTheme.colorScheme.onSurfaceVariant,
                         fontWeight = if (kpiColor == null) FontWeight.Normal else FontWeight.Bold,
                     )
                 }
+            }
+            if (expanded) {
+                Text(
+                    "Этап ${workerTaskStageOrdinal(task.routeIndex, task.routeStepCount, " из ")}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "Приоритет ${task.priority}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (task.status != "WAITING") {
+                    complexity?.let {
+                        Text(it, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                task.deadlineAt?.let {
+                    Text("Срок: $it", style = MaterialTheme.typography.bodyMedium)
+                }
+                Text(
+                    "Загружено фото: ${task.readyEvidenceCount}",
+                    style = MaterialTheme.typography.labelMedium,
+                )
             }
             OutlinedButton(
                 onClick = onOpen,
@@ -491,6 +496,12 @@ internal fun taskCardTitle(unitNumber: String?): String =
 /** Replaces the backend's technical maintenance queue label in the worker UI. */
 internal fun taskBoardQueueLabel(name: String): String =
     workerTaskStageLabel(name) ?: name
+
+/** Formats the server-issued budget without treating it as elapsed work. */
+internal fun allocatedQueueDurationLabel(minutes: Int?): String = minutes
+    ?.coerceAtLeast(0)
+    ?.let { value -> "%d:%02d:00".format(value / 60, value % 60) }
+    ?: "—"
 
 /**
  * Reports whether a durable progress row is both an active stage and recent

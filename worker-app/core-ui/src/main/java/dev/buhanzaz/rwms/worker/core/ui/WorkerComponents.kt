@@ -73,7 +73,7 @@ fun WorkerScreenScaffold(
                         )
                     }
                 },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(),
+                colors = TopAppBarDefaults.topAppBarColors(),
             )
         },
         bottomBar = bottomBar,

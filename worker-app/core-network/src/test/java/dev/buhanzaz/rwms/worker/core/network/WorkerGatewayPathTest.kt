@@ -10,8 +10,9 @@ import retrofit2.http.PUT
 class WorkerGatewayPathTest {
     @Test
     fun `same origin media path accepts only public media routes`() {
-        assertThat(requireSameOriginApiPath("/api/media/v1/upload-sessions/123e4567-e89b-12d3-a456-426614174000/content"))
-            .isEqualTo("/api/media/v1/upload-sessions/123e4567-e89b-12d3-a456-426614174000/content")
+        val path =
+            "/api/media/v1/upload-sessions/123e4567-e89b-12d3-a456-426614174000/variants/SMALL/content"
+        assertThat(requireSameOriginApiPath(path)).isEqualTo(path)
     }
 
     @Test
@@ -42,7 +43,9 @@ class WorkerGatewayPathTest {
 
     @Test(expected = IllegalArgumentException::class)
     fun `same origin media path rejects traversal and query`() {
-        requireSameOriginApiPath("/api/media/v1/upload-sessions/123e4567-e89b-12d3-a456-426614174000/content?next=../secret")
+        requireSameOriginApiPath(
+            "/api/media/v1/upload-sessions/123e4567-e89b-12d3-a456-426614174000/variants/SMALL/content?next=../secret",
+        )
     }
 
     @Test(expected = IllegalArgumentException::class)

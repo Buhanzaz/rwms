@@ -54,7 +54,7 @@ import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
 import dev.buhanzaz.rwms.worker.core.ui.cabinNumberForDisplay
 import dev.buhanzaz.rwms.worker.core.ui.workerRepairComplexityLabel
 import dev.buhanzaz.rwms.worker.core.ui.workerKpiTimeColor
-import dev.buhanzaz.rwms.worker.core.ui.workerTaskStageLabel
+import dev.buhanzaz.rwms.worker.core.ui.workerTaskStageOrdinal
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -100,9 +100,11 @@ fun TaskDetailScreen(
     }
     val readyEvidenceCount = readyEvidenceIds.size
     var showCompletionDialog by remember(entryId) { mutableStateOf(false) }
-    val localEvidenceWithoutServerPhoto = state.evidence.filterNot { local ->
-        readyServerEvidence.any { remote -> remote.evidenceId == local.evidenceId }
-    }
+    val localEvidenceWithoutServerPhoto = state.evidence
+        .filterNot { local -> local.state == "READY" }
+        .filterNot { local ->
+            readyServerEvidence.any { remote -> remote.evidenceId == local.evidenceId }
+        }
     val plannedDurationMinutes = detail?.plannedDurationMinutes ?: task?.plannedDurationMinutes
     val timerSnapshot = detail?.timerSnapshot ?: task?.serverTimerSnapshotOrNull()
     var elapsedSinceSnapshotSeconds by remember(timerSnapshot) { mutableStateOf(0L) }
@@ -129,13 +131,8 @@ fun TaskDetailScreen(
         sourceMedia = detail?.sourceMedia.orEmpty(),
     )
     val generalSourceMedia = sourceMediaPresentation.general
-    val detailRouteIndex = detail?.routeIndex
-    val stageLabel = workerTaskStageLabel(
-        detail?.relatedSteps
-            ?.firstOrNull { it.routeIndex == detailRouteIndex }
-            ?.queueName
-            ?: task?.categoryName,
-    )
+    val routeIndex = detail?.routeIndex ?: task?.routeIndex ?: 0
+    val routeStepCount = task?.routeStepCount ?: (routeIndex + 1)
     val repairComplexity = workerRepairComplexityLabel(detail?.title ?: task?.title)
     val showRepairComplexity = detail?.source?.type == "MAINTENANCE_REPAIR" || repairComplexity != null
     LaunchedEffect(timerSnapshot?.nextTransitionAt, timerSnapshot?.serverTime) {
@@ -208,7 +205,7 @@ fun TaskDetailScreen(
             item { TaskTimerCard(timing = timing, kpiColor = kpiTimeColor) }
             item {
                 TaskMetadataCard(
-                    stage = stageLabel,
+                    stage = workerTaskStageOrdinal(routeIndex, routeStepCount, "/"),
                     priority = detail?.priority ?: task?.priority,
                     repairComplexity = repairComplexity,
                     showRepairComplexity = showRepairComplexity,
@@ -429,11 +426,11 @@ private fun TaskMetadataCard(
             modifier = Modifier.fillMaxWidth().padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text("Этап: ${stage ?: "—"}", style = MaterialTheme.typography.bodyLarge)
-            Text("Приоритет: ${priority ?: "—"}", style = MaterialTheme.typography.bodyLarge)
+            Text("Этап ${stage ?: "—"}", style = MaterialTheme.typography.bodyLarge)
+            Text("Приоритет ${priority ?: "—"}", style = MaterialTheme.typography.bodyLarge)
             if (showRepairComplexity) {
                 Text(
-                    "Ремонт: ${repairComplexity ?: "—"}",
+                    repairComplexity ?: "—",
                     style = MaterialTheme.typography.bodyLarge,
                 )
             }
@@ -668,6 +665,10 @@ private fun EvidenceRow(
     )
     Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LocalEvidenceThumbnail(
+                encryptedPath = evidence.encryptedFilePath,
+                modifier = Modifier.fillMaxWidth().height(160.dp),
+            )
             Text(presentation.status, style = MaterialTheme.typography.titleSmall)
             presentation.message?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
             evidence.lastError?.let {
@@ -680,6 +681,38 @@ private fun EvidenceRow(
             if (presentation.canRetryReservation) {
                 OutlinedButton(onClick = onRetry) { Text("Повторить отправку") }
             }
+        }
+    }
+}
+
+/** Renders only the encrypted local original; transport variants remain an implementation detail. */
+@Composable
+private fun LocalEvidenceThumbnail(
+    encryptedPath: String,
+    modifier: Modifier = Modifier,
+    viewModel: TaskMediaThumbnailViewModel = hiltViewModel(),
+) {
+    val thumbnails by viewModel.thumbnails.collectAsStateWithLifecycle()
+    val thumbnail = thumbnails[encryptedPath]
+    LaunchedEffect(encryptedPath, thumbnail) {
+        if (thumbnail == null) viewModel.loadLocal(encryptedPath)
+    }
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        when (thumbnail) {
+            is TaskMediaThumbnail.Ready -> Image(
+                bitmap = thumbnail.bitmap.asImageBitmap(),
+                contentDescription = "Локальное фото результата",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+            is TaskMediaThumbnail.Failed -> Text(
+                "Фото сохранено",
+                style = MaterialTheme.typography.labelSmall,
+            )
+            null, TaskMediaThumbnail.Loading -> Text(
+                "Открываем фото…",
+                style = MaterialTheme.typography.labelSmall,
+            )
         }
     }
 }

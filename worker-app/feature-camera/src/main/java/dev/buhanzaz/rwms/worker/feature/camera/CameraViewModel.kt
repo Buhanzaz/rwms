@@ -8,6 +8,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.buhanzaz.rwms.worker.core.database.PendingEvidenceReservation
 import dev.buhanzaz.rwms.worker.core.database.WorkerLocalStore
 import dev.buhanzaz.rwms.worker.core.media.EncryptedEvidenceFileStore
+import dev.buhanzaz.rwms.worker.core.media.WorkerEvidenceBundlePreparer
 import dev.buhanzaz.rwms.worker.core.media.WorkerGalleryJpegImporter
 import dev.buhanzaz.rwms.worker.core.sync.WorkerSyncScheduler
 import java.io.File
@@ -37,6 +38,7 @@ data class CameraUiState(
  */
 class CameraViewModel @Inject constructor(
     private val fileStore: EncryptedEvidenceFileStore,
+    private val bundlePreparer: WorkerEvidenceBundlePreparer,
     private val galleryImporter: WorkerGalleryJpegImporter,
     private val localStore: WorkerLocalStore,
     private val scheduler: WorkerSyncScheduler,
@@ -51,8 +53,8 @@ class CameraViewModel @Inject constructor(
     }
 
     /**
-     * Persists a confirmed CameraX JPEG. Completion flows defer scheduling until their action is
-     * in the outbox; ordinary evidence capture schedules immediately.
+     * Converts a confirmed CameraX result into encrypted WebP evidence. Completion flows defer
+     * scheduling until their action is in the outbox; ordinary evidence capture schedules immediately.
      */
     fun confirmCapture(
         userId: String,
@@ -173,32 +175,33 @@ class CameraViewModel @Inject constructor(
         val capturedAt = Instant.ofEpochMilli(
             lease.estimatedServerNow(SystemClock.elapsedRealtime()),
         ).toString()
-        val persisted = fileStore.persistJpeg(userId, evidenceId, temporaryFile)
+        val persisted = bundlePreparer.prepareAndPersist(userId, evidenceId, temporaryFile)
         val reservation = PendingEvidenceReservation(
             operationId = evidenceId,
             evidenceId = evidenceId,
             routeIndex = routeIndex,
             capturedAt = capturedAt,
             offlineLeaseId = requireNotNull(localStore.currentLeaseId(userId)),
-            contentType = "image/jpeg",
-            sizeBytes = persisted.plainSizeBytes,
-            sha256 = persisted.sha256,
+            contentType = "image/webp",
+            sizeBytes = persisted.aggregateContentLength,
+            sha256 = persisted.manifestSha256,
         )
         try {
             localStore.enqueueEvidenceReservation(
                 userId = userId,
                 entryId = entryId,
                 evidenceId = evidenceId,
-                encryptedFilePath = persisted.encryptedPath,
-                fileName = "$evidenceId.jpg",
+                encryptedFilePath = persisted.originalEncryptedPath,
+                fileName = "$evidenceId.webp",
                 routeIndex = routeIndex,
                 capturedAt = capturedAt,
-                sizeBytes = persisted.plainSizeBytes,
-                sha256 = persisted.sha256,
+                sizeBytes = persisted.aggregateContentLength,
+                sha256 = persisted.manifestSha256,
+                variantManifestJson = json.encodeToString(persisted.variants),
                 reservationPayload = json.encodeToString(reservation),
             )
         } catch (error: Throwable) {
-            fileStore.delete(persisted.encryptedPath)
+            fileStore.deleteBundle(persisted.originalEncryptedPath, persisted.variants)
             throw error
         }
         evidenceId

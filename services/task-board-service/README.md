@@ -118,6 +118,7 @@ components own the decisions:
 | `DriverTaskAudienceService` | Logistics-driver audience shape, qualification, visibility and execution authorization |
 | `MobileTaskSurfacePolicy` | Non-overlapping DriverApp primary and WorkerApp secondary capabilities |
 | `WorkerTaskAccessService` | Shared worker/group/qualification queue audience for native task reads and media proofs |
+| `WorkerFeedCountProjection` | One-query route cardinality and READY-evidence counts for a bounded native feed page |
 | `TaskBoardEntryOwnerProofReconciler` | Bounded idempotent repair of legacy or workforce-stale media proof audiences |
 | `WorkerPushOutbox` / `WorkerPushDispatcher` | Transactional slinger notification, leased FCM delivery and bounded recovery |
 | `WorkforceService` | Stable worker/group API facade over three lifecycle owners |
@@ -212,11 +213,21 @@ persistence schema or event payload shape.
 first position. Each `WorkerWork.sourceMediaIds` is the exact link from a work line to its own
 references in that array; task-board does not flatten or infer that association.
 
+Every `WorkerFeedEntry` exposes zero-based `routeIndex` and positive `routeStepCount`. The latter
+is counted from the task's complete persisted `queue_entry` route, including stages hidden from the
+current worker. Route cardinality and READY evidence counts are loaded for the selected feed page
+in one database projection rather than one query per card.
+
 The worker action path validates the worker identity, current assignment,
 entry version, action/status transition, and offline lease where applicable.
 Evidence is first reserved with a stable client reference, then uploaded to
 media-service. A media fact links the processed generation back to the reserved
-evidence before completion may rely on it.
+evidence before completion may rely on it. A legacy `image/jpeg` declaration may be at most 15 MiB;
+an `image/webp` logical client bundle may be at most 1 MiB and its `sha256` is the deterministic
+bundle-manifest checksum. Both formats retain one logical evidence row, and reservation replays
+must match the original entry, operation, route step, capture time, MIME type, size, and checksum.
+The same format and byte limits are enforced by
+[`V32__support_worker_evidence_webp_bundles.sql`](src/main/resources/db/migration/V32__support_worker_evidence_webp_bundles.sql).
 
 The current OpenAPI text mentions `Last-Event-ID`, but controller and client do
 not implement durable replay. Current reconnect is safe because it triggers a

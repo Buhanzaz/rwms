@@ -760,8 +760,8 @@ and
 
 ### Media
 
-`media-service` owns media metadata, upload/finalize, private originals,
-variants and transformations. MinIO remains private; other domains reference
+`media-service` owns media metadata, upload/finalize, private stored payloads,
+variants and processing state. MinIO remains private; other domains reference
 media IDs and ownership contexts rather than object keys or credentials.
 
 A WORKER media request must carry exactly one native task scope:
@@ -770,19 +770,26 @@ combining both is rejected, and the existing worker, warehouse and media-owner
 proofs still apply. Scope separation changes neither media ownership nor the
 private-object boundary.
 
-Phone-side capture and gallery intake normalize still-image pixels to their
-upright orientation before upload. Media-service neither auto-rotates EXIF
-images nor accepts a mutable rotation command for new media. Its historical
-`rotationDegrees` read field is retained for compatible display of old assets,
-not as current media state to mutate.
+ManagerApp and WorkerApp normalize captured or selected still-image pixels to
+their upright orientation, then durably encode exactly `SMALL`, `MEDIUM` and
+`LARGE` WebP parts with an aggregate one-MiB ceiling. Only the app-private
+original is rendered locally; it is not uploaded, and the app deletes that
+original plus all generated parts only after every part and finalization have
+succeeded and the media owner reports the asset as `READY`. Media-service
+neither rotates, decodes nor recompresses these image parts. Its historical
+`rotationDegrees` read field remains only for compatible display of old
+assets, not as current media state to mutate.
 
 Video uploads retain the immutable original and, after finalization, are
 processed asynchronously into a bounded MP4 `PLAYBACK` derivative. The
 derivative uses H.264/AAC, strips mutable metadata, fits within 1280x720 without
-upscaling and remains subject to an explicit output-byte limit. Image variants
-and video playback are both media-owned; clients resolve only a scoped READY
-variant URL. Panel and ManagerApp bound independent upload transfers to four
-and do not retain a transfer slot while polling processing readiness. The panel
+upscaling and remains subject to an explicit output-byte limit. Accepted image
+objects and video playback are media-owned; clients resolve only a scoped READY
+variant URL. A compatible legacy image source is pinned once and exposed
+through logical variant aliases without a server-side byte transformation.
+ManagerApp and WorkerApp bound both photo-level and part-level transfer
+parallelism and do not retain a transfer slot while polling processing
+readiness. The panel
 renders a selected local original immediately, reports authenticated
 content-transfer byte progress below it and withholds cover/delete commands
 until the matching server item is ready; the blob preview remains disposable
@@ -809,11 +816,15 @@ Evidence: [`services/media-service/`](../../services/media-service/),
 [`ManagerPhotos.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/components/ManagerPhotos.kt),
 [`InventoryMediaRebasePolicy.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/uploads/InventoryMediaRebasePolicy.kt),
 [`BackgroundUploadWorker.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/uploads/BackgroundUploadWorker.kt),
+[`ImageUploadBundleEncoder.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/media/ImageUploadBundleEncoder.kt),
+[`WorkerEvidenceBundlePreparer.kt`](../../worker-app/core-media/src/main/java/dev/buhanzaz/rwms/worker/core/media/WorkerEvidenceBundlePreparer.kt),
 [`validator.go`](../../services/media-service/internal/auth/validator.go),
+[`media upload API`](../../services/media-service/internal/api/server.go),
 [`consumer.go`](../../services/media-service/internal/worker/consumer.go),
 [`worker.go`](../../services/media-service/internal/persistence/worker.go),
 [`video_transcoder.go`](../../services/media-service/internal/media/video_transcoder.go),
 [`V12__video_playback_variant.sql`](../../services/media-service/db/migration/V12__video_playback_variant.sql),
+[`V16__client_image_variants.sql`](../../services/media-service/db/migration/V16__client_image_variants.sql),
 [`V11__bounded_media_processing_recovery.sql`](../../services/media-service/db/migration/V11__bounded_media_processing_recovery.sql),
 [`upload_session_recovery_integration_test.go`](../../services/media-service/internal/persistence/upload_session_recovery_integration_test.go).
 

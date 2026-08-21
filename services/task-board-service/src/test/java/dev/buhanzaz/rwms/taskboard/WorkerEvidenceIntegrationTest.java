@@ -4,8 +4,10 @@ import static dev.buhanzaz.rwms.taskboard.QueueFixtureModels.*;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 import static dev.buhanzaz.rwms.taskboard.api.KpiSettingsApiModels.*;
 import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.EvidenceReservationRequest;
+import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerContext;
 import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerDeviceRegistrationRequest;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerMediaReference;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
@@ -14,6 +16,7 @@ import dev.buhanzaz.rwms.taskboard.eventing.WorkerMediaEventProcessor;
 import dev.buhanzaz.rwms.taskboard.push.WorkerPushClient;
 import dev.buhanzaz.rwms.taskboard.push.WorkerPushDispatcher;
 import dev.buhanzaz.rwms.taskboard.push.WorkerPushOutbox;
+import dev.buhanzaz.rwms.taskboard.service.ConflictException;
 import dev.buhanzaz.rwms.taskboard.service.KpiSettingsService;
 import dev.buhanzaz.rwms.taskboard.service.RegistryService;
 import dev.buhanzaz.rwms.taskboard.service.TaskBoardEntryOwnerProofReconciler;
@@ -63,6 +66,225 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
   @BeforeEach
   void clean() {
     cleanTaskBoardFixtures(jdbc);
+  }
+
+  @Test
+  void feedCountsTheCompleteRouteAndEvidenceDeclarationsKeepExactFormatLimits() {
+    var workerClass =
+        registry.createClass(
+            new WorkerClassRequest(0L, "Пакетные фото", null, null, 10, true));
+    var firstDefinition =
+        registry.createQueueDefinition(
+            QueueRegistryTestFixtures.globalDefinition(
+                0L, "Первый этап", null, QueueType.REPAIR));
+    var secondDefinition =
+        registry.createQueueDefinition(
+            QueueRegistryTestFixtures.globalDefinition(
+                0L, "Второй этап", null, QueueType.REPAIR));
+    var thirdDefinition =
+        registry.createQueueDefinition(
+            QueueRegistryTestFixtures.globalDefinition(
+                0L, "Третий этап", null, QueueType.REPAIR));
+    for (UUID definitionId :
+        List.of(firstDefinition.id(), secondDefinition.id(), thirdDefinition.id())) {
+      QueueRegistryTestFixtures.create(
+          registry,
+          jdbc,
+          WAREHOUSE,
+          new QueueFixtureRequest(
+              0L,
+              definitionId,
+              true,
+              false,
+              false,
+              null,
+              null,
+              false,
+              null,
+              List.of(new QueueBindingRequest(workerClass.id(), false))));
+    }
+    var worker =
+        workforce.createWorker(
+            WAREHOUSE,
+            new WorkerRequest(
+                0L,
+                "Оператор пакетных фото",
+                null,
+                null,
+                null,
+                true,
+                null,
+                null,
+                null,
+                List.of(new QualificationRequest(workerClass.id(), true, null))));
+    jdbc.update("update worker set app_login='worker-bundle-photo' where id=?", worker.id());
+    var group =
+        workforce.createGroup(
+            WAREHOUSE,
+            new WorkerGroupRequest(
+                0L,
+                workerClass.id(),
+                "Группа пакетных фото",
+                null,
+                true,
+                List.of(new GroupMemberRequest(worker.id(), true))));
+    workforce.setCurrentGroup(
+        WAREHOUSE,
+        worker.id(),
+        new SetCurrentGroupRequest(worker.version(), group.id()));
+
+    var created =
+        board.createTask(
+            WAREHOUSE,
+            new CreateBoardTaskRequest(
+                null,
+                "Маршрут с пакетным фото",
+                "БТ-77",
+                null,
+                null,
+                null,
+                List.of(
+                    new RouteStepRequest(firstDefinition.id(), "Первый", null),
+                    new RouteStepRequest(secondDefinition.id(), "Второй", null),
+                    new RouteStepRequest(thirdDefinition.id(), "Третий", null))));
+    BoardEntryDto entry =
+        created.columns().stream()
+            .flatMap(column -> column.entries().stream())
+            .findFirst()
+            .orElseThrow();
+    var feedEntry =
+        workerBoard.feed(worker.id(), WAREHOUSE, null, 50).feed().categories().stream()
+            .flatMap(category -> category.entries().stream())
+            .filter(candidate -> candidate.entryId().equals(entry.id()))
+            .findFirst()
+            .orElseThrow();
+    assertThat(feedEntry.routeIndex()).isZero();
+    assertThat(feedEntry.routeStepCount()).isEqualTo(3);
+
+    BoardEntryDto active =
+        board.take(
+            WAREHOUSE,
+            entry.id(),
+            new TakeEntryRequest(entry.version(), null, worker.id()),
+            worker.id());
+    var context = workerBoard.context(worker.id(), WAREHOUSE);
+    UUID jpegOperationId = UUID.randomUUID();
+    UUID jpegEvidenceId = UUID.randomUUID();
+    var jpegRequest =
+        new EvidenceReservationRequest(
+            jpegOperationId,
+            jpegEvidenceId,
+            active.routeIndex(),
+            context.serverTime(),
+            context.offlineLease().id(),
+            "image/jpeg",
+            15_728_640,
+            "a".repeat(64));
+    var jpeg =
+        workerBoard.reserveEvidence(
+            worker.id(), WAREHOUSE, active.id(), jpegOperationId.toString(), jpegRequest);
+    var jpegReplay =
+        workerBoard.reserveEvidence(
+            worker.id(),
+            WAREHOUSE,
+            active.id(),
+            jpegOperationId.toString(),
+            new EvidenceReservationRequest(
+                jpegOperationId,
+                jpegEvidenceId,
+                active.routeIndex(),
+                context.serverTime(),
+                context.offlineLease().id(),
+                "IMAGE/JPEG",
+                15_728_640,
+                "a".repeat(64)));
+    assertThat(jpegReplay).isEqualTo(jpeg);
+
+    UUID bundleOperationId = UUID.randomUUID();
+    UUID bundleEvidenceId = UUID.randomUUID();
+    var bundle =
+        workerBoard.reserveEvidence(
+            worker.id(),
+            WAREHOUSE,
+            active.id(),
+            bundleOperationId.toString(),
+            new EvidenceReservationRequest(
+                bundleOperationId,
+                bundleEvidenceId,
+                active.routeIndex(),
+                context.serverTime(),
+                context.offlineLease().id(),
+                "image/webp",
+                1_048_576,
+                "b".repeat(64)));
+    assertThat(bundle.contentType()).isEqualTo("image/webp");
+    var bundleReplay =
+        workerBoard.reserveEvidence(
+            worker.id(),
+            WAREHOUSE,
+            active.id(),
+            bundleOperationId.toString(),
+            new EvidenceReservationRequest(
+                bundleOperationId,
+                bundleEvidenceId,
+                active.routeIndex(),
+                context.serverTime(),
+                context.offlineLease().id(),
+                "IMAGE/WEBP",
+                1_048_576,
+                "b".repeat(64)));
+    assertThat(bundleReplay).isEqualTo(bundle);
+    assertThatThrownBy(
+            () ->
+                workerBoard.reserveEvidence(
+                    worker.id(),
+                    WAREHOUSE,
+                    active.id(),
+                    bundleOperationId.toString(),
+                    new EvidenceReservationRequest(
+                        bundleOperationId,
+                        bundleEvidenceId,
+                        active.routeIndex(),
+                        context.serverTime(),
+                        context.offlineLease().id(),
+                        "image/webp",
+                        1_048_576,
+                        "d".repeat(64))))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("уже использован другой фотографией");
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select content_type,size_bytes,sha256
+                  from worker_task_evidence
+                 where evidence_id=?
+                """,
+                bundleEvidenceId))
+        .containsEntry("content_type", "image/webp")
+        .containsEntry("size_bytes", 1_048_576L)
+        .containsEntry("sha256", "b".repeat(64));
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from worker_task_evidence where entry_id=?",
+                Integer.class,
+                active.id()))
+        .isEqualTo(2);
+
+    assertInvalidEvidenceDeclaration(
+        worker,
+        active,
+        context,
+        "image/webp",
+        1_048_577,
+        "1048576");
+    assertInvalidEvidenceDeclaration(
+        worker,
+        active,
+        context,
+        "image/jpeg",
+        15_728_641,
+        "15728640");
+    assertInvalidEvidenceDeclaration(worker, active, context, "image/png", 128, "image/webp");
   }
 
   @Test
@@ -654,6 +876,34 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
                 "select status from worker_device_registration where installation_id='push-worker-installation'",
                 String.class))
         .isEqualTo("REVOKED");
+  }
+
+  private void assertInvalidEvidenceDeclaration(
+      WorkerDto worker,
+      BoardEntryDto active,
+      WorkerContext context,
+      String contentType,
+      long sizeBytes,
+      String messageFragment) {
+    UUID operationId = UUID.randomUUID();
+    assertThatThrownBy(
+            () ->
+                workerBoard.reserveEvidence(
+                    worker.id(),
+                    WAREHOUSE,
+                    active.id(),
+                    operationId.toString(),
+                    new EvidenceReservationRequest(
+                        operationId,
+                        UUID.randomUUID(),
+                        active.routeIndex(),
+                        context.serverTime(),
+                        context.offlineLease().id(),
+                        contentType,
+                        sizeBytes,
+                        "c".repeat(64))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining(messageFragment);
   }
 
   private boolean latestOwnerProofActive(UUID entryId) {

@@ -1167,22 +1167,37 @@ and
 
 ## Media upload and processing
 
-1. The client asks `media-service` for an owner-scoped upload session using the
-   public gateway.
+1. The client asks `media-service` for an owner-scoped upload session through
+   the public gateway. A current Android still-image request declares exactly
+   `SMALL`, `MEDIUM` and `LARGE` WebP parts; their aggregate length cannot
+   exceed one MiB. For Worker evidence, task-board separately reserves their
+   aggregate byte count and the SHA-256 of the canonical ordered manifest. The
+   compatible source-upload request remains available for panel, video and
+   older clients.
 2. The service validates the authenticated warehouse and a service-owned proof
    that the referenced domain entity may own media.
-3. The client uploads bytes to the narrow media content route. Panel and
-   ManagerApp may run at most four independent transfers concurrently, preserve
-   selection order and release a transfer permit before READY polling. Object
-   storage remains private; clients never receive MinIO administration access.
+3. ManagerApp and WorkerApp physically orient a still image and durably encode
+   the three upload parts while keeping one phone-only original for local
+   display. They upload only the WebP parts through authenticated same-origin
+   variant PUT routes, using a stable idempotency key per part and bounded
+   photo/part concurrency. Panel, video and legacy clients stream their source
+   through the corresponding authenticated content route. Object storage
+   remains private; clients receive neither a MinIO address nor credentials.
    The panel immediately renders the selected local original, shows byte
    progress under that preview and enables cover/delete only after the scoped
    server item is ready. This disposable blob URL is never a media fact.
-4. Finalization records immutable media metadata and processing work.
-5. Image processing produces the declared image variants. An accepted video
-   retains its exact original and produces an MP4 `PLAYBACK` derivative through
-   startup-resolved ffmpeg and ffprobe executables, bounded duration and
-   output-byte budget.
+4. `media-service` verifies each streamed length, checksum, object version,
+   ETag and WebP type without reading the object back into an image decoder.
+   Finalization accepts only the complete persisted bundle and records its
+   immutable metadata. The Android app retains its local original and generated
+   parts through READY polling, then deletes them only after the media owner
+   reports the asset as `READY`.
+5. The worker promotes current Android image parts to READY without decoding or
+   transforming them. For a compatible legacy source image, it creates logical
+   variant aliases to the same pinned object. An accepted video retains its
+   exact original and produces an MP4 `PLAYBACK` derivative through
+   startup-resolved ffmpeg and ffprobe executables, bounded duration and output
+   bytes.
    Clients play only a scoped READY URL and never an object-store key.
 6. A fenced worker claims at most four processing attempts in one cycle. A
    transient dependency failure is scheduled after 1s/2s/4s; the fourth
@@ -1221,7 +1236,11 @@ Evidence:
 [`media-service startup`](../../services/media-service/cmd/media-service/main.go),
 [`media upload queue`](../../panel/src/features/media/media-upload-queue.ts),
 [`Manager media uploader`](../../app/src/main/java/dev/buhanzaz/rwms/manager/media/MediaUploader.kt),
+[`Manager image bundle encoder`](../../app/src/main/java/dev/buhanzaz/rwms/manager/media/ImageUploadBundleEncoder.kt),
+[`Worker image upload pipeline`](../../worker-app/core-media/src/main/java/dev/buhanzaz/rwms/worker/core/media/MediaUploadPipeline.kt),
+[`media upload API`](../../services/media-service/internal/api/server.go),
 [`V12__video_playback_variant.sql`](../../services/media-service/db/migration/V12__video_playback_variant.sql),
+[`V16__client_image_variants.sql`](../../services/media-service/db/migration/V16__client_image_variants.sql),
 [`processing_metrics.go`](../../services/media-service/internal/observability/processing_metrics.go),
 [`metrics_runtime.go`](../../services/media-service/cmd/media-service/metrics_runtime.go),
 [`V11__bounded_media_processing_recovery.sql`](../../services/media-service/db/migration/V11__bounded_media_processing_recovery.sql),

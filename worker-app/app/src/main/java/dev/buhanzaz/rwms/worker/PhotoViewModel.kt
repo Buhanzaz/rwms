@@ -8,12 +8,16 @@ import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient
 import dev.buhanzaz.rwms.worker.core.ui.decodeWorkerBitmap
 import dev.buhanzaz.rwms.worker.core.ui.readWorkerImageBytes
 import javax.inject.Inject
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 /**
@@ -36,6 +40,7 @@ class PhotoViewModel @Inject constructor(
     val state: StateFlow<PhotoUiState> = mutableState.asStateFlow()
     private var requestedGeneration = 0L
     private var requestedPaths: Set<String> = emptySet()
+    private val downloadPermits = Semaphore(MAX_PARALLEL_FULL_SCREEN_IMAGES)
 
     /**
      * Retains only the current pager window and loads its missing images. A cabin archive can
@@ -66,42 +71,59 @@ class PhotoViewModel @Inject constructor(
         if (missing.isEmpty()) return
         mutableState.value = current.copy(loading = current.loading + missing)
         viewModelScope.launch {
-            missing.forEach { path ->
-                try {
-                    val bitmap = withContext(Dispatchers.IO) {
-                        gateway.mediaContent(path).use { body ->
-                            val declaredSize = body.contentLength()
-                            require(declaredSize < 0 || declaredSize <= MAX_IMAGE_BYTES) {
-                                "Файл слишком большой для просмотра"
+            val loaded = supervisorScope {
+                missing.map { path ->
+                    async {
+                        path to try {
+                            val bitmap = downloadPermits.withPermit {
+                                withContext(Dispatchers.IO) {
+                                    gateway.mediaContent(path).use { body ->
+                                        val declaredSize = body.contentLength()
+                                        require(declaredSize < 0 || declaredSize <= MAX_IMAGE_BYTES) {
+                                            "Файл слишком большой для просмотра"
+                                        }
+                                        val bytes = body.byteStream().use { input ->
+                                            input.readWorkerImageBytes(MAX_IMAGE_BYTES)
+                                        }
+                                        decodeWorkerBitmap(bytes, MAX_FULL_SCREEN_PIXELS)
+                                    }
+                                }
                             }
-                            val bytes = body.byteStream().use { input ->
-                                input.readWorkerImageBytes(MAX_IMAGE_BYTES)
-                            }
-                            decodeWorkerBitmap(bytes, MAX_FULL_SCREEN_PIXELS)
+                            Result.success(bitmap)
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Throwable) {
+                            Result.failure(error)
                         }
                     }
-                    if (generation != requestedGeneration || path !in requestedPaths) {
-                        bitmap.recycle()
-                        return@forEach
-                    }
-                    val next = mutableState.value
-                    mutableState.value = next.copy(
-                        bitmaps = next.bitmaps + (path to bitmap),
-                        errors = next.errors - path,
-                        loading = next.loading - path,
-                    )
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Throwable) {
-                    if (generation != requestedGeneration || path !in requestedPaths) {
-                        return@forEach
-                    }
-                    val next = mutableState.value
-                    mutableState.value = next.copy(
-                        errors = next.errors + (path to (error.message ?: "Не удалось открыть фото")),
-                        loading = next.loading - path,
-                    )
-                }
+                }.map { request -> request.await() }
+            }
+            loaded.forEach { (path, result) ->
+                result.fold(
+                    onSuccess = { bitmap ->
+                        if (generation != requestedGeneration || path !in requestedPaths) {
+                            bitmap.recycle()
+                            return@fold
+                        }
+                        val next = mutableState.value
+                        mutableState.value = next.copy(
+                            bitmaps = next.bitmaps + (path to bitmap),
+                            errors = next.errors - path,
+                            loading = next.loading - path,
+                        )
+                    },
+                    onFailure = { error ->
+                        if (generation != requestedGeneration || path !in requestedPaths) {
+                            return@fold
+                        }
+                        val next = mutableState.value
+                        mutableState.value = next.copy(
+                            errors = next.errors +
+                                (path to (error.message ?: "Не удалось открыть фото")),
+                            loading = next.loading - path,
+                        )
+                    },
+                )
             }
         }
     }
@@ -116,5 +138,6 @@ class PhotoViewModel @Inject constructor(
     private companion object {
         const val MAX_IMAGE_BYTES = 15 * 1024 * 1024
         const val MAX_FULL_SCREEN_PIXELS = 4_000_000L
+        const val MAX_PARALLEL_FULL_SCREEN_IMAGES = 2
     }
 }

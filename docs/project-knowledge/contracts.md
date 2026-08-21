@@ -199,19 +199,30 @@ Completed content is immutable and cannot be reopened through this recovery
 path. Active panel and Android consumers already use the session returned by
 each create response, so the change is compatible with their durable retries.
 
-### Media Orientation
+### Media Image Bundles And Orientation
 
-`media-service.yaml` has no mutable photo-rotation operation. Android clients
-normalize a captured or gallery JPEG into upright pixel data before it enters a
-durable upload queue; media-service stores and derives variants from that
-supplied orientation without applying EXIF or requested rotation. The
-read-only `rotationDegrees` response field remains only so older persisted
+For a new still image, `media-service.yaml` accepts either the compatible
+single-source shape or exactly three declared `SMALL`, `MEDIUM` and `LARGE`
+WebP parts whose aggregate content length is at most one MiB. A bundle create
+omits the legacy top-level content fields, returns a nullable source URL plus
+one authenticated same-origin PUT URL per part, and finalizes with the exact
+object version, ETag and checksum of every part. The logical bundle checksum is
+the SHA-256 of the contract-defined ordered `rwms-image-variants-v1` manifest.
+No object-store key, MinIO origin or credential crosses the boundary.
+
+Android clients physically orient captured or gallery pixels before encoding
+the three parts. Media-service verifies and stores those supplied bytes without
+EXIF rotation, decoding or recompression. A legacy source image remains
+compatible by aliasing its one pinned object as the logical image variants.
+The read-only `rotationDegrees` response field remains only so older persisted
 assets can still be displayed compatibly; it is not a command for new media.
 
 Evidence: [`media-service.yaml`](../../contracts/openapi/media-service.yaml),
-[`ManagerCameraScreen.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/components/ManagerCameraScreen.kt),
-[`ManagerPhotos.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/components/ManagerPhotos.kt),
-[`image_processor.go`](../../services/media-service/internal/media/image_processor.go).
+[`media upload API`](../../services/media-service/internal/api/server.go),
+[`V16__client_image_variants.sql`](../../services/media-service/db/migration/V16__client_image_variants.sql),
+[`ImageUploadBundleEncoder.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/media/ImageUploadBundleEncoder.kt),
+and
+[`WorkerEvidenceBundlePreparer.kt`](../../worker-app/core-media/src/main/java/dev/buhanzaz/rwms/worker/core/media/WorkerEvidenceBundlePreparer.kt).
 
 ### Media Video Playback
 

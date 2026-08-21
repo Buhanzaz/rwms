@@ -176,14 +176,24 @@ class TaskQueueListComposeTest {
     }
 
     @Test
-    fun collapsedTaskOmitsDateAndShowsElapsedTimeThenOpensFullScreenTask() {
+    fun activeTaskOmitsDateAndShowsElapsedTimeWithKpiThenOpensFullScreenTask() {
         var openedEntryId: String? = null
         val section = TaskQueueSection(
             queueId = "repair",
             name = "Ремонты",
             queuePurpose = "GENERAL",
             sortOrder = 10,
-            tasks = listOf(task("timed-task").copy(activeWorkSeconds = 65)),
+            tasks = listOf(
+                task("timed-task").copy(
+                    status = "IN_PROGRESS",
+                    activeWorkSeconds = 65,
+                    timerCountedActiveSeconds = 65,
+                    timerRemainingSeconds = 65,
+                    timerRemainingPercent = 50.0,
+                    timerState = "WORKING",
+                    timerServerTime = "2026-08-10T10:00:00Z",
+                ),
+            ),
         )
         compose.setContent {
             MaterialTheme {
@@ -198,8 +208,36 @@ class TaskQueueListComposeTest {
 
         compose.onAllNodesWithText("Дата: 2026-08-10").assertCountEquals(0)
         compose.onNodeWithText("Время работы: 0:01:05").assertIsDisplayed()
+        compose.onNodeWithText("KPI: 50.0%").assertIsDisplayed()
         compose.onNodeWithText("Открыть задание").assertIsDisplayed().performClick()
         assertThat(openedEntryId).isEqualTo("timed-task")
+    }
+
+    @Test
+    fun waitingTaskShowsAllocatedTimeAndBareDifficultyOnce() {
+        val section = TaskQueueSection(
+            queueId = "repair",
+            name = "Ремонты",
+            queuePurpose = "GENERAL",
+            sortOrder = 10,
+            tasks = listOf(
+                task("waiting").copy(
+                    title = "Лёгкий ремонт",
+                    plannedDurationMinutes = 75,
+                ),
+            ),
+        )
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.size(width = 360.dp, height = 500.dp)) {
+                    TaskQueueList(sections = listOf(section), onTask = {})
+                }
+            }
+        }
+
+        compose.onNodeWithText("Выделенное время: 1:15:00").assertIsDisplayed()
+        compose.onAllNodesWithText("Легкий ремонт").assertCountEquals(1)
+        compose.onAllNodesWithText("Время работы: 0:00:00").assertCountEquals(0)
     }
 
     @Test
@@ -212,8 +250,16 @@ class TaskQueueListComposeTest {
             tasks = listOf(
                 task("metadata").copy(
                     categoryName = "Внутренние работы",
+                    status = "PAUSED",
                     priority = 4,
                     title = "Средний ремонт",
+                    routeIndex = 1,
+                    routeStepCount = 3,
+                    timerState = "PAUSED",
+                    timerServerTime = "2026-08-10T10:00:00Z",
+                    timerCountedActiveSeconds = 65,
+                    timerRemainingSeconds = 120,
+                    timerRemainingPercent = 75.0,
                 ),
             ),
         )
@@ -227,9 +273,13 @@ class TaskQueueListComposeTest {
 
         compose.onNodeWithTag("task-card-toggle-repair-metadata").performClick()
 
-        compose.onNodeWithText("Этап: Внутренние работы").assertIsDisplayed()
-        compose.onNodeWithText("Приоритет: 4").assertIsDisplayed()
-        compose.onNodeWithText("Ремонт: Средний ремонт").assertIsDisplayed()
+        compose.onNodeWithText("Этап 2 из 3").assertIsDisplayed()
+        compose.onNodeWithText("Приоритет 4").assertIsDisplayed()
+        compose.onNodeWithText("Средний ремонт").assertIsDisplayed()
+        compose.onNodeWithText("Загружено фото: 1").assertIsDisplayed()
+        compose.onAllNodesWithText("Ремонт: Средний ремонт").assertCountEquals(0)
+        compose.onAllNodesWithText("Пауза").assertCountEquals(0)
+        compose.onAllNodesWithText("осталось", substring = true).assertCountEquals(0)
     }
 
     @Test

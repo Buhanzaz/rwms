@@ -465,9 +465,23 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
             ((List<?>) child(schemas, "WorkerFeedEntry").get("required")).stream()
                 .map(String::valueOf)
                 .toList())
-        .contains("driverAudience");
+        .contains("routeStepCount", "driverAudience");
     assertThat(child(child(schemas, "WorkerFeedEntry"), "properties"))
-        .containsKey("driverAudience");
+        .containsKeys("routeStepCount", "driverAudience");
+    assertThat(
+            child(
+                child(child(schemas, "WorkerFeedEntry"), "properties"),
+                "routeStepCount"))
+        .containsEntry("minimum", 1);
+    Map<String, Object> evidenceReservation = child(schemas, "EvidenceReservationRequest");
+    assertThat(
+            child(child(evidenceReservation, "properties"), "contentType").get("enum"))
+        .isEqualTo(List.of("image/jpeg", "image/webp"));
+    assertThat(evidenceReservation.get("oneOf").toString())
+        .contains("image/jpeg", "15728640", "image/webp", "1048576");
+    assertThat(child(child(evidenceReservation, "properties"), "sha256").get("description"))
+        .asString()
+        .contains("manifest checksum");
     assertThat(child(schemas, "WorkerContext").get("required"))
         .asList()
         .contains("kpiPalette");

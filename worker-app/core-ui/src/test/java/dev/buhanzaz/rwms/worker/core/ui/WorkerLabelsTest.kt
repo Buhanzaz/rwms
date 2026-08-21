@@ -13,11 +13,19 @@ class WorkerLabelsTest {
 
     @Test
     fun `only canonical repair complexity titles are exposed`() {
-        assertThat(workerRepairComplexityLabel("Лёгкий ремонт")).isEqualTo("Лёгкий ремонт")
+        assertThat(workerRepairComplexityLabel("Лёгкий ремонт")).isEqualTo("Легкий ремонт")
         assertThat(workerRepairComplexityLabel("Средний ремонт")).isEqualTo("Средний ремонт")
-        assertThat(workerRepairComplexityLabel("Тяжёлый ремонт")).isEqualTo("Сложный ремонт")
+        assertThat(workerRepairComplexityLabel("Тяжёлый ремонт")).isEqualTo("Тяжелый ремонт")
         assertThat(workerRepairComplexityLabel("Капитальный ремонт")).isEqualTo("Капитальный ремонт")
         assertThat(workerRepairComplexityLabel("Maintenance repair")).isNull()
         assertThat(workerRepairComplexityLabel("Погрузка")).isNull()
+    }
+
+    @Test
+    fun `route stage is one based and never reports a total below current stage`() {
+        assertThat(workerTaskStageOrdinal(routeIndex = 0, routeStepCount = 2, separator = "/"))
+            .isEqualTo("1/2")
+        assertThat(workerTaskStageOrdinal(routeIndex = 2, routeStepCount = 1, separator = " из "))
+            .isEqualTo("3 из 3")
     }
 }

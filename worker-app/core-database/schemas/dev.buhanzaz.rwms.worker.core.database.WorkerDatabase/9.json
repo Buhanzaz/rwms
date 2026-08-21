@@ -1,0 +1,1088 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 9,
+    "identityHash": "93bcbdfddbe0abdea9219775d944e1c7",
+    "entities": [
+      {
+        "tableName": "worker_session",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`userId` TEXT NOT NULL, `displayName` TEXT NOT NULL, `login` TEXT, `warehouseId` TEXT, `leaseId` TEXT, `leaseExpiresAtEpochMillis` INTEGER, `serverEpochMillis` INTEGER, `elapsedRealtimeAtSyncMillis` INTEGER, `revision` INTEGER NOT NULL, `feedEtag` TEXT, `cacheHidden` INTEGER NOT NULL, `updatedAtEpochMillis` INTEGER NOT NULL, `currentGroupId` TEXT, `currentGroupName` TEXT, `operationalAvailability` TEXT NOT NULL DEFAULT 'AVAILABLE', `kpiPaletteJson` TEXT, PRIMARY KEY(`userId`))",
+        "fields": [
+          {
+            "fieldPath": "userId",
+            "columnName": "userId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "displayName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "login",
+            "columnName": "login",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "warehouseId",
+            "columnName": "warehouseId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "leaseId",
+            "columnName": "leaseId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "leaseExpiresAtEpochMillis",
+            "columnName": "leaseExpiresAtEpochMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "serverEpochMillis",
+            "columnName": "serverEpochMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "elapsedRealtimeAtSyncMillis",
+            "columnName": "elapsedRealtimeAtSyncMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "feedEtag",
+            "columnName": "feedEtag",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "cacheHidden",
+            "columnName": "cacheHidden",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtEpochMillis",
+            "columnName": "updatedAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentGroupId",
+            "columnName": "currentGroupId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "currentGroupName",
+            "columnName": "currentGroupName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "operationalAvailability",
+            "columnName": "operationalAvailability",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'AVAILABLE'"
+          },
+          {
+            "fieldPath": "kpiPaletteJson",
+            "columnName": "kpiPaletteJson",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "userId"
+          ]
+        }
+      },
+      {
+        "tableName": "worker_group",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` TEXT NOT NULL, `userId` TEXT NOT NULL, `groupId` TEXT NOT NULL, `name` TEXT NOT NULL, `workerClassId` TEXT NOT NULL, `workerClassName` TEXT NOT NULL, PRIMARY KEY(`localId`))",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "userId",
+            "columnName": "userId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "groupId",
+            "columnName": "groupId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "workerClassId",
+            "columnName": "workerClassId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "workerClassName",
+            "columnName": "workerClassName",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_worker_group_userId_name",
+            "unique": false,
+            "columnNames": [
+              "userId",
+              "name"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_worker_group_userId_name` ON `${TABLE_NAME}` (`userId`, `name`)"
+          }
+        ]
+      },
+      {
+        "tableName": "worker_category",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` TEXT NOT NULL, `userId` TEXT NOT NULL, `queueId` TEXT NOT NULL, `name` TEXT NOT NULL, `type` TEXT NOT NULL, `queuePurpose` TEXT NOT NULL DEFAULT 'GENERAL', `groupIdsKey` TEXT NOT NULL DEFAULT '', `sortOrder` INTEGER NOT NULL, `audienceModesKey` TEXT NOT NULL, `resultPhotoMinCount` INTEGER NOT NULL, `lastServerRevision` INTEGER NOT NULL, PRIMARY KEY(`localId`))",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "userId",
+            "columnName": "userId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "queueId",
+            "columnName": "queueId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "queuePurpose",
+            "columnName": "queuePurpose",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'GENERAL'"
+          },
+          {
+            "fieldPath": "groupIdsKey",
+            "columnName": "groupIdsKey",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "sortOrder",
+            "columnName": "sortOrder",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "audienceModesKey",
+            "columnName": "audienceModesKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "resultPhotoMinCount",
+            "columnName": "resultPhotoMinCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastServerRevision",
+            "columnName": "lastServerRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_worker_category_userId_queueId",
+            "unique": true,
+            "columnNames": [
+              "userId",
+              "queueId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_worker_category_userId_queueId` ON `${TABLE_NAME}` (`userId`, `queueId`)"
+          },
+          {
+            "name": "index_worker_category_userId_sortOrder_queueId",
+            "unique": false,
+            "columnNames": [
+              "userId",
+              "sortOrder",
+              "queueId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_worker_category_userId_sortOrder_queueId` ON `${TABLE_NAME}` (`userId`, `sortOrder`, `queueId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "worker_task",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` TEXT NOT NULL, `userId` TEXT NOT NULL, `entryId` TEXT NOT NULL, `taskId` TEXT NOT NULL, `version` INTEGER NOT NULL, `categoryId` TEXT NOT NULL, `categoryName` TEXT NOT NULL, `categorySortOrder` INTEGER NOT NULL, `title` TEXT NOT NULL, `unitNumber` TEXT, `taskText` TEXT, `scheduledDate` TEXT NOT NULL, `deadlineAt` TEXT, `priority` INTEGER NOT NULL, `queuePosition` INTEGER NOT NULL, `status` TEXT NOT NULL, `availabilityMode` TEXT NOT NULL, `plannedDurationMinutes` INTEGER, `activeStartedAt` TEXT, `activeWorkSeconds` INTEGER NOT NULL, `readyEvidenceCount` INTEGER NOT NULL, `resultPhotoMinCount` INTEGER NOT NULL, `lastServerRevision` INTEGER NOT NULL, `locallyPending` INTEGER NOT NULL, `updatedAtEpochMillis` INTEGER NOT NULL, `timerCountedActiveSeconds` INTEGER, `timerRemainingSeconds` INTEGER, `timerRemainingPercent` REAL, `timerState` TEXT, `timerNextTransitionAt` TEXT, `timerServerTime` TEXT, `routeIndex` INTEGER NOT NULL DEFAULT 0, `routeStepCount` INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(`localId`))",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "userId",
+            "columnName": "userId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "entryId",
+            "columnName": "entryId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "taskId",
+            "columnName": "taskId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "version",
+            "columnName": "version",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryId",
+            "columnName": "categoryId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryName",
+            "columnName": "categoryName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categorySortOrder",
+            "columnName": "categorySortOrder",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "unitNumber",
+            "columnName": "unitNumber",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "taskText",
+            "columnName": "taskText",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "scheduledDate",
+            "columnName": "scheduledDate",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deadlineAt",
+            "columnName": "deadlineAt",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "priority",
+            "columnName": "priority",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "queuePosition",
+            "columnName": "queuePosition",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "availabilityMode",
+            "columnName": "availabilityMode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "plannedDurationMinutes",
+            "columnName": "plannedDurationMinutes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "activeStartedAt",
+            "columnName": "activeStartedAt",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "activeWorkSeconds",
+            "columnName": "activeWorkSeconds",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "readyEvidenceCount",
+            "columnName": "readyEvidenceCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "resultPhotoMinCount",
+            "columnName": "resultPhotoMinCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastServerRevision",
+            "columnName": "lastServerRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "locallyPending",
+            "columnName": "locallyPending",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtEpochMillis",
+            "columnName": "updatedAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timerCountedActiveSeconds",
+            "columnName": "timerCountedActiveSeconds",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "timerRemainingSeconds",
+            "columnName": "timerRemainingSeconds",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "timerRemainingPercent",
+            "columnName": "timerRemainingPercent",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "timerState",
+            "columnName": "timerState",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "timerNextTransitionAt",
+            "columnName": "timerNextTransitionAt",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "timerServerTime",
+            "columnName": "timerServerTime",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "routeIndex",
+            "columnName": "routeIndex",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "routeStepCount",
+            "columnName": "routeStepCount",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "1"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_worker_task_userId_categorySortOrder_queuePosition",
+            "unique": false,
+            "columnNames": [
+              "userId",
+              "categorySortOrder",
+              "queuePosition"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_worker_task_userId_categorySortOrder_queuePosition` ON `${TABLE_NAME}` (`userId`, `categorySortOrder`, `queuePosition`)"
+          },
+          {
+            "name": "index_worker_task_userId_entryId",
+            "unique": true,
+            "columnNames": [
+              "userId",
+              "entryId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_worker_task_userId_entryId` ON `${TABLE_NAME}` (`userId`, `entryId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "worker_assignment",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` TEXT NOT NULL, `userId` TEXT NOT NULL, `entryId` TEXT NOT NULL, `assignmentId` TEXT NOT NULL, `workerId` TEXT, `workerName` TEXT, `workerGroupId` TEXT, `workerGroupName` TEXT, `status` TEXT NOT NULL, `assignedAt` TEXT NOT NULL, `startedAt` TEXT, `pausedAt` TEXT, `finishedAt` TEXT, PRIMARY KEY(`localId`))",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "userId",
+            "columnName": "userId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "entryId",
+            "columnName": "entryId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assignmentId",
+            "columnName": "assignmentId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "workerId",
+            "columnName": "workerId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "workerName",
+            "columnName": "workerName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "workerGroupId",
+            "columnName": "workerGroupId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "workerGroupName",
+            "columnName": "workerGroupName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assignedAt",
+            "columnName": "assignedAt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startedAt",
+            "columnName": "startedAt",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pausedAt",
+            "columnName": "pausedAt",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "finishedAt",
+            "columnName": "finishedAt",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_worker_assignment_userId_entryId",
+            "unique": false,
+            "columnNames": [
+              "userId",
+              "entryId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_worker_assignment_userId_entryId` ON `${TABLE_NAME}` (`userId`, `entryId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "worker_task_detail",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` TEXT NOT NULL, `userId` TEXT NOT NULL, `entryId` TEXT NOT NULL, `version` INTEGER NOT NULL, `sanitizedDetailJson` TEXT NOT NULL, `fetchedAtEpochMillis` INTEGER NOT NULL, PRIMARY KEY(`localId`))",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "userId",
+            "columnName": "userId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "entryId",
+            "columnName": "entryId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "version",
+            "columnName": "version",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sanitizedDetailJson",
+            "columnName": "sanitizedDetailJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fetchedAtEpochMillis",
+            "columnName": "fetchedAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "localId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_worker_task_detail_userId_entryId",
+            "unique": true,
+            "columnNames": [
+              "userId",
+              "entryId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_worker_task_detail_userId_entryId` ON `${TABLE_NAME}` (`userId`, `entryId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "worker_outbox",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`operationId` TEXT NOT NULL, `userId` TEXT NOT NULL, `entryId` TEXT NOT NULL, `kind` TEXT NOT NULL, `encryptedPayload` TEXT NOT NULL, `expectedVersion` INTEGER, `state` TEXT NOT NULL, `retryCount` INTEGER NOT NULL, `createdAtEpochMillis` INTEGER NOT NULL, `updatedAtEpochMillis` INTEGER NOT NULL, `lastError` TEXT, PRIMARY KEY(`operationId`))",
+        "fields": [
+          {
+            "fieldPath": "operationId",
+            "columnName": "operationId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "userId",
+            "columnName": "userId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "entryId",
+            "columnName": "entryId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "encryptedPayload",
+            "columnName": "encryptedPayload",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "expectedVersion",
+            "columnName": "expectedVersion",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "retryCount",
+            "columnName": "retryCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtEpochMillis",
+            "columnName": "createdAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtEpochMillis",
+            "columnName": "updatedAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastError",
+            "columnName": "lastError",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "operationId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_worker_outbox_userId_state_createdAtEpochMillis",
+            "unique": false,
+            "columnNames": [
+              "userId",
+              "state",
+              "createdAtEpochMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_worker_outbox_userId_state_createdAtEpochMillis` ON `${TABLE_NAME}` (`userId`, `state`, `createdAtEpochMillis`)"
+          },
+          {
+            "name": "index_worker_outbox_entryId",
+            "unique": false,
+            "columnNames": [
+              "entryId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_worker_outbox_entryId` ON `${TABLE_NAME}` (`entryId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "task_evidence",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`evidenceId` TEXT NOT NULL, `userId` TEXT NOT NULL, `entryId` TEXT NOT NULL, `routeIndex` INTEGER NOT NULL, `capturedAt` TEXT NOT NULL, `encryptedFilePath` TEXT NOT NULL, `fileName` TEXT NOT NULL, `contentType` TEXT NOT NULL, `sizeBytes` INTEGER NOT NULL, `sha256` TEXT NOT NULL, `reservationOperationId` TEXT NOT NULL, `uploadOperationId` TEXT NOT NULL, `state` TEXT NOT NULL, `mediaId` TEXT, `mediaGeneration` INTEGER, `reviewReason` TEXT, `uploadPercent` INTEGER NOT NULL, `lastError` TEXT, `createdAtEpochMillis` INTEGER NOT NULL, `updatedAtEpochMillis` INTEGER NOT NULL, `variantManifestJson` TEXT NOT NULL DEFAULT '[]', PRIMARY KEY(`evidenceId`))",
+        "fields": [
+          {
+            "fieldPath": "evidenceId",
+            "columnName": "evidenceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "userId",
+            "columnName": "userId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "entryId",
+            "columnName": "entryId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "routeIndex",
+            "columnName": "routeIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "capturedAt",
+            "columnName": "capturedAt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "encryptedFilePath",
+            "columnName": "encryptedFilePath",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fileName",
+            "columnName": "fileName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentType",
+            "columnName": "contentType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sizeBytes",
+            "columnName": "sizeBytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sha256",
+            "columnName": "sha256",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reservationOperationId",
+            "columnName": "reservationOperationId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "uploadOperationId",
+            "columnName": "uploadOperationId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaId",
+            "columnName": "mediaId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "mediaGeneration",
+            "columnName": "mediaGeneration",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "reviewReason",
+            "columnName": "reviewReason",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "uploadPercent",
+            "columnName": "uploadPercent",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastError",
+            "columnName": "lastError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAtEpochMillis",
+            "columnName": "createdAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtEpochMillis",
+            "columnName": "updatedAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "variantManifestJson",
+            "columnName": "variantManifestJson",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'[]'"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "evidenceId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_task_evidence_userId_entryId",
+            "unique": false,
+            "columnNames": [
+              "userId",
+              "entryId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_task_evidence_userId_entryId` ON `${TABLE_NAME}` (`userId`, `entryId`)"
+          },
+          {
+            "name": "index_task_evidence_userId_state",
+            "unique": false,
+            "columnNames": [
+              "userId",
+              "state"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_task_evidence_userId_state` ON `${TABLE_NAME}` (`userId`, `state`)"
+          }
+        ]
+      },
+      {
+        "tableName": "worker_sync_progress",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`userId` TEXT NOT NULL, `stage` TEXT NOT NULL, `completedUnits` INTEGER NOT NULL, `totalUnits` INTEGER NOT NULL, `activeEvidenceId` TEXT, `activeEvidencePercent` INTEGER, `message` TEXT, `updatedAtEpochMillis` INTEGER NOT NULL, PRIMARY KEY(`userId`))",
+        "fields": [
+          {
+            "fieldPath": "userId",
+            "columnName": "userId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stage",
+            "columnName": "stage",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "completedUnits",
+            "columnName": "completedUnits",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalUnits",
+            "columnName": "totalUnits",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "activeEvidenceId",
+            "columnName": "activeEvidenceId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "activeEvidencePercent",
+            "columnName": "activeEvidencePercent",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message",
+            "columnName": "message",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "updatedAtEpochMillis",
+            "columnName": "updatedAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "userId"
+          ]
+        }
+      },
+      {
+        "tableName": "worker_conflict",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`operationId` TEXT NOT NULL, `userId` TEXT NOT NULL, `entryId` TEXT NOT NULL, `code` TEXT NOT NULL, `message` TEXT NOT NULL, `currentVersion` INTEGER, `encryptedCurrentEntry` TEXT, `createdAtEpochMillis` INTEGER NOT NULL, `resolvedAtEpochMillis` INTEGER, PRIMARY KEY(`operationId`))",
+        "fields": [
+          {
+            "fieldPath": "operationId",
+            "columnName": "operationId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "userId",
+            "columnName": "userId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "entryId",
+            "columnName": "entryId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "code",
+            "columnName": "code",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "message",
+            "columnName": "message",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentVersion",
+            "columnName": "currentVersion",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "encryptedCurrentEntry",
+            "columnName": "encryptedCurrentEntry",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAtEpochMillis",
+            "columnName": "createdAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "resolvedAtEpochMillis",
+            "columnName": "resolvedAtEpochMillis",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "operationId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_worker_conflict_userId_createdAtEpochMillis",
+            "unique": false,
+            "columnNames": [
+              "userId",
+              "createdAtEpochMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_worker_conflict_userId_createdAtEpochMillis` ON `${TABLE_NAME}` (`userId`, `createdAtEpochMillis`)"
+          }
+        ]
+      },
+      {
+        "tableName": "worker_invalidation",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`eventId` TEXT NOT NULL, `userId` TEXT NOT NULL, `revision` INTEGER NOT NULL, `type` TEXT NOT NULL, `entryId` TEXT, `occurredAt` TEXT NOT NULL, PRIMARY KEY(`eventId`))",
+        "fields": [
+          {
+            "fieldPath": "eventId",
+            "columnName": "eventId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "userId",
+            "columnName": "userId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "entryId",
+            "columnName": "entryId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "occurredAt",
+            "columnName": "occurredAt",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "eventId"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '93bcbdfddbe0abdea9219775d944e1c7')"
+    ]
+  }
+}

@@ -15,15 +15,22 @@ fun workerTaskStageLabel(value: String?): String? =
         if (TECHNICAL_MAINTENANCE_LABEL.matches(label)) "Работы" else label
     }
 
-/** Returns only source-owned repair-complexity titles and normalizes the former heavy label. */
+/** Returns only source-owned repair-complexity titles using the worker-facing three-level scale. */
 fun workerRepairComplexityLabel(value: String?): String? =
     when (value?.trim()?.lowercase()) {
-        "лёгкий ремонт", "легкий ремонт" -> "Лёгкий ремонт"
+        "лёгкий ремонт", "легкий ремонт" -> "Легкий ремонт"
         "средний ремонт" -> "Средний ремонт"
-        "сложный ремонт", "тяжёлый ремонт", "тяжелый ремонт" -> "Сложный ремонт"
+        "сложный ремонт", "тяжёлый ремонт", "тяжелый ремонт" -> "Тяжелый ремонт"
         "капитальный ремонт" -> "Капитальный ремонт"
         else -> null
     }
+
+/** Formats the zero-based server route index against its authoritative route size. */
+fun workerTaskStageOrdinal(routeIndex: Int, routeStepCount: Int, separator: String): String {
+    val current = routeIndex.coerceAtLeast(0) + 1
+    val total = routeStepCount.coerceAtLeast(current)
+    return "$current$separator$total"
+}
 
 private val UUID_PATTERN = Regex(
     pattern = """(?i)(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-f])""",

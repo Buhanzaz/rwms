@@ -104,7 +104,7 @@ class TaskQueueSectionsTest {
     }
 
     @Test
-    fun `renders frozen break timer from the server snapshot`() {
+    fun `renders elapsed work and KPI from the server timer snapshot`() {
         val timer = queueTaskTimerPresentation(
             task("entry", "repair", "Ремонты", 10, 0).copy(
                 timerCountedActiveSeconds = 1_200,
@@ -119,9 +119,7 @@ class TaskQueueSectionsTest {
         assertThat(timer).isEqualTo(
             QueueTaskTimerPresentation(
                 elapsed = "0:20:00",
-                remaining = "0:40:00",
                 percent = "66.7%",
-                state = "Перерыв · таймер остановлен",
             ),
         )
     }

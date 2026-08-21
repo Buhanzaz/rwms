@@ -129,6 +129,7 @@ public final class WorkerApiModels {
    * One worker-visible route entry with a server-owned classification for ordinary versus
    * logistics-driver tables.
    *
+   * @param routeStepCount positive number of steps in the task's authoritative route
    * @param driverAudience logistics driver audience, or {@code null} for ordinary work
    */
   public record WorkerFeedEntry(
@@ -136,6 +137,7 @@ public final class WorkerApiModels {
       long version,
       UUID taskId,
       int routeIndex,
+      int routeStepCount,
       String title,
       String unitNumber,
       String taskText,

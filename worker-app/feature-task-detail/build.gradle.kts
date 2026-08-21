@@ -23,6 +23,7 @@ dependencies {
     implementation(project(":core-database"))
     implementation(project(":core-sync"))
     implementation(project(":core-network"))
+    implementation(project(":core-media"))
     implementation(project(":core-ui"))
     implementation(libs.bundles.compose)
     implementation(libs.compose.material.icons)
