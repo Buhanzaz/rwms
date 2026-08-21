@@ -228,13 +228,14 @@ internal fun RoutingSnapshotDto.routingLabel(): String =
     listOf(queueName.trim(), queueType.trim()).filter(String::isNotEmpty).joinToString(" · ")
 
 /**
- * The task-board snapshot is the live directory of queues. Catalog snapshots are intentionally
+ * The aggregate task-board snapshot is the live directory of queues. Catalog snapshots are intentionally
  * not used as the only source here: a catalog may reference a route that was subsequently
  * removed or disabled in the board settings.
  */
-internal fun List<TaskBoardSnapshotDto>.maintenanceWorkRoutingOptions(): List<RoutingSnapshotDto> =
-    asSequence()
-        .flatMap { board -> board.columns.asSequence() }
+internal fun TaskBoardSnapshotDto?.maintenanceWorkRoutingOptions(): List<RoutingSnapshotDto> =
+    this?.columns
+        .orEmpty()
+        .asSequence()
         .filter { column -> column.queueType in setOf("REPAIR", "HOLDING") }
         .map(TaskBoardColumnDto::toMaintenanceRouting)
         .filter(RoutingSnapshotDto::isUsableMaintenanceRouting)

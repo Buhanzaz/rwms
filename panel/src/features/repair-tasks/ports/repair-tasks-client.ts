@@ -29,7 +29,6 @@ export class RepairTaskQueueDraftPersistedError extends Error {
 }
 
 export interface RepairTasksClient {
-  list(warehouseId: string): Promise<RepairTaskDto[]>
   listPendingAcceptance(warehouseId: string): Promise<RepairTaskDto[]>
   getById(taskId: string, warehouseId: string): Promise<RepairTaskDto | null>
   getBySourceEstimateId(

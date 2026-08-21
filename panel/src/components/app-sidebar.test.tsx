@@ -173,18 +173,15 @@ beforeAll(() => {
 })
 
 describe("AppSidebar collapsed desktop navigation", () => {
-  it("places movement inside the repair cycle between repairs and the task board", () => {
+  it("keeps movement and the single task board without a legacy repairs link", () => {
     renderSidebar({ open: true })
 
-    const repairs = screen.getByRole("link", { name: "Ремонты" })
     const movement = screen.getByRole("link", { name: "Перемещение" })
     const taskBoard = screen.getByRole("link", { name: "Доска задач" })
 
+    expect(screen.queryByRole("link", { name: "Ремонты" })).toBeNull()
     expect(movement.getAttribute("href")).toBe("/logistics/tasks")
-    expect(
-      repairs.compareDocumentPosition(movement) &
-        Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy()
+    expect(taskBoard.getAttribute("href")).toBe("/task-board")
     expect(
       movement.compareDocumentPosition(taskBoard) &
         Node.DOCUMENT_POSITION_FOLLOWING

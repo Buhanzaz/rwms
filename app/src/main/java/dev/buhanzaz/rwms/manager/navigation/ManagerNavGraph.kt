@@ -635,8 +635,6 @@ private fun AuthenticatedManagerNavGraph(
                         }
                     }
                 },
-                onMoveQueueEntry = viewModel::moveRepairQueueEntry,
-                onSwapQueueDateColumns = viewModel::swapRepairQueueDateColumns,
             )
         }
         composable(ManagerRoute.Acceptance.route) {

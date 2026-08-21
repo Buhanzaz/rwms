@@ -58,6 +58,7 @@ const movementDefinition: QueueDefinitionDto = {
   notificationThreshold: null,
   notifyWhenThresholdReached: false,
   resultPhotoMinCount: 1,
+  availableTaskLimit: 6,
   bindings: [
     {
       id: "binding-driver",
@@ -239,6 +240,7 @@ describe("QueueDefinitionEditorDialog", () => {
       notificationThreshold: null,
       notifyWhenThresholdReached: false,
       resultPhotoMinCount: 1,
+      availableTaskLimit: 6,
       bindings: [
         {
           workerClassId: driverClass.id,

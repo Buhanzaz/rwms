@@ -62,8 +62,8 @@ internal class ManagerMaintenanceEditorCoordinator(
     private suspend fun refreshMaintenance(force: Boolean = false) =
         maintenanceRefresh.refreshMaintenance(force)
 
-    private suspend fun refreshRepairTaskBoards(force: Boolean = false) =
-        maintenanceRefresh.refreshRepairTaskBoards(force)
+    private suspend fun refreshRepairTaskBoard(force: Boolean = false) =
+        maintenanceRefresh.refreshRepairTaskBoard(force)
 
     private suspend fun maintenanceRentalItem(
         rentalItemId: String,
@@ -91,7 +91,7 @@ internal class ManagerMaintenanceEditorCoordinator(
     ) = command {
         val warehouseId = requireWarehouseId()
         ensureMaintenanceCatalog(warehouseId)
-        refreshRepairTaskBoards()
+        refreshRepairTaskBoard()
         assetSearchGeneration += 1
         mutableState.update {
             it.withStartedMaintenanceEditor(newMaintenanceEditor(mode))
@@ -102,7 +102,7 @@ internal class ManagerMaintenanceEditorCoordinator(
     fun openEstimateEditor(id: String, onReady: () -> Unit) = command {
         val warehouseId = requireWarehouseId()
         ensureMaintenanceCatalog(warehouseId)
-        refreshRepairTaskBoards()
+        refreshRepairTaskBoard()
         val estimate = backend.api.estimate(id, warehouseId)
         val linkedRepair = estimate.repairId?.let { repairId ->
             backend.api.repair(repairId, warehouseId)
@@ -184,7 +184,7 @@ internal class ManagerMaintenanceEditorCoordinator(
     fun openRepairEditor(id: String, onReady: () -> Unit) = command {
         val warehouseId = requireWarehouseId()
         ensureMaintenanceCatalog(warehouseId)
-        refreshRepairTaskBoards()
+        refreshRepairTaskBoard()
         val repair = backend.api.repair(id, warehouseId)
         val linkedEstimate = repair.estimateId?.let { estimateId ->
             backend.api.estimate(estimateId, warehouseId)
@@ -293,7 +293,7 @@ internal class ManagerMaintenanceEditorCoordinator(
     ) = command {
         val warehouseId = requireWarehouseId()
         ensureMaintenanceCatalog(warehouseId)
-        refreshRepairTaskBoards()
+        refreshRepairTaskBoard()
         val source = backend.api.repair(sourceRepairId, warehouseId)
         if (source.executionState != "COMPLETED" || source.acceptanceState != "PENDING") {
             throw IllegalStateException("Ремонт больше не ожидает приёмки")

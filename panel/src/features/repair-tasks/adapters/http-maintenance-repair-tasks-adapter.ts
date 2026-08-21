@@ -700,47 +700,7 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
   }
 
   private async board(accessToken: string, warehouseId: string) {
-    const initial = await getTaskBoard(accessToken, warehouseId)
-    const additional = await Promise.all(
-      initial.availableDates
-        .filter((date) => date !== initial.selectedDate)
-        .map((date) => getTaskBoard(accessToken, warehouseId, date))
-    )
-    if (additional.length === 0) return initial
-    const queueByKey = new Map(
-      initial.queues.map((queue) => [
-        queue.key,
-        { ...queue, entries: [...queue.entries] },
-      ])
-    )
-    additional.forEach((board) => {
-      board.queues.forEach((queue) => {
-        const current = queueByKey.get(queue.key)
-        if (!current) {
-          queueByKey.set(queue.key, {
-            ...queue,
-            entries: [...queue.entries],
-          })
-          return
-        }
-        const entryIds = new Set(current.entries.map((entry) => entry.id))
-        current.entries.push(
-          ...queue.entries.filter((entry) => !entryIds.has(entry.id))
-        )
-      })
-    })
-    const queues = [...queueByKey.values()]
-    const entries = queues.flatMap((queue) => queue.entries)
-    return {
-      warehouseId,
-      selectedDate: null,
-      availableDates: initial.availableDates,
-      queues,
-      totalEntries: entries.length,
-      realEntries: entries.filter((entry) => entry.entryType === "REAL").length,
-      shadowEntries: entries.filter((entry) => entry.entryType === "SHADOW")
-        .length,
-    }
+    return getTaskBoard(accessToken, warehouseId)
   }
 
   private async projection(
@@ -760,19 +720,6 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
       return projection ? { readyAt: projection.readyAt } : undefined
     }
     return undefined
-  }
-
-  async list(warehouseId: string) {
-    const accessToken = await this.tokenProvider()
-    const [page, board] = await Promise.all([
-      listMaintenanceRepairs(accessToken, warehouseId),
-      this.board(accessToken, warehouseId),
-    ])
-    return Promise.all(
-      page.items
-        .filter((repair) => repair.complexity.type !== "CAPITAL")
-        .map((repair) => toTask(repair, this.rentalItemsClient, board))
-    )
   }
 
   async listPendingAcceptance(warehouseId: string) {

@@ -42,10 +42,6 @@ export const REPAIR_TASK_RENTAL_ITEMS_QUERY_KEY = [
 const repairTasksClient: RepairTasksClient =
   new HttpMaintenanceRepairTasksAdapter(panelRepairTaskRentalItemsClient)
 
-export function repairTasksListQueryKey(warehouseId: string) {
-  return [...REPAIR_TASKS_QUERY_KEY, "list", warehouseId] as const
-}
-
 export function repairTaskDetailQueryKey(
   warehouseId: string,
   taskId: string | null
@@ -80,10 +76,6 @@ export function repairTaskBySourceEstimateQueryKey(
 
 export function repairAcceptanceListQueryKey(warehouseId: string) {
   return [...REPAIR_TASKS_QUERY_KEY, "acceptance", warehouseId] as const
-}
-
-export function listRepairTasks(warehouseId: string) {
-  return repairTasksClient.list(warehouseId)
 }
 
 export function listPendingRepairAcceptance(warehouseId: string) {

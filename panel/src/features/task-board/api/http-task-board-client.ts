@@ -211,6 +211,11 @@ function parseBoard(value: unknown): TaskBoardSnapshotDto {
       kind,
       settingsQueueId: queueId,
       settingsCollapsed: false,
+      availableTaskLimit: (() => {
+        const limit = integer(column.availableTaskLimit)
+        if (limit < 1 || limit > 50) invalid()
+        return limit
+      })(),
       entries: list(column.entries).map((value) =>
         entry(value, warehouseId, queueId)
       ),
@@ -229,8 +234,6 @@ function parseBoard(value: unknown): TaskBoardSnapshotDto {
   })
   return {
     warehouseId,
-    selectedDate: nullableText(source.selectedDate),
-    availableDates: list(source.availableDates).map(text),
     queues,
     totalEntries: entries.length,
     realEntries: entries.filter((item) => item.entryType === "REAL").length,
@@ -251,19 +254,12 @@ function command(entry: TaskBoardEntryDto, effect: string, body: unknown) {
 
 export async function getHttpTaskBoard(
   accessToken: string,
-  warehouseId: string,
-  date?: string | null
+  warehouseId: string
 ) {
-  const endpoint = new URL(
-    `${TASK_BOARD_API}/warehouses/${encodeURIComponent(warehouseId)}/task-board`,
-    window.location.origin
-  )
-  endpoint.searchParams.set("includeShadow", "true")
-  if (date) endpoint.searchParams.set("date", date)
   return parseBoard(
     await bearerRequest<unknown>(
       accessToken,
-      `${endpoint.pathname}${endpoint.search}`
+      `${TASK_BOARD_API}/warehouses/${encodeURIComponent(warehouseId)}/task-board`
     )
   )
 }
@@ -276,25 +272,6 @@ export function listHttpEligibleWorkerGroups(
   return bearerRequest<WorkerGroupDto[]>(
     accessToken,
     `${TASK_BOARD_API}/warehouses/${encodeURIComponent(warehouseId)}/task-board/queues/${encodeURIComponent(queueId)}/eligible-groups`
-  )
-}
-
-export function moveHttpTaskBoardEntry(
-  accessToken: string,
-  entry: TaskBoardEntryDto,
-  targetQueueId: string,
-  targetIndex: number,
-  targetDate: string
-) {
-  const request = command(entry, "move", {
-    expectedVersion: entry.version,
-    expectedTaskVersion: entry.taskVersion,
-    targetQueueId,
-    targetIndex,
-    targetDate,
-  })
-  return bearerRequest<unknown>(accessToken, request.url, request.init).then(
-    parseBoard
   )
 }
 

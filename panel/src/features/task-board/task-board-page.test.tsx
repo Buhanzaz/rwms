@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   useWarehouse: vi.fn(),
   getTaskBoard: vi.fn(),
   getKpiSettings: vi.fn(),
-  getMaintenanceRepair: vi.fn(),
+  listMaintenanceRepairs: vi.fn(),
 }))
 
 vi.mock("@/features/auth/use-auth", () => ({ useAuth: mocks.useAuth }))
@@ -41,11 +41,10 @@ vi.mock("@/features/settings/kpi/api/kpi-settings-api", async () => {
 })
 vi.mock(
   "@/features/repair-estimates/api/http-maintenance-lifecycle-client",
-  () => ({ getMaintenanceRepair: mocks.getMaintenanceRepair })
+  () => ({ listMaintenanceRepairs: mocks.listMaintenanceRepairs })
 )
 vi.mock("@/features/task-board/task-board-column", () => ({
   TaskBoardColumn: ({
-    dragDisabled,
     actionPending,
     queueActionsDisabled,
     visibleEntries,
@@ -53,7 +52,6 @@ vi.mock("@/features/task-board/task-board-column", () => ({
     palette,
     repairComplexitiesByRepairId,
   }: {
-    dragDisabled: boolean
     actionPending: boolean
     queueActionsDisabled: boolean
     visibleEntries: TaskBoardEntryDto[]
@@ -68,9 +66,7 @@ vi.mock("@/features/task-board/task-board-column", () => ({
       data-testid="task-board-command-state"
       data-palette-color={palette?.ranges[0]?.color}
     >
-      {dragDisabled && actionPending && queueActionsDisabled
-        ? "read-only"
-        : "editable"}
+      {actionPending && queueActionsDisabled ? "read-only" : "editable"}
       <span data-testid="visible-task-external-ids">
         {visibleEntries
           .map((entry) => entry.externalTaskId ?? entry.taskId)
@@ -98,8 +94,6 @@ vi.mock("@/features/task-board/task-board-column", () => ({
 const WAREHOUSE_ID = "00000000-0000-4000-8000-000000000001"
 const board: TaskBoardSnapshotDto = {
   warehouseId: WAREHOUSE_ID,
-  selectedDate: "2026-07-18",
-  availableDates: ["2026-07-18"],
   queues: [
     {
       key: "repair",
@@ -107,6 +101,7 @@ const board: TaskBoardSnapshotDto = {
       kind: "REPAIR",
       settingsQueueId: "00000000-0000-4000-8000-000000000002",
       settingsCollapsed: false,
+      availableTaskLimit: 6,
       entries: [],
     },
   ],
@@ -175,10 +170,22 @@ function renderPage(
     currentBoard = board,
     initialEntry = "/",
     maintenanceRepairs = [],
+    maintenancePage,
   }: {
     currentBoard?: TaskBoardSnapshotDto
     initialEntry?: string
     maintenanceRepairs?: RepairComplexityFixture[]
+    maintenancePage?: (filters: {
+      executionState?: string
+      repairIds?: readonly string[]
+      page?: number
+      size?: number
+    }) => Promise<{
+      items: RepairComplexityFixture[]
+      page: number
+      size: number
+      totalElements: number
+    }>
   } = {}
 ) {
   mocks.useAuth.mockReturnValue({
@@ -212,16 +219,18 @@ function renderPage(
     activeSchedule: null,
     pendingSchedule: null,
   })
-  mocks.getMaintenanceRepair.mockImplementation(
-    (_accessToken: string, _warehouseId: string, repairId: string) => {
-      const repair = maintenanceRepairs.find(
-        (candidate) => candidate.id === repairId
-      )
-      return repair
-        ? Promise.resolve(repair)
-        : Promise.reject(new Error(`Не найден ремонт ${repairId}.`))
-    }
-  )
+  if (maintenancePage) {
+    mocks.listMaintenanceRepairs.mockImplementation(
+      (_token, _warehouse, filters) => maintenancePage(filters)
+    )
+  } else {
+    mocks.listMaintenanceRepairs.mockResolvedValue({
+      items: maintenanceRepairs,
+      page: 0,
+      size: 200,
+      totalElements: maintenanceRepairs.length,
+    })
+  }
 
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
@@ -263,20 +272,11 @@ describe("task board warehouse access", () => {
       search.closest('[data-slot="page-toolbar-content"]')?.className
     ).toContain("max-w-xl")
 
-    const dateSelector = await screen.findByRole("region", {
-      name: "Дата очереди",
-    })
-    for (const label of ["Предыдущие даты", "Следующие даты"]) {
-      const button = screen.getByRole("button", { name: label })
-      expect(button.getAttribute("data-size")).toBe("icon")
-      expect(button.classList.contains("size-9")).toBe(true)
-    }
-    const dateButtons = dateSelector.querySelectorAll("button[aria-pressed]")
-    expect(dateButtons).toHaveLength(7)
-    for (const button of dateButtons) {
-      expect(button.getAttribute("data-size")).toBe("default")
-      expect(button.classList.contains("h-9")).toBe(true)
-    }
+    expect(screen.queryByRole("region", { name: "Дата очереди" })).toBeNull()
+    expect(mocks.getTaskBoard).toHaveBeenCalledWith(
+      "task-board-token",
+      WAREHOUSE_ID
+    )
 
     const createButton = screen.getByRole("button", {
       name: "Создать задание",
@@ -301,7 +301,7 @@ describe("task board warehouse access", () => {
     })
   })
 
-  it("loads service-issued complexity for each distinct maintenance source", async () => {
+  it("loads service-issued complexities in bounded active-repair requests", async () => {
     const firstRepairId = "repair-1"
     const secondRepairId = "repair-2"
     const currentBoard: TaskBoardSnapshotDto = {
@@ -358,16 +358,69 @@ describe("task board warehouse access", () => {
         screen.getByTestId("visible-repair-complexities").textContent
       ).toBe("Лёгкий ремонт,Тяжёлый ремонт")
     })
-    expect(mocks.getMaintenanceRepair).toHaveBeenCalledTimes(2)
-    expect(mocks.getMaintenanceRepair).toHaveBeenCalledWith(
+    expect(mocks.listMaintenanceRepairs).toHaveBeenCalledTimes(1)
+    expect(mocks.listMaintenanceRepairs).toHaveBeenCalledWith(
       "task-board-token",
       WAREHOUSE_ID,
-      firstRepairId
+      { repairIds: [firstRepairId, secondRepairId], page: 0, size: 200 }
     )
-    expect(mocks.getMaintenanceRepair).toHaveBeenCalledWith(
+  })
+
+  it("chunks more than two hundred visible repair complexity IDs", async () => {
+    const repairId = "repair-after-first-page"
+    const repairIds = [
+      ...Array.from({ length: 200 }, (_, index) => `repair-${index}`),
+      repairId,
+    ]
+    const currentBoard: TaskBoardSnapshotDto = {
+      ...board,
+      totalEntries: repairIds.length,
+      realEntries: repairIds.length,
+      queues: [
+        {
+          ...board.queues[0]!,
+          entries: repairIds.map((id) => ({
+            ...taskEntry(id, "Ремонт"),
+            source: { type: "MAINTENANCE_REPAIR" as const, sourceId: id },
+          })),
+        },
+      ],
+    }
+    const repair: RepairComplexityFixture = {
+      id: repairId,
+      complexity: {
+        type: "COMPLEX",
+        name: "Тяжёлый ремонт",
+        color: "#dc2626",
+      },
+    }
+
+    renderPage("EDIT", {
+      currentBoard,
+      maintenancePage: (filters) => {
+        const includesLastRepair = filters.repairIds?.includes(repairId) ?? false
+        return Promise.resolve({
+          items: includesLastRepair ? [repair] : [],
+          page: 0,
+          size: 200,
+          totalElements: includesLastRepair ? 1 : 0,
+        })
+      },
+    })
+
+    await waitFor(() => {
+      const renderedComplexities = screen
+        .getByTestId("visible-repair-complexities")
+        .textContent?.split(",")
+        .filter(Boolean)
+
+      expect(renderedComplexities).toEqual(["Тяжёлый ремонт"])
+    })
+    expect(mocks.listMaintenanceRepairs).toHaveBeenNthCalledWith(
+      2,
       "task-board-token",
       WAREHOUSE_ID,
-      secondRepairId
+      { repairIds: [repairId], page: 0, size: 200 }
     )
   })
 
@@ -394,9 +447,7 @@ describe("task board warehouse access", () => {
       initialEntry: `/?externalTaskId=${furnitureTaskId}`,
     })
 
-    expect(
-      await screen.findByText("Открыто связанное логистическое задание.")
-    ).toBeTruthy()
+    expect(await screen.findByText("Открыто связанное задание.")).toBeTruthy()
     expect(
       (await screen.findByTestId("visible-task-external-ids")).textContent
     ).toBe(furnitureTaskId)

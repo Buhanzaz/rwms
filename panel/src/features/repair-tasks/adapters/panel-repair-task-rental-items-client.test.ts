@@ -68,7 +68,7 @@ describe("panel repair-task rental-items client", () => {
     })
   })
 
-  it("searches every direct-repair status except rented and after-rent", async () => {
+  it("searches every direct-repair status except rented", async () => {
     vi.mocked(listAssetRentalItems).mockResolvedValue({
       content: [rentalItem("WAREHOUSE")],
       page: 0,
@@ -101,11 +101,11 @@ describe("panel repair-task rental-items client", () => {
       search: "042",
       page: 0,
       size: 40,
-      excludeStatuses: ["RENTED", "AFTER_RENT"],
+      excludeStatuses: ["RENTED"],
     })
   })
 
-  it.each(["RENTED", "AFTER_RENT"] as const)(
+  it.each(["RENTED"] as const)(
     "rejects a maintenance-ineligible %s rental item",
     async (status) => {
       vi.mocked(getAssetRentalItem).mockResolvedValue(rentalItem(status))
@@ -118,4 +118,16 @@ describe("panel repair-task rental-items client", () => {
       ).resolves.toBeNull()
     }
   )
+
+  it("keeps an after-rent rental item eligible for direct repair", async () => {
+    vi.mocked(getAssetRentalItem).mockResolvedValue(rentalItem("AFTER_RENT"))
+
+    await expect(
+      panelRepairTaskRentalItemsClient.resolveById(WAREHOUSE_ID, RENTAL_ITEM_ID)
+    ).resolves.toEqual({
+      id: RENTAL_ITEM_ID,
+      warehouseId: WAREHOUSE_ID,
+      number: "БЫТ-042",
+    })
+  })
 })

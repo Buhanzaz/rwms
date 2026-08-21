@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.manager.ui
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.manager.network.EstimatePageDto
 import dev.buhanzaz.rwms.manager.network.RepairPageDto
+import dev.buhanzaz.rwms.manager.network.TaskBoardSnapshotDto
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
@@ -75,4 +76,20 @@ class ManagerReadCacheTest {
             assertThat(cache.readMaintenance(firstScope)).isNull()
             assertThat(cache.readMaintenance(secondScope)).isEqualTo(second)
         }
+
+    @Test
+    fun `aggregate repair board cache stores one warehouse snapshot and etag`() = runBlocking {
+        val snapshot = CachedRepairQueueRead(
+            snapshot = TaskBoardSnapshotDto(
+                warehouseId = firstScope.warehouseId,
+                columns = emptyList(),
+            ),
+            etag = "W/\"ordinary-board-4\"",
+        )
+
+        cache.writeRepairQueue(firstScope, snapshot)
+
+        assertThat(cache.readRepairQueue(firstScope)).isEqualTo(snapshot)
+        assertThat(cache.readRepairQueue(secondScope)).isNull()
+    }
 }

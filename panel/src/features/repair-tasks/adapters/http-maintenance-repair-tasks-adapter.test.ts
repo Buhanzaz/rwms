@@ -180,8 +180,6 @@ function repairCommandResult(
 
 const board: TaskBoardSnapshotDto = {
   warehouseId,
-  selectedDate: "2026-07-18",
-  availableDates: ["2026-07-18"],
   queues: [
     {
       key: "queue-repair",
@@ -189,6 +187,7 @@ const board: TaskBoardSnapshotDto = {
       kind: "REPAIR",
       settingsQueueId: queueId,
       settingsCollapsed: false,
+      availableTaskLimit: 6,
       entries: [
         {
           id: entryId,
@@ -919,73 +918,14 @@ describe("maintenance repair tasks adapter", () => {
     ])
   })
 
-  it("keeps maintenance draft repairs in the repairs list", async () => {
-    lifecycle.listRepairs.mockResolvedValue({ items: [repair()] })
-    const adapter = new HttpMaintenanceRepairTasksAdapter(
-      rentalItemsClient,
-      async () => "token"
-    )
-
-    const tasks = await adapter.list(warehouseId)
-
-    expect(lifecycle.listRepairs).toHaveBeenCalledWith("token", warehouseId)
-    expect(tasks).toEqual([
-      expect.objectContaining({
-        id: repairId,
-        status: "DRAFT",
-      }),
-    ])
-  })
-
-  it("keeps calculated capital repairs out of the ordinary repairs list", async () => {
-    const capitalRepair = {
-      ...repair(),
-      id: "00000000-0000-4000-8000-000000000014",
-      complexity: {
-        type: "CAPITAL" as const,
-        name: "Капитальный ремонт" as const,
-        color: "#DC2626",
-        plannedMinutes: "30",
-        forcedCapital: true,
-      },
-    }
-    lifecycle.listRepairs.mockResolvedValue({
-      items: [repair(), capitalRepair],
-    })
-    const adapter = new HttpMaintenanceRepairTasksAdapter(
-      rentalItemsClient,
-      async () => "token"
-    )
-
-    const tasks = await adapter.list(warehouseId)
-
-    expect(tasks.map((task) => task.id)).toEqual([repairId])
-  })
-
-  it("fails the repair projection when task-board enrichment is unavailable", async () => {
-    lifecycle.listRepairs.mockResolvedValue({ items: [repair()] })
-    getBoard.mockRejectedValue(new Error("task-board unavailable"))
-    const adapter = new HttpMaintenanceRepairTasksAdapter(
-      rentalItemsClient,
-      async () => "token"
-    )
-
-    await expect(adapter.list(warehouseId)).rejects.toThrow(
-      "task-board unavailable"
-    )
-  })
-
   it("rejects a repair priority outside the service contract", async () => {
-    lifecycle.listRepairs.mockResolvedValue({
-      items: [{ ...repair(), priority: 0 }],
-    })
-    getBoard.mockResolvedValue(board)
+    lifecycle.get.mockResolvedValue({ ...repair(), priority: 0 })
     const adapter = new HttpMaintenanceRepairTasksAdapter(
       rentalItemsClient,
       async () => "token"
     )
 
-    await expect(adapter.list(warehouseId)).rejects.toThrow(
+    await expect(adapter.getById(repairId, warehouseId)).rejects.toThrow(
       "некорректный приоритет"
     )
   })

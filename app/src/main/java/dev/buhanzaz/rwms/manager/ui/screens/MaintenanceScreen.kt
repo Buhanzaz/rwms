@@ -484,26 +484,23 @@ private fun CapitalRepairLinesColumn(
     }
 }
 
+/** Loads and hosts the read-only aggregate ordinary repair board. */
 @Composable
 fun RepairQueueScreen(
     uiState: ManagerUiState,
     onBack: () -> Unit,
     onLoadQueue: () -> Unit,
     onOpenRepair: (String) -> Unit,
-    onMoveQueueEntry: (dev.buhanzaz.rwms.manager.ui.RepairQueueItem, String, Int) -> Unit,
-    onSwapQueueDateColumns: (String, String, () -> Unit) -> Unit,
 ) {
     LaunchedEffect(uiState.selectedWarehouseId) {
         if (uiState.selectedWarehouseId != null) onLoadQueue()
     }
     ManagerScreenScaffold(title = "Очередь ремонтов", onBack = onBack) { padding ->
         RepairQueueView(
-            boards = uiState.repairTaskBoards,
+            board = uiState.repairTaskBoard,
             repairs = uiState.repairs,
             assetLabels = uiState.maintenanceAssetLabels,
             busy = uiState.busy,
-            onMove = onMoveQueueEntry,
-            onSwapDateColumns = onSwapQueueDateColumns,
             onOpenRepair = onOpenRepair,
             modifier = Modifier.fillMaxSize().padding(padding),
         )
@@ -1292,7 +1289,7 @@ internal fun MaintenanceCatalogStep(
             editor = editor,
             catalogNodes = catalogNodes,
             catalogLinks = uiState.maintenanceCatalogLinks,
-            liveRoutings = uiState.repairTaskBoards.maintenanceWorkRoutingOptions(),
+            liveRoutings = uiState.repairTaskBoard.maintenanceWorkRoutingOptions(),
             availableLocalPhotoUris = editor.photoUris,
             availablePhotos = editor.readyMedia
                 .filterNot { reference ->

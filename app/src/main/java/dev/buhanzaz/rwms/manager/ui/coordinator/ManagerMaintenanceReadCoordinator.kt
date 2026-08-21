@@ -4,13 +4,9 @@ import dev.buhanzaz.rwms.manager.media.MediaOwner
 import dev.buhanzaz.rwms.manager.media.retryMediaReadAfterOwnerProof
 import dev.buhanzaz.rwms.manager.network.EstimateDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
-import dev.buhanzaz.rwms.manager.network.MoveTaskBoardEntryRequest
 import dev.buhanzaz.rwms.manager.network.RentalItemDto
 import dev.buhanzaz.rwms.manager.network.RepairDto
 import dev.buhanzaz.rwms.manager.network.RwmsBackend
-import dev.buhanzaz.rwms.manager.network.TaskBoardSnapshotDto
-import dev.buhanzaz.rwms.manager.network.TaskBoardDateEntryExpectationDto
-import dev.buhanzaz.rwms.manager.network.SwapTaskBoardDatesRequest
 import dev.buhanzaz.rwms.manager.uploads.AcceptanceUploadCommand
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadArea
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadCoordinator
@@ -21,7 +17,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import retrofit2.HttpException
 
 /**
  * Defines manager UI state or presentation policy; server state and command authorization remain authoritative.
@@ -31,7 +26,8 @@ import retrofit2.HttpException
 internal interface ManagerMaintenanceRefreshPort {
     suspend fun refreshMaintenance(force: Boolean = false)
 
-    suspend fun refreshRepairTaskBoards(force: Boolean = false)
+    /** Refreshes the single aggregate ordinary-board snapshot used by maintenance screens. */
+    suspend fun refreshRepairTaskBoard(force: Boolean = false)
 
     suspend fun refreshAcceptance()
 }
@@ -45,8 +41,8 @@ internal interface ManagerMaintenanceAssetReadPort {
 }
 
 /**
- * Coordinates maintenance lists, repair-board snapshots and acceptance review. The cache fallback
- * and owner-scoped acceptance media behavior remain exactly in this workflow boundary.
+ * Coordinates maintenance lists, one aggregate repair-board snapshot, and acceptance review.
+ * The cache fallback and owner-scoped acceptance media behavior remain in this workflow boundary.
  */
 internal class ManagerMaintenanceReadCoordinator(
     private val runtime: ManagerCommandRuntime,
@@ -90,90 +86,7 @@ internal class ManagerMaintenanceReadCoordinator(
     fun loadRepairQueue() = command {
         coroutineScope {
             async { refreshMaintenance() }
-            async { refreshRepairTaskBoards() }
-        }
-    }
-
-    fun moveRepairQueueEntry(
-        item: RepairQueueItem,
-        targetDate: String,
-        targetIndex: Int,
-    ) = command {
-        if (!repairQueueEntryCanMove(item.entry)) {
-            throw IllegalStateException("Это задание уже нельзя перемещать")
-        }
-        val warehouseId = requireWarehouseId()
-        try {
-            backend.api.moveTaskBoardEntry(
-                warehouseId = warehouseId,
-                entryId = item.entry.id,
-                request = MoveTaskBoardEntryRequest(
-                    expectedVersion = item.entry.version,
-                    expectedTaskVersion = item.entry.taskVersion,
-                    targetQueueId = item.queue.queueId,
-                    targetIndex = targetIndex,
-                    targetDate = targetDate,
-                ),
-            )
-            refreshRepairTaskBoards()
-            message("Очередь ремонта обновлена")
-        } catch (failure: HttpException) {
-            if (failure.code() != 409) throw failure
-            refreshRepairTaskBoards()
-            message("Очередь уже изменилась. Данные обновлены — повторите перемещение")
-        }
-    }
-
-    /**
-     * A column exchange is not a series of card moves.  The task-board owns the scheduled date,
-     * so submit the full real+shadow snapshot evidence for both columns and let it atomically
-     * exchange dates while retaining every queue position.
-     */
-    fun swapRepairQueueDateColumns(
-        firstDate: String,
-        secondDate: String,
-        onSwapped: () -> Unit,
-    ) = command {
-        if (firstDate == secondDate) return@command
-        val warehouseId = requireWarehouseId()
-        val boards = mutableState.value.repairTaskBoards
-        val first = boards.firstOrNull { it.selectedDate == firstDate }
-            ?: throw IllegalStateException("Колонка даты $firstDate устарела. Обновите очередь")
-        val second = boards.firstOrNull { it.selectedDate == secondDate }
-            ?: throw IllegalStateException("Колонка даты $secondDate устарела. Обновите очередь")
-        val expectations = (first.columns.asSequence().flatMap { it.entries.asSequence() } +
-            second.columns.asSequence().flatMap { it.entries.asSequence() })
-            .map { entry ->
-                TaskBoardDateEntryExpectationDto(
-                    entryId = entry.id,
-                    expectedVersion = entry.version,
-                    expectedTaskVersion = entry.taskVersion,
-                )
-            }
-            .distinctBy(TaskBoardDateEntryExpectationDto::entryId)
-            .toList()
-        if (expectations.isEmpty()) {
-            throw IllegalStateException("В выбранных колонках нет заданий для обмена датами")
-        }
-        try {
-            backend.api.swapTaskBoardDates(
-                warehouseId = warehouseId,
-                request = SwapTaskBoardDatesRequest(
-                    firstDate = firstDate,
-                    secondDate = secondDate,
-                    entries = expectations,
-                ),
-            )
-            refreshRepairTaskBoards()
-            onSwapped()
-            message("Даты колонок очереди обменены")
-        } catch (failure: HttpException) {
-            if (failure.code() != 409) throw failure
-            refreshRepairTaskBoards()
-            throw IllegalStateException(
-                "Очередь уже изменилась. Данные обновлены — повторите обмен датами",
-                failure,
-            )
+            async { refreshRepairTaskBoard() }
         }
     }
 
@@ -493,47 +406,21 @@ internal class ManagerMaintenanceReadCoordinator(
         }
     }
 
-    override suspend fun refreshRepairTaskBoards(force: Boolean) {
+    override suspend fun refreshRepairTaskBoard(force: Boolean) {
         val warehouseId = requireWarehouseId()
         val scope = readCacheScope(warehouseId)
         repairQueueMutex.withLock {
             val cached = managerReadCache.readRepairQueue(scope)
             val refreshed = try {
-                val root = conditionalRead(
+                conditionalRead(
                     response = backend.api.taskBoard(
                         warehouseId = warehouseId,
-                        includeShadow = true,
-                        ifNoneMatch = if (force) null else cached?.rootEtag,
+                        ifNoneMatch = if (force) null else cached?.etag,
                     ),
-                    cachedValue = cached?.rootSnapshot,
-                    cachedEtag = cached?.rootEtag,
+                    cachedValue = cached?.snapshot,
+                    cachedEtag = cached?.etag,
                     missingCacheMessage = "Сервер подтвердил старую очередь, которой нет на телефоне",
                 )
-                val cachedBoardsByDate = cached?.snapshots
-                    ?.mapNotNull { board -> board.selectedDate?.let { it to board } }
-                    ?.toMap()
-                    .orEmpty()
-                val rootDate = root.value.selectedDate
-                val remaining = root.value.availableDates.filterNot { date -> date == rootDate }
-                val boards = coroutineScope {
-                    remaining.map { date ->
-                        async {
-                            date to conditionalRead(
-                                response = backend.api.taskBoard(
-                                    warehouseId = warehouseId,
-                                    includeShadow = true,
-                                    date = date,
-                                    ifNoneMatch = if (force) null else cached?.etagsByDate?.get(date),
-                                ),
-                                cachedValue = cachedBoardsByDate[date],
-                                cachedEtag = cached?.etagsByDate?.get(date),
-                                missingCacheMessage =
-                                    "Сервер подтвердил старую колонку очереди, которой нет на телефоне",
-                            )
-                        }
-                    }.map { request -> request.await() }
-                }
-                root to boards
             } catch (failure: Throwable) {
                 if (cached != null && canUseCachedReadAfter(failure)) {
                     applyRepairQueueRead(warehouseId, cached)
@@ -543,22 +430,9 @@ internal class ManagerMaintenanceReadCoordinator(
             }
             if (mutableState.value.selectedWarehouseId != warehouseId) return@withLock
 
-            val root = refreshed.first
-            val boardsByDate = linkedMapOf<String, TaskBoardSnapshotDto>()
-            root.value.selectedDate?.let { date -> boardsByDate[date] = root.value }
-            val etagsByDate = refreshed.second.mapNotNull { (date, board) ->
-                board.etag?.let { tag -> date to tag }
-            }.toMap()
-            refreshed.second.forEach { (_, board) ->
-                board.value.selectedDate?.let { date -> boardsByDate[date] = board.value }
-            }
-            val snapshots = root.value.availableDates.mapNotNull(boardsByDate::get)
-                .ifEmpty { listOf(root.value) }
             val snapshot = CachedRepairQueueRead(
-                rootSnapshot = root.value,
-                rootEtag = root.etag,
-                snapshots = snapshots,
-                etagsByDate = etagsByDate,
+                snapshot = refreshed.value,
+                etag = refreshed.etag,
             )
             managerReadCache.writeRepairQueue(scope, snapshot)
             applyRepairQueueRead(warehouseId, snapshot)
@@ -569,12 +443,9 @@ internal class ManagerMaintenanceReadCoordinator(
         warehouseId: String,
         snapshot: CachedRepairQueueRead,
     ) {
-        val ordered = snapshot.rootSnapshot.availableDates
-            .mapNotNull { date -> snapshot.snapshots.firstOrNull { it.selectedDate == date } }
-            .ifEmpty { snapshot.snapshots.ifEmpty { listOf(snapshot.rootSnapshot) } }
         mutableState.update { current ->
             if (current.selectedWarehouseId == warehouseId) {
-                current.copy(repairTaskBoards = ordered)
+                current.copy(repairTaskBoard = snapshot.snapshot)
             } else {
                 current
             }

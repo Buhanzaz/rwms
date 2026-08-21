@@ -177,13 +177,21 @@ class TaskBoardQueuePositionCoordinator {
   }
 
   void normalizePositions(UUID warehouseId, WorkQueue q) {
+    if (q.getPurpose() != QueuePurpose.LOGISTICS_DRIVER) {
+      int position = 0;
+      for (QueueEntry entry : orderedEntries(warehouseId, q).stream()
+          .filter(candidate -> UNFINISHED.contains(candidate.getStatus()))
+          .sorted(queuePositionOrder())
+          .toList()) {
+        entry.setQueuePosition(position++);
+        projectionWriter.save(entries, entry);
+      }
+      return;
+    }
     Map<LocalDate, List<QueueEntry>> byDate =
         orderedEntries(warehouseId, q).stream()
             .filter(entry -> UNFINISHED.contains(entry.getStatus()))
-            .filter(
-                entry ->
-                    q.getPurpose() != QueuePurpose.LOGISTICS_DRIVER
-                        || entry.getTask().getLane() == TaskLane.SCHEDULED)
+            .filter(entry -> entry.getTask().getLane() == TaskLane.SCHEDULED)
             .collect(
                 java.util.stream.Collectors.groupingBy(
                     entry -> entry.getTask().getScheduledDate(),
@@ -196,9 +204,7 @@ class TaskBoardQueuePositionCoordinator {
         projectionWriter.save(entries, entry);
       }
     }
-    if (q.getPurpose() == QueuePurpose.LOGISTICS_DRIVER) {
-      normalizeCurrentLogisticsPositions(warehouseId, orderedEntries(warehouseId, q));
-    }
+    normalizeCurrentLogisticsPositions(warehouseId, orderedEntries(warehouseId, q));
   }
 
   void insertAtPosition(
@@ -252,8 +258,8 @@ class TaskBoardQueuePositionCoordinator {
 
   /**
    * Captures the absolute slots occupied by pinned cards before a user-directed queue mutation.
-   * Queue positions are scoped by date for ordinary queues and by lane for the driver queue, so a
-   * pin in a scheduled column never reserves a slot in CURRENT (and vice versa).
+   * Ordinary queue positions are warehouse-aggregate; logistics positions remain scoped by date
+   * and lane, so a pin in a scheduled logistics column never reserves a slot in CURRENT.
    */
   Map<QueuePositionScope, List<PinnedQueueOrdinal>> pinnedQueueOrdinals(
       Collection<QueueEntry> candidates) {
@@ -354,7 +360,11 @@ class TaskBoardQueuePositionCoordinator {
         queue.getPurpose() == QueuePurpose.LOGISTICS_DRIVER
             ? entry.getTask().getLane()
             : TaskLane.SCHEDULED;
-    return new QueuePositionScope(queue.getId(), entry.getTask().getScheduledDate(), lane);
+    LocalDate scheduledDate =
+        queue.getPurpose() == QueuePurpose.LOGISTICS_DRIVER
+            ? entry.getTask().getScheduledDate()
+            : null;
+    return new QueuePositionScope(queue.getId(), scheduledDate, lane);
   }
 
   private Comparator<QueueEntry> queuePositionOrder() {
@@ -383,11 +393,11 @@ class TaskBoardQueuePositionCoordinator {
   List<QueueEntry> orderedEntries(
       UUID warehouseId, WorkQueue queue, LocalDate scheduledDate) {
     return orderedEntries(warehouseId, queue).stream()
-        .filter(entry -> Objects.equals(entry.getTask().getScheduledDate(), scheduledDate))
         .filter(
             entry ->
                 queue.getPurpose() != QueuePurpose.LOGISTICS_DRIVER
-                    || entry.getTask().getLane() == TaskLane.SCHEDULED)
+                    || (entry.getTask().getLane() == TaskLane.SCHEDULED
+                        && Objects.equals(entry.getTask().getScheduledDate(), scheduledDate)))
         .sorted(Comparator.comparingInt(QueueEntry::getQueuePosition))
         .toList();
   }
@@ -434,8 +444,8 @@ class TaskBoardQueuePositionCoordinator {
   static record QueueEntryPosition(UUID queueId, int position) {}
 
   /**
-   * Defines the ordering partition: scheduled queues are date-scoped, while driver work is also
-   * separated by lane.
+   * Defines the ordering partition: ordinary queues are aggregate, while driver work remains
+   * separated by schedule date and lane.
    */
   static record QueuePositionScope(UUID queueId, LocalDate scheduledDate, TaskLane lane) {}
 

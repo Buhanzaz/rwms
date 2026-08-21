@@ -6,7 +6,6 @@ import dev.buhanzaz.rwms.taskboard.security.*;
 import dev.buhanzaz.rwms.taskboard.service.TaskBoardService;
 import jakarta.validation.Valid;
 import java.security.MessageDigest;
-import java.time.LocalDate;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
@@ -38,21 +37,19 @@ public class TaskBoardController {
   private final ObjectMapper objectMapper;
 
   /**
-   * Returns a date-scoped board snapshot with a weak semantic ETag.
+   * Returns the aggregate ordinary board snapshot with a weak semantic ETag.
    *
-   * <p>Rolling timer counters are intentionally excluded from the validator, while timer state,
-   * next transition, requested date and shadow-lane selection remain part of it.
+   * <p>Rolling timer counters are intentionally excluded from the validator, while timer state
+   * and the next transition remain part of it.
    */
   @GetMapping
   public ResponseEntity<TaskBoardSnapshot> snapshot(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID warehouseId,
-      @RequestParam(required = false) LocalDate date,
-      @RequestParam(defaultValue = "false") boolean includeShadow,
       ServletWebRequest request) {
     taskAccess(jwt, warehouseId, false);
-    TaskBoardSnapshot snapshot = service.snapshot(warehouseId, date, includeShadow);
-    String etag = snapshotEtag(date, includeShadow, snapshot);
+    TaskBoardSnapshot snapshot = service.snapshot(warehouseId);
+    String etag = snapshotEtag(snapshot);
     if (request.checkNotModified(etag)) {
       return ResponseEntity.status(HttpStatus.NOT_MODIFIED).eTag(etag).build();
     }
@@ -163,31 +160,6 @@ public class TaskBoardController {
     return service.complete(warehouseId, entryId, request, access.workerId(jwt));
   }
 
-  /** Moves an entry to an eligible target queue, date and position as one version-fenced command. */
-  @PostMapping("/entries/{entryId}/move")
-  public TaskBoardSnapshot move(
-      @AuthenticationPrincipal Jwt jwt,
-      @PathVariable UUID warehouseId,
-      @PathVariable UUID entryId,
-      @Valid @RequestBody MoveEntryRequest request) {
-    userWrite(jwt, warehouseId);
-    return service.move(warehouseId, entryId, request);
-  }
-
-  /**
-   * Exchanges two complete visual date columns after proving the caller observed every entry.
-   *
-   * <p>The complete expectation set prevents a stale or partial client from moving only a subset
-   * of a task's route.
-   */
-  @PostMapping("/dates/swap")
-  public TaskBoardSnapshot swapDates(
-      @AuthenticationPrincipal Jwt jwt,
-      @PathVariable UUID warehouseId,
-      @Valid @RequestBody SwapTaskBoardDatesRequest request) {
-    userWrite(jwt, warehouseId);
-    return service.swapDates(warehouseId, request);
-  }
 
   /** Pins or unpins a task in every route queue without changing its position. */
   @PostMapping("/tasks/{taskId}/pin")
@@ -211,17 +183,13 @@ public class TaskBoardController {
   }
 
   /**
-   * A weak validator reflects stable public state rather than a byte-for-byte response. Requested
-   * parameters are part of the value because unavailable dates may resolve to the same selected
-   * date and an empty shadow lane can otherwise have the same response body. Rolling timer values
-   * are intentionally excluded: clients derive them from the stable timer state and transition.
+   * A weak validator reflects stable public state rather than a byte-for-byte response. Rolling
+   * timer values are intentionally excluded: clients derive them from stable timer state and
+   * transition.
    */
-  private String snapshotEtag(
-      LocalDate requestedDate, boolean includeShadow, TaskBoardSnapshot snapshot) {
+  private String snapshotEtag(TaskBoardSnapshot snapshot) {
     try {
-      ObjectNode representation =
-          objectMapper.valueToTree(
-              new SnapshotRepresentation(requestedDate, includeShadow, snapshot));
+      ObjectNode representation = objectMapper.valueToTree(snapshot);
       removeVolatileTimerValues(representation);
       String digest =
           HexFormat.of()
@@ -235,9 +203,7 @@ public class TaskBoardController {
   }
 
   private void removeVolatileTimerValues(ObjectNode representation) {
-    JsonNode snapshot = representation.get("snapshot");
-    if (!(snapshot instanceof ObjectNode board)) return;
-    JsonNode columns = board.get("columns");
+    JsonNode columns = representation.get("columns");
     if (columns == null) return;
     for (JsonNode column : columns) {
       JsonNode entries = column.get("entries");
@@ -253,6 +219,4 @@ public class TaskBoardController {
     }
   }
 
-  private record SnapshotRepresentation(
-      LocalDate requestedDate, boolean includeShadow, TaskBoardSnapshot snapshot) {}
 }

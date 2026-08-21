@@ -9,10 +9,17 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import java.util.UUID;
 
-/** Warehouse-specific physical queue derived from a global definition or logistics driver lane. */
+/**
+ * Warehouse-specific physical queue derived from a global definition or logistics driver lane.
+ *
+ * <p>General queues mirror their definition's waiting-task availability limit so board reads and
+ * TAKE validation use the same persisted warehouse projection.
+ */
 @Entity
 @Table(
     name = "work_queue",
@@ -63,6 +70,11 @@ public class WorkQueue extends AbstractVersionedEntity {
 
   @Column(name = "result_photo_min_count", nullable = false)
   private int resultPhotoMinCount = 1;
+
+  @Min(1)
+  @Max(50)
+  @Column(name = "available_task_limit", nullable = false)
+  private int availableTaskLimit = 6;
 
   public QueueDefinition getDefinition() {
     return definition;
@@ -158,6 +170,17 @@ public class WorkQueue extends AbstractVersionedEntity {
 
   public void setResultPhotoMinCount(int resultPhotoMinCount) {
     this.resultPhotoMinCount = resultPhotoMinCount;
+  }
+
+  public int getAvailableTaskLimit() {
+    return availableTaskLimit;
+  }
+
+  public void setAvailableTaskLimit(int value) {
+    if (value < 1 || value > 50) {
+      throw new IllegalArgumentException("Лимит доступных заданий должен быть от 1 до 50");
+    }
+    availableTaskLimit = value;
   }
 
   public void touch() {

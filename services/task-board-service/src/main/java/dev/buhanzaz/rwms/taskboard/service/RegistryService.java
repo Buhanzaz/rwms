@@ -457,6 +457,7 @@ public class RegistryService {
       throw new IllegalArgumentException("Для общей очереди обязателен минимум фотографий результата");
     }
     entity.setResultPhotoMinCount(request.resultPhotoMinCount());
+    entity.setAvailableTaskLimit(request.availableTaskLimit());
   }
 
   private void apply(WorkQueue queue, DriverQueueRequest request) {

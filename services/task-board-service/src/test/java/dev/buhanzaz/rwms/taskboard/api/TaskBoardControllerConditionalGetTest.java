@@ -57,17 +57,17 @@ class TaskBoardControllerConditionalGetTest {
 
   @Test
   void weakEtagIgnoresRollingTimerValuesAndHonorsListedIfNoneMatch() {
-    when(service.snapshot(WAREHOUSE, DATE, false))
+    when(service.snapshot(WAREHOUSE))
         .thenReturn(snapshot(120, "2026-07-30T10:00:00Z", TimerState.WORKING))
         .thenReturn(snapshot(121, "2026-07-30T10:00:01Z", TimerState.WORKING));
 
-    ResponseEntity<TaskBoardSnapshot> initial = get(DATE, false, null);
+    ResponseEntity<TaskBoardSnapshot> initial = get(null);
 
     assertThat(initial.getStatusCode()).isEqualTo(HttpStatus.OK);
     String etag = initial.getHeaders().getETag();
     assertThat(etag).startsWith("W/\"task-board-");
 
-    ResponseEntity<TaskBoardSnapshot> notModified = get(DATE, false, "\"obsolete\", " + etag);
+    ResponseEntity<TaskBoardSnapshot> notModified = get("\"obsolete\", " + etag);
 
     assertThat(notModified.getStatusCode()).isEqualTo(HttpStatus.NOT_MODIFIED);
     assertThat(notModified.getHeaders().getETag()).isEqualTo(etag);
@@ -75,21 +75,15 @@ class TaskBoardControllerConditionalGetTest {
   }
 
   @Test
-  void weakEtagIncludesRequestedDimensionsAndStableTimerState() {
+  void weakEtagIncludesStableTimerState() {
     TaskBoardSnapshot working = snapshot(120, "2026-07-30T10:00:00Z", TimerState.WORKING);
-    when(service.snapshot(WAREHOUSE, DATE, false))
+    when(service.snapshot(WAREHOUSE))
         .thenReturn(working)
         .thenReturn(snapshot(120, "2026-07-30T10:00:00Z", TimerState.PAUSED));
-    when(service.snapshot(WAREHOUSE, DATE.plusDays(1), false)).thenReturn(working);
-    when(service.snapshot(WAREHOUSE, DATE, true)).thenReturn(working);
 
-    String standard = get(DATE, false, null).getHeaders().getETag();
-    String anotherDate = get(DATE.plusDays(1), false, null).getHeaders().getETag();
-    String shadowView = get(DATE, true, null).getHeaders().getETag();
-    String paused = get(DATE, false, null).getHeaders().getETag();
+    String standard = get(null).getHeaders().getETag();
+    String paused = get(null).getHeaders().getETag();
 
-    assertThat(anotherDate).isNotEqualTo(standard);
-    assertThat(shadowView).isNotEqualTo(standard);
     assertThat(paused).isNotEqualTo(standard);
   }
 
@@ -157,19 +151,14 @@ class TaskBoardControllerConditionalGetTest {
     assertThat(feedJson.required("driverAudience").isNull()).isTrue();
   }
 
-  private ResponseEntity<TaskBoardSnapshot> get(
-      LocalDate requestedDate, boolean includeShadow, String ifNoneMatch) {
+  private ResponseEntity<TaskBoardSnapshot> get(String ifNoneMatch) {
     MockHttpServletRequest request =
         new MockHttpServletRequest("GET", "/api/warehouses/" + WAREHOUSE + "/task-board");
     if (ifNoneMatch != null) {
       request.addHeader(HttpHeaders.IF_NONE_MATCH, ifNoneMatch);
     }
     return controller.snapshot(
-        JWT,
-        WAREHOUSE,
-        requestedDate,
-        includeShadow,
-        new ServletWebRequest(request, new MockHttpServletResponse()));
+        JWT, WAREHOUSE, new ServletWebRequest(request, new MockHttpServletResponse()));
   }
 
   private TaskBoardSnapshot snapshot(long countedActiveSeconds, String serverTime, TimerState timerState) {
@@ -213,8 +202,6 @@ class TaskBoardControllerConditionalGetTest {
             null);
     return new TaskBoardSnapshot(
         WAREHOUSE,
-        DATE,
-        List.of(DATE),
         List.of(
             new BoardColumnDto(
                 QUEUE,
@@ -222,6 +209,7 @@ class TaskBoardControllerConditionalGetTest {
                 QueueType.REPAIR,
                 QueuePurpose.GENERAL,
                 0,
+                6,
                 List.of(entry))));
   }
 }

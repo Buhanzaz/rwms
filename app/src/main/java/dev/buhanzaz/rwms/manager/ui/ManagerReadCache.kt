@@ -177,14 +177,10 @@ internal data class CachedMaintenanceRead(
     val assetLabels: Map<String, String> = emptyMap(),
 )
 
-/**
- * Defines manager UI or local cache state; it does not own a server-side business transition.
- */
+/** One account-and-warehouse-scoped aggregate ordinary-board snapshot and its validator. */
 internal data class CachedRepairQueueRead(
-    val rootSnapshot: TaskBoardSnapshotDto,
-    val rootEtag: String? = null,
-    val snapshots: List<TaskBoardSnapshotDto> = emptyList(),
-    val etagsByDate: Map<String, String> = emptyMap(),
+    val snapshot: TaskBoardSnapshotDto,
+    val etag: String? = null,
 )
 
 /**

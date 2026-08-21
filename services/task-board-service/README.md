@@ -19,7 +19,7 @@ keeping source-domain facts and decisions with their original owners.
 | --- | --- | --- |
 | Queue standard | Global definitions, warehouse bindings, ordering, capabilities, and usage references | Maintenance/logistics register only contract-defined references |
 | Workforce | Worker classes, workers, groups, current membership, and credentials workflow | Auth-service owns credential material and token issuance |
-| Operational work | Tasks, route entries, assignment, pinning, movement, pause/resume/complete, and history | Source domain owns why the work exists and its aggregate state |
+| Operational work | Tasks, route entries, assignment, pinning, pause/resume/complete, and history | Source domain owns why the work exists and its aggregate state |
 | Native execution | Separate driver/worker feeds, offline action leases, evidence reservation, SSE and transactional FCM invalidation | DriverApp and WorkerApp refresh authoritative REST state and upload media through media-service |
 | KPI | Warehouse palette/schedule revisions and emitted daily evidence | Analytics owns the KPI read projection |
 | Warehouse lifecycle | Local operation marks, admission fence, draining blockers, exact-version readiness | Warehouse-service owns lifecycle state and admission decisions |
@@ -55,6 +55,28 @@ task instead of creating a duplicate. Mutable entry operations are fenced by
 the contract-defined version and status. Route order, eligibility, assignment,
 and terminal transitions remain server-owned.
 
+The ordinary repair board is one aggregate warehouse view, not a calendar. Each queue exposes all
+`IN_PROGRESS` and `PAUSED` real entries plus only the first `availableTaskLimit` waiting real entries
+in canonical priority order. Active work stays at the front in aggregate-position order; waiting
+work follows by priority and aggregate position. A take is rejected when the card is outside that
+server-owned window.
+Future route stages remain hidden until their predecessor completes; a holding/SES stage is the only
+ordinary card for its task until treatment finishes. The public board has no date selector, shadow
+mode, manual entry move, date swap, daily-capacity scheduling, or overdue rollover scan. Dated driver
+and shipment planning remains on the separate logistics surfaces. These invariants are defined by
+[`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
+[`TaskBoardReadProjectionService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardReadProjectionService.java),
+and [`OrdinaryQueueAvailabilityPolicy`](src/main/java/dev/buhanzaz/rwms/taskboard/service/OrdinaryQueueAvailabilityPolicy.java).
+
+Flyway V31 normalizes existing ordinary `queue_entry.queue_position` values into that aggregate
+sequence and corrects the real/shadow shape of a fully waiting holding route. It does not rewrite
+the append-only `domain_event` history. Replay comparison therefore accepts only `queuePosition`
+and `entryType` differences from queue-entry tails recorded no later than the successful V31
+cutover; every later event tail and every other field remain exact. The cutover is read from
+`flyway_schema_history`, so a rebuild preserves immutable facts without weakening post-migration
+drift detection. The rule lives in
+[`TaskBoardReplayVerifier`](src/main/java/dev/buhanzaz/rwms/taskboard/eventing/TaskBoardReplayVerifier.java).
+
 Logistics driver tasks additionally carry one persisted audience:
 `UNASSIGNED`, `ASSIGNED_DRIVER`, or `WAREHOUSE_DRIVERS`. Only the exact
 logistics-service driver-task source may set it. Only assigned work carries a worker identity; that
@@ -74,8 +96,8 @@ the slinger joins. The driver may close before a slinger joins; once joined, eit
 participant may close with at least one READY result photo from either participant. A group-less
 primary assignment never becomes a secondary assignment, even when that driver also has the
 slinger qualification. Only the
-private source replan boundary may replace audience under the shared task/entry version fence;
-public board movement does not.
+private source replan boundary may replace audience under the shared task/entry version fence; the
+public ordinary board exposes no entry-movement command.
 
 ## Internal application structure
 
@@ -90,7 +112,7 @@ components own the decisions:
 | `TaskBoardExternalMutationService` | Source-authorized pre-start update/cancel, lane movement and relocation |
 | `TaskBoardLogisticsTaskService` | Logistics equipment/driver task boundary |
 | `TaskBoardWorkerExecutionService` | Assignment, timing, interruption, cancellation and worker execution |
-| `TaskBoardOrderingService` | Manager-owned move, swap, pin and rollover operations |
+| `TaskBoardPinningService` | Version-fenced manager pin/unpin command |
 | `TaskBoardQueuePositionCoordinator` | Advisory locks, stream fences and persisted queue/pin ordering only |
 | `TaskBoardRoutePayloadCodec` | The single canonical route JSON and fingerprint codec |
 | `DriverTaskAudienceService` | Logistics-driver audience shape, qualification, visibility and execution authorization |
@@ -105,7 +127,7 @@ components own the decisions:
 | `WorkforceReadProjectionService` | Read-only worker and group DTO assembly |
 
 The dependency graph is acyclic. Registration and mutation share the route
-codec; registration, mutation, worker execution and ordering use the narrow
+codec; registration, mutation, worker execution and pinning use the narrow
 queue-position coordinator. Neither technical collaborator owns authorization,
 source status, worker transitions or another domain aggregate.
 
@@ -127,10 +149,10 @@ calculated by the same native worker/group/qualification and driver rules as
 feed/detail access, so a worker may view a waiting task's source/result photos
 without gaining upload authority. Task creation publishes the initial proof in
 the same local transaction. When an entry closes, the reader audience is reduced
-to every historical assignee and evidence worker. A bounded 30-second reconciler
-emits only changed proofs, backfills events created before the additive reader
-field and converges later workforce or queue-policy changes. Inactive proofs
-never authorize a new upload or finalization.
+to every historical assignee and evidence worker. A bounded reconciler runs at startup and after a
+warehouse audience-revision change, emits only changed proofs, and does not poll every task while
+the warehouse is idle. Failed passes do not advance the revision watermark. Inactive proofs never
+authorize a new upload or finalization.
 
 ## HTTP boundaries
 
@@ -145,7 +167,7 @@ The public gateway maps `/api/task-board/**` to this service's downstream
 | `/api/worker-classes/**` | Authenticated manager/admin policy | Worker qualification catalog |
 | `/api/warehouses/{warehouseId}/workers/**` | Warehouse-authorized manager | Workers, groups, credential operations, and reconciliation |
 | `/api/warehouses/{warehouseId}/work-queues` | Warehouse-authorized user | Physical queue projections and capabilities |
-| `/api/warehouses/{warehouseId}/task-board/**` | Warehouse-authorized user | Board reads and operational commands |
+| `/api/warehouses/{warehouseId}/task-board/**` | Warehouse-authorized user | Aggregate ordinary-board read and supported task commands |
 | `/api/warehouses/{warehouseId}/task-board/kpi-settings/**` | Warehouse manager/admin | Palette and effective schedule revisions |
 | `/api/worker/v1/**` | Worker credential and `worker.tasks` scope | Context, feed, detail, actions, evidence reservations, devices, and events |
 | `/api/driver/v1/**` | Worker credential and `driver.tasks` scope | Driver-only context, primary feed, actions, evidence reservations, devices, and events |
@@ -176,6 +198,19 @@ and never sends slinger calls to DriverApp installations.
 contains only the existing immutable source type and ID. A worker client can use a
 `LOGISTICS_DRIVER_TASK` ID to load the logistics-owned trip details; task-board does not copy that
 payload or its business state.
+
+For `MAINTENANCE_REPAIR`, consecutive route entries assigned to the same physical queue are one
+worker execution package. Detail aggregates the complete segment's work, material, comment, and
+source-media snapshots; its duration and timer use only the still-unfinished members. TAKE keeps
+one representative assignment and KPI segment. One version-fenced COMPLETE atomically marks that
+representative and every later unfinished shadow member done, records assignment/time audit for
+each, emits one existing queue-entry completion fact per source-mapped repair stage, and promotes
+only the next different route segment. Non-maintenance sources remain entry-scoped. This changes no
+persistence schema or event payload shape.
+
+`WorkerTaskDetail.sourceMedia` preserves source order, including a source-defined cover in the
+first position. Each `WorkerWork.sourceMediaIds` is the exact link from a work line to its own
+references in that array; task-board does not flatten or infer that association.
 
 The worker action path validates the worker identity, current assignment,
 entry version, action/status transition, and offline lease where applicable.

@@ -203,7 +203,7 @@ internal class ManagerWorkspaceCoordinator(
                         logisticsAssetLabels = emptyMap(),
                         estimates = emptyList(),
                         repairs = emptyList(),
-                        repairTaskBoards = emptyList(),
+                        repairTaskBoard = null,
                         acceptanceRepairs = emptyList(),
                         acceptanceEditor = null,
                         acceptanceGallery = null,

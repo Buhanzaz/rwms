@@ -147,7 +147,7 @@ Table paths are relative to `/api`. JSON fields, enums, and responses are in
 
 | `operationId`                            | Method and path                                                                                   | Purpose and important rule                                                                                                           |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `getTaskBoard`                           | `GET /warehouses/{warehouseId}/task-board?date=&includeShadow=`                                   | Date-scoped board. `If-None-Match` uses a weak semantic ETag: rolling counters do not change it; timer state and next transition do. |
+| `getTaskBoard`                           | `GET /warehouses/{warehouseId}/task-board`                                                        | Aggregate ordinary board: all active real cards and the bounded waiting window per queue. `If-None-Match` uses a weak semantic ETag. |
 | `getDriverLogisticsBoard`                | `GET /warehouses/{warehouseId}/task-board/logistics`                                              | Separate driver board: sticky current lane plus non-empty scheduled-date columns, without ordinary repair queues.                    |
 | `getWarehouseKpiSettings`                | `GET /warehouses/{warehouseId}/task-board/kpi-settings`                                           | Active and pending KPI settings for the selected warehouse.                                                                          |
 | `replaceWarehouseKpiPalette`             | `PUT /warehouses/{warehouseId}/task-board/kpi-settings/palette`                                   | Version-fenced replacement of ranges and overdue color.                                                                              |
@@ -163,14 +163,12 @@ Table paths are relative to `/api`. JSON fields, enums, and responses are in
 | `pauseTaskEntry`                         | `POST /warehouses/{warehouseId}/task-board/entries/{entryId}/pause`                               | Version-fenced pause of an active entry.                                                                                             |
 | `resumeTaskEntry`                        | `POST /warehouses/{warehouseId}/task-board/entries/{entryId}/resume`                              | Resumes a paused entry using its version.                                                                                            |
 | `completeTaskEntry`                      | `POST /warehouses/{warehouseId}/task-board/entries/{entryId}/complete`                            | Completes an entry using its version and completion rules.                                                                           |
-| `moveTaskEntry`                          | `POST /warehouses/{warehouseId}/task-board/entries/{entryId}/move`                                | Atomically checks entry version, task version, target queue/date/index.                                                              |
-| `swapTaskBoardDates`                     | `POST /warehouses/{warehouseId}/task-board/dates/swap`                                            | Exchanges two complete visual columns. It requires expectations for every REAL and SHADOW entry in both current snapshots.           |
 | `setTaskPinned`                          | `POST /warehouses/{warehouseId}/task-board/tasks/{taskId}/pin`                                    | Pins or unpins every route queue without changing position.                                                                          |
 
 ### Read a board with ETag
 
 ```http
-GET /api/task-board/warehouses/{warehouseId}/task-board?date=2026-08-07&includeShadow=true
+GET /api/task-board/warehouses/{warehouseId}/task-board
 Authorization: Bearer <JWT>
 If-None-Match: W/"task-board-..."
 ```
@@ -178,6 +176,11 @@ If-None-Match: W/"task-board-..."
 For unchanged semantic state the service returns `304` and the ETag. Do not
 treat a falling `remainingSeconds` alone as a board change: clients derive the
 rolling timer from server time, timer state, and `nextTransitionAt`.
+
+The ordinary board has no date or shadow query dimensions and no public move or date-swap
+commands. Each queue returns all real `IN_PROGRESS`/`PAUSED` cards plus its first
+`availableTaskLimit` real `WAITING` cards in server priority order; `TAKE` enforces the same window.
+Dated driver and shipment planning remains on the logistics board.
 
 ## Public API: worker app
 

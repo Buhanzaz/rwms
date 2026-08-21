@@ -4,7 +4,6 @@ import static dev.buhanzaz.rwms.taskboard.QueueFixtureModels.*;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CancelLogisticsEquipmentMovementTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CreateBoardTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.EquipmentMovementOperation;
-import static dev.buhanzaz.rwms.taskboard.api.ApiModels.MoveEntryRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueDefinitionRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RegisterLogisticsEquipmentMovementTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RouteStepRequest;
@@ -342,17 +341,6 @@ class LogisticsEquipmentMovementTaskIntegrationTest extends PostgresIntegrationT
         board.registerLogisticsEquipmentMovementTask(
             movementRequest(UUID.randomUUID(), OffsetDateTime.now().plusDays(1), 2L));
     var movementEntry = entries.findAllByTaskIdOrderByRouteIndexAsc(movement.taskId()).getFirst();
-    var movementTask = tasks.findById(movement.taskId()).orElseThrow();
-    board.move(
-        WAREHOUSE,
-        movementEntry.getId(),
-        new MoveEntryRequest(
-            movementEntry.getVersion(),
-            movementTask.getVersion(),
-            queue.id(),
-            0,
-            movementTask.getScheduledDate()));
-    movementEntry = entries.findById(movementEntry.getId()).orElseThrow();
     BoardEntryDto started =
         board.take(
             WAREHOUSE,
@@ -389,7 +377,7 @@ class LogisticsEquipmentMovementTaskIntegrationTest extends PostgresIntegrationT
   }
 
   private BoardEntryDto entry(UUID externalTaskId) {
-    return board.snapshot(WAREHOUSE, true).columns().stream()
+    return board.snapshot(WAREHOUSE).columns().stream()
         .flatMap(column -> column.entries().stream())
         .filter(entry -> externalTaskId.equals(entry.externalTaskId()))
         .findFirst()

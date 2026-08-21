@@ -1115,7 +1115,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(snapshot.columns().stream().flatMap(column -> column.entries().stream()))
         .extracting(BoardEntryDto::taskText)
         .containsExactly("hold");
-    assertThat(board.snapshot(W1, true).columns().stream().flatMap(c -> c.entries().stream()))
+    assertThat(board.snapshot(W1).columns().stream().flatMap(c -> c.entries().stream()))
         .extracting(BoardEntryDto::taskText)
         .containsExactly("hold");
   }
@@ -1148,7 +1148,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThatThrownBy(() -> board.createTask(W1, missingQueueRoute))
         .isInstanceOf(ConflictException.class)
         .hasMessageContaining("общей очереди");
-    assertThat(board.snapshot(W1, true).columns())
+    assertThat(board.snapshot(W1).columns())
         .flatExtracting(BoardColumnDto::entries)
         .isEmpty();
 
@@ -1628,7 +1628,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void concurrentCompleteMoveAndCancelPreserveQueuePositionInvariants() throws Exception {
+  void concurrentCompleteAndCancelPreserveQueuePositionInvariants() throws Exception {
     var workerClass = registry.createClass(workerClass("QUEUE_RACE_WORKER"));
     var source =
         QueueRegistryTestFixtures.create(registry, jdbc,
@@ -1636,13 +1636,6 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             queue(
                 "QUEUE_RACE_SOURCE",
                 QueueType.MOVEMENT,
-                List.of(new QueueBindingRequest(workerClass.id(), false))));
-    var target =
-        QueueRegistryTestFixtures.create(registry, jdbc,
-            W1,
-            queue(
-                "QUEUE_RACE_TARGET",
-                QueueType.REPAIR,
                 List.of(new QueueBindingRequest(workerClass.id(), false))));
     var worker =
         workforce.createWorker(
@@ -1653,10 +1646,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 null,
                 List.of(new QualificationRequest(workerClass.id(), true, null))));
     UUID completeExternal = UUID.randomUUID();
-    UUID moveExternal = UUID.randomUUID();
     UUID cancelExternal = UUID.randomUUID();
     board.createTask(W1, externalTask(completeExternal, source.id(), "complete-race"));
-    board.createTask(W1, externalTask(moveExternal, source.id(), "move-race"));
     board.createTask(W1, externalTask(cancelExternal, source.id(), "cancel-race"));
     var completeEntry = entry("complete-race");
     completeEntry =
@@ -1665,11 +1656,10 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             completeEntry.id(),
             new TakeEntryRequest(completeEntry.version(), null, worker.id()),
             null);
-    var moveEntry = entry("move-race");
     long cancelVersion = board.registration(W1, cancelExternal).taskVersion();
 
     CountDownLatch start = new CountDownLatch(1);
-    try (var executor = Executors.newFixedThreadPool(3)) {
+    try (var executor = Executors.newFixedThreadPool(2)) {
       BoardEntryDto finalCompleteEntry = completeEntry;
       var completeFuture =
           executor.submit(
@@ -1680,24 +1670,6 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                     finalCompleteEntry.id(),
                     new VersionCommand(finalCompleteEntry.version()),
                     null);
-              });
-      var moveFuture =
-          executor.submit(
-              () -> {
-                start.await();
-                try {
-                  return board.move(
-                      W1,
-                      moveEntry.id(),
-                      new MoveEntryRequest(
-                          moveEntry.version(),
-                          moveEntry.taskVersion(),
-                          target.id(),
-                          0,
-                          moveEntry.scheduledDate()));
-                } catch (RuntimeException conflict) {
-                  return conflict;
-                }
               });
       var cancelFuture =
           executor.submit(
@@ -1711,10 +1683,6 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
       start.countDown();
       assertThat(completeFuture.get(10, TimeUnit.SECONDS).status()).isEqualTo(EntryStatus.DONE);
       assertThat(cancelFuture.get(10, TimeUnit.SECONDS).status()).isEqualTo(TaskStatus.CANCELLED);
-      Object moveResult = moveFuture.get(10, TimeUnit.SECONDS);
-      assertThat(moveResult)
-          .matches(
-              value -> value instanceof TaskBoardSnapshot || value instanceof StaleVersionException);
     }
 
     assertThat(tasks.findByWarehouseIdAndExternalTaskId(W1, completeExternal).orElseThrow().getStatus())
@@ -1731,9 +1699,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                and e.status in ('WAITING', 'IN_PROGRESS', 'PAUSED')
             """,
             W1);
-    assertThat(unfinished).hasSize(1);
-    assertThat(unfinished.getFirst().get("external_task_id")).isEqualTo(moveExternal);
-    assertThat(unfinished.getFirst().get("queue_position")).isEqualTo(0);
+    assertThat(unfinished).isEmpty();
   }
 
   @Test
@@ -1822,22 +1788,6 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 String.class,
                 TaskBoardEventTypes.BOARD_TASK_CANCELLED))
         .doesNotContain("Отмена логистической операции", "Повторная отмена");
-    var cancelledEntry = entries.findById(entry.id()).orElseThrow();
-    LocalDate cancelledDate =
-        tasks.findById(cancelled.taskId()).orElseThrow().getScheduledDate();
-    assertThatThrownBy(
-            () ->
-                board.move(
-                    W1,
-                    cancelledEntry.getId(),
-                    new MoveEntryRequest(
-                        cancelledEntry.getVersion(),
-                        cancelled.taskVersion(),
-                        null,
-                        0,
-                        cancelledDate)))
-        .isInstanceOf(ConflictException.class)
-        .hasMessageContaining("отмененный");
   }
 
   @RepeatedTest(10)
@@ -1967,20 +1917,6 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                     new CancelTaskRequest(doneTask.getVersion(), "Поздняя отмена")))
         .isInstanceOf(ConflictException.class)
         .hasMessageContaining("Завершенную задачу");
-    var completedEntry = entries.findById(entry.id()).orElseThrow();
-    assertThatThrownBy(
-            () ->
-                board.move(
-                    W1,
-                    completedEntry.getId(),
-                    new MoveEntryRequest(
-                        completedEntry.getVersion(),
-                        doneTask.getVersion(),
-                        null,
-                        0,
-                        doneTask.getScheduledDate())))
-        .isInstanceOf(ConflictException.class)
-        .hasMessageContaining("Завершенный");
   }
 
   @Test
@@ -2000,7 +1936,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     var renamed = registry.listQueues(W1).getFirst();
     assertThat(renamed.id()).isEqualTo(current.id());
     assertThat(renamed.name()).isEqualTo("Renamed repair");
-    assertThat(board.snapshot(W1, true).columns())
+    assertThat(board.snapshot(W1).columns())
         .extracting(BoardColumnDto::queueName)
         .containsExactly("Renamed repair");
   }
@@ -3443,347 +3379,226 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void moveInsertsAtTargetAndNormalizesBothQueues() {
-    var q1 = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("ONE", QueueType.REPAIR, List.of()));
-    var q2 = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("TWO", QueueType.REPAIR, List.of()));
-    var moving =
-        board.createTask(W1, task(q1.id(), "moving")).columns().stream()
-            .flatMap(c -> c.entries().stream())
-            .filter(e -> e.title().equals("moving"))
-            .findFirst()
-            .orElseThrow();
-    board.createTask(W1, task(q1.id(), "left"));
-    board.createTask(W1, task(q2.id(), "target"));
-    var snapshot =
-        board.move(
-            W1,
-            moving.id(),
-            new MoveEntryRequest(
-                moving.version(), moving.taskVersion(), q2.id(), 0, moving.scheduledDate()));
-    var source =
-        snapshot.columns().stream()
-            .filter(c -> q1.id().equals(c.queueId()))
-            .findFirst()
-            .orElseThrow();
-    var target =
-        snapshot.columns().stream()
-            .filter(c -> q2.id().equals(c.queueId()))
-            .findFirst()
-            .orElseThrow();
-    assertThat(source.entries()).extracting(BoardEntryDto::queuePosition).containsExactly(0);
-    assertThat(target.entries())
-        .extracting(BoardEntryDto::title)
-        .containsExactly("moving", "target");
-    assertThat(target.entries()).extracting(BoardEntryDto::queuePosition).containsExactly(0, 1);
-  }
-
-  @Test
-  void sameDayMovePropagatesToCompanionRouteQueuesBehindActiveAndPinnedBarriers() {
-    var workerClass = registry.createClass(workerClass("ROUTE_ORDER_WORKER"));
-    var firstQueue =
-        QueueRegistryTestFixtures.create(registry, jdbc,
+  void workerCompletesRemainingMaintenanceQueuePackageAsOneTask() {
+    var workerClass = registry.createClass(workerClass("MAINTENANCE_PACKAGE_WORKER"));
+    var queue =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
             W1,
             queue(
-                "ROUTE_ORDER_FIRST",
+                "Внутренние работы",
                 QueueType.REPAIR,
-                List.of(new QueueBindingRequest(workerClass.id(), false))));
-    var secondQueue =
-        QueueRegistryTestFixtures.create(registry, jdbc,
-            W1, queue("ROUTE_ORDER_SECOND", QueueType.REPAIR, List.of()));
+                List.of(
+                    new QueueBindingRequest(
+                        workerClass.id(),
+                        0,
+                        false,
+                        ParticipationPolicy.PRIMARY,
+                        false))));
     var worker =
         workforce.createWorker(
             W1,
             worker(
-                "Route order worker",
+                "Исполнитель пакета",
                 null,
                 null,
                 List.of(new QualificationRequest(workerClass.id(), true, null))));
-    LocalDate date = LocalDate.of(2026, 7, 24);
-    board.createTask(
-        W1,
-        scheduledRouteTask(
-            List.of(firstQueue.id(), secondQueue.id()), "active", date, 3));
-    board.createTask(W1, scheduledTask(firstQueue.id(), "pinned", date, 3));
-    board.createTask(
-        W1,
-        scheduledRouteTask(
-            List.of(firstQueue.id(), secondQueue.id()), "middle", date, 3));
-    board.createTask(
-        W1,
-        scheduledRouteTask(
-            List.of(firstQueue.id(), secondQueue.id()), "moving", date, 3));
-    BoardEntryDto pinned = entry(date, firstQueue.id(), "pinned");
-    board.pin(W1, pinned.taskId(), new PinTaskRequest(pinned.taskVersion(), true));
-    BoardEntryDto active = entry(date, firstQueue.id(), "active");
-    board.take(
-        W1,
-        active.id(),
-        new TakeEntryRequest(active.version(), null, worker.id()),
-        null);
-
-    BoardEntryDto moving = entry(date, firstQueue.id(), "moving");
-    TaskBoardSnapshot moved =
-        board.move(
+    jdbc.update(
+        "update worker set app_login='maintenance.package.worker' where id=?",
+        worker.id());
+    var group =
+        workforce.createGroup(
             W1,
-            moving.id(),
-            new MoveEntryRequest(
-                moving.version(),
-                moving.taskVersion(),
-                firstQueue.id(),
-                0,
-                date));
+            new WorkerGroupRequest(
+                0L,
+                workerClass.id(),
+                "Бригада разнорабочих 1",
+                null,
+                true,
+                List.of(new GroupMemberRequest(worker.id(), null, true))));
+    workforce.setCurrentGroup(
+        W1,
+        worker.id(),
+        new SetCurrentGroupRequest(worker.version(), group.id()));
 
-    assertThat(queueEntries(moved, firstQueue.id()))
-        .extracting(BoardEntryDto::title)
-        .containsExactly("active", "pinned", "moving", "middle");
-    assertThat(queueEntries(moved, secondQueue.id()))
-        .extracting(BoardEntryDto::title)
-        .containsExactly("active", "moving", "middle");
-    assertThat(queueEntries(moved, firstQueue.id()))
-        .extracting(BoardEntryDto::queuePosition)
-        .containsExactly(0, 1, 2, 3);
-    assertThat(queueEntries(moved, secondQueue.id()))
-        .extracting(BoardEntryDto::queuePosition)
-        .containsExactly(0, 1, 2);
-  }
+    List<RouteStepRequest> requestedRoute =
+        List.of(
+            maintenancePackageStep(
+                queue.definitionId(), "Замена ПВХ панели", "ПВХ панель"),
+            maintenancePackageStep(
+                queue.definitionId(), "Влажная уборка пола", null),
+            maintenancePackageStep(
+                queue.definitionId(), "Замена/Установка Буклетов", "Буклет"),
+            maintenancePackageStep(
+                queue.definitionId(), "Замена/Установка Вешалки", "Вешалка"),
+            maintenancePackageStep(
+                queue.definitionId(), "Замена/Установка Рекламы ББ", "Реклама ББ"));
+    UUID externalTaskId = UUID.randomUUID();
+    BoardTaskRegistrationDto registration =
+        board.registerExternalTask(
+            "maintenance-service",
+            new RegisterExternalTaskRequest(
+                W1,
+                externalTaskId,
+                "Maintenance repair",
+                "011015",
+                null,
+                null,
+                null,
+                requestedRoute,
+                LocalDate.of(2026, 8, 21),
+                3,
+                new TaskSourceReferenceDto(
+                    TaskSourceType.MAINTENANCE_REPAIR, UUID.randomUUID()),
+                TaskLane.SCHEDULED));
 
-  @Test
-  void dateMoveMovesEveryRouteEntryAndKeepsTheRequestedOrdinalInEachQueue() {
-    var sourceQueue =
-        QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("ROUTE_DATE_SOURCE", QueueType.REPAIR, List.of()));
-    var companionQueue =
-        QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("ROUTE_DATE_COMPANION", QueueType.REPAIR, List.of()));
-    var targetQueue =
-        QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("ROUTE_DATE_TARGET", QueueType.REPAIR, List.of()));
-    LocalDate firstDate = LocalDate.of(2026, 7, 24);
-    LocalDate secondDate = firstDate.plusDays(1);
-    board.createTask(
-        W1,
-        scheduledRouteTask(
-            List.of(sourceQueue.id(), companionQueue.id()), "moving", firstDate, 3));
-    board.createTask(
-        W1,
-        scheduledRouteTask(
-            List.of(sourceQueue.id(), companionQueue.id()), "remaining", firstDate, 3));
-    board.createTask(
-        W1,
-        scheduledRouteTask(
-            List.of(companionQueue.id(), targetQueue.id()), "planned-first", secondDate, 3));
-    board.createTask(
-        W1,
-        scheduledRouteTask(
-            List.of(companionQueue.id(), targetQueue.id()), "planned-last", secondDate, 3));
-    BoardEntryDto moving = entry(firstDate, sourceQueue.id(), "moving");
+    List<QueueEntry> persistedRoute =
+        entries.findAllByTaskIdOrderByRouteIndexAsc(registration.taskId());
+    OffsetDateTime alreadyDoneAt = OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(1);
+    persistedRoute.subList(0, 2).forEach(
+        completed -> {
+          completed.setStatus(EntryStatus.DONE);
+          completed.setDoneAt(alreadyDoneAt);
+        });
+    QueueEntry representative = persistedRoute.get(2);
+    representative.setEntryType(EntryType.REAL);
+    entries.saveAllAndFlush(persistedRoute);
 
-    TaskBoardSnapshot moved =
-        board.move(
+    WorkerTaskDetail offered =
+        workerBoard.detail(
+            MobileTaskSurface.WORKER, worker.id(), W1, representative.getId());
+    assertThat(offered.works())
+        .extracting(WorkerWork::name)
+        .containsExactly(
+            "Замена ПВХ панели",
+            "Влажная уборка пола",
+            "Замена/Установка Буклетов",
+            "Замена/Установка Вешалки",
+            "Замена/Установка Рекламы ББ");
+    assertThat(offered.materials())
+        .extracting(WorkerMaterial::name)
+        .containsExactly("ПВХ панель", "Буклет", "Вешалка", "Реклама ББ");
+    assertThat(offered.plannedDurationMinutes()).isEqualTo(45);
+    assertThat(offered.timerSnapshot().remainingSeconds()).isEqualTo(45L * 60L);
+    assertThat(offered.timerSnapshot().remainingPercent()).isEqualByComparingTo("100.00");
+
+    WorkerContext takeContext =
+        workerBoard.context(MobileTaskSurface.WORKER, worker.id(), W1);
+    UUID takeOperation = UUID.randomUUID();
+    WorkerActionAppliedResult taken =
+        workerBoard.applyAction(
+            MobileTaskSurface.WORKER,
+            worker.id(),
             W1,
-            moving.id(),
-            new MoveEntryRequest(
-                moving.version(),
-                moving.taskVersion(),
-                targetQueue.id(),
-                1,
-                secondDate));
+            representative.getId(),
+            takeOperation.toString(),
+            new WorkerActionRequest(
+                takeOperation,
+                WorkerAction.TAKE,
+                offered.version(),
+                group.id(),
+                takeContext.serverTime(),
+                takeContext.offlineLease().id(),
+                null));
 
-    assertThat(moved.selectedDate()).isEqualTo(secondDate);
-    assertThat(queueEntries(moved, targetQueue.id()))
-        .extracting(BoardEntryDto::title)
-        .containsExactly("planned-first", "moving", "planned-last");
-    assertThat(queueEntries(moved, companionQueue.id()))
-        .extracting(BoardEntryDto::title)
-        .containsExactly("planned-first", "moving", "planned-last");
-    assertThat(queueEntries(board.snapshot(W1, firstDate, true), sourceQueue.id()))
-        .extracting(BoardEntryDto::title)
-        .containsExactly("remaining");
-    assertThat(queueEntries(board.snapshot(W1, firstDate, true), companionQueue.id()))
-        .extracting(BoardEntryDto::title)
-        .containsExactly("remaining");
-  }
-
-  @Test
-  void swappingDateColumnsKeepsTaskMembershipAndPersistsTheCommonRouteDate() {
-    var repairQueue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("DATE_SWAP_REPAIR", QueueType.REPAIR, List.of()));
-    var verificationQueue =
-        QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("DATE_SWAP_VERIFY", QueueType.REPAIR, List.of()));
-    LocalDate firstDate = LocalDate.of(2026, 7, 24);
-    LocalDate secondDate = firstDate.plusDays(1);
-    board.createTask(
+    WorkerContext evidenceContext =
+        workerBoard.context(MobileTaskSurface.WORKER, worker.id(), W1);
+    UUID evidenceOperation = UUID.randomUUID();
+    UUID evidenceId = UUID.randomUUID();
+    workerBoard.reserveEvidence(
+        MobileTaskSurface.WORKER,
+        worker.id(),
         W1,
-        scheduledRouteTask(
-            List.of(repairQueue.id(), verificationQueue.id()), "first-route", firstDate, 3));
-    board.createTask(W1, scheduledTask(repairQueue.id(), "first-single", firstDate, 3));
-    board.createTask(
-        W1,
-        scheduledRouteTask(
-            List.of(repairQueue.id(), verificationQueue.id()), "second-route", secondDate, 3));
-    board.createTask(W1, scheduledTask(verificationQueue.id(), "second-single", secondDate, 3));
+        representative.getId(),
+        evidenceOperation.toString(),
+        new EvidenceReservationRequest(
+            evidenceOperation,
+            evidenceId,
+            representative.getRouteIndex(),
+            evidenceContext.serverTime(),
+            evidenceContext.offlineLease().id(),
+            "image/jpeg",
+            128,
+            "c".repeat(64)));
+    publishReadyTaskEvidence(
+        representative.getId(), evidenceId, worker.id(), UUID.randomUUID());
 
-    TaskBoardSnapshot firstBefore = board.snapshot(W1, firstDate, true);
-    TaskBoardSnapshot secondBefore = board.snapshot(W1, secondDate, true);
-    List<BoardEntryDto> firstBeforeEntries = boardEntries(firstBefore);
-    List<BoardEntryDto> secondBeforeEntries = boardEntries(secondBefore);
-    Map<UUID, String> physicalPlacementBefore = new java.util.LinkedHashMap<>();
-    for (BoardEntryDto entry : firstBeforeEntries) {
-      physicalPlacementBefore.put(
-          entry.id(), entry.queueId() + ":" + entry.queuePosition() + ":" + entry.version());
-    }
-    for (BoardEntryDto entry : secondBeforeEntries) {
-      physicalPlacementBefore.put(
-          entry.id(), entry.queueId() + ":" + entry.queuePosition() + ":" + entry.version());
-    }
-    UUID firstRouteTaskId =
-        firstBeforeEntries.stream()
-            .filter(entry -> entry.title().equals("first-route"))
-            .findFirst()
-            .orElseThrow()
-            .taskId();
+    WorkerTaskDetail ready =
+        workerBoard.detail(
+            MobileTaskSurface.WORKER, worker.id(), W1, representative.getId());
+    UUID completeOperation = UUID.randomUUID();
+    WorkerContext completeContext =
+        workerBoard.context(MobileTaskSurface.WORKER, worker.id(), W1);
+    WorkerActionRequest completeRequest =
+        new WorkerActionRequest(
+            completeOperation,
+            WorkerAction.COMPLETE,
+            ready.version(),
+            group.id(),
+            completeContext.serverTime(),
+            completeContext.offlineLease().id(),
+            evidenceId);
+    WorkerActionAppliedResult completed =
+        workerBoard.applyAction(
+            MobileTaskSurface.WORKER,
+            worker.id(),
+            W1,
+            representative.getId(),
+            completeOperation.toString(),
+            completeRequest);
+    WorkerActionAppliedResult replayed =
+        workerBoard.applyAction(
+            MobileTaskSurface.WORKER,
+            worker.id(),
+            W1,
+            representative.getId(),
+            completeOperation.toString(),
+            completeRequest);
 
-    TaskBoardSnapshot firstAfter =
-        board.swapDates(
-            W1, swapDateColumnsRequest(firstDate, firstBefore, secondDate, secondBefore));
-    TaskBoardSnapshot secondAfter = board.snapshot(W1, secondDate, true);
-
-    assertThat(firstAfter.selectedDate()).isEqualTo(firstDate);
-    assertThat(boardEntries(firstAfter))
-        .extracting(BoardEntryDto::id)
-        .containsExactlyInAnyOrderElementsOf(
-            secondBeforeEntries.stream().map(BoardEntryDto::id).toList());
-    assertThat(boardEntries(secondAfter))
-        .extracting(BoardEntryDto::id)
-        .containsExactlyInAnyOrderElementsOf(
-            firstBeforeEntries.stream().map(BoardEntryDto::id).toList());
-    assertThat(boardEntries(firstAfter))
-        .extracting(BoardEntryDto::scheduledDate)
-        .containsOnly(firstDate);
-    assertThat(boardEntries(secondAfter))
-        .extracting(BoardEntryDto::scheduledDate)
-        .containsOnly(secondDate);
-
-    Map<UUID, String> physicalPlacementAfter = new java.util.LinkedHashMap<>();
-    for (BoardEntryDto entry : boardEntries(firstAfter)) {
-      physicalPlacementAfter.put(
-          entry.id(), entry.queueId() + ":" + entry.queuePosition() + ":" + entry.version());
-    }
-    for (BoardEntryDto entry : boardEntries(secondAfter)) {
-      physicalPlacementAfter.put(
-          entry.id(), entry.queueId() + ":" + entry.queuePosition() + ":" + entry.version());
-    }
-    assertThat(physicalPlacementAfter).containsExactlyInAnyOrderEntriesOf(physicalPlacementBefore);
-
-    assertThat(entries.findAllByTaskIdOrderByRouteIndexAsc(firstRouteTaskId)).hasSize(2);
+    assertThat(taken.entry().status()).isEqualTo("IN_PROGRESS");
+    assertThat(completed.entry().status()).isEqualTo("DONE");
+    assertThat(replayed.outcome()).isEqualTo("REPLAYED");
+    assertThat(replayed.entry().entryId()).isEqualTo(representative.getId());
+    List<QueueEntry> completedRoute =
+        entries.findAllByTaskIdOrderByRouteIndexAsc(registration.taskId());
+    assertThat(completedRoute)
+        .extracting(QueueEntry::getStatus)
+        .containsOnly(EntryStatus.DONE);
+    assertThat(tasks.findById(registration.taskId()).orElseThrow().getStatus())
+        .isEqualTo(TaskStatus.DONE);
     assertThat(
-            jdbc.queryForList(
-                """
-                select task.scheduled_date
-                  from queue_entry entry
-                  join board_task task on task.id = entry.task_id
-                 where entry.task_id = ?
-                 order by entry.route_index
-                """,
-                LocalDate.class,
-                firstRouteTaskId))
-        .containsExactly(secondDate, secondDate);
+            completedRoute.subList(2, 5).stream()
+                .flatMap(item -> assignments.findAllByQueueEntryId(item.getId()).stream()))
+        .extracting(TaskAssignment::getStatus)
+        .containsOnly(AssignmentStatus.DONE);
     assertThat(
             jdbc.queryForObject(
-                "select scheduled_date from board_task where id = ?",
-                LocalDate.class,
-                firstRouteTaskId))
-        .isEqualTo(secondDate);
-    assertThat(kafkaOutboxCount(TaskBoardEventTypes.BOARD_TASK_CHANGED)).isEqualTo(4);
+                """
+                select count(*)
+                  from domain_event
+                 where event_type=?
+                   and aggregate_id in (?,?,?)
+                """,
+                Integer.class,
+                TaskBoardEventTypes.QUEUE_ENTRY_COMPLETED,
+                completedRoute.get(2).getId().toString(),
+                completedRoute.get(3).getId().toString(),
+                completedRoute.get(4).getId().toString()))
+        .isEqualTo(3);
+    assertThat(
+            workerBoard
+                .detail(
+                    MobileTaskSurface.WORKER,
+                    worker.id(),
+                    W1,
+                    representative.getId())
+                .works())
+        .hasSize(5);
   }
 
   @Test
-  void routePropagationPreservesRealShadowQueueSwap() {
-    var firstQueue =
-        QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("ROUTE_SWAP_FIRST", QueueType.REPAIR, List.of()));
-    var secondQueue =
-        QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("ROUTE_SWAP_SECOND", QueueType.REPAIR, List.of()));
-    LocalDate date = LocalDate.of(2026, 7, 24);
-    board.createTask(
-        W1,
-        scheduledRouteTask(
-            List.of(firstQueue.id(), secondQueue.id()), "moving", date, 3));
-    BoardEntryDto moving = entry(date, firstQueue.id(), "moving");
-
-    TaskBoardSnapshot moved =
-        board.move(
-            W1,
-            moving.id(),
-            new MoveEntryRequest(
-                moving.version(),
-                moving.taskVersion(),
-                secondQueue.id(),
-                0,
-                date));
-
-    List<QueueEntry> route =
-        entries.findAllByTaskIdOrderByRouteIndexAsc(moving.taskId());
-    assertThat(route)
-        .extracting(routeEntry -> routeEntry.getQueue().getId())
-        .containsExactly(secondQueue.id(), firstQueue.id());
-    assertThat(route)
-        .extracting(QueueEntry::getEntryType)
-        .containsExactly(EntryType.REAL, EntryType.SHADOW);
-    assertThat(queueEntries(moved, firstQueue.id()))
-        .extracting(BoardEntryDto::title)
-        .containsExactly("moving");
-    assertThat(queueEntries(moved, secondQueue.id()))
-        .extracting(BoardEntryDto::title)
-        .containsExactly("moving");
-  }
-
-  @Test
-  void repeatedWaitingStagesInOneQueueMoveTogetherWithoutAFalseConflict() {
-    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("REPEATED_ROUTE", QueueType.REPAIR, List.of()));
-    LocalDate date = LocalDate.of(2026, 7, 24);
-    board.createTask(W1, scheduledTask(queue.id(), "first", date, 3));
-    board.registerExternalTask(
-        "maintenance-service",
-        new RegisterExternalTaskRequest(
-            W1,
-            UUID.randomUUID(),
-            "moving",
-            "БТ-3",
-            null,
-            null,
-            null,
-            List.of(
-                new RouteStepRequest(queue.definitionId(), "first stage", null),
-                new RouteStepRequest(queue.definitionId(), "second stage", null)),
-            date,
-            3));
-    board.createTask(W1, scheduledTask(queue.id(), "last", date, 3));
-    BoardEntryDto realEntry =
-        queueEntries(board.snapshot(W1, date, true), queue.id()).stream()
-            .filter(
-                candidate ->
-                    candidate.title().equals("moving")
-                        && candidate.entryType() == EntryType.REAL)
-            .findFirst()
-            .orElseThrow();
-
-    TaskBoardSnapshot moved =
-        board.move(
-            W1,
-            realEntry.id(),
-            new MoveEntryRequest(
-                realEntry.version(),
-                realEntry.taskVersion(),
-                queue.id(),
-                0,
-                date));
-
-    assertThat(queueEntries(moved, queue.id()))
-        .extracting(BoardEntryDto::title)
-        .containsExactly("moving", "moving", "first", "last");
-    assertThat(queueEntries(moved, queue.id()).subList(0, 2))
-        .extracting(BoardEntryDto::routeIndex)
-        .containsExactly(0, 1);
-  }
-
-  @Test
-  void newTasksAreAppendedToTheirPriorityGroup() {
+  void waitingWindowKeepsPriorityGroupsStableAndBounded() {
     var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("STABLE_PRIORITY", QueueType.REPAIR, List.of()));
     LocalDate date = LocalDate.of(2026, 7, 24);
     board.createTask(W1, scheduledTask(queue.id(), "priority 4 first", date, 4));
@@ -3794,7 +3609,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     board.createTask(W1, scheduledTask(queue.id(), "priority 4 second", date, 4));
     board.createTask(W1, scheduledTask(queue.id(), "priority 1 second", date, 1));
 
-    assertThat(queueEntries(board.snapshot(W1, date, true), queue.id()))
+    assertThat(queueEntries(board.snapshot(W1), queue.id()))
         .extracting(BoardEntryDto::title)
         .containsExactly(
             "priority 1 first",
@@ -3802,147 +3617,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             "priority 2",
             "priority 3",
             "priority 4 first",
-            "priority 4 second",
-            "priority 5");
-  }
-
-  @Test
-  void maintenanceRegistrationUsesDailyCapacityButManualDateMovesRemainUnrestricted() {
-    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("DAILY_CAPACITY", QueueType.REPAIR, List.of()));
-    LocalDate requestedDate = LocalDate.of(2026, 7, 25);
-    assertThatThrownBy(
-            () ->
-                board.registerExternalTask(
-                    "maintenance-service",
-                    new RegisterExternalTaskRequest(
-                        W1,
-                        UUID.randomUUID(),
-                        "ordinary-audience-rejected",
-                        null,
-                        null,
-                        null,
-                        null,
-                        List.of(new RouteStepRequest(queue.definitionId(), "repair", null)),
-                        requestedDate,
-                        3,
-                        null,
-                        null,
-                        TaskLane.SCHEDULED,
-                        new DriverTaskAudienceDto(
-                            DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null))))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("только логистическому заданию");
-    List<BoardTaskRegistrationDto> registrations = new java.util.ArrayList<>();
-    for (int number = 1; number <= 7; number++) {
-      List<RouteStepRequest> route =
-          number == 1
-              ? List.of(
-                  new RouteStepRequest(queue.definitionId(), "repair", null),
-                  new RouteStepRequest(queue.definitionId(), "verification", null))
-              : List.of(new RouteStepRequest(queue.definitionId(), "repair", null));
-      registrations.add(
-          board.registerExternalTask(
-              "maintenance-service",
-              new RegisterExternalTaskRequest(
-                  W1,
-                  UUID.randomUUID(),
-                  "maintenance-" + number,
-                  "BT-" + number,
-                  null,
-                  null,
-                  null,
-                  route,
-                  requestedDate,
-                  3,
-                  6)));
-    }
-
-    assertThat(registrations.subList(0, 6))
-        .extracting(BoardTaskRegistrationDto::scheduledDate)
-        .containsOnly(requestedDate);
-    assertThat(registrations)
-        .extracting(BoardTaskRegistrationDto::driverAudience)
-        .containsOnlyNulls();
-    BoardTaskRegistrationDto seventhRegistration = registrations.get(6);
-    LocalDate overflowDate = requestedDate.plusDays(1);
-    assertThat(seventhRegistration.scheduledDate()).isEqualTo(overflowDate);
-    assertThat(tasks.findById(seventhRegistration.taskId()).orElseThrow().getScheduledDate())
-        .isEqualTo(overflowDate);
-    assertThat(
-            board.registerExternalTask(
-                "maintenance-service",
-                new RegisterExternalTaskRequest(
-                    W1,
-                    seventhRegistration.externalTaskId(),
-                    "maintenance-7",
-                    "BT-7",
-                    null,
-                    null,
-                    null,
-                    List.of(new RouteStepRequest(queue.definitionId(), "repair", null)),
-                    requestedDate,
-                    3,
-                    7)))
-        .isEqualTo(seventhRegistration);
-
-    BoardEntryDto seventhEntry = entry(overflowDate, "maintenance-7");
-    TaskBoardSnapshot moved =
-        board.move(
-            W1,
-            seventhEntry.id(),
-            new MoveEntryRequest(
-                seventhEntry.version(),
-                seventhEntry.taskVersion(),
-                queue.id(),
-                6,
-                requestedDate));
-
-    assertThat(moved.selectedDate()).isEqualTo(requestedDate);
-    assertThat(queueEntries(board.snapshot(W1, requestedDate, false), queue.id()))
-        .extracting(BoardEntryDto::taskId)
-        .containsExactlyInAnyOrderElementsOf(
-            registrations.stream().map(BoardTaskRegistrationDto::taskId).toList());
-  }
-
-  @Test
-  void dailyCapacityDoesNotChangeNonMaintenanceOrPublicRegistration() {
-    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("CAPACITY_SCOPE", QueueType.REPAIR, List.of()));
-    LocalDate requestedDate = LocalDate.of(2026, 7, 25);
-    board.registerExternalTask(
-        "maintenance-service",
-        new RegisterExternalTaskRequest(
-            W1,
-            UUID.randomUUID(),
-            "maintenance",
-            null,
-            null,
-            null,
-            null,
-            List.of(new RouteStepRequest(queue.definitionId(), "repair", null)),
-            requestedDate,
-            3,
-            1));
-
-    BoardTaskRegistrationDto otherSource =
-        board.registerExternalTask(
-            "other-service",
-            new RegisterExternalTaskRequest(
-                W1,
-                UUID.randomUUID(),
-                "other source",
-                null,
-                null,
-                null,
-                null,
-                List.of(new RouteStepRequest(queue.definitionId(), "repair", null)),
-                requestedDate,
-                3,
-                1));
-    TaskBoardSnapshot publicRegistration =
-        board.createTask(W1, scheduledTask(queue.id(), "public", requestedDate, 3));
-
-    assertThat(otherSource.scheduledDate()).isEqualTo(requestedDate);
-    assertThat(publicRegistration.selectedDate()).isEqualTo(requestedDate);
+            "priority 4 second");
   }
 
   @Test
@@ -4339,148 +4014,6 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void concurrentMaintenanceRegistrationsDoNotOverfillDailyCapacity() throws Exception {
-    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("CAPACITY_RACE", QueueType.REPAIR, List.of()));
-    LocalDate requestedDate = LocalDate.of(2026, 7, 25);
-
-    List<Object> outcomes =
-        race(
-            () ->
-                board.registerExternalTask(
-                    "maintenance-service",
-                    new RegisterExternalTaskRequest(
-                        W1,
-                        UUID.randomUUID(),
-                        "first",
-                        null,
-                        null,
-                        null,
-                        null,
-                        List.of(new RouteStepRequest(queue.definitionId(), "repair", null)),
-                        requestedDate,
-                        3,
-                        1)),
-            () ->
-                board.registerExternalTask(
-                    "maintenance-service",
-                    new RegisterExternalTaskRequest(
-                        W1,
-                        UUID.randomUUID(),
-                        "second",
-                        null,
-                        null,
-                        null,
-                        null,
-                        List.of(new RouteStepRequest(queue.definitionId(), "repair", null)),
-                        requestedDate,
-                        3,
-                        1)));
-
-    assertThat(outcomes).allMatch(BoardTaskRegistrationDto.class::isInstance);
-    assertThat(outcomes.stream().map(BoardTaskRegistrationDto.class::cast).toList())
-        .extracting(BoardTaskRegistrationDto::scheduledDate)
-        .containsExactlyInAnyOrder(requestedDate, requestedDate.plusDays(1));
-  }
-
-  @Test
-  void priorityInsertionKeepsPinnedOrdinalAndDateMoveUpdatesBothViews() {
-    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("PLANNED", QueueType.REPAIR, List.of()));
-    LocalDate firstDate = LocalDate.of(2026, 7, 24);
-    LocalDate secondDate = firstDate.plusDays(1);
-    board.createTask(W1, scheduledTask(queue.id(), "first", firstDate, 3));
-    board.createTask(W1, scheduledTask(queue.id(), "pinned", firstDate, 3));
-    BoardEntryDto pinned = entry(firstDate, "pinned");
-    board.pin(
-        W1, pinned.taskId(), new PinTaskRequest(pinned.taskVersion(), true));
-
-    board.createTask(W1, scheduledTask(queue.id(), "urgent", firstDate, 1));
-
-    assertThat(board.snapshot(W1, firstDate, true).columns().getFirst().entries())
-        .extracting(BoardEntryDto::title)
-        .containsExactly("urgent", "pinned", "first");
-    assertThat(entry(firstDate, "pinned").queuePosition()).isEqualTo(1);
-    BoardEntryDto urgent = entry(firstDate, "urgent");
-    TaskBoardSnapshot moved =
-        board.move(
-            W1,
-            urgent.id(),
-            new MoveEntryRequest(
-                urgent.version(),
-                urgent.taskVersion(),
-                queue.id(),
-                0,
-                secondDate));
-
-    assertThat(moved.selectedDate()).isEqualTo(secondDate);
-    assertThat(moved.availableDates()).containsExactly(firstDate, secondDate);
-    assertThat(moved.columns().getFirst().entries())
-        .extracting(BoardEntryDto::title)
-        .containsExactly("urgent");
-    assertThat(board.snapshot(W1, firstDate, true).columns().getFirst().entries())
-        .extracting(BoardEntryDto::title)
-        .containsExactly("first", "pinned");
-  }
-
-  @Test
-  void movingTaskFromBeforePinnedCardToAfterKeepsPinnedAbsoluteOrdinal() {
-    var queue =
-        QueueRegistryTestFixtures.create(
-            registry, jdbc, W1, queue("PINNED_ORDINAL_AFTER", QueueType.REPAIR, List.of()));
-    LocalDate date = LocalDate.of(2026, 8, 3);
-    board.createTask(W1, scheduledTask(queue.id(), "before", date, 3));
-    board.createTask(W1, scheduledTask(queue.id(), "pinned", date, 3));
-    board.createTask(W1, scheduledTask(queue.id(), "after", date, 3));
-    board.createTask(W1, scheduledTask(queue.id(), "tail", date, 3));
-
-    BoardEntryDto pinned = entry(date, queue.id(), "pinned");
-    board.pin(W1, pinned.taskId(), new PinTaskRequest(pinned.taskVersion(), true));
-    BoardEntryDto before = entry(date, queue.id(), "before");
-
-    TaskBoardSnapshot snapshot =
-        board.move(
-            W1,
-            before.id(),
-            new MoveEntryRequest(
-                before.version(), before.taskVersion(), queue.id(), 3, date));
-
-    assertThat(queueEntries(snapshot, queue.id()))
-        .extracting(BoardEntryDto::title)
-        .containsExactly("after", "pinned", "tail", "before");
-    assertThat(queueEntries(snapshot, queue.id()))
-        .extracting(BoardEntryDto::queuePosition)
-        .containsExactly(0, 1, 2, 3);
-  }
-
-  @Test
-  void movingTaskFromAfterPinnedCardToBeforeKeepsPinnedAbsoluteOrdinal() {
-    var queue =
-        QueueRegistryTestFixtures.create(
-            registry, jdbc, W1, queue("PINNED_ORDINAL_BEFORE", QueueType.REPAIR, List.of()));
-    LocalDate date = LocalDate.of(2026, 8, 3);
-    board.createTask(W1, scheduledTask(queue.id(), "before", date, 3));
-    board.createTask(W1, scheduledTask(queue.id(), "pinned", date, 3));
-    board.createTask(W1, scheduledTask(queue.id(), "after", date, 3));
-    board.createTask(W1, scheduledTask(queue.id(), "tail", date, 3));
-
-    BoardEntryDto pinned = entry(date, queue.id(), "pinned");
-    board.pin(W1, pinned.taskId(), new PinTaskRequest(pinned.taskVersion(), true));
-    BoardEntryDto tail = entry(date, queue.id(), "tail");
-
-    TaskBoardSnapshot snapshot =
-        board.move(
-            W1,
-            tail.id(),
-            new MoveEntryRequest(tail.version(), tail.taskVersion(), queue.id(), 0, date));
-
-    assertThat(queueEntries(snapshot, queue.id()))
-        .extracting(BoardEntryDto::title)
-        .containsExactly("tail", "pinned", "before", "after");
-    assertThat(queueEntries(snapshot, queue.id()))
-        .extracting(BoardEntryDto::queuePosition)
-        .containsExactly(0, 1, 2, 3);
-  }
-
-  @Test
   void urgentTaskIsInsertedImmediatelyAfterTheCurrentInProgressTask() {
     var workerClass = registry.createClass(workerClass("PRIORITY_WORKER"));
     var queue =
@@ -4501,7 +4034,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     LocalDate date = LocalDate.of(2026, 7, 24);
     board.createTask(W1, scheduledTask(queue.id(), "current", date, 3));
     board.createTask(W1, scheduledTask(queue.id(), "waiting", date, 3));
-    BoardEntryDto current = entry(date, "current");
+    BoardEntryDto current = entry("current");
     board.take(
         W1,
         current.id(),
@@ -4510,114 +4043,20 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
     board.createTask(W1, scheduledTask(queue.id(), "urgent", date, 1));
 
-    assertThat(board.snapshot(W1, date, true).columns().getFirst().entries())
+    assertThat(board.snapshot(W1).columns().getFirst().entries())
         .extracting(BoardEntryDto::title)
         .containsExactly("current", "urgent", "waiting");
 
-    BoardEntryDto paused =
-        board.pause(
-            W1,
-            current.id(),
-            new PauseEntryRequest(entry(date, "current").version(), "Перерыв"),
-            null);
-    board.createTask(W1, scheduledTask(queue.id(), "another urgent", date, 1));
-
-    assertThat(board.snapshot(W1, date, true).columns().getFirst().entries())
-        .extracting(BoardEntryDto::title)
-        .containsExactly("current", "urgent", "another urgent", "waiting");
-    assertThatThrownBy(
-            () ->
-                board.move(
-                    W1,
-                    paused.id(),
-                    new MoveEntryRequest(
-                        paused.version(),
-                        paused.taskVersion(),
-                        queue.id(),
-                        2,
-                        paused.scheduledDate())))
-        .isInstanceOf(ConflictException.class)
-        .hasMessageContaining("в работе");
-  }
-
-  @Test
-  void overdueMaintenanceTasksRollOverBeforeOriginallyPlannedTasks() {
-    var workerClass = registry.createClass(workerClass("ROLLOVER_WORKER"));
-    var queue =
-        QueueRegistryTestFixtures.create(registry, jdbc,
-            W1,
-            queue(
-                "ROLLOVER",
-                QueueType.REPAIR,
-                List.of(new QueueBindingRequest(workerClass.id(), false))));
-    var worker =
-        workforce.createWorker(
-            W1,
-            worker(
-                "Rollover worker",
-                null,
-                null,
-                List.of(new QualificationRequest(workerClass.id(), true, null))));
-    LocalDate today = LocalDate.of(2026, 7, 24);
-    board.createTask(W1, scheduledTask(queue.id(), "current", today, 3));
-    board.createTask(W1, scheduledTask(queue.id(), "planned", today, 3));
-    BoardEntryDto current = entry(today, "current");
-    board.take(
+    board.pause(
         W1,
         current.id(),
-        new TakeEntryRequest(current.version(), null, worker.id()),
+        new PauseEntryRequest(entry("current").version(), "Перерыв"),
         null);
-    board.registerExternalTask(
-        "maintenance-service",
-        new RegisterExternalTaskRequest(
-            W1,
-            UUID.randomUUID(),
-            "overdue",
-            "БТ-1",
-            null,
-            null,
-            null,
-            List.of(new RouteStepRequest(queue.definitionId(), "repair", null)),
-            today.minusDays(1),
-            4));
+    board.createTask(W1, scheduledTask(queue.id(), "another urgent", date, 1));
 
-    assertThat(board.rolloverOverdueMaintenanceTasks(today)).isEqualTo(1);
-
-    TaskBoardSnapshot snapshot = board.snapshot(W1, today, true);
-    assertThat(snapshot.availableDates()).containsExactly(today);
-    assertThat(snapshot.columns().getFirst().entries())
+    assertThat(board.snapshot(W1).columns().getFirst().entries())
         .extracting(BoardEntryDto::title)
-        .containsExactly("current", "overdue", "planned");
-    assertThat(board.rolloverOverdueMaintenanceTasks(today)).isZero();
-  }
-
-  @Test
-  void concurrentMaintenanceRolloverMovesEachTaskExactlyOnce() throws Exception {
-    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("ROLLOVER-RACE", QueueType.REPAIR, List.of()));
-    LocalDate today = LocalDate.of(2026, 7, 24);
-    board.registerExternalTask(
-        "maintenance-service",
-        new RegisterExternalTaskRequest(
-            W1,
-            UUID.randomUUID(),
-            "overdue",
-            "БТ-2",
-            null,
-            null,
-            null,
-            List.of(new RouteStepRequest(queue.definitionId(), "repair", null)),
-            today.minusDays(1),
-            3));
-
-    List<Object> outcomes =
-        race(
-            () -> board.rolloverOverdueMaintenanceTasks(today),
-            () -> board.rolloverOverdueMaintenanceTasks(today));
-
-    assertThat(outcomes).containsExactlyInAnyOrder(0, 1);
-    assertThat(board.snapshot(W1, today, true).columns().getFirst().entries())
-        .extracting(BoardEntryDto::title)
-        .containsExactly("overdue");
+        .containsExactly("current", "urgent", "another urgent", "waiting");
   }
 
   @Test
@@ -4732,65 +4171,6 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void dateColumnSwapApiRejectsStaleTaskVersionWithoutMovingEitherColumn() throws Exception {
-    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("HTTP_DATE_SWAP", QueueType.REPAIR, List.of()));
-    LocalDate firstDate = LocalDate.of(2026, 7, 24);
-    LocalDate secondDate = firstDate.plusDays(1);
-    board.createTask(W1, scheduledTask(queue.id(), "first", firstDate, 3));
-    board.createTask(W1, scheduledTask(queue.id(), "second", secondDate, 3));
-    TaskBoardSnapshot firstBefore = board.snapshot(W1, firstDate, true);
-    TaskBoardSnapshot secondBefore = board.snapshot(W1, secondDate, true);
-    BoardEntryDto firstEntry = boardEntries(firstBefore).getFirst();
-    BoardEntryDto secondEntry = boardEntries(secondBefore).getFirst();
-    board.pin(W1, firstEntry.taskId(), new PinTaskRequest(firstEntry.taskVersion(), true));
-
-    String body =
-        """
-        {
-          "firstDate":"%s",
-          "secondDate":"%s",
-          "entries":[
-            {"entryId":"%s","expectedVersion":%d,"expectedTaskVersion":%d},
-            {"entryId":"%s","expectedVersion":%d,"expectedTaskVersion":%d}
-          ]
-        }
-        """
-            .formatted(
-                firstDate,
-                secondDate,
-                firstEntry.id(),
-                firstEntry.version(),
-                firstEntry.taskVersion(),
-                secondEntry.id(),
-                secondEntry.version(),
-                secondEntry.taskVersion());
-
-    mockMvc
-        .perform(
-            post("/api/warehouses/{warehouseId}/task-board/dates/swap", W1)
-                .with(
-                    jwt()
-                        .jwt(
-                            token ->
-                                token
-                                    .claim("principal_type", "USER")
-                                    .claim("global_role", "SYSTEM_ADMIN")
-                                    .claim("scope", "rwms.write")))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(body))
-        .andExpect(status().isConflict())
-        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
-        .andExpect(jsonPath("$.code").value("TASK_BOARD_CONFLICT"));
-
-    assertThat(boardEntries(board.snapshot(W1, firstDate, true)))
-        .extracting(BoardEntryDto::id)
-        .containsExactly(firstEntry.id());
-    assertThat(boardEntries(board.snapshot(W1, secondDate, true)))
-        .extracting(BoardEntryDto::id)
-        .containsExactly(secondEntry.id());
-  }
-
-  @Test
   void duplicateRouteControllerMutationReturns409() throws Exception {
     var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("HTTP_ROUTE", QueueType.REPAIR, List.of()));
     String body =
@@ -4897,32 +4277,6 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 .content(body))
         .andExpect(status().isOk());
 
-    var cancelledEntry = entries.findById(entry.id()).orElseThrow();
-    var cancelledTask = tasks.findByWarehouseIdAndExternalTaskId(W1, externalTaskId).orElseThrow();
-    mockMvc
-        .perform(
-            post(
-                    "/api/warehouses/{warehouseId}/task-board/entries/{entryId}/move",
-                    W1,
-                    entry.id())
-                .with(
-                    jwt()
-                        .jwt(
-                            token ->
-                                token
-                                    .claim("principal_type", "USER")
-                                    .claim("global_role", "SYSTEM_ADMIN")
-                                    .claim("scope", "rwms.write")))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(
-                    "{\"expectedVersion\":"
-                        + cancelledEntry.getVersion()
-                        + ",\"expectedTaskVersion\":"
-                        + cancelledTask.getVersion()
-                        + ",\"targetQueueId\":null,\"targetIndex\":0,\"targetDate\":\""
-                        + cancelledTask.getScheduledDate()
-                        + "\"}"))
-        .andExpect(status().isBadRequest());
   }
 
   @Test
@@ -5030,7 +4384,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   private BoardEntryDto entry(String title) {
-    return board.snapshot(W1, true).columns().stream()
+    return board.snapshot(W1).columns().stream()
         .flatMap(c -> c.entries().stream())
         .filter(e -> e.title().equals(title))
         .findFirst()
@@ -5169,6 +4523,26 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         List.of(new RouteStepRequest(routeDefinition(queue), title, null)));
   }
 
+  private RouteStepRequest maintenancePackageStep(
+      UUID queueDefinitionId, String workName, String materialName) {
+    List<TaskMaterialSnapshotRequest> materials =
+        materialName == null
+            ? List.of()
+            : List.of(
+                new TaskMaterialSnapshotRequest(
+                    UUID.randomUUID(), materialName, 1, "шт"));
+    return new RouteStepRequest(
+        queueDefinitionId,
+        workName,
+        15,
+        List.of(
+            new TaskWorkSnapshotRequest(
+                UUID.randomUUID(), workName, 1, "шт", 15, null)),
+        materials,
+        List.of(),
+        List.of());
+  }
+
   private BoardTaskRegistrationDto registerMaintenanceRoute(
       UUID queueId, String title) {
     return board.registerExternalTask(
@@ -5205,7 +4579,6 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         List.of(new RouteStepRequest(queueDefinitionId, "Перемещение на ремонт", null)),
         scheduledDate,
         3,
-        null,
         new TaskSourceReferenceDto(TaskSourceType.LOGISTICS_DRIVER_TASK, UUID.randomUUID()),
         TaskLane.SCHEDULED,
         driverAudience);
@@ -5224,7 +4597,6 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         request.route(),
         request.scheduledDate(),
         request.priority(),
-        request.dailyCapacity(),
         request.source(),
         request.lane(),
         driverAudience);
@@ -5300,6 +4672,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         definition.notificationThreshold(),
         definition.notifyWhenThresholdReached(),
         definition.resultPhotoMinCount(),
+        definition.availableTaskLimit(),
         definition.bindings().stream()
             .map(
                 binding ->
@@ -5312,50 +4685,12 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             .toList());
   }
 
-  private BoardEntryDto entry(LocalDate date, String title) {
-    return board.snapshot(W1, date, true).columns().stream()
-        .flatMap(column -> column.entries().stream())
-        .filter(entry -> entry.title().equals(title))
-        .findFirst()
-        .orElseThrow();
-  }
-
-  private BoardEntryDto entry(LocalDate date, UUID queueId, String title) {
-    return queueEntries(board.snapshot(W1, date, true), queueId).stream()
-        .filter(entry -> entry.title().equals(title))
-        .findFirst()
-        .orElseThrow();
-  }
-
   private List<BoardEntryDto> queueEntries(TaskBoardSnapshot snapshot, UUID queueId) {
     return snapshot.columns().stream()
         .filter(column -> Objects.equals(column.queueId(), queueId))
         .findFirst()
         .orElseThrow()
         .entries();
-  }
-
-  private List<BoardEntryDto> boardEntries(TaskBoardSnapshot snapshot) {
-    return snapshot.columns().stream().flatMap(column -> column.entries().stream()).toList();
-  }
-
-  private SwapTaskBoardDatesRequest swapDateColumnsRequest(
-      LocalDate firstDate,
-      TaskBoardSnapshot firstColumn,
-      LocalDate secondDate,
-      TaskBoardSnapshot secondColumn) {
-    List<TaskBoardDateEntryExpectation> expectations = new java.util.ArrayList<>();
-    for (BoardEntryDto entry : boardEntries(firstColumn)) {
-      expectations.add(
-          new TaskBoardDateEntryExpectation(
-              entry.id(), entry.version(), entry.taskVersion()));
-    }
-    for (BoardEntryDto entry : boardEntries(secondColumn)) {
-      expectations.add(
-          new TaskBoardDateEntryExpectation(
-              entry.id(), entry.version(), entry.taskVersion()));
-    }
-    return new SwapTaskBoardDatesRequest(firstDate, secondDate, expectations);
   }
 
   private List<Object> race(Supplier<Object> firstCommand, Supplier<Object> secondCommand)

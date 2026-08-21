@@ -38,6 +38,7 @@ export type TaskBoardQueueDto = {
   kind: TaskBoardQueueKind
   settingsQueueId: string
   settingsCollapsed: boolean
+  availableTaskLimit: number
   entries: TaskBoardEntryDto[]
 }
 
@@ -79,8 +80,6 @@ export type TaskBoardEntryDto = {
 
 export type TaskBoardSnapshotDto = {
   warehouseId: string
-  selectedDate: string | null
-  availableDates: string[]
   queues: TaskBoardQueueDto[]
   totalEntries: number
   realEntries: number

@@ -71,7 +71,9 @@ public class TaskBoardEntryOwnerProofService {
   @Transactional(propagation = Propagation.MANDATORY)
   public void publish(UUID warehouseId, UUID entryId, boolean requestedActive) {
     QueueEntry entry = requireEntry(warehouseId, entryId);
-    write(proof(entry, requestedActive), false);
+    WorkerTaskAccessService.ReaderAudienceSnapshot audience =
+        requestedActive ? taskAccess.readerAudienceSnapshot(warehouseId) : null;
+    write(proof(entry, requestedActive, audience), false);
   }
 
   /**
@@ -83,10 +85,38 @@ public class TaskBoardEntryOwnerProofService {
   @Transactional
   public boolean reconcile(UUID warehouseId, UUID entryId) {
     QueueEntry entry = requireEntry(warehouseId, entryId);
-    boolean open =
-        entry.getTask().getStatus() == TaskStatus.ACTIVE
-            && OPEN_ENTRIES.contains(entry.getStatus());
-    return write(proof(entry, open), true);
+    boolean open = isOpen(entry);
+    WorkerTaskAccessService.ReaderAudienceSnapshot audience =
+        open ? taskAccess.readerAudienceSnapshot(warehouseId) : null;
+    return write(proof(entry, open, audience), true);
+  }
+
+  /**
+   * Captures one warehouse audience for reuse by a bounded reconciliation pass.
+   *
+   * <p>The returned value is deliberately opaque to callers: only this owner service can apply it
+   * to proof construction, and the warehouse identity is checked again for every entry.
+   */
+  public ReconciliationAudience captureReconciliationAudience(UUID warehouseId) {
+    return new ReconciliationAudience(
+        warehouseId, taskAccess.readerAudienceSnapshot(warehouseId));
+  }
+
+  /** Rebuilds one proof while reusing the immutable audience captured for its bounded pass. */
+  @Transactional
+  public boolean reconcile(
+      UUID warehouseId, UUID entryId, ReconciliationAudience audience) {
+    if (audience == null || !warehouseId.equals(audience.warehouseId)) {
+      throw new IllegalArgumentException("Снимок аудитории относится к другому складу");
+    }
+    QueueEntry entry = requireEntry(warehouseId, entryId);
+    boolean open = isOpen(entry);
+    return write(proof(entry, open, audience.taskAccess), true);
+  }
+
+  private boolean isOpen(QueueEntry entry) {
+    return entry.getTask().getStatus() == TaskStatus.ACTIVE
+        && OPEN_ENTRIES.contains(entry.getStatus());
   }
 
   private QueueEntry requireEntry(UUID warehouseId, UUID entryId) {
@@ -96,7 +126,10 @@ public class TaskBoardEntryOwnerProofService {
         .orElseThrow(() -> new NotFoundException("Задание не найдено"));
   }
 
-  private EntryOwnerProofFact proof(QueueEntry entry, boolean requestedActive) {
+  private EntryOwnerProofFact proof(
+      QueueEntry entry,
+      boolean requestedActive,
+      WorkerTaskAccessService.ReaderAudienceSnapshot audience) {
     UUID entryId = entry.getId();
     boolean pendingEvidence =
         Boolean.TRUE.equals(
@@ -127,7 +160,10 @@ public class TaskBoardEntryOwnerProofService {
 
     Set<UUID> readerWorkerIds = new LinkedHashSet<>();
     if (requestedActive) {
-      readerWorkerIds.addAll(taskAccess.readerWorkerIds(entry));
+      if (audience == null) {
+        throw new IllegalStateException("Для активного задания отсутствует снимок аудитории");
+      }
+      readerWorkerIds.addAll(taskAccess.readerWorkerIds(entry, audience));
     }
     readerWorkerIds.addAll(allowedWorkerIds);
 
@@ -191,4 +227,16 @@ public class TaskBoardEntryOwnerProofService {
 
   /** Locked latest proof version and its equality with the freshly calculated payload. */
   private record ProofHead(long version, boolean samePayload) {}
+
+  /** Opaque same-warehouse workforce snapshot shared only within one bounded repair pass. */
+  public static final class ReconciliationAudience {
+    private final UUID warehouseId;
+    private final WorkerTaskAccessService.ReaderAudienceSnapshot taskAccess;
+
+    private ReconciliationAudience(
+        UUID warehouseId, WorkerTaskAccessService.ReaderAudienceSnapshot taskAccess) {
+      this.warehouseId = warehouseId;
+      this.taskAccess = taskAccess;
+    }
+  }
 }

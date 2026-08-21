@@ -19,7 +19,7 @@ Maintenance, logistics, inventory и менеджерам нужна опера�
 | --- | --- | --- |
 | Queue standard | Global definitions, warehouse bindings, order, capabilities и usage references | Maintenance/logistics регистрируют только contract-defined references |
 | Workforce | Worker classes, workers, groups, current membership и credentials workflow | Auth-service владеет credential material и token issuance |
-| Operational work | Tasks, route entries, assignment, pinning, move, pause/resume/complete и history | Source domain владеет причиной работы и состоянием своего агрегата |
+| Operational work | Tasks, route entries, assignment, pinning, pause/resume/complete и history | Source domain владеет причиной работы и состоянием своего агрегата |
 | Native execution | Раздельные driver/worker feeds, offline action leases, evidence reservation, SSE и transactional FCM invalidation | DriverApp и WorkerApp обновляют authoritative REST state и загружают media через media-service |
 | KPI | Warehouse palette/schedule revisions и emitted daily evidence | Analytics владеет KPI read projection |
 | Warehouse lifecycle | Local operation marks, admission fence, draining blockers и exact-version readiness | Warehouse-service владеет lifecycle state и admission decisions |
@@ -55,6 +55,28 @@ Source-owned task использует stable external identity, поэтому 
 contract-defined version и status. Route order, eligibility, assignment и
 terminal transitions остаются server-owned.
 
+Обычная доска ремонтов — единое агрегированное представление склада, а не календарь. Каждая
+очередь показывает все реальные entries в `IN_PROGRESS` и `PAUSED` и только первые
+`availableTaskLimit` ожидающих реальных entries в каноническом порядке приоритета. Активная работа
+остаётся первой в порядке агрегатной позиции; ожидающие задачи следуют по приоритету и агрегатной
+позиции. Take отклоняется, если карточка находится за пределами этого server-owned окна. Будущие стадии маршрута скрыты до
+завершения предыдущей; стадия holding/СЭС остаётся единственной обычной карточкой задачи до конца
+обработки. В публичной доске нет выбора даты, shadow-режима, ручного перемещения entry, обмена дат,
+планирования по daily capacity и фонового rollover просрочки. Датированное планирование водителей и
+отгрузок остаётся в отдельных logistics surfaces. Инварианты подтверждаются
+[`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
+[`TaskBoardReadProjectionService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardReadProjectionService.java) и
+[`OrdinaryQueueAvailabilityPolicy`](src/main/java/dev/buhanzaz/rwms/taskboard/service/OrdinaryQueueAvailabilityPolicy.java).
+
+Flyway V31 нормализует существующие значения `queue_entry.queue_position` в эту агрегатную
+последовательность и исправляет real/shadow-форму полностью ожидающего holding-маршрута. Она не
+переписывает append-only историю `domain_event`. Поэтому replay-сравнение допускает только различия
+`queuePosition` и `entryType` у queue-entry tail, записанного не позже успешного cutover V31; каждый
+последующий event tail и каждое другое поле сравниваются точно. Cutover читается из
+`flyway_schema_history`, поэтому rebuild сохраняет immutable facts, не ослабляя обнаружение дрейфа
+после миграции. Правило реализовано в
+[`TaskBoardReplayVerifier`](src/main/java/dev/buhanzaz/rwms/taskboard/eventing/TaskBoardReplayVerifier.java).
+
 Logistics driver task дополнительно несёт одну сохранённую аудиторию:
 `UNASSIGNED`, `ASSIGNED_DRIVER` или `WAREHOUSE_DRIVERS`. Задавать её может
 только точный driver-task source logistics-service. Только назначенная работа содержит worker
@@ -75,7 +97,8 @@ push `TASK_JOIN_AVAILABLE` для подходящих стропальщико�
 участник при хотя бы одном READY result photo от любого участника. Primary assignment без группы
 никогда не становится secondary assignment, даже если у водителя также есть квалификация
 стропальщика. Только private source replan boundary может заменить
-audience под общим task/entry version fence; public board move её не меняет.
+audience под общим task/entry version fence; публичная обычная доска не предоставляет команду
+перемещения entry.
 
 ## Внутренняя структура приложения
 
@@ -90,7 +113,7 @@ audience под общим task/entry version fence; public board move её не
 | `TaskBoardExternalMutationService` | Source-authorized pre-start update/cancel, перемещение lane и relocation |
 | `TaskBoardLogisticsTaskService` | Граница logistics equipment/driver task |
 | `TaskBoardWorkerExecutionService` | Assignment, timing, interruption, cancellation и worker execution |
-| `TaskBoardOrderingService` | Manager-owned move, swap, pin и rollover operations |
+| `TaskBoardPinningService` | Version-fenced manager-команда pin/unpin |
 | `TaskBoardQueuePositionCoordinator` | Только advisory locks, stream fences и persisted queue/pin ordering |
 | `TaskBoardRoutePayloadCodec` | Единственный canonical route JSON и fingerprint codec |
 | `DriverTaskAudienceService` | Shape аудитории logistics-driver, qualification, visibility и execution authorization |
@@ -105,7 +128,7 @@ audience под общим task/entry version fence; public board move её не
 | `WorkforceReadProjectionService` | Read-only сборка DTO worker и group |
 
 Dependency graph ацикличен. Registration и mutation совместно используют route
-codec; registration, mutation, worker execution и ordering используют узкий
+codec; registration, mutation, worker execution и pinning используют узкий
 queue-position coordinator. Ни один technical collaborator не владеет
 authorization, source status, worker transitions или агрегатом другого домена.
 
@@ -127,10 +150,10 @@ Task-entry owner proof разделяет uploaders результата (`allow
 рабочий может видеть исходные и итоговые фотографии ожидающего задания, но не
 получает права upload. Создание task публикует исходный proof в той же локальной
 транзакции. После закрытия reader audience сокращается до всех исторических
-assignees и работников с evidence. Bounded reconciler каждые 30 секунд публикует
-только изменившийся proof, дополняет события до additive reader field и сводит
-последующие изменения workforce или queue policy. Inactive proof не разрешает
-новый upload или finalization.
+assignees и работников с evidence. Bounded reconciler запускается при старте и после изменения
+warehouse audience revision, публикует только изменившийся proof и не сканирует все задачи на
+простаивающем складе. Неуспешный проход не продвигает revision watermark. Inactive proof не
+разрешает новый upload или finalization.
 
 ## HTTP-границы
 
@@ -145,7 +168,7 @@ Public gateway преобразует `/api/task-board/**` в downstream `/api/*
 | `/api/worker-classes/**` | Authenticated manager/admin policy | Каталог квалификаций работников |
 | `/api/warehouses/{warehouseId}/workers/**` | Warehouse-authorized manager | Workers, groups, credential operations и reconciliation |
 | `/api/warehouses/{warehouseId}/work-queues` | Warehouse-authorized user | Physical queue projections и capabilities |
-| `/api/warehouses/{warehouseId}/task-board/**` | Warehouse-authorized user | Board reads и operational commands |
+| `/api/warehouses/{warehouseId}/task-board/**` | Warehouse-authorized user | Чтение агрегированной ordinary board и поддерживаемые task-команды |
 | `/api/warehouses/{warehouseId}/task-board/kpi-settings/**` | Warehouse manager/admin | Palette и effective schedule revisions |
 | `/api/worker/v1/**` | Worker credential и `worker.tasks` scope | Context, feed, detail, actions, evidence reservations, devices и events |
 | `/api/driver/v1/**` | Worker credential и `driver.tasks` scope | Driver-only context, primary feed, actions, evidence reservations, devices и events |
@@ -176,6 +199,19 @@ registrations привязаны к surface и принимают текущие
 работы он содержит только существующие immutable type и ID источника. Worker client может
 использовать ID `LOGISTICS_DRIVER_TASK`, чтобы загрузить принадлежащие logistics детали ходки;
 task-board не копирует этот payload или его business state.
+
+Для `MAINTENANCE_REPAIR` последовательные route entries одной physical queue образуют один пакет
+выполнения рабочего. Detail объединяет снимки работ, материалов, комментариев и source media всего
+сегмента; duration и timer учитывают только ещё не завершённые части. TAKE сохраняет одно
+representative assignment и один KPI segment. Один version-fenced COMPLETE атомарно переводит в
+done representative и все последующие незавершённые shadow members, записывает assignment/time
+audit для каждого, выдаёт существующий queue-entry completion fact для каждой связанной стадии
+ремонта и продвигает только следующий отличный route segment. Для источников не из maintenance
+семантика остаётся entry-scoped. Схема persistence и форма event payload не меняются.
+
+`WorkerTaskDetail.sourceMedia` сохраняет порядок источника, включая заданную источником обложку на
+первой позиции. Каждый `WorkerWork.sourceMediaIds` является точной связью строки работы с её
+собственными references в этом массиве; task-board не выравнивает и не угадывает эту связь.
 
 Worker action проверяет identity работника, current assignment, entry version,
 action/status transition и offline lease, где он нужен. Evidence сначала

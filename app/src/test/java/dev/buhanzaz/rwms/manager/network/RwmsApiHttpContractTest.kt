@@ -658,67 +658,15 @@ class RwmsApiHttpContractTest {
     }
 
     @Test
-    fun `repair queue reads every board date and moves with exact CAS payload`() = runTest {
+    fun `repair queue reads one aggregate ordinary board without query dimensions`() = runTest {
         val warehouseId = "46464646-4646-4646-4646-464646464646"
-        val entryId = "57575757-5757-5757-5757-575757575757"
-        val queueId = "68686868-6868-6868-6868-686868686868"
 
-        val initialBoard = captureRequest {
+        val board = captureRequest {
             api.taskBoard(warehouseId = warehouseId)
         }
-        val datedBoard = captureRequest {
-            api.taskBoard(
-                warehouseId = warehouseId,
-                date = "2026-07-28",
-            )
-        }
-        val move = captureRequest {
-            api.moveTaskBoardEntry(
-                warehouseId = warehouseId,
-                entryId = entryId,
-                request = MoveTaskBoardEntryRequest(
-                    expectedVersion = 7,
-                    expectedTaskVersion = 9,
-                    targetQueueId = queueId,
-                    targetIndex = 2,
-                    targetDate = "2026-07-29",
-                ),
-            )
-        }
-        val swap = captureRequest {
-            api.swapTaskBoardDates(
-                warehouseId = warehouseId,
-                request = SwapTaskBoardDatesRequest(
-                    firstDate = "2026-07-28",
-                    secondDate = "2026-07-30",
-                    entries = listOf(
-                        TaskBoardDateEntryExpectationDto(
-                            entryId = entryId,
-                            expectedVersion = 7,
-                            expectedTaskVersion = 9,
-                        ),
-                    ),
-                ),
-            )
-        }
 
-        initialBoard.assertPublicSameOriginPath(
-            "/api/task-board/warehouses/$warehouseId/task-board?includeShadow=true",
-        )
-        datedBoard.assertPublicSameOriginPath(
-            "/api/task-board/warehouses/$warehouseId/task-board?includeShadow=true&date=2026-07-28",
-        )
-        move.assertJsonCommand(
-            method = "POST",
-            path = "/api/task-board/warehouses/$warehouseId/task-board/entries/$entryId/move",
-            idempotencyKey = null,
-            body = """{"expectedVersion":7,"expectedTaskVersion":9,"targetQueueId":"$queueId","targetIndex":2,"targetDate":"2026-07-29"}""",
-        )
-        swap.assertJsonCommand(
-            method = "POST",
-            path = "/api/task-board/warehouses/$warehouseId/task-board/dates/swap",
-            idempotencyKey = null,
-            body = """{"firstDate":"2026-07-28","secondDate":"2026-07-30","entries":[{"entryId":"$entryId","expectedVersion":7,"expectedTaskVersion":9}]}""",
+        board.assertPublicSameOriginPath(
+            "/api/task-board/warehouses/$warehouseId/task-board",
         )
     }
 
@@ -750,7 +698,7 @@ class RwmsApiHttpContractTest {
             "/api/maintenance/v1/catalog/versions?warehouseId=$warehouseId&page=0&size=200&lifecycle=ACTIVE",
             "/api/maintenance/v1/estimates?warehouseId=$warehouseId&page=0&size=100",
             "/api/maintenance/v1/repairs?warehouseId=$warehouseId&page=0&size=100",
-            "/api/task-board/warehouses/$warehouseId/task-board?includeShadow=true",
+            "/api/task-board/warehouses/$warehouseId/task-board",
         ).inOrder()
     }
 

@@ -336,6 +336,7 @@ class TaskBoardEventingRuntimeIntegrationTest {
         });
     UUID firstEvent = eventId(orderedId, 0);
     UUID secondEvent = eventId(orderedId, 1);
+    assertThat(outboxStore.backlog()).isEqualTo(2L);
     for (int attempt = 1; attempt <= 4; attempt++) {
       var claim = outboxStore.claim("runtime-test", Duration.ofSeconds(30)).orElseThrow();
       assertThat(claim.eventId()).isEqualTo(firstEvent);

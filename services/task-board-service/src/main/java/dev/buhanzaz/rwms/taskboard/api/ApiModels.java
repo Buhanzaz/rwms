@@ -107,6 +107,7 @@ public final class ApiModels {
    * @param notificationThreshold optional queue notification threshold
    * @param notifyWhenThresholdReached whether threshold notification is enabled
    * @param resultPhotoMinCount minimum result-photo count for completion
+   * @param availableTaskLimit maximum waiting cards exposed and takeable in this ordinary queue
    * @param bindings qualified worker-class process bindings
    */
   public record QueueDefinitionRequest(
@@ -123,6 +124,7 @@ public final class ApiModels {
       @Min(0) Integer notificationThreshold,
       boolean notifyWhenThresholdReached,
       @NotNull @Min(0) @Max(20) Integer resultPhotoMinCount,
+      @NotNull @Min(1) @Max(50) Integer availableTaskLimit,
       @NotNull List<@Valid QueueBindingRequest> bindings) {}
 
   /**
@@ -142,6 +144,7 @@ public final class ApiModels {
    * @param notificationThreshold optional queue notification threshold
    * @param notifyWhenThresholdReached whether threshold notification is enabled
    * @param resultPhotoMinCount minimum result-photo count for completion
+   * @param availableTaskLimit maximum waiting cards exposed and takeable in this ordinary queue
    * @param bindings qualified worker-class process bindings
    */
   public record QueueDefinitionDto(
@@ -159,6 +162,7 @@ public final class ApiModels {
       Integer notificationThreshold,
       boolean notifyWhenThresholdReached,
       int resultPhotoMinCount,
+      int availableTaskLimit,
       List<QueueBindingDto> bindings) {}
 
   public record QueueDefinitionOrderItem(
@@ -183,6 +187,7 @@ public final class ApiModels {
    * @param notificationThreshold optional queue notification threshold
    * @param notifyWhenThresholdReached whether threshold notification is enabled
    * @param resultPhotoMinCount minimum result-photo count for completion
+   * @param availableTaskLimit mirrored waiting-card limit for general derived queues
    * @param bindings qualified worker-class process bindings
    */
   public record DriverQueueRequest(
@@ -246,6 +251,7 @@ public final class ApiModels {
       Integer notificationThreshold,
       boolean notifyWhenThresholdReached,
       int resultPhotoMinCount,
+      int availableTaskLimit,
       List<QueueBindingDto> bindings) {}
 
   public record QualificationRequest(
@@ -719,7 +725,6 @@ public final class ApiModels {
    * @param route complete ordered route declaration
    * @param scheduledDate optional initial operational date
    * @param priority optional priority from one through five
-   * @param dailyCapacity optional source planning capacity
    * @param source optional immutable source-domain reference
    * @param lane requested initial task lane
    * @param driverAudience optional logistics driver audience; omitted legacy driver tasks are
@@ -736,7 +741,6 @@ public final class ApiModels {
       @NotEmpty List<@Valid RouteStepRequest> route,
       LocalDate scheduledDate,
       @Min(1) @Max(5) Integer priority,
-      @Min(1) Integer dailyCapacity,
       @Valid TaskSourceReferenceDto source,
       TaskLane lane,
       @Valid DriverTaskAudienceDto driverAudience) {
@@ -751,7 +755,6 @@ public final class ApiModels {
         List<RouteStepRequest> route,
         LocalDate scheduledDate,
         Integer priority,
-        Integer dailyCapacity,
         TaskSourceReferenceDto source,
         TaskLane lane) {
       this(
@@ -765,7 +768,6 @@ public final class ApiModels {
           route,
           scheduledDate,
           priority,
-          dailyCapacity,
           source,
           lane,
           null);
@@ -789,7 +791,6 @@ public final class ApiModels {
           plannedDurationMinutes,
           deadlineAt,
           route,
-          null,
           null,
           null,
           null,
@@ -818,35 +819,6 @@ public final class ApiModels {
           route,
           scheduledDate,
           priority,
-          null,
-          null,
-          TaskLane.SCHEDULED);
-    }
-
-    public RegisterExternalTaskRequest(
-        UUID warehouseId,
-        UUID externalTaskId,
-        String title,
-        String unitNumber,
-        String description,
-        Integer plannedDurationMinutes,
-        OffsetDateTime deadlineAt,
-        List<RouteStepRequest> route,
-        LocalDate scheduledDate,
-        Integer priority,
-        Integer dailyCapacity) {
-      this(
-          warehouseId,
-          externalTaskId,
-          title,
-          unitNumber,
-          description,
-          plannedDurationMinutes,
-          deadlineAt,
-          route,
-          scheduledDate,
-          priority,
-          dailyCapacity,
           null,
           TaskLane.SCHEDULED);
     }
@@ -1049,22 +1021,6 @@ public final class ApiModels {
       @NotNull @Min(0) Long expectedVersion, @Size(max = 1000) String reason) {}
 
   /**
-   * Version-fenced movement of an entry to a permitted queue, date and zero-based position.
-   *
-   * @param expectedVersion observed entry version
-   * @param expectedTaskVersion observed parent task version
-   * @param targetQueueId permitted target physical queue
-   * @param targetIndex zero-based target position
-   * @param targetDate target operational date
-   */
-  public record MoveEntryRequest(
-      @NotNull @Min(0) Long expectedVersion,
-      @NotNull @Min(0) Long expectedTaskVersion,
-      @NotNull UUID targetQueueId,
-      @NotNull @Min(0) Integer targetIndex,
-      @NotNull LocalDate targetDate) {}
-
-  /**
    * Version-fenced logistics movement command for a dedicated driver entry.
    *
    * @param expectedTaskVersion observed task version
@@ -1096,25 +1052,6 @@ public final class ApiModels {
           null);
     }
   }
-
-  /**
-   * Exchanges the scheduled dates assigned to two complete visual task-board date columns.
-   * Every entry returned by both {@code includeShadow=true} snapshots must be represented so a
-   * stale or partial browser view cannot move only part of a column.
-   *
-   * @param firstDate first visible date column
-   * @param secondDate second visible date column
-   * @param entries complete entry and task version expectations for both columns
-   */
-  public record SwapTaskBoardDatesRequest(
-      @NotNull LocalDate firstDate,
-      @NotNull LocalDate secondDate,
-      @NotEmpty @Size(max = 2000) List<@Valid TaskBoardDateEntryExpectation> entries) {}
-
-  public record TaskBoardDateEntryExpectation(
-      @NotNull UUID entryId,
-      @NotNull @Min(0) Long expectedVersion,
-      @NotNull @Min(0) Long expectedTaskVersion) {}
 
   /**
    * Version-fenced pin declaration applied consistently to every task route entry.
@@ -1224,21 +1161,16 @@ public final class ApiModels {
       QueueType queueType,
       QueuePurpose queuePurpose,
       int sortOrder,
+      int availableTaskLimit,
       List<BoardEntryDto> entries) {}
 
   /**
-   * Date-scoped board snapshot returned to managers and eligible workers.
+   * Aggregate ordinary board snapshot returned to managers and eligible workers.
    *
    * @param warehouseId warehouse that owns the board
-   * @param selectedDate date resolved for this representation
-   * @param availableDates operational dates with board data
-   * @param columns queues and entries for the selected date
+   * @param columns ordinary queues and their server-limited actionable entries
    */
-  public record TaskBoardSnapshot(
-      UUID warehouseId,
-      LocalDate selectedDate,
-      List<LocalDate> availableDates,
-      List<BoardColumnDto> columns) {}
+  public record TaskBoardSnapshot(UUID warehouseId, List<BoardColumnDto> columns) {}
 
   public record LogisticsDateColumnDto(
       @NotNull LocalDate date, List<BoardEntryDto> entries) {

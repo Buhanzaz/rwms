@@ -126,7 +126,6 @@ class TaskBoardExternalRegistrationService {
         true,
         fingerprint,
         null,
-        null,
         TaskLane.SCHEDULED,
         null,
         admissionDirection);
@@ -148,7 +147,6 @@ class TaskBoardExternalRegistrationService {
             request.route(),
             request.scheduledDate(),
             request.priority());
-    Integer dailyCapacity = request.dailyCapacity();
     BoardTask task =
         createTask(
             request.warehouseId(),
@@ -157,7 +155,6 @@ class TaskBoardExternalRegistrationService {
             true,
             false,
             null,
-            dailyCapacity,
             source,
             request.lane() == null ? TaskLane.SCHEDULED : request.lane(),
             driverAudience,
@@ -177,7 +174,6 @@ class TaskBoardExternalRegistrationService {
         sourceClientId,
         allowRepeatedQueues,
         false,
-        null,
         null,
         null,
         TaskLane.SCHEDULED,
@@ -200,7 +196,6 @@ class TaskBoardExternalRegistrationService {
         completionDeadlineEnforced,
         suppliedFingerprint,
         null,
-        null,
         TaskLane.SCHEDULED,
         null,
         OperationDirection.INCOMING);
@@ -213,7 +208,6 @@ class TaskBoardExternalRegistrationService {
       boolean allowRepeatedQueues,
       boolean completionDeadlineEnforced,
       String suppliedFingerprint,
-      Integer dailyCapacity,
       TaskSourceReferenceDto sourceReference,
       TaskLane taskLane,
       DriverTaskAudienceDto driverAudience,
@@ -233,7 +227,6 @@ class TaskBoardExternalRegistrationService {
                     warehouseId,
                     request,
                     sourceClientId,
-                    dailyCapacity,
                     sourceReference,
                     effectiveLane,
                     driverAudience,
@@ -252,7 +245,6 @@ class TaskBoardExternalRegistrationService {
                 allowRepeatedQueues,
                 completionDeadlineEnforced,
                 suppliedFingerprint,
-                dailyCapacity,
                 sourceReference,
                 effectiveLane,
                 driverAudience,
@@ -266,7 +258,6 @@ class TaskBoardExternalRegistrationService {
       boolean allowRepeatedQueues,
       boolean completionDeadlineEnforced,
       String suppliedFingerprint,
-      Integer dailyCapacity,
       TaskSourceReferenceDto sourceReference,
       TaskLane effectiveLane,
       DriverTaskAudienceDto driverAudience,
@@ -279,7 +270,6 @@ class TaskBoardExternalRegistrationService {
               warehouseId,
               request,
               sourceClientId,
-              dailyCapacity,
               sourceReference,
               effectiveLane,
               driverAudience,
@@ -293,7 +283,7 @@ class TaskBoardExternalRegistrationService {
         resolveRoute(warehouseId, request.route(), allowRepeatedQueues, sourceClientId);
     requireRoutePurpose(routeSteps, sourceReference);
     queuePositions.lockQueuePositions(warehouseId, routeSteps.stream().map(ResolvedRouteStep::queue).toList());
-    LocalDate scheduledDate = scheduledDate(warehouseId, request, sourceClientId, dailyCapacity);
+    LocalDate scheduledDate = scheduleDate(request);
     Set<QueueEntry> existingEntries = new LinkedHashSet<>();
     routeSteps.stream()
         .map(ResolvedRouteStep::queue)
@@ -348,6 +338,9 @@ class TaskBoardExternalRegistrationService {
               sourceReference == null ? null : sourceReference.type(),
               sourceReference == null ? null : sourceReference.sourceId()));
     }
+    int initialRouteGate =
+        OrdinaryQueueAvailabilityPolicy.initialRouteGateIndex(
+            routeSteps.stream().map(ResolvedRouteStep::queue).toList());
     int route = 0;
     for (var resolved : routeSteps) {
       RouteStepRequest step = resolved.request();
@@ -356,7 +349,7 @@ class TaskBoardExternalRegistrationService {
       entry.setTask(task);
       entry.setQueue(queue);
       entry.setRouteIndex(route);
-      entry.setEntryType(route == 0 ? EntryType.REAL : EntryType.SHADOW);
+      entry.setEntryType(route == initialRouteGate ? EntryType.REAL : EntryType.SHADOW);
       entry.setStatus(EntryStatus.WAITING);
       entry.setQueuePosition(queuePositions.nextPosition(warehouseId, queue, task.getScheduledDate()));
       entry.setTaskText(trim(step.taskText()));
@@ -410,7 +403,6 @@ class TaskBoardExternalRegistrationService {
       UUID warehouseId,
       CreateBoardTaskRequest request,
       String sourceClientId,
-      Integer dailyCapacity,
       TaskSourceReferenceDto sourceReference,
       TaskLane effectiveLane,
       DriverTaskAudienceDto driverAudience,
@@ -427,8 +419,7 @@ class TaskBoardExternalRegistrationService {
             ? routePayloads.fingerprint(
                 warehouseId,
                 request,
-                (MAINTENANCE_SOURCE_CLIENT_ID.equals(sourceClientId) && dailyCapacity != null)
-                        || request.scheduledDate() == null
+                request.scheduledDate() == null
                     ? task.getScheduledDate()
                     : request.scheduledDate(),
                 request.priority() == null ? task.getPriority() : priority(request.priority()),
@@ -448,8 +439,7 @@ class TaskBoardExternalRegistrationService {
           routePayloads.fingerprint(
               warehouseId,
               request,
-              (MAINTENANCE_SOURCE_CLIENT_ID.equals(sourceClientId) && dailyCapacity != null)
-                      || request.scheduledDate() == null
+              request.scheduledDate() == null
                   ? task.getScheduledDate()
                   : request.scheduledDate(),
               request.priority() == null ? task.getPriority() : priority(request.priority()),
@@ -580,37 +570,6 @@ class TaskBoardExternalRegistrationService {
     if (request.scheduledDate() != null) return request.scheduledDate();
     if (request.deadlineAt() != null) return request.deadlineAt().toLocalDate();
     return LocalDate.now(DEFAULT_SCHEDULE_ZONE);
-  }
-
-  private LocalDate scheduledDate(
-      UUID warehouseId,
-      CreateBoardTaskRequest request,
-      String sourceClientId,
-      Integer dailyCapacity) {
-    LocalDate requestedDate = scheduleDate(request);
-    if (!MAINTENANCE_SOURCE_CLIENT_ID.equals(sourceClientId) || dailyCapacity == null) {
-      return requestedDate;
-    }
-    if (dailyCapacity < 1) {
-      throw new IllegalArgumentException("Daily capacity must be positive");
-    }
-
-    Set<UUID> maintenanceTaskIds = new LinkedHashSet<>();
-    taskSyncSources
-        .findAllBySourceClientId(MAINTENANCE_SOURCE_CLIENT_ID)
-        .forEach(source -> maintenanceTaskIds.add(source.getBoardTaskId()));
-    Map<LocalDate, Integer> activeTaskCounts = new java.util.HashMap<>();
-    for (BoardTask task : tasks.findAllById(maintenanceTaskIds)) {
-      if (warehouseId.equals(task.getWarehouseId()) && task.getStatus() == TaskStatus.ACTIVE) {
-        activeTaskCounts.merge(task.getScheduledDate(), 1, Integer::sum);
-      }
-    }
-
-    LocalDate selectedDate = requestedDate;
-    while (activeTaskCounts.getOrDefault(selectedDate, 0) >= dailyCapacity) {
-      selectedDate = selectedDate.plusDays(1);
-    }
-    return selectedDate;
   }
 
   private int priority(Integer value) {

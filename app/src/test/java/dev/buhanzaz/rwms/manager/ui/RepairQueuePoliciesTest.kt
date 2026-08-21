@@ -14,6 +14,7 @@ import dev.buhanzaz.rwms.manager.network.TaskBoardSourceDto
 import dev.buhanzaz.rwms.manager.network.TaskSyncSnapshotDto
 import org.junit.Test
 
+/** Verifies the ManagerApp projection of maintenance repairs onto the aggregate ordinary board. */
 class RepairQueuePoliciesTest {
     @Test
     fun `operational stage excludes finished stages and prefers in progress`() {
@@ -39,7 +40,7 @@ class RepairQueuePoliciesTest {
     }
 
     @Test
-    fun `repair maps only to exact external task route and matching maintenance source`() {
+    fun `repair maps only to exact real external route and maintenance source`() {
         val repair = repair(
             id = "repair-1",
             stages = listOf(
@@ -53,20 +54,19 @@ class RepairQueuePoliciesTest {
         )
         val matchingEntry = entry(
             id = "entry-1",
+            repairId = "repair-1",
             externalTaskId = "external-task-1",
             routeIndex = 2,
-            source = TaskBoardSourceDto("MAINTENANCE_REPAIR", "repair-1"),
         )
-        val board = board(entries = listOf(matchingEntry))
 
-        val mapped = createRepairQueueItems(listOf(board), listOf(repair))
+        val mapped = createRepairQueueItems(board(column(entries = listOf(matchingEntry))), listOf(repair))
         val wrongRoute = createRepairQueueItems(
-            listOf(board(entries = listOf(matchingEntry.copy(routeIndex = 1)))),
+            board(column(entries = listOf(matchingEntry.copy(routeIndex = 1)))),
             listOf(repair),
         )
         val wrongSource = createRepairQueueItems(
-            listOf(
-                board(
+            board(
+                column(
                     entries = listOf(
                         matchingEntry.copy(
                             source = TaskBoardSourceDto("MAINTENANCE_REPAIR", "repair-2"),
@@ -76,181 +76,83 @@ class RepairQueuePoliciesTest {
             ),
             listOf(repair),
         )
+        val missingSource = createRepairQueueItems(
+            board(column(entries = listOf(matchingEntry.copy(source = null)))),
+            listOf(repair),
+        )
+        val shadow = createRepairQueueItems(
+            board(column(entries = listOf(matchingEntry.copy(entryType = "SHADOW")))),
+            listOf(repair),
+        )
 
         assertThat(mapped).hasSize(1)
         assertThat(mapped.single().entry.id).isEqualTo("entry-1")
         assertThat(mapped.single().stage.id).isEqualTo("stage-1")
         assertThat(wrongRoute).isEmpty()
         assertThat(wrongSource).isEmpty()
+        assertThat(missingSource).isEmpty()
+        assertThat(shadow).isEmpty()
     }
 
     @Test
-    fun `only real active waiting entries can be moved`() {
-        val movable = entry()
+    fun `aggregate sections follow queue and card order without grouping by scheduled date`() {
+        val firstQueue = column(
+            id = "queue-first",
+            name = "Электрика",
+            sortOrder = 10,
+            entries = listOf(
+                entry(
+                    id = "entry-a",
+                    repairId = "repair-a",
+                    queueId = "queue-first",
+                    queuePosition = 2,
+                    scheduledDate = "2026-08-21",
+                ),
+                entry(
+                    id = "entry-c",
+                    repairId = "repair-c",
+                    queueId = "queue-first",
+                    queuePosition = 0,
+                    scheduledDate = "2026-09-04",
+                ),
+            ),
+        )
+        val secondQueue = column(
+            id = "queue-second",
+            name = "Внутренние работы",
+            sortOrder = 20,
+            entries = listOf(
+                entry(
+                    id = "entry-b",
+                    repairId = "repair-b",
+                    queueId = "queue-second",
+                    queuePosition = 0,
+                    scheduledDate = "2026-08-01",
+                ),
+            ),
+        )
+        val board = board(secondQueue, firstQueue)
+        val items = createRepairQueueItems(
+            board,
+            listOf(repair("repair-b"), repair("repair-a"), repair("repair-c")),
+        )
 
-        assertThat(repairQueueEntryCanMove(movable)).isTrue()
-        assertThat(repairQueueEntryCanMove(movable.copy(entryType = "SHADOW"))).isFalse()
-        assertThat(repairQueueEntryCanMove(movable.copy(taskStatus = "DONE"))).isFalse()
-        assertThat(repairQueueEntryCanMove(movable.copy(status = "IN_PROGRESS"))).isFalse()
-        assertThat(repairQueueEntryCanMove(movable.copy(status = "PAUSED"))).isFalse()
+        val sections = repairQueueSections(board, items)
+
+        assertThat(sections.map { it.queue.queueId })
+            .containsExactly("queue-first", "queue-second")
+            .inOrder()
+        assertThat(sections.first().items.map { it.repair.id })
+            .containsExactly("repair-c", "repair-a")
+            .inOrder()
+        assertThat(sections.last().items.map { it.repair.id })
+            .containsExactly("repair-b")
     }
 
     @Test
-    fun `target index stays after immutable prefix and adjusts for same date removal`() {
-        val date = "2026-07-27"
-        val immutable = queueItem(
-            repairId = "repair-immutable",
-            date = date,
-            entry = entry(id = "immutable", status = "IN_PROGRESS"),
-        )
-        val active = queueItem(
-            repairId = "repair-active",
-            date = date,
-            entry = entry(id = "active"),
-        )
-        val tail = queueItem(
-            repairId = "repair-tail",
-            date = date,
-            entry = entry(id = "tail"),
-        )
-        val items = listOf(immutable, active, tail)
-
-        assertThat(minimumRepairQueueInsertionIndex(items)).isEqualTo(1)
-        assertThat(
-            normalizedRepairQueueTargetIndex(
-                targetItems = items,
-                activeItem = active,
-                proposedIndex = 3,
-                targetDate = date,
-            ),
-        ).isEqualTo(2)
-        assertThat(
-            normalizedRepairQueueTargetIndex(
-                targetItems = listOf(immutable, tail),
-                activeItem = active,
-                proposedIndex = 0,
-                targetDate = "2026-07-28",
-            ),
-        ).isEqualTo(1)
-    }
-
-    @Test
-    fun `queue dates include available selected and mapped entry dates in order`() {
-        val boards = listOf(
-            board(
-                selectedDate = "2026-07-28",
-                availableDates = listOf("2026-07-29", "2026-07-27"),
-            ),
-        )
-        val items = listOf(
-            queueItem(
-                repairId = "repair-1",
-                date = "2026-07-30",
-                entry = entry(),
-            ),
-        )
-
-        assertThat(repairQueueDates(boards, items)).containsExactly(
-            "2026-07-27",
-            "2026-07-28",
-            "2026-07-29",
-            "2026-07-30",
-        ).inOrder()
-    }
-
-    @Test
-    fun `empty-space drop resolves only an actual date column`() {
-        val columns = listOf(
-            RepairQueueDateColumnRange("2026-07-27", left = 12f, right = 228f),
-            RepairQueueDateColumnRange("2026-07-28", left = 238f, right = 454f),
-        )
-
-        assertThat(repairQueueDateAtHorizontalPosition(columns, 120f))
-            .isEqualTo("2026-07-27")
-        assertThat(repairQueueDateAtHorizontalPosition(columns, 232f)).isNull()
-        assertThat(repairQueueDateAtHorizontalPosition(columns, 500f)).isNull()
-    }
-
-    @Test
-    fun `empty-space move appends after the source is removed`() {
-        val date = "2026-07-27"
-        val immutable = queueItem(
-            repairId = "repair-immutable",
-            date = date,
-            entry = entry(id = "immutable", status = "IN_PROGRESS"),
-        )
-        val active = queueItem(
-            repairId = "repair-active",
-            date = date,
-            entry = entry(id = "active"),
-        )
-        val tail = queueItem(
-            repairId = "repair-tail",
-            date = date,
-            entry = entry(id = "tail"),
-        )
-
-        assertThat(
-            repairQueueEndTargetIndex(
-                targetItems = listOf(immutable, active, tail),
-                activeItem = active,
-            ),
-        ).isEqualTo(2)
-        assertThat(
-            repairQueueEndTargetIndex(
-                targetItems = listOf(immutable, tail),
-                activeItem = active,
-            ),
-        ).isEqualTo(2)
-    }
-
-    @Test
-    fun `new date must be an ISO calendar date`() {
-        assertThat(isRepairQueueCalendarDate("2026-07-29")).isTrue()
-        assertThat(isRepairQueueCalendarDate("2024-02-29")).isTrue()
-        assertThat(isRepairQueueCalendarDate("2026-02-29")).isFalse()
-        assertThat(isRepairQueueCalendarDate("2026-7-29")).isFalse()
-        assertThat(isRepairQueueCalendarDate("29-07-2026")).isFalse()
-    }
-
-    @Test
-    fun `date column reorder preserves local order and reconciles server dates`() {
-        val manuallyOrdered = reorderRepairQueueDateColumn(
-            dates = listOf("2026-07-27", "2026-07-28", "2026-07-29"),
-            activeDate = "2026-07-29",
-            targetIndex = 0,
-        )
-
-        assertThat(manuallyOrdered).containsExactly(
-            "2026-07-29",
-            "2026-07-27",
-            "2026-07-28",
-        ).inOrder()
-        assertThat(
-            reconcileRepairQueueDateColumnOrder(
-                currentOrder = manuallyOrdered,
-                availableDates = listOf("2026-07-27", "2026-07-29", "2026-07-30"),
-            ),
-        ).containsExactly(
-            "2026-07-29",
-            "2026-07-27",
-            "2026-07-30",
-        ).inOrder()
-    }
-
-    @Test
-    fun `date exchange swaps only headers so physical card columns can stay put`() {
-        assertThat(
-            swapRepairQueueDateColumns(
-                dates = listOf("2026-07-30", "2026-07-28", "2026-07-31"),
-                firstDate = "2026-07-30",
-                secondDate = "2026-07-28",
-            ),
-        ).containsExactly(
-            "2026-07-28",
-            "2026-07-30",
-            "2026-07-31",
-        ).inOrder()
+    fun `null aggregate snapshot produces no local repair cards`() {
+        assertThat(createRepairQueueItems(null, listOf(repair("repair-1")))).isEmpty()
+        assertThat(repairQueueSections(null, emptyList())).isEmpty()
     }
 
     @Test
@@ -270,12 +172,19 @@ class RepairQueuePoliciesTest {
 
     private fun repair(
         id: String = "repair-1",
-        stages: List<RepairStageDto>,
+        stages: List<RepairStageDto> = listOf(
+            stage(
+                id = "stage-$id",
+                order = 0,
+                state = "WAITING",
+                externalTaskId = "external-$id",
+            ),
+        ),
     ): RepairDto = RepairDto(
         id = id,
         rootRepairId = id,
         warehouseId = "warehouse-1",
-        rentalItemId = "asset-1",
+        rentalItemId = "asset-$id",
         origin = "DIRECT",
         kind = "PRIMARY",
         executionState = "QUEUED",
@@ -327,74 +236,50 @@ class RepairQueuePoliciesTest {
     )
 
     private fun entry(
-        id: String = "entry-1",
-        externalTaskId: String = "external-task-1",
+        id: String,
+        repairId: String,
+        externalTaskId: String = "external-$repairId",
         routeIndex: Int = 0,
-        source: TaskBoardSourceDto? = null,
-        status: String = "WAITING",
+        queueId: String = "queue-1",
+        queuePosition: Int = 0,
+        scheduledDate: String = "2026-07-27",
     ): TaskBoardEntryDto = TaskBoardEntryDto(
         id = id,
         version = 6,
         taskId = "task-$id",
         externalTaskId = externalTaskId,
-        source = source,
+        source = TaskBoardSourceDto("MAINTENANCE_REPAIR", repairId),
         taskVersion = 8,
         title = "Ремонт бытовки",
         unitNumber = "БЫТ-001",
         taskStatus = "ACTIVE",
-        scheduledDate = "2026-07-27",
+        scheduledDate = scheduledDate,
         priority = 3,
         pinned = false,
-        queueId = "queue-1",
+        queueId = queueId,
         routeIndex = routeIndex,
-        queuePosition = 0,
+        queuePosition = queuePosition,
         entryType = "REAL",
-        status = status,
+        status = "WAITING",
         activeWorkSeconds = 0,
     )
 
-    private fun board(
-        entries: List<TaskBoardEntryDto> = emptyList(),
-        selectedDate: String = "2026-07-27",
-        availableDates: List<String> = listOf(selectedDate),
-    ): TaskBoardSnapshotDto = TaskBoardSnapshotDto(
-        warehouseId = "warehouse-1",
-        selectedDate = selectedDate,
-        availableDates = availableDates,
-        columns = listOf(
-            TaskBoardColumnDto(
-                queueId = "queue-1",
-                queueName = "Ремонт",
-                queueType = "REPAIR",
-                sortOrder = 0,
-                entries = entries,
-            ),
-        ),
-    )
+    private fun board(vararg columns: TaskBoardColumnDto): TaskBoardSnapshotDto =
+        TaskBoardSnapshotDto(
+            warehouseId = "warehouse-1",
+            columns = columns.toList(),
+        )
 
-    private fun queueItem(
-        repairId: String,
-        date: String,
-        entry: TaskBoardEntryDto,
-    ): RepairQueueItem {
-        val repair = repair(
-            id = repairId,
-            stages = listOf(
-                stage(
-                    id = "stage-$repairId",
-                    order = entry.routeIndex,
-                    state = entry.status,
-                    externalTaskId = entry.externalTaskId.orEmpty(),
-                ),
-            ),
-        )
-        return RepairQueueItem(
-            repair = repair,
-            stage = repair.plan.stages.single(),
-            entry = entry.copy(scheduledDate = date),
-            queue = board(entries = listOf(entry)).columns.single(),
-            date = date,
-            boardOrder = 0,
-        )
-    }
+    private fun column(
+        id: String = "queue-1",
+        name: String = "Ремонт",
+        sortOrder: Int = 0,
+        entries: List<TaskBoardEntryDto> = emptyList(),
+    ): TaskBoardColumnDto = TaskBoardColumnDto(
+        queueId = id,
+        queueName = name,
+        queueType = "REPAIR",
+        sortOrder = sortOrder,
+        entries = entries,
+    )
 }

@@ -359,26 +359,12 @@ interface RwmsApi {
         @Body request: RepairDecisionRequest,
     ): RepairCommandResultDto
 
+    /** Reads the warehouse's single public aggregate ordinary-board representation. */
     @GET("api/task-board/warehouses/{warehouseId}/task-board")
     suspend fun taskBoard(
         @Path("warehouseId") warehouseId: String,
-        @Query("includeShadow") includeShadow: Boolean = true,
-        @Query("date") date: String? = null,
         @Header("If-None-Match") ifNoneMatch: String? = null,
     ): Response<TaskBoardSnapshotDto>
-
-    @POST("api/task-board/warehouses/{warehouseId}/task-board/entries/{entryId}/move")
-    suspend fun moveTaskBoardEntry(
-        @Path("warehouseId") warehouseId: String,
-        @Path("entryId") entryId: String,
-        @Body request: MoveTaskBoardEntryRequest,
-    ): TaskBoardSnapshotDto
-
-    @POST("api/task-board/warehouses/{warehouseId}/task-board/dates/swap")
-    suspend fun swapTaskBoardDates(
-        @Path("warehouseId") warehouseId: String,
-        @Body request: SwapTaskBoardDatesRequest,
-    ): TaskBoardSnapshotDto
 
     @GET("api/maintenance/v1/catalog/versions")
     suspend fun catalogVersions(

@@ -1,4 +1,3 @@
-import { DndContext } from "@dnd-kit/core"
 import { cleanup, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { useState } from "react"
@@ -72,22 +71,22 @@ function renderCard(
   {
     onDetails = vi.fn<(entry: TaskBoardEntryDto) => void>(),
     onEdit = vi.fn<(entry: TaskBoardEntryDto) => void>(),
+    onTake = vi.fn<(entry: TaskBoardEntryDto) => void>(),
     onToggleCollapsed = vi.fn<(entryId: string) => void>(),
     canEdit = true,
     mobile = false,
     collapsed = mobile,
-    dragDisabled = true,
     entryPatch = {},
     palette = null,
     repairComplexity = null,
   }: {
     onDetails?: (entry: TaskBoardEntryDto) => void
     onEdit?: (entry: TaskBoardEntryDto) => void
+    onTake?: (entry: TaskBoardEntryDto) => void
     onToggleCollapsed?: (entryId: string) => void
     canEdit?: boolean
     mobile?: boolean
     collapsed?: boolean
-    dragDisabled?: boolean
     entryPatch?: Partial<TaskBoardEntryDto>
     palette?: KpiPalette | null
     repairComplexity?: TaskBoardRepairComplexity | null
@@ -95,25 +94,23 @@ function renderCard(
 ) {
   const entry = { ...taskEntry(source), ...entryPatch }
   render(
-    <DndContext>
-      <TaskBoardCard
-        entry={entry}
-        now={Date.parse("2026-07-18T10:00:00Z")}
-        mobile={mobile}
-        canEdit={canEdit}
-        collapsed={collapsed}
-        dragDisabled={dragDisabled}
-        actionPending={false}
-        onDetails={onDetails}
-        onEdit={onEdit}
-        onPause={vi.fn()}
-        onResume={vi.fn()}
-        onPin={vi.fn()}
-        onToggleCollapsed={onToggleCollapsed}
-        palette={palette}
-        repairComplexity={repairComplexity}
-      />
-    </DndContext>
+    <TaskBoardCard
+      entry={entry}
+      now={Date.parse("2026-07-18T10:00:00Z")}
+      mobile={mobile}
+      canEdit={canEdit}
+      collapsed={collapsed}
+      actionPending={false}
+      onDetails={onDetails}
+      onEdit={onEdit}
+      onTake={onTake}
+      onPause={vi.fn()}
+      onResume={vi.fn()}
+      onPin={vi.fn()}
+      onToggleCollapsed={onToggleCollapsed}
+      palette={palette}
+      repairComplexity={repairComplexity}
+    />
   )
   return entry
 }
@@ -126,24 +123,22 @@ function CollapsibleCard() {
   })
 
   return (
-    <DndContext>
-      <TaskBoardCard
-        entry={entry}
-        now={Date.parse("2026-07-18T10:00:00Z")}
-        mobile={false}
-        canEdit
-        collapsed={collapsed}
-        dragDisabled
-        actionPending={false}
-        onDetails={vi.fn()}
-        onEdit={vi.fn()}
-        onPause={vi.fn()}
-        onResume={vi.fn()}
-        onPin={vi.fn()}
-        onToggleCollapsed={() => setCollapsed((current) => !current)}
-        repairComplexity={complexRepair}
-      />
-    </DndContext>
+    <TaskBoardCard
+      entry={entry}
+      now={Date.parse("2026-07-18T10:00:00Z")}
+      mobile={false}
+      canEdit
+      collapsed={collapsed}
+      actionPending={false}
+      onDetails={vi.fn()}
+      onEdit={vi.fn()}
+      onTake={vi.fn()}
+      onPause={vi.fn()}
+      onResume={vi.fn()}
+      onPin={vi.fn()}
+      onToggleCollapsed={() => setCollapsed((current) => !current)}
+      repairComplexity={complexRepair}
+    />
   )
 }
 
@@ -409,6 +404,17 @@ describe("TaskBoardCard source details", () => {
     expect(onEdit).toHaveBeenCalledWith(entry)
   })
 
+  it("lets an editor take every server-admitted waiting card", async () => {
+    const onTake = vi.fn()
+    const entry = renderCard(null, { onTake })
+
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Взять в работу" }))
+
+    expect(onTake).toHaveBeenCalledWith(entry)
+  })
+
   it("hides repair editing without EDIT access", () => {
     renderCard(
       {
@@ -419,6 +425,7 @@ describe("TaskBoardCard source details", () => {
     )
 
     expect(screen.queryByRole("button", { name: "Редактировать" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Взять в работу" })).toBeNull()
     expect(screen.getByRole("button", { name: "Детали" })).toBeTruthy()
   })
 })

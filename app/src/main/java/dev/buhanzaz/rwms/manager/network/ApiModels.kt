@@ -1394,41 +1394,10 @@ data class TaskBoardColumnDto(
     val entries: List<TaskBoardEntryDto> = emptyList(),
 )
 
-/**
- * Public-manager-gateway response/read payload for TaskBoardSnapshotDto. It is a transport boundary model, not persisted domain state.
- */
+/** Public aggregate ordinary-board snapshot; task dates and shadow routes are not read dimensions. */
 data class TaskBoardSnapshotDto(
     val warehouseId: String,
-    val selectedDate: String? = null,
-    val availableDates: List<String> = emptyList(),
     val columns: List<TaskBoardColumnDto> = emptyList(),
-)
-
-/**
- * Public-manager-gateway request payload for MoveTaskBoardEntryRequest. It is a transport boundary model, not persisted domain state.
- */
-data class MoveTaskBoardEntryRequest(
-    val expectedVersion: Long,
-    val expectedTaskVersion: Long,
-    val targetQueueId: String,
-    val targetIndex: Int,
-    val targetDate: String,
-)
-
-/** Exact optimistic-concurrency evidence for both visible date columns. */
-data class TaskBoardDateEntryExpectationDto(
-    val entryId: String,
-    val expectedVersion: Long,
-    val expectedTaskVersion: Long,
-)
-
-/**
- * Public-manager-gateway request payload for SwapTaskBoardDatesRequest. It is a transport boundary model, not persisted domain state.
- */
-data class SwapTaskBoardDatesRequest(
-    val firstDate: String,
-    val secondDate: String,
-    val entries: List<TaskBoardDateEntryExpectationDto>,
 )
 
 /**

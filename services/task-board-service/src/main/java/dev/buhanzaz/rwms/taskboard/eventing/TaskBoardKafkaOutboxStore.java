@@ -163,7 +163,11 @@ public class TaskBoardKafkaOutboxStore {
   @Transactional(readOnly = true)
   public long backlog() {
     Long count = jdbc.queryForObject(
-        "select count(*) from outbox_event where status in ('PENDING','IN_FLIGHT')", Long.class);
+        """
+        select (select count(*) from outbox_event where status='PENDING')
+             + (select count(*) from outbox_event where status='IN_FLIGHT')
+        """,
+        Long.class);
     return count == null ? 0 : count;
   }
 

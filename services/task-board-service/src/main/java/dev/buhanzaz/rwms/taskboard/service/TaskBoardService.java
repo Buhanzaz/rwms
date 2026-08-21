@@ -2,7 +2,6 @@ package dev.buhanzaz.rwms.taskboard.service;
 
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 
-import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -23,7 +22,7 @@ public class TaskBoardService {
   private final TaskBoardExternalMutationService externalMutations;
   private final TaskBoardLogisticsTaskService logisticsTasks;
   private final TaskBoardWorkerExecutionService workerExecutions;
-  private final TaskBoardOrderingService ordering;
+  private final TaskBoardPinningService pinning;
 
   public TaskBoardService(
       TaskBoardReadProjectionService readProjections,
@@ -31,25 +30,19 @@ public class TaskBoardService {
       TaskBoardExternalMutationService externalMutations,
       TaskBoardLogisticsTaskService logisticsTasks,
       TaskBoardWorkerExecutionService workerExecutions,
-      TaskBoardOrderingService ordering) {
+      TaskBoardPinningService pinning) {
     this.readProjections = readProjections;
     this.externalTasks = externalTasks;
     this.externalMutations = externalMutations;
     this.logisticsTasks = logisticsTasks;
     this.workerExecutions = workerExecutions;
-    this.ordering = ordering;
+    this.pinning = pinning;
   }
 
-  /** Returns a stable date-scoped operational board representation. */
+  /** Returns the stable bounded aggregate ordinary-board representation. */
   @Transactional(readOnly = true)
-  public TaskBoardSnapshot snapshot(
-      UUID warehouseId, LocalDate requestedDate, boolean includeShadow) {
-    return readProjections.snapshot(warehouseId, requestedDate, includeShadow);
-  }
-
-  @Transactional(readOnly = true)
-  public TaskBoardSnapshot snapshot(UUID warehouseId, boolean includeShadow) {
-    return readProjections.snapshot(warehouseId, includeShadow);
+  public TaskBoardSnapshot snapshot(UUID warehouseId) {
+    return readProjections.snapshot(warehouseId);
   }
 
   @Transactional(readOnly = true)
@@ -59,7 +52,7 @@ public class TaskBoardService {
   }
 
   /**
-   * Worker feed keeps the ordinary selected-date view and adds only actionable
+   * Worker feed keeps the aggregate ordinary view and adds only actionable
    * logistics entries from the server-controlled current lane.  The lane is an
    * ordered queue; only its first waiting entry is actionable for a driver.
    */
@@ -104,7 +97,7 @@ public class TaskBoardService {
     return externalTasks.createManagerTask(
         warehouseId,
         request,
-        task -> readProjections.snapshot(warehouseId, task.getScheduledDate(), true));
+        task -> readProjections.snapshot(warehouseId));
   }
 
   @Transactional(propagation = Propagation.NEVER)
@@ -269,32 +262,9 @@ public class TaskBoardService {
   }
 
   @Transactional
-  /** Moves an entry to an eligible queue/date/position as one version-fenced transition. */
-  public TaskBoardSnapshot move(UUID warehouseId, UUID entryId, MoveEntryRequest request) {
-    ordering.move(warehouseId, entryId, request, false);
-    return readProjections.snapshot(warehouseId, request.targetDate(), true);
-  }
-
-  /**
-   * Exchanges two complete date columns without changing any queue or queue-position assignment.
-   * A board task owns the date shared by every route entry, so changing the task exactly once also
-   * carries the new date to its complete route, including currently non-visible later steps.
-   */
-  @Transactional
-  /** Exchanges two complete date columns after validating every entry expectation. */
-  public TaskBoardSnapshot swapDates(UUID warehouseId, SwapTaskBoardDatesRequest request) {
-    ordering.swapDates(warehouseId, request);
-    return readProjections.snapshot(warehouseId, request.firstDate(), true);
-  }
-
-  @Transactional
   /** Pins or unpins all route entries for a task without changing their positions. */
   public TaskBoardSnapshot pin(UUID warehouseId, UUID taskId, PinTaskRequest request) {
-    return readProjections.snapshot(warehouseId, ordering.pin(warehouseId, taskId, request), true);
-  }
-
-  @Transactional
-  public int rolloverOverdueMaintenanceTasks(LocalDate targetDate) {
-    return ordering.rolloverOverdueMaintenanceTasks(targetDate);
+    pinning.pin(warehouseId, taskId, request);
+    return readProjections.snapshot(warehouseId);
   }
 }

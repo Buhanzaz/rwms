@@ -336,12 +336,11 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
                 new RouteStepRequest(verification.definitionId(), null, 10)),
             null,
             null,
-            null,
             source,
             TaskLane.SCHEDULED));
 
     assertThat(
-            board.snapshot(WAREHOUSE, true).columns().stream()
+            board.snapshot(WAREHOUSE).columns().stream()
                 .flatMap(column -> column.entries().stream())
                 .filter(entry -> registration.taskId().equals(entry.taskId()))
                 .map(entry -> entry.source())
@@ -555,7 +554,8 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
         child(child(schemas, "RegisterExternalTaskRequest"), "properties");
     assertThat(createTaskProperties).doesNotContainKey("dailyCapacity");
     assertThat(externalTaskProperties)
-        .containsKeys("dailyCapacity", "source", "driverAudience");
+        .containsKeys("source", "driverAudience")
+        .doesNotContainKey("dailyCapacity");
     assertThat(schemas)
         .containsKeys("DriverTaskAudienceMode", "DriverTaskAudience");
     assertThat(child(schemas, "DriverTaskAudienceMode").get("enum"))
@@ -575,8 +575,6 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
                 "taskVersion",
                 "status",
                 "cancelledAt"));
-    assertThat(child(externalTaskProperties, "dailyCapacity").toString())
-        .contains("minimum=1", "type=null");
     assertThat(
             ((List<?>) child(schemas, "BoardEntry").get("required")).stream()
                 .map(String::valueOf)
@@ -588,28 +586,20 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void canonicalOpenApiDeclaresOptimisticDateColumnSwap() throws Exception {
+  void canonicalOpenApiExposesOnlyTheAggregateOrdinaryBoard() throws Exception {
     Map<String, Object> contract = yaml("openapi/task-board-service.yaml");
     Map<String, Object> paths = child(contract, "paths");
-    Map<String, Object> operation =
-        child(
-            child(paths, "/warehouses/{warehouseId}/task-board/dates/swap"),
-            "post");
-    assertThat(operation.get("operationId")).isEqualTo("swapTaskBoardDates");
-    Map<String, Object> requestSchema =
-        child(
-            child(
-                child(child(operation, "requestBody"), "content"),
-                "application/json"),
-            "schema");
-    assertThat(requestSchema.get("$ref"))
-        .isEqualTo("#/components/schemas/SwapTaskBoardDatesRequest");
+    assertThat(paths)
+        .doesNotContainKeys(
+            "/warehouses/{warehouseId}/task-board/dates/swap",
+            "/warehouses/{warehouseId}/task-board/entries/{entryId}/move");
 
     Map<String, Object> schemas = child(child(contract, "components"), "schemas");
-    assertThat(child(schemas, "SwapTaskBoardDatesRequest").get("required"))
-        .isEqualTo(List.of("firstDate", "secondDate", "entries"));
-    assertThat(child(schemas, "TaskBoardDateEntryExpectation").get("required"))
-        .isEqualTo(List.of("entryId", "expectedVersion", "expectedTaskVersion"));
+    assertThat(schemas)
+        .doesNotContainKeys(
+            "MoveEntryRequest", "SwapTaskBoardDatesRequest", "TaskBoardDateEntryExpectation");
+    assertThat(child(schemas, "TaskBoardSnapshot").get("required"))
+        .isEqualTo(List.of("warehouseId", "columns"));
     assertAllLocalReferencesResolve(contract, contract);
   }
 

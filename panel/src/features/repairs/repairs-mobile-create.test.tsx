@@ -7,10 +7,11 @@ import {
   within,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { MemoryRouter, useLocation } from "react-router-dom"
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { MANAGER_MOBILE_APP_DOWNLOAD_PATH } from "@/components/mobile-app-required-dialog"
+import { resolveHeaderBreadcrumbs } from "@/components/site-header-breadcrumbs"
 import type {
   CurrentUser,
   WarehouseAccessLevel,
@@ -24,10 +25,6 @@ const REPAIR_ID = "33333333-3333-4333-8333-333333333333"
 const deviceState = vi.hoisted(() => ({ isMobile: true }))
 const api = vi.hoisted(() => ({
   getRepairTask: vi.fn(),
-  getTaskBoardsForAvailableDates: vi.fn(),
-  listRepairTasks: vi.fn(),
-  moveTaskBoardEntry: vi.fn(),
-  pinTaskBoardEntry: vi.fn(),
 }))
 
 vi.mock("@/hooks/use-mobile", () => ({
@@ -68,29 +65,12 @@ vi.mock("@/hooks/use-warehouse", () => ({
 
 vi.mock("@/features/repair-tasks/api/repair-tasks-api", () => ({
   getRepairTask: api.getRepairTask,
-  listRepairTasks: api.listRepairTasks,
   repairTaskDetailQueryKey: (warehouseId: string, repairId: string | null) => [
     "repair-tasks",
     "detail",
     warehouseId,
     repairId,
   ],
-  repairTasksListQueryKey: (warehouseId: string) => [
-    "repair-tasks",
-    "list",
-    warehouseId,
-  ],
-}))
-
-vi.mock("@/features/task-board/api/task-board-api", () => ({
-  TASK_BOARD_QUERY_KEY: ["task-board"],
-  getTaskBoardsForAvailableDates: api.getTaskBoardsForAvailableDates,
-  moveTaskBoardEntry: api.moveTaskBoardEntry,
-  pinTaskBoardEntry: api.pinTaskBoardEntry,
-}))
-
-vi.mock("@/features/repairs/repairs-queue-view", () => ({
-  RepairsQueueView: () => null,
 }))
 
 vi.mock("@/features/repair-tasks/repair-task-detail-workspace", () => ({
@@ -98,10 +78,31 @@ vi.mock("@/features/repair-tasks/repair-task-detail-workspace", () => ({
 }))
 
 vi.mock("@/features/repair-tasks/repair-task-editor-workspace", () => ({
-  RepairTaskEditorWorkspace: ({ task }: { task: RepairTaskDto | null }) => (
-    <output data-testid="repair-editor">
-      {task ? "existing repair" : "new repair"}
-    </output>
+  RepairTaskEditorWorkspace: ({
+    task,
+    onBack,
+    onClose,
+    onSaved,
+  }: {
+    task: RepairTaskDto | null
+    onBack: () => void
+    onClose: () => void
+    onSaved: () => void
+  }) => (
+    <div>
+      <output data-testid="repair-editor">
+        {task ? "existing repair" : "new repair"}
+      </output>
+      <button type="button" onClick={onBack}>
+        Назад из редактора
+      </button>
+      <button type="button" onClick={onClose}>
+        Закрыть редактор
+      </button>
+      <button type="button" onClick={onSaved}>
+        Ремонт сохранён
+      </button>
+    </div>
   ),
 }))
 
@@ -145,7 +146,10 @@ function LocationProbe() {
   )
 }
 
-function renderPage(path = "/repairs") {
+function renderPage(
+  path = "/repairs",
+  options?: { previousPath?: string; state?: unknown }
+) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -153,10 +157,23 @@ function renderPage(path = "/repairs") {
     },
   })
 
+  const [pathname, search = ""] = path.split("?", 2)
+  const workspaceEntry = {
+    pathname,
+    search: search ? `?${search}` : "",
+    state: options?.state,
+  }
+  const initialEntries = options?.previousPath
+    ? [options.previousPath, workspaceEntry]
+    : [workspaceEntry]
+
   return render(
-    <MemoryRouter initialEntries={[path]}>
+    <MemoryRouter initialEntries={initialEntries}>
       <QueryClientProvider client={queryClient}>
-        <RepairsPage />
+        <Routes>
+          <Route path="/repairs" element={<RepairsPage />} />
+          <Route path="*" element={null} />
+        </Routes>
         <LocationProbe />
       </QueryClientProvider>
     </MemoryRouter>
@@ -166,8 +183,6 @@ function renderPage(path = "/repairs") {
 beforeEach(() => {
   deviceState.isMobile = true
   api.getRepairTask.mockResolvedValue(repair)
-  api.getTaskBoardsForAvailableDates.mockResolvedValue([])
-  api.listRepairTasks.mockResolvedValue([])
 })
 
 afterEach(() => {
@@ -176,43 +191,41 @@ afterEach(() => {
 })
 
 describe("RepairsPage mobile creation", () => {
-  it("opens the mobile app dialog from the list without adding create to the URL", async () => {
-    const user = userEvent.setup()
-    renderPage()
+  it.each(["/repairs", "/repairs?view=queue"])(
+    "redirects the obsolete list route %s to the task board",
+    async (path) => {
+      renderPage(path)
 
-    await user.click(screen.getByRole("button", { name: "Создать задание" }))
-
-    const dialog = await screen.findByRole("dialog")
-    expect(
-      within(dialog).getByRole("heading", {
-        name: "Создание ремонта доступно в мобильном приложении",
+      await waitFor(() => {
+        expect(screen.getByTestId("repairs-location").textContent).toBe(
+          "/task-board"
+        )
       })
-    ).toBeTruthy()
-    expect(
-      within(dialog)
-        .getByRole("link", { name: "Скачать приложение" })
-        .getAttribute("href")
-    ).toBe(MANAGER_MOBILE_APP_DOWNLOAD_PATH)
-    expect(screen.queryByTestId("repair-editor")).toBeNull()
-    expect(screen.getByTestId("repairs-location").textContent).toBe("/repairs")
-  })
+      expect(api.getRepairTask).not.toHaveBeenCalled()
+    }
+  )
 
-  it("blocks a direct mobile creation route and returns to the list when dismissed", async () => {
+  it("blocks a direct mobile creation route and returns to the task board when dismissed", async () => {
     const user = userEvent.setup()
     renderPage("/repairs?create=1")
 
     const dialog = await screen.findByRole("dialog")
     expect(screen.queryByTestId("repair-editor")).toBeNull()
+    expect(
+      within(dialog)
+        .getByRole("link", { name: "Скачать приложение" })
+        .getAttribute("href")
+    ).toBe(MANAGER_MOBILE_APP_DOWNLOAD_PATH)
 
     await user.click(within(dialog).getByRole("button", { name: "Понятно" }))
 
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).toBeNull()
       expect(screen.getByTestId("repairs-location").textContent).toBe(
-        "/repairs"
+        "/task-board"
       )
     })
-    expect(screen.getByRole("button", { name: "Создать задание" })).toBeTruthy()
+    expect(api.getRepairTask).not.toHaveBeenCalled()
   })
 
   it("keeps an existing repair editor available on mobile", async () => {
@@ -224,5 +237,52 @@ describe("RepairsPage mobile creation", () => {
       )
     })
     expect(screen.queryByRole("dialog")).toBeNull()
+  })
+
+  it("uses the task board as the fallback after closing a direct desktop link", async () => {
+    deviceState.isMobile = false
+    const user = userEvent.setup()
+    renderPage(`/repairs?repairId=${REPAIR_ID}`)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Закрыть редактор" })
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId("repairs-location").textContent).toBe(
+        "/task-board"
+      )
+    })
+  })
+
+  it("returns to the recorded in-panel origin after saving", async () => {
+    deviceState.isMobile = false
+    const user = userEvent.setup()
+    renderPage(`/repairs?repairId=${REPAIR_ID}`, {
+      previousPath: "/acceptance",
+      state: { workspaceEntry: true },
+    })
+
+    await user.click(
+      await screen.findByRole("button", { name: "Ремонт сохранён" })
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId("repairs-location").textContent).toBe(
+        "/acceptance"
+      )
+    })
+  })
+})
+
+describe("repair workspace breadcrumbs", () => {
+  it.each([
+    ["?repairId=repair-1", "Задание"],
+    ["?create=1", "Новое задание"],
+  ])("keeps %s under the task board", (search, currentTitle) => {
+    expect(resolveHeaderBreadcrumbs("/repairs", search, null, null)).toEqual([
+      { title: "Доска задач", to: "/task-board" },
+      { title: currentTitle },
+    ])
   })
 })

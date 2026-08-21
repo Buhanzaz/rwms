@@ -9,10 +9,7 @@ import type {
   RentalItemStatus,
 } from "@/features/rental-items/model/rental-item"
 
-const DIRECT_REPAIR_EXCLUDED_STATUSES: RentalItemStatus[] = [
-  "RENTED",
-  "AFTER_RENT",
-]
+const DIRECT_REPAIR_EXCLUDED_STATUSES: RentalItemStatus[] = ["RENTED"]
 
 function toOption(item: RentalItemDto) {
   return {

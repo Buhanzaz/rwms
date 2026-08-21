@@ -565,6 +565,12 @@ export function TaskBoardSettingsPage() {
                 render: (item) => <QueueBindings queue={item} />,
               },
               {
+                id: "availableTaskLimit",
+                label: "Доступно заданий",
+                getSortValue: (item) => item.availableTaskLimit,
+                render: (item) => item.availableTaskLimit,
+              },
+              {
                 id: "status",
                 label: "Статус",
                 getSortValue: (item) => (item.active ? 1 : 0),

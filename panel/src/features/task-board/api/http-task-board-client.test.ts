@@ -4,7 +4,6 @@ import {
   completeHttpTaskBoardEntry,
   getHttpTaskBoard,
   listHttpEligibleWorkerGroups,
-  moveHttpTaskBoardEntry,
   pinHttpTaskBoardEntry,
 } from "@/features/task-board/api/http-task-board-client"
 import { ApiError } from "@/lib/api-client"
@@ -19,14 +18,13 @@ const repairSourceId = "repair id/with space"
 
 const boardResponse = {
   warehouseId,
-  selectedDate: "2026-07-18",
-  availableDates: ["2026-07-18", "2026-07-19"],
   columns: [
     {
       queueId,
       queueName: "Ремонт",
       queueType: "REPAIR",
       sortOrder: 10,
+      availableTaskLimit: 6,
       entries: [
         {
           id: entryId,
@@ -94,6 +92,7 @@ const boardResponse = {
       queueName: "Перемещение мебели",
       queueType: "FURNITURE_MOVEMENT",
       sortOrder: 20,
+      availableTaskLimit: 6,
       entries: [],
     },
   ],
@@ -147,17 +146,11 @@ describe("public task-board HTTP client", () => {
     })
 
     await completeHttpTaskBoardEntry("task-board-token", entry)
-    await moveHttpTaskBoardEntry(
-      "task-board-token",
-      entry,
-      queueId,
-      1,
-      "2026-07-19"
-    )
 
     expect(String(fetchMock.mock.calls[0]![0])).toContain(
-      `/api/task-board/warehouses/${warehouseId}/task-board?includeShadow=true`
+      `/api/task-board/warehouses/${warehouseId}/task-board`
     )
+    expect(String(fetchMock.mock.calls[0]![0])).not.toContain("?")
     const [completeUrl, completeInit] = fetchMock.mock.calls[1] as [
       string,
       RequestInit,
@@ -171,13 +164,6 @@ describe("public task-board HTTP client", () => {
     expect(new Headers(completeInit.headers).get("Authorization")).toBe(
       "Bearer task-board-token"
     )
-    expect(JSON.parse(String(fetchMock.mock.calls[2]![1]?.body))).toEqual({
-      expectedVersion: 7,
-      expectedTaskVersion: 42,
-      targetQueueId: queueId,
-      targetIndex: 1,
-      targetDate: "2026-07-19",
-    })
   })
 
   it("does not map missing or unknown sources to repair links", async () => {
@@ -222,13 +208,12 @@ describe("public task-board HTTP client", () => {
   it("pins a task with task-version CAS", async () => {
     const fetchMock = vi.fn().mockImplementation(() => json(boardResponse))
     vi.stubGlobal("fetch", fetchMock)
-    const entry = (
-      await getHttpTaskBoard("task-board-token", warehouseId, "2026-07-18")
-    ).queues[0]!.entries[0]!
+    const entry = (await getHttpTaskBoard("task-board-token", warehouseId))
+      .queues[0]!.entries[0]!
 
     await pinHttpTaskBoardEntry("task-board-token", entry, false)
 
-    expect(String(fetchMock.mock.calls[0]![0])).toContain("date=2026-07-18")
+    expect(String(fetchMock.mock.calls[0]![0])).not.toContain("?")
     const [pinUrl, pinInit] = fetchMock.mock.calls[1] as [string, RequestInit]
     expect(pinUrl).toContain(
       `/api/task-board/warehouses/${warehouseId}/task-board/tasks/${taskId}/pin`

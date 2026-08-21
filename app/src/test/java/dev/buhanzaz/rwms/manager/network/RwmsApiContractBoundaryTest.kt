@@ -41,7 +41,7 @@ class RwmsApiContractBoundaryTest {
             .filterNot(Method::isSynthetic)
             .associateBy(Method::getName)
 
-        assertThat(expected).hasSize(63)
+        assertThat(expected).hasSize(61)
         assertWithMessage("RwmsApi method inventory must stay synchronized with canonical public OpenAPI")
             .that(methods.keys)
             .containsExactlyElementsIn(expected.keys)
@@ -323,30 +323,18 @@ class RwmsApiContractBoundaryTest {
     }
 
     @Test
-    fun `task board response and command fixtures keep exact optimistic fences`() {
+    fun `task board response fixture is one aggregate ordinary snapshot`() {
         val snapshot = decode<TaskBoardSnapshotDto>(
             """
             {
               "warehouseId":"22222222-2222-2222-2222-222222222222",
-              "selectedDate":"2026-08-09",
-              "availableDates":["2026-08-09"],
               "columns":[]
             }
             """.trimIndent(),
         )
-        val request = MoveTaskBoardEntryRequest(
-            expectedVersion = 8,
-            expectedTaskVersion = 13,
-            targetQueueId = "88888888-8888-8888-8888-888888888888",
-            targetIndex = 2,
-            targetDate = "2026-08-10",
-        )
-        val encoded = moshi.adapter(MoveTaskBoardEntryRequest::class.java).toJson(request)
 
-        assertThat(snapshot.selectedDate).isEqualTo("2026-08-09")
-        assertThat(encoded).contains("\"expectedVersion\":8")
-        assertThat(encoded).contains("\"expectedTaskVersion\":13")
-        assertThat(encoded).contains("\"targetDate\":\"2026-08-10\"")
+        assertThat(snapshot.warehouseId).isEqualTo("22222222-2222-2222-2222-222222222222")
+        assertThat(snapshot.columns).isEmpty()
     }
 
     @Test
@@ -584,8 +572,6 @@ private fun expectedManagerRoutes(): Map<String, ManagerContractRoute> {
         "reworkCandidates" to route("GET", "api/maintenance/v1/repairs/{repairId}/rework-candidates", "$maintenance /api/maintenance/v1/repairs/{id}/rework-candidates"),
         "acceptRepair" to route("POST", "api/maintenance/v1/repairs/{repairId}/accept", "$maintenance /api/maintenance/v1/repairs/{id}/accept"),
         "taskBoard" to route("GET", "api/task-board/warehouses/{warehouseId}/task-board", "$taskBoard /warehouses/{warehouseId}/task-board"),
-        "moveTaskBoardEntry" to route("POST", "api/task-board/warehouses/{warehouseId}/task-board/entries/{entryId}/move", "$taskBoard /warehouses/{warehouseId}/task-board/entries/{entryId}/move"),
-        "swapTaskBoardDates" to route("POST", "api/task-board/warehouses/{warehouseId}/task-board/dates/swap", "$taskBoard /warehouses/{warehouseId}/task-board/dates/swap"),
         "catalogVersions" to route("GET", "api/maintenance/v1/catalog/versions", "$maintenance /api/maintenance/v1/catalog/versions"),
         "catalogNodes" to route("GET", "api/maintenance/v1/catalog/versions/{catalogVersionId}/nodes", "$maintenance /api/maintenance/v1/catalog/versions/{id}/nodes"),
         "catalogLinks" to route("GET", "api/maintenance/v1/catalog/versions/{catalogVersionId}/links", "$maintenance /api/maintenance/v1/catalog/versions/{id}/links"),

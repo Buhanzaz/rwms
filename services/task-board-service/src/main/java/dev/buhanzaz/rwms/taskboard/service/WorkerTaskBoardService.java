@@ -51,6 +51,7 @@ public class WorkerTaskBoardService {
   private final WorkforceService workforce;
   private final RegistryService registry;
   private final WorkerTaskAccessService taskAccess;
+  private final MaintenanceTaskExecutionPackageService executionPackages;
   private final JdbcTemplate jdbc;
   private final WorkerOfflineLeaseCodec leases;
   private final WorkerInvalidationHub invalidations;
@@ -64,6 +65,7 @@ public class WorkerTaskBoardService {
       WorkforceService workforce,
       RegistryService registry,
       WorkerTaskAccessService taskAccess,
+      MaintenanceTaskExecutionPackageService executionPackages,
       JdbcTemplate jdbc,
       WorkerOfflineLeaseCodec leases,
       WorkerInvalidationHub invalidations,
@@ -75,6 +77,7 @@ public class WorkerTaskBoardService {
     this.workforce = workforce;
     this.registry = registry;
     this.taskAccess = taskAccess;
+    this.executionPackages = executionPackages;
     this.jdbc = jdbc;
     this.leases = leases;
     this.invalidations = invalidations;
@@ -221,7 +224,12 @@ public class WorkerTaskBoardService {
     return detail(MobileTaskSurface.WORKER, workerId, warehouseId, entryId);
   }
 
-  /** Returns task detail after enforcing the selected surface and worker audience. */
+  /**
+   * Returns task detail after enforcing the selected surface and worker audience.
+   *
+   * <p>A maintenance representative presents the content and remaining timer of its consecutive
+   * same-queue execution package; other sources remain entry-scoped.
+   */
   public WorkerTaskDetail detail(
       MobileTaskSurface surface, UUID workerId, UUID warehouseId, UUID entryId) {
     WorkerAccess access = access(surface, workerId, warehouseId);
@@ -251,66 +259,97 @@ public class WorkerTaskBoardService {
         entry.unitNumber() == null || entry.unitNumber().isBlank()
             ? null
             : new WorkerTaskObject("CABIN", null, entry.unitNumber());
-    TaskWorkerContentDto workerContent = taskBoard.workerContent(warehouseId, entryId);
-    List<WorkerWork> works =
-        workerContent.works().stream()
-            .map(
-                work ->
-                    new WorkerWork(
-                        work.id(),
-                        work.name(),
-                        work.quantity(),
-                        work.unit(),
-                        work.durationMinutes(),
-                        work.comment(),
-                        work.sourceMediaIds()))
-            .toList();
-    List<WorkerMaterial> materials =
-        workerContent.materials().stream()
-            .map(
-                material ->
-                    new WorkerMaterial(
-                        material.id(),
-                        material.name(),
-                        material.quantity(),
-                        material.unit()))
-            .toList();
-    List<WorkerVisibleComment> comments =
-        workerContent.comments().stream()
-            .map(
-                comment ->
-                    new WorkerVisibleComment(
-                        comment.id(),
-                        comment.text(),
-                        comment.authorDisplayName(),
-                        comment.createdAt()))
-            .toList();
-    List<WorkerMediaReference> sourceMedia =
-        workerContent.sourceMedia().stream()
-            .map(
-                reference ->
-                    new WorkerMediaReference(
-                        reference.mediaId(),
-                        reference.generation(),
-                        "SOURCE",
-                        reference.contentType() == null
-                            ? "application/octet-stream"
-                            : reference.contentType(),
-                        mediaReadPath(
-                            reference.mediaId(),
-                            entry.id(),
-                            warehouseId,
-                            reference.generation(),
-                            null),
-                        mediaReadPath(
-                            reference.mediaId(),
-                            entry.id(),
-                            warehouseId,
-                            reference.generation(),
-                            "SMALL"),
-                        reference.capturedAt(),
-                        reference.recordedAt()))
-            .toList();
+    List<RegisteredRouteStepDto> packageSteps = executionPackages.detailSteps(entry, task);
+    Map<UUID, TaskWorkerContentDto> contentByEntry = new LinkedHashMap<>();
+    if (packageSteps.isEmpty()) {
+      contentByEntry.put(entry.id(), taskBoard.workerContent(warehouseId, entry.id()));
+    } else {
+      packageSteps.forEach(
+          step ->
+              contentByEntry.put(
+                  step.entryId(), taskBoard.workerContent(warehouseId, step.entryId())));
+    }
+
+    Map<UUID, WorkerWork> workById = new LinkedHashMap<>();
+    Map<UUID, WorkerMaterial> materialById = new LinkedHashMap<>();
+    Map<UUID, WorkerVisibleComment> commentById = new LinkedHashMap<>();
+    contentByEntry.values().forEach(
+        content -> {
+          content.works().forEach(
+              work ->
+                  workById.putIfAbsent(
+                      work.id(),
+                      new WorkerWork(
+                          work.id(),
+                          work.name(),
+                          work.quantity(),
+                          work.unit(),
+                          work.durationMinutes(),
+                          work.comment(),
+                          work.sourceMediaIds())));
+          content.materials().forEach(
+              material ->
+                  materialById.putIfAbsent(
+                      material.id(),
+                      new WorkerMaterial(
+                          material.id(),
+                          material.name(),
+                          material.quantity(),
+                          material.unit())));
+          content.comments().forEach(
+              comment ->
+                  commentById.putIfAbsent(
+                      comment.id(),
+                      new WorkerVisibleComment(
+                          comment.id(),
+                          comment.text(),
+                          comment.authorDisplayName(),
+                          comment.createdAt())));
+        });
+
+    List<UUID> mediaEntryOrder = new ArrayList<>();
+    mediaEntryOrder.add(entry.id());
+    contentByEntry.keySet().stream()
+        .filter(candidate -> !candidate.equals(entry.id()))
+        .forEach(mediaEntryOrder::add);
+    Map<UUID, WorkerMediaReference> sourceMediaById = new LinkedHashMap<>();
+    for (UUID contentEntryId : mediaEntryOrder) {
+      TaskWorkerContentDto content = contentByEntry.get(contentEntryId);
+      if (content == null) continue;
+      content.sourceMedia().forEach(
+          reference ->
+              sourceMediaById.putIfAbsent(
+                  reference.mediaId(),
+                  new WorkerMediaReference(
+                      reference.mediaId(),
+                      reference.generation(),
+                      "SOURCE",
+                      reference.contentType() == null
+                          ? "application/octet-stream"
+                          : reference.contentType(),
+                      mediaReadPath(
+                          reference.mediaId(),
+                          contentEntryId,
+                          warehouseId,
+                          reference.generation(),
+                          null),
+                      mediaReadPath(
+                          reference.mediaId(),
+                          contentEntryId,
+                          warehouseId,
+                          reference.generation(),
+                          "SMALL"),
+                      reference.capturedAt(),
+                      reference.recordedAt())));
+    }
+    List<WorkerWork> works = List.copyOf(workById.values());
+    List<WorkerMaterial> materials = List.copyOf(materialById.values());
+    List<WorkerVisibleComment> comments = List.copyOf(commentById.values());
+    List<WorkerMediaReference> sourceMedia = List.copyOf(sourceMediaById.values());
+    Integer packageDurationMinutes =
+        executionPackages.plannedDurationMinutes(entry, packageSteps);
+    TaskTimerSnapshot packageTimer =
+        executionPackages.timerSnapshot(entry, packageSteps, packageDurationMinutes);
     List<TaskEvidence> evidence = evidence(entry.id());
     List<WorkerAssignmentSnapshot> assignmentSnapshots = assignments(entry);
     long readyEvidenceCount =
@@ -347,10 +386,10 @@ public class WorkerTaskBoardService {
         entry.queuePosition(),
         entry.status().name(),
         availabilityMode(workerCategory, entry.status().name()),
-        entry.plannedDurationMinutes(),
+        packageDurationMinutes,
         entry.activeStartedAt(),
         entry.activeWorkSeconds(),
-        entry.timerSnapshot(),
+        packageTimer,
         List.copyOf(audienceSelectors),
         assignmentSnapshots,
         works,

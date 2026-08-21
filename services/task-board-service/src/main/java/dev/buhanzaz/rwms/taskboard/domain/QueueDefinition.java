@@ -8,12 +8,19 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import java.util.Locale;
 import java.util.UUID;
 
-/** Owns the global queue identity and policy mirrored by warehouse-specific work queues. */
+/**
+ * Owns the global queue identity and policy mirrored by warehouse-specific work queues.
+ *
+ * <p>The policy includes the number of canonically ordered waiting tasks exposed for ordinary
+ * board work; physical queues copy that limit and do not override it locally.
+ */
 @Entity
 @Table(
     name = "queue_definition",
@@ -73,6 +80,11 @@ public class QueueDefinition extends AbstractVersionedEntity {
 
   @Column(name = "result_photo_min_count", nullable = false)
   private int resultPhotoMinCount = 1;
+
+  @Min(1)
+  @Max(50)
+  @Column(name = "available_task_limit", nullable = false)
+  private int availableTaskLimit = 6;
 
   @PrePersist
   @PreUpdate
@@ -186,6 +198,17 @@ public class QueueDefinition extends AbstractVersionedEntity {
 
   public void setResultPhotoMinCount(int value) {
     resultPhotoMinCount = value;
+  }
+
+  public int getAvailableTaskLimit() {
+    return availableTaskLimit;
+  }
+
+  public void setAvailableTaskLimit(int value) {
+    if (value < 1 || value > 50) {
+      throw new IllegalArgumentException("Лимит доступных заданий должен быть от 1 до 50");
+    }
+    availableTaskLimit = value;
   }
 
   public UUID getRevisionMarker() {

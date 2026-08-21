@@ -70,7 +70,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
   void cumulativeVersionFourEventSourcingAndTaskSyncMigrateCleanDatabaseAndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(26);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(28);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -134,9 +134,9 @@ class TaskBoardFlywayMigrationIntegrationTest {
                 Map.entry("task_time_event", 10),
                 Map.entry("task_board_warehouse_lifecycle_intent", 10),
                 Map.entry("warehouse_kpi_settings", 10),
-                Map.entry("queue_definition", 16),
+                Map.entry("queue_definition", 17),
                 Map.entry("queue_definition_class_binding", 8),
-                Map.entry("work_queue", 13),
+                Map.entry("work_queue", 14),
                 Map.entry("work_queue_class_binding", 8),
                 Map.entry("worker", 17),
                 Map.entry("worker_class", 8),
@@ -335,6 +335,14 @@ class TaskBoardFlywayMigrationIntegrationTest {
         .containsEntry("script", "V29__remove_shared_driver_identity.sql")
         .containsEntry("success", true);
     assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='31'"))
+        .containsEntry("version", "31")
+        .containsEntry(
+            "script", "V31__ordinary_queue_availability_and_holding_gate.sql")
+        .containsEntry("success", true);
+    assertThat(
             jdbc.queryForObject(
                 "select to_regprocedure('public.task_board_request_fingerprint_v4(jsonb)')",
                 String.class))
@@ -349,6 +357,138 @@ class TaskBoardFlywayMigrationIntegrationTest {
                     + "where table_schema='public' and table_name='queue_entry' "
                     + "and column_name='queue_id'"))
         .containsEntry("is_nullable", "NO");
+  }
+
+  @Test
+  void versionThirtyOneAddsAvailabilityLimitAndCorrectsOnlyFullyWaitingHoldingRoutes() {
+    configuration(MIGRATION_LOCATION).target("30").load().migrate();
+    UUID warehouseId = UUID.randomUUID();
+    UUID repairDefinition = UUID.randomUUID();
+    UUID holdingDefinition = UUID.randomUUID();
+    UUID repairQueue = UUID.randomUUID();
+    UUID holdingQueue = UUID.randomUUID();
+    UUID waitingTask = UUID.randomUUID();
+    UUID startedTask = UUID.randomUUID();
+    UUID waitingRepair = UUID.randomUUID();
+    UUID waitingHolding = UUID.randomUUID();
+    UUID startedRepair = UUID.randomUUID();
+    UUID startedHolding = UUID.randomUUID();
+
+    jdbc.update(
+        """
+        insert into queue_definition(
+          id,version,revision_marker,name,normalized_name,queue_type,queue_purpose,
+          sort_order,active,hidden,collapsed,notify_when_threshold_reached,result_photo_min_count)
+        values
+          (?,0,?,'Repair','repair','REPAIR','GENERAL',1,true,false,false,false,1),
+          (?,0,?,'SES','ses','HOLDING','GENERAL',2,true,false,false,false,0)
+        """,
+        repairDefinition,
+        UUID.randomUUID(),
+        holdingDefinition,
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into work_queue(
+          id,version,revision_marker,warehouse_id,definition_id,sort_order,active,hidden,
+          collapsed,notify_when_threshold_reached,result_photo_min_count)
+        values
+          (?,0,?,?,?,1,true,false,false,false,1),
+          (?,0,?,?,?,2,true,false,false,false,0)
+        """,
+        repairQueue,
+        UUID.randomUUID(),
+        warehouseId,
+        repairDefinition,
+        holdingQueue,
+        UUID.randomUUID(),
+        warehouseId,
+        holdingDefinition);
+    jdbc.update(
+        """
+        insert into board_task(
+          id,version,warehouse_id,title,status,scheduled_date,task_lane,priority,pinned,
+          completion_deadline_enforced)
+        values
+          (?,0,?,'Waiting route','ACTIVE','2026-08-21','SCHEDULED',3,false,false),
+          (?,0,?,'Started route','ACTIVE','2026-08-21','SCHEDULED',3,false,false)
+        """,
+        waitingTask,
+        warehouseId,
+        startedTask,
+        warehouseId);
+    jdbc.update(
+        """
+        insert into queue_entry(
+          id,version,revision_marker,task_id,queue_id,route_index,queue_position,entry_type,status,
+          worker_works,worker_materials,worker_comments,source_media_references,active_work_seconds)
+        values
+          (?,0,?,?,?,0,0,'REAL','WAITING','[]','[]','[]','[]',0),
+          (?,0,?,?,?,1,0,'SHADOW','WAITING','[]','[]','[]','[]',0),
+          (?,0,?,?,?,0,1,'REAL','IN_PROGRESS','[]','[]','[]','[]',0),
+          (?,0,?,?,?,1,1,'SHADOW','WAITING','[]','[]','[]','[]',0)
+        """,
+        waitingRepair,
+        UUID.randomUUID(),
+        waitingTask,
+        repairQueue,
+        waitingHolding,
+        UUID.randomUUID(),
+        waitingTask,
+        holdingQueue,
+        startedRepair,
+        UUID.randomUUID(),
+        startedTask,
+        repairQueue,
+        startedHolding,
+        UUID.randomUUID(),
+        startedTask,
+        holdingQueue);
+
+    Flyway migration = configuration(MIGRATION_LOCATION).target("31").load();
+    assertThat(migration.migrate().migrationsExecuted).isOne();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select available_task_limit from queue_definition where id=?",
+                Integer.class,
+                repairDefinition))
+        .isEqualTo(6);
+    assertThat(
+            jdbc.queryForObject(
+                "select available_task_limit from work_queue where id=?",
+                Integer.class,
+                repairQueue))
+        .isEqualTo(6);
+    assertThat(
+            jdbc.queryForObject(
+                "select to_regclass('public.idx_board_task_ordinary_availability')",
+                String.class))
+        .isEqualTo("idx_board_task_ordinary_availability");
+    assertThat(
+            jdbc.queryForList(
+                "select id,entry_type from queue_entry where task_id=? order by route_index",
+                waitingTask))
+        .extracting(row -> row.get("entry_type"))
+        .containsExactly("SHADOW", "REAL");
+    assertThat(
+            jdbc.queryForList(
+                "select id,entry_type from queue_entry where task_id=? order by route_index",
+                startedTask))
+        .extracting(row -> row.get("entry_type"))
+        .containsExactly("REAL", "SHADOW");
+    assertThat(
+            jdbc.queryForList(
+                "select queue_position from queue_entry where queue_id=? order by queue_position",
+                repairQueue))
+        .extracting(row -> row.get("queue_position"))
+        .containsExactly(0, 1);
+    assertThat(
+            jdbc.queryForList(
+                "select queue_position from queue_entry where queue_id=? order by queue_position",
+                holdingQueue))
+        .extracting(row -> row.get("queue_position"))
+        .containsExactly(0, 1);
   }
 
   @Test
@@ -1316,7 +1456,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
   }
 
   @Test
-  void verifiedVersionFourDatabaseIsExplicitlyBaselinedWithoutChangingRows()
+  void verifiedVersionFourDatabaseIsExplicitlyBaselinedWithoutChangingUnrelatedRows()
       throws Exception {
     applyHistoricalSchema();
     createHistoricalMigrationEvidence();
@@ -1337,7 +1477,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(25);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(27);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
 
@@ -1493,13 +1633,15 @@ class TaskBoardFlywayMigrationIntegrationTest {
             : "queue_entry".equals(table)
                 ? "to_jsonb(row_value) - array['queue_code','worker_works','worker_materials',"
                     + "'worker_comments','source_media_references','revision_marker',"
-                    + "'original_budget_seconds','current_budget_seconds']"
+                    + "'original_budget_seconds','current_budget_seconds','queue_position',"
+                    + "'entry_type']"
                 : "work_queue".equals(table)
                     ? "to_jsonb(row_value) - array['code','result_photo_min_count',"
                         + "'name','description','queue_type','definition_id',"
                         + "'sort_order','active','hidden','collapsed',"
                         + "'holding_period_minutes','notification_threshold',"
-                        + "'notify_when_threshold_reached','revision_marker']"
+                        + "'notify_when_threshold_reached','revision_marker',"
+                        + "'available_task_limit']"
                     : "queue_usage_reference".equals(table)
                         ? "to_jsonb(row_value) - array['queue_id','queue_definition_id']"
                     : "worker_class".equals(table)

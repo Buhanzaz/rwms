@@ -8,14 +8,12 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
-import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -33,7 +31,6 @@ import tools.jackson.databind.ObjectMapper;
 @Service
 class TaskBoardReadProjectionService {
   private static final String LOGISTICS_SOURCE_CLIENT_ID = "logistics-service";
-  private static final ZoneId DEFAULT_SCHEDULE_ZONE = ZoneId.of("Europe/Moscow");
   private static final Set<EntryStatus> UNFINISHED =
       Set.of(EntryStatus.WAITING, EntryStatus.IN_PROGRESS, EntryStatus.PAUSED);
 
@@ -83,37 +80,28 @@ class TaskBoardReadProjectionService {
     this.driverAudiences = driverAudiences;
   }
 
-  public TaskBoardSnapshot snapshot(
-      UUID warehouseId, LocalDate requestedDate, boolean includeShadow) {
+  /** Builds the bounded aggregate ordinary board without exposing future route stages. */
+  public TaskBoardSnapshot snapshot(UUID warehouseId) {
     var columns = new ArrayList<BoardColumnDto>();
-    var allEntries =
-        activeEntries(warehouseId).stream()
-            .filter(
-                entry ->
-                    entry.getQueue() != null
-                        && entry.getQueue().getPurpose() != QueuePurpose.LOGISTICS_DRIVER)
-            .toList();
-    List<LocalDate> availableDates =
-        allEntries.stream()
-            .map(entry -> entry.getTask().getScheduledDate())
-            .distinct()
-            .sorted()
-            .toList();
-    LocalDate selectedDate = selectDate(requestedDate, availableDates);
-    var selectedEntries =
-        allEntries.stream()
-            .filter(entry -> Objects.equals(entry.getTask().getScheduledDate(), selectedDate))
-            .toList();
-    Map<UUID, TaskSourceReferenceDto> sources = sourceReferences(selectedEntries);
-    for (var queue :
-        queues.findAllActiveOrderedByWarehouseId(warehouseId)) {
+    var allEntries = ordinaryEntries(warehouseId);
+    Map<UUID, TaskSourceReferenceDto> sources = sourceReferences(allEntries);
+    Map<UUID, List<AssignmentDto>> assignmentsByEntry = assignmentDtos(allEntries);
+    for (var queue : queues.findAllActiveOrderedByWarehouseId(warehouseId)) {
       if (queue.isHidden() || queue.getPurpose() == QueuePurpose.LOGISTICS_DRIVER) continue;
-      var cards =
-          selectedEntries.stream()
+      List<QueueEntry> queueEntries =
+          allEntries.stream()
               .filter(e -> e.getQueue() != null && e.getQueue().getId().equals(queue.getId()))
-              .filter(e -> includeShadow || e.getEntryType() == EntryType.REAL)
-              .sorted(Comparator.comparingInt(QueueEntry::getQueuePosition))
-              .map(entry -> dto(entry, sources.get(entry.getTask().getId())))
+              .toList();
+      var cards =
+          OrdinaryQueueAvailabilityPolicy.visibleEntries(
+                  queueEntries, queue.getAvailableTaskLimit())
+              .stream()
+              .map(
+                  entry ->
+                      dto(
+                          entry,
+                          sources.get(entry.getTask().getId()),
+                          assignmentsByEntry.getOrDefault(entry.getId(), List.of())))
               .toList();
       columns.add(
           new BoardColumnDto(
@@ -122,29 +110,31 @@ class TaskBoardReadProjectionService {
               queue.getType(),
               queue.getPurpose(),
               queue.getSortOrder(),
+              queue.getAvailableTaskLimit(),
               cards));
     }
-    return new TaskBoardSnapshot(warehouseId, selectedDate, availableDates, columns);
-  }
-
-  TaskBoardSnapshot snapshot(UUID warehouseId, boolean includeShadow) {
-    return snapshot(warehouseId, null, includeShadow);
+    return new TaskBoardSnapshot(warehouseId, columns);
   }
 
   /** Returns the separate driver-logistics projection for one warehouse. */
   LogisticsBoardSnapshot logisticsSnapshot(UUID warehouseId) {
     WorkQueue queue = requireLogisticsDriverQueue(warehouseId);
     List<QueueEntry> selected =
-        activeEntries(warehouseId).stream()
-            .filter(entry -> entry.getQueue() != null && entry.getQueue().equals(queue))
+        activeEntries(queue).stream()
             .filter(entry -> entry.getEntryType() == EntryType.REAL)
             .sorted(Comparator.comparingInt(QueueEntry::getQueuePosition))
             .toList();
     Map<UUID, TaskSourceReferenceDto> sources = sourceReferences(selected);
+    Map<UUID, List<AssignmentDto>> assignmentsByEntry = assignmentDtos(selected);
     List<BoardEntryDto> current =
         selected.stream()
             .filter(entry -> entry.getTask().getLane() == TaskLane.CURRENT)
-            .map(entry -> dto(entry, sources.get(entry.getTask().getId())))
+            .map(
+                entry ->
+                    dto(
+                        entry,
+                        sources.get(entry.getTask().getId()),
+                        assignmentsByEntry.getOrDefault(entry.getId(), List.of())))
             .toList();
     List<LogisticsDateColumnDto> dates =
         selected.stream()
@@ -162,7 +152,12 @@ class TaskBoardReadProjectionService {
                         item.getKey(),
                         item.getValue().stream()
                             .sorted(Comparator.comparingInt(QueueEntry::getQueuePosition))
-                            .map(entry -> dto(entry, sources.get(entry.getTask().getId())))
+                            .map(
+                                entry ->
+                                    dto(
+                                        entry,
+                                        sources.get(entry.getTask().getId()),
+                                        assignmentsByEntry.getOrDefault(entry.getId(), List.of())))
                             .toList()))
             .toList();
     return new LogisticsBoardSnapshot(
@@ -170,9 +165,9 @@ class TaskBoardReadProjectionService {
   }
 
   /**
-   * Worker feed keeps the ordinary selected-date view and adds only actionable
-   * logistics entries from the server-controlled current lane.  The lane is an
-   * ordered queue; only its first waiting entry is actionable for a driver.
+   * Worker feed keeps the aggregate ordinary view and adds only actionable logistics entries from
+   * the server-controlled current lane. The lane is an ordered queue; only its first waiting entry
+   * is actionable for a driver.
    */
   TaskBoardSnapshot workerSnapshot(UUID warehouseId, UUID workerId) {
     return workerSnapshot(MobileTaskSurface.WORKER, warehouseId, workerId);
@@ -181,19 +176,19 @@ class TaskBoardReadProjectionService {
   /** Builds the task projection with the exact audience rules of one native surface. */
   TaskBoardSnapshot workerSnapshot(
       MobileTaskSurface surface, UUID warehouseId, UUID workerId) {
-    TaskBoardSnapshot ordinary = snapshot(warehouseId, null, false);
+    TaskBoardSnapshot ordinary = snapshot(warehouseId);
     List<BoardColumnDto> columns = new ArrayList<>(ordinary.columns());
     for (WorkQueue queue : queues.findAllActiveOrderedByWarehouseId(warehouseId)) {
       if (queue.isHidden() || queue.getPurpose() != QueuePurpose.LOGISTICS_DRIVER) continue;
       List<QueueEntry> logisticsEntries =
-          activeEntries(warehouseId).stream()
-              .filter(entry -> entry.getQueue() != null && entry.getQueue().equals(queue))
+          activeEntries(queue).stream()
               .filter(entry -> entry.getEntryType() == EntryType.REAL)
               .filter(entry -> entry.getTask().getLane() == TaskLane.CURRENT)
               .filter(entry -> isVisibleToSurface(surface, entry, workerId))
               .sorted(Comparator.comparingInt(QueueEntry::getQueuePosition))
               .toList();
       Map<UUID, TaskSourceReferenceDto> sources = sourceReferences(logisticsEntries);
+      Map<UUID, List<AssignmentDto>> assignmentsByEntry = assignmentDtos(logisticsEntries);
       columns.add(
           new BoardColumnDto(
               queue.getId(),
@@ -201,12 +196,17 @@ class TaskBoardReadProjectionService {
               queue.getType(),
               queue.getPurpose(),
               queue.getSortOrder(),
+              queue.getAvailableTaskLimit(),
               logisticsEntries.stream()
-                  .map(entry -> dto(entry, sources.get(entry.getTask().getId())))
+                  .map(
+                      entry ->
+                          dto(
+                              entry,
+                              sources.get(entry.getTask().getId()),
+                              assignmentsByEntry.getOrDefault(entry.getId(), List.of())))
                   .toList()));
     }
-    return new TaskBoardSnapshot(
-        warehouseId, ordinary.selectedDate(), ordinary.availableDates(), columns);
+    return new TaskBoardSnapshot(warehouseId, columns);
   }
 
   BoardEntryDto entry(UUID warehouseId, UUID entryId) {
@@ -395,24 +395,15 @@ class TaskBoardReadProjectionService {
     return task;
   }
 
-  private List<QueueEntry> activeEntries(UUID warehouseId) {
-    var result = new ArrayList<QueueEntry>();
-    for (var task : tasks.findAllByWarehouseIdAndStatusIn(warehouseId, Set.of(TaskStatus.ACTIVE))) {
-      List<QueueEntry> route =
-          entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId()).stream()
-              .filter(e -> UNFINISHED.contains(e.getStatus()))
-              .toList();
-      int holdingBlocker =
-          route.stream()
-              .filter(
-                  entry ->
-                      entry.getQueue() != null && entry.getQueue().getType() == QueueType.HOLDING)
-              .mapToInt(QueueEntry::getRouteIndex)
-              .min()
-              .orElse(Integer.MAX_VALUE);
-      route.stream().filter(entry -> entry.getRouteIndex() <= holdingBlocker).forEach(result::add);
-    }
-    return result;
+  /** Resolves the bounded actionable ID window before hydrating ordinary entry entities. */
+  private List<QueueEntry> ordinaryEntries(UUID warehouseId) {
+    List<UUID> entryIds = entries.findVisibleOrdinaryEntryIds(warehouseId);
+    return entryIds.isEmpty() ? List.of() : entries.findAllWithTaskAndQueueByIdIn(entryIds);
+  }
+
+  private List<QueueEntry> activeEntries(WorkQueue queue) {
+    return entries.findAllActiveByQueueIdAndStatusIn(
+        queue.getId(), TaskStatus.ACTIVE, UNFINISHED);
   }
 
 
@@ -424,17 +415,6 @@ class TaskBoardReadProjectionService {
     }
   }
 
-
-  private LocalDate selectDate(LocalDate requestedDate, List<LocalDate> availableDates) {
-    if (requestedDate != null && availableDates.contains(requestedDate)) return requestedDate;
-    if (availableDates.isEmpty()) return null;
-    LocalDate today = LocalDate.now(DEFAULT_SCHEDULE_ZONE);
-    if (availableDates.contains(today)) return today;
-    return availableDates.stream()
-        .filter(date -> !date.isBefore(today))
-        .findFirst()
-        .orElse(availableDates.getLast());
-  }
 
   private UUID id(WorkQueue q) {
     return q == null ? null : q.getId();
@@ -485,27 +465,15 @@ class TaskBoardReadProjectionService {
   BoardEntryDto dto(QueueEntry entry) {
     TaskSourceReferenceDto source =
         taskSyncSources.findById(entry.getTask().getId()).map(this::sourceReference).orElse(null);
-    return dto(entry, source);
+    List<AssignmentDto> entryAssignments =
+        assignments.findAllByQueueEntryId(entry.getId()).stream()
+            .map(this::assignmentDto)
+            .toList();
+    return dto(entry, source, entryAssignments);
   }
 
-  BoardEntryDto dto(QueueEntry e, TaskSourceReferenceDto source) {
-    var as =
-        assignments.findAllByQueueEntryId(e.getId()).stream()
-            .map(
-                a ->
-                    new AssignmentDto(
-                        a.getId(),
-                        a.getVersion(),
-                        a.getWorker() == null ? null : a.getWorker().getId(),
-                        a.getWorkerNameSnapshot(),
-                        a.getWorkerGroup() == null ? null : a.getWorkerGroup().getId(),
-                        a.getGroupNameSnapshot(),
-                        a.getStatus(),
-                        a.getAssignedAt(),
-                        a.getStartedAt(),
-                        a.getPausedAt(),
-                        a.getFinishedAt()))
-            .toList();
+  private BoardEntryDto dto(
+      QueueEntry e, TaskSourceReferenceDto source, List<AssignmentDto> entryAssignments) {
     var t = e.getTask();
     OffsetDateTime serverTime = now();
     return new BoardEntryDto(
@@ -532,10 +500,39 @@ class TaskBoardReadProjectionService {
         e.getActiveStartedAt(),
         e.getPausedAt(),
         e.getActiveWorkSeconds(),
-        as,
+        entryAssignments,
         timerSnapshot(e, serverTime),
         source,
         driverAudiences.dto(t));
+  }
+
+  /** Materializes all visible-card assignments in one fetch and groups them by route entry. */
+  private Map<UUID, List<AssignmentDto>> assignmentDtos(Collection<QueueEntry> boardEntries) {
+    Set<UUID> entryIds =
+        boardEntries.stream().map(QueueEntry::getId).collect(java.util.stream.Collectors.toSet());
+    if (entryIds.isEmpty()) return Map.of();
+    Map<UUID, List<AssignmentDto>> result = new java.util.HashMap<>();
+    for (TaskAssignment assignment : assignments.findAllBoardAssignmentsByEntryIdIn(entryIds)) {
+      result
+          .computeIfAbsent(assignment.getQueueEntry().getId(), ignored -> new ArrayList<>())
+          .add(assignmentDto(assignment));
+    }
+    return result;
+  }
+
+  private AssignmentDto assignmentDto(TaskAssignment assignment) {
+    return new AssignmentDto(
+        assignment.getId(),
+        assignment.getVersion(),
+        assignment.getWorker() == null ? null : assignment.getWorker().getId(),
+        assignment.getWorkerNameSnapshot(),
+        assignment.getWorkerGroup() == null ? null : assignment.getWorkerGroup().getId(),
+        assignment.getGroupNameSnapshot(),
+        assignment.getStatus(),
+        assignment.getAssignedAt(),
+        assignment.getStartedAt(),
+        assignment.getPausedAt(),
+        assignment.getFinishedAt());
   }
 
   private TaskTimerSnapshot timerSnapshot(QueueEntry entry, OffsetDateTime serverTime) {

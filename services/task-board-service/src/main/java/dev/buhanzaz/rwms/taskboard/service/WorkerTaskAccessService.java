@@ -9,8 +9,10 @@ import dev.buhanzaz.rwms.taskboard.domain.QueueEntry;
 import dev.buhanzaz.rwms.taskboard.domain.QueuePurpose;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -66,31 +68,78 @@ class WorkerTaskAccessService {
   List<UUID> readerWorkerIds(QueueEntry entry) {
     if (entry.getQueue() == null) return List.of();
     UUID warehouseId = entry.getTask().getWarehouseId();
-    WorkQueueDto queue =
-        registry.listQueues(warehouseId).stream()
-            .filter(candidate -> candidate.id().equals(entry.getQueue().getId()))
-            .filter(candidate -> candidate.active() && !candidate.hidden())
-            .findFirst()
-            .orElse(null);
+    return readerWorkerIds(entry, readerAudienceSnapshot(warehouseId));
+  }
+
+  /**
+   * Captures the immutable queue and workforce inputs shared by one bounded proof-reconciliation
+   * pass.
+   *
+   * <p>Qualifications and active group memberships are reduced to worker-class identifiers once.
+   * A repair pass can therefore evaluate hundreds of entries without rebuilding the same full
+   * workforce DTO graph and issuing its per-worker/per-group repository reads for every entry.
+   */
+  ReaderAudienceSnapshot readerAudienceSnapshot(UUID warehouseId) {
+    Map<UUID, WorkQueueDto> queuesById = new LinkedHashMap<>();
+    registry.listQueues(warehouseId).forEach(queue -> queuesById.put(queue.id(), queue));
+
+    List<WorkerDto> workers = workforce.listWorkers(warehouseId);
+    Map<UUID, Set<UUID>> classIdsByWorkerId = new LinkedHashMap<>();
+    workers.stream()
+        .filter(WorkerDto::active)
+        .forEach(
+            worker -> {
+              Set<UUID> classIds = new LinkedHashSet<>();
+              activeQualifications(worker)
+                  .forEach(qualification -> classIds.add(qualification.workerClass().id()));
+              classIdsByWorkerId.put(worker.id(), classIds);
+            });
+    workforce.listGroups(warehouseId).stream()
+        .filter(WorkerGroupDto::active)
+        .forEach(
+            group ->
+                group.members().stream()
+                    .filter(
+                        member ->
+                            member.active()
+                                && classIdsByWorkerId.containsKey(member.workerId()))
+                    .forEach(
+                        member ->
+                            classIdsByWorkerId
+                                .get(member.workerId())
+                                .add(group.workerClass().id())));
+
+    Map<UUID, Set<UUID>> immutableClassIds = new LinkedHashMap<>();
+    classIdsByWorkerId.forEach(
+        (workerId, classIds) -> immutableClassIds.put(workerId, Set.copyOf(classIds)));
+    return new ReaderAudienceSnapshot(
+        warehouseId, Map.copyOf(queuesById), Map.copyOf(immutableClassIds));
+  }
+
+  /** Resolves an entry against a previously captured same-warehouse reconciliation snapshot. */
+  List<UUID> readerWorkerIds(QueueEntry entry, ReaderAudienceSnapshot snapshot) {
+    if (entry.getQueue() == null) return List.of();
+    UUID warehouseId = entry.getTask().getWarehouseId();
+    if (!warehouseId.equals(snapshot.warehouseId())) {
+      throw new IllegalArgumentException("Снимок аудитории относится к другому складу");
+    }
+    WorkQueueDto queue = snapshot.queuesById().get(entry.getQueue().getId());
+    if (queue != null && (!queue.active() || queue.hidden())) queue = null;
     if (queue == null) return List.of();
 
-    List<WorkerGroupDto> warehouseGroups = workforce.listGroups(warehouseId);
     List<UUID> result = new ArrayList<>();
-    for (WorkerDto worker : workforce.listWorkers(warehouseId)) {
-      if (!worker.active()) continue;
-      List<WorkerGroupDto> groups = groupsFor(worker.id(), warehouseGroups);
-      List<QualificationDto> qualifications = activeQualifications(worker);
-      Set<UUID> classIds = classIds(groups, qualifications);
+    for (Map.Entry<UUID, Set<UUID>> workerAccess : snapshot.classIdsByWorkerId().entrySet()) {
+      UUID workerId = workerAccess.getKey();
+      Set<UUID> classIds = workerAccess.getValue();
       boolean workerSurface =
           surfacePolicy.includesQueue(MobileTaskSurface.WORKER, queue, classIds);
       boolean driverSurface =
           surfacePolicy.includesQueue(MobileTaskSurface.DRIVER, queue, classIds);
       if (queue.purpose() == QueuePurpose.LOGISTICS_DRIVER) {
-        workerSurface =
-            workerSurface && driverAudiences.isVisibleToMobileWorker(entry, worker.id());
-        driverSurface = driverSurface && driverAudiences.isVisibleTo(entry, worker.id());
+        workerSurface = workerSurface && driverAudiences.isVisibleToMobileWorker(entry, workerId);
+        driverSurface = driverSurface && driverAudiences.isVisibleTo(entry, workerId);
       }
-      if (workerSurface || driverSurface) result.add(worker.id());
+      if (workerSurface || driverSurface) result.add(workerId);
     }
     return result.stream().distinct().sorted(Comparator.comparing(UUID::toString)).toList();
   }
@@ -136,4 +185,10 @@ class WorkerTaskAccessService {
       List<WorkerGroupDto> groups,
       List<QualificationDto> qualifications,
       List<WorkQueueDto> categories) {}
+
+  /** Immutable same-warehouse inputs reused only for one bounded proof-reconciliation pass. */
+  record ReaderAudienceSnapshot(
+      UUID warehouseId,
+      Map<UUID, WorkQueueDto> queuesById,
+      Map<UUID, Set<UUID>> classIdsByWorkerId) {}
 }

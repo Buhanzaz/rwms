@@ -9,6 +9,7 @@ import dev.buhanzaz.rwms.taskboard.repository.WorkerClassRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WorkerGroupRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WorkerRepository;
 import java.nio.charset.StandardCharsets;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -64,7 +65,7 @@ public class TaskBoardReplayVerifier {
             .findFirst()
             .orElseThrow(
                 () -> new IllegalStateException("Task-board authoritative stream does not exist"));
-    return verifyAuthoritativeStream(stream);
+    return verifyAuthoritativeStream(stream, ordinaryQueueMigrationCutover());
   }
 
   @Transactional
@@ -80,8 +81,10 @@ public class TaskBoardReplayVerifier {
     requireNoOrphanedShadowRows();
 
     StringBuilder parityMaterial = new StringBuilder();
+    OffsetDateTime ordinaryQueueMigrationCutover = ordinaryQueueMigrationCutover();
     for (StreamIdentity stream : streams) {
-      ReplayResult replay = verifyAuthoritativeStream(stream);
+      ReplayResult replay =
+          verifyAuthoritativeStream(stream, ordinaryQueueMigrationCutover);
       jdbc.update(
           """
           insert into projection_checkpoint(
@@ -122,13 +125,15 @@ public class TaskBoardReplayVerifier {
     return result;
   }
 
-  private ReplayResult verifyAuthoritativeStream(StreamIdentity stream) {
+  private ReplayResult verifyAuthoritativeStream(
+      StreamIdentity stream, OffsetDateTime ordinaryQueueMigrationCutover) {
     metrics.replayAttempted();
     try {
       List<StoredFact> stored =
           jdbc.query(
               """
-              select event_id,aggregate_version,event_type,payload::text,payload_sha256,baseline
+              select event_id,aggregate_version,event_type,payload::text,payload_sha256,baseline,
+                     recorded_at
                 from domain_event
                where aggregate_type=? and aggregate_id=?
                order by aggregate_version
@@ -140,7 +145,8 @@ public class TaskBoardReplayVerifier {
                       result.getString("event_type"),
                       result.getString("payload"),
                       result.getString("payload_sha256").trim(),
-                      result.getBoolean("baseline")),
+                      result.getBoolean("baseline"),
+                      result.getObject("recorded_at", OffsetDateTime.class)),
               stream.aggregateType().name(),
               stream.aggregateId().toString());
       if (stored.isEmpty()) throw new IllegalStateException("Task-board event stream has no facts");
@@ -172,7 +178,13 @@ public class TaskBoardReplayVerifier {
       if (liveProjection.isPresent()) {
         JsonNode live = read(write(liveProjection.orElseThrow()));
         JsonNode storedProjection = read(tail.payload());
-        JsonNode comparableLive = replayCompatibleProjection(stream.aggregateType(), live, storedProjection);
+        JsonNode comparableLive =
+            replayCompatibleProjection(
+                stream.aggregateType(),
+                live,
+                storedProjection,
+                tail.recordedAt(),
+                ordinaryQueueMigrationCutover);
         String projectionJson = canonicalJson(write(comparableLive));
         String storedJson = canonicalJson(write(storedProjection));
         if (!projectionJson.equals(storedJson)) {
@@ -191,19 +203,48 @@ public class TaskBoardReplayVerifier {
   }
 
   /**
-   * Removes audience fields only when comparing against a legacy board-task tail that predates
-   * those optional event fields. New tails remain subject to exact projection parity.
+   * Applies only the explicitly recorded projection-migration compatibility rules. Board-task
+   * audience additions remain optional for a legacy tail. V31 deliberately normalized persisted
+   * ordinary queue position and the fully-waiting SES gate without rewriting immutable historical
+   * events, so queue-entry tails recorded before that Flyway cutover compare using their stored
+   * values for exactly those two fields. Every post-cutover tail remains subject to exact parity.
    */
   private JsonNode replayCompatibleProjection(
-      TaskBoardAggregateType type, JsonNode live, JsonNode stored) {
-    if (type != TaskBoardAggregateType.BOARD_TASK || stored.has("driverAudience")) {
-      return live;
+      TaskBoardAggregateType type,
+      JsonNode live,
+      JsonNode stored,
+      OffsetDateTime tailRecordedAt,
+      OffsetDateTime ordinaryQueueMigrationCutover) {
+    if (type == TaskBoardAggregateType.QUEUE_ENTRY
+        && ordinaryQueueMigrationCutover != null
+        && !tailRecordedAt.isAfter(ordinaryQueueMigrationCutover)) {
+      tools.jackson.databind.node.ObjectNode compatible =
+          (tools.jackson.databind.node.ObjectNode) live.deepCopy();
+      compatible.set("queuePosition", stored.get("queuePosition"));
+      compatible.set("entryType", stored.get("entryType"));
+      return compatible;
     }
+    if (type != TaskBoardAggregateType.BOARD_TASK || stored.has("driverAudience")) return live;
     tools.jackson.databind.node.ObjectNode compatible =
         (tools.jackson.databind.node.ObjectNode) live.deepCopy();
     compatible.remove("driverAudience");
     compatible.remove("plannedDriverWorkerId");
     return compatible;
+  }
+
+  /** Returns the successful V31 projection cutover once for the complete replay pass. */
+  private OffsetDateTime ordinaryQueueMigrationCutover() {
+    List<OffsetDateTime> installed =
+        jdbc.query(
+            """
+            select installed_on at time zone current_setting('TimeZone')
+              from flyway_schema_history
+             where version='31' and success
+             order by installed_rank desc
+             limit 1
+            """,
+            (result, row) -> result.getObject(1, OffsetDateTime.class));
+    return installed.isEmpty() ? null : installed.getFirst();
   }
 
   private Optional<Object> liveProjection(TaskBoardAggregateType type, UUID id) {
@@ -416,7 +457,8 @@ public class TaskBoardReplayVerifier {
       String eventType,
       String payload,
       String payloadSha256,
-      boolean baseline) {}
+      boolean baseline,
+      OffsetDateTime recordedAt) {}
 
   private record StreamIdentity(
       TaskBoardAggregateType aggregateType, UUID aggregateId, long version, UUID eventId) {}

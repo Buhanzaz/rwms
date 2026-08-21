@@ -7,6 +7,7 @@ import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.EvidenceReservatio
 import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerDeviceRegistrationRequest;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerMediaReference;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
 import dev.buhanzaz.rwms.taskboard.eventing.WorkerMediaEventProcessor;
@@ -21,6 +22,7 @@ import dev.buhanzaz.rwms.taskboard.service.TaskBoardEntryOwnerProofService;
 import dev.buhanzaz.rwms.taskboard.service.WorkerOfflineLeaseCodec;
 import dev.buhanzaz.rwms.taskboard.service.WorkerTaskBoardService;
 import dev.buhanzaz.rwms.taskboard.service.WorkforceService;
+import jakarta.persistence.EntityManagerFactory;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -31,6 +33,8 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import org.hibernate.SessionFactory;
+import org.hibernate.stat.Statistics;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -54,6 +58,7 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
   @Autowired WorkerMediaEventProcessor mediaEvents;
   @Autowired WorkerPushOutbox pushOutbox;
   @Autowired JdbcTemplate jdbc;
+  @Autowired EntityManagerFactory entityManagerFactory;
 
   @BeforeEach
   void clean() {
@@ -137,6 +142,7 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
             org.assertj.core.groups.Tuple.tuple(60, 85, "#EAB308"),
             org.assertj.core.groups.Tuple.tuple(85, 100, "#16A34A"));
     assertThat(context.kpiPalette().overdueColor()).isEqualTo("#7F1D1D");
+    UUID coverMediaId = UUID.randomUUID();
     UUID sourceMediaId = UUID.randomUUID();
     UUID workId = UUID.randomUUID();
     UUID materialId = UUID.randomUUID();
@@ -176,6 +182,12 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
                                 "Диспетчер",
                                 sourceRecordedAt)),
                         List.of(
+                            new TaskSourceMediaSnapshotRequest(
+                                coverMediaId,
+                                1,
+                                "image/jpeg",
+                                sourceRecordedAt.minusMinutes(2),
+                                sourceRecordedAt.minusMinutes(1)),
                             new TaskSourceMediaSnapshotRequest(
                                 sourceMediaId,
                                 2,
@@ -379,6 +391,10 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
         .singleElement()
         .satisfies(comment -> assertThat(comment.text()).isEqualTo("Проверить внешний угол"));
     assertThat(detail.sourceMedia())
+        .extracting(WorkerMediaReference::mediaId)
+        .containsExactly(coverMediaId, sourceMediaId);
+    assertThat(detail.sourceMedia())
+        .filteredOn(source -> source.mediaId().equals(sourceMediaId))
         .singleElement()
         .satisfies(
             source -> {
@@ -542,8 +558,20 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
     long reconciledVersion = latestProofVersion(entry.id());
     assertThat(latestProofContains(entry.id(), "readerWorkerIds", second.id())).isTrue();
     assertThat(latestProofContains(entry.id(), "allowedWorkerIds", second.id())).isFalse();
-    reconciler.reconcile();
-    assertThat(latestProofVersion(entry.id())).isEqualTo(reconciledVersion);
+    Statistics statistics = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
+    boolean statisticsWereEnabled = statistics.isStatisticsEnabled();
+    statistics.setStatisticsEnabled(true);
+    statistics.clear();
+    try {
+      reconciler.reconcile();
+      assertThat(latestProofVersion(entry.id())).isEqualTo(reconciledVersion);
+      assertThat(statistics.getEntityLoadCount())
+          .as("an unchanged audience must not rehydrate every open task and worker")
+          .isZero();
+    } finally {
+      statistics.clear();
+      statistics.setStatisticsEnabled(statisticsWereEnabled);
+    }
   }
 
   @Test

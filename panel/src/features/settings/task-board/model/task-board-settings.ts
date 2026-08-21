@@ -52,6 +52,7 @@ export type QueueDefinitionDto = {
   notificationThreshold: number | null
   notifyWhenThresholdReached: boolean
   resultPhotoMinCount: number
+  availableTaskLimit: number
   bindings: QueueBindingDto[]
 }
 
@@ -80,6 +81,7 @@ export type WorkQueueDto = {
   notificationThreshold: number | null
   notifyWhenThresholdReached: boolean
   resultPhotoMinCount: number
+  availableTaskLimit: number
   bindings: QueueBindingDto[]
 }
 

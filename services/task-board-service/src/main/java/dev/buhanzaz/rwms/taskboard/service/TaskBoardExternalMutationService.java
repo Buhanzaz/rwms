@@ -219,7 +219,7 @@ class TaskBoardExternalMutationService {
       move(
           task.getWarehouseId(),
           entry.getId(),
-          new MoveEntryRequest(
+          new EntryMoveCommand(
               request.expectedEntryVersion(),
               request.expectedTaskVersion(),
               entry.getQueue().getId(),
@@ -462,6 +462,9 @@ class TaskBoardExternalMutationService {
             jdbc));
     task = projectionWriter.saveAndFlush(tasks, task);
 
+    int initialRouteGate =
+        OrdinaryQueueAvailabilityPolicy.initialRouteGateIndex(
+            routeSteps.stream().map(ResolvedRouteStep::queue).toList());
     int routeIndex = 0;
     for (ResolvedRouteStep resolved : routeSteps) {
       RouteStepRequest step = resolved.request();
@@ -469,7 +472,7 @@ class TaskBoardExternalMutationService {
       entry.setTask(task);
       entry.setQueue(resolved.queue());
       entry.setRouteIndex(routeIndex);
-      entry.setEntryType(routeIndex == 0 ? EntryType.REAL : EntryType.SHADOW);
+      entry.setEntryType(routeIndex == initialRouteGate ? EntryType.REAL : EntryType.SHADOW);
       entry.setStatus(EntryStatus.WAITING);
       entry.setQueuePosition(
           queuePositions.nextPosition(warehouseId, resolved.queue(), task.getScheduledDate()));
@@ -768,7 +771,7 @@ class TaskBoardExternalMutationService {
   private void move(
       UUID warehouseId,
       UUID entryId,
-      MoveEntryRequest request,
+      EntryMoveCommand request,
       boolean allowCurrentLogistics,
       DriverTaskAudienceDto targetDriverAudience) {
     queuePositions.lockQueueMutation(warehouseId);
@@ -1021,4 +1024,12 @@ class TaskBoardExternalMutationService {
 
   /** Binds one requested route step to its authoritative task-board queue before persistence. */
   private record ResolvedRouteStep(RouteStepRequest request, WorkQueue queue) {}
+
+  /** Internal logistics-only queue movement; ordinary manager movement is not supported. */
+  private record EntryMoveCommand(
+      long expectedVersion,
+      long expectedTaskVersion,
+      UUID targetQueueId,
+      int targetIndex,
+      LocalDate targetDate) {}
 }

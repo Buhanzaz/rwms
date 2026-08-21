@@ -212,6 +212,9 @@ export function QueueDefinitionEditorDialog({
   const [resultPhotoMinCount, setResultPhotoMinCount] = useState(
     String(definition?.resultPhotoMinCount ?? defaultResultPhotoMinCount(type))
   )
+  const [availableTaskLimit, setAvailableTaskLimit] = useState(
+    String(definition?.availableTaskLimit ?? 6)
+  )
   const [bindings, setBindings] = useState<QueueBindingRequest[]>(() =>
     normalizeBindings(
       [...(definition?.bindings ?? [])]
@@ -228,6 +231,12 @@ export function QueueDefinitionEditorDialog({
   const [validation, setValidation] = useState<string | null>(null)
   const resultPhotoMinCountInvalid =
     !isValidResultPhotoMinCount(resultPhotoMinCount)
+  const availableTaskLimitNumber = numberOrNull(availableTaskLimit)
+  const availableTaskLimitInvalid =
+    availableTaskLimitNumber === null ||
+    !Number.isInteger(availableTaskLimitNumber) ||
+    availableTaskLimitNumber < 1 ||
+    availableTaskLimitNumber > 50
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -238,6 +247,12 @@ export function QueueDefinitionEditorDialog({
     const photoMinCount = numberOrNull(resultPhotoMinCount)
     if (photoMinCount === null || resultPhotoMinCountInvalid) {
       setValidation("Минимум фотографий должен быть целым числом от 0 до 20.")
+      return
+    }
+    if (availableTaskLimitInvalid || availableTaskLimitNumber === null) {
+      setValidation(
+        "Количество доступных заданий должно быть целым числом от 1 до 50."
+      )
       return
     }
     await onSave({
@@ -256,6 +271,7 @@ export function QueueDefinitionEditorDialog({
         type === "HOLDING" ? numberOrNull(threshold) : null,
       notifyWhenThresholdReached: type === "HOLDING" && notify,
       resultPhotoMinCount: photoMinCount,
+      availableTaskLimit: availableTaskLimitNumber,
       bindings: normalizeBindings(bindings),
     })
   }
@@ -300,10 +316,10 @@ export function QueueDefinitionEditorDialog({
             <SelectContent>
               <SelectGroup>
                 {(Object.keys(queueTypeLabels) as QueueType[]).map((value) => (
-                    <SelectItem key={value} value={value}>
-                      {queueTypeLabels[value]}
-                    </SelectItem>
-                  ))}
+                  <SelectItem key={value} value={value}>
+                    {queueTypeLabels[value]}
+                  </SelectItem>
+                ))}
               </SelectGroup>
             </SelectContent>
           </Select>
@@ -326,6 +342,26 @@ export function QueueDefinitionEditorDialog({
           <FieldDescription>
             Завершение задания доступно после загрузки указанного количества
             фотографий.
+          </FieldDescription>
+        </Field>
+        <Field data-invalid={availableTaskLimitInvalid || undefined}>
+          <FieldLabel htmlFor="queue-available-task-limit">
+            Доступных заданий в строке
+          </FieldLabel>
+          <Input
+            id="queue-available-task-limit"
+            type="number"
+            min={1}
+            max={50}
+            step={1}
+            value={availableTaskLimit}
+            aria-invalid={availableTaskLimitInvalid}
+            onChange={(event) => setAvailableTaskLimit(event.target.value)}
+            required
+          />
+          <FieldDescription>
+            Столько ожидающих заданий сервер показывает и разрешает взять;
+            задания в работе и на паузе отображаются дополнительно.
           </FieldDescription>
         </Field>
         <BooleanField

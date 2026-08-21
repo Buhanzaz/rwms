@@ -255,21 +255,14 @@ paths:
     get:
       operationId: getTaskBoard
       description: >-
-        Returns the requested operational-board representation. If-None-Match
-        is evaluated with a weak semantic ETag over stable snapshot state,
-        including the date and includeShadow query dimensions. Rolling timer
-        counters and serverTime do not invalidate the ETag; timer state and
-        the next transition do.
+        Returns one aggregate ordinary operational-board representation. Each
+        ordinary queue contains every IN_PROGRESS/PAUSED REAL card plus the first
+        availableTaskLimit WAITING REAL cards in canonical priority-first order.
+        Future route stages are not part of this actionable projection.
+        If-None-Match is evaluated with a weak semantic ETag over stable snapshot
+        state. Rolling timer counters and serverTime do not invalidate the ETag;
+        timer state and the next transition do.
       parameters:
-        - name: includeShadow
-          in: query
-          required: false
-          schema: { type: boolean, default: false }
-        - name: date
-          in: query
-          required: false
-          description: Requested operational queue date. Defaults to today when available, otherwise the nearest available date.
-          schema: { type: string, format: date }
         - name: If-None-Match
           in: header
           required: false
@@ -480,9 +473,8 @@ paths:
         source reference owned by that caller are mandatory for driver tasks.
         Identical replay by the same authenticated source returns the existing
         registration; changed immutable input or another source returns 409.
-        dailyCapacity is maintenance-only; when supplied, task-board selects
-        the first date on or after the requested/default scheduledDate with
-        available maintenance capacity and returns that selected date.
+        Ordinary maintenance work is registered into one aggregate priority
+        queue; scheduledDate does not partition the ordinary board.
       requestBody:
         required: true
         content:
@@ -843,50 +835,6 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /warehouses/{warehouseId}/task-board/entries/{entryId}/move:
-    parameters:
-      - $ref: '#/components/parameters/WarehouseId'
-      - $ref: '#/components/parameters/EntryId'
-    post:
-      operationId: moveTaskEntry
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/MoveEntryRequest' }
-      responses:
-        '200': { $ref: '#/components/responses/TaskBoardSnapshotOk' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-  /warehouses/{warehouseId}/task-board/dates/swap:
-    parameters:
-      - $ref: '#/components/parameters/WarehouseId'
-    post:
-      operationId: swapTaskBoardDates
-      description: >-
-        Requires USER, rwms.write and EDIT. Exchanges the scheduled dates of the
-        two complete visual date columns while preserving every queue and queue
-        position. The request must include every REAL and SHADOW entry returned by
-        the two current includeShadow=true snapshots, together with its entry and
-        owning task versions; a missing, duplicate or stale expectation returns 409.
-        The date is owned by BoardTask, so every route step of an affected task
-        receives its new date without a queue move. Tasks with an in-progress or
-        paused route step cannot be exchanged. The response is the refreshed firstDate
-        snapshot, which now contains the cards that were previously on secondDate.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/SwapTaskBoardDatesRequest' }
-      responses:
-        '200': { $ref: '#/components/responses/TaskBoardSnapshotOk' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '409': { $ref: '#/components/responses/Conflict' }
   /warehouses/{warehouseId}/task-board/tasks/{taskId}/pin:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -974,7 +922,11 @@ paths:
       description: >-
         Returns a sanitized worker-visible task snapshot. An entry without a
         matching current audience selector is indistinguishable from a missing
-        entry and is never disclosed.
+        entry and is never disclosed. For a MAINTENANCE_REPAIR source,
+        consecutive route entries in the same physical work queue form one
+        worker execution package: works, materials, comments and source media
+        cover the complete segment, while planned duration and timer cover its
+        still-unfinished members.
       responses:
         '200':
           description: Current worker-visible entry detail.
@@ -1018,6 +970,10 @@ paths:
         Applies or replays a worker transition. Idempotency-Key must equal the
         request operationId. The worker identity is derived from the JWT;
         occurredAt is accepted only when it falls inside the referenced lease.
+        COMPLETE on a MAINTENANCE_REPAIR representative atomically completes
+        every later unfinished entry in its consecutive same-queue package and
+        publishes the ordinary completion fact for each source-mapped entry.
+        Other sources remain entry-scoped.
       parameters:
         - $ref: '#/components/parameters/WorkerIdempotencyKey'
       requestBody:
@@ -1761,7 +1717,7 @@ components:
       items: { $ref: '#/components/schemas/WorkerClass' }
     QueueDefinition:
       type: object
-      required: [id, version, name, description, type, purpose, sortOrder, active, hidden, collapsed, holdingPeriodMinutes, notificationThreshold, notifyWhenThresholdReached, resultPhotoMinCount, bindings]
+      required: [id, version, name, description, type, purpose, sortOrder, active, hidden, collapsed, holdingPeriodMinutes, notificationThreshold, notifyWhenThresholdReached, resultPhotoMinCount, availableTaskLimit, bindings]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
@@ -1777,6 +1733,11 @@ components:
         notificationThreshold: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
         notifyWhenThresholdReached: { type: boolean }
         resultPhotoMinCount: { type: integer, minimum: 0, maximum: 20 }
+        availableTaskLimit:
+          type: integer
+          minimum: 1
+          maximum: 50
+          description: Number of canonical WAITING REAL cards exposed and takeable in this ordinary queue.
         bindings:
           type: array
           items: { $ref: '#/components/schemas/QueueBinding' }
@@ -1786,7 +1747,7 @@ components:
       items: { $ref: '#/components/schemas/QueueDefinition' }
     QueueDefinitionRequest:
       type: object
-      required: [version, name, type, purpose, sortOrder, active, hidden, collapsed, holdingPeriodMinutes, notificationThreshold, notifyWhenThresholdReached, resultPhotoMinCount, bindings]
+      required: [version, name, type, purpose, sortOrder, active, hidden, collapsed, holdingPeriodMinutes, notificationThreshold, notifyWhenThresholdReached, resultPhotoMinCount, availableTaskLimit, bindings]
       properties:
         version: { type: integer, format: int64, minimum: 0 }
         name: { type: string, minLength: 1, maxLength: 128 }
@@ -1804,6 +1765,7 @@ components:
         notificationThreshold: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
         notifyWhenThresholdReached: { type: boolean }
         resultPhotoMinCount: { type: integer, minimum: 0, maximum: 20 }
+        availableTaskLimit: { type: integer, minimum: 1, maximum: 50, default: 6 }
         bindings:
           type: array
           items: { $ref: '#/components/schemas/QueueBindingRequest' }
@@ -1889,7 +1851,7 @@ components:
       additionalProperties: false
     WorkQueue:
       type: object
-      required: [id, version, warehouseId, definitionId, definitionVersion, name, description, type, purpose, sortOrder, active, hidden, collapsed, holdingPeriodMinutes, notificationThreshold, notifyWhenThresholdReached, resultPhotoMinCount, bindings]
+      required: [id, version, warehouseId, definitionId, definitionVersion, name, description, type, purpose, sortOrder, active, hidden, collapsed, holdingPeriodMinutes, notificationThreshold, notifyWhenThresholdReached, resultPhotoMinCount, availableTaskLimit, bindings]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64 }
@@ -1908,6 +1870,7 @@ components:
         notificationThreshold: { oneOf: [{ type: integer }, { type: 'null' }] }
         notifyWhenThresholdReached: { type: boolean }
         resultPhotoMinCount: { type: integer, minimum: 0, maximum: 20 }
+        availableTaskLimit: { type: integer, minimum: 1, maximum: 50 }
         bindings:
           type: array
           items: { $ref: '#/components/schemas/QueueBinding' }
@@ -2200,27 +2163,27 @@ components:
       additionalProperties: false
     BoardColumn:
       type: object
-      required: [queueId, queueName, queueType, queuePurpose, sortOrder, entries]
+      required: [queueId, queueName, queueType, queuePurpose, sortOrder, availableTaskLimit, entries]
       properties:
         queueId: { type: string, format: uuid }
         queueName: { type: string }
         queueType: { type: string, enum: [MOVEMENT, REPAIR, HOLDING, FURNITURE_MOVEMENT] }
         queuePurpose: { $ref: '#/components/schemas/QueuePurpose' }
         sortOrder: { type: integer }
+        availableTaskLimit:
+          type: integer
+          minimum: 1
+          maximum: 50
+          description: Configured WAITING REAL availability window for this ordinary queue.
         entries:
           type: array
           items: { $ref: '#/components/schemas/BoardEntry' }
       additionalProperties: false
     TaskBoardSnapshot:
       type: object
-      required: [warehouseId, selectedDate, availableDates, columns]
+      required: [warehouseId, columns]
       properties:
         warehouseId: { type: string, format: uuid }
-        selectedDate: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
-        availableDates:
-          type: array
-          uniqueItems: true
-          items: { type: string, format: date }
         columns:
           type: array
           items: { $ref: '#/components/schemas/BoardColumn' }
@@ -2444,7 +2407,10 @@ components:
           maxItems: 100
           items: { $ref: '#/components/schemas/TaskCommentSnapshotRequest' }
         sourceMedia:
-          description: Immutable source media identities; object storage coordinates are forbidden.
+          description: >-
+            Ordered immutable source media identities; object storage coordinates are forbidden.
+            When the owning source defines a cover image, that reference is first and the remaining
+            references retain source order.
           type: array
           maxItems: 100
           items: { $ref: '#/components/schemas/TaskSourceMediaSnapshotRequest' }
@@ -2552,14 +2518,6 @@ components:
             - { $ref: '#/components/schemas/DriverTaskAudience' }
             - { type: 'null' }
         priority: { oneOf: [{ type: integer, minimum: 1, maximum: 5 }, { type: 'null' }] }
-        dailyCapacity:
-          description: >-
-            Optional positive maintenance-service daily capacity. For the exact
-            maintenance-service source, registration selects the first calendar
-            date on or after scheduledDate (or its default) with fewer ACTIVE
-            maintenance source tasks for this warehouse; the response reports
-            the selected scheduledDate. Other source identities ignore it.
-          oneOf: [{ type: integer, minimum: 1 }, { type: 'null' }]
         route:
           type: array
           minItems: 1
@@ -2671,36 +2629,6 @@ components:
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         reason: { oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }] }
-      additionalProperties: false
-    MoveEntryRequest:
-      type: object
-      required: [expectedVersion, expectedTaskVersion, targetQueueId, targetIndex, targetDate]
-      properties:
-        expectedVersion: { type: integer, format: int64, minimum: 0 }
-        expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
-        targetQueueId: { type: string, format: uuid }
-        targetIndex: { type: integer, minimum: 0 }
-        targetDate: { type: string, format: date }
-      additionalProperties: false
-    SwapTaskBoardDatesRequest:
-      type: object
-      required: [firstDate, secondDate, entries]
-      properties:
-        firstDate: { type: string, format: date }
-        secondDate: { type: string, format: date }
-        entries:
-          type: array
-          minItems: 1
-          maxItems: 2000
-          items: { $ref: '#/components/schemas/TaskBoardDateEntryExpectation' }
-      additionalProperties: false
-    TaskBoardDateEntryExpectation:
-      type: object
-      required: [entryId, expectedVersion, expectedTaskVersion]
-      properties:
-        entryId: { type: string, format: uuid }
-        expectedVersion: { type: integer, format: int64, minimum: 0 }
-        expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
       additionalProperties: false
     PinTaskRequest:
       type: object
@@ -3105,6 +3033,9 @@ components:
           type: array
           items: { $ref: '#/components/schemas/WorkerVisibleComment' }
         sourceMedia:
+          description: >-
+            Server-ordered source media. A source-defined task cover is first; WorkerWork.sourceMediaIds
+            identifies the remaining references that belong to each individual work.
           type: array
           items: { $ref: '#/components/schemas/WorkerMediaReference' }
         evidence:

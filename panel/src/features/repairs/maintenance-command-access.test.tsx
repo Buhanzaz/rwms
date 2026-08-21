@@ -28,7 +28,6 @@ const api = vi.hoisted(() => ({
   getRepairTask: vi.fn(),
   getRepairTaskBySourceEstimateId: vi.fn(),
   listRepairEstimates: vi.fn(),
-  listRepairTasks: vi.fn(),
   queueRepairTask: vi.fn(),
   saveRepairEstimateDraft: vi.fn(),
   saveRepairTaskDraft: vi.fn(),
@@ -109,7 +108,6 @@ vi.mock("@/features/repair-tasks/api/repair-tasks-api", () => ({
   REPAIR_TASKS_QUERY_KEY: ["repair-tasks"],
   getRepairTask: api.getRepairTask,
   getRepairTaskBySourceEstimateId: api.getRepairTaskBySourceEstimateId,
-  listRepairTasks: api.listRepairTasks,
   queueRepairTask: api.queueRepairTask,
   repairTaskBySourceEstimateQueryKey: (
     warehouseId: string,
@@ -120,11 +118,6 @@ vi.mock("@/features/repair-tasks/api/repair-tasks-api", () => ({
     "detail",
     warehouseId,
     taskId,
-  ],
-  repairTasksListQueryKey: (warehouseId: string) => [
-    "repair-tasks",
-    "list",
-    warehouseId,
   ],
   saveRepairTaskDraft: api.saveRepairTaskDraft,
   updateRepairTaskSubtasks: api.updateRepairTaskSubtasks,
@@ -296,7 +289,6 @@ beforeEach(() => {
   api.getRepairTask.mockResolvedValue(repair)
   api.getRepairTaskBySourceEstimateId.mockResolvedValue(null)
   api.listRepairEstimates.mockResolvedValue([])
-  api.listRepairTasks.mockResolvedValue([])
   actorApi.listDossierActorDisplays.mockResolvedValue([])
 })
 
@@ -345,10 +337,6 @@ describe("maintenance command access", () => {
 
     expect(screen.queryByRole("button", { name: "Создать смету" })).toBeNull()
     estimatesList.unmount()
-
-    const repairsList = renderPage("/repairs", <RepairsPage />)
-    expect(screen.queryByRole("button", { name: "Создать задание" })).toBeNull()
-    repairsList.unmount()
 
     const estimateDraft = renderPage(
       `/estimates?estimateId=${ESTIMATE_ID}`,

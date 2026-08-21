@@ -1,6 +1,4 @@
 import { memo } from "react"
-import { useDroppable } from "@dnd-kit/core"
-import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   ArrowLeft01Icon,
@@ -36,7 +34,6 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   mobile,
   canEdit,
   collapsed,
-  dragDisabled,
   actionPending,
   queueActionsDisabled,
   onToggleCollapsed,
@@ -58,7 +55,6 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   mobile: boolean
   canEdit: boolean
   collapsed: boolean
-  dragDisabled: boolean
   actionPending: boolean
   queueActionsDisabled: boolean
   onToggleCollapsed: (queueKey: string) => void
@@ -74,14 +70,10 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   palette: KpiPalette | null
   repairComplexitiesByRepairId: ReadonlyMap<string, TaskBoardRepairComplexity>
 }) {
-  const { setNodeRef, isOver } = useDroppable({
-    id: `queue:${queue.key}`,
-    data: { type: "queue", queueKey: queue.key },
-  })
-  const nextWaiting = queue.entries.find(
+  const nextWaiting = visibleEntries.find(
     (entry) => entry.entryType === "REAL" && entry.status === "WAITING"
   )
-  const inProgress = queue.entries.find(
+  const inProgress = visibleEntries.find(
     (entry) => entry.status === "IN_PROGRESS"
   )
 
@@ -90,9 +82,7 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
       <section
         className={cn(
           "flex shrink-0 items-center gap-3 rounded-lg bg-card ring-1 ring-foreground/10",
-          mobile
-            ? "h-auto w-full flex-row px-3 py-2"
-            : "h-full min-h-0 w-16 flex-col py-3"
+          "h-auto w-full flex-row px-3 py-2"
         )}
         aria-label={`${queue.label}, свёрнута`}
       >
@@ -106,21 +96,14 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
           <HugeiconsIcon icon={ArrowRight01Icon} />
         </Button>
         <Badge variant="secondary">{visibleEntries.length}</Badge>
-        <span className={cn(!mobile && "[writing-mode:vertical-rl]")}>
-          {queue.label}
-        </span>
+        <span>{queue.label}</span>
       </section>
     )
   }
 
   return (
     <section
-      ref={setNodeRef}
-      className={cn(
-        "flex min-h-0 shrink-0 flex-col overflow-hidden rounded-lg bg-muted/35 ring-1 ring-foreground/10",
-        mobile ? "h-auto w-full" : "h-full w-80",
-        isOver && "ring-2 ring-primary/40"
-      )}
+      className="flex w-full min-w-0 shrink-0 flex-col overflow-hidden rounded-lg bg-muted/35 ring-1 ring-foreground/10"
       aria-label={`Очередь ${queue.label}`}
     >
       <header className="sticky top-0 flex flex-col gap-3 bg-card p-3 shadow-xs">
@@ -132,6 +115,9 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
             <div className="mt-1 flex flex-wrap gap-1">
               <Badge variant="secondary">{visibleEntries.length}</Badge>
               <Badge variant="outline">{queueKindLabel(queue)}</Badge>
+              <Badge variant="outline">
+                До {queue.availableTaskLimit} ожидающих
+              </Badge>
             </div>
           </div>
           <Button
@@ -171,34 +157,19 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
         </div>
       </header>
 
-      <SortableContext
-        items={visibleEntries.map((entry) => entry.id)}
-        strategy={verticalListSortingStrategy}
-      >
-        <div
-          className={cn(
-            "flex min-h-0 flex-1 touch-pan-y flex-col gap-3 p-3",
-            mobile
-              ? "overflow-visible"
-              : "[scrollbar-width:none] overflow-y-auto overscroll-contain [&::-webkit-scrollbar]:hidden"
-          )}
-        >
-          {visibleEntries.map((entry) => (
+      <div className="flex min-w-0 gap-3 overflow-x-auto overscroll-x-contain p-3 pb-4">
+        {visibleEntries.map((entry) => (
+          <div key={entry.id} className="w-72 shrink-0 sm:w-80">
             <TaskBoardCard
-              key={entry.id}
               entry={entry}
               now={now}
               mobile={mobile}
               canEdit={canEdit}
               collapsed={isEntryCollapsed(entry.id)}
-              dragDisabled={
-                dragDisabled ||
-                entry.status === "IN_PROGRESS" ||
-                entry.status === "PAUSED"
-              }
               actionPending={actionPending}
               onDetails={onDetails}
               onEdit={onEdit}
+              onTake={onTake}
               onPause={onPause}
               onResume={onResume}
               onPin={onPin}
@@ -210,9 +181,9 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
                   : null
               }
             />
-          ))}
-        </div>
-      </SortableContext>
+          </div>
+        ))}
+      </div>
     </section>
   )
 })

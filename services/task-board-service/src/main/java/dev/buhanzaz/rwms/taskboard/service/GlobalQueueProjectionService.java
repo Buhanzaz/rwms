@@ -184,6 +184,7 @@ public class GlobalQueueProjectionService {
     target.setNotificationThreshold(source.getNotificationThreshold());
     target.setNotifyWhenThresholdReached(source.isNotifyWhenThresholdReached());
     target.setResultPhotoMinCount(source.getResultPhotoMinCount());
+    target.setAvailableTaskLimit(source.getAvailableTaskLimit());
   }
 
   private boolean matchesTemplate(WorkQueue queue, QueueDefinition definition) {
@@ -196,7 +197,8 @@ public class GlobalQueueProjectionService {
         && java.util.Objects.equals(
             queue.getNotificationThreshold(), definition.getNotificationThreshold())
         && queue.isNotifyWhenThresholdReached() == definition.isNotifyWhenThresholdReached()
-        && queue.getResultPhotoMinCount() == definition.getResultPhotoMinCount();
+        && queue.getResultPhotoMinCount() == definition.getResultPhotoMinCount()
+        && queue.getAvailableTaskLimit() == definition.getAvailableTaskLimit();
   }
 
   private boolean bindingsMatch(

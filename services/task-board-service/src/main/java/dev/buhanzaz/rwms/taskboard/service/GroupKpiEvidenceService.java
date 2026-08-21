@@ -130,6 +130,24 @@ public class GroupKpiEvidenceService {
   @Transactional
   public void beginSegment(
       UUID warehouseId, UUID groupId, QueueEntry entry, OffsetDateTime at) {
+    beginSegment(warehouseId, groupId, entry, at, entry.getCurrentBudgetSeconds());
+  }
+
+  /**
+   * Opens responsibility for an execution representative with an explicit combined package
+   * budget. A secondary group still receives zero budget when another open segment already owns
+   * it.
+   */
+  @Transactional
+  void beginSegment(
+      UUID warehouseId,
+      UUID groupId,
+      QueueEntry entry,
+      OffsetDateTime at,
+      Long responsibilityBudgetSeconds) {
+    if (responsibilityBudgetSeconds != null && responsibilityBudgetSeconds < 0) {
+      throw new IllegalArgumentException("Бюджет ответственности не может быть отрицательным");
+    }
     LocalDate dataAvailableFrom = clock.dataAvailableFrom(warehouseId).orElse(null);
     if (dataAvailableFrom == null
         || clock.localDate(warehouseId, at.toInstant()).isBefore(dataAvailableFrom)) {
@@ -145,8 +163,8 @@ public class GroupKpiEvidenceService {
                   entry.getId(), GroupKpiSegmentOutcome.OPEN)
               .isEmpty();
       long budget =
-          firstResponsibility && entry.getCurrentBudgetSeconds() != null
-              ? entry.getCurrentBudgetSeconds()
+          firstResponsibility && responsibilityBudgetSeconds != null
+              ? responsibilityBudgetSeconds
               : 0;
       segments.saveAndFlush(
           new GroupKpiResponsibilitySegment(

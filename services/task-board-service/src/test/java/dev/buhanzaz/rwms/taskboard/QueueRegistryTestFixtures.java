@@ -150,6 +150,7 @@ final class QueueRegistryTestFixtures {
         type == QueueType.HOLDING ? 2 : null,
         false,
         resultPhotoMinCount(type, null),
+        6,
         List.of());
   }
 
@@ -173,6 +174,7 @@ final class QueueRegistryTestFixtures {
         request.notificationThreshold(),
         request.notifyWhenThresholdReached(),
         resultPhotoMinCount(definition.type(), request.resultPhotoMinCount()),
+        definition.availableTaskLimit(),
         request.bindings() == null ? List.of() : request.bindings());
   }
 

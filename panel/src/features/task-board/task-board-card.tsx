@@ -1,6 +1,4 @@
 import { memo, type CSSProperties } from "react"
-import { useSortable } from "@dnd-kit/sortable"
-import { CSS } from "@dnd-kit/utilities"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   DragDropVerticalIcon,
@@ -193,17 +191,20 @@ function cardActionVisibility(
   mobile: boolean,
   canEdit: boolean
 ) {
+  const showTake =
+    canEdit && entry.entryType === "REAL" && entry.status === "WAITING"
   const showEdit = canEdit && canEditMaintenanceRepair(entry)
   const showDetails = entry.source?.type === "MAINTENANCE_REPAIR"
   const showPause = !mobile && entry.status === "IN_PROGRESS"
   const showResume = !mobile && entry.status === "PAUSED"
 
   return {
+    showTake,
     showEdit,
     showDetails,
     showPause,
     showResume,
-    showActions: showEdit || showDetails || showPause || showResume,
+    showActions: showTake || showEdit || showDetails || showPause || showResume,
   }
 }
 
@@ -296,8 +297,14 @@ export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
 }) {
   const description = taskDescription(entry)
   const unitLabel = entry.unitNumber ?? description ?? "Задание без номера"
-  const { showEdit, showDetails, showPause, showResume, showActions } =
-    cardActionVisibility(entry, mobile, canEdit)
+  const {
+    showTake,
+    showEdit,
+    showDetails,
+    showPause,
+    showResume,
+    showActions,
+  } = cardActionVisibility(entry, mobile, canEdit)
   const appearance = kpiCardAppearance(entry, now, palette)
 
   return (
@@ -348,6 +355,12 @@ export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
       />
       {showActions ? (
         <CardFooter className="flex flex-col gap-2">
+          {showTake ? (
+            <Button type="button" size="sm" className="w-full" disabled>
+              <HugeiconsIcon icon={PlayIcon} data-icon="inline-start" />
+              Взять в работу
+            </Button>
+          ) : null}
           {showEdit ? (
             <Button
               type="button"
@@ -402,10 +415,10 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   mobile,
   canEdit,
   collapsed,
-  dragDisabled,
   actionPending,
   onDetails,
   onEdit,
+  onTake,
   onPause,
   onResume,
   onPin,
@@ -418,10 +431,10 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   mobile: boolean
   canEdit: boolean
   collapsed: boolean
-  dragDisabled: boolean
   actionPending: boolean
   onDetails: (entry: TaskBoardEntryDto) => void
   onEdit: (entry: TaskBoardEntryDto) => void
+  onTake: (entry: TaskBoardEntryDto) => void
   onPause: (entry: TaskBoardEntryDto) => void
   onResume: (entry: TaskBoardEntryDto) => void
   onPin: (entry: TaskBoardEntryDto, pinned: boolean) => void
@@ -430,33 +443,20 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   repairComplexity?: TaskBoardRepairComplexity | null
 }) {
   const description = taskDescription(entry)
-  const { showEdit, showDetails, showPause, showResume, showActions } =
-    cardActionVisibility(entry, mobile, canEdit)
   const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({
-    id: entry.id,
-    disabled: dragDisabled,
-    data: { type: "entry", queueKey: entry.queueKey, entryId: entry.id },
-  })
+    showTake,
+    showEdit,
+    showDetails,
+    showPause,
+    showResume,
+    showActions,
+  } = cardActionVisibility(entry, mobile, canEdit)
   const appearance = kpiCardAppearance(entry, now, palette)
-  const style: CSSProperties = {
-    ...appearance.style,
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.35 : 1,
-  }
   const unitLabel = entry.unitNumber ?? "Задание без номера"
 
   return (
     <Card
-      ref={setNodeRef}
-      style={style}
+      style={appearance.style}
       size="sm"
       className={cn(
         entry.entryType === "SHADOW" && shadowEntryCardClassName,
@@ -506,8 +506,6 @@ export const TaskBoardCard = memo(function TaskBoardCard({
               aria-label={`${collapsed ? "Развернуть" : "Свернуть"} этап ${unitLabel}`}
               aria-expanded={!collapsed}
               onClick={() => onToggleCollapsed(entry.id)}
-              {...(!dragDisabled ? attributes : {})}
-              {...(!dragDisabled ? listeners : {})}
             >
               <HugeiconsIcon icon={DragDropVerticalIcon} />
             </Button>
@@ -525,6 +523,18 @@ export const TaskBoardCard = memo(function TaskBoardCard({
       />
       {showActions ? (
         <CardFooter className="flex flex-col gap-2">
+          {showTake ? (
+            <Button
+              type="button"
+              size="sm"
+              className="w-full"
+              disabled={actionPending}
+              onClick={() => onTake(entry)}
+            >
+              <HugeiconsIcon icon={PlayIcon} data-icon="inline-start" />
+              Взять в работу
+            </Button>
+          ) : null}
           {showEdit ? (
             <Button
               type="button"

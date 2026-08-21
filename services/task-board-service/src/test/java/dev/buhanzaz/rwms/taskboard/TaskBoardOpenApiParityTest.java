@@ -142,6 +142,7 @@ class TaskBoardOpenApiParityTest {
             "notificationThreshold",
             "notifyWhenThresholdReached",
             "resultPhotoMinCount",
+            "availableTaskLimit",
             "bindings")
         .doesNotContainKey("groupBindings");
     assertThat(schemas).containsKey("DriverQueueRequest");
@@ -165,6 +166,13 @@ class TaskBoardOpenApiParityTest {
             "notifyOnPrimaryTake");
     assertThat(list(child(schemas, "QueueBindingRequest").get("required")))
         .contains("order", "stopTaskOnTake", "participationPolicy", "notifyOnPrimaryTake");
+
+    assertThat(list(child(schemas, "QueueDefinition").get("required")))
+        .contains("availableTaskLimit");
+    assertThat(list(child(schemas, "WorkQueue").get("required")))
+        .contains("availableTaskLimit");
+    assertThat(list(child(schemas, "BoardColumn").get("required")))
+        .contains("availableTaskLimit");
 
     assertThat(child(child(schemas, "GroupMember"), "properties"))
         .doesNotContainKey("roleInGroup");

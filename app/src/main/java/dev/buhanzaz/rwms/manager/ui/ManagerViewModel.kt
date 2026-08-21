@@ -81,7 +81,8 @@ data class ManagerUiState(
     val estimates: List<EstimateDto> = emptyList(),
     val repairs: List<RepairDto> = emptyList(),
     val capitalRepairs: List<RepairDto> = emptyList(),
-    val repairTaskBoards: List<TaskBoardSnapshotDto> = emptyList(),
+    /** Last server-verified aggregate ordinary repair board for the selected warehouse. */
+    val repairTaskBoard: TaskBoardSnapshotDto? = null,
     val acceptanceRepairs: List<RepairDto> = emptyList(),
     val acceptanceEditor: MaintenanceAcceptanceEditorState? = null,
     val acceptanceGallery: AcceptanceGalleryState? = null,
@@ -637,22 +638,6 @@ class ManagerViewModel(
     fun loadMaintenance() = maintenanceReadCoordinator.loadMaintenance()
 
     fun loadRepairQueue() = maintenanceReadCoordinator.loadRepairQueue()
-
-    fun moveRepairQueueEntry(
-        item: RepairQueueItem,
-        targetDate: String,
-        targetIndex: Int,
-    ) = maintenanceReadCoordinator.moveRepairQueueEntry(item, targetDate, targetIndex)
-
-    fun swapRepairQueueDateColumns(
-        firstDate: String,
-        secondDate: String,
-        onSwapped: () -> Unit,
-    ) = maintenanceReadCoordinator.swapRepairQueueDateColumns(
-        firstDate,
-        secondDate,
-        onSwapped,
-    )
 
     fun loadAcceptance() = maintenanceReadCoordinator.loadAcceptance()
 

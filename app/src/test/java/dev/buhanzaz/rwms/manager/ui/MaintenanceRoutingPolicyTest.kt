@@ -9,19 +9,15 @@ import org.junit.Test
 class MaintenanceRoutingPolicyTest {
     @Test
     fun `custom maintenance rows use live repair and holding queues from the board`() {
-        val boards = listOf(
-            board(
-                column("repair", "Внутренние работы", "REPAIR"),
-                column("movement", "Перемещение", "MOVEMENT"),
-                column("holding", "Ожидание", "HOLDING"),
-            ),
-            board(
-                column("repair", "Внутренние работы", "REPAIR"),
-                column("furniture", "Мебель", "FURNITURE_MOVEMENT"),
-            ),
+        val board = board(
+            column("repair", "Внутренние работы", "REPAIR"),
+            column("movement", "Перемещение", "MOVEMENT"),
+            column("holding", "Ожидание", "HOLDING"),
+            column("repair", "Внутренние работы", "REPAIR"),
+            column("furniture", "Мебель", "FURNITURE_MOVEMENT"),
         )
 
-        assertThat(boards.maintenanceWorkRoutingOptions()).containsExactly(
+        assertThat(board.maintenanceWorkRoutingOptions()).containsExactly(
             RoutingSnapshotDto("repair", "Внутренние работы", "REPAIR"),
             RoutingSnapshotDto("holding", "Ожидание", "HOLDING"),
         ).inOrder()
@@ -102,7 +98,6 @@ class MaintenanceRoutingPolicyTest {
 
     private fun board(vararg columns: TaskBoardColumnDto): TaskBoardSnapshotDto = TaskBoardSnapshotDto(
         warehouseId = "warehouse-1",
-        selectedDate = "2026-07-29",
         columns = columns.toList(),
     )
 

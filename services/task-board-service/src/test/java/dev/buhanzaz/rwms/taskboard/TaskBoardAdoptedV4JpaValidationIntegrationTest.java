@@ -2,7 +2,9 @@ package dev.buhanzaz.rwms.taskboard;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardAggregateType;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventFactFactory;
+import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardReplayVerifier;
 import dev.buhanzaz.rwms.taskboard.repository.BoardTaskRepository;
 import dev.buhanzaz.rwms.taskboard.repository.QueueEntryRepository;
 import dev.buhanzaz.rwms.taskboard.repository.QueueUsageReferenceRepository;
@@ -75,6 +77,7 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
   @Autowired WorkerGroupRepository workerGroups;
   @Autowired WorkerRepository workers;
   @Autowired TaskBoardEventFactFactory facts;
+  @Autowired TaskBoardReplayVerifier replayVerifier;
   @Autowired ObjectMapper objectMapper;
 
   @DynamicPropertySource
@@ -86,7 +89,7 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
 
   @Test
   @Transactional
-  void bootMigratesAdoptedVersionFourThroughVersionTwentyNineAndValidatesJpa() {
+  void bootMigratesAdoptedVersionFourThroughVersionThirtyOneAndValidatesJpa() {
     assertThat(entityManagerFactory.isOpen()).isTrue();
     assertThat(retainedDigests(jdbc)).containsExactlyInAnyOrderEntriesOf(beforeStartup);
     assertThat(
@@ -159,6 +162,12 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
             jdbc.queryForObject(
                 "select count(*) from flyway_schema_history "
                     + "where version='29' and type='SQL' and success",
+                Integer.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from flyway_schema_history "
+                    + "where version='31' and type='SQL' and success",
                 Integer.class))
         .isOne();
     assertThat(
@@ -260,9 +269,14 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
     entries
         .findAll()
         .forEach(
-            item ->
+            item -> {
                 assertBaselinePayload(
-                    "QUEUE_ENTRY", item.getId(), facts.queueEntry(item, false)));
+                    "QUEUE_ENTRY", item.getId(), facts.queueEntry(item, false));
+              assertThat(
+                      replayVerifier.verify(
+                          TaskBoardAggregateType.QUEUE_ENTRY, item.getId()))
+                  .isNotNull();
+            });
   }
 
   @Test
@@ -295,15 +309,6 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
   }
 
   private void assertBaselinePayload(String aggregateType, UUID id, Object fact) {
-    String serialized;
-    try {
-      JsonNode expectedFact = objectMapper.valueToTree(fact);
-      serialized = objectMapper.writeValueAsString(expectedFact);
-    } catch (tools.jackson.core.JacksonException exception) {
-      throw new AssertionError("Cannot serialize expected task-board baseline fact", exception);
-    }
-    String expected =
-        jdbc.queryForObject("select (?::jsonb)::text", String.class, serialized);
     String actual =
         jdbc.queryForObject(
             "select payload::text from domain_event where aggregate_type=? "
@@ -311,6 +316,25 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
             String.class,
             aggregateType,
             id.toString());
+    String serialized;
+    try {
+      JsonNode expectedFact = objectMapper.valueToTree(fact);
+      if ("QUEUE_ENTRY".equals(aggregateType)) {
+        JsonNode storedFact = objectMapper.readTree(actual);
+        // V31 owns this one-time relational ordering/gate projection cutover. Immutable baseline
+        // facts retain their pre-cutover values; post-cutover events are still checked exactly by
+        // TaskBoardReplayVerifier.
+        ((tools.jackson.databind.node.ObjectNode) expectedFact)
+            .set("queuePosition", storedFact.get("queuePosition"));
+        ((tools.jackson.databind.node.ObjectNode) expectedFact)
+            .set("entryType", storedFact.get("entryType"));
+      }
+      serialized = objectMapper.writeValueAsString(expectedFact);
+    } catch (tools.jackson.core.JacksonException exception) {
+      throw new AssertionError("Cannot serialize expected task-board baseline fact", exception);
+    }
+    String expected =
+        jdbc.queryForObject("select (?::jsonb)::text", String.class, serialized);
     assertThat(actual).isEqualTo(expected);
   }
 
@@ -467,13 +491,15 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
             : "queue_entry".equals(table)
                 ? "to_jsonb(row_value) - array['queue_code','worker_works','worker_materials',"
                     + "'worker_comments','source_media_references','revision_marker',"
-                    + "'original_budget_seconds','current_budget_seconds']"
+                    + "'original_budget_seconds','current_budget_seconds','queue_position',"
+                    + "'entry_type']"
                 : "work_queue".equals(table)
                     ? "to_jsonb(row_value) - array['code','result_photo_min_count',"
                         + "'name','description','queue_type','definition_id',"
                         + "'sort_order','active','hidden','collapsed',"
                         + "'holding_period_minutes','notification_threshold',"
-                        + "'notify_when_threshold_reached','revision_marker']"
+                        + "'notify_when_threshold_reached','revision_marker',"
+                        + "'available_task_limit']"
                     : "queue_usage_reference".equals(table)
                         ? "to_jsonb(row_value) - array['queue_id','queue_definition_id']"
                     : "worker_class".equals(table)

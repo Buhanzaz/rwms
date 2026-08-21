@@ -147,7 +147,7 @@ production-контракта.
 
 | `operationId`                            | Метод и путь                                                                                      | Что делает и важное правило                                                                                                                        |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `getTaskBoard`                           | `GET /warehouses/{warehouseId}/task-board?date=&includeShadow=`                                   | Date-scoped board. `If-None-Match` сравнивается с weak semantic ETag: rolling counters не меняют ETag, состояние timer и next transition — меняют. |
+| `getTaskBoard`                           | `GET /warehouses/{warehouseId}/task-board`                                                        | Агрегированная ordinary board: все активные реальные карточки и ограниченное окно ожидания каждой очереди. Поддерживает weak semantic ETag.         |
 | `getDriverLogisticsBoard`                | `GET /warehouses/{warehouseId}/task-board/logistics`                                              | Отдельный driver board: sticky current lane и непустые scheduled-date колонки, без обычных repair queues.                                          |
 | `getWarehouseKpiSettings`                | `GET /warehouses/{warehouseId}/task-board/kpi-settings`                                           | Active и pending KPI settings выбранного склада.                                                                                                   |
 | `replaceWarehouseKpiPalette`             | `PUT /warehouses/{warehouseId}/task-board/kpi-settings/palette`                                   | Версионно заменяет ranges и overdue color.                                                                                                         |
@@ -163,14 +163,12 @@ production-контракта.
 | `pauseTaskEntry`                         | `POST /warehouses/{warehouseId}/task-board/entries/{entryId}/pause`                               | Версионно ставит active entry на паузу.                                                                                                            |
 | `resumeTaskEntry`                        | `POST /warehouses/{warehouseId}/task-board/entries/{entryId}/resume`                              | Возобновляет paused entry по его версии.                                                                                                           |
 | `completeTaskEntry`                      | `POST /warehouses/{warehouseId}/task-board/entries/{entryId}/complete`                            | Завершает entry по версии и completion rules.                                                                                                      |
-| `moveTaskEntry`                          | `POST /warehouses/{warehouseId}/task-board/entries/{entryId}/move`                                | Одной командой проверяет entry version, task version, target queue/date/index.                                                                     |
-| `swapTaskBoardDates`                     | `POST /warehouses/{warehouseId}/task-board/dates/swap`                                            | Меняет даты двух полных visual columns. Нужны expectations для всех REAL и SHADOW entries из обеих актуальных snapshots.                           |
 | `setTaskPinned`                          | `POST /warehouses/{warehouseId}/task-board/tasks/{taskId}/pin`                                    | Pin/unpin во всех route queues без изменения позиции.                                                                                              |
 
 ### Получение board с ETag
 
 ```http
-GET /api/task-board/warehouses/{warehouseId}/task-board?date=2026-08-07&includeShadow=true
+GET /api/task-board/warehouses/{warehouseId}/task-board
 Authorization: Bearer <JWT>
 If-None-Match: W/"task-board-..."
 ```
@@ -178,6 +176,11 @@ If-None-Match: W/"task-board-..."
 При неизменном semantic state сервер ответит `304` и вернёт ETag. Не считайте
 падение `remainingSeconds` самостоятельным изменением board: клиент выводит
 rolling timer из server time, timer state и `nextTransitionAt`.
+
+У ordinary board нет query-параметров даты/shadow и публичных команд move или обмена дат. Каждая
+очередь возвращает все реальные карточки `IN_PROGRESS`/`PAUSED` и первые `availableTaskLimit`
+реальных карточек `WAITING` в server priority order; `TAKE` проверяет то же окно. Датированное
+планирование водителей и отгрузок остаётся на logistics board.
 
 ## Публичный API: worker-app
 

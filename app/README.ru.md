@@ -37,8 +37,8 @@ English version: [README.md](README.md).
 ### Проверка transport-контракта
 
 [`RwmsApiContractBoundaryTest.kt`](src/test/java/dev/buhanzaz/rwms/manager/network/RwmsApiContractBoundaryTest.kt)
-фиксирует все 62 объявленных метода `RwmsApi` на их канонический публичный
-OpenAPI-источник: 60 фиксированных gateway routes и ровно два разрешённых
+фиксирует все 61 объявленный метод `RwmsApi` на их канонический публичный
+OpenAPI-источник: 59 фиксированных gateway routes и ровно два разрешённых
 динамических media routes. Тест запрещает internal/private namespaces и service
 origins, заранее разрешает каждый request/response converter Retrofit/Moshi и
 проверяет репрезентативные decode/encode fixtures для всех восьми потребляемых
@@ -92,6 +92,20 @@ CAPITAL и существующего логистического/приёмо�
 столбцами с точным количеством и единицей. Раскрытие только отображает данные
 и не создаёт и не продвигает логистическое задание. См.
 [`MaintenanceScreen.kt`](src/main/java/dev/buhanzaz/rwms/manager/ui/screens/MaintenanceScreen.kt).
+
+Обычная очередь ремонтов читает ровно один публичный агрегатный snapshot
+task-board без query-измерений даты и shadow. Она отображает один адаптивный
+вертикальный поток, сгруппированный по серверному порядку очередей, и никогда
+не показывает и не использует `scheduledDate` записи: выбор дат,
+горизонтальные колонки дат, drag-and-drop, обычное перемещение и команды обмена
+датами удалены. Task-board владеет окном доступных карточек и каноническим
+порядком; детали карточки только открывают принадлежащий maintenance ремонт.
+`ManagerReadCache` хранит один account-and-warehouse-scoped агрегатный snapshot
+с его ETag для fail-soft восстановления. См.
+[`RepairQueueView.kt`](src/main/java/dev/buhanzaz/rwms/manager/ui/screens/RepairQueueView.kt),
+[`ManagerMaintenanceReadCoordinator.kt`](src/main/java/dev/buhanzaz/rwms/manager/ui/coordinator/ManagerMaintenanceReadCoordinator.kt)
+и
+[`RwmsApi.kt`](src/main/java/dev/buhanzaz/rwms/manager/network/RwmsApi.kt).
 
 При первом добавлении работы из maintenance catalog новые, выбранные из галереи
 и повторно использованные фото состояния сразу отображаются удаляемыми

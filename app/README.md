@@ -36,8 +36,8 @@ Russian version: [README.ru.md](README.ru.md).
 ### Transport contract gate
 
 [`RwmsApiContractBoundaryTest.kt`](src/test/java/dev/buhanzaz/rwms/manager/network/RwmsApiContractBoundaryTest.kt)
-pins all 62 declared `RwmsApi` methods to their canonical public OpenAPI source:
-60 fixed gateway routes and exactly two allowlisted dynamic media routes. It
+pins all 61 declared `RwmsApi` methods to their canonical public OpenAPI source:
+59 fixed gateway routes and exactly two allowlisted dynamic media routes. It
 rejects internal/private namespaces and service origins, eagerly resolves every
 Retrofit/Moshi request and response converter, and checks representative
 decode/encode fixtures for all eight consumed contract owners: auth, warehouse,
@@ -89,6 +89,19 @@ authoritative ordered repair stages, naming their queues and showing works and
 materials in separate columns with the exact quantity and unit. Expansion is
 read-only presentation and does not create or advance a logistics task. See
 [`MaintenanceScreen.kt`](src/main/java/dev/buhanzaz/rwms/manager/ui/screens/MaintenanceScreen.kt).
+
+The ordinary repair queue reads exactly one public aggregate task-board
+snapshot without date or shadow query dimensions. It renders one adaptive
+vertical stream grouped by the server-ordered queues and never exposes or uses
+an entry's `scheduledDate`: date selectors, horizontal date columns, drag and
+drop, ordinary move, and date-swap commands have been removed. Task-board owns
+the available-card window and canonical order; the card detail only opens the
+maintenance-owned repair. `ManagerReadCache` retains one account-and-warehouse
+scoped aggregate snapshot with its ETag for fail-soft recovery. See
+[`RepairQueueView.kt`](src/main/java/dev/buhanzaz/rwms/manager/ui/screens/RepairQueueView.kt),
+[`ManagerMaintenanceReadCoordinator.kt`](src/main/java/dev/buhanzaz/rwms/manager/ui/coordinator/ManagerMaintenanceReadCoordinator.kt),
+and
+[`RwmsApi.kt`](src/main/java/dev/buhanzaz/rwms/manager/network/RwmsApi.kt).
 
 When a work is first added from the maintenance catalog, newly captured,
 gallery-picked, and reused condition photos are rendered immediately as

@@ -52,6 +52,7 @@ class TaskBoardWorkerExecutionService {
   private final GroupKpiEvidenceService kpiEvidence;
   private final TaskBoardQueuePositionCoordinator queuePositions;
   private final DriverTaskAudienceService driverAudiences;
+  private final MaintenanceTaskExecutionPackageService executionPackages;
 
   TaskBoardWorkerExecutionService(
       BoardTaskRepository tasks,
@@ -69,7 +70,8 @@ class TaskBoardWorkerExecutionService {
       WarehouseKpiClock kpiClock,
       GroupKpiEvidenceService kpiEvidence,
       TaskBoardQueuePositionCoordinator queuePositions,
-      DriverTaskAudienceService driverAudiences) {
+      DriverTaskAudienceService driverAudiences,
+      MaintenanceTaskExecutionPackageService executionPackages) {
     this.tasks = tasks;
     this.entries = entries;
     this.bindings = bindings;
@@ -86,6 +88,7 @@ class TaskBoardWorkerExecutionService {
     this.kpiEvidence = kpiEvidence;
     this.queuePositions = queuePositions;
     this.driverAudiences = driverAudiences;
+    this.executionPackages = executionPackages;
   }
 
   CancelledTaskDto cancelTask(
@@ -468,7 +471,13 @@ class TaskBoardWorkerExecutionService {
     entry = projectionWriter.saveAndFlush(entries, entry);
     projectionWriter.flush();
     if (assignedGroup != null) {
-      kpiEvidence.beginSegment(warehouseId, assignedGroup.getId(), entry, now);
+      List<QueueEntry> route =
+          entries.findAllByTaskIdOrderByRouteIndexAsc(entry.getTask().getId());
+      Long responsibilityBudget =
+          executionPackages.budgetSeconds(
+              executionPackages.unfinishedExecutionEntries(entry, route));
+      kpiEvidence.beginSegment(
+          warehouseId, assignedGroup.getId(), entry, now, responsibilityBudget);
     }
     interruptedEntries.forEach(
         interrupted ->
@@ -530,7 +539,12 @@ class TaskBoardWorkerExecutionService {
     return entry;
   }
 
-  /** Completes an entry under its observed version and completion rules. */
+  /**
+   * Completes an entry under its observed version and completion rules.
+   *
+   * <p>A maintenance representative also completes later unfinished shadow entries in its
+   * consecutive same-queue package and publishes each source-mapped completion independently.
+   */
   QueueEntry complete(
       UUID warehouseId, UUID entryId, VersionCommand request, UUID authenticatedWorkerId) {
     queuePositions.lockQueueMutation(warehouseId);
@@ -542,11 +556,25 @@ class TaskBoardWorkerExecutionService {
     ensureRequiredSecondaryAssignments(entry);
     queuePositions.lockQueuePositions(warehouseId, List.of(entry.getQueue()));
     List<QueueEntry> taskRoute = entries.findAllByTaskIdOrderByRouteIndexAsc(entry.getTask().getId());
+    List<QueueEntry> completionEntries =
+        executionPackages.unfinishedExecutionEntries(entry, taskRoute);
+    Set<UUID> completionEntryIds =
+        completionEntries.stream()
+            .map(QueueEntry::getId)
+            .collect(java.util.stream.Collectors.toSet());
+    for (QueueEntry bundledEntry : completionEntries.subList(1, completionEntries.size())) {
+      if (!assignments
+          .findAllByQueueEntryIdAndStatusIn(
+              bundledEntry.getId(),
+              Set.of(AssignmentStatus.ACTIVE, AssignmentStatus.PAUSED))
+          .isEmpty()) {
+        throw new ConflictException(
+            "Следующая часть пакета работ уже назначена отдельно");
+      }
+    }
     QueueEntry nextEntry =
-        taskRoute.stream()
-            .filter(candidate -> !candidate.equals(entry) && UNFINISHED.contains(candidate.getStatus()))
-            .min(Comparator.comparingInt(QueueEntry::getRouteIndex))
-            .orElse(null);
+        OrdinaryQueueAvailabilityPolicy.nextExecutableRouteEntry(
+            taskRoute, completionEntryIds);
     Set<QueueEntry> resumedEntries =
         interruptions.findAllByInterruptingEntryIdAndActiveTrue(entryId).stream()
             .map(TaskAutoInterruption::getInterruptedEntry)
@@ -555,7 +583,7 @@ class TaskBoardWorkerExecutionService {
     Map<UUID, TaskBoardQueuePositionCoordinator.QueueEntryPosition> positionsBefore = queuePositions.positionsOf(positionCandidates);
     Set<QueueEntry> streamsToLock = new LinkedHashSet<>(positionCandidates);
     streamsToLock.addAll(resumedEntries);
-    streamsToLock.add(entry);
+    streamsToLock.addAll(completionEntries);
     if (nextEntry != null) streamsToLock.add(nextEntry);
     var streamVersions =
         nextEntry == null
@@ -568,7 +596,7 @@ class TaskBoardWorkerExecutionService {
     entry.setStatus(EntryStatus.DONE);
     entry.setDoneAt(now);
     entry.setPauseOrigin(null);
-    var active =
+    List<TaskAssignment> active =
         assignments.findAllByQueueEntryIdAndStatusIn(
             entryId, Set.of(AssignmentStatus.ACTIVE, AssignmentStatus.PAUSED));
     for (var a : active) {
@@ -583,6 +611,9 @@ class TaskBoardWorkerExecutionService {
           "Этап завершен",
           null,
           now);
+    }
+    for (QueueEntry bundledEntry : completionEntries.subList(1, completionEntries.size())) {
+      completeBundledEntry(bundledEntry, active, now);
     }
     resolveInterruptions(entry, now);
     if (nextEntry != null) {
@@ -600,6 +631,7 @@ class TaskBoardWorkerExecutionService {
     }
     queuePositions.normalizePositions(warehouseId, entry.getQueue());
     QueueEntry completedEntry = projectionWriter.saveAndFlush(entries, entry);
+    projectionWriter.flush();
     Set<UUID> repositionedIds = queuePositions.changedPositionIds(positionCandidates, positionsBefore);
     for (QueueEntry resumedEntry : resumedEntries) {
       eventSourcing.entryChanged(
@@ -614,7 +646,7 @@ class TaskBoardWorkerExecutionService {
           TaskBoardEventTypes.QUEUE_ENTRY_CHANGED);
     }
     for (QueueEntry positionCandidate : positionCandidates) {
-      if (!positionCandidate.equals(entry)
+      if (!completionEntryIds.contains(positionCandidate.getId())
           && !positionCandidate.equals(nextEntry)
           && !resumedEntries.contains(positionCandidate)
           && repositionedIds.contains(positionCandidate.getId())) {
@@ -625,11 +657,19 @@ class TaskBoardWorkerExecutionService {
             TaskBoardEventTypes.QUEUE_ENTRY_CHANGED);
       }
     }
+    for (QueueEntry bundledEntry : completionEntries.subList(1, completionEntries.size())) {
+      eventSourcing.entryChanged(
+          bundledEntry,
+          queuePositions.streamVersion(
+              streamVersions, TaskBoardAggregateType.QUEUE_ENTRY, bundledEntry.getId()),
+          TaskBoardEventTypes.QUEUE_ENTRY_COMPLETED);
+    }
     eventSourcing.entryChanged(
         completedEntry,
         queuePositions.streamVersion(streamVersions, TaskBoardAggregateType.QUEUE_ENTRY, entryId),
         TaskBoardEventTypes.QUEUE_ENTRY_COMPLETED);
-    ownerProofs.publish(warehouseId, entryId, false);
+    completionEntries.forEach(
+        completed -> ownerProofs.publish(warehouseId, completed.getId(), false));
     completedKpiGroups.forEach(
         groupId -> kpiEvidence.refreshGroup(warehouseId, groupId, now));
     resumedEntries.forEach(
@@ -638,32 +678,87 @@ class TaskBoardWorkerExecutionService {
     return completedEntry;
   }
 
+  /**
+   * Persists audit-equivalent completion for a shadow member executed with the representative
+   * entry, without opening another timer or KPI responsibility segment.
+   */
+  private void completeBundledEntry(
+      QueueEntry bundledEntry,
+      List<TaskAssignment> representativeAssignments,
+      OffsetDateTime completedAt) {
+    bundledEntry.setStatus(EntryStatus.DONE);
+    bundledEntry.setDoneAt(completedAt);
+    bundledEntry.setActiveStartedAt(null);
+    bundledEntry.setPausedAt(null);
+    bundledEntry.setPauseOrigin(null);
+    for (TaskAssignment representative : representativeAssignments) {
+      TaskAssignment bundledAssignment = new TaskAssignment();
+      bundledAssignment.setQueueEntry(bundledEntry);
+      bundledAssignment.setWorkerGroup(representative.getWorkerGroup());
+      bundledAssignment.setWorker(representative.getWorker());
+      bundledAssignment.setWorkerNameSnapshot(representative.getWorkerNameSnapshot());
+      bundledAssignment.setGroupNameSnapshot(representative.getGroupNameSnapshot());
+      bundledAssignment.setStatus(AssignmentStatus.DONE);
+      bundledAssignment.setAssignedAt(representative.getAssignedAt());
+      OffsetDateTime startedAt =
+          representative.getStartedAt() == null
+              ? representative.getAssignedAt()
+              : representative.getStartedAt();
+      bundledAssignment.setStartedAt(startedAt);
+      bundledAssignment.setFinishedAt(completedAt);
+      projectionWriter.save(assignments, bundledAssignment);
+      event(
+          bundledEntry,
+          representative.getWorker(),
+          representative.getWorkerGroup(),
+          TimeEventType.STARTED,
+          "Часть пакета работ взята вместе с основным этапом",
+          null,
+          startedAt);
+      event(
+          bundledEntry,
+          representative.getWorker(),
+          representative.getWorkerGroup(),
+          TimeEventType.FINISHED,
+          "Часть пакета работ завершена",
+          null,
+          completedAt);
+    }
+    projectionWriter.save(entries, bundledEntry);
+  }
+
 
 
   private void ensureFirstAvailable(QueueEntry entry, UUID workerId) {
-    var first =
-        entries
-            .findAllByQueueIdAndStatusInOrderByQueuePositionAsc(
-                entry.getQueue().getId(), Set.of(EntryStatus.WAITING))
-            .stream()
-            .filter(
-                candidate ->
-                    entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER
-                        ? candidate.getTask().getLane() == TaskLane.CURRENT
-                            && driverAudiences.isVisibleTo(candidate, workerId)
-                        : candidate
-                            .getTask()
-                            .getScheduledDate()
-                            .equals(entry.getTask().getScheduledDate()))
-            .filter(e -> e.getEntryType() == EntryType.REAL)
-            .findFirst();
-    if (first.isEmpty() || !first.get().equals(entry))
-      throw new ConflictException("Сначала возьмите первый доступный этап очереди");
-    var routeFirst =
-        entries.findFirstByTaskIdAndStatusNotInOrderByRouteIndexAsc(
-            entry.getTask().getId(), Set.of(EntryStatus.DONE, EntryStatus.CANCELLED));
-    if (routeFirst.isEmpty() || !routeFirst.get().equals(entry))
-      throw new ConflictException("Сначала завершите предыдущий этап маршрута");
+    if (entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER) {
+      var first =
+          entries
+              .findAllByQueueIdAndStatusInOrderByQueuePositionAsc(
+                  entry.getQueue().getId(), Set.of(EntryStatus.WAITING))
+              .stream()
+              .filter(candidate -> candidate.getTask().getLane() == TaskLane.CURRENT)
+              .filter(candidate -> driverAudiences.isVisibleTo(candidate, workerId))
+              .filter(candidate -> candidate.getEntryType() == EntryType.REAL)
+              .findFirst();
+      if (first.isEmpty() || !first.get().equals(entry)) {
+        throw new ConflictException("Сначала возьмите первый доступный этап очереди");
+      }
+    } else {
+      // Reuse the exact bounded board-selection query instead of hydrating the entire waiting
+      // backlog for every TAKE command. This also keeps command admission in lockstep with the
+      // cards exposed by the ordinary board.
+      if (!entries
+          .findVisibleOrdinaryEntryIds(entry.getTask().getWarehouseId())
+          .contains(entry.getId())) {
+        throw new ConflictException("Этап находится за пределами доступных заданий очереди");
+      }
+    }
+    QueueEntry routeGate =
+        OrdinaryQueueAvailabilityPolicy.nextExecutableRouteEntry(
+            entries.findAllByTaskIdOrderByRouteIndexAsc(entry.getTask().getId()), Set.of());
+    if (!entry.equals(routeGate)) {
+      throw new ConflictException("Сначала завершите обязательный этап маршрута");
+    }
   }
 
   private void assertAssigned(QueueEntry entry, UUID workerId) {

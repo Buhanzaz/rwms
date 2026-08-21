@@ -563,7 +563,6 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
         List.of(new RouteStepRequest(queueDefinitionId, "Repair", 15)),
         null,
         null,
-        null,
         new TaskSourceReferenceDto(TaskSourceType.MAINTENANCE_REPAIR, repairId),
         TaskLane.SCHEDULED);
   }
