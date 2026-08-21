@@ -538,6 +538,11 @@
           "uniqueItems": true,
           "items": {"type": "string", "format": "uuid"}
         },
+        "readerWorkerIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "format": "uuid"}
+        },
         "sourceMediaReferences": {
           "type": "array",
           "uniqueItems": true,

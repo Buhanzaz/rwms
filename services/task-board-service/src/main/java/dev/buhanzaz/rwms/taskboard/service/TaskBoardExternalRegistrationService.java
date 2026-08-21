@@ -62,6 +62,7 @@ class TaskBoardExternalRegistrationService {
   private final WorkforceService workforce;
   private final WorkerInvalidationHub workerInvalidations;
   private final DriverTaskAudienceService driverAudiences;
+  private final TaskBoardEntryOwnerProofService ownerProofs;
   private final JdbcTemplate jdbc;
 
   TaskBoardExternalRegistrationService(
@@ -80,6 +81,7 @@ class TaskBoardExternalRegistrationService {
       WorkforceService workforce,
       WorkerInvalidationHub workerInvalidations,
       DriverTaskAudienceService driverAudiences,
+      TaskBoardEntryOwnerProofService ownerProofs,
       JdbcTemplate jdbc) {
     this.tasks = tasks;
     this.entries = entries;
@@ -96,6 +98,7 @@ class TaskBoardExternalRegistrationService {
     this.workforce = workforce;
     this.workerInvalidations = workerInvalidations;
     this.driverAudiences = driverAudiences;
+    this.ownerProofs = ownerProofs;
     this.jdbc = jdbc;
   }
 
@@ -367,7 +370,10 @@ class TaskBoardExternalRegistrationService {
     }
     projectionWriter.flush();
     eventSourcing.created(task);
-    entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId()).forEach(eventSourcing::created);
+    List<QueueEntry> createdEntries =
+        entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId());
+    createdEntries.forEach(eventSourcing::created);
+    createdEntries.forEach(entry -> ownerProofs.publish(warehouseId, entry.getId(), true));
     for (QueueEntry existing : existingEntries) {
       if (queuePositions.changedPositionIds(List.of(existing), existingPositions).contains(existing.getId())) {
         eventSourcing.entryChanged(

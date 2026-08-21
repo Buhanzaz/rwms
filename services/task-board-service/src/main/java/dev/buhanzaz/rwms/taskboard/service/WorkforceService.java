@@ -100,12 +100,12 @@ public class WorkforceService {
     return groups.listGroups(warehouseId);
   }
 
-  /** Creates a warehouse group with a globally defined worker class and active members. */
+  /** Creates a group and atomically applies any version-fenced current-worker changes. */
   public WorkerGroupDto createGroup(UUID warehouseId, WorkerGroupRequest request) {
     return groups.createGroup(warehouseId, request);
   }
 
-  /** Replaces a version-fenced group and its declarative memberships. */
+  /** Replaces a group, memberships, and requested current-worker changes in one transaction. */
   public WorkerGroupDto updateGroup(UUID warehouseId, UUID id, WorkerGroupRequest request) {
     return groups.updateGroup(warehouseId, id, request);
   }

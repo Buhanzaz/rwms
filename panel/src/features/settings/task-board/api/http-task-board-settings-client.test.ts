@@ -190,13 +190,6 @@ describe("HttpTaskBoardSettingsClient gateway routes", () => {
     )
     const client = new HttpTaskBoardSettingsClient()
 
-    await client.setWorkerCurrentGroup(
-      "token",
-      "warehouse/id",
-      "worker/id",
-      4,
-      "group/id"
-    )
     await client.disableGroup(
       "token",
       "warehouse/id",
@@ -213,11 +206,6 @@ describe("HttpTaskBoardSettingsClient gateway routes", () => {
         body: JSON.parse(String(init?.body)),
       }))
     ).toEqual([
-      {
-        path: "/api/task-board/warehouses/warehouse%2Fid/workers/worker%2Fid/current-group",
-        method: "PUT",
-        body: { expectedVersion: 4, workerGroupId: "group/id" },
-      },
       {
         path: "/api/task-board/warehouses/warehouse%2Fid/worker-groups/group%2Fid/disable",
         method: "POST",

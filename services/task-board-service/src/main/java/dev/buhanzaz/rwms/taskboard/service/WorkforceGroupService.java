@@ -72,12 +72,6 @@ public class WorkforceGroupService {
         transaction -> {
           Worker worker = requireWorker(warehouseId, workerId);
           checkVersion(worker.getVersion(), request.expectedVersion(), "Рабочий");
-          if (!taskAssignments
-              .findAllByWorkerIdAndStatusIn(
-                  workerId, java.util.Set.of(AssignmentStatus.ACTIVE, AssignmentStatus.PAUSED))
-              .isEmpty()) {
-            throw new ConflictException("Нельзя менять текущую группу во время активного задания");
-          }
           WorkerGroup selected =
               request.workerGroupId() == null
                   ? null
@@ -94,47 +88,7 @@ public class WorkforceGroupService {
               throw new ConflictException("Рабочий не состоит в выбранной группе");
             }
           }
-          UUID previousId =
-              worker.getCurrentGroup() == null ? null : worker.getCurrentGroup().getId();
-          UUID selectedId = selected == null ? null : selected.getId();
-          if (java.util.Objects.equals(previousId, selectedId)) {
-            return projections.workerDto(worker);
-          }
-          long streamVersion = eventSourcing.lock(TaskBoardAggregateType.WORKER, workerId);
-          OffsetDateTime changedAt =
-              jdbc.queryForObject("select clock_timestamp()", OffsetDateTime.class);
-          jdbc.update(
-              """
-              update worker_current_group_interval
-                 set ended_at=?
-               where worker_id=? and ended_at is null
-              """,
-              changedAt,
-              workerId);
-          if (selected != null) {
-            jdbc.update(
-                """
-                insert into worker_current_group_interval(
-                  id,worker_id,worker_group_id,started_at,ended_at)
-                values (?,?,?, ?,null)
-                """,
-                UUID.randomUUID(),
-                workerId,
-                selected.getId(),
-                changedAt);
-          }
-          worker.setCurrentGroup(selected);
-          worker.touch();
-          worker = projectionWriter.saveAndFlush(workers, worker);
-          projectionWriter.refresh(worker);
-          eventSourcing.workerChanged(worker, streamVersion, TaskBoardEventTypes.WORKER_CHANGED);
-          if (previousId != null) {
-            kpiEvidence.refreshGroup(warehouseId, previousId, changedAt);
-          }
-          if (selectedId != null) {
-            kpiEvidence.refreshGroup(warehouseId, selectedId, changedAt);
-          }
-          return projections.workerDto(worker);
+          return changeCurrentGroup(warehouseId, worker, selected);
         });
   }
 
@@ -216,7 +170,9 @@ public class WorkforceGroupService {
           group.setWarehouseId(warehouseId);
           apply(group, request);
           group = projectionWriter.save(groups, group);
-          replaceMembers(group, request.members());
+          replaceMembers(group, request);
+          projectionWriter.flush();
+          applyCurrentGroupChanges(group, request);
           projectionWriter.flush();
           projectionWriter.refresh(group);
           jdbc.update(
@@ -241,7 +197,9 @@ public class WorkforceGroupService {
           apply(group, request);
           group.touch();
           group = projectionWriter.save(groups, group);
-          replaceMembers(group, request.members());
+          replaceMembers(group, request);
+          projectionWriter.flush();
+          applyCurrentGroupChanges(group, request);
           projectionWriter.flush();
           projectionWriter.refresh(group);
           eventSourcing.groupChanged(group, streamVersion, TaskBoardEventTypes.WORKER_GROUP_CHANGED);
@@ -286,14 +244,23 @@ public class WorkforceGroupService {
     return group;
   }
 
-  private void replaceMembers(WorkerGroup group, List<GroupMemberRequest> requested) {
+  private void replaceMembers(WorkerGroup group, WorkerGroupRequest request) {
+    List<GroupMemberRequest> requested = request.members();
     Map<UUID, GroupMemberRequest> requestedByWorker = new LinkedHashMap<>();
     if (requested != null) {
       requested.forEach(value -> requestedByWorker.put(value.workerId(), value));
     }
+    java.util.Set<UUID> plannedCurrentGroupClears =
+        request.currentGroupChanges() == null
+            ? java.util.Set.of()
+            : request.currentGroupChanges().stream()
+                .filter(change -> !change.current())
+                .map(CurrentGroupChangeRequest::workerId)
+                .collect(java.util.stream.Collectors.toSet());
     for (Worker currentWorker : workers.findAllByCurrentGroupId(group.getId())) {
       GroupMemberRequest retained = requestedByWorker.get(currentWorker.getId());
-      if (retained == null || !retained.active()) {
+      if ((retained == null || !retained.active())
+          && !plannedCurrentGroupClears.contains(currentWorker.getId())) {
         throw new ConflictException(
             "Нельзя исключить рабочего, пока эта группа назначена ему текущей");
       }
@@ -310,9 +277,9 @@ public class WorkforceGroupService {
       return;
     }
     var unique = new LinkedHashMap<UUID, GroupMemberRequest>();
-    requested.forEach(request -> unique.put(request.workerId(), request));
-    for (var request : unique.values()) {
-      var worker = requireWorker(group.getWarehouseId(), request.workerId());
+    requested.forEach(memberRequest -> unique.put(memberRequest.workerId(), memberRequest));
+    for (var memberRequest : unique.values()) {
+      var worker = requireWorker(group.getWarehouseId(), memberRequest.workerId());
       boolean qualified =
           qualifications.findAllByWorkerId(worker.getId()).stream()
               .anyMatch(
@@ -329,9 +296,99 @@ public class WorkforceGroupService {
       var member = new WorkerGroupMember();
       member.setWorkerGroup(group);
       member.setWorker(worker);
-      member.setActive(request.active());
+      member.setActive(memberRequest.active());
       projectionWriter.save(members, member);
     }
+  }
+
+  private void applyCurrentGroupChanges(WorkerGroup group, WorkerGroupRequest request) {
+    if (request.currentGroupChanges() == null || request.currentGroupChanges().isEmpty()) {
+      return;
+    }
+    Map<UUID, GroupMemberRequest> requestedMembers = new LinkedHashMap<>();
+    if (request.members() != null) {
+      request.members().forEach(member -> requestedMembers.put(member.workerId(), member));
+    }
+    Map<UUID, CurrentGroupChangeRequest> unique = new LinkedHashMap<>();
+    for (CurrentGroupChangeRequest change : request.currentGroupChanges()) {
+      if (unique.put(change.workerId(), change) != null) {
+        throw new ConflictException("Изменение текущей группы рабочего указано повторно");
+      }
+    }
+    unique.values().stream()
+        .sorted(java.util.Comparator.comparing(change -> change.workerId().toString()))
+        .forEach(
+            change -> {
+              Worker worker = requireWorker(group.getWarehouseId(), change.workerId());
+              checkVersion(worker.getVersion(), change.expectedVersion(), "Рабочий");
+              if (change.current()) {
+                GroupMemberRequest membership = requestedMembers.get(worker.getId());
+                if (membership == null || !membership.active()) {
+                  throw new ConflictException(
+                      "Текущим можно назначить только активного участника бригады");
+                }
+                if (!group.isActive()
+                    || group.getOperationalStatus() != GroupOperationalStatus.AVAILABLE) {
+                  throw new ConflictException("Выбранная группа недоступна");
+                }
+                changeCurrentGroup(group.getWarehouseId(), worker, group);
+              } else if (worker.getCurrentGroup() != null
+                  && worker.getCurrentGroup().getId().equals(group.getId())) {
+                changeCurrentGroup(group.getWarehouseId(), worker, null);
+              }
+            });
+  }
+
+  private WorkerDto changeCurrentGroup(
+      UUID warehouseId, Worker worker, WorkerGroup selected) {
+    UUID workerId = worker.getId();
+    UUID previousId =
+        worker.getCurrentGroup() == null ? null : worker.getCurrentGroup().getId();
+    UUID selectedId = selected == null ? null : selected.getId();
+    if (java.util.Objects.equals(previousId, selectedId)) {
+      return projections.workerDto(worker);
+    }
+    if (!taskAssignments
+        .findAllByWorkerIdAndStatusIn(
+            workerId, java.util.Set.of(AssignmentStatus.ACTIVE, AssignmentStatus.PAUSED))
+        .isEmpty()) {
+      throw new ConflictException("Нельзя менять текущую группу во время активного задания");
+    }
+    long streamVersion = eventSourcing.lock(TaskBoardAggregateType.WORKER, workerId);
+    OffsetDateTime changedAt =
+        jdbc.queryForObject("select clock_timestamp()", OffsetDateTime.class);
+    jdbc.update(
+        """
+        update worker_current_group_interval
+           set ended_at=?
+         where worker_id=? and ended_at is null
+        """,
+        changedAt,
+        workerId);
+    if (selected != null) {
+      jdbc.update(
+          """
+          insert into worker_current_group_interval(
+            id,worker_id,worker_group_id,started_at,ended_at)
+          values (?,?,?, ?,null)
+          """,
+          UUID.randomUUID(),
+          workerId,
+          selected.getId(),
+          changedAt);
+    }
+    worker.setCurrentGroup(selected);
+    worker.touch();
+    worker = projectionWriter.saveAndFlush(workers, worker);
+    projectionWriter.refresh(worker);
+    eventSourcing.workerChanged(worker, streamVersion, TaskBoardEventTypes.WORKER_CHANGED);
+    if (previousId != null) {
+      kpiEvidence.refreshGroup(warehouseId, previousId, changedAt);
+    }
+    if (selectedId != null) {
+      kpiEvidence.refreshGroup(warehouseId, selectedId, changedAt);
+    }
+    return projections.workerDto(worker);
   }
 
   private Worker requireWorker(UUID warehouseId, UUID id) {

@@ -93,14 +93,6 @@ export interface TaskBoardSettingsClient {
     id: string,
     expectedVersion: number
   ): Promise<WorkerDto>
-  setWorkerCurrentGroup(
-    token: string,
-    warehouseId: string,
-    id: string,
-    expectedVersion: number,
-    workerGroupId: string | null
-  ): Promise<WorkerDto>
-
   listGroups(token: string, warehouseId: string): Promise<WorkerGroupDto[]>
   createGroup(
     token: string,

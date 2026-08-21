@@ -30,6 +30,7 @@ class MaintenanceInboundEnvelopeValidatorTest {
 
     assertThat(created.actionable()).isFalse();
     assertThat(created.payload().required("scheduledDate").stringValue()).isEqualTo("2026-07-17");
+    assertThat(created.payload().required("lane").stringValue()).isEqualTo("SCHEDULED");
     assertThat(created.payload().required("priority").intValue()).isEqualTo(3);
     assertThat(created.payload().required("pinned").booleanValue()).isFalse();
     assertThat(completed.actionable()).isTrue();
@@ -37,13 +38,66 @@ class MaintenanceInboundEnvelopeValidatorTest {
 
     var historical = mapper.readTree(boardTaskEnvelope(aggregateId, 2, "task-board.board-task.created.v1"));
     ((tools.jackson.databind.node.ObjectNode) historical.required("payload"))
-        .remove(java.util.List.of("scheduledDate", "priority", "pinned"));
+        .remove(java.util.List.of("scheduledDate", "lane", "priority", "pinned"));
     assertThat(
             validator.validate(
                 MaintenanceTransportTopics.BOARD_TASK,
                 key(aggregateId),
                 mapper.writeValueAsBytes(historical)))
         .isNotNull();
+  }
+
+  @Test
+  void acceptsCanonicalQueueEntryBudgetsWithoutHistoricalQueueName() throws Exception {
+    UUID aggregateId = UUID.randomUUID();
+    byte[] current = queueEntryEnvelope(aggregateId);
+
+    var event =
+        validator.validate(MaintenanceTransportTopics.QUEUE_ENTRY, key(aggregateId), current);
+
+    assertThat(event.actionable()).isTrue();
+    assertThat(event.payload().required("originalBudgetSeconds").longValue()).isEqualTo(600L);
+    assertThat(event.payload().required("currentBudgetSeconds").longValue()).isEqualTo(420L);
+    assertThat(event.payload().has("queueName")).isFalse();
+
+    var invalidBudget = mapper.readTree(current).deepCopy();
+    ((tools.jackson.databind.node.ObjectNode) invalidBudget.required("payload"))
+        .put("currentBudgetSeconds", 0);
+    assertThatThrownBy(
+            () ->
+                validator.validate(
+                    MaintenanceTransportTopics.QUEUE_ENTRY,
+                    key(aggregateId),
+                    mapper.writeValueAsBytes(invalidBudget)))
+        .isInstanceOf(MaintenanceInboundValidationException.class)
+        .hasMessageContaining("currentBudgetSeconds is below its minimum");
+  }
+
+  @Test
+  void validatesCanonicalDriverAudiencePair() throws Exception {
+    UUID aggregateId = UUID.randomUUID();
+    var assigned = mapper.readTree(
+        boardTaskEnvelope(aggregateId, 0, "task-board.board-task.created.v1"));
+    var payload = (tools.jackson.databind.node.ObjectNode) assigned.required("payload");
+    payload.put("driverAudience", "ASSIGNED_DRIVER");
+    payload.put("plannedDriverWorkerId", UUID.randomUUID().toString());
+
+    assertThat(
+            validator.validate(
+                MaintenanceTransportTopics.BOARD_TASK,
+                key(aggregateId),
+                mapper.writeValueAsBytes(assigned)))
+        .isNotNull();
+
+    payload.remove("plannedDriverWorkerId");
+    assertThatThrownBy(
+            () ->
+                validator.validate(
+                    MaintenanceTransportTopics.BOARD_TASK,
+                    key(aggregateId),
+                    mapper.writeValueAsBytes(assigned)))
+        .isInstanceOf(MaintenanceInboundValidationException.class)
+        .hasMessageContaining("Driver audience and planned worker are inconsistent");
   }
 
   @Test
@@ -77,14 +131,12 @@ class MaintenanceInboundEnvelopeValidatorTest {
     var partialCurrentShape = mapper.readTree(valid).deepCopy();
     ((tools.jackson.databind.node.ObjectNode) partialCurrentShape.required("payload"))
         .remove("pinned");
-    assertThatThrownBy(
-            () ->
-                validator.validate(
-                    MaintenanceTransportTopics.BOARD_TASK,
-                    key(aggregateId),
-                    mapper.writeValueAsBytes(partialCurrentShape)))
-        .isInstanceOf(MaintenanceInboundValidationException.class)
-        .hasMessageContaining("fields do not match");
+    assertThat(
+            validator.validate(
+                MaintenanceTransportTopics.BOARD_TASK,
+                key(aggregateId),
+                mapper.writeValueAsBytes(partialCurrentShape)))
+        .isNotNull();
 
     var wrongTypes = mapper.readTree(valid).deepCopy();
     ((tools.jackson.databind.node.ObjectNode) wrongTypes.required("payload")).put("pinned", "false");
@@ -123,12 +175,14 @@ class MaintenanceInboundEnvelopeValidatorTest {
 
     var nullableDate = mapper.readTree(valid).deepCopy();
     ((tools.jackson.databind.node.ObjectNode) nullableDate.required("payload")).putNull("scheduledDate");
-    assertThat(
-            validator.validate(
-                MaintenanceTransportTopics.BOARD_TASK,
-                key(aggregateId),
-                mapper.writeValueAsBytes(nullableDate)))
-        .isNotNull();
+    assertThatThrownBy(
+            () ->
+                validator.validate(
+                    MaintenanceTransportTopics.BOARD_TASK,
+                    key(aggregateId),
+                    mapper.writeValueAsBytes(nullableDate)))
+        .isInstanceOf(MaintenanceInboundValidationException.class)
+        .hasMessageContaining("scheduledDate must be a canonical ISO local date");
 
     var extra = mapper.readTree(valid).deepCopy();
     ((tools.jackson.databind.node.ObjectNode) extra.required("payload")).put("comment", "secret");
@@ -198,7 +252,7 @@ class MaintenanceInboundEnvelopeValidatorTest {
           "aggregateVersion":%d,"correlation":{"correlationId":"%s","causationId":null},
           "actorRef":null,"payload":{"boardTaskId":"%s","warehouseId":"%s",
           "externalTaskId":"%s","status":"%s","scheduledDate":"2026-07-17",
-          "priority":3,"pinned":false,"plannedDurationMinutes":10,
+          "lane":"SCHEDULED","priority":3,"pinned":false,"plannedDurationMinutes":10,
           "deadlineAt":null,"doneAt":%s,"deleted":false}
         }
         """
@@ -213,6 +267,32 @@ class MaintenanceInboundEnvelopeValidatorTest {
                 externalTaskId,
                 eventType.endsWith(".completed.v1") ? "DONE" : "ACTIVE",
                 eventType.endsWith(".completed.v1") ? "\"2026-07-17T00:00:00Z\"" : "null"));
+  }
+
+  private byte[] queueEntryEnvelope(UUID aggregateId) {
+    return json(
+        """
+        {
+          "envelopeVersion":2,"eventId":"%s",
+          "eventType":"task-board.queue-entry.completed.v1","eventVersion":1,
+          "occurredAt":"2026-07-17T00:00:00Z","recordedAt":"2026-07-17T00:00:00Z",
+          "producer":"task-board-service","aggregateType":"QUEUE_ENTRY","aggregateId":"%s",
+          "aggregateVersion":3,"correlation":{"correlationId":"%s","causationId":null},
+          "actorRef":null,"payload":{"queueEntryId":"%s","taskId":"%s","queueId":"%s",
+          "routeIndex":0,"queuePosition":1,"entryType":"REAL","status":"DONE",
+          "plannedDurationMinutes":10,"activeStartedAt":"2026-07-17T00:00:00Z",
+          "pausedAt":null,"doneAt":"2026-07-17T00:10:00Z","activeWorkSeconds":600,
+          "originalBudgetSeconds":600,"currentBudgetSeconds":420,"pauseOrigin":null,
+          "assignments":[],"timeEvents":[],"interruptions":[],"deleted":false}
+        }
+        """
+            .formatted(
+                UUID.randomUUID(),
+                aggregateId,
+                UUID.randomUUID(),
+                aggregateId,
+                UUID.randomUUID(),
+                UUID.randomUUID()));
   }
 
   private byte[] mediaEnvelope(UUID aggregateId, String eventType) {

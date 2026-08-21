@@ -257,6 +257,7 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
                 "routeIndex": 1,
                 "active": true,
                 "allowedWorkerIds": ["844cc6a6-47a7-4c6d-926e-6ba12dd3e943"],
+                "readerWorkerIds": ["46fd2ccb-cb75-4530-a904-8df638a2ed09"],
                 "sourceMediaReferences": [{
                   "mediaId": "ee62854e-1b87-42bd-82a2-bf28f86db6e4",
                   "generation": 2

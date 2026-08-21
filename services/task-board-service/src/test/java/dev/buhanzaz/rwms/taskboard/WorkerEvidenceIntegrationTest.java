@@ -15,7 +15,9 @@ import dev.buhanzaz.rwms.taskboard.push.WorkerPushDispatcher;
 import dev.buhanzaz.rwms.taskboard.push.WorkerPushOutbox;
 import dev.buhanzaz.rwms.taskboard.service.KpiSettingsService;
 import dev.buhanzaz.rwms.taskboard.service.RegistryService;
+import dev.buhanzaz.rwms.taskboard.service.TaskBoardEntryOwnerProofReconciler;
 import dev.buhanzaz.rwms.taskboard.service.TaskBoardService;
+import dev.buhanzaz.rwms.taskboard.service.TaskBoardEntryOwnerProofService;
 import dev.buhanzaz.rwms.taskboard.service.WorkerOfflineLeaseCodec;
 import dev.buhanzaz.rwms.taskboard.service.WorkerTaskBoardService;
 import dev.buhanzaz.rwms.taskboard.service.WorkforceService;
@@ -45,6 +47,7 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
   @Autowired RegistryService registry;
   @Autowired WorkforceService workforce;
   @Autowired TaskBoardService board;
+  @Autowired TaskBoardEntryOwnerProofService ownerProofs;
   @Autowired WorkerTaskBoardService workerBoard;
   @Autowired KpiSettingsService kpiSettings;
   @Autowired WorkerOfflineLeaseCodec leases;
@@ -184,6 +187,8 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
             .flatMap(column -> column.entries().stream())
             .findFirst()
             .orElseThrow();
+    assertThat(latestProofContains(entry.id(), "allowedWorkerIds", worker.id())).isFalse();
+    assertThat(latestProofContains(entry.id(), "readerWorkerIds", worker.id())).isTrue();
     assertThat(
             jdbc.queryForObject(
                 """
@@ -267,6 +272,7 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
                 capturedAt.truncatedTo(java.time.temporal.ChronoUnit.MICROS),
                 evidenceId))
         .isTrue();
+    assertThat(latestProofContains(entry.id(), "readerWorkerIds", worker.id())).isTrue();
     assertThat(storedReservation.get("content_type")).isEqualTo("image/jpeg");
     assertThat(storedReservation.get("size_bytes")).isEqualTo(128L);
     assertThat(storedReservation.get("sha256")).isEqualTo("a".repeat(64));
@@ -287,7 +293,7 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
                 "select count(*) from outbox_event where event_type=?",
                 Integer.class,
                 TaskBoardEventTypes.ENTRY_OWNER_PROOF_CHANGED))
-        .isEqualTo(3);
+        .isEqualTo(4);
 
     BoardEntryDto activeEntry = board.entry(WAREHOUSE, entry.id());
     BoardEntryDto completed =
@@ -410,6 +416,20 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(latestOwnerProofActive(entry.id())).isFalse();
     assertThat(
             jdbc.queryForObject(
+                """
+                select payload->'allowedWorkerIds' @> ?::jsonb
+                  from domain_event
+                 where aggregate_type='TASK_BOARD_ENTRY_OWNER_PROOF'
+                   and aggregate_id=?
+                 order by aggregate_version desc
+                 limit 1
+                """,
+                Boolean.class,
+                "[\"" + worker.id() + "\"]",
+                entry.id().toString()))
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
                 "select count(*) from outbox_event where event_type=?",
                 Integer.class,
                 TaskBoardEventTypes.TASK_EVIDENCE_READY))
@@ -429,6 +449,101 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
                 """
                     .formatted(sourceMediaId)))
         .isPositive();
+  }
+
+  @Test
+  void waitingTaskReaderAudienceReconcilesWithoutGrantingResultUpload() {
+    var workerClass =
+        registry.createClass(
+            new WorkerClassRequest(0L, "Читатели фото", null, null, 10, true));
+    var definition =
+        registry.createQueueDefinition(
+            QueueRegistryTestFixtures.globalDefinition(
+                0L, "Очередь фото", null, QueueType.REPAIR));
+    var queue =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
+            WAREHOUSE,
+            new QueueFixtureRequest(
+                0L,
+                definition.id(),
+                true,
+                false,
+                false,
+                null,
+                null,
+                false,
+                null,
+                List.of(new QueueBindingRequest(workerClass.id(), false))));
+    var first =
+        workforce.createWorker(
+            WAREHOUSE,
+            new WorkerRequest(
+                0L,
+                "Первый читатель",
+                null,
+                null,
+                null,
+                true,
+                null,
+                null,
+                null,
+                List.of(new QualificationRequest(workerClass.id(), true, null))));
+    var created =
+        board.createTask(
+            WAREHOUSE,
+            new CreateBoardTaskRequest(
+                null,
+                "Ожидающее задание",
+                "БТ-READ",
+                null,
+                null,
+                null,
+                List.of(
+                    new RouteStepRequest(
+                        queue.definitionId(),
+                        "Открыть исходное фото",
+                        null,
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of()))));
+    BoardEntryDto entry =
+        created.columns().stream()
+            .flatMap(column -> column.entries().stream())
+            .findFirst()
+            .orElseThrow();
+    assertThat(workerBoard.detail(first.id(), WAREHOUSE, entry.id()).status())
+        .isEqualTo("WAITING");
+    assertThat(latestProofContains(entry.id(), "readerWorkerIds", first.id())).isTrue();
+    assertThat(latestProofContains(entry.id(), "allowedWorkerIds", first.id())).isFalse();
+
+    var second =
+        workforce.createWorker(
+            WAREHOUSE,
+            new WorkerRequest(
+                0L,
+                "Второй читатель",
+                null,
+                null,
+                null,
+                true,
+                null,
+                null,
+                null,
+                List.of(new QualificationRequest(workerClass.id(), true, null))));
+    assertThat(workerBoard.detail(second.id(), WAREHOUSE, entry.id()).status())
+        .isEqualTo("WAITING");
+    assertThat(latestProofContains(entry.id(), "readerWorkerIds", second.id())).isFalse();
+
+    var reconciler = new TaskBoardEntryOwnerProofReconciler(jdbc, ownerProofs);
+    reconciler.reconcile();
+    long reconciledVersion = latestProofVersion(entry.id());
+    assertThat(latestProofContains(entry.id(), "readerWorkerIds", second.id())).isTrue();
+    assertThat(latestProofContains(entry.id(), "allowedWorkerIds", second.id())).isFalse();
+    reconciler.reconcile();
+    assertThat(latestProofVersion(entry.id())).isEqualTo(reconciledVersion);
   }
 
   @Test
@@ -527,5 +642,38 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
             Boolean.class,
             entryId.toString());
     return Boolean.TRUE.equals(active);
+  }
+
+  private boolean latestProofContains(UUID entryId, String field, UUID workerId) {
+    return Boolean.TRUE.equals(
+        jdbc.queryForObject(
+            """
+            select payload->? @> ?::jsonb
+              from domain_event
+             where aggregate_type='TASK_BOARD_ENTRY_OWNER_PROOF'
+               and aggregate_id=?
+             order by aggregate_version desc
+             limit 1
+            """,
+            Boolean.class,
+            field,
+            "[\"" + workerId + "\"]",
+            entryId.toString()));
+  }
+
+  private long latestProofVersion(UUID entryId) {
+    Long version =
+        jdbc.queryForObject(
+            """
+            select aggregate_version
+              from domain_event
+             where aggregate_type='TASK_BOARD_ENTRY_OWNER_PROOF'
+               and aggregate_id=?
+             order by aggregate_version desc
+             limit 1
+            """,
+            Long.class,
+            entryId.toString());
+    return version == null ? -1 : version;
   }
 }

@@ -604,11 +604,6 @@ export function ClassEditorDialog({
       setValidation("Укажите название класса.")
       return
     }
-    const selectedWorkerIds = new Set(
-      eligibleWorkers
-        .filter((worker) => members[worker.id])
-        .map((worker) => worker.id)
-    )
     await onSave({
       version: item?.version ?? 0,
       name: name.trim(),
@@ -937,6 +932,11 @@ export function GroupEditorDialog({
       setValidation("Укажите название и класс бригады.")
       return
     }
+    const selectedWorkerIds = new Set(
+      eligibleWorkers
+        .filter((worker) => members[worker.id])
+        .map((worker) => worker.id)
+    )
     await onSave({
       version: item?.version ?? 0,
       workerClassId,
@@ -965,7 +965,7 @@ export function GroupEditorDialog({
   return (
     <EditorShell
       title={item ? "Бригада" : "Новая бригада"}
-      description="Класс бригады и активные участники."
+      description="Выбранные участники сохраняются и назначаются текущими исполнителями бригады одной командой."
       pending={pending}
       error={validation ?? error}
       onClose={onClose}

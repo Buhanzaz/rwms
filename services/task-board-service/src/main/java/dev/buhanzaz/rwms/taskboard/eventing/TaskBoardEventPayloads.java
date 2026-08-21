@@ -218,10 +218,16 @@ public final class TaskBoardEventPayloads {
       int routeIndex,
       boolean active,
       List<UUID> allowedWorkerIds,
+      List<UUID> readerWorkerIds,
       List<OwnerMediaReferenceFact> sourceMediaReferences) {
     public EntryOwnerProofFact {
       allowedWorkerIds =
           allowedWorkerIds.stream()
+              .distinct()
+              .sorted(java.util.Comparator.comparing(UUID::toString))
+              .toList();
+      readerWorkerIds =
+          readerWorkerIds.stream()
               .distinct()
               .sorted(java.util.Comparator.comparing(UUID::toString))
               .toList();

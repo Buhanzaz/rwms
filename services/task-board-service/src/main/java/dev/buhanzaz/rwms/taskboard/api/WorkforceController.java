@@ -149,7 +149,7 @@ public class WorkforceController {
     return service.listGroups(warehouseId);
   }
 
-  /** Creates a warehouse worker group with its class and active members. */
+  /** Creates a group and atomically applies its requested current-worker changes. */
   @PostMapping("/worker-groups")
   @ResponseStatus(HttpStatus.CREATED)
   public WorkerGroupDto createGroup(
@@ -160,7 +160,7 @@ public class WorkforceController {
     return service.createGroup(warehouseId, request);
   }
 
-  /** Replaces a version-fenced worker group and its membership declaration. */
+  /** Replaces a group, memberships, and requested current-worker changes atomically. */
   @PutMapping("/worker-groups/{id}")
   public WorkerGroupDto updateGroup(
       @AuthenticationPrincipal Jwt jwt,

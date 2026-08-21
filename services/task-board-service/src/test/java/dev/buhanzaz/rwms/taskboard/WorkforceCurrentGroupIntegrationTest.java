@@ -95,6 +95,102 @@ class WorkforceCurrentGroupIntegrationTest extends PostgresIntegrationTestSuppor
   }
 
   @Test
+  void groupCommandAssignsAndRemovesCurrentWorkersAtomically() {
+    WorkerClassDto workerClass =
+        registry.createClass(new WorkerClassRequest(0L, "Монтажник", null, null, 0, true));
+    WorkerDto first = createQualifiedWorker(workerClass, "Иван");
+    WorkerDto second = createQualifiedWorker(workerClass, "Анна");
+
+    WorkerGroupDto group =
+        workforce.createGroup(
+            W1,
+            new WorkerGroupRequest(
+                0L,
+                workerClass.id(),
+                "Монтажная бригада",
+                null,
+                true,
+                List.of(
+                    new GroupMemberRequest(first.id(), true),
+                    new GroupMemberRequest(second.id(), true)),
+                List.of(
+                    new CurrentGroupChangeRequest(first.id(), first.version(), true),
+                    new CurrentGroupChangeRequest(second.id(), second.version(), true))));
+
+    List<WorkerDto> assigned = workforce.listWorkers(W1);
+    assertThat(assigned)
+        .filteredOn(worker -> worker.id().equals(first.id()) || worker.id().equals(second.id()))
+        .allSatisfy(worker -> assertThat(worker.currentGroupId()).isEqualTo(group.id()));
+
+    WorkerDto refreshedFirst =
+        assigned.stream().filter(worker -> worker.id().equals(first.id())).findFirst().orElseThrow();
+    workforce.updateGroup(
+        W1,
+        group.id(),
+        new WorkerGroupRequest(
+            group.version(),
+            workerClass.id(),
+            group.name(),
+            group.description(),
+            true,
+            List.of(new GroupMemberRequest(second.id(), true)),
+            List.of(
+                new CurrentGroupChangeRequest(
+                    first.id(), refreshedFirst.version(), false))));
+
+    WorkerDto cleared =
+        workforce.listWorkers(W1).stream()
+            .filter(worker -> worker.id().equals(first.id()))
+            .findFirst()
+            .orElseThrow();
+    assertThat(cleared.currentGroupId()).isNull();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from worker_group_member where worker_group_id=? and worker_id=?",
+                Integer.class,
+                group.id(),
+                first.id()))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from worker_current_group_interval where worker_id=? and ended_at is null",
+                Integer.class,
+                first.id()))
+        .isZero();
+  }
+
+  @Test
+  void staleWorkerVersionRollsBackGroupCreation() {
+    WorkerClassDto workerClass =
+        registry.createClass(new WorkerClassRequest(0L, "Сборщик", null, null, 0, true));
+    WorkerDto worker = createQualifiedWorker(workerClass, "Пётр");
+
+    assertThatThrownBy(
+            () ->
+                workforce.createGroup(
+                    W1,
+                    new WorkerGroupRequest(
+                        0L,
+                        workerClass.id(),
+                        "Несохранённая бригада",
+                        null,
+                        true,
+                        List.of(new GroupMemberRequest(worker.id(), true)),
+                        List.of(
+                            new CurrentGroupChangeRequest(
+                                worker.id(), worker.version() + 1, true)))))
+        .isInstanceOf(ConflictException.class);
+
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from worker_group where warehouse_id=? and name=?",
+                Integer.class,
+                W1,
+                "Несохранённая бригада"))
+        .isZero();
+  }
+
+  @Test
   void workerCannotSelectAGroupWithoutActiveMembership() {
     WorkerClassDto workerClass =
         registry.createClass(new WorkerClassRequest(0L, "Водитель", null, null, 0, true));
@@ -206,5 +302,21 @@ class WorkforceCurrentGroupIntegrationTest extends PostgresIntegrationTestSuppor
                     W1, group.id(), new GroupAvailabilityRequest(group.version(), "  ")))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("причину");
+  }
+
+  private WorkerDto createQualifiedWorker(WorkerClassDto workerClass, String name) {
+    return workforce.createWorker(
+        W1,
+        new WorkerRequest(
+            0L,
+            name,
+            null,
+            null,
+            null,
+            true,
+            null,
+            null,
+            null,
+            List.of(new QualificationRequest(workerClass.id(), true, null))));
   }
 }

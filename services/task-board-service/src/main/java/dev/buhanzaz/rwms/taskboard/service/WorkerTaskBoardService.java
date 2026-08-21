@@ -19,7 +19,6 @@ import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -51,6 +50,7 @@ public class WorkerTaskBoardService {
   private final TaskBoardService taskBoard;
   private final WorkforceService workforce;
   private final RegistryService registry;
+  private final WorkerTaskAccessService taskAccess;
   private final JdbcTemplate jdbc;
   private final WorkerOfflineLeaseCodec leases;
   private final WorkerInvalidationHub invalidations;
@@ -63,6 +63,7 @@ public class WorkerTaskBoardService {
       TaskBoardService taskBoard,
       WorkforceService workforce,
       RegistryService registry,
+      WorkerTaskAccessService taskAccess,
       JdbcTemplate jdbc,
       WorkerOfflineLeaseCodec leases,
       WorkerInvalidationHub invalidations,
@@ -73,6 +74,7 @@ public class WorkerTaskBoardService {
     this.taskBoard = taskBoard;
     this.workforce = workforce;
     this.registry = registry;
+    this.taskAccess = taskAccess;
     this.jdbc = jdbc;
     this.leases = leases;
     this.invalidations = invalidations;
@@ -787,32 +789,12 @@ public class WorkerTaskBoardService {
 
   private WorkerAccess access(
       MobileTaskSurface surface, UUID workerId, UUID warehouseId) {
-    WorkerDto worker =
-        workforce.listWorkers(warehouseId).stream()
-            .filter(candidate -> candidate.id().equals(workerId) && candidate.active())
-            .findFirst()
-            .orElseThrow(() -> new NotFoundException("Рабочий не найден"));
-    List<QualificationDto> qualifications =
-        worker.qualifications().stream().filter(QualificationDto::active).toList();
-    List<WorkerGroupDto> groups =
-        workforce.listGroups(warehouseId).stream()
-            .filter(WorkerGroupDto::active)
-            .filter(
-                group ->
-                    group.members().stream()
-                        .anyMatch(member -> member.active() && member.workerId().equals(workerId)))
-            .toList();
-    Set<UUID> classIds = new LinkedHashSet<>();
-    qualifications.forEach(value -> classIds.add(value.workerClass().id()));
-    groups.forEach(value -> classIds.add(value.workerClass().id()));
-    List<WorkQueueDto> categories =
-        registry.listQueues(warehouseId).stream()
-            .filter(queue -> queue.active() && !queue.hidden())
-            .filter(
-                queue -> surfacePolicy.includesQueue(surface, queue, classIds))
-            .sorted(Comparator.comparingInt(WorkQueueDto::sortOrder))
-            .toList();
-    return new WorkerAccess(worker, groups, qualifications, categories);
+    var resolved = taskAccess.require(surface, workerId, warehouseId);
+    return new WorkerAccess(
+        resolved.worker(),
+        resolved.groups(),
+        resolved.qualifications(),
+        resolved.categories());
   }
 
   private static String operationalAvailability(

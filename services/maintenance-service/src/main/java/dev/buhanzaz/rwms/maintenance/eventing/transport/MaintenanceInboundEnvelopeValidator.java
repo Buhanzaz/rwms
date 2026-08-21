@@ -45,19 +45,45 @@ public class MaintenanceInboundEnvelopeValidator {
           "deadlineAt",
           "doneAt",
           "deleted");
-  private static final Set<String> BOARD_TASK_CURRENT_FIELDS =
+  private static final Set<String> BOARD_TASK_CURRENT_REQUIRED_FIELDS =
+      java.util.stream.Stream.concat(
+              BOARD_TASK_BASE_FIELDS.stream(), java.util.stream.Stream.of("lane"))
+          .collect(java.util.stream.Collectors.toUnmodifiableSet());
+  private static final Set<String> BOARD_TASK_CURRENT_OPTIONAL_FIELDS =
       Set.of(
-          "boardTaskId",
-          "warehouseId",
-          "externalTaskId",
-          "status",
           "scheduledDate",
           "priority",
           "pinned",
+          "driverAudience",
+          "plannedDriverWorkerId");
+  private static final Set<String> QUEUE_ENTRY_BASE_FIELDS =
+      Set.of(
+          "queueEntryId",
+          "taskId",
+          "queueId",
+          "routeIndex",
+          "queuePosition",
+          "entryType",
+          "status",
           "plannedDurationMinutes",
-          "deadlineAt",
+          "activeStartedAt",
+          "pausedAt",
           "doneAt",
+          "activeWorkSeconds",
+          "pauseOrigin",
+          "assignments",
+          "timeEvents",
+          "interruptions",
           "deleted");
+  private static final Set<String> QUEUE_ENTRY_CURRENT_FIELDS =
+      java.util.stream.Stream.concat(
+              QUEUE_ENTRY_BASE_FIELDS.stream(),
+              java.util.stream.Stream.of("originalBudgetSeconds", "currentBudgetSeconds"))
+          .collect(java.util.stream.Collectors.toUnmodifiableSet());
+  private static final Set<String> QUEUE_ENTRY_HISTORICAL_FIELDS =
+      java.util.stream.Stream.concat(
+              QUEUE_ENTRY_BASE_FIELDS.stream(), java.util.stream.Stream.of("queueName"))
+          .collect(java.util.stream.Collectors.toUnmodifiableSet());
   private static final Set<String> PROHIBITED_FIELDS =
       Set.of(
           "password",
@@ -172,20 +198,32 @@ public class MaintenanceInboundEnvelopeValidator {
   }
 
   private void validateBoardTask(String aggregateId, JsonNode payload) {
-    boolean currentShape =
-        payload.has("scheduledDate") || payload.has("priority") || payload.has("pinned");
-    requireExactObject(
-        payload,
-        currentShape ? BOARD_TASK_CURRENT_FIELDS : BOARD_TASK_BASE_FIELDS,
-        "board-task payload");
+    boolean currentShape = payload.has("lane");
+    if (currentShape) {
+      requireObjectWithOptionalFields(
+          payload,
+          BOARD_TASK_CURRENT_REQUIRED_FIELDS,
+          BOARD_TASK_CURRENT_OPTIONAL_FIELDS,
+          "board-task payload");
+    } else {
+      requireExactObject(payload, BOARD_TASK_BASE_FIELDS, "board-task payload");
+    }
     requireIdentity(payload, "boardTaskId", aggregateId);
     requireUuid(payload, "warehouseId");
     requireNullableUuid(payload, "externalTaskId");
     requireEnum(payload, "status", Set.of("ACTIVE", "DONE", "CANCELLED"));
     if (currentShape) {
-      requireNullableLocalDate(payload, "scheduledDate");
-      requireInt(payload, "priority", 1, 5);
-      requireBoolean(payload, "pinned");
+      requireEnum(payload, "lane", Set.of("SCHEDULED", "CURRENT"));
+      if (payload.has("scheduledDate")) {
+        requireLocalDate(payload, "scheduledDate");
+      }
+      if (payload.has("priority")) {
+        requireInt(payload, "priority", 1, 5);
+      }
+      if (payload.has("pinned")) {
+        requireBoolean(payload, "pinned");
+      }
+      validateDriverAudience(payload);
     }
     requireNullableInteger(payload, "plannedDurationMinutes");
     requireNullableTimestamp(payload, "deadlineAt");
@@ -194,32 +232,18 @@ public class MaintenanceInboundEnvelopeValidator {
   }
 
   private void validateQueueEntry(String aggregateId, JsonNode payload) {
+    boolean currentShape =
+        payload.has("originalBudgetSeconds") || payload.has("currentBudgetSeconds");
     requireExactObject(
         payload,
-        Set.of(
-            "queueEntryId",
-            "taskId",
-            "queueId",
-            "queueName",
-            "routeIndex",
-            "queuePosition",
-            "entryType",
-            "status",
-            "plannedDurationMinutes",
-            "activeStartedAt",
-            "pausedAt",
-            "doneAt",
-            "activeWorkSeconds",
-            "pauseOrigin",
-            "assignments",
-            "timeEvents",
-            "interruptions",
-            "deleted"),
+        currentShape ? QUEUE_ENTRY_CURRENT_FIELDS : QUEUE_ENTRY_HISTORICAL_FIELDS,
         "queue-entry payload");
     requireIdentity(payload, "queueEntryId", aggregateId);
     requireUuid(payload, "taskId");
     requireNullableUuid(payload, "queueId");
-    requireText(payload, "queueName");
+    if (!currentShape) {
+      requireText(payload, "queueName");
+    }
     requireInteger(payload, "routeIndex");
     requireInteger(payload, "queuePosition");
     requireEnum(payload, "entryType", Set.of("REAL", "SHADOW"));
@@ -229,11 +253,35 @@ public class MaintenanceInboundEnvelopeValidator {
     requireNullableTimestamp(payload, "pausedAt");
     requireNullableTimestamp(payload, "doneAt");
     requireLong(payload, "activeWorkSeconds", 0);
+    if (currentShape) {
+      requireNullableLong(payload, "originalBudgetSeconds", 1);
+      requireNullableLong(payload, "currentBudgetSeconds", 1);
+    }
     requireNullableEnum(payload, "pauseOrigin", Set.of("MANUAL", "AUTO"));
     requireArray(payload, "assignments").forEach(this::validateAssignment);
     requireArray(payload, "timeEvents").forEach(this::validateTimeEvent);
     requireArray(payload, "interruptions").forEach(this::validateInterruption);
     requireBoolean(payload, "deleted");
+  }
+
+  private static void validateDriverAudience(JsonNode payload) {
+    JsonNode audience = payload.get("driverAudience");
+    JsonNode plannedWorker = payload.get("plannedDriverWorkerId");
+    if (audience == null) {
+      require(plannedWorker == null, "A planned driver requires a driver audience");
+      return;
+    }
+    requireNullableEnum(
+        payload,
+        "driverAudience",
+        Set.of("UNASSIGNED", "ASSIGNED_DRIVER", "WAREHOUSE_DRIVERS"));
+    if (plannedWorker != null) {
+      requireNullableUuid(payload, "plannedDriverWorkerId");
+    }
+    String mode = audience.isNull() ? null : audience.stringValue();
+    boolean assigned = "ASSIGNED_DRIVER".equals(mode);
+    boolean hasWorker = plannedWorker != null && !plannedWorker.isNull();
+    require(assigned == hasWorker, "Driver audience and planned worker are inconsistent");
   }
 
   private void validateAssignment(JsonNode value) {
@@ -460,6 +508,18 @@ public class MaintenanceInboundEnvelopeValidator {
     require(actual.equals(fields), label + " fields do not match the canonical schema");
   }
 
+  private static void requireObjectWithOptionalFields(
+      JsonNode node, Set<String> required, Set<String> optional, String label) {
+    require(node != null && node.isObject(), label + " must be an object");
+    Set<String> actual = new HashSet<>();
+    node.properties().forEach(entry -> actual.add(entry.getKey()));
+    Set<String> allowed = new HashSet<>(required);
+    allowed.addAll(optional);
+    require(
+        actual.containsAll(required) && allowed.containsAll(actual),
+        label + " fields do not match the canonical schema");
+  }
+
   private static String requireText(JsonNode node, String field) {
     JsonNode value = node.required(field);
     require(value.isTextual(), field + " must be text");
@@ -490,6 +550,13 @@ public class MaintenanceInboundEnvelopeValidator {
     long result = value.longValue();
     require(result >= minimum, field + " is below its minimum");
     return result;
+  }
+
+  private static void requireNullableLong(JsonNode node, String field, long minimum) {
+    JsonNode value = node.required(field);
+    if (!value.isNull()) {
+      requireLong(node, field, minimum);
+    }
   }
 
   private static void requireInteger(JsonNode node, String field) {
@@ -555,6 +622,11 @@ public class MaintenanceInboundEnvelopeValidator {
     } catch (RuntimeException exception) {
       throw invalid(field + " must be a canonical ISO local date", exception);
     }
+  }
+
+  private static void requireLocalDate(JsonNode node, String field) {
+    require(!node.required(field).isNull(), field + " must be a canonical ISO local date");
+    requireNullableLocalDate(node, field);
   }
 
   private static Iterable<JsonNode> requireArray(JsonNode node, String field) {

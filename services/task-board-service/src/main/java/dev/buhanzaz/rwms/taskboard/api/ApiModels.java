@@ -345,6 +345,16 @@ public final class ApiModels {
   }
 
   /**
+   * One version-fenced current-group change committed with a worker-group command.
+   *
+   * @param workerId worker whose current group changes
+   * @param expectedVersion observed worker version
+   * @param current true to assign the edited group; false to clear it
+   */
+  public record CurrentGroupChangeRequest(
+      @NotNull UUID workerId, @NotNull @Min(0) Long expectedVersion, boolean current) {}
+
+  /**
    * Version-fenced warehouse group with one worker class and declarative memberships.
    *
    * @param version observed group version; use zero when creating
@@ -353,6 +363,7 @@ public final class ApiModels {
    * @param description optional description
    * @param active whether the group may accept work
    * @param members active or inactive membership declarations
+   * @param currentGroupChanges optional version-fenced current-group changes in the same transaction
    */
   public record WorkerGroupRequest(
       @NotNull @Min(0) Long version,
@@ -360,7 +371,18 @@ public final class ApiModels {
       @NotBlank @Size(max = 128) String name,
       @Size(max = 1000) String description,
       boolean active,
-      List<@Valid GroupMemberRequest> members) {}
+      List<@Valid GroupMemberRequest> members,
+      @Size(max = 1000) List<@Valid CurrentGroupChangeRequest> currentGroupChanges) {
+    public WorkerGroupRequest(
+        Long version,
+        UUID workerClassId,
+        String name,
+        String description,
+        boolean active,
+        List<GroupMemberRequest> members) {
+      this(version, workerClassId, name, description, active, members, List.of());
+    }
+  }
 
   public record GroupMemberDto(
       UUID id,

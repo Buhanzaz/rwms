@@ -189,20 +189,6 @@ export class HttpTaskBoardSettingsClient implements TaskBoardSettingsClient {
       json("POST", { expectedVersion })
     )
   }
-  setWorkerCurrentGroup(
-    token: string,
-    warehouseId: string,
-    id: string,
-    expectedVersion: number,
-    workerGroupId: string | null
-  ) {
-    return bearerRequest<WorkerDto>(
-      token,
-      `${warehouseEndpoint(warehouseId)}/workers/${encodeURIComponent(id)}/current-group`,
-      json("PUT", { expectedVersion, workerGroupId })
-    )
-  }
-
   listGroups(token: string, warehouseId: string) {
     return bearerRequest<WorkerGroupDto[]>(
       token,
