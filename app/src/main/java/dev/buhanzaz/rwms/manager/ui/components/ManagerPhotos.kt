@@ -248,7 +248,7 @@ private fun ManagerZoomablePhoto(
     var scale by remember(photoUri) { mutableFloatStateOf(1f) }
     var translationX by remember(photoUri) { mutableFloatStateOf(0f) }
     var translationY by remember(photoUri) { mutableFloatStateOf(0f) }
-    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+    val transformState = rememberTransformableState { _, zoomChange, panChange, _ ->
         val nextScale = (scale * zoomChange).coerceIn(MANAGER_PHOTO_MIN_SCALE, MANAGER_PHOTO_MAX_SCALE)
         if (nextScale <= MANAGER_PHOTO_MIN_SCALE) {
             translationX = 0f
