@@ -26,6 +26,7 @@ const routeTitles = [
   { path: "/logistics/shipments", title: "Отгрузка в аренду" },
   { path: "/logistics/transfers", title: "Перемещения" },
   { path: "/estimates", title: "Сметы" },
+  { path: "/repairs", title: "Ремонты" },
   { path: "/task-board", title: "Доска задач" },
   { path: "/acceptance", title: "Приёмка и доработки" },
   { path: "/write-offs", title: "Списание" },
@@ -179,14 +180,11 @@ export function resolveHeaderBreadcrumbs(
   }
 
   if (pathname === "/repairs" && searchParams.has("repairId")) {
-    return [{ title: "Доска задач", to: "/task-board" }, { title: "Задание" }]
+    return [{ title: "Ремонты", to: "/repairs" }, { title: "Задание" }]
   }
 
   if (pathname === "/repairs" && searchParams.get("create") === "1") {
-    return [
-      { title: "Доска задач", to: "/task-board" },
-      { title: "Новое задание" },
-    ]
+    return [{ title: "Ремонты", to: "/repairs" }, { title: "Новое задание" }]
   }
 
   if (/^\/orders\/[0-9a-f-]{36}$/i.test(pathname)) {

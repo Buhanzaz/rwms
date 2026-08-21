@@ -124,6 +124,12 @@ const pages: PageConfig[] = [
     description: "Создание, просмотр и история смет по работам и материалам.",
   },
   {
+    path: "/repairs",
+    title: "Ремонты",
+    description:
+      "Ремонтный цикл после аренды, текущие ремонты и капитальные ремонты.",
+  },
+  {
     path: "/task-board",
     title: "Доска задач",
     description:
@@ -329,6 +335,7 @@ function AppLayout() {
                       "/kpi",
                       "/inventory",
                       "/estimates",
+                      "/repairs",
                       "/task-board",
                       "/acceptance",
                       "/logistics/tasks",

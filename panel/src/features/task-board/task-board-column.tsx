@@ -82,7 +82,9 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
       <section
         className={cn(
           "flex shrink-0 items-center gap-3 rounded-lg bg-card ring-1 ring-foreground/10",
-          "h-auto w-full flex-row px-3 py-2"
+          mobile
+            ? "h-auto w-full flex-row px-3 py-2"
+            : "h-full min-h-0 w-16 flex-col py-3"
         )}
         aria-label={`${queue.label}, свёрнута`}
       >
@@ -96,14 +98,19 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
           <HugeiconsIcon icon={ArrowRight01Icon} />
         </Button>
         <Badge variant="secondary">{visibleEntries.length}</Badge>
-        <span>{queue.label}</span>
+        <span className={cn(!mobile && "[writing-mode:vertical-rl]")}>
+          {queue.label}
+        </span>
       </section>
     )
   }
 
   return (
     <section
-      className="flex w-full min-w-0 shrink-0 flex-col overflow-hidden rounded-lg bg-muted/35 ring-1 ring-foreground/10"
+      className={cn(
+        "flex min-h-0 shrink-0 flex-col overflow-hidden rounded-lg bg-muted/35 ring-1 ring-foreground/10",
+        mobile ? "h-auto w-full" : "h-full w-80"
+      )}
       aria-label={`Очередь ${queue.label}`}
     >
       <header className="sticky top-0 flex flex-col gap-3 bg-card p-3 shadow-xs">
@@ -157,31 +164,37 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
         </div>
       </header>
 
-      <div className="flex min-w-0 gap-3 overflow-x-auto overscroll-x-contain p-3 pb-4">
+      <div
+        className={cn(
+          "flex min-h-0 flex-1 touch-pan-y flex-col gap-3 p-3",
+          mobile
+            ? "overflow-visible"
+            : "[scrollbar-width:none] overflow-y-auto overscroll-contain [&::-webkit-scrollbar]:hidden"
+        )}
+      >
         {visibleEntries.map((entry) => (
-          <div key={entry.id} className="w-72 shrink-0 sm:w-80">
-            <TaskBoardCard
-              entry={entry}
-              now={now}
-              mobile={mobile}
-              canEdit={canEdit}
-              collapsed={isEntryCollapsed(entry.id)}
-              actionPending={actionPending}
-              onDetails={onDetails}
-              onEdit={onEdit}
-              onTake={onTake}
-              onPause={onPause}
-              onResume={onResume}
-              onPin={onPin}
-              onToggleCollapsed={onToggleEntryCollapsed}
-              palette={palette}
-              repairComplexity={
-                entry.source?.type === "MAINTENANCE_REPAIR"
-                  ? repairComplexitiesByRepairId.get(entry.source.sourceId)
-                  : null
-              }
-            />
-          </div>
+          <TaskBoardCard
+            key={entry.id}
+            entry={entry}
+            now={now}
+            mobile={mobile}
+            canEdit={canEdit}
+            collapsed={isEntryCollapsed(entry.id)}
+            actionPending={actionPending}
+            onDetails={onDetails}
+            onEdit={onEdit}
+            onTake={onTake}
+            onPause={onPause}
+            onResume={onResume}
+            onPin={onPin}
+            onToggleCollapsed={onToggleEntryCollapsed}
+            palette={palette}
+            repairComplexity={
+              entry.source?.type === "MAINTENANCE_REPAIR"
+                ? repairComplexitiesByRepairId.get(entry.source.sourceId)
+                : null
+            }
+          />
         ))}
       </div>
     </section>

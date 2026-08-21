@@ -33,21 +33,25 @@ contexts and screens are usable.
   version-fenced current-brigade changes in one group command. The panel does
   not offer a second worker-table assignment action; task-board commits or
   rejects the complete change atomically.
-- `/task-board` renders one ordinary board across server-internal dates, with
-  one horizontal row per queue. It does not own date routing or drag-and-drop
-  queue decisions. Each row shows all active/paused cards and the server-owned
-  priority-first waiting window configured by `availableTaskLimit` (six by
-  default). A cabin gated by SES/HOLDING appears only in that row until the
-  gate completes; driver movement and external capital work remain on their
-  existing surfaces. The panel resolves complexity only for the visible
-  maintenance repair IDs, in bounded batches of at most 200; it never hydrates
-  the warehouse's complete repair collection for the board. The obsolete Repairs queue table, its sidebar entry, and
-  its collection read are removed. `/repairs` is now only the create,
-  detail, and edit workspace reached through `?create=1`, `?repairId=...`, or
-  `?repairId=...&edit=1`; bare `/repairs` and the old `?view=queue` route
-  replace-redirect to `/task-board`. Closing, saving, or going back returns to
-  the safe in-panel origin when one was recorded, with `/task-board` as the
-  direct-link fallback.
+- `/task-board` renders queues as side-by-side desktop columns with a vertical
+  card stack in each column; mobile stacks the columns. It has no date selector
+  or browser-owned queue decisions. Active work appears first, then the
+  server-bounded actionable REAL window (`availableTaskLimit`, six by default),
+  followed by non-actionable SHADOW route stages in their persisted positions.
+  A directly executable electricity task therefore appears immediately, while
+  promotion restores an earlier shadow ahead of a later unpinned REAL; a pinned
+  REAL stays ahead. SES/HOLDING exposes only its gate and no repair shadows until
+  treatment completes. Driver movement and external capital work remain on
+  their existing surfaces. Complexity is resolved only for board-visible repair
+  IDs in batches of at most 200.
+- The `Ремонты` sidebar item and bare `/repairs` registry remain supported. The
+  registry pages 50 maintenance-owned repairs at a time, resolves asset-owned
+  cabin numbers in batches of eight concurrent reads, and shows type, current
+  stage/work, priority, status and origin without a date or duplicate queue
+  view. `?view=queue` is removed back to the registry. Create, detail and edit
+  use `?create=1`, `?repairId=...` and `?repairId=...&edit=1`; direct workspace
+  close/back falls back to `/repairs`, while a recorded in-panel origin is
+  preserved.
 - A verified authenticated subject and its bearer-grant revision own a fresh
   nested TanStack Query client. A logout, subject change, or grant change
   remounts the protected subtree so effect-owned realtime streams stop, cancels

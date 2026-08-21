@@ -72,6 +72,7 @@ function renderCard(
     onDetails = vi.fn<(entry: TaskBoardEntryDto) => void>(),
     onEdit = vi.fn<(entry: TaskBoardEntryDto) => void>(),
     onTake = vi.fn<(entry: TaskBoardEntryDto) => void>(),
+    onPin = vi.fn<(entry: TaskBoardEntryDto, pinned: boolean) => void>(),
     onToggleCollapsed = vi.fn<(entryId: string) => void>(),
     canEdit = true,
     mobile = false,
@@ -83,6 +84,7 @@ function renderCard(
     onDetails?: (entry: TaskBoardEntryDto) => void
     onEdit?: (entry: TaskBoardEntryDto) => void
     onTake?: (entry: TaskBoardEntryDto) => void
+    onPin?: (entry: TaskBoardEntryDto, pinned: boolean) => void
     onToggleCollapsed?: (entryId: string) => void
     canEdit?: boolean
     mobile?: boolean
@@ -106,7 +108,7 @@ function renderCard(
       onTake={onTake}
       onPause={vi.fn()}
       onResume={vi.fn()}
-      onPin={vi.fn()}
+      onPin={onPin}
       onToggleCollapsed={onToggleCollapsed}
       palette={palette}
       repairComplexity={repairComplexity}
@@ -413,6 +415,34 @@ describe("TaskBoardCard source details", () => {
       .click(screen.getByRole("button", { name: "Взять в работу" }))
 
     expect(onTake).toHaveBeenCalledWith(entry)
+  })
+
+  it("shows a future shadow but keeps every mutating action unavailable", () => {
+    const onPin = vi.fn()
+    renderCard(
+      {
+        type: "MAINTENANCE_REPAIR",
+        sourceId: "repair-1",
+      },
+      {
+        onPin,
+        entryPatch: {
+          entryType: "SHADOW",
+          routeIndex: 2,
+          routeLength: 4,
+        },
+      }
+    )
+
+    expect(screen.getByText("После предыдущего этапа")).toBeTruthy()
+    expect(screen.getByText("Этап 3 из 4")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Взять в работу" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Редактировать" })).toBeNull()
+    const pin = screen.getByRole("button", {
+      name: "Закрепить этап БЫТ-001",
+    })
+    expect((pin as HTMLButtonElement).disabled).toBe(true)
+    expect(onPin).not.toHaveBeenCalled()
   })
 
   it("hides repair editing without EDIT access", () => {

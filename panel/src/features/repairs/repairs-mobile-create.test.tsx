@@ -16,6 +16,7 @@ import type {
   CurrentUser,
   WarehouseAccessLevel,
 } from "@/features/auth/auth-model"
+import type { MaintenanceRepair } from "@/features/repair-estimates/api/http-maintenance-lifecycle-client"
 import type { RepairTaskDto } from "@/features/repair-tasks/model/repair-task"
 import { RepairsPage } from "@/features/repairs/repairs-page"
 
@@ -25,6 +26,8 @@ const REPAIR_ID = "33333333-3333-4333-8333-333333333333"
 const deviceState = vi.hoisted(() => ({ isMobile: true }))
 const api = vi.hoisted(() => ({
   getRepairTask: vi.fn(),
+  getAssetRentalItem: vi.fn(),
+  listMaintenanceRepairs: vi.fn(),
 }))
 
 vi.mock("@/hooks/use-mobile", () => ({
@@ -71,6 +74,15 @@ vi.mock("@/features/repair-tasks/api/repair-tasks-api", () => ({
     warehouseId,
     repairId,
   ],
+}))
+
+vi.mock(
+  "@/features/repair-estimates/api/http-maintenance-lifecycle-client",
+  () => ({ listMaintenanceRepairs: api.listMaintenanceRepairs })
+)
+
+vi.mock("@/features/rental-items/api/asset-rental-items-api", () => ({
+  getAssetRentalItem: api.getAssetRentalItem,
 }))
 
 vi.mock("@/features/repair-tasks/repair-task-detail-workspace", () => ({
@@ -135,6 +147,35 @@ const repair: RepairTaskDto = {
   updatedAt: "2026-07-18T10:00:00Z",
 }
 
+const overviewRepair = {
+  id: REPAIR_ID,
+  rentalItemId: repair.rentalItemId,
+  executionState: "IN_PROGRESS",
+  origin: "INVENTORY",
+  priority: 2,
+  sourceParty: "Инвентаризация",
+  movementToRepair: false,
+  complexity: {
+    type: "COMPLEX",
+    name: "Тяжёлый ремонт",
+    color: "#DC2626",
+    plannedMinutes: "180",
+    forcedCapital: false,
+  },
+  plan: {
+    stages: [
+      {
+        order: 0,
+        state: "IN_PROGRESS",
+        routing: { queueName: "Электрика" },
+        workLines: [{ description: "Замена проводки" }],
+        groupComment: "",
+        taskSync: { taskBoardRegistrationVersion: 1 },
+      },
+    ],
+  },
+} as MaintenanceRepair
+
 function LocationProbe() {
   const location = useLocation()
 
@@ -183,6 +224,12 @@ function renderPage(
 beforeEach(() => {
   deviceState.isMobile = true
   api.getRepairTask.mockResolvedValue(repair)
+  api.listMaintenanceRepairs.mockResolvedValue({
+    items: [],
+    page: 0,
+    size: 50,
+    totalElements: 0,
+  })
 })
 
 afterEach(() => {
@@ -191,21 +238,68 @@ afterEach(() => {
 })
 
 describe("RepairsPage mobile creation", () => {
-  it.each(["/repairs", "/repairs?view=queue"])(
-    "redirects the obsolete list route %s to the task board",
-    async (path) => {
-      renderPage(path)
+  it("keeps the repairs list and opens the mobile-app dialog from its create action", async () => {
+    const user = userEvent.setup()
+    renderPage()
 
-      await waitFor(() => {
-        expect(screen.getByTestId("repairs-location").textContent).toBe(
-          "/task-board"
-        )
+    await user.click(
+      await screen.findByRole("button", { name: "Создать задание" })
+    )
+
+    const dialog = await screen.findByRole("dialog")
+    expect(
+      within(dialog)
+        .getByRole("link", { name: "Скачать приложение" })
+        .getAttribute("href")
+    ).toBe(MANAGER_MOBILE_APP_DOWNLOAD_PATH)
+    expect(screen.getByTestId("repairs-location").textContent).toBe("/repairs")
+    expect(api.getRepairTask).not.toHaveBeenCalled()
+  })
+
+  it("removes the obsolete queue view parameter but stays in repairs", async () => {
+    renderPage("/repairs?view=queue")
+
+    await waitFor(() => {
+      expect(screen.getByTestId("repairs-location").textContent).toBe(
+        "/repairs"
+      )
+    })
+    expect(await screen.findByLabelText("Поиск по ремонтам")).toBeTruthy()
+  })
+
+  it("shows the repairs registry without a date column", async () => {
+    deviceState.isMobile = false
+    api.listMaintenanceRepairs.mockResolvedValue({
+      items: [overviewRepair],
+      page: 0,
+      size: 50,
+      totalElements: 1,
+    })
+    api.getAssetRentalItem.mockResolvedValue({
+      id: repair.rentalItemId,
+      warehouseId: WAREHOUSE_ID,
+      number: "БЫТ-001",
+    })
+
+    renderPage()
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Открыть ремонт бытовки БЫТ-001",
       })
-      expect(api.getRepairTask).not.toHaveBeenCalled()
-    }
-  )
+    ).toBeTruthy()
+    expect(screen.getByText("Тяжёлый ремонт")).toBeTruthy()
+    expect(screen.getByText("Электрика")).toBeTruthy()
+    expect(screen.getByText("Замена проводки")).toBeTruthy()
+    expect(screen.queryByText("Дата")).toBeNull()
+    expect(api.listMaintenanceRepairs).toHaveBeenCalledWith(
+      "repairs-mobile-token",
+      WAREHOUSE_ID,
+      { page: 0, size: 50 }
+    )
+  })
 
-  it("blocks a direct mobile creation route and returns to the task board when dismissed", async () => {
+  it("blocks a direct mobile creation route and returns to repairs when dismissed", async () => {
     const user = userEvent.setup()
     renderPage("/repairs?create=1")
 
@@ -222,7 +316,7 @@ describe("RepairsPage mobile creation", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).toBeNull()
       expect(screen.getByTestId("repairs-location").textContent).toBe(
-        "/task-board"
+        "/repairs"
       )
     })
     expect(api.getRepairTask).not.toHaveBeenCalled()
@@ -239,7 +333,7 @@ describe("RepairsPage mobile creation", () => {
     expect(screen.queryByRole("dialog")).toBeNull()
   })
 
-  it("uses the task board as the fallback after closing a direct desktop link", async () => {
+  it("uses repairs as the fallback after closing a direct desktop link", async () => {
     deviceState.isMobile = false
     const user = userEvent.setup()
     renderPage(`/repairs?repairId=${REPAIR_ID}`)
@@ -250,7 +344,7 @@ describe("RepairsPage mobile creation", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("repairs-location").textContent).toBe(
-        "/task-board"
+        "/repairs"
       )
     })
   })
@@ -279,9 +373,9 @@ describe("repair workspace breadcrumbs", () => {
   it.each([
     ["?repairId=repair-1", "Задание"],
     ["?create=1", "Новое задание"],
-  ])("keeps %s under the task board", (search, currentTitle) => {
+  ])("keeps %s under repairs", (search, currentTitle) => {
     expect(resolveHeaderBreadcrumbs("/repairs", search, null, null)).toEqual([
-      { title: "Доска задач", to: "/task-board" },
+      { title: "Ремонты", to: "/repairs" },
       { title: currentTitle },
     ])
   })

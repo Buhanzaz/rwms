@@ -195,8 +195,10 @@ function cardActionVisibility(
     canEdit && entry.entryType === "REAL" && entry.status === "WAITING"
   const showEdit = canEdit && canEditMaintenanceRepair(entry)
   const showDetails = entry.source?.type === "MAINTENANCE_REPAIR"
-  const showPause = !mobile && entry.status === "IN_PROGRESS"
-  const showResume = !mobile && entry.status === "PAUSED"
+  const showPause =
+    entry.entryType === "REAL" && !mobile && entry.status === "IN_PROGRESS"
+  const showResume =
+    entry.entryType === "REAL" && !mobile && entry.status === "PAUSED"
 
   return {
     showTake,
@@ -230,6 +232,9 @@ function TaskBoardCardContent({
         <Badge variant={entry.status === "IN_PROGRESS" ? "default" : "outline"}>
           {statusLabels[entry.status]}
         </Badge>
+        {entry.entryType === "SHADOW" ? (
+          <Badge variant="secondary">После предыдущего этапа</Badge>
+        ) : null}
         <Badge variant="outline">
           Этап {entry.routeIndex + 1} из {entry.routeLength}
         </Badge>
@@ -483,7 +488,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
               type="button"
               size="sm"
               variant={entry.pinned ? "secondary" : "ghost"}
-              disabled={actionPending}
+              disabled={actionPending || entry.entryType === "SHADOW"}
               aria-pressed={entry.pinned}
               aria-label={
                 entry.pinned

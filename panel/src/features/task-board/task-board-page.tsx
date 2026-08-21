@@ -50,6 +50,7 @@ import { TaskBoardTakeDialog } from "@/features/task-board/task-board-take-dialo
 import { useIsMobile } from "@/hooks/use-mobile"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
+import { cn } from "@/lib/utils"
 
 type BoardAction =
   | {
@@ -101,7 +102,7 @@ async function loadActiveRepairComplexities(
   )
 }
 
-/** Renders the server-ordered ordinary board as one horizontal card row per queue. */
+/** Renders server-ordered queues as side-by-side columns with vertically stacked route entries. */
 export function TaskBoardPage() {
   const isMobile = useIsMobile()
   const navigate = useNavigate()
@@ -418,9 +419,17 @@ export function TaskBoardPage() {
       ) : null}
 
       {boardQuery.isLoading ? (
-        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+        <div
+          className={cn(
+            "flex min-h-0 flex-1 gap-3 overflow-hidden",
+            isMobile && "flex-col overflow-y-auto"
+          )}
+        >
           {[0, 1, 2].map((index) => (
-            <Skeleton key={index} className="h-72 w-full shrink-0" />
+            <Skeleton
+              key={index}
+              className={cn("h-full w-80 shrink-0", isMobile && "h-80 w-full")}
+            />
           ))}
         </div>
       ) : boardQuery.isError ? (
@@ -428,67 +437,93 @@ export function TaskBoardPage() {
           {errorMessage(boardQuery.error, "Не удалось загрузить доску задач.")}
         </p>
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-px pb-4">
-          {visibleQueues.map(({ queue, visibleEntries }) => (
-            <TaskBoardColumn
-              key={queue.key}
-              queue={queue}
-              visibleEntries={visibleEntries}
-              now={now}
-              mobile={isMobile}
-              canEdit={canEdit}
-              collapsed={collapsedQueues.has(queue.key)}
-              actionPending={busy || !canEdit}
-              queueActionsDisabled={!canEdit || Boolean(normalizedSearch)}
-              palette={taskBoardPalette}
-              repairComplexitiesByRepairId={repairComplexitiesByRepairId}
-              onToggleCollapsed={(queueKey) =>
-                setCollapsedQueues((current) => {
-                  const next = new Set(current)
-                  if (next.has(queueKey)) next.delete(queueKey)
-                  else next.add(queueKey)
-                  return next
-                })
-              }
-              onDetails={(entry) => {
-                if (entry.source?.type !== "MAINTENANCE_REPAIR") return
-                navigate(
-                  `/repairs?repairId=${encodeURIComponent(entry.source.sourceId)}`,
-                  workspaceEntryNavigationOptions
-                )
-              }}
-              onEdit={(entry) => {
-                if (!canEdit || entry.source?.type !== "MAINTENANCE_REPAIR") {
-                  return
+        <div
+          className={cn(
+            "min-h-0 flex-1",
+            isMobile
+              ? "overflow-x-hidden overflow-y-auto overscroll-y-contain"
+              : "touch-pan-x overflow-x-auto overscroll-x-contain"
+          )}
+        >
+          <div
+            className={cn(
+              "flex items-stretch gap-3 p-px pb-4",
+              isMobile
+                ? "min-h-full w-full min-w-0 flex-col"
+                : "h-full min-w-max"
+            )}
+          >
+            {visibleQueues.map(({ queue, visibleEntries }) => (
+              <TaskBoardColumn
+                key={queue.key}
+                queue={queue}
+                visibleEntries={visibleEntries}
+                now={now}
+                mobile={isMobile}
+                canEdit={canEdit}
+                collapsed={collapsedQueues.has(queue.key)}
+                actionPending={busy || !canEdit}
+                queueActionsDisabled={!canEdit || Boolean(normalizedSearch)}
+                palette={taskBoardPalette}
+                repairComplexitiesByRepairId={repairComplexitiesByRepairId}
+                onToggleCollapsed={(queueKey) =>
+                  setCollapsedQueues((current) => {
+                    const next = new Set(current)
+                    if (next.has(queueKey)) next.delete(queueKey)
+                    else next.add(queueKey)
+                    return next
+                  })
                 }
-                navigate(
-                  `/repairs?repairId=${encodeURIComponent(entry.source.sourceId)}&edit=1`,
-                  workspaceEntryNavigationOptions
-                )
-              }}
-              onTake={(entry) => {
-                if (!canEdit) return
-                setTakeEntry(entry)
-                setError(null)
-              }}
-              onPause={(entry) => {
-                if (canEdit) actionMutation.mutate({ kind: "pause", entry })
-              }}
-              onResume={(entry) => {
-                if (canEdit) actionMutation.mutate({ kind: "resume", entry })
-              }}
-              onPin={(entry, pinned) => {
-                if (canEdit) pinMutation.mutate({ entry, pinned })
-              }}
-              isEntryCollapsed={isEntryCollapsed}
-              onToggleEntryCollapsed={toggleEntryCollapsed}
-              onComplete={(entry) => {
-                if (!canEdit) return
-                setCompleteEntry(entry)
-                setError(null)
-              }}
-            />
-          ))}
+                onDetails={(entry) => {
+                  if (entry.source?.type !== "MAINTENANCE_REPAIR") return
+                  navigate(
+                    `/repairs?repairId=${encodeURIComponent(entry.source.sourceId)}`,
+                    workspaceEntryNavigationOptions
+                  )
+                }}
+                onEdit={(entry) => {
+                  if (
+                    !canEdit ||
+                    entry.entryType !== "REAL" ||
+                    entry.source?.type !== "MAINTENANCE_REPAIR"
+                  ) {
+                    return
+                  }
+                  navigate(
+                    `/repairs?repairId=${encodeURIComponent(entry.source.sourceId)}&edit=1`,
+                    workspaceEntryNavigationOptions
+                  )
+                }}
+                onTake={(entry) => {
+                  if (!canEdit || entry.entryType !== "REAL") return
+                  setTakeEntry(entry)
+                  setError(null)
+                }}
+                onPause={(entry) => {
+                  if (canEdit && entry.entryType === "REAL") {
+                    actionMutation.mutate({ kind: "pause", entry })
+                  }
+                }}
+                onResume={(entry) => {
+                  if (canEdit && entry.entryType === "REAL") {
+                    actionMutation.mutate({ kind: "resume", entry })
+                  }
+                }}
+                onPin={(entry, pinned) => {
+                  if (canEdit && entry.entryType === "REAL") {
+                    pinMutation.mutate({ entry, pinned })
+                  }
+                }}
+                isEntryCollapsed={isEntryCollapsed}
+                onToggleEntryCollapsed={toggleEntryCollapsed}
+                onComplete={(entry) => {
+                  if (!canEdit || entry.entryType !== "REAL") return
+                  setCompleteEntry(entry)
+                  setError(null)
+                }}
+              />
+            ))}
+          </div>
         </div>
       )}
 

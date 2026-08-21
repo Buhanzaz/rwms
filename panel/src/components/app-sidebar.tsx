@@ -33,6 +33,7 @@ import {
   UserGroupIcon,
   WarehouseIcon,
   WasteIcon,
+  Wrench01Icon,
 } from "@hugeicons/core-free-icons"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { isGlobalAdministrator } from "@/features/auth/auth-model"
@@ -157,6 +158,11 @@ const navGroups: SidebarNavGroup[] = [
         title: "Сметы",
         url: "/estimates",
         icon: ClipboardListIcon,
+      },
+      {
+        title: "Ремонты",
+        url: "/repairs",
+        icon: Wrench01Icon,
       },
       {
         title: "Перемещение",

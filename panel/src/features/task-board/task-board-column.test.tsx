@@ -88,6 +88,24 @@ function renderColumn(params: {
 }
 
 describe("TaskBoardColumn visible command targets", () => {
+  it("stacks cards vertically inside a fixed desktop queue column", () => {
+    const first = entry("first", "WAITING")
+    const second = entry("second", "WAITING")
+    renderColumn({
+      entries: [first, second],
+      visibleEntries: [first, second],
+    })
+
+    const section = screen.getByRole("region", { name: "Очередь Электрика" })
+    expect(section.className).toContain("h-full")
+    expect(section.className).toContain("w-80")
+
+    const cardStack = section.lastElementChild
+    expect(cardStack?.className).toContain("flex-col")
+    expect(cardStack?.className).toContain("overflow-y-auto")
+    expect(cardStack?.className).not.toContain("overflow-x-auto")
+  })
+
   it("starts the visible waiting card and keeps the same action on its card", async () => {
     const first = entry("first", "WAITING")
     const focused = entry("focused", "WAITING")
