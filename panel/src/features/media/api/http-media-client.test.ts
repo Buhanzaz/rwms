@@ -452,7 +452,7 @@ describe("HttpMediaClient", () => {
         items: [
           {
             cabinId: OWNER_ID,
-            photoCount: 2,
+            photoCount: 230,
             cover,
             previews: [secondPreview, cover],
           },
@@ -469,7 +469,7 @@ describe("HttpMediaClient", () => {
       items: [
         {
           cabinId: OWNER_ID,
-          photoCount: 2,
+          photoCount: 230,
           cover,
           previews: [secondPreview, cover],
         },

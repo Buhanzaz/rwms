@@ -220,11 +220,12 @@ the live warehouse, revision and active state. There is no proof TTL: activity
 is determined by the binding checkpoint and quarantine state.
 
 `POST /api/media/v1/cabin-covers` returns a bounded warehouse batch. Its
-`photoCount`, `previews` and explicit `cover` include only the active gallery
-folder. `previews` contains at most 100 READY images, with the explicit cover
-first and the remaining images in stable association order, and exactly one
-`SMALL` variant per logical image. The private logistics snapshot uses the same
-cover-first presentation order and returns zero-based presentation positions.
+`photoCount` covers every retained logical archive image; `previews` contains
+at most 100 READY archive images, with the explicit canonical cover first and
+the remaining images in stable association order, and exactly one `SMALL`
+variant per logical image. Folder boundaries stay in the CABIN archive read.
+The private logistics snapshot remains limited to the active gallery folder,
+uses the same cover-first presentation order and returns zero-based presentation positions.
 MEDIUM, LARGE, ORIGINAL and object-store locations are never returned by the
 public projection. A CABIN owner read through `GET /api/media/v1/assets`
 remains the full archive: its projected `folderId` comes from the CABIN

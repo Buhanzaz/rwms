@@ -758,7 +758,6 @@ function parseCabinCoverPage(
       }
       cabinIds.add(cabinId)
       const photoCount = requirePositiveInteger(item.photoCount, "photoCount")
-      if (photoCount > 100) throw new Error("Invalid cabin photo count")
       const owner = cabinMediaOwner(cabinId, warehouseId)
       if (!Array.isArray(item.previews) || item.previews.length > 100) {
         throw new Error("Invalid cabin preview list")

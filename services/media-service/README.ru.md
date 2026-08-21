@@ -220,13 +220,14 @@ return/shipment/transfer. Все они авторизуются по local owne
 внутри media-service.
 
 `POST /api/media/v1/cabin-covers` возвращает ограниченную warehouse batch.
-`photoCount`, `previews` и явный `cover` включают только активную gallery
-folder. В `previews` не более 100 READY изображений: сначала явная обложка,
-затем остальные изображения в стабильном association order; на каждое
-логическое изображение приходится ровно один `SMALL` variant. Приватный
-logistics snapshot использует тот же cover-first presentation order и
-возвращает позиции с нуля. MEDIUM, LARGE, ORIGINAL и координаты object storage
-публичная projection не выдаёт. CABIN owner read через
+`photoCount` учитывает все сохранённые логические изображения архива. В
+`previews` не более 100 READY изображений всего архива: сначала явная
+каноническая обложка, затем остальные изображения в стабильном association
+order; на каждое логическое изображение приходится ровно один `SMALL` variant.
+Границы папок остаются в CABIN archive read. Приватный logistics snapshot
+по-прежнему ограничен активной gallery folder, использует тот же cover-first
+presentation order и возвращает позиции с нуля. MEDIUM, LARGE, ORIGINAL и
+координаты object storage публичная projection не выдаёт. CABIN owner read через
 `GET /api/media/v1/assets` остаётся полным архивом: его projected `folderId`
 берётся из CABIN association, поэтому фотографии инвентаризации образуют одну
 deterministic folder без изменения принадлежащих finding строк `media_asset`.

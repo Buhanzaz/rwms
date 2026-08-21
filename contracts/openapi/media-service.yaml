@@ -598,13 +598,13 @@ paths:
       description: >-
         Requires USER, rwms.read and warehouse VIEW. The service returns only
         cabins with a current canonical media owner binding. photoCount and
-        previews include only associations from the active gallery folder;
-        historical folders remain available from the CABIN archive list.
+        previews include retained associations from every CABIN archive folder;
+        folder boundaries remain available from the CABIN archive list.
         photoCount counts logical non-deleted IMAGE associations, never derived
         variant rows. previews contains at most 100 READY images with exactly
         one SMALL variant per logical image; the canonical cover is first and
-        the remaining images retain stable association order. cover is resolved
-        only through the active folder's canonical pointer and never by a
+        the remaining archive images retain stable association order. cover is
+        resolved only through the canonical pointer and never by a
         sort-order fallback.
       requestBody:
         required: true
@@ -1354,17 +1354,16 @@ components:
       properties:
         cabinId: { type: string, format: uuid }
         photoCount:
-          description: Number of logical, non-deleted IMAGE associations in the active gallery folder.
+          description: Number of logical, non-deleted IMAGE associations in the complete retained CABIN archive.
           type: integer
           minimum: 1
-          maximum: 100
         cover:
-          description: Exact active-folder cover pointer projection; null when the pointer has no READY SMALL variant.
+          description: Exact canonical cover pointer projection; null when the pointer has no READY SMALL variant.
           oneOf:
             - { $ref: '#/components/schemas/CabinCoverVariant' }
             - { type: 'null' }
         previews:
-          description: READY, non-deleted active-folder images with one exact SMALL variant each; the canonical cover is first and the remaining images retain stable association order.
+          description: Up to 100 READY, non-deleted archive images with one exact SMALL variant each; the canonical cover is first and the remaining images retain stable association order.
           type: array
           maxItems: 100
           uniqueItems: true

@@ -1260,14 +1260,12 @@ func readOwnerAssets(
 	return records, nil
 }
 
-// ReadCabinCovers returns one bounded, warehouse-scoped cover projection per
-// requested cabin. The count is based on logical image assets, never on the
-// number of derived variants. Previews contain at most one exact SMALL variant
-// per READY image, put the explicit cover first, and are bounded by the owner
-// media limit. Cabin bindings are share-locked for the complete projection
-// callback so a concurrent owner revocation cannot race the read.
-// ReadCabinCovers returns bounded ready-image cover and preview projections
-// for CABINs with current, non-quarantined owner bindings.
+// ReadCabinCovers returns one warehouse-scoped cover projection per requested
+// cabin. The count covers every retained logical archive image, never derived
+// variants. Previews contain at most one exact SMALL variant per READY image,
+// put the explicit canonical cover first, and are bounded to 100 images. Cabin
+// bindings are share-locked for the complete projection callback so a
+// concurrent owner revocation cannot race the read.
 func (repository *Repository) ReadCabinCovers(
 	ctx context.Context,
 	warehouseID uuid.UUID,
@@ -1336,11 +1334,10 @@ func (repository *Repository) ReadCabinCovers(
 			select asset.media_id,photo.cabin_id::text as owner_id,
 				asset.processing_status,asset.current_generation,
 				photo.sort_order,photo.attached_at as created_at,
-				(asset.media_id=active_library.cover_media_id) as is_cover
+				(asset.media_id=library.cover_media_id) as is_cover
 			from media_cabin_photo photo
-			join media_cabin_photo_library active_library
-			  on active_library.cabin_id=photo.cabin_id
-			 and active_library.active_gallery_folder_id=photo.gallery_folder_id
+			join media_cabin_photo_library library
+			  on library.cabin_id=photo.cabin_id
 			join media_asset asset on asset.media_id=photo.media_id
 			where photo.warehouse_id=$1 and photo.cabin_id::text=any($2::text[])
 			  and asset.media_kind='IMAGE' and asset.deleted_at is null

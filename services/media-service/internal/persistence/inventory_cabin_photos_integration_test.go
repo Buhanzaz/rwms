@@ -315,11 +315,12 @@ func assertCurrentInventoryFolderAndArchive(
 		func(records []CabinCoverRecord) error {
 			covers = records
 			return nil
-		}); err != nil || len(covers) != 1 || covers[0].PhotoCount != 2 ||
-		covers[0].MediaID != secondAsset.ID || len(covers[0].Previews) != 2 ||
+		}); err != nil || len(covers) != 1 || covers[0].PhotoCount != 3 ||
+		covers[0].MediaID != secondAsset.ID || len(covers[0].Previews) != 3 ||
 		covers[0].Previews[0].MediaID != secondAsset.ID ||
-		covers[0].Previews[1].MediaID != firstAsset.ID {
-		t.Fatalf("current inventory cover projection = %#v error=%v", covers, err)
+		covers[0].Previews[1].MediaID != directAsset.ID ||
+		covers[0].Previews[2].MediaID != firstAsset.ID {
+		t.Fatalf("cover-first full archive projection = %#v error=%v", covers, err)
 	}
 	var presentation []CabinPresentationSnapshotRecord
 	if err := repository.ReadCabinPresentationSnapshots(ctx, warehouseID,

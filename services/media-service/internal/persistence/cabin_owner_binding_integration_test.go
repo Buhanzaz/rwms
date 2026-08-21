@@ -67,7 +67,9 @@ func TestMigratedCabinOwnerBindingsAuthorizeOnlyTheirCanonicalWarehouseIntegrati
 		func(records []CabinCoverRecord) error {
 			uploadingCovers = records
 			return nil
-		}); err != nil || len(uploadingCovers) != 0 {
+		}); err != nil || len(uploadingCovers) != 1 ||
+		uploadingCovers[0].PhotoCount != 1 || uploadingCovers[0].Variant != nil ||
+		len(uploadingCovers[0].Previews) != 0 {
 		t.Fatalf("ReadCabinCovers(uploading) = %#v, %v", uploadingCovers, err)
 	}
 	secondCommand := createCommand(cabinID, warehouseID, media.KindImage, 1)
@@ -142,12 +144,14 @@ func TestMigratedCabinOwnerBindingsAuthorizeOnlyTheirCanonicalWarehouseIntegrati
 		func(records []CabinCoverRecord) error {
 			readyCovers = records
 			return nil
-		}); err != nil || len(readyCovers) != 1 || readyCovers[0].PhotoCount != 1 ||
+		}); err != nil || len(readyCovers) != 1 || readyCovers[0].PhotoCount != 3 ||
 		readyCovers[0].MediaID != command.MediaID || readyCovers[0].Generation != 1 ||
 		readyCovers[0].Variant == nil || readyCovers[0].Variant.Variant != media.VariantSmall ||
-		len(readyCovers[0].Previews) != 1 ||
+		len(readyCovers[0].Previews) != 2 ||
 		readyCovers[0].Previews[0].MediaID != command.MediaID ||
-		readyCovers[0].Previews[0].Variant.Variant != media.VariantSmall {
+		readyCovers[0].Previews[0].Variant.Variant != media.VariantSmall ||
+		readyCovers[0].Previews[1].MediaID != secondCommand.MediaID ||
+		readyCovers[0].Previews[1].Variant.Variant != media.VariantSmall {
 		t.Fatalf("ReadCabinCovers(ready variants) = %#v, %v", readyCovers, err)
 	}
 	var presentationSnapshots []CabinPresentationSnapshotRecord
