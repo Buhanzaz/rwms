@@ -29,6 +29,10 @@ contexts and screens are usable.
   entity, and filter inputs. The server stays authoritative.
 - The selected warehouse is a non-authoritative local UI preference. It is
   revalidated against the profile returned after authentication.
+- Task-board brigade settings submit the selected membership and the workers'
+  version-fenced current-brigade changes in one group command. The panel does
+  not offer a second worker-table assignment action; task-board commits or
+  rejects the complete change atomically.
 - A verified authenticated subject and its bearer-grant revision own a fresh
   nested TanStack Query client. A logout, subject change, or grant change
   remounts the protected subtree so effect-owned realtime streams stop, cancels
@@ -87,12 +91,19 @@ contexts and screens are usable.
   projection; its photo archive still lists every historical folder. If that
   auxiliary cover projection fails while owner media loaded successfully, the
   detail falls back to those loaded photos and does not report the whole photo
-  service unavailable. Warehouse card previews preserve association order and
-  accept the explicit cover pointer at any position in that order, so a valid
-  cover selection cannot invalidate the complete cabin batch. Repair task
-  details keep the task's aggregate media, each work line's source media, and
-  task-board result evidence in separate exact-reference galleries. Only each
-  work-line gallery uses a compact carousel with an in-image photo count and
+  service unavailable. Warehouse cards, booking cards, the passport carousel
+  and the active archive folder put the explicit cover first while preserving
+  stable association order for every remaining photo; the client also applies
+  this ordering to an older media response whose cover appears later. The
+  passport Photo tab lists retained media-owned folders before their photos and
+  shows source, occurrence time, actor and photo count on each folder. It reads
+  every `INVENTORY`/`MEDIA` dossier page independently from History-tab filters;
+  unavailable provenance stays explicitly unknown instead of being guessed.
+  The archive also follows every media cursor instead of stopping after the
+  first 100 associations.
+  Repair task details keep the task's aggregate media, each work line's source
+  media, and task-board result evidence in separate exact-reference galleries.
+  Only each work-line gallery uses a compact carousel with an in-image photo count and
   always-visible previous/next controls; aggregate and result-evidence
   galleries keep the standard shared presentation. Aggregate
   and work-line references use their original inventory, estimate, or repair
@@ -314,10 +325,21 @@ version/hash with an idempotency key to the public inventory boundary. Its manda
 confirmation explains that the inventory is current truth: no-work cabins become
 `FREE`, ordinary work becomes `REPAIR`, forced capital work becomes
 `CAPITAL_REPAIR`, and active rental, reservation, internal-transfer or previous-repair
-bindings may be superseded. Photos, evidence and history remain preserved. The action
+bindings may be superseded. Ordinary work without inbound movement is routed to task-board;
+movement waits for logistics delivery, and capital work stays on the active capital route.
+Applying the outcome alone never opens acceptance or rework. Photos, evidence and history remain preserved. The action
 is disabled without the completed final-plan identity or while a competing history
 command runs. An accepted response updates the publication cache and refreshes only
 the affected session detail, final plan, statistics and warehouse history queries; the
+response may identify a strictly newer corrected final-plan version/hash when the server restored
+an omitted explicit observation. The panel accepts that authoritative successor and refetches its
+head; a lower version or a changed hash at the same version remains a conflict. In completed
+history, the outcome-status column renders the publication intent's required
+`desiredAssetStatus` (`FREE`, `REPAIR` or `CAPITAL_REPAIR`) only after that intent succeeds and
+adds a movement marker when `movementToRepair` is set. A current pending or failed intent is
+shown as not applied; the panel never presents the frozen inspection snapshot as the final
+status. Active sessions, cancelled history and rows without an outcome intent continue to show
+the recorded snapshot as inspection evidence. The
 authoritative contract is the [inventory OpenAPI](../contracts/openapi/inventory-service.yaml).
 
 ## Local development and checks

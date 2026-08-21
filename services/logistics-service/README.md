@@ -144,15 +144,23 @@ repair work requiring logistics driver/equipment orchestration. It uses service 
 not a client route. Its driver-task intake accepts ordinary inbound `DELIVER_TO_REPAIR` work and a
 separate outbound `CAPITAL_TO_PRODUCTION` task whose source is the external capital repair; both
 remain logistics-owned scheduled work and never bypass the ordered driver queue.
+When a fresh private maintenance `FIXED_DATE` request reaches logistics after that warehouse-local
+day has passed, the scheduler preserves the fixed-date/source intent but persists the current local
+day as the effective `scheduledDate`. This recovery applies only to service-owned maintenance
+intake: public creates still reject past dates. Its checksum retains the originally requested day,
+so only the exact request can replay the stored effective date without a duplicate.
 
 `PUT /api/internal/logistics/v1/inventory/outcomes/{inventoryId}` applies the latest completed
 inventory as authoritative logistics truth for exact canonical `assetId` values. It accepts only an
 exact `inventory-service` SERVICE token with audience `rwms-services` and sole scope
 `logistics.inventory`, plus a UUID `Idempotency-Key`. The complete batch is rejected with `409`
 before mutation when it is stale, has an ambiguous equal-time source, crosses warehouse ownership,
-or selects only part of a nonterminal document. Otherwise selected document lines and rental terms
-remain historical but are marked inventory-superseded and excluded from active rental/shipment
-reads. Fully selected nonterminal documents become `CANCELLED`; `ACCEPTED`, `ESTIMATE_REQUESTED`,
+or selects only part of a nonterminal document. An equal completion time is accepted only for an
+exact source reassertion or when the same warehouse and inventory publish a strictly greater final
+plan version; lower versions and a changed hash at the current version remain conflicts. Otherwise
+selected document lines and rental terms remain historical but are marked inventory-superseded and
+excluded from active rental/shipment reads. Fully selected nonterminal documents become `CANCELLED`;
+`ACCEPTED`, `ESTIMATE_REQUESTED`,
 `SHIPPED`, `COMPLETED` and already `CANCELLED` documents retain their terminal state. Orders with no
 active terms move from `DRAFT`/`SAVED` to `CANCELLED` or from `FULFILLED` to `CLOSED`; existing
 terminal orders retain their state. Unfinished logistics-owned driver/document tasks are cancelled
@@ -256,8 +264,8 @@ the incoming payload is identical. The owning create path remains the checksum a
 warehouse/direction or any other payload change returns the existing `409` without a dependency call
 or mutation, while an exact match returns the stored operation before ticket consumption. A replay
 candidate is rejected if it reaches any new-create consumption path. Driver replay checksums use the
-persisted scheduled date before any current warehouse-local date gate; only a fresh driver task
-derives an `AUTO` date from its remote ticket.
+originally requested fixed date before any current warehouse-local date gate and return the stored
+effective date; only a fresh driver task derives an `AUTO` date from its remote ticket.
 
 Historical marks remain deliberately unproven because migration `V39` does not backfill evidence.
 Legacy null evidence, an expired document receipt, a missing domain row or mark, a subset, a

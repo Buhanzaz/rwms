@@ -151,15 +151,23 @@ work, которому нужна logistics driver/equipment orchestration. Он
 `DELIVER_TO_REPAIR` и отдельное исходящее задание `CAPITAL_TO_PRODUCTION`, источником которого
 является внешний капремонт; обе работы принадлежат logistics и не обходят упорядоченную очередь
 водителей.
+Если свежий private maintenance-запрос `FIXED_DATE` приходит в logistics после указанного
+warehouse-local дня, scheduler сохраняет fixed-date/source intent, но записывает текущий local day
+как эффективный `scheduledDate`. Это восстановление действует только для service-owned maintenance
+intake: public create по-прежнему отклоняет прошедшую дату. Checksum сохраняет исходно запрошенный
+день, поэтому только точный запрос повторно возвращает сохранённую эффективную дату без дубликата.
 
 `PUT /api/internal/logistics/v1/inventory/outcomes/{inventoryId}` применяет последнюю завершённую
 инвентаризацию как авторитетную logistics-истину по точным canonical `assetId`. Маршрут принимает
 только exact SERVICE token `inventory-service` с audience `rwms-services` и единственным scope
 `logistics.inventory`, а также UUID `Idempotency-Key`. Весь batch отклоняется с `409` до mutation,
 если он устарел, имеет неоднозначный equal-time source, пересекает ownership другого склада или
-выбирает лишь часть nonterminal document. Иначе выбранные document lines и rental terms остаются в
-истории, получают inventory-superseded marker и исключаются из active rental/shipment reads. Полностью
-выбранные nonterminal documents становятся `CANCELLED`; документы `ACCEPTED`,
+выбирает лишь часть nonterminal document. Равное время завершения принимается только для exact
+source reassertion либо когда те же склад и инвентаризация публикуют строго большую версию финального
+плана; меньшая версия и изменённый hash при текущей версии остаются конфликтами. Иначе выбранные
+document lines и rental terms остаются в истории, получают inventory-superseded marker и
+исключаются из active rental/shipment reads. Полностью выбранные nonterminal documents становятся
+`CANCELLED`; документы `ACCEPTED`,
 `ESTIMATE_REQUESTED`, `SHIPPED`, `COMPLETED` и уже `CANCELLED` сохраняют terminal state. Заказы без
 active terms переходят из `DRAFT`/`SAVED` в `CANCELLED` или из `FULFILLED` в `CLOSED`; уже terminal
 orders сохраняют status. Незавершённые logistics-owned driver/document tasks отменяются через
@@ -263,8 +271,8 @@ subject/operation/key, который по-прежнему ссылается �
 warehouse/direction или любое другое изменение payload возвращает существующий `409` без dependency
 call или mutation, а exact match возвращает сохранённую operation до consume ticket. Replay
 candidate отклоняется, если достигает любого new-create consume path. Driver replay checksum
-использует сохранённую scheduled date до любого current warehouse-local date gate; только свежая
-driver task выводит `AUTO` date из remote ticket.
+использует исходно запрошенную fixed date до любого current warehouse-local date gate и возвращает
+сохранённую effective date; только свежая driver task выводит `AUTO` date из remote ticket.
 
 Historical marks намеренно остаются unproven: migration `V39` не выполняет backfill evidence. Legacy
 null evidence, истёкший document receipt, отсутствующий domain row или mark, subset, superset и

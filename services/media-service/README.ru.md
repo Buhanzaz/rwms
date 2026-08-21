@@ -46,7 +46,11 @@ source и result; неподтверждённые размеры видео о�
 - **Клиенты task evidence.** Principal `WORKER` получает доступ к медиа
   `TASK_BOARD_ENTRY/WORK_RESULT` с ровно одним scope: `worker.tasks` или
   `driver.tasks`, своим точным `worker_id` и единственным `warehouse_id`;
-  токен с обоими task scopes отклоняется.
+  токен с обоими task scopes отклоняется. Current non-quarantined task proof
+  разделяет read и upload audiences: рабочий, которому доступны feed/detail,
+  получает только list/original/variant read, а создание upload и finalization
+  требуют assigned/evidence worker из active proof. После закрытия остаются
+  только исторические assigned/evidence readers.
 - **Восстановимая доставка.** PostgreSQL владеет состоянием и точным replay;
   Kafka переносит at-least-once факты через transactional outbox и
   идемпотентных consumers. Недоступность брокера не превращает Kafka в базу
@@ -102,13 +106,21 @@ Flyway выполняется вне процесса. До запуска пр�
 `db/migration/V10__canonical_cabin_photo_library.sql`, затем
 `db/migration/V11__bounded_media_processing_recovery.sql`, затем
 `db/migration/V12__video_playback_variant.sql`, затем
-`db/migration/V13__authoritative_inventory_cabin_photos.sql`.
+`db/migration/V13__authoritative_inventory_cabin_photos.sql`, затем
+`db/migration/V14__task_board_reader_audience.sql`, затем
+`db/migration/V15__inventory_finding_membership_markers.sql`.
 
 Go-приложение не выполняет миграции, baseline, repair и не принимает молча
 чужую непустую базу.
 
-- Новая local/test база мигрируется от V1 до V13.
-- База с точной историей V12 обновляется применением V13.
+- Новая local/test база мигрируется от V1 до V15.
+- База на V12 применяет V13, V14 и V15; точная база V13 применяет V14 и V15,
+  а точная база V14 применяет только V15. V14 добавляет и backfill-ит
+  task-entry read audience без удаления owner proofs, media rows или объектов.
+  V15 заменяет только `media_inventory_finding_inbox_check2`: канонические
+  departed, refreshed и restored membership markers принимаются с null
+  `owner_revision`, а существующие inbox rows, owner proofs и media data не
+  меняются.
 - `baselineOnMigrate` должен оставаться `false`; непустая база без истории
   миграций отклоняется.
 - На старте и readiness проверяются успешные строки Flyway, их версии,
@@ -209,13 +221,15 @@ return/shipment/transfer. Все они авторизуются по local owne
 
 `POST /api/media/v1/cabin-covers` возвращает ограниченную warehouse batch.
 `photoCount`, `previews` и явный `cover` включают только активную gallery
-folder. В `previews` не более 100 READY изображений в порядке associations,
-ровно с одним `SMALL` variant на логическое изображение. MEDIUM, LARGE,
-ORIGINAL и координаты object storage эта projection не выдаёт. CABIN owner
-read через `GET /api/media/v1/assets` остаётся полным архивом: его projected
-`folderId` берётся из CABIN association, поэтому фотографии инвентаризации
-образуют одну deterministic folder без изменения принадлежащих finding строк
-`media_asset`.
+folder. В `previews` не более 100 READY изображений: сначала явная обложка,
+затем остальные изображения в стабильном association order; на каждое
+логическое изображение приходится ровно один `SMALL` variant. Приватный
+logistics snapshot использует тот же cover-first presentation order и
+возвращает позиции с нуля. MEDIUM, LARGE, ORIGINAL и координаты object storage
+публичная projection не выдаёт. CABIN owner read через
+`GET /api/media/v1/assets` остаётся полным архивом: его projected `folderId`
+берётся из CABIN association, поэтому фотографии инвентаризации образуют одну
+deterministic folder без изменения принадлежащих finding строк `media_asset`.
 
 Inventory stream должен начинаться с `inventory.finding.added.v1` версии 0;
 последующие facts непрерывны и сохраняют исходный warehouse. Reuse event ID,
@@ -224,6 +238,16 @@ Inventory stream должен начинаться с `inventory.finding.added.v
 исчерпавшие попытки records публикуют только санитизированный media-owned DLT.
 Reconciliation — operator-only file command; публичной регистрации или admin
 bypass нет:
+
+Факты membership-departed, membership-refreshed и completed-observation-restored
+служат только маркерами порядка/checkpoint и никогда не открывают и не закрывают
+media owner proof. `membershipActive` необязателен в исторических added/inspection
+markers, но departed marker обязан нести `false`, а refreshed/restored marker —
+`true`. Поэтому completed restoration позволяет publication saga адресовать
+сохранённые media finding без повторного открытия worker upload authority.
+[`V15__inventory_finding_membership_markers.sql`](db/migration/V15__inventory_finding_membership_markers.sql)
+допускает эти три marker в durable inbox и требует, чтобы их `owner_revision`
+оставался null.
 
 ```bash
 MEDIA_DATABASE_URL=... media-service reconcile-inventory-owner reviewed-batch.json
@@ -238,15 +262,31 @@ MEDIA_DATABASE_URL=... media-service reconcile-inventory-owner reviewed-batch.js
 serializable transition принадлежит
 [`inventory_cabin_photos.go`](internal/persistence/inventory_cabin_photos.go).
 
-Транзакция требует активные, не quarantine-нутые CABIN и INVENTORY_FINDING
-bindings в одном warehouse. Каждая уникальная выбранная ссылка должна быть
-finding-owned READY IMAGE на точном current generation, а cover должен входить
-в эти ссылки. Fingerprint неизменяемого запроса определяет одну стабильную
-gallery folder. Exact replay ключа возвращает замороженный receipt; reuse ключа
-с другим запросом отклоняется. Per-CABIN watermark отклоняет более старое
-завершение и другой immutable source с тем же временем завершения. Новый ключ
-может повторно утвердить тот же последний source после более поздней смены
-cover заданием или прямой операцией.
+Транзакция требует активный, не quarantine-нутый CABIN binding и сохранённый,
+checkpointed INVENTORY_FINDING binding в том же warehouse. Незакрытый quarantine
+finding отклоняется, кроме `VERSION_GAP`, у которого expected version строго
+больше proof aggregate version сохранённого binding: в этом ограниченном случае
+используется proof, checkpoint которого предшествует более позднему gap, а
+quarantine-нутые события не применяются и не считаются доверенными. Активный
+quarantine CABIN блокирует команду всегда. Публичные upload и
+list/original/variant reads finding по-прежнему требуют active, не
+quarantine-нутый proof. Эта SERVICE-only команда completed outcome может
+повторно использовать уже существующее READY evidence finding после того, как
+completion закрыл proof; uploads она не открывает.
+Каждая уникальная выбранная ссылка должна быть finding-owned READY IMAGE на
+точном current generation, а cover должен входить в эти ссылки. Fingerprint
+неизменяемого запроса определяет одну стабильную gallery folder. Exact replay
+ключа возвращает замороженный receipt; reuse ключа с другим запросом
+отклоняется. Per-CABIN watermark отклоняет более старое завершение и другой
+immutable source с тем же временем завершения. Новый ключ может повторно
+утвердить тот же последний source после более поздней смены cover заданием или
+прямой операцией.
+
+В тот же момент завершения строго большая версия final plan для того же
+inventory и finding принимается только при неизменных точных media IDs,
+generations, source revision и прежних folder associations. Transaction
+сохраняет стабильные folder и library version, продвигает только source metadata
+association, receipt и watermark и откатывается при изменении набора фото.
 
 [`V13__authoritative_inventory_cabin_photos.sql`](db/migration/V13__authoritative_inventory_cabin_photos.sql)
 backfill-ит association folders из `media_asset.folder_id`, активную folder из
@@ -254,9 +294,9 @@ backfill-ит association folders из `media_asset.folder_id`, активную
 state. Миграция не обновляет и не удаляет `media_asset`, `media_variant` или
 данные object store. В полном CABIN archive inventory associations используют
 derived folder; текущие cover/previews и logistics current presentation
-используют только активную folder. Существующие direct и task-evidence
-associations остаются в истории, а выбор task evidence также выбирает его
-собственную association folder.
+используют только активную folder и ставят её явную обложку первой.
+Существующие direct и task-evidence associations остаются в истории, а выбор
+task evidence также выбирает его собственную association folder.
 
 ## Приватный импорт assets из Yandex.Disk
 
@@ -444,6 +484,8 @@ go build -trimpath -o /tmp/rwms-media-service ./cmd/media-service
 ```
 
 Проверка миграций выполняется отдельно Flyway и PostgreSQL и должна покрыть
-clean install V1-to-V13, upgrade V12-to-V13, повторный запуск, checksum drift и
-непустую базу без истории. Проверки MinIO должны использовать versioned
-local/test bucket; Kafka-проверки — канонические topics и broker acknowledgements.
+clean install V1-to-V15, upgrade V12-to-V13-to-V14-to-V15, V13-to-V14 reader
+backfill, upgrade membership constraint V14-to-V15, повторный запуск, checksum
+drift и непустую базу без истории. Проверки MinIO должны использовать versioned
+local/test bucket; Kafka-проверки — канонические topics и broker
+acknowledgements.

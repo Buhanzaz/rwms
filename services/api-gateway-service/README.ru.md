@@ -26,7 +26,7 @@ Gateway решает действительно общие задачи публ
 | Браузеру нужен единый same-origin API | Обслуживает публичные пути `/auth/**` и `/api/**` | В panel нет внутренних адресов сервисов или конфигурации вида `localhost:<port>`. |
 | Прокси-заголовки могут быть подделаны | Удаляет входящие `Forwarded` и `X-Forwarded-*`, а канонические OIDC-метаданные строит только из конфигурации | Клиент не может выбрать OIDC host, scheme, port или префикс `/auth`. |
 | Сбой downstream-сервиса должен быть понятен клиенту | Преобразует ошибки соединения и таймауты в RWMS Problem Details | Клиент получает безопасный и единообразный `502` или `504` без внутренних адресов и текста исключения. |
-| Долгие потоки отличаются от обычного HTTP | Использует отдельные ограниченные обработчики для SSE, байтов загрузки, commit HTML-импорта и turns ассистента | Обычный proxy timeout не обрывает поддерживаемый долгий запрос. |
+| Долгие потоки и предсказуемо медленные операции отличаются от обычного HTTP | Использует отдельные ограниченные обработчики для SSE, байтов загрузки, commit HTML-импорта, пересчёта результата инвентаризации и turns ассистента | Обычный proxy timeout не обрывает поддерживаемый долгий запрос. |
 | Нужна наблюдаемость общей точки входа | Предоставляет health/readiness, Prometheus, tracing и correlation ID | Доступность и путь запроса можно расследовать без логирования учётных данных и payload. |
 
 При этом доменный сервис по-прежнему владеет смыслом API, бизнес-авторизацией,
@@ -104,7 +104,7 @@ API gateway: проверка host/headers, CORS, JWT, route policy, observabili
 | `/api/asset/**` | `asset-service`, путь без изменений | Internal-пути запрещены. HTML-import commit обслуживает отдельный handler. |
 | `/api/maintenance/**` | `maintenance-service`, путь без изменений | Internal-пути запрещены. |
 | `/api/media/**` | `media-service`, путь без изменений | Internal- и private-пути запрещены. Upload content и SSE используют отдельные handlers. |
-| `/api/inventory/**` | `inventory-service`, путь без изменений | Internal- и private-пути запрещены. |
+| `/api/inventory/**` | `inventory-service`, путь без изменений | Internal- и private-пути запрещены. Пересчёт завершённого результата использует отдельный handler с тайм-аутом 60 секунд; все остальные inventory-запросы сохраняют обычный тайм-аут. |
 | `/api/logistics/**` | `logistics-service`, путь без изменений | Internal- и private-пути запрещены; явно публичный client-presentation — исключение из обычной аутентификации. |
 | `/api/assistant/**` | `assistant-service`, путь без изменений | Internal- и private-пути запрещены. Turns диалога использует отдельный streaming handler. |
 | `/api/dossier/**` | `dossier-service`, путь без изменений | Только `GET`: dossier является read-проекцией и не имеет публичного command route. |
@@ -118,6 +118,10 @@ API gateway: проверка host/headers, CORS, JWT, route policy, observabili
 - `POST /api/asset/v1/html-imports/*/commit` и
   `PUT /api/media/v1/upload-sessions/*/content` используют специальные
   ограниченные прокси для поддерживаемого долгого трафика.
+- `POST /api/inventory/v1/sessions/*/outcome/recalculate` использует отдельный
+  downstream read deadline 60 секунд. Точная команда исключена из общего
+  inventory-маршрута; её путь, заголовки авторизации и идемпотентности
+  пересылаются без изменений, а cookies удаляются.
 - `POST /api/assistant/v1/conversations/*/turns` использует streaming proxy
   ассистента, поэтому корректный потоковый ответ не наследует обычный read
   deadline.
@@ -226,7 +230,8 @@ target, public issuer/base URI и разрешённый panel origin.
 Его domain-инвентарь содержит каждую каноническую публичную операцию `/api/**`; операции auth-service,
 делегированные под `/auth/**`, и локальные для media-service probes `/health/**` образуют явные
 отдельные разделы. Gate проверяет owner-specific rewrite путей task-board и analytics, приоритет
-специализированных SSE/upload/import/assistant routes, нулевую маршрутизацию каждой канонической
+специализированных SSE/upload/import/inventory-recalculation/assistant routes, однозначное исключение
+команды пересчёта из общего inventory-маршрута, нулевую маршрутизацию каждой канонической
 internal-операции и зарезервированного private/internal alias, а также реальную edge security
 classification. Все публичные domain-операции требуют Bearer-аутентификацию, кроме четырёх явно
 анонимных logistics client-presentation операций.

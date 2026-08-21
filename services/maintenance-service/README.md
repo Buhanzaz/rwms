@@ -61,10 +61,57 @@ mismatch, and a projection outside that range remain conflicts. A completed idem
 its frozen response without new effects. A new key for the same immutable source re-discovers and
 supersedes non-terminal predecessors created after the previous success while preserving the exact
 same-source repair and never creating a duplicate.
+If that exact work coordinator is already `APPLIED` and the local projection later advances above
+the request's original authority, the new-key recovery remains deliberately narrow. The immutable
+request, warehouse, applied coordinator, watermark and active bound repair must still match. A
+current immutable source row must name that repair; when an equivalent corrected plan intentionally
+has no current source row, an immutable different-plan source must already own the exact retained
+repair. Its classification must already match current `REPAIR`/`CAPITAL_REPAIR` asset truth.
+The current status may equal the stored desired status, or a stored `REPAIR` may have been promoted
+to `CAPITAL_REPAIR`. Recovery then reasserts only the bound repair's existing
+status/task/driver/lease reconciliation effects, issues no asset-status transition and does not
+rewrite the coordinator's request, authoritative version or response. `FREE`, `RENTED`, `BOOKED`, a
+desired `CAPITAL_REPAIR` with current `REPAIR`, terminal state, changed source, missing or
+non-`APPLIED` coordinator, an unbound or mismatched repair, and stale plan/watermark remain
+conflicts. This fence is owned by
+[`InventoryPublicationAssetFence`](src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryPublicationAssetFence.java)
+and
+[`InventoryAuthoritativeOutcomeStore`](src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryAuthoritativeOutcomeStore.java).
 For no-work reassertion, an increased `authoritativeAssetVersion` from the same immutable source is
 treated as a newer technical fence, not as a different inventory decision. The original outcome
 coordinator remains immutable, while the new idempotency key retains its exact request fingerprint
 and response in a separate receipt.
+
+A corrected completed plan may advance the same inventory/finding at the exact same completion
+instant only through a strictly higher `finalPlanVersion` after the previous outcome is `APPLIED`.
+An unchanged work correction adopts the existing repair and advances the outcome watermark;
+because the original immutable source row already owns that repair, the corrected coordinator and
+receipt reference it without creating a duplicate source or repair. When later completed receipts
+already replaced the predecessor coordinator's original repair, the newest receipt-bound live
+repair is retained. Driver reassertion resolves the newest `APPLIED` coordinator with a bounded
+completion-time/plan-version lookup because corrected plans intentionally leave the same repair in
+more than one historical coordinator. A retry from `EFFECTS_SETTLED` clears any compensation guard
+recorded before that binding was known and reasserts the retained repair's task, driver and lease work. Changed
+finding revision, observed asset version, fingerprint, priority, dates, media, selected target,
+movement, ordinary or capital routing, and `WORK`/`NO_WORK` classification instead run the same
+durable remote compensation and local supersession used by a later inventory. The former active
+outcome remains history and exactly one corrected repair, or no repair for `NO_WORK`, remains
+active. Lower
+versions, same-version drift, changed inventory/finding/warehouse/completion identity, a predecessor
+that is not yet `APPLIED`, and terminal accepted or written-off predecessor work remain conflicts.
+
+If compensation durably cancelled the retained ordinary task before an equivalent correction was
+recognized, maintenance cannot reuse that task identity. Only an inventory-owned, queued,
+no-movement, pre-start repair whose stages still prove the cancelled mappings rotates to one
+deterministic replacement task ID, clears only those mappings and registers the replacement once.
+The same recovery marks the released operation lease, acquires and persists a new fence before
+status reconciliation, and then confirms task delivery. A later reassertion also honors the durable
+local `RECONCILIATION_REQUIRED` fence when the release ledger belongs to an older plan version: it
+must reacquire the lease instead of confirming an already-matching asset status. That new fence
+completes local reconciliation only when an ordinary task is already generated and no movement is
+pending; otherwise task or driver confirmation remains the final fence. Started, completed,
+movement and capital routes are never reopened; an exact replay neither rotates the task nor
+acquires another lease.
 
 Publication registrations and immutable source rows written before the V45 coordinator remain
 audit history and do not block the latest completed inventory. An operation-only row or a source
@@ -89,18 +136,38 @@ version cannot move backwards. An already locally `RELEASED` lease is not called
 When a newer inventory generation preserves that current repair, maintenance reasserts the
 calculated `REPAIR`/`CAPITAL_REPAIR` asset status and recreates missing execution work under
 generation-specific keys. Ordinary inbound `DELIVER_TO_REPAIR` work identifies the authoritative
-inventory finding even when the current repair was adopted from a pre-V45 source. An external
-capital repair with `movementToRepair=true` instead owns a separate outbound
-`CAPITAL_TO_PRODUCTION` task whose source is that capital repair.
+inventory finding even when the current repair was adopted from a pre-V45 source. An explicit
+capital choice is mutually exclusive with inbound movement and remains on the active capital route.
 
 A work apply first persists an `INVENTORY` repair in `DRAFT` with the full frozen plan and one
 durable `ASSET/QUEUE_REPAIR` reconciliation. The existing queue reconciler acquires the lease and
-changes the asset status. For `forceCapitalRepair=true`, it uses `QUEUE_TO_CAPITAL_REPAIR`, completes
-the local repair as external capital (`COMPLETED/PENDING`, `EXTERNAL_CAPITAL`), creates no ordinary
-task-board task, and, when `movementToRepair=true`, creates its separate logistics
-`CAPITAL_TO_PRODUCTION` driver task. For ordinary work it queues the repair and either registers the
-task-board task directly or, when `movementToRepair=true`, creates the logistics
+changes the asset status. For `forceCapitalRepair=true`, it uses `QUEUE_TO_CAPITAL_REPAIR`, routes
+the local repair as active external capital (`QUEUED/NOT_READY`, `EXTERNAL_CAPITAL`) without treating
+inventory publication as completed work, and creates no ordinary task-board task. For ordinary work
+it queues the repair and either registers the task-board task directly or, when
+`movementToRepair=true`, creates the logistics
 `DELIVER_TO_REPAIR` driver task and registers repair work after delivery.
+When catalog-enforced capital work retains `movementToRepair=true`, the same frozen choice creates
+or reuses `CAPITAL_TO_PRODUCTION`; recalculation never clears that choice merely because the target
+repair is capital. The capital repair still remains `QUEUED/NOT_READY` until execution completes.
+The private logistics response owns the effective driver-task date. Its HTTP boundary still
+requires a non-null date for `AUTO`; for `FIXED_DATE` it rejects a date before the immutable request
+but permits a later effective result. Before confirming durable `CREATE_DRIVER_TASK` work,
+maintenance resolves the current warehouse-local day outside its database transaction. A current
+or future fixed request must match exactly, while an overdue request accepts an effective date only
+in the inclusive range from the original request through that local day. A later day is rejected by
+the existing bounded reconciliation failure path. The repair's requested date and stable
+idempotency key remain unchanged, and the confirmation receipt records the logistics-owned
+effective date. Identity, source, kind, priority and state checks are unchanged. See the
+[`MaintenanceLogisticsHttpClient`](src/main/java/dev/buhanzaz/rwms/maintenance/integration/MaintenanceLogisticsHttpClient.java)
+transport fence and
+[`MaintenanceTaskReconciliationUseCases`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceTaskReconciliationUseCases.java)
+confirmation fence.
+No-work publication uses the separate authoritative cleanup and leaves the cabin `FREE`. Acceptance
+and rework reads/commands reject inventory-origin rows without task-board execution evidence, which
+also keeps historical publication-created capital rows out of those surfaces. Reapplying their
+completed inventory outcome restores the former `COMPLETED/PENDING` rows to the active
+`QUEUED/NOT_READY` capital route.
 
 Publication validates the fingerprint of the exact raw frozen snapshot before any compatibility
 adaptation. For schema version 1 only, a historical snapshot that copied the same non-empty
@@ -134,9 +201,9 @@ compatibility, consumers accept the field's omission in historical v1 facts as `
 non-boolean values remain invalid. Repair complexity is CAPITAL when this explicit choice is true or
 any current catalog WORK forces capital repair. Inventory freeze and stored snapshot boundaries
 reject a plan that also requests repair movement, so maintenance never owns two competing
-destinations for one finding. The
-existing capital-repair logistics, separate active-capital list, acceptance, and return-to-FREE
-cycle remain the only downstream implementation; clients do not create those effects themselves.
+destinations for one finding. Capital routing and the separate active-capital list remain
+server-owned. Inventory publication alone never opens acceptance or rework; those transitions
+require authoritative execution completion. Clients do not create those effects themselves.
 Migration [`V44__manual_capital_repair_selection.sql`](src/main/resources/db/migration/V44__manual_capital_repair_selection.sql)
 backfills existing estimates, revisions, and repairs as `false`.
 
@@ -183,6 +250,7 @@ application owners:
 | Asset, task and repair-lifecycle reconciliation use cases | The three independent remote-effect/recovery branches |
 | `InventoryMaintenanceService` | Stable private inventory-boundary facade over freeze, upsert and repair-snapshot projection |
 | Inventory maintenance freeze/upsert/validation/transaction collaborators | Frozen-plan admission, catalog/routing/media validation and isolated local transactions |
+| `InventoryAuthoritativeOutcomeStore` and `InventoryAuthoritativeOutcomeService` | Ordering, compatibility and idempotent application of original or corrected completed-plan outcomes |
 | `InventoryPublicationReconciliationService` | Stable completed-inventory facade over preflight projection and durable apply |
 | Inventory authoritative outcome/source/target/materialization collaborators | Completed-at watermark, receipt replay/reassertion, predecessor compensation, local supersession and sole full-plan repair materialization |
 | `PropertyDispositionApplicationService` | Stable decision facade over creation, furniture materialization, review/recovery, reads and processing callbacks |
@@ -240,6 +308,13 @@ transactional outbox in the same PostgreSQL transaction. Kafka delivery is at-le
 revalidates an envelope and marks an outbox row only after broker acknowledgement; consumers
 deduplicate and retain version-gap/recovery state; sanitized terminal failures use the service-owned
 DLT path rather than copying raw message bodies into logs.
+
+The inbound task-board validator accepts both the exact historical event shapes and the current
+canonical shapes: board-task facts require `lane` and may carry schedule, priority, pinning and the
+driver-audience pair; queue-entry facts carry nullable original/current budgets and no historical
+`queueName`. Validation failures happen before replay staging and are therefore non-replayable;
+after a validator correction, recovery republishes the immutable source envelopes in aggregate
+version order instead of editing inbox or domain rows.
 
 `MAINTENANCE_KAFKA_ENABLED` controls Kafka-specific relay and consumer beans. It may be `false`
 only in an explicit `dev` or `test` profile; every other profile fails startup if delivery is

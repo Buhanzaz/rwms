@@ -27,9 +27,13 @@ retry.
 an active session whose live cabin membership or derived review became stale. It checks the supplied
 session revision before a fresh read-only asset capture and again under the local apply lock. Remote
 capture reads finish before the idempotent local transaction reconciles arrivals, departures and
-current snapshots through the normal membership journal. Saved findings, inspection evidence,
-media references and movement history remain intact; only the derived furniture review is restarted
-and an existing final plan is marked stale. Furniture-review seeding reads the active client
+current snapshots through the normal membership journal. Only automatic `EXPECTED` population
+follows a later registry departure. An explicitly observed `ADDED_NEW`, `ADDED_USED` or
+`UNEXPECTED_EXISTING` finding remains in the inventory table and final-plan population when a later
+capture omits it; capture eligibility cannot erase the operator's physical warehouse observation.
+Saved findings, inspection evidence, media references and movement history remain intact; only the
+derived furniture review is restarted and an existing final plan is marked stale. Furniture-review
+seeding reads the active client
 `quantity` observation and retains `observedQuantity` as compatibility for previously stored review
 facts. The public refresh contract adds no schema field.
 
@@ -95,8 +99,16 @@ objects are never inputs to deletion in this flow.
 
 `POST /api/inventory/v1/sessions/{inventoryId}/outcome/recalculate` is the MANAGE-scoped recovery
 command for a completed history row. It fences the exact session revision, final-plan version and
-SHA-256, performs no remote I/O and returns `202` after rebuilding durable work. It creates missing
-no-work/status intents and requeues every existing publication, including rows previously marked
+SHA-256 and returns `202` after rebuilding durable work. When an obsolete automatic-membership
+projection omitted an inspected explicit observation, the command restores that finding from its
+human-confirmed inspection baseline, appends it to a strictly newer completed plan version and
+replaces the frozen statistics. Existing plan entries, manager choices, dates and order remain
+unchanged; only restored work is capacity-scheduled after them. Completed inventory is
+authoritative, so this correction needs no maintenance preflight and performs no remote I/O or
+downstream mutation. Completed-session media
+owner authorization remains closed while the finding-owned restoration fact advances consumer
+checkpoints. The command then creates missing no-work/status intents and requeues every publication
+in the corrected plan, including rows previously marked
 successful, because older runtime versions cannot prove that newer logistics, media and no-work
 effects ran. The same command also makes an unresolved furniture reconciliation immediately
 eligible. Attempts and prior maintenance results remain append-only audit evidence; schedulers
@@ -112,6 +124,9 @@ asset identity still match; unmatched legacy rows receive explicit `ABSENT`. His
 preserves this frozen column instead of rereading the finding, increments the durable reapplication
 generation, and therefore derives a new owner-effect idempotency key. Old successful receipts can
 still replay their unchanged response, while the new generation sends the passport-bearing request.
+Migration
+[`V24__restore_explicit_inventory_observations.sql`](src/main/resources/db/migration/V24__restore_explicit_inventory_observations.sql)
+admits the restoration audit event without rewriting any existing finding, plan or publication row.
 
 ## Security, warehouse isolation and fencing
 
@@ -145,6 +160,7 @@ service:
 | `InventoryCompletionService` | Preview, terminal completion/cancellation and post-commit intents |
 | `InventoryStatisticsService` | Frozen and aggregate statistics calculations |
 | `InventoryPublicationService` | Publication, retry, closure and recovery |
+| `CompletedInventoryPlanCorrectionService` | Completed-plan restoration of omitted explicit observations and strict next-version creation |
 | `InventoryOutcomeRecoveryService` | Completed-history rebuilding of authoritative asset and maintenance work |
 | `InventoryProjectionService` | API projections over owner-local state |
 

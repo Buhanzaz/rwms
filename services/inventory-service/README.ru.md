@@ -27,9 +27,12 @@ completion/statistics, final planning, а также publication intent, attempt
 сессии, в которой устарел живой состав бытовок или производная сверка. Она проверяет переданную
 ревизию сессии до свежего read-only asset capture и повторно под локальной блокировкой применения.
 Удалённое чтение capture завершается до idempotent local transaction, которая проводит приходы,
-уходы и текущие snapshots через штатный membership journal. Сохранённые findings, inspection
-evidence, ссылки на media и история перемещений остаются без изменений; перезапускается только
-производная сверка мебели, а существующий итоговый план помечается устаревшим. При построении
+уходы и текущие snapshots через штатный membership journal. За последующим уходом из реестра
+следует только автоматическая популяция `EXPECTED`. Явно найденный `ADDED_NEW`, `ADDED_USED` или
+`UNEXPECTED_EXISTING` finding остаётся в таблице инвентаризации и составе итогового плана, даже если
+следующий capture его не вернул: фильтр eligibility не может стереть физическое наблюдение оператора.
+Сохранённые findings, inspection evidence, ссылки на media и история перемещений остаются без
+изменений; перезапускается только производная сверка мебели, а существующий итоговый план помечается устаревшим. При построении
 сверки читается активное клиентское наблюдение `quantity`, а `observedQuantity` сохраняется для
 совместимости с уже записанными фактами сверки. Публичный refresh-контракт не добавляет поле схемы.
 
@@ -98,9 +101,16 @@ media, общий эффект logistics и maintenance именно в тако
 
 `POST /api/inventory/v1/sessions/{inventoryId}/outcome/recalculate` — MANAGE-команда восстановления
 для строки истории завершённых инвентаризаций. Она проверяет точные revision session, version
-итогового плана и SHA-256, не делает remote I/O и возвращает `202` после восстановления durable
-работы. Команда создаёт недостающие intents для статуса/бытовок без работ и повторно ставит в
-очередь каждую существующую публикацию, включая ранее помеченные successful: старые версии runtime
+итогового плана и SHA-256 и возвращает `202` после восстановления durable работы. Если устаревшая
+автоматическая projection состава исключила осмотренное явное наблюдение, команда восстанавливает
+finding из подтверждённого человеком inspection baseline, добавляет его в строго следующую
+completed-версию плана и заменяет замороженную статистику. Существующие entries, выборы менеджера,
+даты и порядок не меняются; только восстановленные работы capacity-schedule-ятся после них.
+Completed inventory авторитетна, поэтому correction не требует maintenance preflight и не делает
+remote I/O или downstream mutation. Media owner authorization завершённой сессии остаётся закрытой, а finding-owned факт
+восстановления продвигает checkpoints потребителей. Затем команда создаёт недостающие intents для
+статуса/бытовок без работ и повторно ставит в очередь каждую публикацию исправленного плана,
+включая ранее помеченные successful: старые версии runtime
 не могут доказать выполнение более новых logistics, media и no-work эффектов. Она также делает
 незавершённую сверку мебели немедленно доступной для повтора. Attempts и прежние результаты
 maintenance остаются append-only audit evidence; schedulers применяют очередь со стабильной
@@ -115,7 +125,9 @@ backfill-ит замороженное наблюдение только при 
 истории сохраняет эту frozen column вместо повторного чтения finding, увеличивает durable
 generation повторного применения и тем самым получает новый owner-effect idempotency key. Старые
 успешные receipts по-прежнему могут replay-ить неизменённый response, а новая generation отправляет
-запрос с паспортом.
+запрос с паспортом. Миграция
+[`V24__restore_explicit_inventory_observations.sql`](src/main/resources/db/migration/V24__restore_explicit_inventory_observations.sql)
+разрешает audit event восстановления без перезаписи существующих findings, plans или publication rows.
 
 ## Безопасность, изоляция складов и fencing
 
@@ -149,6 +161,7 @@ attempts fence retries. Нельзя делать вывод о completed remote
 | `InventoryCompletionService` | Preview, terminal completion/cancellation и post-commit intents |
 | `InventoryStatisticsService` | Расчёт frozen и aggregate statistics |
 | `InventoryPublicationService` | Publication, retry, closure и recovery |
+| `CompletedInventoryPlanCorrectionService` | Восстановление исключённых явных наблюдений в completed plan и создание строгой следующей версии |
 | `InventoryOutcomeRecoveryService` | Восстановление авторитетной asset/maintenance работы из завершённой истории |
 | `InventoryProjectionService` | API-проекции над owner-local state |
 

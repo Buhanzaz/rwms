@@ -27,7 +27,7 @@ public boundary:
 | Browsers need a single same-origin API surface | Serve public `/auth/**` and `/api/**` paths | The panel does not contain internal origins or `localhost:<port>` configuration. |
 | Proxies can carry spoofable forwarding headers | Discard incoming `Forwarded` and `X-Forwarded-*` headers; derive canonical auth metadata from configured public settings | The OIDC-facing host, scheme, port, and `/auth` prefix cannot be selected by a client. |
 | Downstream outages should be understandable to clients | Convert connection and timeout failures to the RWMS Problem Details contract | Clients receive a safe, consistent `502` or `504`, without an internal destination or exception leak. |
-| Long-lived streams differ from ordinary HTTP calls | Use dedicated bounded handlers for SSE, upload bytes, HTML-import commit, and assistant turns | A normal proxy timeout does not incorrectly terminate supported long-running traffic. |
+| Long-lived or predictably slow operations differ from ordinary HTTP calls | Use dedicated bounded handlers for SSE, upload bytes, HTML-import commit, inventory outcome recalculation, and assistant turns | A normal proxy timeout does not incorrectly terminate supported long-running traffic. |
 | Operators need one observable edge | Provide health/readiness, Prometheus metrics, tracing, and correlation IDs | Availability and request paths can be investigated without logging credentials or payloads. |
 
 The domain service still owns its API meaning, authorization rules, state
@@ -106,7 +106,7 @@ replacement for the owning service's OpenAPI contract.
 | `/api/asset/**` | asset-service, unchanged | Internal paths are denied. HTML-import commit uses a dedicated handler. |
 | `/api/maintenance/**` | maintenance-service, unchanged | Internal paths are denied. |
 | `/api/media/**` | media-service, unchanged | Internal and private paths are denied. Upload content and SSE use dedicated handlers. |
-| `/api/inventory/**` | inventory-service, unchanged | Internal and private paths are denied. |
+| `/api/inventory/**` | inventory-service, unchanged | Internal and private paths are denied. Completed-outcome recalculation uses a dedicated 60-second handler; every other inventory request keeps the ordinary timeout. |
 | `/api/logistics/**` | logistics-service, unchanged | Internal and private paths are denied; the explicitly public client-presentation path is an exception to normal authentication. |
 | `/api/assistant/**` | assistant-service, unchanged | Internal and private paths are denied. Conversation turns use a dedicated streaming handler. |
 | `/api/dossier/**` | dossier-service, unchanged | `GET` only: dossier is a read projection and receives no public command route. |
@@ -121,6 +121,10 @@ routes:
 - `POST /api/asset/v1/html-imports/*/commit` and
   `PUT /api/media/v1/upload-sessions/*/content` use specialized bounded
   forwarding for supported long-running traffic.
+- `POST /api/inventory/v1/sessions/*/outcome/recalculate` uses an isolated
+  60-second downstream read deadline. The exact command is excluded from the
+  generic inventory route, while its path, authorization and idempotency
+  headers are forwarded unchanged and cookies are removed.
 - `POST /api/assistant/v1/conversations/*/turns` uses the assistant streaming
   proxy so a valid streamed answer does not inherit the ordinary read deadline.
 
@@ -230,7 +234,8 @@ parses every canonical service OpenAPI and evaluates the real ordered router fun
 inventory contains every canonical public `/api/**` operation; auth-service operations delegated
 under `/auth/**` and media-service-local `/health/**` probes are explicit separate partitions. The
 gate verifies owner-specific task-board and analytics path rewrites, dedicated SSE/upload/import/
-assistant route precedence, zero routing for every canonical internal operation and reserved
+inventory-recalculation/assistant route precedence, unambiguous exclusion of the recalculation
+command from the generic inventory route, zero routing for every canonical internal operation and reserved
 private/internal alias, and the real edge security classification. All public domain operations
 require Bearer authentication except the four explicitly anonymous logistics client-presentation
 operations.

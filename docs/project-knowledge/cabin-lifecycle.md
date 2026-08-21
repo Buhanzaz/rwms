@@ -383,7 +383,10 @@ Inventory can intersect the cabin lifecycle before booking, after return, or
 while repair work exists:
 
 1. The panel starts an `ACTIVE` session. Membership is a live warehouse-scoped
-   population owned by inventory; the manager app records field findings.
+   population owned by inventory; the manager app records field findings. Only an automatically
+   captured `EXPECTED` finding follows a later registry departure. An explicit `ADDED_NEW`,
+   `ADDED_USED` or `UNEXPECTED_EXISTING` observation remains in the result when a later capture
+   omits it because the physical warehouse finding is authoritative inventory evidence.
 2. An inspection moves from `NOT_INSPECTED` to `READY` or `WORK_STAGED` and
    stores a proposal only. Saving a finding does not yet mutate another owner.
 3. Review builds a server-owned final plan in `DRAFT`; source changes make it
@@ -423,8 +426,12 @@ remains visible; it is not silently treated as applied. From completed history,
 a MANAGE user can rebuild missing work and requeue every existing publication,
 including an earlier success, because the later photo, logistics and no-work
 owner effects may not have existed when that result was recorded. Exact
-owner-local receipts make the replay safe; photos and finding evidence are
-retained.
+owner-local receipts make the replay safe; photos and finding evidence are retained. If the
+obsolete membership rule had already deactivated and omitted inspected explicit observations, the
+same command restores their inspection baseline, appends them after unchanged prior entries in a
+strictly newer completed plan version, replaces statistics and requeues the complete corrected
+plan. Completed inventory is authoritative, so the correction performs no remote I/O or downstream
+mutation and does not reopen completed media upload authority.
 
 All findings in one frozen plan share one durable reapplication generation.
 Automatic retries preserve it and their downstream keys; only the confirmed
@@ -432,6 +439,14 @@ history action advances it for the whole plan. During that same-source
 reassertion asset-service preserves an operation lease that may already belong
 to the exact inventory repair, while maintenance or logistics releases only an
 unrelated predecessor lease under its recorded owner and fencing token.
+At the same completion instant, every owner accepts a higher plan version only as the same
+inventory/finding correction: maintenance adopts an equivalent applied repair without duplicating
+its immutable source, but supersedes it through the normal durable workflow when work/no-work,
+priority, movement or capital routing changed. The result has exactly one current route, including
+after an interrupted effects-settled retry. Media retains the exact photo folder, and
+its private completed-outcome path may use a retained finding proof only when a `VERSION_GAP`
+starts after that proof; the quarantine and all public media restrictions remain unchanged.
+Lower/equal-version drift fails closed.
 
 ## 10. Transfer branch
 

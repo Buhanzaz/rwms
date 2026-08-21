@@ -62,10 +62,59 @@ Apply требует `authoritativeAssetVersion`, который asset-service �
 idempotency key возвращает замороженный ответ без новых эффектов. Новый ключ для того же immutable
 source заново обнаруживает и supersede non-terminal predecessors, созданные после предыдущего
 успеха, сохраняя exact same-source repair и никогда не создавая дубликат.
+Если этот exact work coordinator уже находится в состоянии `APPLIED`, а local projection позже
+продвинулась выше исходного authority запроса, восстановление с новым ключом остаётся намеренно
+узким. Immutable запрос, warehouse, applied coordinator, watermark и active bound repair должны
+по-прежнему совпадать. Текущая immutable source row должна называть этот repair; когда у
+эквивалентного исправленного плана намеренно нет собственной source row, immutable source другого
+плана уже должна владеть ровно этим retained repair. Его классификация должна соответствовать
+текущей asset truth `REPAIR`/`CAPITAL_REPAIR`. Текущий статус может совпадать с desired status,
+либо сохранённый `REPAIR` может быть повышен до `CAPITAL_REPAIR`. Тогда recovery повторно утверждает
+только существующие status/task/driver/lease reconciliation effects связанного repair,
+не выполняет asset-status transition и не переписывает request, authoritative version или
+response coordinator. `FREE`, `RENTED`, `BOOKED`, desired `CAPITAL_REPAIR` при текущем `REPAIR`,
+terminal state, изменённый source, отсутствующий либо не-`APPLIED` coordinator, несвязанный либо
+несовпадающий repair и устаревший plan/watermark остаются конфликтами. Этим fence владеют
+[`InventoryPublicationAssetFence`](src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryPublicationAssetFence.java)
+и
+[`InventoryAuthoritativeOutcomeStore`](src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryAuthoritativeOutcomeStore.java).
 Для no-work reassertion увеличенный `authoritativeAssetVersion` от того же immutable source
 считается новым техническим fence, а не другим решением инвентаризации. Исходный outcome
 coordinator остаётся неизменным, а новый idempotency key сохраняет точный fingerprint запроса и
 ответ в отдельном receipt.
+
+Исправленный completed plan может продвинуть тот же inventory/finding в точный тот же момент
+завершения только строго большей `finalPlanVersion` после состояния предыдущего outcome `APPLIED`.
+Неизменная work-коррекция принимает существующий repair и продвигает outcome watermark; поскольку
+исходная immutable source row уже владеет этим repair, исправленные coordinator и receipt ссылаются
+на него без дубликата source или repair. Если более поздние completed receipts уже заменили
+исходный repair predecessor coordinator, сохраняется новейший live repair, связанный receipt.
+Driver reassert разрешает новейший `APPLIED` coordinator bounded-запросом по completion time и
+plan version, поскольку исправленные планы намеренно оставляют один repair в нескольких
+исторических coordinator rows. Retry из `EFFECTS_SETTLED` снимает compensation guard, записанный до
+обнаружения этой связи, и повторно утверждает task-, driver- и lease-работу сохранённого repair. Изменение finding revision,
+наблюдаемой asset version, fingerprint, приоритета, дат, media, выбранной цели, перемещения,
+обычного или капитального routing, а также классификации `WORK`/`NO_WORK` вместо этого запускает ту
+же durable remote compensation и local supersession, что и более поздняя inventory. Прежний active
+outcome остаётся историей, а активным остаётся ровно один исправленный repair либо ни одного repair
+для `NO_WORK`. Меньшая
+версия, drift той же версии, изменение identity inventory/finding/warehouse/completion,
+предыдущий outcome не в состоянии `APPLIED` и terminal accepted или written-off работа остаются
+конфликтами.
+
+Если compensation успела durable отменить ordinary task сохраняемого repair до распознавания
+эквивалентной коррекции, maintenance не может повторно использовать identity этой задачи. Только
+inventory-owned repair в состоянии queued, без перемещения и до начала работ, все stages которого
+ещё подтверждают отменённые mappings, переходит на один детерминированный replacement task ID,
+очищает только эти mappings и ровно один раз регистрирует replacement. То же восстановление
+помечает освобождённый operation lease, получает и сохраняет новый fence до reconciliation
+статуса, а затем подтверждает доставку task. Более поздний reassert также соблюдает durable
+локальный fence `RECONCILIATION_REQUIRED`, когда release-ledger принадлежит старой версии плана:
+вместо подтверждения уже совпадающего asset status он обязан заново получить lease. Новый fence
+завершает локальную reconciliation, только если ordinary task уже generated и перемещение не
+ожидается; иначе последним fence остаётся подтверждение task или driver. Started, completed,
+movement и capital routes не открываются заново; exact replay не вращает task и не получает ещё
+один lease.
 
 Регистрации публикации и immutable source rows, записанные до V45 coordinator, остаются audit
 history и не блокируют последнюю completed inventory. Operation-only row или source, создавший
@@ -89,18 +138,37 @@ asset owner до replacement. Ответ asset может подтвердить
 Когда новая inventory generation сохраняет этот current repair, maintenance повторно утверждает
 вычисленный asset-статус `REPAIR`/`CAPITAL_REPAIR` и пересоздаёт отсутствующую работу с
 generation-specific ключами. Обычная входящая работа `DELIVER_TO_REPAIR` указывает authoritative
-inventory finding, даже если current repair был принят из source до V45. Внешний капремонт с
-`movementToRepair=true` вместо неё получает отдельное исходящее задание
-`CAPITAL_TO_PRODUCTION`, источником которого является этот капремонт.
+inventory finding, даже если current repair был принят из source до V45. Явный выбор капремонта
+взаимоисключаем с входящим перемещением и остаётся в active capital-route.
 
 Work apply сначала сохраняет `INVENTORY` repair в `DRAFT` с полным замороженным планом и одной
 durable reconciliation `ASSET/QUEUE_REPAIR`. Существующий queue reconciler получает lease и меняет
-статус asset. При `forceCapitalRepair=true` он использует `QUEUE_TO_CAPITAL_REPAIR`, завершает local
-repair как внешний капитальный (`COMPLETED/PENDING`, `EXTERNAL_CAPITAL`), не создаёт обычное
-task-board задание и при `movementToRepair=true` создаёт отдельное logistics driver task
-`CAPITAL_TO_PRODUCTION`. Для обычных работ он ставит repair в очередь и либо сразу регистрирует
+статус asset. При `forceCapitalRepair=true` он использует `QUEUE_TO_CAPITAL_REPAIR`, направляет local
+repair в активный внешний капремонт (`QUEUED/NOT_READY`, `EXTERNAL_CAPITAL`), не считает публикацию
+inventory завершением работы и не создаёт обычное task-board задание. Для обычных работ он ставит
+repair в очередь и либо сразу регистрирует
 задание task-board, либо при `movementToRepair=true` создаёт logistics driver task
 `DELIVER_TO_REPAIR` и регистрирует ремонтную работу после доставки.
+Если catalog-enforced капремонт сохраняет `movementToRepair=true`, тот же frozen-выбор создаёт или
+переиспользует `CAPITAL_TO_PRODUCTION`; пересчёт не очищает этот выбор только потому, что целевой
+repair является капитальным. Капремонт всё равно остаётся `QUEUED/NOT_READY` до завершения работ.
+Эффективная дата задания водителя в private-ответе принадлежит logistics. HTTP-граница по-прежнему
+требует непустую дату для `AUTO`; для `FIXED_DATE` она отклоняет дату раньше immutable request, но
+разрешает более поздний эффективный результат. До подтверждения durable-работы
+`CREATE_DRIVER_TASK` maintenance определяет текущий локальный день склада вне своей транзакции БД.
+Текущий или будущий fixed request должен совпасть точно, а для просроченного request эффективная
+дата принимается только во включительном диапазоне от исходной даты до этого локального дня. Более
+поздняя дата отклоняется существующим bounded reconciliation failure path. Запрошенная дата repair
+и stable idempotency key не меняются, а confirmation receipt записывает принадлежащую logistics
+эффективную дату. Проверки identity, source, kind, priority и state не меняются. См. transport fence
+[`MaintenanceLogisticsHttpClient`](src/main/java/dev/buhanzaz/rwms/maintenance/integration/MaintenanceLogisticsHttpClient.java)
+и confirmation fence
+[`MaintenanceTaskReconciliationUseCases`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceTaskReconciliationUseCases.java).
+No-work publication использует отдельный authoritative cleanup и оставляет бытовку `FREE`.
+Чтения и команды приёмки/доработки отклоняют inventory-origin rows без task-board evidence
+исполнения, поэтому исторические capital rows, созданные одной публикацией, также не попадают на
+эти поверхности. Повторное применение их завершённого результата inventory возвращает прежние
+`COMPLETED/PENDING` rows в активный capital-route `QUEUED/NOT_READY`.
 
 Публикация проверяет fingerprint точного raw frozen snapshot до любой compatibility adaptation.
 Только для schema version 1 исторический snapshot, в котором один и тот же непустой список
@@ -135,9 +203,10 @@ inventory snapshot и каждый новый Kafka-факт ESTIMATE/REPAIR v1.
 остаются недопустимыми. Сложность ремонта становится CAPITAL, когда этот явный выбор истинен либо
 любая текущая catalog WORK принудительно требует капремонт. Границы inventory freeze и сохранённого
 snapshot отклоняют план, который одновременно запрашивает перемещение на ремонт, поэтому
-maintenance не владеет двумя конкурирующими направлениями одного finding.
-Единственным downstream implementation остаётся существующий логистический цикл капремонта,
-отдельный active-capital список, приёмка и возврат в FREE; клиенты сами эти эффекты не создают.
+maintenance не владеет двумя конкурирующими направлениями одного finding. Capital routing и
+отдельный active-capital список остаются server-owned. Одна публикация inventory никогда не
+открывает приёмку или доработку: для этих переходов требуется авторитетное завершение исполнения.
+Клиенты сами эти эффекты не создают.
 Миграция [`V44__manual_capital_repair_selection.sql`](src/main/resources/db/migration/V44__manual_capital_repair_selection.sql)
 заполняет существующие сметы, ревизии и ремонты значением `false`.
 
@@ -185,6 +254,7 @@ workflow замены бытовки.
 | Asset-, task- и repair-lifecycle reconciliation use cases | Три независимые ветки remote effect/recovery |
 | `InventoryMaintenanceService` | Стабильный фасад private inventory boundary над freeze, upsert и repair-snapshot projection |
 | Collaborators freeze/upsert/validation/transaction для inventory maintenance | Admission замороженного плана, validation каталога/routing/media и изолированные local transactions |
+| `InventoryAuthoritativeOutcomeStore` и `InventoryAuthoritativeOutcomeService` | Ordering, compatibility и idempotent применение исходных или исправленных outcomes завершённого плана |
 | `InventoryPublicationReconciliationService` | Стабильный фасад completed inventory над preflight projection и durable apply |
 | Collaborators authoritative outcome/source/target/materialization для inventory | Completed-at watermark, replay/reassertion receipt, compensation predecessors, local supersession и materialization единственного full-plan repair |
 | `PropertyDispositionApplicationService` | Стабильный decision facade над creation, furniture materialization, review/recovery, reads и processing callbacks |
@@ -243,6 +313,13 @@ transactional outbox в одной PostgreSQL-транзакции. Достав
 проверяет envelope и отмечает outbox row только после broker acknowledgement; consumers выполняют
 deduplication и хранят version-gap/recovery state; sanitized terminal failures проходят через
 принадлежащий сервису DLT path, без копирования исходного тела сообщения в логи.
+
+Inbound validator task-board принимает и точные исторические формы событий, и текущие канонические
+формы: board-task fact обязательно содержит `lane` и может нести schedule, priority, pinning и пару
+driver audience; queue-entry fact содержит nullable original/current budgets и не содержит
+исторический `queueName`. Ошибка validation происходит до replay staging и поэтому не может быть
+переиграна из DLT; после исправления validator восстановление повторно публикует immutable source
+envelopes по порядку aggregate version, а не редактирует inbox или domain rows.
 
 `MAINTENANCE_KAFKA_ENABLED` управляет Kafka-specific relay и consumer beans. Он может быть `false`
 только в явном профиле `dev` или `test`; любой другой профиль отклоняет startup при выключенной

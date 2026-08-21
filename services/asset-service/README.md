@@ -113,11 +113,14 @@ asset-owned transaction. See the canonical
 
 Flyway V38 adds a permanent successful idempotency receipt and a per-cabin completed-at watermark.
 The same key and request return the frozen result. A new key for the same latest final-plan finding
-reasserts status, reservations, holds and transfer state, but preserves the active operation lease
-because it may already belong to the repair created by this finding. Maintenance or logistics
-releases an unrelated predecessor lease with its exact owner and fence. A strictly older completed
-inventory and a conflicting equal-time source return `409`. `LOST`, `WRITTEN_OFF` and a wrong
-warehouse always reject without a partial status or receipt.
+reasserts status, reservations, holds and transfer state. At the same completion time, the service
+also accepts a strictly greater final-plan version only when the inventory and finding IDs match
+the current watermark; a lower version or same-version hash drift returns `409`. A reassertion or
+plan correction releases every active operation lease for `FREE`. For `REPAIR` and
+`CAPITAL_REPAIR`, it retains only `MAINTENANCE_REPAIR`, which may already belong to the repair
+created from that finding, and releases stale logistics or rental leases. A strictly older
+completed inventory, another equal-time source, `LOST`, `WRITTEN_OFF` and a wrong warehouse always
+reject without a partial status or receipt.
 
 Flyway
 [`V39__inventory_outcome_passport_watermark.sql`](src/main/resources/db/migration/V39__inventory_outcome_passport_watermark.sql)

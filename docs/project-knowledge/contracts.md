@@ -135,12 +135,20 @@ The public logistics rich-detail operation
 has `driver.tasks`, the WORKER identity equals the planned assigned worker and
 the task audience is `ASSIGNED_DRIVER`. Media accepts a WORKER upload/read
 token with exactly one of `worker.tasks` and `driver.tasks`; all existing
-worker, warehouse and owner proofs still apply.
+worker, warehouse and owner proofs still apply. The additive optional
+`readerWorkerIds` property in
+[`task-board-events-v1.schema.json`](../../contracts/events/task-board/task-board-events-v1.schema.json)
+separates task read visibility from `allowedWorkerIds` upload authority. A
+consumer receiving an older proof derives its initial reader set from
+`allowedWorkerIds`; the producer always emits both fields after the compatible
+media consumer and V14 projection are installed.
 
 Evidence:
 [`task-board OpenAPI`](../../contracts/openapi/task-board-service.yaml),
 [`logistics OpenAPI`](../../contracts/openapi/logistics-service.yaml),
 [`media OpenAPI`](../../contracts/openapi/media-service.yaml),
+[`task-board reader projection`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardEntryOwnerProofService.java),
+[`media V14`](../../services/media-service/db/migration/V14__task_board_reader_audience.sql),
 [`MobileTaskSurfacePolicy.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/MobileTaskSurfacePolicy.java),
 [`LogisticsAuthorizer.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/security/LogisticsAuthorizer.java),
 and
@@ -225,7 +233,23 @@ MANAGE command `POST /api/inventory/v1/sessions/{inventoryId}/refresh`. Its requ
 `expectedSessionRevision`, and `Idempotency-Key` identifies an exact replay. A successful response
 is the authoritative session detail after inventory-service has reconciled a fresh asset capture;
 the command preserves stored finding/inspection evidence while invalidating derived furniture and
-final-plan state.
+final-plan state. Capture departure applies only to automatic `EXPECTED` population; explicit
+`ADDED_NEW`, `ADDED_USED` and `UNEXPECTED_EXISTING` observations remain in the result.
+
+[`inventory-events.yaml`](../../contracts/events/inventory-events.yaml) and the canonical
+[`inventory finding schema`](../../contracts/events/inventory/inventory-events-v1.schema.json) add
+the finding lifecycle markers `inventory.finding.membership-departed.v1`,
+`inventory.finding.membership-refreshed.v1` and
+`inventory.finding.membership-restored.v1`, plus compatible optional `membershipActive` on the
+shared v1 finding payload. New lifecycle markers require the matching boolean in active consumers;
+historical added/inspection records may omit it. The corresponding
+[`media consumer contract`](../../contracts/events/media-events.yaml) checkpoints the markers
+without changing owner proof, while
+[`dossier-consumers.yaml`](../../contracts/events/dossier-consumers.yaml) maps them to no activity.
+Media migration
+[`V15__inventory_finding_membership_markers.sql`](../../services/media-service/db/migration/V15__inventory_finding_membership_markers.sql)
+widens only the existing inbox event/owner-revision check; it neither rewrites inbox evidence nor
+changes media rows or objects.
 
 The private inventory-publication preflight in
 [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml) keeps `findings`
@@ -249,7 +273,10 @@ MANAGE command `POST /api/inventory/v1/sessions/{inventoryId}/outcome/recalculat
 requires the session revision plus the completed final-plan version and SHA-256, and its successful
 `202` response reports created, requeued and already-authoritative publication counts. The command
 only schedules owner-local durable work; it does not report a downstream status or repair as
-applied before the existing publication records settle.
+applied before the existing publication records settle. If the server restores an explicit finding
+omitted by the obsolete membership rule, the same response identifies the strictly newer corrected
+final-plan version/SHA; clients must accept that authoritative successor while rejecting a lower
+version or same-version hash drift.
 
 The private asset command
 `PUT /api/internal/asset/v1/inventory/outcomes/{inventoryId}/findings/{findingId}` in
@@ -264,7 +291,11 @@ The private media command
 `PUT /api/internal/media/v1/inventory/outcomes/{inventoryId}/findings/{findingId}/cabin-photos` in
 [`media-service.yaml`](../../contracts/openapi/media-service.yaml) accepts exact `READY IMAGE`
 references and their generations under the `media.inventory` service credential. It makes one
-deterministic inventory folder current while retaining older gallery associations and objects.
+deterministic inventory folder current while retaining older gallery associations and objects. The
+private command may reuse the completed finding's retained checkpointed identity without reopening
+public finding reads or uploads; a later unresolved version gap is tolerated only when it begins
+strictly after that proof checkpoint. Current-folder cover and logistics projections put the
+explicit cover first and keep the remaining images in stable association order.
 
 The plan-wide logistics command
 `PUT /api/internal/logistics/v1/inventory/outcomes/{inventoryId}` in
@@ -282,6 +313,19 @@ which supersedes non-terminal maintenance work and its external effects without 
 repair. These are separate owner commands with permanent idempotency receipts and per-owner latest
 inventory watermarks, not one distributed transaction. No boundary transfers media bytes, object
 keys or permission to delete inventory photos.
+
+For the same inventory/finding and completion instant, these existing private contracts permit a
+strictly higher corrected final-plan version only under owner-local compatibility checks. Asset and
+logistics advance their ordering fence; maintenance requires the previous outcome to be applied,
+adopts the current repair when the executable finding content is equivalent, and otherwise runs its
+existing supersession workflow so changed work/no-work, priority, movement or capital routing leaves
+one current route. It never rewrites terminal accepted or written-off work. Media requires the exact
+previous photo set and retains the stable folder. The same private completed-outcome operation may
+reuse a retained checkpointed finding proof across a strictly later `VERSION_GAP`, but it neither
+resolves that quarantine nor changes public media authorization; every other owner/quarantine check
+still fails closed. This is a compatible use of the existing
+version/hash and payload fields, not a new transport shape. Lower versions, equal-version drift,
+another finding/inventory or a changed completion instant remain `409`.
 
 The reapplication generation is inventory-service persistence, not a public
 request field. Automatic retries retain its exact downstream idempotency keys;
@@ -441,7 +485,9 @@ domain-public operations, proves the four logistics presentation operations are
 the only anonymous domain routes, and proves canonical internal operations and
 reserved internal/private aliases are not public gateway routes. Auth callbacks
 and media health remain explicit owner-specific exclusions rather than hidden
-route gaps.
+route gaps. The completed-inventory recalculation POST has one dedicated 60-second
+transport timeout and is excluded from the generic inventory route; this changes
+neither its canonical path/security nor inventory-service ownership.
 
 Manager, worker and driver Retrofit gates inventory all declared client
 methods, eagerly validate their converters and exercise representative

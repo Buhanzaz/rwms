@@ -95,6 +95,8 @@ components own the decisions:
 | `TaskBoardRoutePayloadCodec` | The single canonical route JSON and fingerprint codec |
 | `DriverTaskAudienceService` | Logistics-driver audience shape, qualification, visibility and execution authorization |
 | `MobileTaskSurfacePolicy` | Non-overlapping DriverApp primary and WorkerApp secondary capabilities |
+| `WorkerTaskAccessService` | Shared worker/group/qualification queue audience for native task reads and media proofs |
+| `TaskBoardEntryOwnerProofReconciler` | Bounded idempotent repair of legacy or workforce-stale media proof audiences |
 | `WorkerPushOutbox` / `WorkerPushDispatcher` | Transactional slinger notification, leased FCM delivery and bounded recovery |
 | `WorkforceService` | Stable worker/group API facade over three lifecycle owners |
 | `WorkforceProfileService` | Worker profile and qualification mutation with the credential lock span |
@@ -111,6 +113,24 @@ The workforce graph is also acyclic. Profile commands call the narrow
 credential lifecycle and read projection, while group commands use only the
 read projection. Credential recovery never calls the facade or the group
 owner, and no collaborator exposes more than 15 direct dependencies.
+
+A group create/update may include `currentGroupChanges` alongside the complete
+membership replacement. `WorkforceGroupService` locks changed workers in stable
+UUID order, checks each worker version, membership, availability and active-task
+guard, and commits membership plus current-group intervals/events/KPI facts in
+one transaction. Omitting the field preserves the previous current groups for
+older callers; the dedicated worker current-group endpoint remains compatible.
+
+Task-entry owner proofs separate result uploaders (`allowedWorkerIds`) from
+readers (`readerWorkerIds`). While an entry is open, the read audience is
+calculated by the same native worker/group/qualification and driver rules as
+feed/detail access, so a worker may view a waiting task's source/result photos
+without gaining upload authority. Task creation publishes the initial proof in
+the same local transaction. When an entry closes, the reader audience is reduced
+to every historical assignee and evidence worker. A bounded 30-second reconciler
+emits only changed proofs, backfills events created before the additive reader
+field and converges later workforce or queue-policy changes. Inactive proofs
+never authorize a new upload or finalization.
 
 ## HTTP boundaries
 

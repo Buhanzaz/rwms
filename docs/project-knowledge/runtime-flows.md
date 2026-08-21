@@ -168,8 +168,10 @@ first refuses to run beside a dirty furniture/final-plan draft or another finish
 the displayed session revision and a new idempotency key to inventory-service. The owner checks that
 revision, completes a fresh asset capture outside the local apply transaction, rechecks the revision
 under lock, and atomically journals target-session arrivals, departures and current snapshots. Saved
-finding inspections/media/history remain in PostgreSQL; only the derived registry/furniture/final
-plan projections are discarded or marked stale. The returned session replaces the detail cache and
+finding inspections/media/history remain in PostgreSQL. A departure deactivates only automatically
+captured `EXPECTED` population; `ADDED_NEW`, `ADDED_USED` and `UNEXPECTED_EXISTING` are explicit
+physical observations and remain in the result even when the capture omits them. Only the derived
+registry/furniture/final-plan projections are discarded or marked stale. The returned session replaces the detail cache and
 the panel clears only those derived query entries before the user rebuilds cabin and furniture
 review. If the rebuilt final plan contains no maintenance work, inventory sends `findings: []` and
 maintenance returns an empty candidate set instead of a validation failure.
@@ -221,6 +223,15 @@ canonical asset result and effective version before the remaining owner effects:
    recoverable reassertion, not a different inventory decision. Inventory projects this command
    explicitly to the maintenance schema; the asset-only passport observation and hash remain on
    the asset boundary.
+4. Maintenance routes the materialized result without manufacturing completion: ordinary work
+   without inbound movement registers on task-board; selected movement creates the logistics
+   delivery and registers ordinary work after arrival; catalog-enforced capital work with the same
+   frozen movement choice creates or reuses `CAPITAL_TO_PRODUCTION` while remaining active as
+   `QUEUED/NOT_READY`; explicit no-movement capital work remains on that active route without a
+   driver task; and no-work remains `FREE`. Only task-board completion can open inventory
+   repair acceptance/rework. Historical inventory rows without that execution proof are excluded
+   from both surfaces; reapplying their completed outcome restores legacy `COMPLETED/PENDING`
+   capital rows to the active `QUEUED/NOT_READY` route.
 
 The panel repair-detail workspace keeps three evidence sets separate: aggregate task media, the
 selected work line's source media, and worker result photos. Maintenance reconstructs an
@@ -232,10 +243,15 @@ repair owner proof. Only worker-result evidence uses the task-board entry proof.
 the exact `mediaId`/generation references from the current projections; it neither substitutes the
 repair-wide gallery nor changes media or MinIO ownership. Each exact work-line set uses the shared
 compact carousel with an in-image count and always-visible previous/next controls; aggregate and
-result-evidence sets retain the standard gallery presentation. Warehouse card previews consume the
-association-ordered cabin projection independently of the explicit cover position, so a cover
-selected later in that order cannot invalidate the whole batch. The authoritative read projection
-is implemented by
+result-evidence sets retain the standard gallery presentation. The cabin projection puts its
+explicit cover first and retains stable association order for the remaining current-folder images;
+the panel repeats that ordering defensively during a mixed-version rollout. The passport photo
+archive groups every retained CABIN association by its media-owned folder and shows the folder's
+source, occurrence time, actor and photo count before opening its images. Folder provenance comes
+from a separately paginated `INVENTORY`/`MEDIA` dossier read, so History-tab filters or its first
+page cannot relabel older photo folders; missing provenance remains explicitly unknown. The panel
+also consumes every CABIN archive cursor instead of truncating history at the first 100
+associations. The authoritative read projection is implemented by
 [`InventoryRepairSourceReadProjection`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryRepairSourceReadProjection.java),
 and the panel owner precedence is implemented by
 [`repair-task-media-owner.ts`](../../panel/src/features/repair-tasks/repair-task-media-owner.ts); the
@@ -248,8 +264,72 @@ superseded, while a repair previously adopted into an `APPLIED` outcome is repla
 full-plan repair and bound through a new permanent receipt. The old source, outcome, receipt and
 repair rows remain unchanged. A current V45 repair is reasserted instead of duplicated.
 
+One narrow exception lets a new-key reassertion of that exact already-`APPLIED` work coordinator
+recover after the maintenance asset projection has advanced beyond the request's original
+authority. Its immutable request, warehouse, watermark and active coordinator-bound repair must
+still match. A current immutable source row must name that repair; when an equivalent corrected
+plan intentionally has no current source row, an immutable different-plan source must already own
+the exact retained repair. The current asset status may equal the stored desired repair status, or
+a stored `REPAIR` may have been promoted to `CAPITAL_REPAIR`; the bound repair's own classification
+must already match that current truth. Maintenance therefore schedules only the existing bound
+status/task/driver/lease reconciliation effects and performs no asset-status transition. It keeps
+the coordinator's stored authoritative version and response unchanged. Initial publication,
+`FREE`/`RENTED`/`BOOKED`, desired capital with current ordinary repair, terminal state, changed
+source, absent or non-applied coordinator, unbound or mismatched repair and stale plan/watermark
+still fail closed. The lock order remains
+source/coordinator, asset projection, watermark, then bound repair. Evidence:
+[`InventoryPublicationAssetFence`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryPublicationAssetFence.java),
+[`InventoryAuthoritativeOutcomeStore`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryAuthoritativeOutcomeStore.java),
+and the DB-backed
+[`MaintenanceInventoryBoundaryIntegrationTest`](../../services/maintenance-service/src/test/java/dev/buhanzaz/rwms/maintenance/MaintenanceInventoryBoundaryIntegrationTest.java).
+
 Each owner uses a permanent receipt and latest-completed-inventory watermark. An exact retry returns
 the stored result, an older inventory is rejected, and no service reads another owner's database.
+At the same completion instant, a strictly higher plan version is a correction only for the same
+inventory/finding. Asset and logistics advance their ordering fences; maintenance first proves the
+prior outcome is applied. Equivalent work evidence adopts the current repair from the newest
+completed predecessor receipt without creating a second immutable source row. Changed priority,
+work, movement, capital or work/no-work evidence uses the same durable supersession workflow to
+leave exactly one current route; terminal accepted or written-off work still fails closed. An
+interrupted correction whose remote effects already settled resumes from its coordinator, restores
+the retained route's task/driver/lease effects when needed and completes idempotently. Media requires
+the exact prior photo set and reuses the stable gallery folder while advancing association metadata.
+When that retained repair has several historical corrected-plan coordinators, driver-task recovery
+selects the newest `APPLIED` owner with a bounded completion-time/plan-version query; it never asks
+JPA for an invalid unique target row and never rewrites the older coordinators.
+If a fresh private maintenance movement keeps a `FIXED_DATE` that has already passed by the current
+warehouse-local day, logistics preserves that original day in its idempotency checksum while using
+the current local day as the task's effective schedule. Exact maintenance replay returns that stored
+effective date; a changed original day conflicts, and public creates remain subject to the normal
+past-date rejection. The private contract therefore distinguishes the immutable requested date from
+the logistics-owned effective `DriverTask.scheduledDate`. Maintenance rejects a private HTTP
+response before the request date, then resolves the current warehouse-local day outside its database
+transaction before confirming the durable reconciliation: `AUTO` still requires a returned date;
+current or future `FIXED_DATE` must match exactly; overdue `FIXED_DATE` accepts only the inclusive
+range from the request through the current local day. The original maintenance repair date and
+stable key are not rewritten, while the confirmation receipt records the effective date. Scheduling
+normalization remains owned by
+[`DriverTaskService`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverTaskService.java),
+and maintenance only fences its consumed response in
+[`MaintenanceTaskReconciliationUseCases`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceTaskReconciliationUseCases.java).
+For this SERVICE-only completed-outcome command, a retained finding proof may still authorize those
+exact READY generations when its checkpoint predates a later unresolved `VERSION_GAP`; every other
+finding quarantine and every cabin quarantine remains fail-closed, and public finding media access
+is unchanged.
+A retained ordinary pre-start task that the settled correction already cancelled cannot be
+reactivated under the same task-board identity. Maintenance uses the cancellation ledger to rotate
+that inventory-owned task to one deterministic replacement identity, clears only its confirmed
+stage mappings, marks the released lease for reconciliation, acquires a new fence and registers the
+replacement once. Exact replay sees the new task/lease identities and performs no second rotation;
+started, completed, movement and capital routes remain unchanged.
+A later same-plan reassertion treats the retained repair's durable local
+`RECONCILIATION_REQUIRED` lease fence as recovery authority even when the exact release ledger is
+stored only with an older plan version. It acquires and persists a replacement lease before
+confirming an already-matching asset status. The replacement completes local reconciliation only
+when the ordinary task is already generated and no movement remains; otherwise the task or driver
+effect keeps ownership of the final confirmation.
+A lower version, equal-version drift, changed completion instant or another inventory/finding fails
+closed.
 Inventory keeps one durable reapplication generation across every finding in the completed plan.
 Automatic retry after a timeout or lost response keeps the same generation and downstream keys;
 only a confirmed history recalculation advances the whole plan to a new generation. On that
@@ -270,19 +350,53 @@ predecessor work.
 
 From completed history, the panel MANAGE action **Recalculate and apply outcomes** confirms the
 exact session revision and completed final-plan version/SHA. Inventory creates missing intents,
-advances one shared plan reapplication generation, requeues every existing intent, including an
+but first restores every inspected `ADDED_NEW`, `ADDED_USED` or `UNEXPECTED_EXISTING` finding that
+the obsolete capture rule deactivated and omitted. It restores the inspection baseline, emits a
+membership-restored ordering fact without reopening owner proof, copies every old plan entry,
+choice, date and order unchanged, appends the restored findings to a strict next completed version
+and replaces frozen statistics. Restored work is capacity-scheduled after retained work. Because
+completed inventory is authoritative, the correction needs no maintenance preflight and performs
+no remote I/O or downstream mutation. The
+response therefore may contain a newer plan version/SHA than the request, which the panel treats as
+the authoritative successor. Inventory then advances one shared plan reapplication generation and
+requeues every existing intent, including an
 earlier `SUCCEEDED` result, and makes a failed furniture
 reconciliation immediately eligible. Replaying every row is deliberate: an old success cannot prove
 that owner effects introduced later in the chain were applied. The public command returns `202`
 after this local scheduling step; the existing schedulers perform remote effects and keep every
 prior attempt/result as audit evidence. Finding media references and MinIO objects are not mutated
-by either scheduling or outcome apply; only media-service's current-folder pointer changes.
+by either scheduling or outcome apply; media-service reasserts the exact completed batch as the
+current folder and the selected cover as that folder's first presentation image. Earlier folders
+and their objects remain in the passport archive.
 Migration
 [`V22__retry_legacy_maintenance_source_outcomes.sql`](../../services/inventory-service/src/main/resources/db/migration/V22__retry_legacy_maintenance_source_outcomes.sql)
 advances the whole affected completed plan, rather than only its blocked rows, when a partially
 processed pre-coordinator maintenance source conflict is detected. This keeps all findings on one
 reapplication generation and allows prior apparent successes to receive the corrected owner
 effects without deleting their attempts or receipts.
+
+The panel keeps inspection evidence and applied outcome truth distinct. While a session is active,
+its finding list continues to show the frozen current-status snapshot. In completed history, a
+`PUBLISHED` operation shows the inventory owner's `desiredAssetStatus`; a selected movement is
+shown alongside that status. A current operation which has not reached `PUBLISHED` is explicitly
+shown as not applied, while an absent or cancelled operation falls back to the historical snapshot.
+Thus a cabin found at the warehouse may retain `RENTED` in its immutable inspection evidence while
+the completed result correctly displays the applied `REPAIR`, `CAPITAL_REPAIR` or `FREE` truth.
+This presentation does not let the browser derive or change asset status. It is implemented by the
+[`inventory view mapper`](../../panel/src/features/inventory/domain/inventory-view-mapper.ts) and
+[`completed findings list`](../../panel/src/features/inventory/inventory-findings-list.tsx).
+
+The public gateway gives this exact recalculation POST a dedicated bounded 60-second upstream read
+timeout. It remains a transport-only exception: the unchanged path, bearer token and
+`Idempotency-Key` reach inventory-service, cookies are stripped, and every other inventory route
+keeps the normal gateway timeout. This allows the durable `202` response to reach the panel when a
+large completed-plan correction takes longer than the ordinary edge budget without moving retry or
+business state into the gateway.
+
+Finding membership markers carry additive `membershipActive` state. Historical added/inspection
+facts may omit it, while departed requires `false` and refreshed/restored require `true`.
+Media-service and dossier-service validate and checkpoint these lifecycle markers as ordering
+evidence only: they neither reopen media owner authorization nor create a dossier cabin activity.
 
 Evidence:
 [`ManagerWorkspaceCoordinator`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/coordinator/ManagerWorkspaceCoordinator.kt),
@@ -297,7 +411,10 @@ Evidence:
 [`inventory session refresh`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventorySessionService.java),
 [`inventory membership reconciliation`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryFindingService.java),
 [`inventory history recovery`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryOutcomeRecoveryService.java),
+[`completed-plan correction`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/CompletedInventoryPlanCorrectionService.java),
 [`inventory publication`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryPublicationService.java),
+[`restoration event migration`](../../services/inventory-service/src/main/resources/db/migration/V24__restore_explicit_inventory_observations.sql),
+[`media membership-marker migration`](../../services/media-service/db/migration/V15__inventory_finding_membership_markers.sql),
 [`inventory passport intent migration`](../../services/inventory-service/src/main/resources/db/migration/V23__freeze_inventory_outcome_passport_observation.sql),
 [`asset outcome owner`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/InventoryAssetOutcomeService.java),
 [`asset passport watermark migration`](../../services/asset-service/src/main/resources/db/migration/V39__inventory_outcome_passport_watermark.sql),
@@ -308,6 +425,9 @@ Evidence:
 [`maintenance source compatibility`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryPublicationSourceLifecycle.java),
 [`maintenance inventory apply`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryPublicationApplyUseCases.java),
 [`panel inventory finish flow`](../../panel/src/features/inventory/inventory-pages.tsx),
+[`inventory event contract`](../../contracts/events/inventory-events.yaml),
+[`media inventory consumer`](../../services/media-service/internal/worker/inventory_owner_consumer.go),
+[`dossier inventory validator`](../../services/dossier-service/src/main/java/dev/buhanzaz/rwms/dossier/eventing/DossierEnvelopeValidator.java),
 [`panel repair task media`](../../panel/src/features/repair-tasks/repair-task-media-owner.ts),
 and
 [`maintenance work-photo UI`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/screens/MaintenanceScreen.kt).
@@ -744,13 +864,23 @@ and
    It then presents general source photos, materials, ordered works with their
    exact work-bound photos, comments and result evidence in execution order.
    Selecting a thumbnail opens that exact index in the authenticated paged and
-   zoomable viewer.
+   zoomable viewer. Task-board publishes that same feed/detail-visible audience
+   as `readerWorkerIds`; `allowedWorkerIds` remains limited to assigned workers
+   and evidence reservers, so viewing a waiting task never grants result-upload
+   authority. Task creation emits the initial proof in its local transaction.
+   The bounded owner-proof reconciler republishes only a changed audience and
+   also repairs proofs created before the reader field existed.
 9. Slinger participation is optional. The driver may close before anyone joins,
    while a joined driver and slinger share one task-board entry and evidence
    set. At least one result photo from either active participant must have
    reached media state `READY`; after that, either active participant may
    complete the entry. The one owner transition closes it for both clients and
    resumes interrupted group work.
+   Task-board's terminal owner proof reduces both audiences to every historical
+   assignee/evidence worker. Media-service uses that inactive proof only for
+   assigned-worker list/original/variant reads; upload creation and finalization still require
+   the active proof, so WorkerApp can reopen completed-task photos without
+   extending write authority.
 10. DriverApp exposes warehouse work, dated personal logistics and durable
     uploads as three main destinations. The logistics surface defaults to the
     device-local current date and filters only task-board-issued
@@ -779,6 +909,9 @@ Evidence:
 [`WorkerPushDispatcher.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/push/WorkerPushDispatcher.java),
 [`TaskBoardReadProjectionService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardReadProjectionService.java),
 [`WorkerTaskBoardService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/WorkerTaskBoardService.java),
+[`TaskBoardExternalRegistrationService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardExternalRegistrationService.java),
+[`TaskBoardEntryOwnerProofService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardEntryOwnerProofService.java),
+[`media task-entry projection`](../../services/media-service/internal/persistence/task_board_owner_projection.go),
 [`DriverLocalStore.kt`](../../driver-app/core-database/src/main/java/dev/buhanzaz/rwms/driver/core/database/DriverLocalStore.kt),
 [`TaskDetailScreen.kt`](../../driver-app/feature-task-detail/src/main/java/dev/buhanzaz/rwms/driver/feature/taskdetail/TaskDetailScreen.kt),
 [`logistics-board-page.tsx`](../../panel/src/features/logistics/driver-board/logistics-board-page.tsx),

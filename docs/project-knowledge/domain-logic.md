@@ -144,10 +144,26 @@ share one evidence set and terminal transition. Completion by the driver or
 joined slinger requires at least one result photo whose media generation is
 `READY`, then removes the task for both.
 
+A workforce group command may replace membership and version-fenced current
+group assignments atomically. Current assignment still requires active
+membership, an available active group, and no conflicting active task; a failed
+worker check rolls back the membership change. Closed task owner proof retains
+historical assignees for read-only task-photo access, while upload/finalize
+continues to require an active entry proof. For an open entry,
+`readerWorkerIds` is the exact union of WorkerApp/DriverApp feed/detail-visible
+workers, while `allowedWorkerIds` remains the assigned/evidence upload
+audience. Task creation publishes that initial proof transactionally. A bounded
+idempotent reconciliation pass repairs legacy proofs and converges later
+workforce or queue-policy changes without a browser-owned authorization
+fallback.
+
 Evidence: [`services/task-board-service/`](../../services/task-board-service/),
 [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
 [`DriverTaskAudienceService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/DriverTaskAudienceService.java),
 [`MobileTaskSurfacePolicy.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/MobileTaskSurfacePolicy.java),
+[`WorkerTaskAccessService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/WorkerTaskAccessService.java),
+[`TaskBoardExternalRegistrationService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardExternalRegistrationService.java),
+[`TaskBoardEntryOwnerProofReconciler.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardEntryOwnerProofReconciler.java),
 [`TaskBoardWorkerExecutionService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardWorkerExecutionService.java),
 and
 [`WorkerPushDispatcher.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/push/WorkerPushDispatcher.java).
@@ -218,6 +234,18 @@ queued, the repair uses the existing capital-repair placement,
 driver-movement, execution and acceptance lifecycle rather than creating a
 second queue owner or a client-side task.
 
+Completed-inventory publication is routing evidence, not execution evidence.
+No-work produces `FREE`; ordinary work without inbound movement registers on
+task-board; selected movement completes before ordinary task registration; and
+capital work stays `QUEUED/NOT_READY` on the active capital route. A frozen
+`movementToRepair=true` remains authoritative when catalog rules make that work
+capital and creates or reuses `CAPITAL_TO_PRODUCTION`; recalculation cannot clear
+the choice. Explicit no-movement capital work creates no driver task.
+Inventory-origin acceptance and rework require task-board execution proof, so a
+publication-created repair cannot enter either surface directly. Reapplication
+also restores legacy publication-completed capital rows to the active capital
+route.
+
 Evidence: [`services/maintenance-service/`](../../services/maintenance-service/),
 [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml),
 [`PropertyDispositionApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/disposition/application/PropertyDispositionApplicationService.java),
@@ -256,16 +284,20 @@ task: maintenance combines the flag with catalog-derived complexity and owns
 the resulting capital-repair lifecycle after publication.
 
 Membership is live while a session is active. An arrival at the inventoried
-warehouse becomes an expected uninspected item; a departure is excluded even
-if it had already been inspected. A terminal asset fact for either
-`WRITTEN_OFF` or `LOST` is a departure, so the cabin leaves the active
-population while prior evidence remains historical. A later return requires a
-new inspection.
+warehouse becomes an expected uninspected item. Only an automatically captured
+`EXPECTED` finding follows a later registry departure. An explicit operator
+observation (`ADDED_NEW`, `ADDED_USED` or `UNEXPECTED_EXISTING`) remains active
+in the inventory table and final-plan population when a later capture omits it;
+capture eligibility cannot erase the fact that the cabin was physically found.
+Terminal `WRITTEN_OFF` and `LOST` status still rejects outcome publication at
+the asset owner rather than being rewritten by inventory.
 
 A warehouse MANAGE user can explicitly refresh a stale active session from a fresh, read-only
 asset capture. Inventory checks the expected session revision before the remote capture and again
 under the local apply lock, then atomically feeds captured arrivals/current snapshots and
-target-session departures through the existing membership journal. A target departure never
+target-session departures through the existing membership journal. A target departure deactivates
+only automatic `EXPECTED` population; explicit observations and their inspection snapshots remain
+part of the active result. A target departure never
 changes another warehouse's active session merely because that asset was absent from this capture.
 The command retains findings, inspection/furniture evidence, media references and movement history;
 it restarts only the derived furniture review and marks any final plan stale. Furniture review
@@ -338,6 +370,25 @@ distributed transaction. A same-source no-work retry may carry a higher
 the immutable outcome coordinator but records that exact invocation fingerprint
 and response in its own receipt.
 
+If completed-history recovery creates a strictly newer plan version for the same inventory,
+finding and completion instant, asset, logistics, maintenance and media accept it only as a
+corrected successor. Lower versions and same-version drift remain conflicts. Maintenance requires
+the prior outcome to be `APPLIED`. Equivalent finding/work/routing evidence adopts the current
+repair resolved from the newest completed predecessor receipt without duplicating its immutable
+source row. Changed work, priority, movement/capital routing or `WORK`/`FREE` evidence supersedes the
+old active route and leaves exactly one current outcome; terminal accepted or written-off work is
+never rewritten. A retry can finish an interrupted corrected coordinator after remote effects have
+settled and reassert the retained repair's task, driver and lease effects. If those effects already
+cancelled the retained ordinary pre-start task, maintenance rotates only that inventory-owned task
+to a deterministic replacement identity, clears its confirmed stage mappings, reacquires the
+released lease under a new fence and registers the replacement once. Started, completed, movement
+and capital work is not reopened. Media likewise requires
+the exact prior photo set and keeps its stable gallery folder while advancing association metadata
+and the watermark. Its SERVICE-only completed-outcome path may use a retained checkpointed finding
+proof through a later `VERSION_GAP` only when the gap starts strictly after that proof; this does not
+resolve the quarantine or reopen public upload/read authority. A cabin quarantine, another finding
+quarantine reason, or a gap at or before the retained proof remains a conflict.
+
 Every intent in one completed plan carries the same durable reapplication
 generation. A scheduler retry or recovery from an unknown remote result keeps
 that generation and therefore the same owner-local idempotency keys. Only the
@@ -348,14 +399,21 @@ because it can already belong to the exact inventory repair; maintenance and
 logistics supersede unrelated predecessor work and release its lease using the
 stored owner and fencing token.
 
-A MANAGE command on completed inventory history fences the exact session
-revision and final-plan version/SHA, then rebuilds durable local work without a
-remote call. It creates missing no-work outcomes and requeues every existing
-publication, including a prior `SUCCEEDED` row, because an older success cannot
-prove that the later media, logistics and maintenance-cleanup steps were
-applied. Publication attempts and responses, finding revisions, photos and
-media-service/MinIO objects remain evidence; ordinary schedulers replay the
-immutable plan through owner-local idempotency receipts.
+A MANAGE command on completed inventory history fences the exact session revision and final-plan
+version/SHA. Before rebuilding durable work it restores every inspected explicit observation that
+the obsolete automatic-membership rule deactivated and omitted from the plan. The correction
+copies every existing entry, manager choice, date and order unchanged, appends the restored rows to
+a strictly newer completed version, replaces frozen statistics and emits a finding-owned restoration
+fact without reopening completed media authorization. Completed inventory is authoritative, so the
+correction needs no maintenance preflight and performs neither remote I/O nor downstream mutation.
+Media V15 changes only its finding-inbox constraint so the restoration ordering fact can advance
+the existing checkpoint; retained public owner proof remains inactive.
+It then creates
+missing outcomes and requeues every existing publication in the corrected plan, including a prior
+`SUCCEEDED` row, because an older success cannot prove that later media, logistics and
+maintenance-cleanup steps were applied. Publication attempts and responses, finding revisions,
+photos and media-service/MinIO objects remain evidence; ordinary schedulers replay the immutable
+plan through owner-local idempotency receipts.
 
 Maintenance owns frozen-plan allocation. Every stage first consumes at most one
 matching catalog work line, then the remaining work for that exact routing

@@ -114,11 +114,14 @@ nullable-значение. Catalog resolution выполняется до осв
 
 Flyway V38 добавляет permanent successful idempotency receipt и per-cabin completed-at watermark.
 Тот же key и request возвращают замороженный результат. Новый key для того же latest final-plan
-finding повторно применяет статус, reservations, holds и transfer state, но сохраняет active
-operation lease: он уже может принадлежать ремонту, созданному этим finding. Посторонний predecessor
-lease освобождает maintenance или logistics по точному owner и fence. Строго более старая
-завершённая инвентаризация и конфликтующий equal-time source возвращают `409`. `LOST`,
-`WRITTEN_OFF` и неверный warehouse всегда отклоняются без частичного статуса или receipt.
+finding повторно применяет статус, reservations, holds и transfer state. При том же completion time
+сервис также принимает строго большую версию final plan, только если inventory и finding IDs
+совпадают с текущим watermark; меньшая версия или drift hash при той же версии возвращают `409`.
+Повторное применение или исправление плана освобождает любую active operation lease для `FREE`. Для
+`REPAIR` и `CAPITAL_REPAIR` сохраняется только `MAINTENANCE_REPAIR`, которая уже может принадлежать
+ремонту, созданному из этого finding; устаревшие logistics или rental leases освобождаются. Строго
+более старая завершённая инвентаризация, другой equal-time source, `LOST`, `WRITTEN_OFF` и неверный
+warehouse всегда отклоняются без частичного статуса или receipt.
 
 Flyway
 [`V39__inventory_outcome_passport_watermark.sql`](src/main/resources/db/migration/V39__inventory_outcome_passport_watermark.sql)

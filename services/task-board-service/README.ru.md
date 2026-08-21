@@ -95,6 +95,8 @@ audience под общим task/entry version fence; public board move её не
 | `TaskBoardRoutePayloadCodec` | Единственный canonical route JSON и fingerprint codec |
 | `DriverTaskAudienceService` | Shape аудитории logistics-driver, qualification, visibility и execution authorization |
 | `MobileTaskSurfacePolicy` | Непересекающиеся DriverApp primary и WorkerApp secondary capabilities |
+| `WorkerTaskAccessService` | Общая worker/group/qualification аудитория очередей для native task reads и media proofs |
+| `TaskBoardEntryOwnerProofReconciler` | Bounded idempotent восстановление legacy или workforce-stale аудиторий media proof |
 | `WorkerPushOutbox` / `WorkerPushDispatcher` | Transactional уведомление стропальщика, leased FCM delivery и bounded recovery |
 | `WorkforceService` | Стабильный фасад worker/group API над тремя владельцами lifecycle |
 | `WorkforceProfileService` | Изменение worker profile и qualifications с сохранением credential lock span |
@@ -111,6 +113,24 @@ Workforce graph также ацикличен. Profile-команды вызыв
 lifecycle и read projection, а group-команды используют только read projection.
 Credential recovery не вызывает facade или group owner, и ни один collaborator
 не предоставляет больше 15 direct dependencies.
+
+Create/update группы может передавать `currentGroupChanges` вместе с полной
+заменой состава. `WorkforceGroupService` блокирует изменяемых работников в
+стабильном порядке UUID, проверяет version, membership, availability и отсутствие
+активной задачи и в одной транзакции фиксирует состав, интервалы current group,
+events и KPI facts. Отсутствие поля сохраняет прежние current groups для старых
+callers; отдельный worker current-group endpoint остаётся совместимым.
+
+Task-entry owner proof разделяет uploaders результата (`allowedWorkerIds`) и
+читателей (`readerWorkerIds`). Пока entry открыта, read audience рассчитывается
+теми же native worker/group/qualification и driver-правилами, что feed/detail:
+рабочий может видеть исходные и итоговые фотографии ожидающего задания, но не
+получает права upload. Создание task публикует исходный proof в той же локальной
+транзакции. После закрытия reader audience сокращается до всех исторических
+assignees и работников с evidence. Bounded reconciler каждые 30 секунд публикует
+только изменившийся proof, дополняет события до additive reader field и сводит
+последующие изменения workforce или queue policy. Inactive proof не разрешает
+новый upload или finalization.
 
 ## HTTP-границы
 
