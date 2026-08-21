@@ -4,7 +4,6 @@ import dev.buhanzaz.rwms.taskboard.domain.EntryStatus;
 import dev.buhanzaz.rwms.taskboard.domain.EntryType;
 import dev.buhanzaz.rwms.taskboard.domain.QueueEntry;
 import dev.buhanzaz.rwms.taskboard.domain.WorkQueue;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
@@ -12,13 +11,13 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Defines the single deterministic availability order shared by ordinary board reads and TAKE.
+ * Defines the deterministic presentation order of an ordinary task-board queue.
  *
  * <p>Active work remains at the front of its queue. Waiting work follows its aggregate queue
  * position, except that a pinned real card keeps its visible slot while an earlier shadow is
- * promoted; persisted schedule dates do not partition or order ordinary work. A route's first
- * unfinished entry is the only executable phase; later entries remain durable shadows until that
- * phase completes.
+ * promoted; persisted schedule dates do not partition or order ordinary work. This policy never
+ * truncates the backlog: a route's first unfinished entry is the only executable phase, and later
+ * entries remain durable shadows until that phase completes.
  */
 final class OrdinaryQueueAvailabilityPolicy {
   private static final Set<EntryStatus> UNFINISHED =
@@ -52,39 +51,16 @@ final class OrdinaryQueueAvailabilityPolicy {
   }
 
   /**
-   * Returns active and bounded waiting real cards before the selected tasks' future shadows.
+   * Returns every unfinished real and shadow entry in stable queue presentation order.
    *
-   * <p>A real card therefore skips inactive placeholders without destroying their persisted queue
-   * positions. When an earlier shadow is promoted it resumes that earlier position; a pinned real
-   * card remains ahead of newly promoted unpinned work.
+   * <p>A promoted real card resumes its persisted queue position, except that an explicitly pinned
+   * waiting real remains ahead. Daily-plan membership is derived by clients from the first
+   * configured number of waiting real cards and never removes a card or changes TAKE eligibility.
    */
-  static List<QueueEntry> visibleEntries(Collection<QueueEntry> queueEntries, int waitingLimit) {
-    requireLimit(waitingLimit);
-    List<QueueEntry> result = new ArrayList<>();
-    queueEntries.stream()
-        .filter(entry -> entry.getEntryType() == EntryType.REAL)
-        .filter(
-            entry ->
-                entry.getStatus() == EntryStatus.IN_PROGRESS
-                    || entry.getStatus() == EntryStatus.PAUSED)
-        .forEach(result::add);
-    result.addAll(availableWaitingEntries(queueEntries, waitingLimit));
-    queueEntries.stream()
-        .filter(entry -> entry.getEntryType() == EntryType.SHADOW)
-        .filter(entry -> entry.getStatus() == EntryStatus.WAITING)
-        .forEach(result::add);
-    return result.stream().sorted(PRESENTATION_ORDER).toList();
-  }
-
-  /** Returns the waiting real entries currently admitted by the configured queue window. */
-  static List<QueueEntry> availableWaitingEntries(
-      Collection<QueueEntry> queueEntries, int waitingLimit) {
-    requireLimit(waitingLimit);
+  static List<QueueEntry> orderedEntries(Collection<QueueEntry> queueEntries) {
     return queueEntries.stream()
-        .filter(entry -> entry.getEntryType() == EntryType.REAL)
-        .filter(entry -> entry.getStatus() == EntryStatus.WAITING)
+        .filter(entry -> UNFINISHED.contains(entry.getStatus()))
         .sorted(PRESENTATION_ORDER)
-        .limit(waitingLimit)
         .toList();
   }
 
@@ -100,11 +76,5 @@ final class OrdinaryQueueAvailabilityPolicy {
             .filter(entry -> UNFINISHED.contains(entry.getStatus()))
             .toList();
     return unfinished.stream().min(Comparator.comparingInt(QueueEntry::getRouteIndex)).orElse(null);
-  }
-
-  private static void requireLimit(int waitingLimit) {
-    if (waitingLimit < 1 || waitingLimit > 50) {
-      throw new IllegalArgumentException("Лимит доступных заданий должен быть от 1 до 50");
-    }
   }
 }

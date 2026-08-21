@@ -39,7 +39,7 @@ public class TaskBoardService {
     this.pinning = pinning;
   }
 
-  /** Returns the stable bounded aggregate ordinary-board representation. */
+  /** Returns every unfinished manager-visible entry in the stable aggregate ordinary board. */
   @Transactional(readOnly = true)
   public TaskBoardSnapshot snapshot(UUID warehouseId) {
     return readProjections.snapshot(warehouseId);
@@ -52,9 +52,9 @@ public class TaskBoardService {
   }
 
   /**
-   * Worker feed keeps the aggregate ordinary view and adds only actionable
-   * logistics entries from the server-controlled current lane.  The lane is an
-   * ordered queue; only its first waiting entry is actionable for a driver.
+   * Worker feed keeps the aggregate ordinary view, hides stages behind an unfinished SES gate and
+   * adds only actionable logistics entries from the server-controlled current lane. The lane is
+   * ordered; only its first waiting entry is actionable for a driver.
    */
   @Transactional(readOnly = true)
   public TaskBoardSnapshot workerSnapshot(UUID warehouseId, UUID workerId) {

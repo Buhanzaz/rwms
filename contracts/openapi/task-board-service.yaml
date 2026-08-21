@@ -257,9 +257,11 @@ paths:
       operationId: getTaskBoard
       description: >-
         Returns one aggregate ordinary operational-board representation. Each
-        ordinary queue contains every IN_PROGRESS/PAUSED REAL card plus the first
-        availableTaskLimit WAITING REAL cards in canonical priority-first order.
-        Future route stages are not part of this actionable projection.
+        ordinary queue contains every unfinished REAL and SHADOW route entry in
+        canonical active/pinned/position order. availableTaskLimit marks how many
+        waiting REAL cards belong to the visual daily plan; it neither truncates
+        the response nor fences TAKE. SHADOW remains read-only, and route order
+        remains the execution gate.
         If-None-Match is evaluated with a weak semantic ETag over stable snapshot
         state. Rolling timer counters and serverTime do not invalidate the ETag;
         timer state and the next transition do.
@@ -1741,7 +1743,7 @@ components:
           type: integer
           minimum: 1
           maximum: 50
-          description: Number of canonical WAITING REAL cards exposed and takeable in this ordinary queue.
+          description: Number of canonical WAITING REAL cards highlighted in the daily plan; all unfinished cards remain visible and every REAL route gate remains takeable.
         bindings:
           type: array
           items: { $ref: '#/components/schemas/QueueBinding' }
@@ -1769,7 +1771,12 @@ components:
         notificationThreshold: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
         notifyWhenThresholdReached: { type: boolean }
         resultPhotoMinCount: { type: integer, minimum: 0, maximum: 20 }
-        availableTaskLimit: { type: integer, minimum: 1, maximum: 50, default: 6 }
+        availableTaskLimit:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 6
+          description: Number of canonical WAITING REAL cards highlighted in the daily plan; not a visibility or TAKE limit.
         bindings:
           type: array
           items: { $ref: '#/components/schemas/QueueBindingRequest' }
@@ -1874,7 +1881,11 @@ components:
         notificationThreshold: { oneOf: [{ type: integer }, { type: 'null' }] }
         notifyWhenThresholdReached: { type: boolean }
         resultPhotoMinCount: { type: integer, minimum: 0, maximum: 20 }
-        availableTaskLimit: { type: integer, minimum: 1, maximum: 50 }
+        availableTaskLimit:
+          type: integer
+          minimum: 1
+          maximum: 50
+          description: Mirrored daily-plan count for canonical WAITING REAL cards; not a visibility or TAKE limit.
         bindings:
           type: array
           items: { $ref: '#/components/schemas/QueueBinding' }
@@ -2178,7 +2189,7 @@ components:
           type: integer
           minimum: 1
           maximum: 50
-          description: Configured WAITING REAL availability window for this ordinary queue.
+          description: Configured number of canonical WAITING REAL cards in this queue's visual daily plan; entries are never truncated by this value.
         entries:
           type: array
           items: { $ref: '#/components/schemas/BoardEntry' }

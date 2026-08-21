@@ -350,7 +350,7 @@ class TaskBoardWorkerExecutionService {
       }
     }
     if (!joiningSecondary) {
-      ensureFirstAvailable(entry, selected == null ? null : selected.getId());
+      ensureExecutableOrder(entry, selected == null ? null : selected.getId());
     }
     WorkerGroup assignedGroup = group;
     var queueBindings =
@@ -729,7 +729,7 @@ class TaskBoardWorkerExecutionService {
 
 
 
-  private void ensureFirstAvailable(QueueEntry entry, UUID workerId) {
+  private void ensureExecutableOrder(QueueEntry entry, UUID workerId) {
     if (entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER) {
       var first =
           entries
@@ -742,15 +742,6 @@ class TaskBoardWorkerExecutionService {
               .findFirst();
       if (first.isEmpty() || !first.get().equals(entry)) {
         throw new ConflictException("Сначала возьмите первый доступный этап очереди");
-      }
-    } else {
-      // Reuse the exact bounded board-selection query instead of hydrating the entire waiting
-      // backlog for every TAKE command. This also keeps command admission in lockstep with the
-      // cards exposed by the ordinary board.
-      if (!entries
-          .findVisibleOrdinaryEntryIds(entry.getTask().getWarehouseId())
-          .contains(entry.getId())) {
-        throw new ConflictException("Этап находится за пределами доступных заданий очереди");
       }
     }
     QueueEntry routeGate =

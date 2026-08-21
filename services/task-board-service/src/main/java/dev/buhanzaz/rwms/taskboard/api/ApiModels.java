@@ -107,7 +107,7 @@ public final class ApiModels {
    * @param notificationThreshold optional queue notification threshold
    * @param notifyWhenThresholdReached whether threshold notification is enabled
    * @param resultPhotoMinCount minimum result-photo count for completion
-   * @param availableTaskLimit maximum waiting cards exposed and takeable in this ordinary queue
+   * @param availableTaskLimit waiting real cards highlighted in the ordinary queue's daily plan
    * @param bindings qualified worker-class process bindings
    */
   public record QueueDefinitionRequest(
@@ -144,7 +144,7 @@ public final class ApiModels {
    * @param notificationThreshold optional queue notification threshold
    * @param notifyWhenThresholdReached whether threshold notification is enabled
    * @param resultPhotoMinCount minimum result-photo count for completion
-   * @param availableTaskLimit maximum waiting cards exposed and takeable in this ordinary queue
+   * @param availableTaskLimit waiting real cards highlighted in the ordinary queue's daily plan
    * @param bindings qualified worker-class process bindings
    */
   public record QueueDefinitionDto(
@@ -187,7 +187,6 @@ public final class ApiModels {
    * @param notificationThreshold optional queue notification threshold
    * @param notifyWhenThresholdReached whether threshold notification is enabled
    * @param resultPhotoMinCount minimum result-photo count for completion
-   * @param availableTaskLimit mirrored waiting-card limit for general derived queues
    * @param bindings qualified worker-class process bindings
    */
   public record DriverQueueRequest(
@@ -231,6 +230,7 @@ public final class ApiModels {
    * @param notificationThreshold optional queue notification threshold
    * @param notifyWhenThresholdReached whether threshold notification is enabled
    * @param resultPhotoMinCount minimum result-photo count for completion
+   * @param availableTaskLimit mirrored waiting-real daily-plan count for ordinary presentation
    * @param bindings qualified worker-class process bindings
    */
   public record WorkQueueDto(
@@ -1168,7 +1168,8 @@ public final class ApiModels {
    * Aggregate ordinary board snapshot returned to managers and eligible workers.
    *
    * @param warehouseId warehouse that owns the board
-   * @param columns ordinary queues and their server-limited actionable entries
+   * @param columns ordinary queues with every unfinished route entry; worker surfaces may retain
+   *     the SES holding visibility gate
    */
   public record TaskBoardSnapshot(UUID warehouseId, List<BoardColumnDto> columns) {}
 

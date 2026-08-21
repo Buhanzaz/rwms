@@ -29,7 +29,7 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
-/** Integration coverage for aggregate ordinary-board availability and canonical SES gating. */
+/** Integration coverage for complete ordinary-board projection and canonical SES gating. */
 @SpringBootTest(properties = "spring.jpa.properties.hibernate.generate_statistics=true")
 @ActiveProfiles("test")
 class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSupport {
@@ -48,13 +48,13 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
   }
 
   @Test
-  void aggregateBoardUsesPriorityWindowAndTakeRejectsOnlyTheNextWaitingCard() {
+  void aggregateBoardReturnsEveryRealCardAndDailyPlanCountDoesNotFenceTake() {
     WorkerClassDto workerClass = registry.createClass(workerClass("ordinary-window"));
     WorkQueueDto queue = queue("ordinary-window", QueueType.REPAIR, 2, 1, workerClass.id());
     WorkerDto worker = worker(workerClass.id());
     WorkerGroupDto group = group(workerClass.id(), worker.id());
 
-    BoardEntryDto excludedSeed =
+    BoardEntryDto laterSeed =
         entry(create(queue.definitionId(), "priority-three", LocalDate.of(2026, 8, 19), 3),
             "priority-three");
     create(queue.definitionId(), "priority-one", LocalDate.of(2026, 8, 23), 1);
@@ -65,33 +65,21 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
     assertThat(column.availableTaskLimit()).isEqualTo(2);
     assertThat(column.entries())
         .extracting(BoardEntryDto::title)
-        .containsExactly("priority-one", "priority-two");
+        .containsExactly("priority-one", "priority-two", "priority-three");
 
-    BoardEntryDto excluded = board.entry(WAREHOUSE_ID, excludedSeed.id());
-    assertThatThrownBy(
-            () ->
-                board.take(
-                    WAREHOUSE_ID,
-                    excluded.id(),
-                    new TakeEntryRequest(excluded.version(), group.id(), worker.id()),
-                    null))
-        .isInstanceOf(ConflictException.class)
-        .hasMessageContaining("пределами доступных");
-
-    BoardEntryDto secondAvailable = entry(snapshot, "priority-two");
+    BoardEntryDto later = board.entry(WAREHOUSE_ID, laterSeed.id());
     assertThat(
             board.take(
                     WAREHOUSE_ID,
-                    secondAvailable.id(),
-                    new TakeEntryRequest(
-                        secondAvailable.version(), group.id(), worker.id()),
+                    later.id(),
+                    new TakeEntryRequest(later.version(), group.id(), worker.id()),
                     null)
                 .status())
         .isEqualTo(EntryStatus.IN_PROGRESS);
   }
 
   @Test
-  void canonicalSesStepIsTheOnlyOrdinaryCardUntilItCompletesThenFirstRepairIsPromoted() {
+  void managerCanInspectSesFuturePathWhileWorkerSeesOnlyTheGateUntilCompletion() {
     WorkerClassDto workerClass = registry.createClass(workerClass("ses-gate"));
     WorkQueueDto repair = queue("repair-after-ses", QueueType.REPAIR, 6, 1, workerClass.id());
     WorkQueueDto ses = queue("сэс и санитария", QueueType.REPAIR, 6, 0, workerClass.id());
@@ -113,19 +101,22 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
             LocalDate.of(2026, 8, 21),
             1));
 
-    TaskBoardSnapshot actionable = board.snapshot(WAREHOUSE_ID);
-    assertThat(actionable.columns().stream().flatMap(column -> column.entries().stream()))
+    TaskBoardSnapshot managerBoard = board.snapshot(WAREHOUSE_ID);
+    assertThat(managerBoard.columns().stream().flatMap(column -> column.entries().stream()))
+        .extracting(BoardEntryDto::queueId, BoardEntryDto::entryType)
+        .containsExactlyInAnyOrder(
+            org.assertj.core.groups.Tuple.tuple(ses.id(), EntryType.REAL),
+            org.assertj.core.groups.Tuple.tuple(repair.id(), EntryType.SHADOW));
+
+    TaskBoardSnapshot workerBoard = board.workerSnapshot(WAREHOUSE_ID, worker.id());
+    assertThat(workerBoard.columns().stream().flatMap(column -> column.entries().stream()))
         .singleElement()
         .satisfies(
             card -> {
               assertThat(card.queueId()).isEqualTo(ses.id());
               assertThat(card.entryType()).isEqualTo(EntryType.REAL);
             });
-    assertThat(actionable.columns().stream()
-            .filter(column -> column.queueId().equals(repair.id()))
-            .flatMap(column -> column.entries().stream()))
-        .isEmpty();
-    BoardEntryDto sesEntry = entry(actionable, "ses-route", ses.id());
+    BoardEntryDto sesEntry = entry(managerBoard, "ses-route", ses.id());
     assertThat(sesEntry.entryType()).isEqualTo(EntryType.REAL);
 
     BoardEntryDto taken =
@@ -183,6 +174,16 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
         .containsExactly(
             org.assertj.core.groups.Tuple.tuple("electricity-only", EntryType.REAL),
             org.assertj.core.groups.Tuple.tuple("route-first", EntryType.SHADOW));
+    BoardEntryDto futureElectricity = entry(beforePromotion, "route-first", electricity.id());
+    assertThatThrownBy(
+            () ->
+                board.take(
+                    WAREHOUSE_ID,
+                    futureElectricity.id(),
+                    new TakeEntryRequest(futureElectricity.version(), group.id(), worker.id()),
+                    null))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("Взять можно");
 
     BoardEntryDto exteriorEntry = entry(beforePromotion, "route-first", exterior.id());
     BoardEntryDto taken =
@@ -259,7 +260,7 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
   }
 
   @Test
-  void futureShadowsRemainVisibleEvenWhenTheirCurrentRealStageExceedsAnotherQueueLimit() {
+  void completeBoardKeepsEveryRealAndFutureShadowRegardlessOfDailyPlanCount() {
     WorkerClassDto workerClass = registry.createClass(workerClass("complete-shadow-route"));
     WorkQueueDto exterior =
         queue("limited-exterior", QueueType.REPAIR, 1, 0, workerClass.id());
@@ -290,7 +291,7 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
 
     assertThat(column(board.snapshot(WAREHOUSE_ID), exterior.id()).entries())
         .extracting(BoardEntryDto::title)
-        .containsExactly("route-one");
+        .containsExactly("route-one", "route-two");
     assertThat(column(board.snapshot(WAREHOUSE_ID), electricity.id()).entries())
         .extracting(BoardEntryDto::title, BoardEntryDto::entryType)
         .containsExactly(
@@ -314,7 +315,7 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
   }
 
   @Test
-  void actionableSnapshotBoundsEntityMaterializationAndBatchesAssignments() {
+  void completeSnapshotBatchesAllBacklogAssignmentsWithoutNPlusOneQueries() {
     WorkerClassDto workerClass = registry.createClass(workerClass("bounded-read"));
     WorkQueueDto queue = queue("bounded-read", QueueType.REPAIR, 6, 1, workerClass.id());
     WorkerDto worker = worker(workerClass.id());
@@ -326,8 +327,8 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
 
     BoardColumnDto column = column(board.snapshot(WAREHOUSE_ID), queue.id());
 
-    assertThat(column.entries())
-        .hasSize(6)
+    assertThat(column.entries()).hasSize(300);
+    assertThat(column.entries().subList(0, 6))
         .extracting(BoardEntryDto::title)
         .containsExactly(
             "bounded-1",
@@ -336,10 +337,12 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
             "bounded-4",
             "bounded-5",
             "bounded-6");
+    assertThat(column.entries().get(column.entries().size() - 1).title())
+        .isEqualTo("bounded-300");
     assertThat(column.entries())
         .allSatisfy(card -> assertThat(card.assignments()).hasSize(1));
-    assertThat(statistics.getPrepareStatementCount()).isEqualTo(5);
-    assertThat(statistics.getEntityLoadCount()).isEqualTo(22);
+    assertThat(statistics.getPrepareStatementCount()).isEqualTo(4);
+    assertThat(statistics.getEntityLoadCount()).isLessThan(910);
   }
 
   private WorkQueueDto queue(
@@ -436,7 +439,7 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
   }
 
   private void seedWaitingBacklog(
-      UUID queueId, UUID workerId, UUID workerGroupId, int taskCount, int assignedCount) {
+      UUID queueId, UUID workerId, UUID workerGroupId, int taskCount, int priorityOneCount) {
     jdbc.update(
         """
         insert into board_task(
@@ -455,7 +458,7 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
           from generate_series(1, ?) item
         """,
         WAREHOUSE_ID,
-        assignedCount,
+        priorityOneCount,
         taskCount);
     jdbc.update(
         """
@@ -498,7 +501,7 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
         """,
         workerGroupId,
         workerId,
-        assignedCount);
+        taskCount);
   }
 
   private BoardColumnDto column(TaskBoardSnapshot snapshot, UUID queueId) {

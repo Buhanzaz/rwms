@@ -60,22 +60,25 @@ returns its current registration even if the caller retained an older task versi
 response. Any changed title, metadata or route still requires the exact current version and an
 entirely unstarted task; it fails with a conflict otherwise.
 
-The ordinary repair board is one aggregate warehouse view, not a calendar. Each queue exposes all
-`IN_PROGRESS` and `PAUSED` real entries plus only the first `availableTaskLimit` waiting real
-entries. Registration priority is already reflected in the persisted queue position; reads do not
-sort by priority a second time. Active work stays first, waiting real work follows in pinned/queue
-position order, and visible future `SHADOW` entries follow without consuming the actionable limit.
+The ordinary repair board is one aggregate warehouse view, not a calendar. Each manager queue
+returns every unfinished `REAL` and `SHADOW` entry. Registration priority is already reflected in
+the persisted queue position; reads do not sort by priority a second time. Active work stays first,
+waiting real work follows in pinned/queue-position order, and future `SHADOW` entries follow. The
+configured `availableTaskLimit` (six by default) marks the first waiting real cards in the visual
+daily plan; it does not truncate the response or fence `TAKE`.
 Maintenance routes are normalized to `SES -> welding -> exterior -> interior -> electrical ->
 plumbing`. The first existing unfinished phase is the only `REAL` stage; absent or completed phases
 are skipped, and every later stage is `SHADOW`. Electricity is therefore immediately actionable
 only when all four preceding phases are absent or complete. Promotion restores a shadow's persisted
-place ahead of later unpinned work; a pinned real card stays ahead. `TAKE` is rejected outside the
-same server-owned real window, and a shadow is never actionable.
+place ahead of later unpinned work; a pinned real card stays ahead. Every current `REAL` route gate
+may be taken, while a shadow is never actionable.
 
-A canonical SES stage is the only ordinary card for its task until treatment finishes, including
-for retained definitions whose historical queue type is `REPAIR`; none of that task's repair
-shadows appears on either the panel or WorkerApp during the gate. The public board has
-no date selector, manual entry move, date swap, daily-capacity scheduling, or overdue rollover scan.
+A canonical SES stage remains the only executable card for its task until treatment finishes,
+including for retained definitions whose historical queue type is `REPAIR`. The manager snapshot
+contains its later read-only shadows so the panel can reveal the complete route explicitly;
+WorkerApp still receives only the SES gate during treatment. The public board has no date selector,
+manual entry move, date swap, daily-capacity scheduling, or overdue rollover scan. Its daily-plan
+count is presentation only and creates no dated schedule.
 Dated driver and shipment planning remains on the separate logistics surfaces. These invariants are defined by
 [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
 [`TaskBoardReadProjectionService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardReadProjectionService.java),

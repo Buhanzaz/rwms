@@ -81,6 +81,14 @@ final class RepairRoutePhaseOrder {
         .toList();
   }
 
+  /** Returns whether a physical queue is the canonical SES holding phase. */
+  static boolean isSesQueue(WorkQueue queue) {
+    return queue != null
+        && queue.getDefinition() != null
+        && queue.getPurpose() == QueuePurpose.GENERAL
+        && "сэс и санитария".equals(queue.getDefinition().getNormalizedName());
+  }
+
   private static boolean isLogisticsQueue(WorkQueue queue) {
     return queue != null
         && queue.getDefinition() != null

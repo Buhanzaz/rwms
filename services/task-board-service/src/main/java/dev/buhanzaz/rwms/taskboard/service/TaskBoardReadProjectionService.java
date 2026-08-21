@@ -81,15 +81,23 @@ class TaskBoardReadProjectionService {
   }
 
   /**
-   * Builds the aggregate ordinary board with a bounded actionable window and persisted shadows.
+   * Builds the complete aggregate ordinary board for manager surfaces.
    *
-   * <p>The availability limit admits real cards first. Every eligible future shadow remains
-   * visible in its persisted queue position and never consumes that actionable limit. A route with
-   * the canonical SES queue exposes only its SES gate until that gate completes.
+   * <p>Every unfinished real and shadow entry is returned in its persisted queue. The configured
+   * count is carried only as a daily-plan presentation hint; phase type and route order retain
+   * command authority. Manager clients can therefore reveal the complete future route, including
+   * the read-only path behind an active SES gate.
    */
   public TaskBoardSnapshot snapshot(UUID warehouseId) {
+    return ordinarySnapshot(warehouseId, true);
+  }
+
+  private TaskBoardSnapshot ordinarySnapshot(UUID warehouseId, boolean includeSesBlockedShadows) {
     var columns = new ArrayList<BoardColumnDto>();
     var allEntries = ordinaryEntries(warehouseId);
+    if (!includeSesBlockedShadows) {
+      allEntries = workerVisibleOrdinaryEntries(allEntries);
+    }
     Map<UUID, TaskSourceReferenceDto> sources = sourceReferences(allEntries);
     Map<UUID, List<AssignmentDto>> assignmentsByEntry = assignmentDtos(allEntries);
     for (var queue : queues.findAllActiveOrderedByWarehouseId(warehouseId)) {
@@ -99,8 +107,7 @@ class TaskBoardReadProjectionService {
               .filter(e -> e.getQueue() != null && e.getQueue().getId().equals(queue.getId()))
               .toList();
       var cards =
-          OrdinaryQueueAvailabilityPolicy.visibleEntries(
-                  queueEntries, queue.getAvailableTaskLimit())
+          OrdinaryQueueAvailabilityPolicy.orderedEntries(queueEntries)
               .stream()
               .map(
                   entry ->
@@ -182,7 +189,7 @@ class TaskBoardReadProjectionService {
   /** Builds the task projection with the exact audience rules of one native surface. */
   TaskBoardSnapshot workerSnapshot(
       MobileTaskSurface surface, UUID warehouseId, UUID workerId) {
-    TaskBoardSnapshot ordinary = snapshot(warehouseId);
+    TaskBoardSnapshot ordinary = ordinarySnapshot(warehouseId, false);
     List<BoardColumnDto> columns = new ArrayList<>(ordinary.columns());
     for (WorkQueue queue : queues.findAllActiveOrderedByWarehouseId(warehouseId)) {
       if (queue.isHidden() || queue.getPurpose() != QueuePurpose.LOGISTICS_DRIVER) continue;
@@ -401,73 +408,32 @@ class TaskBoardReadProjectionService {
     return task;
   }
 
-  /**
-   * Resolves the bounded actionable window and all eligible future shadows in one additional ID
-   * query. An unfinished route with the canonical SES queue contributes only its SES gate and no
-   * shadows.
-   */
+  /** Loads the complete unfinished ordinary-board projection without per-entry lazy reads. */
   private List<QueueEntry> ordinaryEntries(UUID warehouseId) {
-    List<UUID> actionableEntryIds = entries.findVisibleOrdinaryEntryIds(warehouseId);
-    if (actionableEntryIds.isEmpty()) return List.of();
-    List<UUID> routeEntryIds = visibleOrdinaryEntryIds(warehouseId, actionableEntryIds);
-    return routeEntryIds.isEmpty()
-        ? List.of()
-        : entries.findAllWithTaskAndQueueByIdIn(routeEntryIds);
+    return entries.findAllUnfinishedOrdinaryByWarehouseId(
+        warehouseId, TaskStatus.ACTIVE, UNFINISHED, QueuePurpose.LOGISTICS_DRIVER);
   }
 
   /**
-   * Adds every waiting shadow whose task has an unfinished real ordinary stage and no unfinished
-   * canonical SES gate. Dynamic placeholders bind UUID values only; no caller-controlled SQL
-   * fragment is accepted.
+   * Preserves WorkerApp's SES holding behavior while manager surfaces may inspect the full path.
+   *
+   * <p>Only the canonical SES entry is retained for a task with unfinished SES work. The later
+   * shadows remain persisted and visible to manager clients but cannot leak into the worker feed
+   * before treatment completes.
    */
-  private List<UUID> visibleOrdinaryEntryIds(
-      UUID warehouseId, List<UUID> actionableEntryIds) {
-    List<UUID> shadowEntryIds =
-        jdbc.query(
-        """
-        select shadow.id
-          from queue_entry shadow
-          join board_task task on task.id = shadow.task_id
-          join work_queue queue on queue.id = shadow.queue_id
-          join queue_definition definition on definition.id = queue.definition_id
-         where task.warehouse_id = ?
-           and task.status = 'ACTIVE'
-           and shadow.entry_type = 'SHADOW'
-           and shadow.status = 'WAITING'
-           and queue.active
-           and not queue.hidden
-           and definition.queue_purpose <> 'LOGISTICS_DRIVER'
-           and exists (
-             select 1
-               from queue_entry current_entry
-               join work_queue current_queue on current_queue.id = current_entry.queue_id
-               join queue_definition current_definition
-                 on current_definition.id = current_queue.definition_id
-              where current_entry.task_id = shadow.task_id
-                and current_entry.entry_type = 'REAL'
-                and current_entry.status in ('WAITING', 'IN_PROGRESS', 'PAUSED')
-                and current_queue.active
-                and not current_queue.hidden
-                and current_definition.queue_purpose <> 'LOGISTICS_DRIVER'
-           )
-           and not exists (
-             select 1
-               from queue_entry ses
-               join work_queue ses_queue on ses_queue.id = ses.queue_id
-               join queue_definition ses_definition
-                 on ses_definition.id = ses_queue.definition_id
-              where ses.task_id = shadow.task_id
-                and ses.status in ('WAITING', 'IN_PROGRESS', 'PAUSED')
-                and ses_definition.queue_purpose = 'GENERAL'
-                and ses_definition.normalized_name = 'сэс и санитария'
-           )
-        """,
-            (result, rowNumber) -> UUID.fromString(result.getString("id")),
-            warehouseId);
-    var entryIds = new ArrayList<UUID>(actionableEntryIds.size() + shadowEntryIds.size());
-    entryIds.addAll(actionableEntryIds);
-    entryIds.addAll(shadowEntryIds);
-    return entryIds;
+  private List<QueueEntry> workerVisibleOrdinaryEntries(List<QueueEntry> allEntries) {
+    Set<UUID> sesTaskIds =
+        allEntries.stream()
+            .filter(entry -> RepairRoutePhaseOrder.isSesQueue(entry.getQueue()))
+            .map(entry -> entry.getTask().getId())
+            .collect(java.util.stream.Collectors.toSet());
+    if (sesTaskIds.isEmpty()) return allEntries;
+    return allEntries.stream()
+        .filter(
+            entry ->
+                !sesTaskIds.contains(entry.getTask().getId())
+                    || RepairRoutePhaseOrder.isSesQueue(entry.getQueue()))
+        .toList();
   }
 
   private List<QueueEntry> activeEntries(WorkQueue queue) {

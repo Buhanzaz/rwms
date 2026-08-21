@@ -95,8 +95,10 @@ snapshot without date or shadow query dimensions. It renders one adaptive
 vertical stream grouped by the server-ordered queues and never exposes or uses
 an entry's `scheduledDate`: date selectors, horizontal date columns, drag and
 drop, ordinary move, and date-swap commands have been removed. Task-board owns
-the available-card window and canonical order; the card detail only opens the
-maintenance-owned repair. `ManagerReadCache` retains one account-and-warehouse
+the canonical order and returns the complete unfinished route. ManagerApp binds
+only the current REAL maintenance stage into this compact list; the panel owns
+the optional full-path highlight and daily-plan presentation. Card detail only
+opens the maintenance-owned repair. `ManagerReadCache` retains one account-and-warehouse
 scoped aggregate snapshot with its ETag for fail-soft recovery. See
 [`RepairQueueView.kt`](src/main/java/dev/buhanzaz/rwms/manager/ui/screens/RepairQueueView.kt),
 [`ManagerMaintenanceReadCoordinator.kt`](src/main/java/dev/buhanzaz/rwms/manager/ui/coordinator/ManagerMaintenanceReadCoordinator.kt),

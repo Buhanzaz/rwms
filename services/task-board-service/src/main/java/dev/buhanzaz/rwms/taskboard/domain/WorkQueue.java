@@ -17,8 +17,8 @@ import java.util.UUID;
 /**
  * Warehouse-specific physical queue derived from a global definition or logistics driver lane.
  *
- * <p>General queues mirror their definition's waiting-task availability limit so board reads and
- * TAKE validation use the same persisted warehouse projection.
+ * <p>General queues mirror their definition's waiting-task daily-plan count for stable warehouse
+ * presentation. The count does not truncate reads or authorize task transitions.
  */
 @Entity
 @Table(
@@ -178,7 +178,7 @@ public class WorkQueue extends AbstractVersionedEntity {
 
   public void setAvailableTaskLimit(int value) {
     if (value < 1 || value > 50) {
-      throw new IllegalArgumentException("Лимит доступных заданий должен быть от 1 до 50");
+      throw new IllegalArgumentException("Размер плана на день должен быть от 1 до 50");
     }
     availableTaskLimit = value;
   }

@@ -18,8 +18,8 @@ import java.util.UUID;
 /**
  * Owns the global queue identity and policy mirrored by warehouse-specific work queues.
  *
- * <p>The policy includes the number of canonically ordered waiting tasks exposed for ordinary
- * board work; physical queues copy that limit and do not override it locally.
+ * <p>The policy includes the number of canonically ordered waiting tasks highlighted in the
+ * ordinary board's daily plan; physical queues copy that count and do not override it locally.
  */
 @Entity
 @Table(
@@ -206,7 +206,7 @@ public class QueueDefinition extends AbstractVersionedEntity {
 
   public void setAvailableTaskLimit(int value) {
     if (value < 1 || value > 50) {
-      throw new IllegalArgumentException("Лимит доступных заданий должен быть от 1 до 50");
+      throw new IllegalArgumentException("Размер плана на день должен быть от 1 до 50");
     }
     availableTaskLimit = value;
   }
