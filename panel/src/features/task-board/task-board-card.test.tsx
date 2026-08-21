@@ -73,11 +73,15 @@ function renderCard(
     onEdit = vi.fn<(entry: TaskBoardEntryDto) => void>(),
     onTake = vi.fn<(entry: TaskBoardEntryDto) => void>(),
     onPin = vi.fn<(entry: TaskBoardEntryDto, pinned: boolean) => void>(),
+    onShowFullRoute = vi.fn<(entry: TaskBoardEntryDto) => void>(),
     onToggleCollapsed = vi.fn<(entryId: string) => void>(),
     canEdit = true,
     mobile = false,
     collapsed = mobile,
     entryPatch = {},
+    inDailyPlan = false,
+    routeHighlighted = false,
+    fullRouteSelected = false,
     palette = null,
     repairComplexity = null,
   }: {
@@ -85,11 +89,15 @@ function renderCard(
     onEdit?: (entry: TaskBoardEntryDto) => void
     onTake?: (entry: TaskBoardEntryDto) => void
     onPin?: (entry: TaskBoardEntryDto, pinned: boolean) => void
+    onShowFullRoute?: (entry: TaskBoardEntryDto) => void
     onToggleCollapsed?: (entryId: string) => void
     canEdit?: boolean
     mobile?: boolean
     collapsed?: boolean
     entryPatch?: Partial<TaskBoardEntryDto>
+    inDailyPlan?: boolean
+    routeHighlighted?: boolean
+    fullRouteSelected?: boolean
     palette?: KpiPalette | null
     repairComplexity?: TaskBoardRepairComplexity | null
   } = {}
@@ -103,12 +111,16 @@ function renderCard(
       canEdit={canEdit}
       collapsed={collapsed}
       actionPending={false}
+      inDailyPlan={inDailyPlan}
+      routeHighlighted={routeHighlighted}
+      fullRouteSelected={fullRouteSelected}
       onDetails={onDetails}
       onEdit={onEdit}
       onTake={onTake}
       onPause={vi.fn()}
       onResume={vi.fn()}
       onPin={onPin}
+      onShowFullRoute={onShowFullRoute}
       onToggleCollapsed={onToggleCollapsed}
       palette={palette}
       repairComplexity={repairComplexity}
@@ -132,12 +144,16 @@ function CollapsibleCard() {
       canEdit
       collapsed={collapsed}
       actionPending={false}
+      inDailyPlan={false}
+      routeHighlighted={false}
+      fullRouteSelected={false}
       onDetails={vi.fn()}
       onEdit={vi.fn()}
       onTake={vi.fn()}
       onPause={vi.fn()}
       onResume={vi.fn()}
       onPin={vi.fn()}
+      onShowFullRoute={vi.fn()}
       onToggleCollapsed={() => setCollapsed((current) => !current)}
       repairComplexity={complexRepair}
     />
@@ -417,6 +433,29 @@ describe("TaskBoardCard source details", () => {
     expect(onTake).toHaveBeenCalledWith(entry)
   })
 
+  it("opens and marks the complete route from a real card", async () => {
+    const onShowFullRoute = vi.fn()
+    const entry = renderCard(null, {
+      onShowFullRoute,
+      inDailyPlan: true,
+      routeHighlighted: true,
+      fullRouteSelected: true,
+      entryPatch: { routeLength: 4 },
+    })
+
+    const routeButton = screen.getByRole("button", { name: "Полный путь" })
+    expect(routeButton.getAttribute("aria-pressed")).toBe("true")
+    expect(screen.getByText("План на день")).toBeTruthy()
+    expect(
+      document.querySelector<HTMLElement>('[data-slot="card"]')?.dataset
+        .routeHighlighted
+    ).toBe("true")
+
+    await userEvent.setup().click(routeButton)
+
+    expect(onShowFullRoute).toHaveBeenCalledWith(entry)
+  })
+
   it("shows a future shadow but keeps every mutating action unavailable", () => {
     const onPin = vi.fn()
     renderCard(
@@ -436,6 +475,7 @@ describe("TaskBoardCard source details", () => {
 
     expect(screen.getByText("После предыдущего этапа")).toBeTruthy()
     expect(screen.getByText("Этап 3 из 4")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Полный путь" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Взять в работу" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Редактировать" })).toBeNull()
     const pin = screen.getByRole("button", {

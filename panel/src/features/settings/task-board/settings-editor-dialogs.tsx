@@ -251,7 +251,7 @@ export function QueueDefinitionEditorDialog({
     }
     if (availableTaskLimitInvalid || availableTaskLimitNumber === null) {
       setValidation(
-        "Количество доступных заданий должно быть целым числом от 1 до 50."
+        "Количество заданий в плане на день должно быть целым числом от 1 до 50."
       )
       return
     }
@@ -346,7 +346,7 @@ export function QueueDefinitionEditorDialog({
         </Field>
         <Field data-invalid={availableTaskLimitInvalid || undefined}>
           <FieldLabel htmlFor="queue-available-task-limit">
-            Доступных заданий в строке
+            Заданий в плане на день
           </FieldLabel>
           <Input
             id="queue-available-task-limit"
@@ -360,8 +360,8 @@ export function QueueDefinitionEditorDialog({
             required
           />
           <FieldDescription>
-            Столько ожидающих заданий сервер показывает и разрешает взять;
-            задания в работе и на паузе отображаются дополнительно.
+            Столько первых ожидающих REAL-заданий отмечается как план на день.
+            Остальные REAL остаются видимыми и доступными для взятия.
           </FieldDescription>
         </Field>
         <BooleanField

@@ -71,6 +71,10 @@ function renderColumn(params: {
       collapsed={false}
       actionPending={false}
       queueActionsDisabled={false}
+      dailyPlanEntryIds={
+        new Set(params.visibleEntries.slice(0, 1).map((item) => item.id))
+      }
+      highlightedTaskId={null}
       onToggleCollapsed={vi.fn()}
       onDetails={vi.fn()}
       onEdit={vi.fn()}
@@ -78,6 +82,7 @@ function renderColumn(params: {
       onPause={vi.fn()}
       onResume={vi.fn()}
       onPin={vi.fn()}
+      onShowFullRoute={vi.fn()}
       isEntryCollapsed={() => false}
       onToggleEntryCollapsed={vi.fn()}
       onComplete={params.onComplete ?? vi.fn()}
@@ -104,6 +109,8 @@ describe("TaskBoardColumn visible command targets", () => {
     expect(cardStack?.className).toContain("flex-col")
     expect(cardStack?.className).toContain("overflow-y-auto")
     expect(cardStack?.className).not.toContain("overflow-x-auto")
+    expect(screen.getByText("План на день: 6")).toBeTruthy()
+    expect(screen.getByText("План на день")).toBeTruthy()
   })
 
   it("starts the visible waiting card and keeps the same action on its card", async () => {

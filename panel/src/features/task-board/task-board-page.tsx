@@ -11,6 +11,8 @@ import {
 } from "@/components/page-toolbar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Field, FieldLabel } from "@/components/ui/field"
 import {
   InputGroup,
   InputGroupAddon,
@@ -68,6 +70,7 @@ function errorMessage(error: unknown, fallback: string) {
 }
 
 const ACTIVE_REPAIR_PAGE_SIZE = 200
+const EMPTY_ENTRY_IDS: ReadonlySet<string> = new Set()
 
 /** Resolves visible repair complexity in bounded ID batches without scanning warehouse repairs. */
 async function loadActiveRepairComplexities(
@@ -115,6 +118,10 @@ export function TaskBoardPage() {
     warehouseId && hasWarehouseAccess(currentUser, warehouseId, "EDIT")
   )
   const [search, setSearch] = useState("")
+  const [showFutureSubtasks, setShowFutureSubtasks] = useState(false)
+  const [selectedRouteTaskId, setSelectedRouteTaskId] = useState<string | null>(
+    null
+  )
   const [collapsedQueues, setCollapsedQueues] = useState<Set<string>>(
     () => new Set()
   )
@@ -140,6 +147,102 @@ export function TaskBoardPage() {
     queryFn: () => getTaskBoard(accessToken!, warehouseId!),
     enabled: Boolean(accessToken && warehouseId),
   })
+  const highlightedTaskId = useMemo(() => {
+    if (
+      !selectedRouteTaskId ||
+      !warehouseId ||
+      boardQuery.data?.warehouseId !== warehouseId
+    ) {
+      return null
+    }
+    return boardQuery.data.queues.some((queue) =>
+      queue.entries.some(
+        (entry) =>
+          entry.taskId === selectedRouteTaskId && entry.entryType === "REAL"
+      )
+    )
+      ? selectedRouteTaskId
+      : null
+  }, [boardQuery.data, selectedRouteTaskId, warehouseId])
+  const normalizedSearch = search.trim().toLocaleLowerCase("ru")
+  const visibleQueues = useMemo(
+    () =>
+      (boardQuery.data?.queues ?? []).map((queue) => ({
+        queue,
+        visibleEntries: queue.entries.filter((entry) => {
+          const belongsToHighlightedRoute = entry.taskId === highlightedTaskId
+          if (
+            entry.entryType === "SHADOW" &&
+            !showFutureSubtasks &&
+            !belongsToHighlightedRoute
+          ) {
+            return false
+          }
+          if (
+            focusedExternalTaskId &&
+            entry.externalTaskId !== focusedExternalTaskId
+          ) {
+            return false
+          }
+          if (focusedTaskId && entry.taskId !== focusedTaskId) return false
+          if (belongsToHighlightedRoute || !normalizedSearch) return true
+          return [
+            entry.unitNumber ?? "",
+            entry.title,
+            entry.taskText ?? "",
+            entry.externalTaskId ?? "",
+            ...entry.assignments.flatMap((assignment) => [
+              assignment.workerName ?? "",
+              assignment.workerGroupName ?? "",
+            ]),
+          ]
+            .join(" ")
+            .toLocaleLowerCase("ru")
+            .includes(normalizedSearch)
+        }),
+      })),
+    [
+      boardQuery.data,
+      focusedExternalTaskId,
+      focusedTaskId,
+      highlightedTaskId,
+      normalizedSearch,
+      showFutureSubtasks,
+    ]
+  )
+  const visibleEntryCount = useMemo(
+    () =>
+      visibleQueues.reduce(
+        (count, current) => count + current.visibleEntries.length,
+        0
+      ),
+    [visibleQueues]
+  )
+  const dailyPlanEntryIdsByQueue = useMemo(
+    () =>
+      new Map(
+        (boardQuery.data?.queues ?? []).map((queue) => [
+          queue.key,
+          new Set(
+            queue.entries
+              .filter(
+                (entry) =>
+                  entry.entryType === "REAL" && entry.status === "WAITING"
+              )
+              .slice(0, queue.availableTaskLimit)
+              .map((entry) => entry.id)
+          ),
+        ])
+      ),
+    [boardQuery.data]
+  )
+  const highlightedRouteLabel = useMemo(() => {
+    if (!highlightedTaskId) return null
+    const entry = boardQuery.data?.queues
+      .flatMap((queue) => queue.entries)
+      .find((candidate) => candidate.taskId === highlightedTaskId)
+    return entry?.unitNumber ?? entry?.title ?? "выбранной бытовки"
+  }, [boardQuery.data, highlightedTaskId])
   const kpiSettingsQuery = useQuery({
     queryKey: kpiSettingsKeys.warehouse(warehouseId ?? "none"),
     queryFn: () => getKpiSettings(accessToken!, warehouseId!),
@@ -151,16 +254,16 @@ export function TaskBoardPage() {
     () =>
       Array.from(
         new Set(
-          (
-            boardQuery.data?.queues.flatMap((queue) => queue.entries) ?? []
-          ).flatMap((entry) =>
-            entry.source?.type === "MAINTENANCE_REPAIR"
-              ? [entry.source.sourceId]
-              : []
-          )
+          visibleQueues
+            .flatMap((queue) => queue.visibleEntries)
+            .flatMap((entry) =>
+              entry.source?.type === "MAINTENANCE_REPAIR"
+                ? [entry.source.sourceId]
+                : []
+            )
         )
       ).sort(),
-    [boardQuery.data]
+    [visibleQueues]
   )
   const repairComplexitiesQuery = useQuery({
     queryKey: [
@@ -202,6 +305,28 @@ export function TaskBoardPage() {
       })
     },
     [isMobile]
+  )
+
+  const toggleFullRoute = useCallback(
+    (entry: TaskBoardEntryDto) => {
+      const nextTaskId =
+        highlightedTaskId === entry.taskId ? null : entry.taskId
+      setSelectedRouteTaskId(nextTaskId)
+      if (!nextTaskId) return
+      const routeQueueKeys = new Set(
+        (boardQuery.data?.queues ?? [])
+          .filter((queue) =>
+            queue.entries.some((candidate) => candidate.taskId === nextTaskId)
+          )
+          .map((queue) => queue.key)
+      )
+      setCollapsedQueues((current) => {
+        const next = new Set(current)
+        routeQueueKeys.forEach((queueKey) => next.delete(queueKey))
+        return next
+      })
+    },
+    [boardQuery.data, highlightedTaskId]
   )
 
   useEffect(() => {
@@ -307,37 +432,6 @@ export function TaskBoardPage() {
     },
   })
 
-  const normalizedSearch = search.trim().toLocaleLowerCase("ru")
-  const visibleQueues = useMemo(
-    () =>
-      (boardQuery.data?.queues ?? []).map((queue) => ({
-        queue,
-        visibleEntries: queue.entries.filter((entry) => {
-          if (
-            focusedExternalTaskId &&
-            entry.externalTaskId !== focusedExternalTaskId
-          ) {
-            return false
-          }
-          if (focusedTaskId && entry.taskId !== focusedTaskId) return false
-          if (!normalizedSearch) return true
-          return [
-            entry.unitNumber ?? "",
-            entry.title,
-            entry.taskText ?? "",
-            entry.externalTaskId ?? "",
-            ...entry.assignments.flatMap((assignment) => [
-              assignment.workerName ?? "",
-              assignment.workerGroupName ?? "",
-            ]),
-          ]
-            .join(" ")
-            .toLocaleLowerCase("ru")
-            .includes(normalizedSearch)
-        }),
-      })),
-    [boardQuery.data, focusedExternalTaskId, focusedTaskId, normalizedSearch]
-  )
   const busy = actionMutation.isPending || pinMutation.isPending
 
   return (
@@ -359,8 +453,23 @@ export function TaskBoardPage() {
           </InputGroup>
         </PageToolbarContent>
         <PageToolbarActions className="w-full sm:w-auto">
+          <Field orientation="horizontal" className="h-9 w-auto gap-2">
+            <Checkbox
+              id="task-board-show-future-subtasks"
+              checked={showFutureSubtasks}
+              onCheckedChange={(checked) =>
+                setShowFutureSubtasks(checked === true)
+              }
+            />
+            <FieldLabel
+              htmlFor="task-board-show-future-subtasks"
+              className="whitespace-nowrap"
+            >
+              Отобразить будущие подзадачи
+            </FieldLabel>
+          </Field>
           <Badge variant="secondary" className="h-9 px-3">
-            Заданий: {boardQuery.data?.totalEntries ?? 0}
+            Показано: {visibleEntryCount}
           </Badge>
           {canEdit ? (
             <Button asChild className="w-full sm:w-auto">
@@ -399,6 +508,22 @@ export function TaskBoardPage() {
             }}
           >
             Показать все задания
+          </Button>
+        </p>
+      ) : null}
+      {highlightedTaskId ? (
+        <p
+          role="status"
+          className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
+        >
+          Полный путь: {highlightedRouteLabel}.
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => setSelectedRouteTaskId(null)}
+          >
+            Сбросить выделение
           </Button>
         </p>
       ) : null}
@@ -464,6 +589,10 @@ export function TaskBoardPage() {
                 collapsed={collapsedQueues.has(queue.key)}
                 actionPending={busy || !canEdit}
                 queueActionsDisabled={!canEdit || Boolean(normalizedSearch)}
+                dailyPlanEntryIds={
+                  dailyPlanEntryIdsByQueue.get(queue.key) ?? EMPTY_ENTRY_IDS
+                }
+                highlightedTaskId={highlightedTaskId}
                 palette={taskBoardPalette}
                 repairComplexitiesByRepairId={repairComplexitiesByRepairId}
                 onToggleCollapsed={(queueKey) =>
@@ -514,6 +643,7 @@ export function TaskBoardPage() {
                     pinMutation.mutate({ entry, pinned })
                   }
                 }}
+                onShowFullRoute={toggleFullRoute}
                 isEntryCollapsed={isEntryCollapsed}
                 onToggleEntryCollapsed={toggleEntryCollapsed}
                 onComplete={(entry) => {

@@ -566,7 +566,7 @@ export function TaskBoardSettingsPage() {
               },
               {
                 id: "availableTaskLimit",
-                label: "Доступно заданий",
+                label: "План на день",
                 getSortValue: (item) => item.availableTaskLimit,
                 render: (item) => item.availableTaskLimit,
               },

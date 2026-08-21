@@ -36,6 +36,8 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   collapsed,
   actionPending,
   queueActionsDisabled,
+  dailyPlanEntryIds,
+  highlightedTaskId,
   onToggleCollapsed,
   onDetails,
   onEdit,
@@ -43,6 +45,7 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   onPause,
   onResume,
   onPin,
+  onShowFullRoute,
   isEntryCollapsed,
   onToggleEntryCollapsed,
   onComplete,
@@ -57,6 +60,8 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   collapsed: boolean
   actionPending: boolean
   queueActionsDisabled: boolean
+  dailyPlanEntryIds: ReadonlySet<string>
+  highlightedTaskId: string | null
   onToggleCollapsed: (queueKey: string) => void
   onDetails: (entry: TaskBoardEntryDto) => void
   onEdit: (entry: TaskBoardEntryDto) => void
@@ -64,6 +69,7 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   onPause: (entry: TaskBoardEntryDto) => void
   onResume: (entry: TaskBoardEntryDto) => void
   onPin: (entry: TaskBoardEntryDto, pinned: boolean) => void
+  onShowFullRoute: (entry: TaskBoardEntryDto) => void
   isEntryCollapsed: (entryId: string) => boolean
   onToggleEntryCollapsed: (entryId: string) => void
   onComplete: (entry: TaskBoardEntryDto) => void
@@ -123,7 +129,7 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
               <Badge variant="secondary">{visibleEntries.length}</Badge>
               <Badge variant="outline">{queueKindLabel(queue)}</Badge>
               <Badge variant="outline">
-                До {queue.availableTaskLimit} ожидающих
+                План на день: {queue.availableTaskLimit}
               </Badge>
             </div>
           </div>
@@ -181,12 +187,16 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
             canEdit={canEdit}
             collapsed={isEntryCollapsed(entry.id)}
             actionPending={actionPending}
+            inDailyPlan={dailyPlanEntryIds.has(entry.id)}
+            routeHighlighted={highlightedTaskId === entry.taskId}
+            fullRouteSelected={highlightedTaskId === entry.taskId}
             onDetails={onDetails}
             onEdit={onEdit}
             onTake={onTake}
             onPause={onPause}
             onResume={onResume}
             onPin={onPin}
+            onShowFullRoute={onShowFullRoute}
             onToggleCollapsed={onToggleEntryCollapsed}
             palette={palette}
             repairComplexity={

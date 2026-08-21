@@ -7,6 +7,7 @@ import {
   PinIcon,
   PinOffIcon,
   PlayIcon,
+  Route01Icon,
   ViewIcon,
 } from "@hugeicons/core-free-icons"
 
@@ -199,6 +200,7 @@ function cardActionVisibility(
     entry.entryType === "REAL" && !mobile && entry.status === "IN_PROGRESS"
   const showResume =
     entry.entryType === "REAL" && !mobile && entry.status === "PAUSED"
+  const showFullRoute = entry.entryType === "REAL"
 
   return {
     showTake,
@@ -206,7 +208,14 @@ function cardActionVisibility(
     showDetails,
     showPause,
     showResume,
-    showActions: showTake || showEdit || showDetails || showPause || showResume,
+    showFullRoute,
+    showActions:
+      showTake ||
+      showEdit ||
+      showDetails ||
+      showPause ||
+      showResume ||
+      showFullRoute,
   }
 }
 
@@ -214,11 +223,13 @@ function TaskBoardCardContent({
   entry,
   now,
   collapsed,
+  inDailyPlan,
   repairComplexity,
 }: {
   entry: TaskBoardEntryDto
   now: number
   collapsed: boolean
+  inDailyPlan: boolean
   repairComplexity?: TaskBoardRepairComplexity | null
 }) {
   const workers = assignedWorkerNames(entry)
@@ -232,6 +243,7 @@ function TaskBoardCardContent({
         <Badge variant={entry.status === "IN_PROGRESS" ? "default" : "outline"}>
           {statusLabels[entry.status]}
         </Badge>
+        {inDailyPlan ? <Badge variant="secondary">План на день</Badge> : null}
         {entry.entryType === "SHADOW" ? (
           <Badge variant="secondary">После предыдущего этапа</Badge>
         ) : null}
@@ -289,6 +301,9 @@ export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
   mobile,
   canEdit,
   collapsed,
+  inDailyPlan = false,
+  routeHighlighted = false,
+  fullRouteSelected = false,
   palette = null,
   repairComplexity = null,
 }: {
@@ -297,6 +312,9 @@ export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
   mobile: boolean
   canEdit: boolean
   collapsed: boolean
+  inDailyPlan?: boolean
+  routeHighlighted?: boolean
+  fullRouteSelected?: boolean
   palette?: KpiPalette | null
   repairComplexity?: TaskBoardRepairComplexity | null
 }) {
@@ -308,6 +326,7 @@ export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
     showDetails,
     showPause,
     showResume,
+    showFullRoute,
     showActions,
   } = cardActionVisibility(entry, mobile, canEdit)
   const appearance = kpiCardAppearance(entry, now, palette)
@@ -318,11 +337,13 @@ export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
       style={appearance.style}
       className={cn(
         "w-full",
-        entry.entryType === "SHADOW" && shadowEntryCardClassName
+        entry.entryType === "SHADOW" && shadowEntryCardClassName,
+        routeHighlighted && "ring-2 ring-primary"
       )}
       data-kpi-color={appearance.color ?? undefined}
       data-timer-state={entry.timerSnapshot?.timerState}
       data-collapsed={collapsed || undefined}
+      data-route-highlighted={routeHighlighted || undefined}
     >
       <CardHeader className="flex flex-col gap-2">
         <div className="flex w-full min-w-0 items-center justify-between gap-2">
@@ -356,6 +377,7 @@ export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
         entry={entry}
         now={now}
         collapsed={collapsed}
+        inDailyPlan={inDailyPlan}
         repairComplexity={repairComplexity}
       />
       {showActions ? (
@@ -364,6 +386,19 @@ export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
             <Button type="button" size="sm" className="w-full" disabled>
               <HugeiconsIcon icon={PlayIcon} data-icon="inline-start" />
               Взять в работу
+            </Button>
+          ) : null}
+          {showFullRoute ? (
+            <Button
+              type="button"
+              size="sm"
+              variant={fullRouteSelected ? "secondary" : "outline"}
+              className="w-full"
+              aria-pressed={fullRouteSelected}
+              disabled
+            >
+              <HugeiconsIcon icon={Route01Icon} data-icon="inline-start" />
+              Полный путь
             </Button>
           ) : null}
           {showEdit ? (
@@ -421,12 +456,16 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   canEdit,
   collapsed,
   actionPending,
+  inDailyPlan,
+  routeHighlighted,
+  fullRouteSelected,
   onDetails,
   onEdit,
   onTake,
   onPause,
   onResume,
   onPin,
+  onShowFullRoute,
   onToggleCollapsed,
   palette = null,
   repairComplexity = null,
@@ -437,12 +476,16 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   canEdit: boolean
   collapsed: boolean
   actionPending: boolean
+  inDailyPlan: boolean
+  routeHighlighted: boolean
+  fullRouteSelected: boolean
   onDetails: (entry: TaskBoardEntryDto) => void
   onEdit: (entry: TaskBoardEntryDto) => void
   onTake: (entry: TaskBoardEntryDto) => void
   onPause: (entry: TaskBoardEntryDto) => void
   onResume: (entry: TaskBoardEntryDto) => void
   onPin: (entry: TaskBoardEntryDto, pinned: boolean) => void
+  onShowFullRoute: (entry: TaskBoardEntryDto) => void
   onToggleCollapsed: (entryId: string) => void
   palette?: KpiPalette | null
   repairComplexity?: TaskBoardRepairComplexity | null
@@ -454,6 +497,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
     showDetails,
     showPause,
     showResume,
+    showFullRoute,
     showActions,
   } = cardActionVisibility(entry, mobile, canEdit)
   const appearance = kpiCardAppearance(entry, now, palette)
@@ -470,11 +514,13 @@ export const TaskBoardCard = memo(function TaskBoardCard({
           "border-primary bg-primary/5",
         !appearance.color && entry.status === "PAUSED" && "bg-muted/60",
         (entry.status === "DONE" || entry.status === "CANCELLED") &&
-          "opacity-65"
+          "opacity-65",
+        routeHighlighted && "ring-2 ring-primary"
       )}
       data-collapsed={collapsed || undefined}
       data-kpi-color={appearance.color ?? undefined}
       data-timer-state={entry.timerSnapshot?.timerState}
+      data-route-highlighted={routeHighlighted || undefined}
       aria-label={description ? `${unitLabel}: ${description}` : unitLabel}
     >
       <CardHeader className="flex flex-col gap-2">
@@ -524,6 +570,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
         entry={entry}
         now={now}
         collapsed={collapsed}
+        inDailyPlan={inDailyPlan}
         repairComplexity={repairComplexity}
       />
       {showActions ? (
@@ -538,6 +585,19 @@ export const TaskBoardCard = memo(function TaskBoardCard({
             >
               <HugeiconsIcon icon={PlayIcon} data-icon="inline-start" />
               Взять в работу
+            </Button>
+          ) : null}
+          {showFullRoute ? (
+            <Button
+              type="button"
+              size="sm"
+              variant={fullRouteSelected ? "secondary" : "outline"}
+              className="w-full"
+              aria-pressed={fullRouteSelected}
+              onClick={() => onShowFullRoute(entry)}
+            >
+              <HugeiconsIcon icon={Route01Icon} data-icon="inline-start" />
+              Полный путь
             </Button>
           ) : null}
           {showEdit ? (

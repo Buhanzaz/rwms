@@ -49,6 +49,9 @@ vi.mock("@/features/task-board/task-board-column", () => ({
     queueActionsDisabled,
     visibleEntries,
     onEdit,
+    onShowFullRoute,
+    dailyPlanEntryIds,
+    highlightedTaskId,
     palette,
     repairComplexitiesByRepairId,
   }: {
@@ -56,6 +59,9 @@ vi.mock("@/features/task-board/task-board-column", () => ({
     queueActionsDisabled: boolean
     visibleEntries: TaskBoardEntryDto[]
     onEdit: (entry: TaskBoardEntryDto) => void
+    onShowFullRoute: (entry: TaskBoardEntryDto) => void
+    dailyPlanEntryIds: ReadonlySet<string>
+    highlightedTaskId: string | null
     palette: { ranges: { color: string }[] } | null
     repairComplexitiesByRepairId: ReadonlyMap<
       string,
@@ -82,6 +88,29 @@ vi.mock("@/features/task-board/task-board-column", () => ({
           )
           .join(",")}
       </span>
+      <span data-testid="daily-plan-entry-ids">
+        {visibleEntries
+          .filter((entry) => dailyPlanEntryIds.has(entry.id))
+          .map((entry) => entry.id)
+          .join(",")}
+      </span>
+      <span data-testid="highlighted-route-entry-ids">
+        {visibleEntries
+          .filter((entry) => entry.taskId === highlightedTaskId)
+          .map((entry) => entry.id)
+          .join(",")}
+      </span>
+      {visibleEntries
+        .filter((entry) => entry.entryType === "REAL")
+        .map((entry) => (
+          <button
+            key={`route-${entry.id}`}
+            type="button"
+            onClick={() => onShowFullRoute(entry)}
+          >
+            Полный путь {entry.id}
+          </button>
+        ))}
       {visibleEntries[0] ? (
         <button type="button" onClick={() => onEdit(visibleEntries[0]!)}>
           Редактировать тестовый ремонт
@@ -398,7 +427,8 @@ describe("task board warehouse access", () => {
     renderPage("EDIT", {
       currentBoard,
       maintenancePage: (filters) => {
-        const includesLastRepair = filters.repairIds?.includes(repairId) ?? false
+        const includesLastRepair =
+          filters.repairIds?.includes(repairId) ?? false
         return Promise.resolve({
           items: includesLastRepair ? [repair] : [],
           page: 0,
@@ -451,6 +481,104 @@ describe("task board warehouse access", () => {
     expect(
       (await screen.findByTestId("visible-task-external-ids")).textContent
     ).toBe(furnitureTaskId)
+  })
+
+  it("hides future subtasks by default and reveals either all futures or one full route", async () => {
+    const routeReal = {
+      ...taskEntry("route-real", "Внешние работы"),
+      id: "entry-route-real",
+      taskId: "route-task",
+      routeIndex: 0,
+      routeLength: 2,
+    }
+    const secondReal = {
+      ...taskEntry("second-real", "Другая бытовка"),
+      id: "entry-second-real",
+    }
+    const routeShadow = {
+      ...taskEntry("route-shadow", "Электрика"),
+      id: "entry-route-shadow",
+      taskId: "route-task",
+      entryType: "SHADOW" as const,
+      routeIndex: 1,
+      routeLength: 2,
+      queueKey: "electricity",
+      queueId: "00000000-0000-4000-8000-000000000003",
+    }
+    const unrelatedShadow = {
+      ...taskEntry("other-shadow", "Будущая сантехника"),
+      id: "entry-other-shadow",
+      entryType: "SHADOW" as const,
+      routeIndex: 1,
+      routeLength: 2,
+      queueKey: "electricity",
+      queueId: "00000000-0000-4000-8000-000000000003",
+    }
+    const currentBoard: TaskBoardSnapshotDto = {
+      ...board,
+      totalEntries: 4,
+      realEntries: 2,
+      shadowEntries: 2,
+      queues: [
+        {
+          ...board.queues[0]!,
+          availableTaskLimit: 1,
+          entries: [routeReal, secondReal],
+        },
+        {
+          ...board.queues[0]!,
+          key: "electricity",
+          label: "Электрика",
+          settingsQueueId: "00000000-0000-4000-8000-000000000003",
+          availableTaskLimit: 1,
+          entries: [routeShadow, unrelatedShadow],
+        },
+      ],
+    }
+    const renderedIds = (testId: string) =>
+      screen
+        .getAllByTestId(testId)
+        .flatMap((element) => element.textContent?.split(",") ?? [])
+        .filter(Boolean)
+
+    renderPage("EDIT", { currentBoard })
+    await screen.findAllByTestId("visible-task-external-ids")
+
+    expect(renderedIds("visible-task-external-ids")).toEqual([
+      "route-real",
+      "second-real",
+    ])
+    expect(renderedIds("daily-plan-entry-ids")).toEqual(["entry-route-real"])
+
+    const user = userEvent.setup()
+    const futureToggle = screen.getByRole("checkbox", {
+      name: "Отобразить будущие подзадачи",
+    })
+    await user.click(futureToggle)
+    expect(renderedIds("visible-task-external-ids")).toEqual([
+      "route-real",
+      "second-real",
+      "route-shadow",
+      "other-shadow",
+    ])
+
+    await user.click(futureToggle)
+    await user.click(
+      screen.getByRole("button", {
+        name: "Полный путь entry-route-real",
+      })
+    )
+
+    expect(renderedIds("visible-task-external-ids")).toEqual([
+      "route-real",
+      "second-real",
+      "route-shadow",
+    ])
+    expect(renderedIds("highlighted-route-entry-ids")).toEqual([
+      "entry-route-real",
+      "entry-route-shadow",
+    ])
+    expect(screen.getByText("Полный путь: БЫТ-001.")).toBeTruthy()
   })
 
   it("opens a waiting maintenance repair in edit mode", async () => {

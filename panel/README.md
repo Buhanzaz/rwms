@@ -35,15 +35,19 @@ contexts and screens are usable.
   rejects the complete change atomically.
 - `/task-board` renders queues as side-by-side desktop columns with a vertical
   card stack in each column; mobile stacks the columns. It has no date selector
-  or browser-owned queue decisions. Active work appears first, then the
-  server-bounded actionable REAL window (`availableTaskLimit`, six by default),
-  followed by non-actionable SHADOW route stages in their persisted positions.
+  or browser-owned queue decisions. The default view shows every current REAL
+  card and hides future SHADOW cards. “Show future subtasks” reveals all shadows;
+  “Full route” on a REAL card reveals and highlights that task's entries across
+  every queue even while the global checkbox is off. The first
+  `availableTaskLimit` waiting REAL cards (six by default) are marked as the
+  visual daily plan, but all later REAL cards remain visible and takeable.
   A directly executable electricity task therefore appears immediately, while
   promotion restores an earlier shadow ahead of a later unpinned REAL; a pinned
-  REAL stays ahead. SES/HOLDING exposes only its gate and no repair shadows until
-  treatment completes. Driver movement and external capital work remain on
-  their existing surfaces. Complexity is resolved only for board-visible repair
-  IDs in batches of at most 200.
+  REAL stays ahead. SES remains the only executable gate, while its future path
+  is available only through the explicit shadow/full-route presentation. Driver
+  movement and external capital work remain on their existing surfaces.
+  Complexity is resolved only for currently rendered repair IDs in batches of
+  at most 200.
 - The `Ремонты` sidebar item and bare `/repairs` registry remain supported. The
   registry pages 50 maintenance-owned repairs at a time, resolves asset-owned
   cabin numbers in batches of eight concurrent reads, and shows type, current
