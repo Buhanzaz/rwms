@@ -11,6 +11,24 @@ const coverApi = vi.hoisted(() => ({
 
 vi.mock("@/features/rental-items/use-rental-item-covers", () => ({
   RENTAL_ITEM_COVERS_QUERY_KEY: ["rental-item-media-covers"],
+  getCoverFirstCabinPreviews: (projection: {
+    cover: { mediaId: string; generation: number } | null
+    previews: readonly { mediaId: string; generation: number }[]
+  }) => {
+    const cover = projection.cover
+    if (!cover) return projection.previews
+    const coverIndex = projection.previews.findIndex(
+      (preview) =>
+        preview.mediaId === cover.mediaId &&
+        preview.generation === cover.generation
+    )
+    if (coverIndex <= 0) return projection.previews
+    return [
+      projection.previews[coverIndex],
+      ...projection.previews.slice(0, coverIndex),
+      ...projection.previews.slice(coverIndex + 1),
+    ]
+  },
   loadRentalItemCoverPage: coverApi.load,
 }))
 
@@ -27,7 +45,10 @@ vi.mock("@/features/rental-items/rental-items-grid-view", () => ({
   }: {
     items: RentalItemDto[]
     renderPhotoOverlay: (item: RentalItemDto) => ReactNode
-    mediaCovers: ReadonlyMap<string, { previews: readonly unknown[] }>
+    mediaCovers: ReadonlyMap<
+      string,
+      { previews: readonly { mediaId: string }[] }
+    >
     autoHeight?: boolean
   }) => (
     <div
@@ -36,6 +57,11 @@ vi.mock("@/features/rental-items/rental-items-grid-view", () => ({
       data-preview-count={String(
         items[0] ? (mediaCovers.get(items[0].id)?.previews.length ?? 0) : 0
       )}
+      data-preview-id={
+        items[0]
+          ? mediaCovers.get(items[0].id)?.previews[0]?.mediaId
+          : undefined
+      }
     >
       {items.map((item) => (
         <div key={item.id}>{renderPhotoOverlay(item)}</div>
@@ -176,5 +202,54 @@ describe("BookingCabinBrowser", () => {
       expect(grid.getAttribute("data-preview-count")).toBe("1")
     )
     expect(grid.getAttribute("data-auto-height")).toBe("true")
+  })
+
+  it("uses the explicit cover for the one-photo booking card", async () => {
+    const coverId = "55555555-5555-4555-8555-555555555555"
+    const firstPreviewId = "66666666-6666-4666-8666-666666666666"
+    coverApi.load.mockResolvedValue({
+      items: [
+        {
+          cabinId: item.id,
+          photoCount: 2,
+          cover: {
+            mediaId: coverId,
+            generation: 1,
+            kind: "SMALL",
+            contentType: "image/webp",
+            contentPath: "/api/media/cover.webp",
+            width: 360,
+            height: 240,
+          },
+          previews: [
+            {
+              mediaId: firstPreviewId,
+              generation: 1,
+              kind: "SMALL",
+              contentType: "image/webp",
+              contentPath: "/api/media/first.webp",
+              width: 360,
+              height: 240,
+            },
+            {
+              mediaId: coverId,
+              generation: 1,
+              kind: "SMALL",
+              contentType: "image/webp",
+              contentPath: "/api/media/cover.webp",
+              width: 360,
+              height: 240,
+            },
+          ],
+        },
+      ],
+    })
+    renderBrowser()
+
+    const grid = screen.getByTestId("booking-grid")
+    await waitFor(() =>
+      expect(grid.getAttribute("data-preview-id")).toBe(coverId)
+    )
+    expect(grid.getAttribute("data-preview-count")).toBe("1")
   })
 })

@@ -40,6 +40,27 @@ type LoadedRentalItemPhotos = Readonly<{
 
 const EMPTY_CABIN_PREVIEWS: NonNullable<CabinCoverProjection["previews"]> = []
 
+export function getCoverFirstCabinPreviews(
+  projection: CabinCoverProjection | undefined
+): CabinCoverProjection["previews"] {
+  const previews = projection?.previews ?? EMPTY_CABIN_PREVIEWS
+  const cover = projection?.cover
+  if (!cover) return previews
+
+  const coverIndex = previews.findIndex(
+    (preview) =>
+      preview.mediaId === cover.mediaId &&
+      preview.generation === cover.generation
+  )
+  if (coverIndex <= 0) return previews
+
+  return [
+    previews[coverIndex],
+    ...previews.slice(0, coverIndex),
+    ...previews.slice(coverIndex + 1),
+  ]
+}
+
 function previewCacheKey(
   warehouseId: string,
   cabinId: string,
@@ -104,7 +125,10 @@ export function useRentalItemCardPhotos({
   const fullscreenRequests = useRef(new Map<string, Promise<void>>())
   const currentPhotoListSignature = useRef("")
   const mounted = useRef(true)
-  const previews = projection?.previews ?? EMPTY_CABIN_PREVIEWS
+  const previews = useMemo(
+    () => getCoverFirstCabinPreviews(projection),
+    [projection]
+  )
   const cachedPhotos = useMemo(
     () =>
       previews.flatMap((preview) => {

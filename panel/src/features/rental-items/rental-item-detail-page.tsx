@@ -65,6 +65,7 @@ import {
   RENTAL_ITEM_DOSSIER_QUERY_KEY,
   rentalItemDossierQueryKey,
 } from "@/features/rental-items/dossier/api/rental-item-dossier-api"
+import { loadRentalItemPhotoActivities } from "@/features/rental-items/dossier/api/load-rental-item-photo-activities"
 import {
   DossierActivityFiltersPanel,
   DossierActivityRegister,
@@ -230,6 +231,18 @@ function latestActivity(
   return activities.find(
     (activity) => !codes || codes.includes(activity.activityCode)
   )
+}
+
+function mergeDossierActivities(
+  primary: readonly DossierActivity[],
+  secondary: readonly DossierActivity[]
+) {
+  const seen = new Set<string>()
+  return [...primary, ...secondary].filter((activity) => {
+    if (seen.has(activity.activityId)) return false
+    seen.add(activity.activityId)
+    return true
+  })
 }
 
 function retryDossierQuery(failureCount: number, error: Error) {
@@ -496,6 +509,20 @@ export function RentalItemDetailPage() {
     retry: retryDossierQuery,
     enabled: Boolean(rentalItemId && selectedWarehouse && accessToken),
   })
+  const photoDossierQuery = useQuery({
+    queryKey: [
+      ...RENTAL_ITEM_DOSSIER_QUERY_KEY,
+      currentRentalItemId,
+      "photo-archive-metadata",
+      userCacheKey,
+    ],
+    queryFn: () =>
+      loadRentalItemPhotoActivities(accessToken!, currentRentalItemId),
+    enabled: Boolean(
+      activeTab === "photos" && rentalItemId && selectedWarehouse && accessToken
+    ),
+    retry: retryDossierQuery,
+  })
   const manualNotesQuery = useQuery({
     queryKey: manualNotesQueryKey,
     queryFn: () => listAssetRentalItemManualNotes(accessToken, rentalItemId!),
@@ -577,15 +604,19 @@ export function RentalItemDetailPage() {
   const dossierPages = dossierQuery.data?.pages
   const dossierActivities =
     dossierPages?.flatMap((page) => page.activities) ?? []
+  const photoArchiveActivities =
+    activeTab === "photos"
+      ? mergeDossierActivities(photoDossierQuery.data ?? [], dossierActivities)
+      : dossierActivities
   const actorDisplays = useDossierActorDisplays(
-    dossierActivities.flatMap((activity) =>
+    photoArchiveActivities.flatMap((activity) =>
       activity.actorRef ? [activity.actorRef.subjectId] : []
     )
   )
   const media = useRentalItemMedia({
     item: rentalItem,
     accessToken,
-    dossierActivities,
+    dossierActivities: photoArchiveActivities,
     actorDisplays,
     initialVariants:
       activeTab === "photos"
@@ -1082,11 +1113,18 @@ export function RentalItemDetailPage() {
           </Card>
         </TabsContent>
         <TabsContent value="photos">
+          {photoDossierQuery.error ? (
+            <p role="alert" className="mb-4 text-sm text-destructive">
+              Не удалось загрузить подписи фотоархива. Папки и фотографии
+              доступны, но их автор, источник или время могут быть не
+              определены.
+            </p>
+          ) : null}
           <RentalItemPhotosRegister
             item={rentalItem}
             folders={media.photoFolders}
             assets={media.assets}
-            loading={media.isLoading}
+            loading={media.isLoading || photoDossierQuery.isLoading}
             error={media.error}
             canEdit={canEditRentalItem}
             onAdd={() => setPhotoUploadOpen(true)}

@@ -61,24 +61,24 @@ const projection: CabinCoverProjection = {
   },
   previews: [
     {
-      mediaId: COVER_ID,
-      generation: 1,
-      ...variant("SMALL", "/cover-small"),
-    },
-    {
       mediaId: SECOND_ID,
       generation: 1,
       ...variant("SMALL", "/second-small"),
     },
+    {
+      mediaId: COVER_ID,
+      generation: 1,
+      ...variant("SMALL", "/cover-small"),
+    },
   ],
 }
 
-function Harness() {
+function Harness({ value = projection }: { value?: CabinCoverProjection }) {
   const result = useRentalItemCardPhotos({
     accessToken: "read-token",
     cabinId: CABIN_ID,
     warehouseId: WAREHOUSE_ID,
-    projection,
+    projection: value,
     coverAvailability: "available",
   })
   return (
@@ -114,7 +114,7 @@ afterEach(() => {
 })
 
 describe("useRentalItemCardPhotos", () => {
-  it("loads the ordered batch previews once and requests SMALL only", async () => {
+  it("loads the explicit cover first and preserves the remaining preview order", async () => {
     media.createVariantObjectUrl.mockImplementation(
       async (_token: string, _owner: unknown, requested: MediaVariant) => ({
         url: `blob:${requested.contentPath}`,
@@ -143,6 +143,28 @@ describe("useRentalItemCardPhotos", () => {
     ).toEqual(["/cover-small", "/second-small"])
     expect(media.listOwnerMedia).not.toHaveBeenCalled()
     expect(media.createOriginalObjectUrl).not.toHaveBeenCalled()
+  })
+
+  it("keeps the server preview order when no explicit cover exists", async () => {
+    media.createVariantObjectUrl.mockImplementation(
+      async (_token: string, _owner: unknown, requested: MediaVariant) => ({
+        url: `blob:${requested.contentPath}`,
+        dispose: vi.fn(),
+      })
+    )
+
+    render(<Harness value={{ ...projection, cover: null }} />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId("photo-ids").textContent).toBe(
+        `${SECOND_ID},${COVER_ID}`
+      )
+    )
+    expect(
+      media.createVariantObjectUrl.mock.calls.map(
+        (call) => (call[2] as MediaVariant).contentPath
+      )
+    ).toEqual(["/second-small", "/cover-small"])
   })
 
   it("loads the original only when the card photo is opened fullscreen", async () => {

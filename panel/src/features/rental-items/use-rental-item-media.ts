@@ -28,6 +28,7 @@ import { RENTAL_ITEM_COVERS_QUERY_KEY } from "@/features/rental-items/use-rental
 
 const mediaClient = createHttpMediaClient()
 const UNKNOWN_ACTOR = "Автор не зафиксирован"
+const UNKNOWN_SOURCE = "Источник не зафиксирован"
 const EMPTY_ACTOR_DISPLAYS = new Map<string, DossierActorDisplay>()
 const DEFAULT_INITIAL_VARIANTS: readonly DerivedMediaVariantKind[] = ["MEDIUM"]
 
@@ -123,9 +124,9 @@ function photoSourceLabel(
   assetId: string,
   activities: readonly DossierActivity[]
 ) {
-  return inventoryMediaActivity(assetId, activities)
-    ? "Инвентаризация"
-    : "Добавленные фотографии"
+  if (inventoryMediaActivity(assetId, activities)) return "Инвентаризация"
+  if (mediaActivity(assetId, activities)) return "Добавленные фотографии"
+  return UNKNOWN_SOURCE
 }
 
 function dossierActorLabel(
@@ -177,6 +178,51 @@ function latestOccurredAt(left: string | null, right: string) {
   return rightTime > leftTime ? right : left
 }
 
+function orderPhotosWithCoverFirst(
+  photos: RentalItemMediaPhoto[],
+  coverMediaId: string | null
+) {
+  if (!coverMediaId) return photos
+  const coverIndex = photos.findIndex((photo) => photo.id === coverMediaId)
+  if (coverIndex <= 0) return photos
+  return [
+    photos[coverIndex],
+    ...photos.slice(0, coverIndex),
+    ...photos.slice(coverIndex + 1),
+  ]
+}
+
+async function loadRentalItemMediaArchive(
+  accessToken: string,
+  owner: ReturnType<typeof cabinMediaOwner>
+) {
+  const items: MediaAsset[] = []
+  const seenMediaIds = new Set<string>()
+  const seenCursors = new Set<string>()
+  let cursor: string | undefined
+
+  for (;;) {
+    const page = await mediaClient.listOwnerMedia(accessToken, owner, {
+      limit: 100,
+      ...(cursor ? { cursor } : {}),
+    })
+    for (const asset of page.items) {
+      if (seenMediaIds.has(asset.id)) {
+        throw new Error("Media service repeated a cabin archive asset")
+      }
+      seenMediaIds.add(asset.id)
+      items.push(asset)
+    }
+
+    if (!page.next) return { items, next: null }
+    if (seenCursors.has(page.next)) {
+      throw new Error("Media service repeated the cabin archive cursor")
+    }
+    seenCursors.add(page.next)
+    cursor = page.next
+  }
+}
+
 export function useRentalItemMedia({
   item,
   accessToken,
@@ -212,8 +258,7 @@ export function useRentalItemMedia({
   >(() => new Set())
   const query = useQuery({
     queryKey,
-    queryFn: () =>
-      mediaClient.listOwnerMedia(accessToken!, owner, { limit: 100 }),
+    queryFn: () => loadRentalItemMediaArchive(accessToken!, owner),
     enabled: enabled && item !== null && Boolean(accessToken),
     retry: shouldRetryOwnerProof,
     retryDelay: ownerProofRetryDelay,
@@ -249,14 +294,15 @@ export function useRentalItemMedia({
     : coverQuery.data?.items.find(
         (projection) => projection.cabinId === rentalItemId
       )
+  const currentCoverMediaId = currentCover?.cover?.mediaId ?? null
   const currentFolderId = useMemo(() => {
     const currentMediaId =
-      currentCover?.cover?.mediaId ?? currentCover?.previews[0]?.mediaId
+      currentCoverMediaId ?? currentCover?.previews[0]?.mediaId
     return currentMediaId
       ? (readyImages.find((asset) => asset.id === currentMediaId)?.folderId ??
           null)
       : null
-  }, [currentCover?.cover?.mediaId, currentCover?.previews, readyImages])
+  }, [currentCover?.previews, currentCoverMediaId, readyImages])
   const logicalPhotoCount =
     currentCover?.photoCount ??
     (query.data?.items ?? []).filter(
@@ -433,17 +479,22 @@ export function useRentalItemMedia({
     return servicePhotos
   }, [activeLoadedVariants, actorDisplays, dossierActivities, readyImages])
 
-  const photos = useMemo(
-    () =>
-      coverQuery.error
-        ? allPhotos
-        : currentFolderId === null
-          ? coverQuery.data
-            ? []
-            : allPhotos
-          : allPhotos.filter((photo) => photo.folderId === currentFolderId),
-    [allPhotos, coverQuery.data, coverQuery.error, currentFolderId]
-  )
+  const photos = useMemo(() => {
+    const currentPhotos = coverQuery.error
+      ? allPhotos
+      : currentFolderId === null
+        ? coverQuery.data
+          ? []
+          : allPhotos
+        : allPhotos.filter((photo) => photo.folderId === currentFolderId)
+    return orderPhotosWithCoverFirst(currentPhotos, currentCoverMediaId)
+  }, [
+    allPhotos,
+    coverQuery.data,
+    coverQuery.error,
+    currentCoverMediaId,
+    currentFolderId,
+  ])
 
   const photoFolders = useMemo<RentalItemPhotoFolder[]>(() => {
     const folders = new Map<string, RentalItemPhotoFolder>()
@@ -486,12 +537,30 @@ export function useRentalItemMedia({
       })
     }
 
-    return [...folders.values()].sort((left, right) => {
+    const orderedFolders = [...folders.values()].sort((left, right) => {
       const leftTime = left.occurredAt ? Date.parse(left.occurredAt) : 0
       const rightTime = right.occurredAt ? Date.parse(right.occurredAt) : 0
       return rightTime - leftTime
     })
-  }, [actorDisplays, allPhotos, dossierActivities, query.data?.items])
+    return orderedFolders.map((folder) =>
+      folder.id === currentFolderId
+        ? {
+            ...folder,
+            photos: orderPhotosWithCoverFirst(
+              folder.photos,
+              currentCoverMediaId
+            ),
+          }
+        : folder
+    )
+  }, [
+    actorDisplays,
+    allPhotos,
+    currentCoverMediaId,
+    currentFolderId,
+    dossierActivities,
+    query.data?.items,
+  ])
 
   const requestFolderPreview = useCallback(
     (folderId: string) =>

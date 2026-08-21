@@ -44,6 +44,8 @@ const ACTOR_ID = "55555555-5555-4555-8555-555555555555"
 const NEW_ASSET_ID = "77777777-7777-4777-8777-777777777777"
 const NEW_FOLDER_ID = "88888888-8888-4888-8888-888888888888"
 const NEW_ACTOR_ID = "99999999-9999-4999-8999-999999999999"
+const FIRST_ACTIVE_ASSET_ID = "aaaaaaaa-2222-4aaa-8aaa-aaaaaaaaaaaa"
+const LAST_ACTIVE_ASSET_ID = "bbbbbbbb-2222-4bbb-8bbb-bbbbbbbbbbbb"
 const owner = {
   ownerType: "CABIN",
   ownerId: RENTAL_ITEM_ID,
@@ -81,41 +83,47 @@ const item: RentalItemDto = {
   tags: [],
 }
 
-function Harness() {
+function Harness({
+  includeDossierActivity = true,
+}: {
+  includeDossierActivity?: boolean
+}) {
   const rentalItemMedia = useRentalItemMedia({
     item,
     accessToken: "media-token",
     initialVariants: INITIAL_VARIANTS,
-    dossierActivities: [
-      {
-        activityId: "66666666-6666-4666-8666-666666666666",
-        cabinId: RENTAL_ITEM_ID,
-        warehouseId: WAREHOUSE_ID,
-        activityCode: "MEDIA_READY",
-        occurredAt: "2026-07-19T09:59:00Z",
-        recordedAt: "2026-07-19T10:00:00Z",
-        actorRef: {
-          subjectId: ACTOR_ID,
-          principalType: "USER",
-          profileRevision: null,
-        },
-        sourceRef: {
-          producer: "media-service",
-          aggregateType: "MEDIA",
-          aggregateId: ASSET_ID,
-        },
-        media: [
+    dossierActivities: includeDossierActivity
+      ? [
           {
-            mediaId: ASSET_ID,
-            folderId: FOLDER_ID,
-            findingId: RENTAL_ITEM_ID,
-            generation: 1,
-            state: "READY",
+            activityId: "66666666-6666-4666-8666-666666666666",
+            cabinId: RENTAL_ITEM_ID,
+            warehouseId: WAREHOUSE_ID,
+            activityCode: "MEDIA_READY",
+            occurredAt: "2026-07-19T09:59:00Z",
+            recordedAt: "2026-07-19T10:00:00Z",
+            actorRef: {
+              subjectId: ACTOR_ID,
+              principalType: "USER",
+              profileRevision: null,
+            },
+            sourceRef: {
+              producer: "media-service",
+              aggregateType: "MEDIA",
+              aggregateId: ASSET_ID,
+            },
+            media: [
+              {
+                mediaId: ASSET_ID,
+                folderId: FOLDER_ID,
+                findingId: RENTAL_ITEM_ID,
+                generation: 1,
+                state: "READY",
+              },
+            ],
+            taskEvidencePhotos: [],
           },
-        ],
-        taskEvidencePhotos: [],
-      },
-    ],
+        ]
+      : [],
     actorDisplays: new Map([
       [
         ACTOR_ID,
@@ -151,6 +159,7 @@ function Harness() {
       <span data-testid="service-medium">{service?.variants?.medium?.url}</span>
       <span data-testid="service-large">{service?.variants?.large?.url}</span>
       <span data-testid="service-actor">{service?.actorLabel}</span>
+      <span data-testid="service-source">{service?.sourceLabel}</span>
       <button
         type="button"
         onClick={() => void rentalItemMedia.requestFolderPreview(FOLDER_ID)}
@@ -185,7 +194,7 @@ function Harness() {
   )
 }
 
-function renderHarness() {
+function renderHarness(includeDossierActivity = true) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -194,7 +203,7 @@ function renderHarness() {
   })
   return render(
     <QueryClientProvider client={queryClient}>
-      <Harness />
+      <Harness includeDossierActivity={includeDossierActivity} />
     </QueryClientProvider>
   )
 }
@@ -396,6 +405,9 @@ function CurrentInventoryFolderHarness() {
       <span data-testid="inventory-folder-actor">
         {inventoryFolder?.actorLabel}
       </span>
+      <span data-testid="inventory-folder-photo-ids">
+        {inventoryFolder?.photos.map((photo) => photo.id).join(",")}
+      </span>
       <span data-testid="archive-folder-count">
         {rentalItemMedia.photoFolders.length}
       </span>
@@ -480,6 +492,51 @@ describe("rental item media", () => {
     expect(media.listCabinCovers).toHaveBeenCalledTimes(1)
   })
 
+  it("does not invent a folder source when dossier provenance is unavailable", async () => {
+    media.listOwnerMedia.mockResolvedValue({
+      items: [
+        {
+          id: ASSET_ID,
+          folderId: FOLDER_ID,
+          fileName: "service.jpg",
+          contentType: "image/jpeg",
+          kind: "IMAGE",
+          status: "READY",
+          version: 1,
+          generation: 1,
+          rotationDegrees: 0,
+          sortOrder: 0,
+          sizeBytes: 3,
+          createdAt: "2026-07-19T10:00:00Z",
+          variants: [
+            {
+              kind: "SMALL",
+              contentType: "image/webp",
+              contentPath: "/api/media/service-small.webp",
+              width: 360,
+              height: 240,
+            },
+          ],
+        },
+      ],
+      next: null,
+    })
+    media.createVariantObjectUrl.mockResolvedValue({
+      url: "blob:service-small",
+      contentType: "image/webp",
+      size: 3,
+      dispose: vi.fn(),
+    })
+
+    renderHarness(false)
+
+    await waitFor(() =>
+      expect(screen.getByTestId("service-source").textContent).toBe(
+        "Источник не зафиксирован"
+      )
+    )
+  })
+
   it("still exposes an owner media failure", async () => {
     media.listOwnerMedia.mockRejectedValue(new Error("Owner media failed"))
 
@@ -489,6 +546,20 @@ describe("rental item media", () => {
       expect(screen.getByTestId("media-error").textContent).toBe("true")
     )
     expect(screen.getByTestId("photo-count").textContent).toBe("0")
+  })
+
+  it("rejects a repeated archive cursor instead of looping forever", async () => {
+    media.listOwnerMedia.mockResolvedValue({
+      items: [],
+      next: "repeated-archive-page",
+    })
+
+    renderHarness()
+
+    await waitFor(() =>
+      expect(screen.getByTestId("media-error").textContent).toBe("true")
+    )
+    expect(media.listOwnerMedia).toHaveBeenCalledTimes(2)
   })
 
   it("shows only the latest inventory folder as current and keeps older folders in history", async () => {
@@ -518,6 +589,29 @@ describe("rental item media", () => {
           ],
         },
         {
+          id: FIRST_ACTIVE_ASSET_ID,
+          folderId: NEW_FOLDER_ID,
+          fileName: "inventory-first.jpg",
+          contentType: "image/jpeg",
+          kind: "IMAGE",
+          status: "READY",
+          version: 1,
+          generation: 1,
+          rotationDegrees: 0,
+          sortOrder: 0,
+          sizeBytes: 3,
+          createdAt: "2026-08-19T07:28:00Z",
+          variants: [
+            {
+              kind: "SMALL",
+              contentType: "image/webp",
+              contentPath: "/api/media/inventory-first-small.webp",
+              width: 360,
+              height: 240,
+            },
+          ],
+        },
+        {
           id: NEW_ASSET_ID,
           folderId: NEW_FOLDER_ID,
           fileName: "inventory.jpg",
@@ -540,6 +634,29 @@ describe("rental item media", () => {
             },
           ],
         },
+        {
+          id: LAST_ACTIVE_ASSET_ID,
+          folderId: NEW_FOLDER_ID,
+          fileName: "inventory-last.jpg",
+          contentType: "image/jpeg",
+          kind: "IMAGE",
+          status: "READY",
+          version: 1,
+          generation: 1,
+          rotationDegrees: 0,
+          sortOrder: 2,
+          sizeBytes: 3,
+          createdAt: "2026-08-19T07:30:00Z",
+          variants: [
+            {
+              kind: "SMALL",
+              contentType: "image/webp",
+              contentPath: "/api/media/inventory-last-small.webp",
+              width: 360,
+              height: 240,
+            },
+          ],
+        },
       ],
       next: null,
     })
@@ -547,7 +664,7 @@ describe("rental item media", () => {
       items: [
         {
           cabinId: RENTAL_ITEM_ID,
-          photoCount: 1,
+          photoCount: 3,
           cover: {
             mediaId: NEW_ASSET_ID,
             generation: 1,
@@ -581,10 +698,13 @@ describe("rental item media", () => {
 
     await waitFor(() =>
       expect(screen.getByTestId("current-photo-ids").textContent).toBe(
-        NEW_ASSET_ID
+        `${NEW_ASSET_ID},${FIRST_ACTIVE_ASSET_ID},${LAST_ACTIVE_ASSET_ID}`
       )
     )
-    expect(screen.getByTestId("current-photo-count").textContent).toBe("1")
+    expect(screen.getByTestId("inventory-folder-photo-ids").textContent).toBe(
+      `${NEW_ASSET_ID},${FIRST_ACTIVE_ASSET_ID},${LAST_ACTIVE_ASSET_ID}`
+    )
+    expect(screen.getByTestId("current-photo-count").textContent).toBe("3")
     expect(screen.getByTestId("archive-folder-count").textContent).toBe("2")
     expect(screen.getByTestId("inventory-folder-source").textContent).toBe(
       "Инвентаризация"
@@ -594,8 +714,8 @@ describe("rental item media", () => {
     )
   })
 
-  it("prefers each asset's exact source activity over a newer secondary media association", async () => {
-    media.listOwnerMedia.mockResolvedValue({
+  it("loads every archive page and prefers each asset's exact source activity", async () => {
+    media.listOwnerMedia.mockResolvedValueOnce({
       items: [
         {
           id: ASSET_ID,
@@ -620,6 +740,11 @@ describe("rental item media", () => {
             },
           ],
         },
+      ],
+      next: "archive-page-2",
+    })
+    media.listOwnerMedia.mockResolvedValueOnce({
+      items: [
         {
           id: NEW_ASSET_ID,
           folderId: NEW_FOLDER_ID,
@@ -670,6 +795,18 @@ describe("rental item media", () => {
     )
     expect(screen.getByTestId("new-folder-actor").textContent).toBe(
       "Системный администратор — Автор Новый"
+    )
+    expect(media.listOwnerMedia).toHaveBeenNthCalledWith(
+      1,
+      "media-token",
+      owner,
+      { limit: 100 }
+    )
+    expect(media.listOwnerMedia).toHaveBeenNthCalledWith(
+      2,
+      "media-token",
+      owner,
+      { limit: 100, cursor: "archive-page-2" }
     )
   })
 

@@ -40,6 +40,7 @@ import {
   type RentalItemsFiltersState,
 } from "@/features/rental-items/model/rental-item"
 import {
+  getCoverFirstCabinPreviews,
   loadRentalItemCoverPage,
   RENTAL_ITEM_COVERS_QUERY_KEY,
 } from "@/features/rental-items/use-rental-item-covers"
@@ -112,7 +113,7 @@ async function loadCoverPages(
 function toBookingCardCover(projection: CabinCoverProjection) {
   return {
     ...projection,
-    previews: projection.previews.slice(0, 1),
+    previews: getCoverFirstCabinPreviews(projection).slice(0, 1),
   }
 }
 
