@@ -88,10 +88,12 @@ func TestBoundedProcessingRecoveryMigrationTreatsAmbiguousDLTAsLegacyIntegration
 		"V14__task_board_reader_audience.sql", mediamigration.V14)
 	applyResidualMigration(t, ctx, pool, 17, "15", "inventory finding membership markers",
 		"V15__inventory_finding_membership_markers.sql", mediamigration.V15)
+	applyResidualMigration(t, ctx, pool, 18, "16", "client image variants",
+		"V16__client_image_variants.sql", mediamigration.V16)
 	pool.Close()
 	database, err := Open(ctx, databaseURL)
 	if err != nil {
-		t.Fatalf("open upgraded V15 ambiguous database: %v", err)
+		t.Fatalf("open upgraded V16 ambiguous database: %v", err)
 	}
 	database.Close()
 }
@@ -375,7 +377,7 @@ func TestProcessingDBSuccessRedeliveryIsIdempotentIntegration(t *testing.T) {
 		t.Fatalf("claim DB-success work = %#v, %v", claim, err)
 	}
 	if err := repository.CompleteProcessingJob(ctx, claim.Job,
-		processedImageVariants(message.ExpectedMediaID, message.ExpectedGeneration)); err != nil {
+		processedImageVariantsForJob(claim.Job)); err != nil {
 		t.Fatalf("complete DB-success work: %v", err)
 	}
 	redelivery, err := repository.ClaimProcessingJob(ctx, message, "redelivery-worker", time.Minute)

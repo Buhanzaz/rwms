@@ -77,14 +77,31 @@ class MediaUploadContentTimeoutIntegrationTest {
   @Test
   void uploadContentUsesItsFiveMinuteDeadlineWhilePreservingPublicProxyHeaders()
       throws Exception {
+    assertUploadContentProxy(
+        "/api/media/v1/upload-sessions/session-1/content",
+        "image/jpeg",
+        "upload-1");
+  }
+
+  @Test
+  void uploadVariantUsesTheSameFiveMinuteDeadlineWithoutRewritingItsPublicPath()
+      throws Exception {
+    assertUploadContentProxy(
+        "/api/media/v1/upload-sessions/session-1/variants/SMALL/content",
+        "image/webp",
+        "upload-small-1");
+  }
+
+  private void assertUploadContentProxy(String path, String contentType, String idempotencyKey)
+      throws Exception {
     byte[] content = {1, 2, 3, 4, 5};
 
     HttpResponse<String> response =
         HttpClient.newHttpClient()
             .send(
-                request("/api/media/v1/upload-sessions/session-1/content")
-                    .header(HttpHeaders.CONTENT_TYPE, "image/jpeg")
-                    .header("Idempotency-Key", "upload-1")
+                request(path)
+                    .header(HttpHeaders.CONTENT_TYPE, contentType)
+                    .header("Idempotency-Key", idempotencyKey)
                     .PUT(HttpRequest.BodyPublishers.ofByteArray(content))
                     .build(),
                 HttpResponse.BodyHandlers.ofString());
@@ -95,12 +112,12 @@ class MediaUploadContentTimeoutIntegrationTest {
         .singleElement()
         .satisfies(
             request -> {
-              assertThat(request.path())
-                  .isEqualTo("/api/media/v1/upload-sessions/session-1/content");
+              assertThat(request.path()).isEqualTo(path);
               assertThat(request.method()).isEqualTo("PUT");
               assertThat(request.authorization()).isEqualTo("Bearer valid");
               assertThat(request.cookie()).isNull();
-              assertThat(request.idempotencyKey()).isEqualTo("upload-1");
+              assertThat(request.idempotencyKey()).isEqualTo(idempotencyKey);
+              assertThat(request.contentType()).startsWith(contentType);
               assertThat(request.body()).containsExactly(content);
             });
   }
@@ -163,6 +180,7 @@ class MediaUploadContentTimeoutIntegrationTest {
               exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION),
               exchange.getRequestHeaders().getFirst(HttpHeaders.COOKIE),
               exchange.getRequestHeaders().getFirst("Idempotency-Key"),
+              exchange.getRequestHeaders().getFirst(HttpHeaders.CONTENT_TYPE),
               requestBody));
       Thread.sleep(250);
       byte[] responseBody = "{\"state\":\"UPLOADED\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -182,6 +200,7 @@ class MediaUploadContentTimeoutIntegrationTest {
       String authorization,
       String cookie,
       String idempotencyKey,
+      String contentType,
       byte[] body) {}
 
   @TestConfiguration

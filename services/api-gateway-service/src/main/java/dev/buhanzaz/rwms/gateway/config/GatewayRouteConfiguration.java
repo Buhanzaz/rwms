@@ -246,7 +246,8 @@ public class GatewayRouteConfiguration {
   }
 
   /**
-   * Uses the dedicated bounded proxy for media upload bytes instead of the generic media route.
+   * Uses the dedicated bounded proxy for source and client-variant media upload bytes instead of
+   * the generic media route.
    */
   @Bean
   @Order(-79)
@@ -256,6 +257,7 @@ public class GatewayRouteConfiguration {
       MediaUploadContentProxyHandler mediaUploadContentProxyHandler) {
     RequestPredicate mediaUploadContentPath =
         path("/api/media/v1/upload-sessions/*/content")
+            .or(path("/api/media/v1/upload-sessions/*/variants/*/content"))
             .and(method(HttpMethod.PUT))
             .and(request -> safePath(request.path()));
     return route("media-upload-content")
@@ -464,7 +466,8 @@ public class GatewayRouteConfiguration {
   private static boolean isMediaUploadContentRequest(ServerRequest request) {
     return request.method() == HttpMethod.PUT
         && decodedPath(request.path())
-            .matches("^/api/media/v1/upload-sessions/[^/]+/content$");
+            .matches(
+                "^/api/media/v1/upload-sessions/[^/]+/(?:content|variants/[^/]+/content)$");
   }
 
   private static boolean isInventoryOutcomeRecalculateRequest(ServerRequest request) {

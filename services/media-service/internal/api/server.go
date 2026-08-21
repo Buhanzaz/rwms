@@ -51,7 +51,10 @@ type readiness interface {
 type repository interface {
 	CreateUpload(context.Context, persistence.CreateUploadCommand) (persistence.AssetRecord, bool, error)
 	AcquireUploadSessionContentLock(context.Context, uuid.UUID) (func() error, error)
+	AcquireUploadImageVariantContentLock(context.Context, uuid.UUID, media.Variant) (func() error, error)
 	UploadSessionForPrincipal(context.Context, uuid.UUID, uuid.UUID, string) (persistence.AssetRecord, error)
+	UploadImageVariantForPrincipal(context.Context, uuid.UUID, uuid.UUID, string, media.Variant) (persistence.AssetRecord, persistence.UploadImageVariantPart, error)
+	CompleteUploadImageVariant(context.Context, persistence.CompleteUploadImageVariantCommand) (persistence.UploadImageVariantPart, bool, error)
 	FinalizeUpload(context.Context, persistence.FinalizeCommand) (persistence.AssetRecord, bool, error)
 	ReadOwnerAssets(context.Context, string, string, uuid.UUID, int, *uuid.UUID,
 		func([]persistence.AssetWithVariants) error) error
@@ -213,6 +216,7 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("GET /api/media/v1/events", server.events)
 	server.mux.HandleFunc("POST /api/media/v1/upload-sessions", server.createUpload)
 	server.mux.HandleFunc("PUT /api/media/v1/upload-sessions/{uploadSessionId}/content", server.uploadSessionContent)
+	server.mux.HandleFunc("PUT /api/media/v1/upload-sessions/{uploadSessionId}/variants/{variant}/content", server.uploadSessionImageVariantContent)
 	server.mux.HandleFunc("POST /api/media/v1/upload-sessions/{uploadSessionId}/complete", server.finalizeUpload)
 	server.mux.HandleFunc("GET /api/media/v1/assets", server.listOwner)
 	server.mux.HandleFunc("POST /api/media/v1/cabin-covers", server.listCabinCovers)
@@ -235,6 +239,7 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("/api/media/v1/events", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/upload-sessions", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/upload-sessions/{uploadSessionId}/content", server.methodNotAllowed)
+	server.mux.HandleFunc("/api/media/v1/upload-sessions/{uploadSessionId}/variants/{variant}/content", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/upload-sessions/{uploadSessionId}/complete", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/assets", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/cabin-covers", server.methodNotAllowed)
@@ -743,7 +748,11 @@ func (server *Server) getLogisticsCabinPresentationVariantContent(response http.
 				asset.Kind != media.KindImage || asset.Status != media.StatusReady ||
 				asset.Generation != int(generation) ||
 				record == nil || record.Variant != variant || record.ObjectKey == "" || record.ObjectVersionID == "" ||
-				record.SizeBytes <= 0 || normalizeContentType(record.ContentType) != "image/webp" {
+				record.SizeBytes <= 0 {
+				return persistence.ErrNotFound
+			}
+			variantKind, supportedImage := media.KindForContentType(normalizeContentType(record.ContentType))
+			if !supportedImage || variantKind != media.KindImage {
 				return persistence.ErrNotFound
 			}
 			copyOfVariant := *record
@@ -760,19 +769,75 @@ func (server *Server) getLogisticsCabinPresentationVariantContent(response http.
 }
 
 type createUploadRequest struct {
-	OwnerType         string `json:"ownerType"`
-	OwnerID           string `json:"ownerId"`
-	DocumentID        string `json:"documentId"`
-	LineID            string `json:"lineId"`
-	ClientReferenceID string `json:"clientReferenceId"`
-	WarehouseID       string `json:"warehouseId"`
-	Context           string `json:"context"`
-	FolderID          string `json:"folderId"`
-	FileName          string `json:"fileName"`
-	ContentType       string `json:"contentType"`
-	ContentLength     int64  `json:"contentLength"`
-	ChecksumSHA256    string `json:"checksumSha256"`
-	SortOrder         int64  `json:"sortOrder"`
+	OwnerType         string                      `json:"ownerType"`
+	OwnerID           string                      `json:"ownerId"`
+	DocumentID        string                      `json:"documentId"`
+	LineID            string                      `json:"lineId"`
+	ClientReferenceID string                      `json:"clientReferenceId"`
+	WarehouseID       string                      `json:"warehouseId"`
+	Context           string                      `json:"context"`
+	FolderID          string                      `json:"folderId"`
+	FileName          string                      `json:"fileName"`
+	ContentType       string                      `json:"contentType"`
+	ContentLength     int64                       `json:"contentLength"`
+	ChecksumSHA256    string                      `json:"checksumSha256"`
+	ImageVariants     []createImageVariantRequest `json:"imageVariants"`
+	SortOrder         int64                       `json:"sortOrder"`
+}
+
+// createImageVariantRequest declares one client-produced WebP object without
+// embedding image bytes in the JSON command.
+type createImageVariantRequest struct {
+	Kind           media.Variant `json:"kind"`
+	ContentLength  int64         `json:"contentLength"`
+	ChecksumSHA256 string        `json:"checksumSha256"`
+	Width          int           `json:"width"`
+	Height         int           `json:"height"`
+}
+
+func normalizeImageVariantCreateRequest(
+	mediaID uuid.UUID,
+	items []createImageVariantRequest,
+) ([]persistence.UploadImageVariantExpectation, int64, string, bool) {
+	if mediaID == uuid.Nil || len(items) != 3 {
+		return nil, 0, "", false
+	}
+	byKind := make(map[media.Variant]createImageVariantRequest, 3)
+	var total int64
+	for _, item := range items {
+		if item.Kind != media.VariantSmall && item.Kind != media.VariantMedium && item.Kind != media.VariantLarge {
+			return nil, 0, "", false
+		}
+		if _, duplicate := byKind[item.Kind]; duplicate || item.ContentLength <= 0 ||
+			item.ContentLength > 1<<20 || item.Width <= 0 || item.Height <= 0 ||
+			!checksumPattern.MatchString(item.ChecksumSHA256) {
+			return nil, 0, "", false
+		}
+		byKind[item.Kind] = item
+		total += item.ContentLength
+		if total > 1<<20 {
+			return nil, 0, "", false
+		}
+	}
+	canonical := []media.Variant{media.VariantSmall, media.VariantMedium, media.VariantLarge}
+	expectations := make([]persistence.UploadImageVariantExpectation, 0, 3)
+	manifest := strings.Builder{}
+	manifest.WriteString("rwms-image-variants-v1\n")
+	for _, variant := range canonical {
+		item, found := byKind[variant]
+		if !found {
+			return nil, 0, "", false
+		}
+		manifest.WriteString(fmt.Sprintf("%s:%d:%s:%dx%d\n", variant, item.ContentLength,
+			item.ChecksumSHA256, item.Width, item.Height))
+		expectations = append(expectations, persistence.UploadImageVariantExpectation{
+			Variant: variant, ContentLength: item.ContentLength, ChecksumSHA256: item.ChecksumSHA256,
+			Width: item.Width, Height: item.Height,
+			ObjectKey: media.ImageVariantObjectKey(mediaID.String(), 1, variant),
+		})
+	}
+	digest := sha256.Sum256([]byte(manifest.String()))
+	return expectations, total, hex.EncodeToString(digest[:]), true
 }
 
 func (server *Server) createUpload(response http.ResponseWriter, request *http.Request) {
@@ -830,26 +895,53 @@ func (server *Server) createUpload(response http.ResponseWriter, request *http.R
 		server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 		return
 	}
-	contentType := normalizeContentType(body.ContentType)
-	if _, allowed := server.config.AllowedMIMETypes[contentType]; !allowed {
-		server.problem(response, request, http.StatusUnsupportedMediaType, "MEDIA_UNSUPPORTED_TYPE", "Unsupported media type")
-		return
-	}
-	if body.ContentLength <= 0 || body.ContentLength > server.config.MaxUploadBytes || !checksumPattern.MatchString(body.ChecksumSHA256) || strings.TrimSpace(body.FileName) == "" || len(body.FileName) > 512 || body.SortOrder < 0 {
+	if strings.TrimSpace(body.FileName) == "" || len(body.FileName) > 512 || body.SortOrder < 0 {
 		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid upload request")
-		return
-	}
-	kind, accepted := media.KindForContentType(contentType)
-	if !accepted {
-		server.problem(response, request, http.StatusUnsupportedMediaType, "MEDIA_UNSUPPORTED_TYPE", "Unsupported media type")
-		return
-	}
-	if body.OwnerType == persistence.OwnerTypeTaskBoardEntry && (kind != media.KindImage || contentType != "image/jpeg") {
-		server.problem(response, request, http.StatusUnsupportedMediaType, "MEDIA_UNSUPPORTED_TYPE", "Unsupported media type")
 		return
 	}
 	fileName := strings.TrimSpace(body.FileName)
 	mediaID := uuid.New()
+	uploadMode := persistence.UploadModeSource
+	contentType := normalizeContentType(body.ContentType)
+	contentLength := body.ContentLength
+	checksumSHA256 := body.ChecksumSHA256
+	var imageVariants []persistence.UploadImageVariantExpectation
+	var kind media.Kind
+	if len(body.ImageVariants) > 0 {
+		if body.ContentType != "" || body.ContentLength != 0 || body.ChecksumSHA256 != "" {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid image variant upload request")
+			return
+		}
+		var valid bool
+		imageVariants, contentLength, checksumSHA256, valid = normalizeImageVariantCreateRequest(mediaID, body.ImageVariants)
+		if !valid {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid image variant upload request")
+			return
+		}
+		uploadMode = persistence.UploadModeImageVariants
+		contentType = "image/webp"
+		kind = media.KindImage
+	} else {
+		if body.ContentLength <= 0 || body.ContentLength > server.config.MaxUploadBytes ||
+			!checksumPattern.MatchString(body.ChecksumSHA256) {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid upload request")
+			return
+		}
+		var accepted bool
+		kind, accepted = media.KindForContentType(contentType)
+		if !accepted {
+			server.problem(response, request, http.StatusUnsupportedMediaType, "MEDIA_UNSUPPORTED_TYPE", "Unsupported media type")
+			return
+		}
+	}
+	if _, allowed := server.config.AllowedMIMETypes[contentType]; !allowed {
+		server.problem(response, request, http.StatusUnsupportedMediaType, "MEDIA_UNSUPPORTED_TYPE", "Unsupported media type")
+		return
+	}
+	if body.OwnerType == persistence.OwnerTypeTaskBoardEntry && kind != media.KindImage {
+		server.problem(response, request, http.StatusUnsupportedMediaType, "MEDIA_UNSUPPORTED_TYPE", "Unsupported media type")
+		return
+	}
 	folderID := mediaID
 	if body.FolderID != "" {
 		folderID, err = uuid.Parse(body.FolderID)
@@ -860,22 +952,36 @@ func (server *Server) createUpload(response http.ResponseWriter, request *http.R
 		body.FolderID = folderID.String()
 	}
 	sessionID := uuid.New()
-	extension := extensionForContentType(contentType)
-	objectKey := media.IngressObjectKey(mediaID.String(), extension)
-	fingerprint := requestFingerprint(map[string]any{
+	objectKey := media.IngressObjectKey(mediaID.String(), extensionForContentType(contentType))
+	if uploadMode == persistence.UploadModeImageVariants {
+		objectKey = media.ImageVariantObjectKey(mediaID.String(), 1, media.VariantLarge)
+	}
+	fingerprintVariants := make([]map[string]any, 0, len(imageVariants))
+	for _, item := range imageVariants {
+		fingerprintVariants = append(fingerprintVariants, map[string]any{
+			"kind": item.Variant, "contentLength": item.ContentLength,
+			"checksumSha256": item.ChecksumSHA256, "width": item.Width, "height": item.Height,
+		})
+	}
+	fingerprintPayload := map[string]any{
 		"ownerType": body.OwnerType, "ownerId": body.OwnerID, "documentId": body.DocumentID,
 		"lineId": body.LineID, "warehouseId": warehouseID,
 		"clientReferenceId": body.ClientReferenceID,
 		"context":           body.Context, "folderId": body.FolderID,
-		"fileName": fileName, "contentType": contentType, "contentLength": body.ContentLength,
-		"checksumSha256": body.ChecksumSHA256, "sortOrder": body.SortOrder,
-	})
+		"fileName": fileName, "contentType": contentType, "contentLength": contentLength,
+		"checksumSha256": checksumSHA256, "sortOrder": body.SortOrder,
+	}
+	if len(fingerprintVariants) > 0 {
+		fingerprintPayload["imageVariants"] = fingerprintVariants
+	}
+	fingerprint := requestFingerprint(fingerprintPayload)
 	asset, replayed, err := server.repository.CreateUpload(request.Context(), persistence.CreateUploadCommand{
 		MediaID: mediaID, FolderID: folderID, UploadSessionID: sessionID, SubjectID: principal.subjectID,
 		PrincipalType: principal.principalType, Actor: principal.actor, WorkerID: workerIDFor(principal),
 		IdempotencyKey: idempotencyKey, RequestSHA256: fingerprint, OwnerType: body.OwnerType,
 		OwnerID: ownerID, WarehouseID: warehouseID, ClientReferenceID: clientReferenceID, Kind: kind, FileName: fileName,
-		ContentType: contentType, ContentLength: body.ContentLength, ChecksumSHA256: body.ChecksumSHA256,
+		ContentType: contentType, ContentLength: contentLength, ChecksumSHA256: checksumSHA256,
+		UploadMode: uploadMode, ImageVariants: imageVariants,
 		SortOrder: body.SortOrder, SourceObjectKey: objectKey,
 		UploadExpiresAt: time.Now().UTC().Add(server.config.UploadExpiry), CorrelationID: correlationID(request.Context()),
 	})
@@ -891,10 +997,22 @@ func (server *Server) createUpload(response http.ResponseWriter, request *http.R
 		status = http.StatusOK
 	}
 	response.Header().Set("Cache-Control", "no-store")
+	var contentUploadURL any = "/api/media/v1/upload-sessions/" + asset.UploadSessionID.String() + "/content"
+	variantUploadURLs := make([]map[string]any, 0, 3)
+	if asset.UploadMode == persistence.UploadModeImageVariants {
+		contentUploadURL = nil
+		for _, variant := range []media.Variant{media.VariantSmall, media.VariantMedium, media.VariantLarge} {
+			variantUploadURLs = append(variantUploadURLs, map[string]any{
+				"kind": variant,
+				"contentUploadUrl": "/api/media/v1/upload-sessions/" + asset.UploadSessionID.String() +
+					"/variants/" + string(variant) + "/content",
+			})
+		}
+	}
 	writeJSON(response, status, map[string]any{
 		"uploadSessionId": asset.UploadSessionID, "mediaId": asset.ID,
 		"expiresAt":        asset.UploadExpiresAt,
-		"contentUploadUrl": "/api/media/v1/upload-sessions/" + asset.UploadSessionID.String() + "/content",
+		"contentUploadUrl": contentUploadURL, "variantUploadUrls": variantUploadURLs,
 	})
 }
 
@@ -904,11 +1022,12 @@ type uploadedObjectResponse struct {
 	ChecksumSHA256  string `json:"checksumSha256"`
 }
 
-// uploadSessionContent is the only browser byte-ingress path. It streams the
-// exact authorized body to private MinIO and commits finalization before
-// acknowledging the upload, so a session cannot accept a second production
-// object. The regular completion endpoint then provides an exact idempotent
-// confirmation using the same key and immutable object metadata.
+// uploadSessionContent is the compatibility source byte-ingress path for the
+// panel, video and retained source clients. It streams the exact authorized
+// body to private MinIO and commits finalization before acknowledging the
+// upload, so a session cannot accept a second production object. The regular
+// completion endpoint then provides an exact idempotent confirmation using the
+// same key and immutable object metadata.
 func (server *Server) uploadSessionContent(response http.ResponseWriter, request *http.Request) {
 	principal, ok := server.mediaPrincipal(response, request)
 	if !ok {
@@ -1030,6 +1149,145 @@ func (server *Server) uploadSessionContent(response http.ResponseWriter, request
 	})
 }
 
+// uploadSessionImageVariantContent streams one already encoded WebP directly
+// to private object storage. It verifies the declared size, checksum, object
+// version and ETag, then records only immutable metadata in PostgreSQL; no Go
+// image decoder or transformer is involved.
+func (server *Server) uploadSessionImageVariantContent(response http.ResponseWriter, request *http.Request) {
+	principal, ok := server.mediaPrincipal(response, request)
+	if !ok {
+		return
+	}
+	sessionID, sessionErr := uuid.Parse(request.PathValue("uploadSessionId"))
+	variant := media.Variant(request.PathValue("variant"))
+	if sessionErr != nil || (variant != media.VariantSmall && variant != media.VariantMedium && variant != media.VariantLarge) {
+		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid image variant upload")
+		return
+	}
+	idempotencyKey, ok := requireUUIDHeader(response, request, "Idempotency-Key", server)
+	if !ok {
+		return
+	}
+	asset, part, err := server.repository.UploadImageVariantForPrincipal(
+		request.Context(), sessionID, principal.subjectID, principal.principalType, variant)
+	if err != nil {
+		server.repositoryProblem(response, request, err)
+		return
+	}
+	if !server.authorizeUploadAsset(response, request, principal, asset) {
+		return
+	}
+	release, err := server.repository.AcquireUploadImageVariantContentLock(request.Context(), asset.ID, variant)
+	if err != nil {
+		server.repositoryProblem(response, request, err)
+		return
+	}
+	defer func() {
+		if releaseErr := release(); releaseErr != nil {
+			server.logger.Error("release upload image variant lock",
+				"correlationId", correlationID(request.Context()), "error", safeError(releaseErr))
+		}
+	}()
+	asset, part, err = server.repository.UploadImageVariantForPrincipal(
+		request.Context(), sessionID, principal.subjectID, principal.principalType, variant)
+	if err != nil {
+		server.repositoryProblem(response, request, err)
+		return
+	}
+	if !server.authorizeUploadAsset(response, request, principal, asset) {
+		return
+	}
+	if part.UploadedAt != nil {
+		_, replayed, completeErr := server.repository.CompleteUploadImageVariant(request.Context(),
+			persistence.CompleteUploadImageVariantCommand{
+				SessionID: sessionID, SubjectID: principal.subjectID, PrincipalType: principal.principalType,
+				MediaID: asset.ID, Variant: variant, IdempotencyKey: idempotencyKey,
+				ObjectVersionID: part.ObjectVersionID, ETag: part.ETag,
+				ChecksumSHA256: part.ChecksumSHA256, SizeBytes: part.ContentLength,
+			})
+		if completeErr != nil {
+			server.repositoryProblem(response, request, completeErr)
+			return
+		}
+		if !replayed {
+			server.problem(response, request, http.StatusConflict, "MEDIA_CONFLICT", "Media command conflicts with current state")
+			return
+		}
+		response.Header().Set("Cache-Control", "no-store")
+		writeJSON(response, http.StatusOK, uploadedObjectResponse{
+			ObjectVersionID: part.ObjectVersionID, ETag: part.ETag, ChecksumSHA256: part.ChecksumSHA256,
+		})
+		return
+	}
+	if asset.UploadCompletedAt != nil || !time.Now().Before(asset.UploadExpiresAt) {
+		server.problem(response, request, http.StatusConflict, "MEDIA_UPLOAD_EXPIRED", "Upload session has expired")
+		return
+	}
+	contentType := normalizeContentType(request.Header.Get("Content-Type"))
+	knownLengthMismatch := request.ContentLength != -1 &&
+		(request.ContentLength <= 0 || request.ContentLength != part.ContentLength)
+	if contentType != "image/webp" || part.ContentLength <= 0 || part.ContentLength > 1<<20 || knownLengthMismatch {
+		server.problem(response, request, http.StatusConflict, "MEDIA_OBJECT_MISMATCH", "Uploaded object does not match the authorized request")
+		return
+	}
+	hash := sha256.New()
+	bounded := &boundedUploadReader{source: request.Body, remaining: part.ContentLength}
+	metadata, err := server.store.PutIngressVersion(request.Context(), part.ObjectKey,
+		io.TeeReader(bounded, hash), part.ContentLength, "image/webp", part.ChecksumSHA256)
+	if err != nil {
+		if bounded.underflow || errors.Is(err, errUploadBodyLength) {
+			server.problem(response, request, http.StatusConflict, "MEDIA_OBJECT_MISMATCH", "Uploaded object does not match the authorized request")
+			return
+		}
+		server.logger.Error("stream immutable image variant", "correlationId", correlationID(request.Context()), "error", safeError(err))
+		server.problem(response, request, http.StatusServiceUnavailable, "MEDIA_STORAGE_UNAVAILABLE", "Storage is unavailable")
+		return
+	}
+	var trailing [1]byte
+	trailingBytes, trailingErr := request.Body.Read(trailing[:])
+	if trailingErr != nil && !errors.Is(trailingErr, io.EOF) {
+		server.problem(response, request, http.StatusServiceUnavailable, "MEDIA_STORAGE_UNAVAILABLE", "Storage is unavailable")
+		return
+	}
+	checksum := hex.EncodeToString(hash.Sum(nil))
+	if bounded.remaining != 0 || trailingBytes != 0 || checksum != part.ChecksumSHA256 ||
+		metadata.SizeBytes != part.ContentLength || normalizeContentType(metadata.ContentType) != "image/webp" ||
+		metadata.VersionID == "" || normalizeETag(metadata.ETag) == "" {
+		server.problem(response, request, http.StatusConflict, "MEDIA_OBJECT_MISMATCH", "Uploaded object does not match the authorized request")
+		return
+	}
+	stored, statErr := server.store.StatVersion(request.Context(), part.ObjectKey, metadata.VersionID)
+	if statErr != nil {
+		server.logger.Error("verify immutable image variant", "correlationId", correlationID(request.Context()), "error", safeError(statErr))
+		server.problem(response, request, http.StatusServiceUnavailable, "MEDIA_STORAGE_UNAVAILABLE", "Storage is unavailable")
+		return
+	}
+	if stored.VersionID != metadata.VersionID || stored.SizeBytes != part.ContentLength ||
+		normalizeContentType(stored.ContentType) != "image/webp" || normalizeETag(stored.ETag) != normalizeETag(metadata.ETag) {
+		server.problem(response, request, http.StatusConflict, "MEDIA_OBJECT_MISMATCH", "Uploaded object does not match the authorized request")
+		return
+	}
+	part, replayed, err := server.repository.CompleteUploadImageVariant(request.Context(),
+		persistence.CompleteUploadImageVariantCommand{
+			SessionID: sessionID, SubjectID: principal.subjectID, PrincipalType: principal.principalType,
+			MediaID: asset.ID, Variant: variant, IdempotencyKey: idempotencyKey,
+			ObjectVersionID: metadata.VersionID, ETag: normalizeETag(metadata.ETag),
+			ChecksumSHA256: checksum, SizeBytes: part.ContentLength,
+		})
+	if err != nil {
+		server.repositoryProblem(response, request, err)
+		return
+	}
+	status := http.StatusCreated
+	if replayed {
+		status = http.StatusOK
+	}
+	response.Header().Set("Cache-Control", "no-store")
+	writeJSON(response, status, uploadedObjectResponse{
+		ObjectVersionID: part.ObjectVersionID, ETag: part.ETag, ChecksumSHA256: part.ChecksumSHA256,
+	})
+}
+
 func (server *Server) authorizeUploadAsset(response http.ResponseWriter, request *http.Request, principal mediaRequestPrincipal, asset persistence.AssetRecord) bool {
 	if principal.isWorker() {
 		entryID, err := principal.requireTaskBoardWorker(asset.OwnerType, asset.OwnerID, asset.WarehouseID)
@@ -1086,16 +1344,66 @@ func (server *Server) confirmContentReplay(
 }
 
 type finalizeUploadRequest struct {
-	ObjectVersionID string `json:"objectVersionId"`
-	ETag            string `json:"etag"`
-	ChecksumSHA256  string `json:"checksumSha256"`
+	ObjectVersionID string                        `json:"objectVersionId"`
+	ETag            string                        `json:"etag"`
+	ChecksumSHA256  string                        `json:"checksumSha256"`
+	Variants        []finalizeImageVariantRequest `json:"variants"`
+}
+
+// finalizeImageVariantRequest echoes the immutable object metadata returned by
+// one successful variant PUT.
+type finalizeImageVariantRequest struct {
+	Kind            media.Variant `json:"kind"`
+	ObjectVersionID string        `json:"objectVersionId"`
+	ETag            string        `json:"etag"`
+	ChecksumSHA256  string        `json:"checksumSha256"`
+}
+
+func normalizeImageVariantFinalizeRequest(
+	items []finalizeImageVariantRequest,
+) ([]persistence.FinalizeImageVariant, []finalizeImageVariantRequest, bool) {
+	if len(items) != 3 {
+		return nil, nil, false
+	}
+	byKind := make(map[media.Variant]finalizeImageVariantRequest, 3)
+	for _, item := range items {
+		item.ObjectVersionID = strings.TrimSpace(item.ObjectVersionID)
+		item.ETag = normalizeETag(item.ETag)
+		if item.Kind != media.VariantSmall && item.Kind != media.VariantMedium && item.Kind != media.VariantLarge {
+			return nil, nil, false
+		}
+		if _, duplicate := byKind[item.Kind]; duplicate || item.ObjectVersionID == "" ||
+			len(item.ObjectVersionID) > 255 || item.ETag == "" || len(item.ETag) > 255 ||
+			!checksumPattern.MatchString(item.ChecksumSHA256) {
+			return nil, nil, false
+		}
+		byKind[item.Kind] = item
+	}
+	commands := make([]persistence.FinalizeImageVariant, 0, 3)
+	canonical := make([]finalizeImageVariantRequest, 0, 3)
+	for _, variant := range []media.Variant{media.VariantSmall, media.VariantMedium, media.VariantLarge} {
+		item, found := byKind[variant]
+		if !found {
+			return nil, nil, false
+		}
+		canonical = append(canonical, item)
+		commands = append(commands, persistence.FinalizeImageVariant{
+			Variant: item.Kind, ObjectVersionID: item.ObjectVersionID,
+			ETag: item.ETag, ChecksumSHA256: item.ChecksumSHA256,
+		})
+	}
+	return commands, canonical, true
 }
 
 func finalizeFingerprint(sessionID uuid.UUID, body finalizeUploadRequest) string {
-	return requestFingerprint(map[string]any{
+	payload := map[string]any{
 		"uploadSessionId": sessionID, "objectVersionId": body.ObjectVersionID,
 		"etag": body.ETag, "checksumSha256": body.ChecksumSHA256,
-	})
+	}
+	if len(body.Variants) > 0 {
+		payload["variants"] = body.Variants
+	}
+	return requestFingerprint(payload)
 }
 
 func (server *Server) finalizeUpload(response http.ResponseWriter, request *http.Request) {
@@ -1116,15 +1424,29 @@ func (server *Server) finalizeUpload(response http.ResponseWriter, request *http
 	if !server.decode(response, request, &body) {
 		return
 	}
-	objectVersionID := strings.TrimSpace(body.ObjectVersionID)
-	etag := normalizeETag(body.ETag)
-	if objectVersionID == "" || len(objectVersionID) > 255 || etag == "" || len(etag) > 255 ||
-		!checksumPattern.MatchString(body.ChecksumSHA256) {
-		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid finalize request")
-		return
+	var imageVariants []persistence.FinalizeImageVariant
+	if len(body.Variants) > 0 {
+		if body.ObjectVersionID != "" || body.ETag != "" || body.ChecksumSHA256 != "" {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid finalize request")
+			return
+		}
+		var canonical []finalizeImageVariantRequest
+		var valid bool
+		imageVariants, canonical, valid = normalizeImageVariantFinalizeRequest(body.Variants)
+		if !valid {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid finalize request")
+			return
+		}
+		body.Variants = canonical
+	} else {
+		body.ObjectVersionID = strings.TrimSpace(body.ObjectVersionID)
+		body.ETag = normalizeETag(body.ETag)
+		if body.ObjectVersionID == "" || len(body.ObjectVersionID) > 255 || body.ETag == "" || len(body.ETag) > 255 ||
+			!checksumPattern.MatchString(body.ChecksumSHA256) {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid finalize request")
+			return
+		}
 	}
-	body.ObjectVersionID = objectVersionID
-	body.ETag = etag
 	asset, err := server.repository.UploadSessionForPrincipal(request.Context(), sessionID, principal.subjectID, principal.principalType)
 	if err != nil {
 		server.repositoryProblem(response, request, err)
@@ -1133,13 +1455,21 @@ func (server *Server) finalizeUpload(response http.ResponseWriter, request *http
 	if !server.authorizeUploadAsset(response, request, principal, asset) {
 		return
 	}
+	uploadMode := asset.UploadMode
+	if uploadMode == "" {
+		uploadMode = persistence.UploadModeSource
+	}
+	if (uploadMode == persistence.UploadModeImageVariants) != (len(imageVariants) == 3) {
+		server.problem(response, request, http.StatusConflict, "MEDIA_OBJECT_MISMATCH", "Uploaded object does not match the authorized request")
+		return
+	}
 	fingerprint := finalizeFingerprint(sessionID, body)
 	if asset.UploadCompletedAt != nil {
 		asset, replayed, err := server.repository.FinalizeUpload(request.Context(), persistence.FinalizeCommand{
 			SessionID: sessionID, SubjectID: principal.subjectID, PrincipalType: principal.principalType,
 			Actor: principal.actor, WorkerID: workerIDFor(principal), IdempotencyKey: idempotencyKey,
-			RequestSHA256: fingerprint, ObjectVersionID: objectVersionID,
-			ETag: etag, ChecksumSHA256: body.ChecksumSHA256,
+			RequestSHA256: fingerprint, ObjectVersionID: body.ObjectVersionID,
+			ETag: body.ETag, ChecksumSHA256: body.ChecksumSHA256, ImageVariants: imageVariants,
 			ContentType: asset.ContentType, SizeBytes: asset.ExpectedLength, CorrelationID: correlationID(request.Context()),
 		})
 		if err != nil || !replayed {
@@ -1153,26 +1483,30 @@ func (server *Server) finalizeUpload(response http.ResponseWriter, request *http
 		server.problem(response, request, http.StatusConflict, "MEDIA_UPLOAD_EXPIRED", "Upload session has expired")
 		return
 	}
-	if asset.ExpectedChecksum != body.ChecksumSHA256 {
+	if uploadMode == persistence.UploadModeSource && asset.ExpectedChecksum != body.ChecksumSHA256 {
 		server.problem(response, request, http.StatusConflict, "MEDIA_OBJECT_MISMATCH", "Uploaded object does not match the authorized request")
 		return
 	}
-	metadata, err := server.verifyObject(request.Context(), asset, body)
-	if err != nil {
-		if errors.Is(err, errObjectMismatch) {
-			server.problem(response, request, http.StatusConflict, "MEDIA_OBJECT_MISMATCH", "Uploaded object does not match the authorized request")
+	metadata := media.ObjectMetadata{ContentType: asset.ContentType, SizeBytes: asset.ExpectedLength}
+	if uploadMode == persistence.UploadModeSource {
+		metadata, err = server.verifyObject(request.Context(), asset, body)
+		if err != nil {
+			if errors.Is(err, errObjectMismatch) {
+				server.problem(response, request, http.StatusConflict, "MEDIA_OBJECT_MISMATCH", "Uploaded object does not match the authorized request")
+				return
+			}
+			server.logger.Error("verify immutable object", "correlationId", correlationID(request.Context()), "error", safeError(err))
+			server.problem(response, request, http.StatusServiceUnavailable, "MEDIA_STORAGE_UNAVAILABLE", "Storage is unavailable")
 			return
 		}
-		server.logger.Error("verify immutable object", "correlationId", correlationID(request.Context()), "error", safeError(err))
-		server.problem(response, request, http.StatusServiceUnavailable, "MEDIA_STORAGE_UNAVAILABLE", "Storage is unavailable")
-		return
 	}
 	asset, replayed, err := server.repository.FinalizeUpload(request.Context(), persistence.FinalizeCommand{
 		SessionID: sessionID, SubjectID: principal.subjectID, PrincipalType: principal.principalType,
 		Actor: principal.actor, WorkerID: workerIDFor(principal), IdempotencyKey: idempotencyKey,
-		RequestSHA256: fingerprint, ObjectVersionID: objectVersionID,
-		ETag: etag, ChecksumSHA256: body.ChecksumSHA256,
-		ContentType: metadata.ContentType, SizeBytes: metadata.SizeBytes, CorrelationID: correlationID(request.Context()),
+		RequestSHA256: fingerprint, ObjectVersionID: body.ObjectVersionID,
+		ETag: body.ETag, ChecksumSHA256: body.ChecksumSHA256,
+		ContentType: metadata.ContentType, SizeBytes: metadata.SizeBytes,
+		ImageVariants: imageVariants, CorrelationID: correlationID(request.Context()),
 	})
 	if err != nil {
 		server.repositoryProblem(response, request, err)

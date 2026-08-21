@@ -3,7 +3,7 @@
 [Русская версия](README.ru.md)
 
 `media-service` is the single stateful Go runtime for upload authorization,
-metadata, immutable MinIO object generations, image/video processing and media
+metadata, immutable MinIO object generations, video processing and media
 facts. PostgreSQL is its replay authority; Kafka is at-least-once transport.
 Browsers upload and read bytes only through authenticated same-origin media API
 paths. MinIO remains private: no storage origin, object key, signed URL or
@@ -16,8 +16,12 @@ snapshot versions and exact bytes, then compares the rebuilt state with the
 live projection. Sanitized Kafka facts are a separate representation and are
 never used as replay authority.
 
-Images produce `SMALL`, `MEDIUM`, `LARGE` WebP variants and an authorized
-`ORIGINAL` without changing the uploaded pixel orientation. Videos retain the
+ManagerApp and WorkerApp physically orient still images and produce `SMALL`,
+`MEDIUM`, and `LARGE` WebP variants whose combined size is at most 1 MiB. They
+upload only those variants; the authorized logical `ORIGINAL` aliases the
+immutable `LARGE` object. Go never decodes, rotates, compresses, or rewrites
+still images. Retained single-source clients remain readable through four
+logical aliases to their exact pinned source. Videos retain the
 exact uploaded `ORIGINAL` and produce a compressed `PLAYBACK` MP4 with H.264,
 yuv420p, optional AAC audio, stripped metadata and a 1280x720 maximum while
 preserving aspect ratio and even dimensions. FFprobe validates the source and
@@ -62,16 +66,21 @@ Interactive clients use the public same-origin media routes through the API
 gateway; private `/api/internal/**` routes are service-to-service only.
 
 1. A client creates an upload session with an `Idempotency-Key`, the proven
-   owner context, declared MIME type, length, and SHA-256 checksum.
-2. It streams bytes to the returned same-origin content path. Media-service
-   serializes ingress for that session, verifies the declared content and pins
-   the exact private MinIO version.
+   owner context, and either one declared source or exactly three declared
+   WebP parts. The WebP-bundle checksum is the SHA-256 of the canonical
+   `rwms-image-variants-v1` manifest.
+2. It streams the source to one same-origin path or uploads `SMALL`, `MEDIUM`,
+   and `LARGE` through three independently locked same-origin paths. Each PUT
+   is length/SHA/version/ETag verified and may run concurrently; MinIO stays
+   private and media-service does not buffer or decode the image.
 3. It completes the session with the same idempotency key. The service commits
    the upload fact and processing request atomically.
-4. The durable Kafka worker asynchronously creates a canonical image original
-   plus WebP variants, or validates a video, preserves its exact original and
-   creates the compressed MP4 playback. It then publishes a safe invalidation;
-   clients refresh their scoped projection.
+4. The durable Kafka worker promotes verified image-part metadata to one READY
+   generation without object I/O. For a retained single-source image it points
+   all logical image variants at that exact source. Video processing still
+   validates the source, preserves its exact original and creates compressed
+   MP4 playback. The worker then publishes a safe invalidation; clients refresh
+   their scoped projection.
 5. Scoped reads stream only the pinned object version through media-service
    with `private, no-store` headers. Logical deletion changes PostgreSQL state
    and emits one fact; it never physically deletes versioned bytes.
@@ -105,18 +114,21 @@ Flyway is external to this process. Apply
 `db/migration/V12__video_playback_variant.sql`, then
 `db/migration/V13__authoritative_inventory_cabin_photos.sql`, then
 `db/migration/V14__task_board_reader_audience.sql`, then
-`db/migration/V15__inventory_finding_membership_markers.sql` before starting
+`db/migration/V15__inventory_finding_membership_markers.sql`, then
+`db/migration/V16__client_image_variants.sql` before starting
 the service. The Go application never migrates, baselines, repairs or silently
 adopts a database.
 
-- New local/test databases migrate through V1 to V15.
-- A database already at V12 applies V13, V14 and V15; an exact V13 database
-  applies V14 and V15, while an exact V14 database applies only V15. V14 adds
+- New local/test databases migrate through V1 to V16.
+- A database already at V15 applies V16. V14 adds
   and backfills the task-entry read audience without deleting owner proofs,
   media rows or objects. V15 replaces only
   `media_inventory_finding_inbox_check2`: canonical departed, refreshed and
   restored membership markers are admitted with a null `owner_revision`, while
-  existing inbox rows, owner proofs and media data remain unchanged.
+  existing inbox rows, owner proofs and media data remain unchanged. V16 adds
+  image-bundle session/part metadata, defaults every existing session to
+  `SOURCE`, and permits `ORIGINAL` and `LARGE` rows to reference the same
+  immutable object; it does not rewrite or delete existing media.
 - `baselineOnMigrate` must remain `false`; a non-empty unversioned database is
   rejected.
 - Startup verifies both successful Flyway history rows, their versions,
@@ -147,8 +159,6 @@ absent.
 | `MEDIA_MINIO_BUCKET` | Dedicated media bucket |
 | `MEDIA_MINIO_USE_SSL` | Explicit `true` or `false` |
 | `MEDIA_MAX_UPLOAD_BYTES` | Maximum immutable source size |
-| `MEDIA_MAX_DECODED_PIXELS` | Maximum decoded image pixels |
-| `MEDIA_MAX_IMAGE_OUTPUT_BYTES` | Maximum encoded image output |
 | `MEDIA_ALLOWED_MIME_TYPES` | Comma-separated allowlist: JPEG, PNG, WebP, MP4 or WebM |
 | `MEDIA_UPLOAD_EXPIRY` | Constrained upload capability lifetime, for example `5m` |
 | `MEDIA_PROCESSING_TIMEOUT` | Per-job processor timeout |
@@ -196,12 +206,12 @@ requests are rejected before any MinIO operation.
 
 ## Storage and owner safety
 
-The bucket must have versioning enabled. Authenticated upload ingress is
-serialized per upload session across service instances, streams the exact
-declared length to private MinIO, and commits finalization before acknowledging
-the caller. Finalization verifies and pins the exact object version, ETag,
-length, content type, checksum and content sniff; derived writes are
-version-pinned as well. Public reads stream the pinned version through the media
+The bucket must have versioning enabled. Single-source ingress is serialized
+per upload session; image-bundle ingress is serialized per variant so the
+three bounded PUTs can run concurrently across service instances. Every path
+streams the exact declared length to private MinIO. Finalization verifies and
+pins the exact object version, ETag, length, content type and checksum; legacy
+single-source ingress also retains content sniffing. Public reads stream the pinned version through the media
 API with private/no-store headers. The runtime has no unversioned download path
 and no physical object delete, retention or orphan-cleanup behavior. The
 owner-scoped deletion command is a PostgreSQL soft-delete only: it preserves all
@@ -473,7 +483,8 @@ go test ./internal/architecture -count=1
 
 ## Local verification
 
-The build host needs Go 1.25, CGO, libvips, FFmpeg and FFprobe.
+The build host needs Go 1.25, FFmpeg and FFprobe. Still-image processing has
+no CGO or libvips dependency.
 
 ```bash
 gofmt -w ./cmd ./internal
@@ -481,9 +492,9 @@ go test ./...
 go build -trimpath -o /tmp/rwms-media-service ./cmd/media-service
 ```
 
-Migration verification must run separately with Flyway and PostgreSQL and cover
-clean V1-to-V15 install, V12-to-V13-to-V14-to-V15 upgrade, V13-to-V14 reader
-backfill, V14-to-V15 membership-constraint upgrade, repeat, checksum drift and
-non-empty unversioned rejection. MinIO integration checks must use a versioned
-local/test bucket; Kafka checks must use the canonical topics and broker
-acknowledgements.
+Migration verification must run separately with Flyway and PostgreSQL and
+cover clean V1-to-V16 install, V12-to-V13-to-V14-to-V15-to-V16 upgrade,
+V13-to-V14 reader backfill, V14-to-V15 membership-constraint upgrade, the
+additive V16 image-bundle upgrade, repeat, checksum drift and non-empty
+unversioned rejection. MinIO integration checks must use a versioned local/test
+bucket; Kafka checks must use the canonical topics and broker acknowledgements.

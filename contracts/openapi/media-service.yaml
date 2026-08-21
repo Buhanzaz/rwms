@@ -1,13 +1,15 @@
 openapi: 3.1.0
 info:
   title: RWMS Media Service API
-  version: 1.15.0
+  version: 1.16.0
   license: { name: UNLICENSED }
   description: >-
     Stateful Go media API. PostgreSQL owns metadata and replay state; MinIO
-    receives browser bytes only through the authenticated same-origin content
-    endpoint; every finalized source and derived variant is pinned to an
-    immutable object version.
+    receives client-produced bytes only through authenticated same-origin
+    content endpoints; every finalized source or image variant is pinned to an
+    immutable object version. Still-image orientation and WebP encoding belong
+    to the capturing client, while media-service authorizes, streams and records
+    the immutable objects without decoding them.
 servers:
   - url: /
 security:
@@ -524,6 +526,47 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '415': { $ref: '#/components/responses/UnsupportedMedia' }
         '503': { $ref: '#/components/responses/Unavailable' }
+  /api/media/v1/upload-sessions/{uploadSessionId}/variants/{variant}/content:
+    put:
+      summary: Stream one authorized client-produced WebP variant to private storage
+      operationId: uploadSessionVariantContent
+      description: >-
+        Requires the session-owning USER or WORKER principal and an IMAGE_VARIANTS
+        session. SMALL, MEDIUM and LARGE may be uploaded concurrently. The exact
+        Content-Length and SHA-256 declared when the session was created are
+        verified while bytes are streamed to private MinIO; the service never
+        decodes, rotates or recompresses the image. A stable per-variant
+        Idempotency-Key makes a completed PUT replay-safe.
+      parameters:
+        - $ref: '#/components/parameters/UploadSessionId'
+        - $ref: '#/components/parameters/UploadImageVariant'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          image/webp: { schema: { type: string, format: binary } }
+      responses:
+        '201':
+          description: The exact immutable variant version was pinned.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadedObject' }
+        '200':
+          description: Exact replay of an already committed variant PUT.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadedObject' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '415': { $ref: '#/components/responses/UnsupportedMedia' }
+        '503': { $ref: '#/components/responses/Unavailable' }
   /api/media/v1/upload-sessions/{uploadSessionId}/complete:
     post:
       summary: Idempotently confirm the pinned upload version
@@ -531,7 +574,9 @@ paths:
       description: >-
         Requires the session-owning principal and rechecks the current owner
         proof. TASK_BOARD_ENTRY finalization preserves clientReferenceId in the
-        emitted media fact so task-board can complete the reservation.
+        emitted media fact so task-board can complete the reservation. A
+        client-variant image can complete only after all three declared WebP
+        objects are pinned and the request repeats their immutable metadata.
       parameters:
         - $ref: '#/components/parameters/UploadSessionId'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -804,6 +849,11 @@ components:
       required: true
       description: Image presentation size or the compressed MP4 video representation.
       schema: { enum: [SMALL, MEDIUM, LARGE, PLAYBACK] }
+    UploadImageVariant:
+      name: variant
+      in: path
+      required: true
+      schema: { enum: [SMALL, MEDIUM, LARGE] }
     CabinPresentationVariant:
       name: variant
       in: path
@@ -1199,7 +1249,7 @@ components:
     CreateUploadSessionRequest:
       type: object
       additionalProperties: false
-      required: [ownerType, warehouseId, context, fileName, contentType, contentLength, checksumSha256]
+      required: [ownerType, warehouseId, context, fileName]
       properties:
         ownerType: { $ref: '#/components/schemas/MediaOwnerType' }
         ownerId: { type: string, format: uuid }
@@ -1229,6 +1279,28 @@ components:
         contentType: { type: string, minLength: 1, maxLength: 255 }
         contentLength: { type: integer, minimum: 1 }
         checksumSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        imageVariants:
+          description: >-
+            Exactly one client-produced SMALL, MEDIUM and LARGE WebP. Their
+            combined contentLength must not exceed 1 MiB; media-service also
+            enforces this invariant server-side.
+          type: array
+          minItems: 3
+          maxItems: 3
+          items: { $ref: '#/components/schemas/CreateImageVariant' }
+          allOf:
+            - contains:
+                type: object
+                required: [kind]
+                properties: { kind: { const: SMALL } }
+            - contains:
+                type: object
+                required: [kind]
+                properties: { kind: { const: MEDIUM } }
+            - contains:
+                type: object
+                required: [kind]
+                properties: { kind: { const: LARGE } }
         sortOrder: { type: integer, minimum: 0, default: 0 }
       oneOf:
         - required: [ownerId]
@@ -1280,13 +1352,67 @@ components:
           properties:
             ownerType: { const: TASK_BOARD_ENTRY }
             context: { const: WORK_RESULT }
-            contentType: { const: image/jpeg }
           not: { anyOf: [{ required: [documentId] }, { required: [lineId] }] }
+      allOf:
+        - oneOf:
+            - required: [contentType, contentLength, checksumSha256]
+              not: { required: [imageVariants] }
+            - required: [imageVariants]
+              not:
+                anyOf:
+                  - { required: [contentType] }
+                  - { required: [contentLength] }
+                  - { required: [checksumSha256] }
+    CreateImageVariant:
+      type: object
+      additionalProperties: false
+      required: [kind, contentLength, checksumSha256, width, height]
+      properties:
+        kind: { enum: [SMALL, MEDIUM, LARGE] }
+        contentLength: { type: integer, minimum: 1, maximum: 1048576 }
+        checksumSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        width: { type: integer, minimum: 1 }
+        height: { type: integer, minimum: 1 }
     FinalizeUploadRequest:
       type: object
       additionalProperties: false
-      required: [objectVersionId, etag, checksumSha256]
       properties:
+        objectVersionId: { type: string, minLength: 1, maxLength: 255 }
+        etag: { type: string, minLength: 1, maxLength: 255 }
+        checksumSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        variants:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items: { $ref: '#/components/schemas/FinalizeImageVariant' }
+          allOf:
+            - contains:
+                type: object
+                required: [kind]
+                properties: { kind: { const: SMALL } }
+            - contains:
+                type: object
+                required: [kind]
+                properties: { kind: { const: MEDIUM } }
+            - contains:
+                type: object
+                required: [kind]
+                properties: { kind: { const: LARGE } }
+      oneOf:
+        - required: [objectVersionId, etag, checksumSha256]
+          not: { required: [variants] }
+        - required: [variants]
+          not:
+            anyOf:
+              - { required: [objectVersionId] }
+              - { required: [etag] }
+              - { required: [checksumSha256] }
+    FinalizeImageVariant:
+      type: object
+      additionalProperties: false
+      required: [kind, objectVersionId, etag, checksumSha256]
+      properties:
+        kind: { enum: [SMALL, MEDIUM, LARGE] }
         objectVersionId: { type: string, minLength: 1, maxLength: 255 }
         etag: { type: string, minLength: 1, maxLength: 255 }
         checksumSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
@@ -1299,15 +1425,31 @@ components:
     UploadSession:
       type: object
       additionalProperties: false
-      required: [uploadSessionId, mediaId, expiresAt, contentUploadUrl]
+      required: [uploadSessionId, mediaId, expiresAt, contentUploadUrl, variantUploadUrls]
       properties:
         uploadSessionId: { type: string, format: uuid }
         mediaId: { type: string, format: uuid }
         expiresAt: { type: string, format: date-time }
         contentUploadUrl:
-          description: Same-origin public API path; never an object-storage URL.
+          description: Same-origin source path for SOURCE sessions; null for IMAGE_VARIANTS.
+          oneOf:
+            - type: string
+              pattern: '^/api/media/v1/upload-sessions/[0-9a-f-]{36}/content$'
+            - type: 'null'
+        variantUploadUrls:
+          description: Three same-origin paths for IMAGE_VARIANTS; empty for SOURCE sessions.
+          type: array
+          maxItems: 3
+          items: { $ref: '#/components/schemas/ImageVariantUploadTarget' }
+    ImageVariantUploadTarget:
+      type: object
+      additionalProperties: false
+      required: [kind, contentUploadUrl]
+      properties:
+        kind: { enum: [SMALL, MEDIUM, LARGE] }
+        contentUploadUrl:
           type: string
-          pattern: '^/api/media/v1/upload-sessions/[0-9a-f-]{36}/content$'
+          pattern: '^/api/media/v1/upload-sessions/[0-9a-f-]{36}/variants/(SMALL|MEDIUM|LARGE)/content$'
     UploadedObject:
       type: object
       additionalProperties: false

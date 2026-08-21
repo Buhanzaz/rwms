@@ -60,6 +60,10 @@ PROMPT_PANEL_RENTAL_TABLE_MIGRATION.md
 
 ### Gradle Kotlin DSL local state ###
 /build-logic/.kotlin/
+**/.kotlin/
+
+### Local Go build outputs ###
+/services/media-service/media-service
 
 ### Local IDE and legacy runtime artifacts ###
 /amplicode.xml

@@ -252,6 +252,9 @@ class BackgroundUploadWorker(
                         updatePhoto(operationId, uri) { photo ->
                             photo.copy(reference = reference, error = null)
                         }
+                        // The reference is durable before cleanup. A process death on either
+                        // side therefore resumes without re-uploading or losing its original.
+                        store.deleteReadyPhotoFiles(requireExecutionScope(), operationId, uri)
                     },
                 )
             } catch (cancelled: CancellationException) {
@@ -273,6 +276,13 @@ class BackgroundUploadWorker(
                     error = null,
                 )
             }
+            // Repeating cleanup here closes the crash window after reference persistence and is
+            // safe because the scoped store refuses gallery URIs and paths outside this row.
+            store.deleteReadyPhotoFiles(
+                requireExecutionScope(),
+                operationId,
+                photo.durableUri,
+            )
         }
         val missing = uploaded.firstOrNull { it.reference == null }
         if (missing != null) {

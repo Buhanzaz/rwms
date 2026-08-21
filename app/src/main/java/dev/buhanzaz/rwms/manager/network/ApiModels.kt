@@ -1401,7 +1401,11 @@ data class TaskBoardSnapshotDto(
 )
 
 /**
- * Public-manager-gateway request payload for CreateUploadSessionRequest. It is a transport boundary model, not persisted domain state.
+ * Starts either one compatibility source upload or one pre-encoded image bundle.
+ *
+ * Still images set [imageVariants] and omit the three nullable legacy source fields. Video and
+ * compatibility callers set those source fields and omit [imageVariants]. The media service owns
+ * validation of the mutually exclusive request shapes.
  */
 data class CreateUploadSessionRequest(
     val ownerType: String,
@@ -1412,19 +1416,39 @@ data class CreateUploadSessionRequest(
     val context: String,
     val folderId: String,
     val fileName: String,
-    val contentType: String,
-    val contentLength: Long,
-    val checksumSha256: String,
+    val contentType: String? = null,
+    val contentLength: Long? = null,
+    val checksumSha256: String? = null,
     val sortOrder: Int,
+    val imageVariants: List<CreateImageVariantRequest>? = null,
 )
 
 /**
- * Public-manager-gateway response/read payload for UploadSessionDto. It is a transport boundary model, not persisted domain state.
+ * Declares one client-prepared WebP part before an image-bundle upload session is created.
+ */
+data class CreateImageVariantRequest(
+    val kind: String,
+    val contentLength: Long,
+    val checksumSha256: String,
+    val width: Int,
+    val height: Int,
+)
+
+/**
+ * Public media upload session. [contentUploadUrl] belongs to a compatibility source upload;
+ * [variantUploadUrls] belongs to a client-prepared image bundle.
  */
 data class UploadSessionDto(
     val uploadSessionId: String,
     val mediaId: String,
     val expiresAt: String,
+    val contentUploadUrl: String? = null,
+    val variantUploadUrls: List<ImageVariantUploadUrlDto> = emptyList(),
+)
+
+/** Same-origin content route issued for one declared image-bundle variant. */
+data class ImageVariantUploadUrlDto(
+    val kind: String,
     val contentUploadUrl: String,
 )
 
@@ -1438,9 +1462,19 @@ data class UploadedObjectDto(
 )
 
 /**
- * Public-manager-gateway request payload for FinalizeUploadRequest. It is a transport boundary model, not persisted domain state.
+ * Completes either one compatibility source object or one three-part image bundle.
+ * Nullable source fields are omitted when [variants] is present.
  */
 data class FinalizeUploadRequest(
+    val objectVersionId: String? = null,
+    val etag: String? = null,
+    val checksumSha256: String? = null,
+    val variants: List<FinalizeImageVariantRequest>? = null,
+)
+
+/** Object-store receipt supplied while finalizing one client-prepared WebP variant. */
+data class FinalizeImageVariantRequest(
+    val kind: String,
     val objectVersionId: String,
     val etag: String,
     val checksumSha256: String,

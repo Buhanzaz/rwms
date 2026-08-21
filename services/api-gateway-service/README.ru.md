@@ -103,7 +103,7 @@ API gateway: проверка host/headers, CORS, JWT, route policy, observabili
 | `/api/warehouse/**` | настроенный target `warehouse-service`, путь без изменений | Internal-пути запрещены; текущий маршрут зарезервирован для warehouse API W1. |
 | `/api/asset/**` | `asset-service`, путь без изменений | Internal-пути запрещены. HTML-import commit обслуживает отдельный handler. |
 | `/api/maintenance/**` | `maintenance-service`, путь без изменений | Internal-пути запрещены. |
-| `/api/media/**` | `media-service`, путь без изменений | Internal- и private-пути запрещены. Upload content и SSE используют отдельные handlers. |
+| `/api/media/**` | `media-service`, путь без изменений | Internal- и private-пути запрещены. Source/variant upload content и SSE используют отдельные handlers. |
 | `/api/inventory/**` | `inventory-service`, путь без изменений | Internal- и private-пути запрещены. Пересчёт завершённого результата использует отдельный handler с тайм-аутом 60 секунд; все остальные inventory-запросы сохраняют обычный тайм-аут. |
 | `/api/logistics/**` | `logistics-service`, путь без изменений | Internal- и private-пути запрещены; явно публичный client-presentation — исключение из обычной аутентификации. |
 | `/api/assistant/**` | `assistant-service`, путь без изменений | Internal- и private-пути запрещены. Turns диалога использует отдельный streaming handler. |
@@ -116,8 +116,11 @@ API gateway: проверка host/headers, CORS, JWT, route policy, observabili
   `GET /api/asset/v1/events` и `GET /api/media/v1/events` проходят через
   ограниченный асинхронный SSE proxy.
 - `POST /api/asset/v1/html-imports/*/commit` и
-  `PUT /api/media/v1/upload-sessions/*/content` используют специальные
-  ограниченные прокси для поддерживаемого долгого трафика.
+  оба `PUT /api/media/v1/upload-sessions/*/content` и
+  `PUT /api/media/v1/upload-sessions/*/variants/*/content` используют
+  специальные ограниченные прокси для поддерживаемого долгого трафика. Пути,
+  bearer/idempotency headers, content bytes и downstream responses проходят без
+  изменений; cookies удаляются, адреса и credentials MinIO не раскрываются.
 - `POST /api/inventory/v1/sessions/*/outcome/recalculate` использует отдельный
   downstream read deadline 60 секунд. Точная команда исключена из общего
   inventory-маршрута; её путь, заголовки авторизации и идемпотентности

@@ -89,3 +89,8 @@ var V14 []byte
 //
 //go:embed V15__inventory_finding_membership_markers.sql
 var V15 []byte
+
+// V16 contains the immutable client-produced image-variant migration bytes.
+//
+//go:embed V16__client_image_variants.sql
+var V16 []byte

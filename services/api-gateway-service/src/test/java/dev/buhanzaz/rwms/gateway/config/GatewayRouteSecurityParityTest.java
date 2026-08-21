@@ -157,6 +157,34 @@ class GatewayRouteSecurityParityTest {
   }
 
   @Test
+  void mediaSourceAndVariantUploadsHaveOneSafeDedicatedRoute() {
+    List<RouteCandidate> routes = domainRoutes();
+    for (String path :
+        List.of(
+            "/api/media/v1/upload-sessions/{}/content",
+            "/api/media/v1/upload-sessions/{}/variants/{}/content")) {
+      assertThat(matchingRoutes(routes, new RouteKey(HttpMethod.PUT, path)))
+          .singleElement()
+          .extracting(RouteCandidate::name)
+          .isEqualTo("mediaUploadContentRoute");
+    }
+    assertThat(
+            matchingRoutes(
+                routes,
+                new RouteKey(
+                    HttpMethod.PUT,
+                    "/api/media/v1/upload-sessions/{}/variants/small%2flarge/content")))
+        .isEmpty();
+    assertThat(
+            matchingRoutes(
+                routes,
+                new RouteKey(
+                    HttpMethod.PUT,
+                    "/api/media/private/v1/upload-sessions/{}/variants/SMALL/content")))
+        .isEmpty();
+  }
+
+  @Test
   void canonicalInternalOperationsAndReservedAliasesHaveZeroGatewayRoutes() throws Exception {
     ContractInventory inventory = contractInventory();
     List<RouteCandidate> routes = publicRoutes();
@@ -602,6 +630,11 @@ class GatewayRouteSecurityParityTest {
             "htmlImportCommitRoute"),
         Map.entry(
             new RouteKey(HttpMethod.PUT, "/api/media/v1/upload-sessions/{}/content"),
+            "mediaUploadContentRoute"),
+        Map.entry(
+            new RouteKey(
+                HttpMethod.PUT,
+                "/api/media/v1/upload-sessions/{}/variants/{}/content"),
             "mediaUploadContentRoute"),
         Map.entry(
             new RouteKey(

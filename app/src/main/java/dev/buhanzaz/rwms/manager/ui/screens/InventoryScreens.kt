@@ -1375,8 +1375,8 @@ fun InventoryPhotosScreen(
         ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris ->
         uris.forEach { uri ->
-            // Import into one app-owned, upright original. MediaUploader then sends these exact
-            // bytes instead of relying on a server-side EXIF or rotation transform.
+            // Import one app-owned, upright original for the UI and durable queue. The background
+            // encoder derives its three WebP parts from these pixels without a server transform.
             copyManagerPhotoToAppCache(context, uri)?.let(onAddPhoto)
         }
     }

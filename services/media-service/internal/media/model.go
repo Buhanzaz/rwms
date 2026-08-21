@@ -211,35 +211,3 @@ func SortForPresentation(assets []Asset) {
 		return assets[left].CreatedAtUnix < assets[right].CreatedAtUnix
 	})
 }
-
-// VariantSpec defines the long edge and quality for one derived image variant.
-type VariantSpec struct {
-	Variant  Variant
-	LongEdge int
-	Quality  int
-}
-
-// VariantConfiguration optionally overrides the default long edges used to
-// create SMALL, MEDIUM, and LARGE WebP derivatives.
-type VariantConfiguration struct {
-	SmallLongEdge  int
-	MediumLongEdge int
-	LargeLongEdge  int
-}
-
-// ImageVariants returns the three required image derivative specifications in
-// presentation order, applying safe defaults to non-positive overrides.
-func (configuration VariantConfiguration) ImageVariants() []VariantSpec {
-	return []VariantSpec{
-		{Variant: VariantSmall, LongEdge: positiveOr(configuration.SmallLongEdge, 480), Quality: 78},
-		{Variant: VariantMedium, LongEdge: positiveOr(configuration.MediumLongEdge, 960), Quality: 80},
-		{Variant: VariantLarge, LongEdge: positiveOr(configuration.LargeLongEdge, 1920), Quality: 82},
-	}
-}
-
-func positiveOr(value, fallback int) int {
-	if value > 0 {
-		return value
-	}
-	return fallback
-}

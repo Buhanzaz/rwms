@@ -60,9 +60,9 @@ class RwmsBackend(
                     )
                 },
             )
-            // A camera original can be several megabytes.  The default ten-second write timeout is
-            // too short for a normal 4G upload, and turns a completed server-side upload into an
-            // indistinguishable "no connection" retry on the device.
+            // Video source uploads can still be several megabytes. The default ten-second write
+            // timeout is too short for normal 4G and can turn an accepted idempotent upload into
+            // an indistinguishable "no connection" retry on the device.
             .connectTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(2, TimeUnit.MINUTES)
             .readTimeout(2, TimeUnit.MINUTES)

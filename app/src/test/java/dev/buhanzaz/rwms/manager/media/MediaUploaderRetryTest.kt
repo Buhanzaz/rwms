@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.manager.media
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.manager.network.MediaAssetDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
+import java.io.File
 import java.io.IOException
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
@@ -15,10 +16,13 @@ import kotlinx.coroutines.sync.Semaphore
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.junit.runners.JUnit4
 import retrofit2.HttpException
 import retrofit2.Response
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(JUnit4::class)
 class MediaUploaderRetryTest {
     @Test
     fun `parallel owner batches share one bounded upload transport limit`() = runTest {
@@ -56,6 +60,40 @@ class MediaUploaderRetryTest {
         batches.forEach { it.await() }
 
         assertThat(maximumActiveUploads).isEqualTo(MEDIA_UPLOAD_PARALLELISM)
+    }
+
+    @Test
+    fun `variant parts share one bounded transport limit across logical images`() = runTest {
+        val permits = Semaphore(IMAGE_VARIANT_UPLOAD_PARALLELISM)
+        val release = CompletableDeferred<Unit>()
+        var activeUploads = 0
+        var maximumActiveUploads = 0
+        val result = async {
+            uploadBoundedParallelOrdered(
+                inputs = (0..IMAGE_VARIANT_UPLOAD_PARALLELISM).toList(),
+                parallelism = IMAGE_VARIANT_UPLOAD_PARALLELISM,
+                permits = permits,
+                upload = { part ->
+                    activeUploads += 1
+                    maximumActiveUploads = maxOf(maximumActiveUploads, activeUploads)
+                    try {
+                        release.await()
+                        part
+                    } finally {
+                        activeUploads -= 1
+                    }
+                },
+                onReady = { _, _ -> },
+            )
+        }
+        runCurrent()
+
+        assertThat(activeUploads).isEqualTo(IMAGE_VARIANT_UPLOAD_PARALLELISM)
+        assertThat(maximumActiveUploads).isEqualTo(IMAGE_VARIANT_UPLOAD_PARALLELISM)
+
+        release.complete(Unit)
+        advanceUntilIdle()
+        assertThat(result.await()).hasSize(IMAGE_VARIANT_UPLOAD_PARALLELISM + 1)
     }
 
     @Test
@@ -195,12 +233,45 @@ class MediaUploaderRetryTest {
         assertThat(differentLocalPhotoWithSameBytes.createSessionKey)
             .isNotEqualTo(firstAttempt.createSessionKey)
         assertThat(firstAttempt.createSessionKey)
-            .isNotEqualTo(firstAttempt.contentAndFinalizeKey)
+            .isNotEqualTo(firstAttempt.finalizeKey)
+        assertThat(firstAttempt.contentUploadKey).isEqualTo(firstAttempt.finalizeKey)
         listOf(
             firstAttempt.folderId,
             firstAttempt.createSessionKey,
-            firstAttempt.contentAndFinalizeKey,
+            firstAttempt.finalizeKey,
         ).forEach(UUID::fromString)
+    }
+
+    @Test
+    fun `image identity uses canonical manifest and stable distinct part keys`() {
+        val bundle = ImageUploadBundle(
+            fileName = "inspection.webp",
+            variants = listOf(
+                variant(ImageUploadVariantKind.SMALL, 10, "a".repeat(64), 100, 50),
+                variant(ImageUploadVariantKind.MEDIUM, 20, "b".repeat(64), 200, 100),
+                variant(ImageUploadVariantKind.LARGE, 30, "c".repeat(64), 300, 150),
+            ),
+        )
+        val owner = MediaOwner(
+            ownerType = "INVENTORY_FINDING",
+            ownerId = "44444444-4444-4444-4444-444444444444",
+            warehouseId = "33333333-3333-3333-3333-333333333333",
+            context = "INSPECTION",
+        )
+
+        val first = imageBundleUploadIdentity(owner, "file:///queue/photo.jpg", bundle, 2)
+        val retry = imageBundleUploadIdentity(owner, "file:///queue/photo.jpg", bundle, 2)
+
+        assertThat(imageVariantManifestSha256(bundle.variants))
+            .isEqualTo("fd2fc8fb59abc92265806748e35b8e905265eb3442e49fec68cc82680ee7a025")
+        assertThat(retry).isEqualTo(first)
+        assertThat(first.contentUploadKey).isNull()
+        assertThat(first.variantUploadKeys.keys)
+            .containsExactlyElementsIn(ImageUploadVariantKind.entries)
+        assertThat(first.variantUploadKeys.values.toSet()).hasSize(3)
+        assertThat(first.finalizeKey).isNotIn(first.variantUploadKeys.values)
+        (first.variantUploadKeys.values + first.folderId + first.createSessionKey + first.finalizeKey)
+            .forEach(UUID::fromString)
     }
 
     @Test
@@ -496,5 +567,20 @@ class MediaUploaderRetryTest {
         sortOrder = 0,
         sizeBytes = 10,
         createdAt = "2026-07-28T00:00:00Z",
+    )
+
+    private fun variant(
+        kind: ImageUploadVariantKind,
+        length: Long,
+        checksum: String,
+        width: Int,
+        height: Int,
+    ) = ImageUploadVariant(
+        kind = kind,
+        file = File("${kind.name}.webp"),
+        contentLength = length,
+        checksumSha256 = checksum,
+        width = width,
+        height = height,
     )
 }

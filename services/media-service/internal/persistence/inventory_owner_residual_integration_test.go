@@ -94,17 +94,17 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 		}
 	})
 
-	t.Run("clean V1 through V15 repeat and checksum drift", func(t *testing.T) {
+	t.Run("clean V1 through V16 repeat and checksum drift", func(t *testing.T) {
 		databaseURL := testsupport.NewIsolatedPostgresDatabase(t, environment.DatabaseURL)
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		pool := openResidualPool(t, ctx, databaseURL)
-		installResidualMigrations(t, ctx, pool, 17)
+		installResidualMigrations(t, ctx, pool, 18)
 		pool.Close()
 
 		first, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open clean V1 through V15 database: %v", err)
+			t.Fatalf("open clean V1 through V16 database: %v", err)
 		}
 		assertTaskBoardV8ConstraintsValidated(t, ctx, first.Pool)
 		first.Close()
@@ -162,10 +162,12 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 		}
 		applyResidualMigration(t, ctx, pool, 17, "15", "inventory finding membership markers",
 			"V15__inventory_finding_membership_markers.sql", mediamigration.V15)
+		applyResidualMigration(t, ctx, pool, 18, "16", "client image variants",
+			"V16__client_image_variants.sql", mediamigration.V16)
 		pool.Close()
 		database, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open V14 reader-backfill database after V15: %v", err)
+			t.Fatalf("open V14 reader-backfill database after V16: %v", err)
 		}
 		database.Close()
 	})
@@ -258,14 +260,16 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 				t.Fatalf("V15 non-null marker owner revision error = %v, want inbox check2 violation", err)
 			}
 		}
-		pool.Close()
 		if markers != 3 || markerOwnerRevisions != 0 {
 			t.Fatalf("V15 membership rows=%d owner revisions=%d, want 3/0",
 				markers, markerOwnerRevisions)
 		}
+		applyResidualMigration(t, ctx, pool, 18, "16", "client image variants",
+			"V16__client_image_variants.sql", mediamigration.V16)
+		pool.Close()
 		upgraded, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("Open(V15 membership-marker upgrade) error = %v", err)
+			t.Fatalf("Open(V16 membership-marker upgrade) error = %v", err)
 		}
 		upgraded.Close()
 	})
@@ -317,10 +321,12 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			"V14__task_board_reader_audience.sql", mediamigration.V14)
 		applyResidualMigration(t, ctx, pool, 17, "15", "inventory finding membership markers",
 			"V15__inventory_finding_membership_markers.sql", mediamigration.V15)
+		applyResidualMigration(t, ctx, pool, 18, "16", "client image variants",
+			"V16__client_image_variants.sql", mediamigration.V16)
 		pool.Close()
 		database, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open upgraded V15 database: %v", err)
+			t.Fatalf("open upgraded V16 database: %v", err)
 		}
 		defer database.Close()
 		assertTaskBoardV8ConstraintsValidated(t, ctx, database.Pool)
@@ -394,7 +400,7 @@ func TestInventoryOwnerResidualStreamAndReconciliationGateReal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	pool := openResidualPool(t, ctx, databaseURL)
-	installResidualMigrations(t, ctx, pool, 17)
+	installResidualMigrations(t, ctx, pool, 18)
 	pool.Close()
 	database, err := Open(ctx, databaseURL)
 	if err != nil {
@@ -677,10 +683,11 @@ func installResidualMigrations(t testing.TB, ctx context.Context, pool *pgxpool.
 		{"authoritative inventory cabin photos", "V13__authoritative_inventory_cabin_photos.sql", mediamigration.V13},
 		{"task board reader audience", "V14__task_board_reader_audience.sql", mediamigration.V14},
 		{"inventory finding membership markers", "V15__inventory_finding_membership_markers.sql", mediamigration.V15},
+		{"client image variants", "V16__client_image_variants.sql", mediamigration.V16},
 	}
 	for index := 0; index < through; index++ {
 		migration := migrations[index]
-		versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"}
+		versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"}
 		applyResidualMigration(t, ctx, pool, index+1, versions[index], migration.description,
 			migration.script, migration.body)
 	}

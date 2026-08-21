@@ -1,9 +1,12 @@
 package dev.buhanzaz.rwms.manager.uploads
 
+import android.content.ContentResolver
 import android.content.Context
+import android.net.Uri
 import android.util.AtomicFile
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import dev.buhanzaz.rwms.manager.media.imageVariantDirectoryFor
 import dev.buhanzaz.rwms.manager.network.ExplicitNullJsonAdapterFactory
 import java.io.File
 import java.io.FileOutputStream
@@ -163,6 +166,41 @@ class BackgroundUploadStore private constructor(
         operationId: String,
     ): File = requireInitialized().let {
         operationDirectoryPath(scope, operationId).apply { mkdirs() }
+    }
+
+    /**
+     * Deletes only a READY photo's app-private durable original and generated WebP parts.
+     * Content URIs and file paths outside the scoped operation directory are never touched.
+     */
+    fun deleteReadyPhotoFiles(
+        scope: BackgroundUploadScope,
+        operationId: String,
+        durableUri: String,
+    ): Boolean {
+        requireInitialized()
+        val ready = synchronized(lock) {
+            allOperations
+                .firstOrNull { it.id == operationId && it.belongsTo(scope) }
+                ?.photos
+                ?.firstOrNull { it.durableUri == durableUri }
+                ?.reference != null
+        }
+        if (!ready) return false
+        val uri = Uri.parse(durableUri)
+        if (uri.scheme != ContentResolver.SCHEME_FILE) return false
+        return runCatching {
+            val source = uri.path?.let(::File) ?: return@runCatching false
+            val operationDirectory = operationDirectoryPath(scope, operationId).canonicalFile
+            val sourceFile = source.canonicalFile
+            val scopedPrefix = operationDirectory.path + File.separator
+            if (!sourceFile.path.startsWith(scopedPrefix)) return@runCatching false
+
+            val variantsDeleted = imageVariantDirectoryFor(sourceFile).let { directory ->
+                !directory.exists() || directory.deleteRecursively()
+            }
+            val originalDeleted = !sourceFile.exists() || sourceFile.delete()
+            variantsDeleted && originalDeleted
+        }.getOrDefault(false)
     }
 
     private fun updateAll(

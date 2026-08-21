@@ -1175,9 +1175,9 @@ private fun bindManagerCamera(
             provider.hasManagerCamera(CameraSelector.LENS_FACING_FRONT),
         nightExtensionAvailable = nightExtensionAvailable,
         lowLightBoostAvailable = baseCameraInfo.isLowLightBoostSupported,
-        // Every still capture is normalized into an app-owned SDR JPEG before it can be
-        // uploaded. JPEG-R gain maps cannot survive that deterministic pixel transform, so do
-        // not advertise a selectable Ultra HDR still format.
+        // Every still capture is normalized into an app-owned SDR JPEG before its local WebP
+        // variants are encoded. JPEG-R gain maps cannot survive that deterministic pixel
+        // transform, so do not advertise a selectable Ultra HDR still format.
         photoHdrAvailable = photoHdrExtensionAvailable,
         videoHdrAvailable = videoHdrAvailable,
         videoStabilizationAvailable = videoCapabilities.isStabilizationSupported,
@@ -1268,8 +1268,8 @@ private fun bindManagerCamera(
         if (selectedLens.isPhysical && !extensionActive && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             Camera2Interop.Extender(captureBuilder).setPhysicalCameraId(selectedLens.cameraId)
         }
-        // The app rotates the captured pixels locally and writes Orientation=1. Use an ordinary
-        // JPEG from CameraX so the final upload is one deterministic, widely supported format.
+        // The app rotates the captured pixels locally and writes Orientation=1. Keep one ordinary
+        // JPEG original for the UI/outbox; the background encoder derives all upload WebP parts.
         captureBuilder.setOutputFormat(ImageCapture.OUTPUT_FORMAT_JPEG)
         val capture = captureBuilder.build()
         val boundCamera = provider.bindToLifecycle(lifecycleOwner, selector, preview, capture)

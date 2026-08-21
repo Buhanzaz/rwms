@@ -40,10 +40,3 @@ func TestKindForContentType(t *testing.T) {
 		}
 	}
 }
-
-func TestImageVariantsUseDefaultPresentationSizesWhenConfigurationIsUnset(t *testing.T) {
-	variants := (VariantConfiguration{}).ImageVariants()
-	if variants[0].LongEdge != 480 || variants[1].LongEdge != 960 || variants[2].LongEdge != 1920 {
-		t.Fatalf("unexpected default variants: %#v", variants)
-	}
-}

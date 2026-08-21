@@ -5,11 +5,11 @@ go 1.25.0
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
-	github.com/h2non/bimg v1.1.9
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/minio/minio-go/v7 v7.2.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/twmb/franz-go v1.20.4
+	github.com/twmb/franz-go/pkg/kmsg v1.12.0
 	go.yaml.in/yaml/v3 v3.0.4
 )
 
@@ -29,7 +29,6 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.22 // indirect
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/tinylib/msgp v1.6.1 // indirect
-	github.com/twmb/franz-go/pkg/kmsg v1.12.0 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/net v0.53.0 // indirect

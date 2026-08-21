@@ -5,19 +5,13 @@ import "time"
 // ProcessingLimits are explicit runtime configuration. Zero never means a
 // production default.
 type ProcessingLimits struct {
-	MaxImageBytes       int64
-	MaxImageOutputBytes int64
-	MaxDecodedPixels    int64
-	MaxVideoBytes       int64
-	Timeout             time.Duration
+	MaxVideoBytes int64
+	Timeout       time.Duration
 }
 
 // Valid reports whether every processing resource bound is explicit and
 // positive.
 func (limits ProcessingLimits) Valid() bool {
-	return limits.MaxImageBytes > 0 &&
-		limits.MaxImageOutputBytes > 0 &&
-		limits.MaxDecodedPixels > 0 &&
-		limits.MaxVideoBytes > 0 &&
+	return limits.MaxVideoBytes > 0 &&
 		limits.Timeout > 0
 }

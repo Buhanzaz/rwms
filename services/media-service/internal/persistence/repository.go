@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"dev.buhanzaz.rwms/media-service/internal/media"
@@ -138,6 +139,86 @@ func (repository *Repository) AcquireUploadSessionContentLock(
 	}, nil
 }
 
+// AcquireUploadImageVariantContentLock serializes one immutable variant PUT
+// without blocking the other two variants of the same image bundle. The lock
+// is database-wide, so retries routed to another media-service instance still
+// cannot create two accepted object versions for one logical part.
+func (repository *Repository) AcquireUploadImageVariantContentLock(
+	ctx context.Context,
+	mediaID uuid.UUID,
+	variant media.Variant,
+) (func() error, error) {
+	if mediaID == uuid.Nil || (variant != media.VariantSmall && variant != media.VariantMedium && variant != media.VariantLarge) {
+		return nil, ErrConflict
+	}
+	connection, err := repository.pool.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	lockName := "media-upload-image-variant:" + mediaID.String() + ":" + string(variant)
+	if _, err := connection.Exec(ctx, `select pg_advisory_lock(hashtextextended($1,0))`, lockName); err != nil {
+		connection.Release()
+		return nil, err
+	}
+	released := false
+	return func() error {
+		if released {
+			return nil
+		}
+		released = true
+		releaseContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var unlocked bool
+		unlockErr := connection.QueryRow(releaseContext,
+			`select pg_advisory_unlock(hashtextextended($1,0))`, lockName).Scan(&unlocked)
+		if unlockErr == nil && unlocked {
+			connection.Release()
+			return nil
+		}
+		rawConnection := connection.Hijack()
+		closeErr := rawConnection.Close(releaseContext)
+		if unlockErr != nil {
+			return unlockErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		return fmt.Errorf("upload image variant advisory lock was not held")
+	}, nil
+}
+
+// UploadMode distinguishes the retained single-source compatibility ingress
+// from the Android-owned, client-produced still-image bundle.
+type UploadMode string
+
+const (
+	// UploadModeSource accepts one legacy-compatible source object.
+	UploadModeSource UploadMode = "SOURCE"
+	// UploadModeImageVariants accepts exactly SMALL, MEDIUM, and LARGE WebP parts.
+	UploadModeImageVariants UploadMode = "IMAGE_VARIANTS"
+)
+
+// UploadImageVariantExpectation is one authorized WebP part declared when an
+// image upload session is created.
+type UploadImageVariantExpectation struct {
+	Variant        media.Variant
+	ContentLength  int64
+	ChecksumSHA256 string
+	Width          int
+	Height         int
+	ObjectKey      string
+}
+
+// UploadImageVariantPart combines one declared image part with immutable
+// object metadata recorded only after a verified streaming PUT succeeds.
+type UploadImageVariantPart struct {
+	UploadImageVariantExpectation
+	UploadIdempotencyKey uuid.UUID
+	ObjectVersionID      string
+	ETag                 string
+	UploadedAt           *time.Time
+}
+
 // AssetRecord is the persisted logical media asset, its upload session, and
 // the current immutable source-generation metadata.
 type AssetRecord struct {
@@ -165,6 +246,7 @@ type AssetRecord struct {
 	UploadExpiresAt   time.Time
 	ExpectedLength    int64
 	ExpectedChecksum  string
+	UploadMode        UploadMode
 	UploadCompletedAt *time.Time
 	CreatedBy         *ActorReference
 }
@@ -241,6 +323,8 @@ type CreateUploadCommand struct {
 	ContentType       string
 	ContentLength     int64
 	ChecksumSHA256    string
+	UploadMode        UploadMode
+	ImageVariants     []UploadImageVariantExpectation
 	SortOrder         int64
 	SourceObjectKey   string
 	UploadExpiresAt   time.Time
@@ -250,6 +334,12 @@ type CreateUploadCommand struct {
 // CreateUpload creates one upload session or returns a safe exact idempotent
 // replay, including a replacement session after pre-content expiry.
 func (repository *Repository) CreateUpload(ctx context.Context, command CreateUploadCommand) (AssetRecord, bool, error) {
+	if command.UploadMode == "" {
+		command.UploadMode = UploadModeSource
+	}
+	if err := validateUploadMode(command); err != nil {
+		return AssetRecord{}, false, err
+	}
 	actor, err := normalizeActor(command.SubjectID, command.PrincipalType, command.Actor)
 	if err != nil {
 		return AssetRecord{}, false, err
@@ -333,13 +423,16 @@ func (repository *Repository) CreateUpload(ctx context.Context, command CreateUp
 		insert into media_upload_session (
 			upload_session_id, media_id, principal_type, subject_id, idempotency_key,
 			expected_content_length, expected_content_type, expected_checksum_sha256,
-			expires_at, created_at)
-		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+			upload_mode, expires_at, created_at)
+		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
 		sessionID, assetID, command.PrincipalType, command.SubjectID, command.IdempotencyKey,
 		command.ContentLength, command.ContentType, command.ChecksumSHA256,
-		command.UploadExpiresAt.UTC(), now)
+		command.UploadMode, command.UploadExpiresAt.UTC(), now)
 	if err != nil {
 		return AssetRecord{}, false, translateConstraint(err)
+	}
+	if err := insertUploadImageVariantExpectations(ctx, tx, assetID, command.ImageVariants); err != nil {
+		return AssetRecord{}, false, err
 	}
 	_, err = tx.Exec(ctx, `
 		insert into media_command_idempotency (
@@ -363,8 +456,70 @@ func (repository *Repository) CreateUpload(ctx context.Context, command CreateUp
 		ContentType: command.ContentType, SourceObjectKey: command.SourceObjectKey,
 		Status: media.StatusUploading, Version: 1, SortOrder: command.SortOrder, CreatedAt: now,
 		UploadSessionID: sessionID, UploadExpiresAt: command.UploadExpiresAt.UTC(),
-		ExpectedLength: command.ContentLength, ExpectedChecksum: command.ChecksumSHA256, CreatedBy: &actor,
+		ExpectedLength: command.ContentLength, ExpectedChecksum: command.ChecksumSHA256,
+		UploadMode: command.UploadMode, CreatedBy: &actor,
 	}, false, nil
+}
+
+func validateUploadMode(command CreateUploadCommand) error {
+	switch command.UploadMode {
+	case UploadModeSource:
+		if len(command.ImageVariants) != 0 {
+			return ErrConflict
+		}
+		return nil
+	case UploadModeImageVariants:
+		if command.Kind != media.KindImage || command.ContentType != "image/webp" ||
+			command.ContentLength <= 0 || command.ContentLength > 1<<20 || len(command.ImageVariants) != 3 {
+			return ErrConflict
+		}
+		seen := make(map[media.Variant]struct{}, 3)
+		var total int64
+		for _, part := range command.ImageVariants {
+			if part.Variant != media.VariantSmall && part.Variant != media.VariantMedium && part.Variant != media.VariantLarge {
+				return ErrConflict
+			}
+			if _, duplicate := seen[part.Variant]; duplicate {
+				return ErrConflict
+			}
+			seen[part.Variant] = struct{}{}
+			if part.ContentLength <= 0 || part.ContentLength > 1<<20 || part.Width <= 0 || part.Height <= 0 ||
+				!validSHA256(part.ChecksumSHA256) || strings.TrimSpace(part.ObjectKey) == "" {
+				return ErrConflict
+			}
+			total += part.ContentLength
+			if total > 1<<20 {
+				return ErrConflict
+			}
+			if part.Variant == media.VariantLarge && part.ObjectKey != command.SourceObjectKey {
+				return ErrConflict
+			}
+		}
+		if total != command.ContentLength || len(seen) != 3 {
+			return ErrConflict
+		}
+		return nil
+	default:
+		return ErrConflict
+	}
+}
+
+func insertUploadImageVariantExpectations(
+	ctx context.Context,
+	tx pgx.Tx,
+	mediaID uuid.UUID,
+	parts []UploadImageVariantExpectation,
+) error {
+	for _, part := range parts {
+		_, err := tx.Exec(ctx, `insert into media_upload_image_variant_part (
+			media_id,variant,expected_content_length,expected_checksum_sha256,width,height,object_key)
+		values ($1,$2,$3,$4,$5,$6,$7)`, mediaID, part.Variant, part.ContentLength,
+			part.ChecksumSHA256, part.Width, part.Height, part.ObjectKey)
+		if err != nil {
+			return translateConstraint(err)
+		}
+	}
+	return nil
 }
 
 func (repository *Repository) findCreateReplay(
@@ -435,12 +590,12 @@ func (repository *Repository) findCreateReplay(
 		update media_upload_session
 		set upload_session_id=$1, principal_type=$2, subject_id=$3, idempotency_key=$4,
 			expected_content_length=$5, expected_content_type=$6, expected_checksum_sha256=$7,
-			expires_at=$8, completed_at=null, created_at=$9
-		where media_id=$10 and upload_session_id=$11 and principal_type=$2 and subject_id=$3
-			and completed_at is null and expires_at <= $9`,
+			upload_mode=$8, expires_at=$9, completed_at=null, created_at=$10
+		where media_id=$11 and upload_session_id=$12 and principal_type=$2 and subject_id=$3
+			and completed_at is null and expires_at <= $10`,
 		newSessionID, command.PrincipalType, command.SubjectID, command.IdempotencyKey,
 		command.ContentLength, command.ContentType, command.ChecksumSHA256,
-		command.UploadExpiresAt.UTC(), now, asset.ID, asset.UploadSessionID)
+		command.UploadMode, command.UploadExpiresAt.UTC(), now, asset.ID, asset.UploadSessionID)
 	if err != nil {
 		return asset, true, translateConstraint(err)
 	}
@@ -458,6 +613,7 @@ func (repository *Repository) findCreateReplay(
 	asset.UploadExpiresAt = command.UploadExpiresAt.UTC()
 	asset.ExpectedLength = command.ContentLength
 	asset.ExpectedChecksum = command.ChecksumSHA256
+	asset.UploadMode = command.UploadMode
 	return asset, true, nil
 }
 
@@ -542,11 +698,12 @@ func (repository *Repository) createTaskBoardEvidenceUpload(
 			}
 			_, err := tx.Exec(ctx, `update media_upload_session set upload_session_id=$1,
 				principal_type=$2,subject_id=$3,idempotency_key=$4,expected_content_length=$5,
-				expected_content_type=$6,expected_checksum_sha256=$7,expires_at=$8,completed_at=null,
-				created_at=$9 where media_id=$10 and principal_type=$2 and subject_id=$3`,
+				expected_content_type=$6,expected_checksum_sha256=$7,upload_mode=$8,
+				expires_at=$9,completed_at=null,created_at=$10
+				where media_id=$11 and principal_type=$2 and subject_id=$3`,
 				newSessionID, command.PrincipalType, command.SubjectID, command.IdempotencyKey,
 				command.ContentLength, command.ContentType, command.ChecksumSHA256,
-				command.UploadExpiresAt.UTC(), now, asset.ID)
+				command.UploadMode, command.UploadExpiresAt.UTC(), now, asset.ID)
 			if err != nil {
 				return AssetRecord{}, false, translateConstraint(err)
 			}
@@ -554,6 +711,7 @@ func (repository *Repository) createTaskBoardEvidenceUpload(
 			asset.UploadExpiresAt = command.UploadExpiresAt.UTC()
 			asset.ExpectedLength = command.ContentLength
 			asset.ExpectedChecksum = command.ChecksumSHA256
+			asset.UploadMode = command.UploadMode
 		}
 		_, err = tx.Exec(ctx, `update media_command_idempotency set request_sha256=$1,expires_at=$2
 			where principal_type=$3 and subject_id=$4 and command_type='CREATE_UPLOAD' and idempotency_key=$5`,
@@ -592,12 +750,15 @@ func (repository *Repository) createTaskBoardEvidenceUpload(
 	}
 	_, err = tx.Exec(ctx, `insert into media_upload_session (
 		upload_session_id,media_id,principal_type,subject_id,idempotency_key,expected_content_length,
-		expected_content_type,expected_checksum_sha256,expires_at,created_at)
-	values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, sessionID, assetID, command.PrincipalType,
+		expected_content_type,expected_checksum_sha256,upload_mode,expires_at,created_at)
+	values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, sessionID, assetID, command.PrincipalType,
 		command.SubjectID, command.IdempotencyKey, command.ContentLength, command.ContentType,
-		command.ChecksumSHA256, command.UploadExpiresAt.UTC(), now)
+		command.ChecksumSHA256, command.UploadMode, command.UploadExpiresAt.UTC(), now)
 	if err != nil {
 		return AssetRecord{}, false, translateConstraint(err)
+	}
+	if err := insertUploadImageVariantExpectations(ctx, tx, assetID, command.ImageVariants); err != nil {
+		return AssetRecord{}, false, err
 	}
 	_, err = tx.Exec(ctx, `insert into media_command_idempotency (
 		principal_type,subject_id,command_type,idempotency_key,request_sha256,media_id,created_at,expires_at)
@@ -618,7 +779,8 @@ func (repository *Repository) createTaskBoardEvidenceUpload(
 		SourceObjectKey: command.SourceObjectKey, Status: media.StatusUploading, Version: 1,
 		SortOrder: command.SortOrder, CreatedAt: now, UploadSessionID: sessionID,
 		UploadExpiresAt: command.UploadExpiresAt.UTC(), ExpectedLength: command.ContentLength,
-		ExpectedChecksum: command.ChecksumSHA256, CreatedBy: &command.Actor,
+		ExpectedChecksum: command.ChecksumSHA256, UploadMode: command.UploadMode,
+		CreatedBy: &command.Actor,
 	}, false, nil
 }
 
@@ -656,7 +818,8 @@ func sameTaskBoardEvidenceRequest(asset AssetRecord, command CreateUploadCommand
 		asset.WarehouseID == command.WarehouseID && asset.Kind == command.Kind &&
 		asset.FileName == command.FileName && asset.ContentType == command.ContentType &&
 		asset.SortOrder == command.SortOrder && asset.ExpectedLength == command.ContentLength &&
-		asset.ExpectedChecksum == command.ChecksumSHA256 && asset.ClientReferenceID != nil &&
+		asset.ExpectedChecksum == command.ChecksumSHA256 && asset.UploadMode == command.UploadMode &&
+		asset.ClientReferenceID != nil &&
 		command.ClientReferenceID != nil && *asset.ClientReferenceID == *command.ClientReferenceID
 }
 
@@ -688,8 +851,178 @@ func (repository *Repository) UploadSessionForPrincipal(
 	return asset, err
 }
 
-// FinalizeCommand confirms one pinned ingress object for an authorized upload
-// session and its idempotent completion request.
+// UploadImageVariantForPrincipal returns one declared WebP part only to the
+// principal that owns its still-open upload session.
+func (repository *Repository) UploadImageVariantForPrincipal(
+	ctx context.Context,
+	sessionID, subjectID uuid.UUID,
+	principalType string,
+	variant media.Variant,
+) (AssetRecord, UploadImageVariantPart, error) {
+	asset, err := repository.UploadSessionForPrincipal(ctx, sessionID, subjectID, principalType)
+	if err != nil {
+		return AssetRecord{}, UploadImageVariantPart{}, err
+	}
+	if asset.UploadMode != UploadModeImageVariants || asset.Kind != media.KindImage {
+		return AssetRecord{}, UploadImageVariantPart{}, ErrNotFound
+	}
+	part, err := scanUploadImageVariantPart(repository.pool.QueryRow(ctx, uploadImageVariantPartSQL+`
+		where media_id=$1 and variant=$2`, asset.ID, variant))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AssetRecord{}, UploadImageVariantPart{}, ErrNotFound
+	}
+	return asset, part, err
+}
+
+// CompleteUploadImageVariantCommand records immutable metadata for one
+// already streamed and verified client-produced WebP object.
+type CompleteUploadImageVariantCommand struct {
+	SessionID       uuid.UUID
+	SubjectID       uuid.UUID
+	PrincipalType   string
+	MediaID         uuid.UUID
+	Variant         media.Variant
+	IdempotencyKey  uuid.UUID
+	ObjectVersionID string
+	ETag            string
+	ChecksumSHA256  string
+	SizeBytes       int64
+}
+
+// CompleteUploadImageVariant persists one exact variant PUT or returns an
+// exact idempotent replay. It never finalizes the parent media asset.
+func (repository *Repository) CompleteUploadImageVariant(
+	ctx context.Context,
+	command CompleteUploadImageVariantCommand,
+) (UploadImageVariantPart, bool, error) {
+	if command.SessionID == uuid.Nil || command.SubjectID == uuid.Nil || command.MediaID == uuid.Nil ||
+		command.IdempotencyKey == uuid.Nil || command.ObjectVersionID == "" || len(command.ObjectVersionID) > 255 ||
+		command.ETag == "" || len(command.ETag) > 255 || !validSHA256(command.ChecksumSHA256) || command.SizeBytes <= 0 ||
+		(command.PrincipalType != PrincipalTypeUser && command.PrincipalType != PrincipalTypeWorker) {
+		return UploadImageVariantPart{}, false, ErrConflict
+	}
+	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return UploadImageVariantPart{}, false, err
+	}
+	defer tx.Rollback(ctx)
+	var expiresAt time.Time
+	var completedAt *time.Time
+	var uploadMode UploadMode
+	var assetStatus media.Status
+	err = tx.QueryRow(ctx, `select s.expires_at,s.completed_at,s.upload_mode,a.processing_status
+		from media_upload_session s join media_asset a on a.media_id=s.media_id
+		where s.upload_session_id=$1 and s.media_id=$2 and s.subject_id=$3 and s.principal_type=$4
+		  and media_asset_is_available(a.media_id)
+		for update of s`, command.SessionID, command.MediaID, command.SubjectID, command.PrincipalType).
+		Scan(&expiresAt, &completedAt, &uploadMode, &assetStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return UploadImageVariantPart{}, false, ErrNotFound
+	}
+	if err != nil {
+		return UploadImageVariantPart{}, false, err
+	}
+	if uploadMode != UploadModeImageVariants {
+		return UploadImageVariantPart{}, false, ErrConflict
+	}
+	part, err := scanUploadImageVariantPart(tx.QueryRow(ctx, uploadImageVariantPartSQL+`
+		where media_id=$1 and variant=$2 for update`, command.MediaID, command.Variant))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return UploadImageVariantPart{}, false, ErrNotFound
+	}
+	if err != nil {
+		return UploadImageVariantPart{}, false, err
+	}
+	if part.ContentLength != command.SizeBytes || part.ChecksumSHA256 != command.ChecksumSHA256 {
+		return UploadImageVariantPart{}, false, ErrConflict
+	}
+	if part.UploadedAt != nil {
+		if part.UploadIdempotencyKey != command.IdempotencyKey || part.ObjectVersionID != command.ObjectVersionID ||
+			part.ETag != command.ETag {
+			return UploadImageVariantPart{}, false, ErrIdempotencyMismatch
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return UploadImageVariantPart{}, false, err
+		}
+		return part, true, nil
+	}
+	if completedAt != nil || assetStatus != media.StatusUploading || !repository.now().Before(expiresAt) {
+		return UploadImageVariantPart{}, false, ErrConflict
+	}
+	var uploadedAt time.Time
+	err = tx.QueryRow(ctx, `update media_upload_image_variant_part
+		set upload_idempotency_key=$3,object_version_id=$4,etag=$5,
+			uploaded_checksum_sha256=$6,uploaded_at=clock_timestamp()
+		where media_id=$1 and variant=$2 and uploaded_at is null
+		returning uploaded_at`, command.MediaID, command.Variant, command.IdempotencyKey,
+		command.ObjectVersionID, command.ETag, command.ChecksumSHA256).Scan(&uploadedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return UploadImageVariantPart{}, false, ErrConflict
+	}
+	if err != nil {
+		return UploadImageVariantPart{}, false, translateConstraint(err)
+	}
+	part.UploadIdempotencyKey = command.IdempotencyKey
+	part.ObjectVersionID = command.ObjectVersionID
+	part.ETag = command.ETag
+	part.UploadedAt = &uploadedAt
+	if err := tx.Commit(ctx); err != nil {
+		return UploadImageVariantPart{}, false, err
+	}
+	return part, false, nil
+}
+
+const uploadImageVariantPartSQL = `select variant,expected_content_length,
+	expected_checksum_sha256,width,height,object_key,upload_idempotency_key,
+	coalesce(object_version_id,''),coalesce(etag,''),uploaded_at
+	from media_upload_image_variant_part `
+
+func scanUploadImageVariantPart(row rowScanner) (UploadImageVariantPart, error) {
+	var part UploadImageVariantPart
+	var uploadID *uuid.UUID
+	err := row.Scan(&part.Variant, &part.ContentLength, &part.ChecksumSHA256, &part.Width,
+		&part.Height, &part.ObjectKey, &uploadID, &part.ObjectVersionID, &part.ETag, &part.UploadedAt)
+	if err == nil && uploadID != nil {
+		part.UploadIdempotencyKey = *uploadID
+	}
+	return part, err
+}
+
+func uploadImageVariantParts(
+	ctx context.Context,
+	database interface {
+		Query(context.Context, string, ...any) (pgx.Rows, error)
+	},
+	mediaID uuid.UUID,
+) ([]UploadImageVariantPart, error) {
+	rows, err := database.Query(ctx, uploadImageVariantPartSQL+`
+		where media_id=$1 order by variant`, mediaID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	parts := make([]UploadImageVariantPart, 0, 3)
+	for rows.Next() {
+		part, scanErr := scanUploadImageVariantPart(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		parts = append(parts, part)
+	}
+	return parts, rows.Err()
+}
+
+// FinalizeImageVariant is immutable object metadata echoed by a client after
+// every WebP part PUT has succeeded.
+type FinalizeImageVariant struct {
+	Variant         media.Variant
+	ObjectVersionID string
+	ETag            string
+	ChecksumSHA256  string
+}
+
+// FinalizeCommand confirms either one pinned compatibility source or one
+// complete client-produced image bundle for an authorized upload session.
 type FinalizeCommand struct {
 	SessionID       uuid.UUID
 	SubjectID       uuid.UUID
@@ -703,6 +1036,7 @@ type FinalizeCommand struct {
 	ChecksumSHA256  string
 	ContentType     string
 	SizeBytes       int64
+	ImageVariants   []FinalizeImageVariant
 	CorrelationID   uuid.UUID
 }
 
@@ -774,12 +1108,14 @@ func (repository *Repository) FinalizeUpload(ctx context.Context, command Finali
 
 	var expiresAt time.Time
 	var completedAt *time.Time
+	var uploadMode UploadMode
 	err = tx.QueryRow(ctx, `
-		select s.media_id, s.expires_at, s.completed_at from media_upload_session s
+		select s.media_id, s.expires_at, s.completed_at, s.upload_mode from media_upload_session s
 		join media_asset a on a.media_id=s.media_id
 		where s.upload_session_id=$1 and s.subject_id=$2 and s.principal_type=$3
 		  and media_asset_is_available(a.media_id) for update of s`,
-		command.SessionID, command.SubjectID, command.PrincipalType).Scan(&assetID, &expiresAt, &completedAt)
+		command.SessionID, command.SubjectID, command.PrincipalType).
+		Scan(&assetID, &expiresAt, &completedAt, &uploadMode)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AssetRecord{}, false, ErrNotFound
 	}
@@ -801,6 +1137,11 @@ func (repository *Repository) FinalizeUpload(ctx context.Context, command Finali
 	}
 	if asset.Status != media.StatusUploading {
 		return AssetRecord{}, false, ErrConflict
+	}
+	asset.UploadMode = uploadMode
+	command, err = requireFinalizeUploadParts(ctx, tx, asset, command)
+	if err != nil {
+		return AssetRecord{}, false, err
 	}
 	jobID := uuid.New()
 	generation := max(asset.Generation+1, 1)
@@ -870,6 +1211,65 @@ func (repository *Repository) FinalizeUpload(ctx context.Context, command Finali
 	asset.Generation = 0
 	asset.SizeBytes = &command.SizeBytes
 	return asset, false, nil
+}
+
+func requireFinalizeUploadParts(
+	ctx context.Context,
+	tx pgx.Tx,
+	asset AssetRecord,
+	command FinalizeCommand,
+) (FinalizeCommand, error) {
+	switch asset.UploadMode {
+	case UploadModeSource:
+		if len(command.ImageVariants) != 0 || command.ObjectVersionID == "" || len(command.ObjectVersionID) > 255 ||
+			command.ETag == "" || len(command.ETag) > 255 || !validSHA256(command.ChecksumSHA256) ||
+			command.SizeBytes != asset.ExpectedLength || command.ContentType != asset.ContentType {
+			return command, ErrConflict
+		}
+		return command, nil
+	case UploadModeImageVariants:
+		if asset.Kind != media.KindImage || len(command.ImageVariants) != 3 {
+			return command, ErrConflict
+		}
+		parts, err := uploadImageVariantParts(ctx, tx, asset.ID)
+		if err != nil {
+			return command, err
+		}
+		if len(parts) != 3 {
+			return command, ErrConflict
+		}
+		requested := make(map[media.Variant]FinalizeImageVariant, 3)
+		for _, item := range command.ImageVariants {
+			if _, duplicate := requested[item.Variant]; duplicate || item.ObjectVersionID == "" ||
+				len(item.ObjectVersionID) > 255 || item.ETag == "" || len(item.ETag) > 255 ||
+				!validSHA256(item.ChecksumSHA256) {
+				return command, ErrConflict
+			}
+			requested[item.Variant] = item
+		}
+		var large UploadImageVariantPart
+		for _, part := range parts {
+			item, found := requested[part.Variant]
+			if !found || part.UploadedAt == nil || item.ObjectVersionID != part.ObjectVersionID ||
+				item.ETag != part.ETag || item.ChecksumSHA256 != part.ChecksumSHA256 {
+				return command, ErrConflict
+			}
+			if part.Variant == media.VariantLarge {
+				large = part
+			}
+		}
+		if large.UploadedAt == nil || large.ObjectKey != asset.SourceObjectKey {
+			return command, ErrConflict
+		}
+		command.ObjectVersionID = large.ObjectVersionID
+		command.ETag = large.ETag
+		command.ChecksumSHA256 = large.ChecksumSHA256
+		command.ContentType = "image/webp"
+		command.SizeBytes = large.ContentLength
+		return command, nil
+	default:
+		return command, ErrConflict
+	}
 }
 
 func requireFinalizeWorkerAccess(ctx context.Context, tx pgx.Tx, asset AssetRecord, command FinalizeCommand) error {
@@ -2005,7 +2405,7 @@ const assetWithSessionSQL = `select a.media_id,a.folder_id,a.client_reference_id
 	coalesce(a.source_version_id,''),coalesce(a.source_etag,''),coalesce(a.source_checksum_sha256,''),
 	a.processing_status,a.version,a.current_generation,a.rotation_degrees,
 	a.sort_order,a.size_bytes,a.created_at,s.upload_session_id,s.expires_at,
-		s.expected_content_length,coalesce(s.expected_checksum_sha256,''),s.completed_at
+		s.expected_content_length,coalesce(s.expected_checksum_sha256,''),s.upload_mode,s.completed_at
 	from media_asset a join media_upload_session s on s.media_id=a.media_id`
 
 type rowScanner interface {
@@ -2055,7 +2455,7 @@ func scanAssetWithSession(row rowScanner) (AssetRecord, error) {
 		&asset.Status, &asset.Version, &asset.Generation, &asset.Rotation,
 		&asset.SortOrder, &asset.SizeBytes, &asset.CreatedAt, &asset.UploadSessionID,
 		&asset.UploadExpiresAt, &asset.ExpectedLength, &asset.ExpectedChecksum,
-		&asset.UploadCompletedAt)
+		&asset.UploadMode, &asset.UploadCompletedAt)
 	if err == nil && actorType != nil && actorID != nil {
 		asset.CreatedBy = &ActorReference{SubjectID: *actorID, PrincipalType: *actorType}
 	}

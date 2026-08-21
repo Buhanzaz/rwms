@@ -133,6 +133,19 @@ video generations. See
 and
 [`ManagerMediaCoordinator.kt`](src/main/java/dev/buhanzaz/rwms/manager/ui/coordinator/ManagerMediaCoordinator.kt).
 
+A still image remains one app-owned original in the UI. The durable worker
+resolves its EXIF orientation before encoding exactly `SMALL`, `MEDIUM`, and
+`LARGE` WebP parts; deterministic quality and resolution fallback keeps their
+aggregate at or below 1 MiB, and only one high-resolution original is decoded
+at a time. The original is not uploaded. The create request
+declares only those variants, each part uses its own stable idempotency key and
+same-origin `/api/media/v1/upload-sessions/{id}/variants/{kind}/content` PUT,
+and finalize sends all three object receipts. MP4/WebM and explicit
+compatibility source uploads retain the legacy `/content` request shape. See
+[`ImageUploadBundleEncoder.kt`](src/main/java/dev/buhanzaz/rwms/manager/media/ImageUploadBundleEncoder.kt),
+[`MediaUploadPayloads.kt`](src/main/java/dev/buhanzaz/rwms/manager/media/MediaUploadPayloads.kt),
+and [`MediaUploader.kt`](src/main/java/dev/buhanzaz/rwms/manager/media/MediaUploader.kt).
+
 Local persistence is deliberately limited:
 
 - encrypted OAuth state and the selected warehouse preference;
@@ -144,8 +157,11 @@ Local persistence is deliberately limited:
   durable enqueue, so process death resumes the same inspection instead of
   assigning a draft to another account or warehouse;
 - an account-and-workspace-warehouse-scoped background-upload document,
-  app-private original media files, and WorkManager identity so an
-  already-created upload can resume only for its immutable owner;
+  app-private original media files, restart-safe generated WebP parts, and
+  WorkManager identity so an already-created upload can resume only for its
+  immutable owner; after the READY reference is durably recorded, the outbox
+  deletes its scoped original and generated parts but never a user-owned
+  gallery URI;
 - an AES-GCM-encrypted maintenance catalog snapshot partitioned by the verified
   account and warehouse, using a non-exportable Android Keystore key.
 
@@ -209,10 +225,13 @@ performs one more read/rebase/save cycle. Both passes are allowed only for
 creation, or saved/repeated inspection stays fail-closed and cannot be
 overwritten by a queued retry.
 
-The manager starts at most four byte-heavy media uploads at once and preserves
-their source order. Once a create/upload/finalize sequence is accepted, its
-server-side READY polling no longer occupies an upload permit, so later files
-can use the uplink while media-service processes earlier images or videos.
+The manager starts at most four logical byte-heavy media uploads at once and
+preserves their source order. Image bundles additionally share a global limit
+of six concurrent part PUTs, so the three parts of one photo can transfer in
+parallel without unbounded fan-out across photos. Once a
+create/upload/finalize sequence is accepted, its READY polling no longer
+occupies a logical upload permit, so later files can use the uplink while the
+earlier media projection becomes visible.
 
 The workspace resolves authoritative `/me`, eligible role, live warehouse
 grants, and the selected warehouse before it exposes or resumes durable work.

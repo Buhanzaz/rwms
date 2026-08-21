@@ -26,10 +26,10 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-// Processor dispatches a claimed media generation to its image or video
-// transformation implementation.
+// Processor dispatches a claimed generation. Still images only promote
+// already verified client variants (or alias a retained compatibility source);
+// video keeps the bounded server-side transcoder.
 type Processor struct {
-	Image media.ImageProcessor
 	Video media.VideoProcessor
 }
 
@@ -171,14 +171,7 @@ func (fanout *processingRecoveryObserverFanout) Observe(snapshot ProcessingConsu
 func (processor Processor) Process(ctx context.Context, job persistence.WorkerJob) ([]media.ProcessedVariant, error) {
 	switch job.MediaKind {
 	case media.KindImage:
-		result, err := processor.Image.Process(ctx, media.ImageProcessRequest{
-			MediaID: job.MediaID.String(), SourceObjectKey: job.SourceObjectKey,
-			SourceVersionID: job.SourceVersionID, Generation: job.Generation,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return append([]media.ProcessedVariant{result.Original}, result.Variants...), nil
+		return imageJobVariants(job)
 	case media.KindVideo:
 		result, err := processor.Video.Process(ctx, media.VideoProcessRequest{
 			MediaID: job.MediaID.String(), SourceObjectKey: job.SourceObjectKey,
@@ -193,6 +186,58 @@ func (processor Processor) Process(ctx context.Context, job persistence.WorkerJo
 	default:
 		return nil, fmt.Errorf("unsupported media kind")
 	}
+}
+
+func imageJobVariants(job persistence.WorkerJob) ([]media.ProcessedVariant, error) {
+	if job.MediaID == uuid.Nil || job.Generation <= 0 || job.SourceSizeBytes <= 0 ||
+		job.SourceObjectKey == "" || job.SourceVersionID == "" || job.SourceChecksum == "" {
+		return nil, fmt.Errorf("invalid image processing job")
+	}
+	if job.UploadMode == persistence.UploadModeSource {
+		variants := make([]media.ProcessedVariant, 0, 4)
+		for _, variant := range []media.Variant{
+			media.VariantOriginal, media.VariantSmall, media.VariantMedium, media.VariantLarge,
+		} {
+			variants = append(variants, media.ProcessedVariant{
+				Variant: variant, ObjectKey: job.SourceObjectKey, ObjectVersionID: job.SourceVersionID,
+				ContentType: job.ContentType, SizeBytes: job.SourceSizeBytes,
+				ChecksumSHA256: job.SourceChecksum,
+			})
+		}
+		return variants, nil
+	}
+	if job.UploadMode != persistence.UploadModeImageVariants || len(job.ImageVariants) != 3 {
+		return nil, fmt.Errorf("invalid client image variant job")
+	}
+	variants := make([]media.ProcessedVariant, 0, 4)
+	var large *media.ProcessedVariant
+	seen := make(map[media.Variant]struct{}, 3)
+	for _, part := range job.ImageVariants {
+		if part.UploadedAt == nil || part.ObjectVersionID == "" || part.ContentLength <= 0 ||
+			part.Width <= 0 || part.Height <= 0 || part.ObjectKey == "" || part.ChecksumSHA256 == "" {
+			return nil, fmt.Errorf("incomplete client image variant job")
+		}
+		if _, duplicate := seen[part.Variant]; duplicate {
+			return nil, fmt.Errorf("duplicate client image variant job")
+		}
+		seen[part.Variant] = struct{}{}
+		variant := media.ProcessedVariant{
+			Variant: part.Variant, ObjectKey: part.ObjectKey, ObjectVersionID: part.ObjectVersionID,
+			ContentType: "image/webp", SizeBytes: part.ContentLength,
+			Width: part.Width, Height: part.Height, ChecksumSHA256: part.ChecksumSHA256,
+		}
+		variants = append(variants, variant)
+		if part.Variant == media.VariantLarge {
+			copyOfLarge := variant
+			large = &copyOfLarge
+		}
+	}
+	if large == nil || len(seen) != 3 {
+		return nil, fmt.Errorf("client image bundle has no large variant")
+	}
+	original := *large
+	original.Variant = media.VariantOriginal
+	return append([]media.ProcessedVariant{original}, variants...), nil
 }
 
 // Consumer persistently processes media-processing Kafka facts with idempotent

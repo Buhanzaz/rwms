@@ -246,7 +246,7 @@ func TestRepositoryConcurrencyOwnerProofCursorAndOutboxIntegration(t *testing.T)
 		t.Fatalf("reclaimed processing job = %#v, %v; first fence %d", secondJob, err, firstJob.Job.LeaseFence)
 	}
 	assertReplayParity(t, ctx, repository, command.MediaID)
-	variants := processedImageVariants(command.MediaID, 1)
+	variants := processedImageVariantsForJob(secondJob.Job)
 	if err := repository.CompleteProcessingJob(ctx, firstJob.Job, variants); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("stale worker completion error = %v, want ErrLeaseLost", err)
 	}
@@ -596,6 +596,20 @@ func processedImageVariants(mediaID uuid.UUID, generation int) []media.Processed
 		{Variant: media.VariantMedium, ObjectKey: media.ImageVariantObjectKey(mediaID.String(), generation, media.VariantMedium), ContentType: "image/webp", SizeBytes: 96, Width: 10, Height: 10, ChecksumSHA256: hex64('d'), ObjectVersionID: "derived-version-medium"},
 		{Variant: media.VariantLarge, ObjectKey: media.ImageVariantObjectKey(mediaID.String(), generation, media.VariantLarge), ContentType: "image/webp", SizeBytes: 112, Width: 10, Height: 10, ChecksumSHA256: hex64('e'), ObjectVersionID: "derived-version-large"},
 	}
+}
+
+func processedImageVariantsForJob(job WorkerJob) []media.ProcessedVariant {
+	variants := make([]media.ProcessedVariant, 0, 4)
+	for _, variant := range []media.Variant{
+		media.VariantOriginal, media.VariantSmall, media.VariantMedium, media.VariantLarge,
+	} {
+		variants = append(variants, media.ProcessedVariant{
+			Variant: variant, ObjectKey: job.SourceObjectKey, ObjectVersionID: job.SourceVersionID,
+			ContentType: job.ContentType, SizeBytes: job.SourceSizeBytes,
+			ChecksumSHA256: job.SourceChecksum,
+		})
+	}
+	return variants
 }
 
 func assertReplayParity(t *testing.T, ctx context.Context, repository *Repository, mediaID uuid.UUID) {

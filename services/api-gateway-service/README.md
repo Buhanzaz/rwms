@@ -105,7 +105,7 @@ replacement for the owning service's OpenAPI contract.
 | `/api/warehouse/**` | configured warehouse-service target, unchanged | Internal paths are denied; the current route is reserved for the W1 warehouse API. |
 | `/api/asset/**` | asset-service, unchanged | Internal paths are denied. HTML-import commit uses a dedicated handler. |
 | `/api/maintenance/**` | maintenance-service, unchanged | Internal paths are denied. |
-| `/api/media/**` | media-service, unchanged | Internal and private paths are denied. Upload content and SSE use dedicated handlers. |
+| `/api/media/**` | media-service, unchanged | Internal and private paths are denied. Source/variant upload content and SSE use dedicated handlers. |
 | `/api/inventory/**` | inventory-service, unchanged | Internal and private paths are denied. Completed-outcome recalculation uses a dedicated 60-second handler; every other inventory request keeps the ordinary timeout. |
 | `/api/logistics/**` | logistics-service, unchanged | Internal and private paths are denied; the explicitly public client-presentation path is an exception to normal authentication. |
 | `/api/assistant/**` | assistant-service, unchanged | Internal and private paths are denied. Conversation turns use a dedicated streaming handler. |
@@ -119,8 +119,12 @@ routes:
   `GET /api/asset/v1/events`, and `GET /api/media/v1/events` use the bounded
   asynchronous SSE proxy.
 - `POST /api/asset/v1/html-imports/*/commit` and
-  `PUT /api/media/v1/upload-sessions/*/content` use specialized bounded
-  forwarding for supported long-running traffic.
+  both `PUT /api/media/v1/upload-sessions/*/content` and
+  `PUT /api/media/v1/upload-sessions/*/variants/*/content` use specialized
+  bounded forwarding for supported long-running traffic. Paths, bearer and
+  idempotency headers, content bytes, and downstream responses pass through
+  unchanged; cookies are removed, and neither MinIO addresses nor credentials
+  are exposed.
 - `POST /api/inventory/v1/sessions/*/outcome/recalculate` uses an isolated
   60-second downstream read deadline. The exact command is excluded from the
   generic inventory route, while its path, authorization and idempotency

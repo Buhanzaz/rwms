@@ -53,7 +53,10 @@ type WorkerJob struct {
 	SourceObjectKey string
 	SourceVersionID string
 	SourceChecksum  string
+	SourceSizeBytes int64
 	ContentType     string
+	UploadMode      UploadMode
+	ImageVariants   []UploadImageVariantPart
 	Attempt         int
 	AttemptInCycle  int
 	CreatedAt       time.Time
@@ -262,8 +265,9 @@ func (repository *Repository) ClaimProcessingJob(ctx context.Context, message Pr
 			attempt_in_cycle=least(attempt_in_cycle+1,4),lease_owner=$2,
 			lease_token=$3,lease_fence=lease_fence+1,lease_until=clock_timestamp()+$4::interval,
 			last_error=null
-		from media_asset a
+		from media_asset a, media_upload_session session
 		where job.processing_job_id=$1 and job.media_id=a.media_id
+		  and session.media_id=a.media_id
 		  and job.generation>0 and job.source_version_id is not null and job.source_checksum_sha256 is not null
 		  and (job.job_status='PENDING' or (job.job_status='RUNNING' and job.lease_until<clock_timestamp()))
 		  and job.next_attempt_at<=clock_timestamp()
@@ -275,11 +279,13 @@ func (repository *Repository) ClaimProcessingJob(ctx context.Context, message Pr
 			job.generation,job.requested_rotation_degrees,a.source_object_key,
 			job.source_version_id,job.source_checksum_sha256,
 			coalesce(a.finalized_content_type,a.original_content_type),
+			coalesce(a.finalized_size_bytes,a.size_bytes,0),session.upload_mode,
 			job.attempt_count,job.attempt_in_cycle,job.created_at,job.lease_fence`,
 		job.JobID, owner, job.LeaseToken, lease.String()).Scan(
 		&job.MediaID, &job.WarehouseID, &job.OwnerType, &job.OwnerID, &job.MediaKind, &job.ProcessingKind,
 		&job.Generation, &job.Rotation, &job.SourceObjectKey, &job.SourceVersionID,
-		&job.SourceChecksum, &job.ContentType, &job.Attempt, &job.AttemptInCycle,
+		&job.SourceChecksum, &job.ContentType, &job.SourceSizeBytes, &job.UploadMode,
+		&job.Attempt, &job.AttemptInCycle,
 		&job.CreatedAt, &job.LeaseFence)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ClaimResult{}, ErrConflict
@@ -291,6 +297,33 @@ func (repository *Repository) ClaimProcessingJob(ctx context.Context, message Pr
 		job.MediaKind != message.ExpectedKind || job.ProcessingKind != message.ExpectedProcessingKind ||
 		job.Generation != message.ExpectedGeneration || job.Rotation != message.ExpectedRotation ||
 		job.SourceVersionID != message.ExpectedSourceVersionID {
+		return ClaimResult{}, ErrConflict
+	}
+	if job.SourceSizeBytes <= 0 {
+		return ClaimResult{}, ErrConflict
+	}
+	switch job.UploadMode {
+	case UploadModeSource:
+		if job.MediaKind == media.KindImage && job.SourceObjectKey == "" {
+			return ClaimResult{}, ErrConflict
+		}
+	case UploadModeImageVariants:
+		if job.MediaKind != media.KindImage {
+			return ClaimResult{}, ErrConflict
+		}
+		job.ImageVariants, err = uploadImageVariantParts(ctx, tx, job.MediaID)
+		if err != nil {
+			return ClaimResult{}, err
+		}
+		if len(job.ImageVariants) != 3 {
+			return ClaimResult{}, ErrConflict
+		}
+		for _, part := range job.ImageVariants {
+			if part.UploadedAt == nil || part.ObjectVersionID == "" || part.ETag == "" {
+				return ClaimResult{}, ErrConflict
+			}
+		}
+	default:
 		return ClaimResult{}, ErrConflict
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -606,15 +639,11 @@ func validateProcessedVariants(job WorkerJob, variants []media.ProcessedVariant)
 	if job.ProcessingKind != media.ProcessingInitial || job.Rotation != media.Rotation0 {
 		return ErrConflict
 	}
+	if job.MediaKind == media.KindImage {
+		return validateProcessedImageVariants(job, variants)
+	}
 	wanted := map[media.Variant]string{}
 	switch job.MediaKind {
-	case media.KindImage:
-		wanted = map[media.Variant]string{
-			media.VariantOriginal: media.OriginalObjectKey(job.MediaID.String(), job.Generation, ".jpg"),
-			media.VariantSmall:    media.ImageVariantObjectKey(job.MediaID.String(), job.Generation, media.VariantSmall),
-			media.VariantMedium:   media.ImageVariantObjectKey(job.MediaID.String(), job.Generation, media.VariantMedium),
-			media.VariantLarge:    media.ImageVariantObjectKey(job.MediaID.String(), job.Generation, media.VariantLarge),
-		}
 	case media.KindVideo:
 		extension := map[string]string{"video/mp4": ".mp4", "video/webm": ".webm"}[job.ContentType]
 		if extension == "" {
@@ -639,23 +668,72 @@ func validateProcessedVariants(job WorkerJob, variants []media.ProcessedVariant)
 			return ErrConflict
 		}
 		seen[variant.Variant] = struct{}{}
-		if job.MediaKind == media.KindImage {
-			expectedContentType := "image/webp"
-			if variant.Variant == media.VariantOriginal {
-				expectedContentType = "image/jpeg"
-			}
-			if variant.ContentType != expectedContentType || variant.Width <= 0 || variant.Height <= 0 {
-				return ErrConflict
-			}
-		} else {
-			expectedContentType := job.ContentType
-			if variant.Variant == media.VariantPlayback {
-				expectedContentType = "video/mp4"
-			}
-			if variant.ContentType != expectedContentType || variant.Width != 0 || variant.Height != 0 {
+		expectedContentType := job.ContentType
+		if variant.Variant == media.VariantPlayback {
+			expectedContentType = "video/mp4"
+		}
+		if variant.ContentType != expectedContentType || variant.Width != 0 || variant.Height != 0 {
+			return ErrConflict
+		}
+	}
+	return nil
+}
+
+func validateProcessedImageVariants(job WorkerJob, variants []media.ProcessedVariant) error {
+	if len(variants) != 4 || job.SourceSizeBytes <= 0 || !validSHA256(job.SourceChecksum) {
+		return ErrConflict
+	}
+	seen := make(map[media.Variant]media.ProcessedVariant, 4)
+	for _, variant := range variants {
+		if _, duplicate := seen[variant.Variant]; duplicate || variant.ObjectVersionID == "" ||
+			len(variant.ObjectVersionID) > 255 || variant.SizeBytes <= 0 || !validSHA256(variant.ChecksumSHA256) {
+			return ErrConflict
+		}
+		seen[variant.Variant] = variant
+	}
+	for _, required := range []media.Variant{
+		media.VariantOriginal, media.VariantSmall, media.VariantMedium, media.VariantLarge,
+	} {
+		if _, found := seen[required]; !found {
+			return ErrConflict
+		}
+	}
+	if job.UploadMode == UploadModeSource {
+		for _, variant := range seen {
+			if variant.ObjectKey != job.SourceObjectKey || variant.ObjectVersionID != job.SourceVersionID ||
+				variant.ContentType != job.ContentType || variant.SizeBytes != job.SourceSizeBytes ||
+				variant.ChecksumSHA256 != job.SourceChecksum || variant.Width != 0 || variant.Height != 0 {
 				return ErrConflict
 			}
 		}
+		return nil
+	}
+	if job.UploadMode != UploadModeImageVariants || len(job.ImageVariants) != 3 {
+		return ErrConflict
+	}
+	parts := make(map[media.Variant]UploadImageVariantPart, 3)
+	for _, part := range job.ImageVariants {
+		if part.UploadedAt == nil {
+			return ErrConflict
+		}
+		parts[part.Variant] = part
+	}
+	for _, name := range []media.Variant{media.VariantSmall, media.VariantMedium, media.VariantLarge} {
+		variant, variantFound := seen[name]
+		part, partFound := parts[name]
+		if !variantFound || !partFound || variant.ObjectKey != part.ObjectKey ||
+			variant.ObjectVersionID != part.ObjectVersionID || variant.ContentType != "image/webp" ||
+			variant.SizeBytes != part.ContentLength || variant.Width != part.Width || variant.Height != part.Height ||
+			variant.ChecksumSHA256 != part.ChecksumSHA256 {
+			return ErrConflict
+		}
+	}
+	original, large := seen[media.VariantOriginal], seen[media.VariantLarge]
+	if original.ObjectKey != large.ObjectKey || original.ObjectVersionID != large.ObjectVersionID ||
+		original.ContentType != large.ContentType || original.SizeBytes != large.SizeBytes ||
+		original.Width != large.Width || original.Height != large.Height ||
+		original.ChecksumSHA256 != large.ChecksumSHA256 {
+		return ErrConflict
 	}
 	return nil
 }

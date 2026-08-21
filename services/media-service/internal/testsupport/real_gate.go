@@ -265,9 +265,10 @@ func newMigratedMediaDatabase(t testing.TB, baseURL string, includeCurrentMigrat
 		{"authoritative inventory cabin photos", "V13__authoritative_inventory_cabin_photos.sql", mediamigration.V13},
 		{"task board reader audience", "V14__task_board_reader_audience.sql", mediamigration.V14},
 		{"inventory finding membership markers", "V15__inventory_finding_membership_markers.sql", mediamigration.V15},
+		{"client image variants", "V16__client_image_variants.sql", mediamigration.V16},
 	}
 	if !includeCurrentMigrations {
-		migrations = migrations[:len(migrations)-3]
+		migrations = migrations[:len(migrations)-4]
 	}
 	for index, migration := range migrations {
 		started := time.Now()
@@ -277,7 +278,7 @@ func newMigratedMediaDatabase(t testing.TB, baseURL string, includeCurrentMigrat
 		if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
 			installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
 		values ($1,$2,$3,'SQL',$4,$5,current_user,$6,true)`, index+1,
-			[]string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"}[index],
+			[]string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"}[index],
 			migration.description, migration.script, realFlywayChecksum(migration.body),
 			int(time.Since(started)/time.Millisecond)); err != nil {
 			t.Fatalf("record isolated media %s: %v", migration.script, err)

@@ -622,7 +622,7 @@ func completeWorkerEvidenceAndClaimReadyFact(t *testing.T, ctx context.Context, 
 	if err != nil || claim.Duplicate {
 		t.Fatalf("claim worker evidence processing = %#v, %v", claim, err)
 	}
-	if err := repository.CompleteProcessingJob(ctx, claim.Job, processedImageVariants(create.MediaID, 1)); err != nil {
+	if err := repository.CompleteProcessingJob(ctx, claim.Job, processedImageVariantsForJob(claim.Job)); err != nil {
 		t.Fatalf("complete worker evidence processing: %v", err)
 	}
 	ready, err := repository.ClaimOutbox(ctx, "task-board-worker-media-relay", time.Minute)

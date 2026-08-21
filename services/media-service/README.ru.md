@@ -4,7 +4,7 @@
 
 `media-service` — единственный stateful Go-сервис RWMS, который владеет
 авторизацией загрузки, метаданными, неизменяемыми поколениями объектов в
-MinIO, обработкой изображений/видео и фактами о медиа. PostgreSQL — источник
+MinIO, обработкой видео и фактами о медиа. PostgreSQL — источник
 истины для состояния и replay; Kafka используется только как транспорт с
 семантикой at-least-once. Браузер загружает и читает байты исключительно через
 аутентифицированные same-origin API-пути. MinIO остаётся приватным: клиенту не
@@ -17,8 +17,12 @@ variants. Shadow replay читает только append-only event stream, пр
 сравнивает восстановленное состояние с live projection. Санитизированные факты
 Kafka — отдельное представление и никогда не являются источником replay.
 
-Для изображения сервис создаёт `SMALL`, `MEDIUM`, `LARGE` в WebP и
-авторизуемый `ORIGINAL`, не меняя ориентацию пикселей, переданную клиентом.
+ManagerApp и WorkerApp физически ориентируют изображения и создают WebP
+`SMALL`, `MEDIUM`, `LARGE` суммарным размером не более 1 МиБ. Загружаются
+только эти варианты; авторизуемый логический `ORIGINAL` ссылается на тот же
+неизменяемый объект, что и `LARGE`. Go не декодирует, не поворачивает, не
+сжимает и не переписывает изображения. Сохранённые single-source клиенты
+остаются читаемыми через четыре логические ссылки на их точный pinned source.
 Для видео сохраняется точный загруженный `ORIGINAL` и создаётся сжатый MP4
 `PLAYBACK`: H.264, yuv420p, необязательный AAC audio, удалённые metadata и
 максимум 1280x720 с сохранением пропорций и чётных размеров. FFprobe проверяет
@@ -63,16 +67,19 @@ source и result; неподтверждённые размеры видео о�
 Интерактивные клиенты используют публичные same-origin media routes через API
 gateway; private `/api/internal/**` доступны только сервисам.
 
-1. Клиент создаёт upload session с `Idempotency-Key`, доказанным owner context,
-   MIME type, длиной и SHA-256.
-2. Клиент передаёт байты в возвращённый same-origin content path. Сервис
-   сериализует ingress для этой session, сверяет заявленные данные и фиксирует
-   точную приватную версию объекта MinIO.
+1. Клиент создаёт upload session с `Idempotency-Key`, доказанным owner context
+   и либо одним source, либо ровно тремя WebP parts. Checksum bundle — SHA-256
+   канонического manifest `rwms-image-variants-v1`.
+2. Source передаётся в один same-origin path, а `SMALL`, `MEDIUM`, `LARGE` — в
+   три независимо блокируемых same-origin path. PUT могут идти параллельно;
+   каждый проверяется по длине, SHA, version и ETag. MinIO остаётся приватным,
+   а media-service не буферизует и не декодирует изображение.
 3. Клиент завершает session тем же idempotency key. Upload fact и processing
    request коммитятся атомарно.
-4. Durable Kafka worker асинхронно создаёт canonical original и WebP-variants
-   для изображения либо проверяет видео, сохраняет его точный original и
-   создаёт сжатый MP4 playback. После этого публикуется безопасный
+4. Durable Kafka worker без object I/O переводит проверенные metadata вариантов
+   изображения в READY generation. Для сохранённого single-source изображения
+   все логические варианты указывают на точный source. Видео по-прежнему
+   проверяется, сохраняется его exact original и создаётся MP4 playback. После этого публикуется безопасный
    invalidation-сигнал, а клиенты обновляют только свою scoped projection.
 5. Scoped read отдаёт ровно закреплённую версию объекта через media-service с
    `private, no-store`. Логическое удаление меняет PostgreSQL и создаёт один
@@ -108,19 +115,22 @@ Flyway выполняется вне процесса. До запуска пр�
 `db/migration/V12__video_playback_variant.sql`, затем
 `db/migration/V13__authoritative_inventory_cabin_photos.sql`, затем
 `db/migration/V14__task_board_reader_audience.sql`, затем
-`db/migration/V15__inventory_finding_membership_markers.sql`.
+`db/migration/V15__inventory_finding_membership_markers.sql`, затем
+`db/migration/V16__client_image_variants.sql`.
 
 Go-приложение не выполняет миграции, baseline, repair и не принимает молча
 чужую непустую базу.
 
-- Новая local/test база мигрируется от V1 до V15.
-- База на V12 применяет V13, V14 и V15; точная база V13 применяет V14 и V15,
-  а точная база V14 применяет только V15. V14 добавляет и backfill-ит
+- Новая local/test база мигрируется от V1 до V16.
+- База на V15 применяет V16. V14 добавляет и backfill-ит
   task-entry read audience без удаления owner proofs, media rows или объектов.
   V15 заменяет только `media_inventory_finding_inbox_check2`: канонические
   departed, refreshed и restored membership markers принимаются с null
   `owner_revision`, а существующие inbox rows, owner proofs и media data не
-  меняются.
+  меняются. V16 добавляет metadata image-bundle session/part, помечает все
+  существующие sessions как `SOURCE` и разрешает `ORIGINAL` и `LARGE`
+  ссылаться на один immutable object; существующие media не переписываются и
+  не удаляются.
 - `baselineOnMigrate` должен оставаться `false`; непустая база без истории
   миграций отклоняется.
 - На старте и readiness проверяются успешные строки Flyway, их версии,
@@ -151,8 +161,6 @@ V1 и legacy union event schema — только compatibility evidence; их н
 | `MEDIA_MINIO_BUCKET` | Выделенный bucket медиа |
 | `MEDIA_MINIO_USE_SSL` | Явное `true` или `false` |
 | `MEDIA_MAX_UPLOAD_BYTES` | Максимальный размер неизменяемого source |
-| `MEDIA_MAX_DECODED_PIXELS` | Максимум декодированных пикселей изображения |
-| `MEDIA_MAX_IMAGE_OUTPUT_BYTES` | Максимальный размер закодированного image output |
 | `MEDIA_ALLOWED_MIME_TYPES` | Allowlist через запятую: JPEG, PNG, WebP, MP4, WebM |
 | `MEDIA_UPLOAD_EXPIRY` | Время жизни ограниченной upload capability, например `5m` |
 | `MEDIA_PROCESSING_TIMEOUT` | Timeout одного processing job |
@@ -200,11 +208,12 @@ API-запрос отклоняется до любой операции MinIO.
 
 ## Хранилище и безопасность владельца
 
-У bucket обязательно включено versioning. Authenticated upload ingress
-сериализуется по upload session между экземплярами сервиса, передаёт ровно
-заявленную длину в private MinIO и коммитит finalization до ответа вызывающей
-стороне. Finalization проверяет и фиксирует точные object version, ETag, длину,
-content type, checksum и content sniff; derived writes тоже version-pinned.
+У bucket обязательно включено versioning. Single-source ingress сериализуется
+по upload session, а image-bundle — по каждому варианту, поэтому три
+ограниченных PUT могут выполняться параллельно между экземплярами сервиса.
+Каждый path передаёт ровно заявленную длину в private MinIO. Finalization
+проверяет и фиксирует точные object version, ETag, длину, content type и
+checksum; legacy single-source ingress также сохраняет content sniffing.
 Публичное чтение стримит закреплённую версию только через media API с
 `private, no-store`. В runtime нет unversioned download, физического delete,
 retention или orphan cleanup. Owner-scoped deletion — только PostgreSQL
@@ -476,7 +485,8 @@ go test ./internal/architecture -count=1
 
 ## Локальная проверка
 
-На build host нужны Go 1.25, CGO, libvips, FFmpeg и FFprobe.
+На build host нужны Go 1.25, FFmpeg и FFprobe. Обработка неподвижных
+изображений больше не зависит от CGO или libvips.
 
 ```bash
 gofmt -w ./cmd ./internal
@@ -485,8 +495,8 @@ go build -trimpath -o /tmp/rwms-media-service ./cmd/media-service
 ```
 
 Проверка миграций выполняется отдельно Flyway и PostgreSQL и должна покрыть
-clean install V1-to-V15, upgrade V12-to-V13-to-V14-to-V15, V13-to-V14 reader
-backfill, upgrade membership constraint V14-to-V15, повторный запуск, checksum
-drift и непустую базу без истории. Проверки MinIO должны использовать versioned
-local/test bucket; Kafka-проверки — канонические topics и broker
-acknowledgements.
+clean install V1-to-V16, upgrade V12-to-V13-to-V14-to-V15-to-V16, V13-to-V14
+reader backfill, upgrade membership constraint V14-to-V15, additive upgrade
+V16 для image bundles, повторный запуск, checksum drift и непустую базу без
+истории. Проверки MinIO должны использовать versioned local/test bucket;
+Kafka-проверки — канонические topics и broker acknowledgements.

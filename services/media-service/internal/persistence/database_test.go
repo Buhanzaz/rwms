@@ -29,6 +29,7 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 	v13 := flywayChecksum(mediamigration.V13)
 	v14 := flywayChecksum(mediamigration.V14)
 	v15 := flywayChecksum(mediamigration.V15)
+	v16 := flywayChecksum(mediamigration.V16)
 	const (
 		flyway124V1      int32 = -1307356325
 		flyway124V2      int32 = -573926044
@@ -47,14 +48,15 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 		flyway124V13     int32 = -455290715
 		flyway124V14     int32 = -2079734905
 		flyway124V15     int32 = 1136570652
+		flyway124V16     int32 = 153703059
 	)
 	if v1 != flyway124V1 || v2 != flyway124V2 || v3 != flyway124V3 || v4 != flyway124V4 ||
 		v4Guard != flyway124V4Guard || v5 != flyway124V5 || v5Guard != flyway124V5Guard ||
 		v6 != flyway124V6 || v7 != flyway124V7 || v8 != flyway124V8 || v9 != flyway124V9 ||
 		v10 != flyway124V10 || v11 != flyway124V11 || v12 != flyway124V12 || v13 != flyway124V13 ||
-		v14 != flyway124V14 || v15 != flyway124V15 {
+		v14 != flyway124V14 || v15 != flyway124V15 || v16 != flyway124V16 {
 		t.Fatalf(
-			"Flyway 12.4 checksum drift: V1=%d (want %d), V2=%d (want %d), V3=%d (want %d), V4=%d (want %d), V4.1=%d (want %d), V5=%d (want %d), V5.1=%d (want %d), V6=%d (want %d), V7=%d (want %d), V8=%d (want %d), V9=%d (want %d), V10=%d (want %d), V11=%d (want %d), V12=%d (want %d), V13=%d (want %d), V14=%d (want %d), V15=%d (want %d)",
+			"Flyway 12.4 checksum drift: V1=%d (want %d), V2=%d (want %d), V3=%d (want %d), V4=%d (want %d), V4.1=%d (want %d), V5=%d (want %d), V5.1=%d (want %d), V6=%d (want %d), V7=%d (want %d), V8=%d (want %d), V9=%d (want %d), V10=%d (want %d), V11=%d (want %d), V12=%d (want %d), V13=%d (want %d), V14=%d (want %d), V15=%d (want %d), V16=%d (want %d)",
 			v1,
 			flyway124V1,
 			v2,
@@ -89,6 +91,8 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 			flyway124V14,
 			v15,
 			flyway124V15,
+			v16,
+			flyway124V16,
 		)
 	}
 }
@@ -106,7 +110,7 @@ func TestVerifyMigrationHistoryAcceptsCanonicalAndOutOfOrderFlywayRanks(t *testi
 		canonical[0], canonical[1], canonical[2], canonical[3], canonical[5],
 		canonical[4], canonical[6], canonical[7], canonical[8], canonical[9], canonical[10],
 		canonical[11], canonical[12],
-		canonical[13], canonical[14], canonical[15], canonical[16],
+		canonical[13], canonical[14], canonical[15], canonical[16], canonical[17],
 	}
 	if err := verifyMigrationHistory(outOfOrder); err != nil {
 		t.Fatalf("real out-of-order Flyway upgrade history rejected: %v", err)
@@ -226,6 +230,7 @@ func approvedMigrationHistory() []migrationHistoryRow {
 		{"13", "authoritative inventory cabin photos", "V13__authoritative_inventory_cabin_photos.sql", mediamigration.V13},
 		{"14", "task board reader audience", "V14__task_board_reader_audience.sql", mediamigration.V14},
 		{"15", "inventory finding membership markers", "V15__inventory_finding_membership_markers.sql", mediamigration.V15},
+		{"16", "client image variants", "V16__client_image_variants.sql", mediamigration.V16},
 	}
 	history := make([]migrationHistoryRow, 0, len(migrations))
 	for _, migration := range migrations {
@@ -438,6 +443,25 @@ func TestInventoryFindingMembershipMarkerMigrationWidensOnlyTheInboxEventConstra
 	for _, forbidden := range []string{"drop table", "truncate table", "delete from", "update media_"} {
 		if strings.Contains(sql, forbidden) {
 			t.Errorf("V15 contains destructive or data-rewriting statement %q", forbidden)
+		}
+	}
+}
+
+func TestClientImageVariantMigrationIsAdditiveAndRetainsSourceUploads(t *testing.T) {
+	sql := strings.ToLower(string(mediamigration.V16))
+	for _, required := range []string{
+		"add column upload_mode", "source", "image_variants",
+		"create table media_upload_image_variant_part", "expected_content_length",
+		"expected_checksum_sha256", "upload_idempotency_key", "object_version_id",
+		"drop constraint if exists media_variant_object_key_key",
+	} {
+		if !strings.Contains(sql, required) {
+			t.Errorf("V16 does not contain %q", required)
+		}
+	}
+	for _, forbidden := range []string{"drop table", "truncate table", "delete from", "update media_"} {
+		if strings.Contains(sql, forbidden) {
+			t.Errorf("V16 contains destructive or data-rewriting statement %q", forbidden)
 		}
 	}
 }

@@ -176,6 +176,137 @@ func TestCreateUploadReturnsOnlySameOriginContentPath(t *testing.T) {
 	}
 }
 
+func TestCreateImageVariantUploadReturnsThreeSameOriginPartPaths(t *testing.T) {
+	warehouseID, ownerID, subjectID := uuid.New(), uuid.New(), uuid.New()
+	sessionID, mediaID := uuid.New(), uuid.New()
+	repository := &repositoryStub{createAsset: persistence.AssetRecord{
+		ID: mediaID, OwnerType: persistence.OwnerTypeInventoryFinding, OwnerID: ownerID.String(),
+		WarehouseID: warehouseID, Version: 1, UploadSessionID: sessionID,
+		UploadMode: persistence.UploadModeImageVariants, UploadExpiresAt: time.Now().Add(time.Minute),
+	}}
+	principal := auth.Principal{
+		SubjectID: subjectID, Scopes: map[string]struct{}{"rwms.write": {}},
+		Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.Edit}},
+	}
+	server := newTestServer(t, repository, validatorStub{principal: principal}, &storeStub{})
+	checksums := []string{strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64)}
+	body := fmt.Sprintf(`{"ownerType":"INVENTORY_FINDING","ownerId":"%s","warehouseId":"%s","context":"INSPECTION","fileName":"finding.jpg","imageVariants":[{"kind":"LARGE","contentLength":300,"checksumSha256":"%s","width":1200,"height":800},{"kind":"SMALL","contentLength":100,"checksumSha256":"%s","width":300,"height":200},{"kind":"MEDIUM","contentLength":200,"checksumSha256":"%s","width":600,"height":400}]}`,
+		ownerID, warehouseID, checksums[2], checksums[0], checksums[1])
+	request := httptest.NewRequest(http.MethodPost, "/api/media/v1/upload-sessions", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer test")
+	request.Header.Set("Idempotency-Key", uuid.NewString())
+	response := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), `"contentUploadUrl":null`) {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+	for _, variant := range []media.Variant{media.VariantSmall, media.VariantMedium, media.VariantLarge} {
+		want := "/api/media/v1/upload-sessions/" + sessionID.String() + "/variants/" + string(variant) + "/content"
+		if !strings.Contains(response.Body.String(), want) {
+			t.Fatalf("variant path %q missing from %s", want, response.Body.String())
+		}
+	}
+	command := repository.createCommand
+	if command.UploadMode != persistence.UploadModeImageVariants || command.ContentType != "image/webp" ||
+		command.ContentLength != 600 || len(command.ImageVariants) != 3 ||
+		command.SourceObjectKey != media.ImageVariantObjectKey(command.MediaID.String(), 1, media.VariantLarge) {
+		t.Fatalf("image bundle command = %#v", command)
+	}
+	manifest := "rwms-image-variants-v1\n" +
+		"SMALL:100:" + checksums[0] + ":300x200\n" +
+		"MEDIUM:200:" + checksums[1] + ":600x400\n" +
+		"LARGE:300:" + checksums[2] + ":1200x800\n"
+	digest := sha256.Sum256([]byte(manifest))
+	if command.ChecksumSHA256 != hex.EncodeToString(digest[:]) {
+		t.Fatalf("manifest checksum = %s", command.ChecksumSHA256)
+	}
+}
+
+func TestImageVariantContentStreamsWithoutReadbackOrServerTransformation(t *testing.T) {
+	warehouseID, ownerID, subjectID, sessionID, mediaID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	body := []byte("already-oriented-webp")
+	digest := sha256.Sum256(body)
+	checksum := hex.EncodeToString(digest[:])
+	asset := persistence.AssetRecord{
+		ID: mediaID, OwnerType: persistence.OwnerTypeInventoryFinding, OwnerID: ownerID.String(),
+		WarehouseID: warehouseID, Kind: media.KindImage, Status: media.StatusUploading,
+		UploadMode: persistence.UploadModeImageVariants, UploadSessionID: sessionID,
+		UploadExpiresAt: time.Now().Add(time.Minute),
+	}
+	part := persistence.UploadImageVariantPart{UploadImageVariantExpectation: persistence.UploadImageVariantExpectation{
+		Variant: media.VariantSmall, ContentLength: int64(len(body)), ChecksumSHA256: checksum,
+		Width: 320, Height: 180, ObjectKey: media.ImageVariantObjectKey(mediaID.String(), 1, media.VariantSmall),
+	}}
+	completed := part
+	completed.ObjectVersionID, completed.ETag = "small-version", "small-etag"
+	uploadedAt := time.Now()
+	completed.UploadedAt = &uploadedAt
+	repository := &repositoryStub{variantAsset: asset, variantPart: part, completeVariantPart: completed}
+	principal := auth.Principal{
+		SubjectID: subjectID, Scopes: map[string]struct{}{"rwms.write": {}},
+		Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.Edit}},
+	}
+	store := &storeStub{
+		putMetadata:  media.ObjectMetadata{VersionID: "small-version", ETag: "small-etag", SizeBytes: int64(len(body)), ContentType: "image/webp"},
+		statMetadata: media.ObjectMetadata{VersionID: "small-version", ETag: "small-etag", SizeBytes: int64(len(body)), ContentType: "image/webp"},
+	}
+	server := newTestServer(t, repository, validatorStub{principal: principal}, store)
+	request := httptest.NewRequest(http.MethodPut,
+		"/api/media/v1/upload-sessions/"+sessionID.String()+"/variants/SMALL/content", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer test")
+	request.Header.Set("Idempotency-Key", uuid.NewString())
+	request.Header.Set("Content-Type", "image/webp")
+	response := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated || store.putCalls != 1 || store.statCalls != 1 || store.getCalls != 0 ||
+		!bytes.Equal(store.putBody, body) || store.putKey != part.ObjectKey || store.putType != "image/webp" ||
+		repository.completeVariantCommand.ChecksumSHA256 != checksum {
+		t.Fatalf("response=%d %s store=%#v command=%#v", response.Code, response.Body.String(), store, repository.completeVariantCommand)
+	}
+}
+
+func TestFinalizeImageVariantBundleUsesPersistedPartMetadataWithoutStorageRead(t *testing.T) {
+	warehouseID, ownerID, subjectID, sessionID, mediaID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	asset := persistence.AssetRecord{
+		ID: mediaID, OwnerType: persistence.OwnerTypeInventoryFinding, OwnerID: ownerID.String(),
+		WarehouseID: warehouseID, Kind: media.KindImage, Status: media.StatusUploading,
+		UploadMode: persistence.UploadModeImageVariants, UploadSessionID: sessionID,
+		UploadExpiresAt: time.Now().Add(time.Minute),
+	}
+	repository := &repositoryStub{sessionAsset: asset, finalizeAsset: persistence.AssetRecord{
+		ID: mediaID, WarehouseID: warehouseID, Status: media.StatusProcessing,
+	}}
+	principal := auth.Principal{
+		SubjectID: subjectID, Scopes: map[string]struct{}{"rwms.write": {}},
+		Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.Edit}},
+	}
+	store := &storeStub{}
+	server := newTestServer(t, repository, validatorStub{principal: principal}, store)
+	body := fmt.Sprintf(`{"variants":[{"kind":"LARGE","objectVersionId":"large-v1","etag":"large-etag","checksumSha256":"%s"},{"kind":"SMALL","objectVersionId":"small-v1","etag":"small-etag","checksumSha256":"%s"},{"kind":"MEDIUM","objectVersionId":"medium-v1","etag":"medium-etag","checksumSha256":"%s"}]}`,
+		strings.Repeat("c", 64), strings.Repeat("a", 64), strings.Repeat("b", 64))
+	request := httptest.NewRequest(http.MethodPost,
+		"/api/media/v1/upload-sessions/"+sessionID.String()+"/complete", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer test")
+	request.Header.Set("Idempotency-Key", uuid.NewString())
+	response := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted || store.statCalls != 0 || store.getCalls != 0 ||
+		repository.finalizeCalls != 1 || len(repository.finalizeCommands[0].ImageVariants) != 3 {
+		t.Fatalf("response=%d %s store=%#v commands=%#v", response.Code, response.Body.String(), store, repository.finalizeCommands)
+	}
+	for index, kind := range []media.Variant{media.VariantSmall, media.VariantMedium, media.VariantLarge} {
+		if repository.finalizeCommands[0].ImageVariants[index].Variant != kind {
+			t.Fatalf("finalize variants = %#v", repository.finalizeCommands[0].ImageVariants)
+		}
+	}
+}
+
 func TestTaskScopedWorkerCreatesTaskBoardEvidenceWithServerDerivedWorkerActor(t *testing.T) {
 	for _, taskScope := range []string{"worker.tasks", "driver.tasks"} {
 		t.Run(taskScope, func(t *testing.T) {
@@ -1944,7 +2075,7 @@ func logisticsReferenceBody(
 func newTestServer(t *testing.T, repository repository, validator tokenValidator, store objectStore) *Server {
 	t.Helper()
 	server, err := NewServer(repository, readyStub{}, validator, store, Configuration{
-		MaxUploadBytes: 1 << 20, AllowedMIMETypes: map[string]struct{}{"image/jpeg": {}},
+		MaxUploadBytes: 1 << 20, AllowedMIMETypes: map[string]struct{}{"image/jpeg": {}, "image/webp": {}},
 		UploadExpiry: time.Minute,
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -2010,6 +2141,13 @@ type repositoryStub struct {
 	mutex                        sync.Mutex
 	contentMutex                 sync.Mutex
 	contentLockErr               error
+	variantAsset                 persistence.AssetRecord
+	variantPart                  persistence.UploadImageVariantPart
+	variantErr                   error
+	completeVariantPart          persistence.UploadImageVariantPart
+	completeVariantReplay        bool
+	completeVariantErr           error
+	completeVariantCommand       persistence.CompleteUploadImageVariantCommand
 	createAsset                  persistence.AssetRecord
 	createReplay                 bool
 	createErr                    error
@@ -2129,8 +2267,47 @@ func (stub *repositoryStub) AcquireUploadSessionContentLock(context.Context, uui
 	}, nil
 }
 
+func (stub *repositoryStub) AcquireUploadImageVariantContentLock(
+	context.Context,
+	uuid.UUID,
+	media.Variant,
+) (func() error, error) {
+	if stub.contentLockErr != nil {
+		return nil, stub.contentLockErr
+	}
+	stub.contentMutex.Lock()
+	return func() error {
+		stub.contentMutex.Unlock()
+		return nil
+	}, nil
+}
+
 func (stub *repositoryStub) UploadSessionForPrincipal(context.Context, uuid.UUID, uuid.UUID, string) (persistence.AssetRecord, error) {
 	return stub.sessionAsset, stub.sessionErr
+}
+
+func (stub *repositoryStub) UploadImageVariantForPrincipal(
+	context.Context,
+	uuid.UUID,
+	uuid.UUID,
+	string,
+	media.Variant,
+) (persistence.AssetRecord, persistence.UploadImageVariantPart, error) {
+	return stub.variantAsset, stub.variantPart, stub.variantErr
+}
+
+func (stub *repositoryStub) CompleteUploadImageVariant(
+	_ context.Context,
+	command persistence.CompleteUploadImageVariantCommand,
+) (persistence.UploadImageVariantPart, bool, error) {
+	stub.completeVariantCommand = command
+	if stub.completeVariantErr != nil {
+		return persistence.UploadImageVariantPart{}, false, stub.completeVariantErr
+	}
+	if stub.completeVariantPart.Variant == "" {
+		return stub.variantPart, stub.completeVariantReplay, nil
+	}
+	return stub.completeVariantPart, stub.completeVariantReplay, nil
 }
 
 func (stub *repositoryStub) FinalizeUpload(_ context.Context, command persistence.FinalizeCommand) (persistence.AssetRecord, bool, error) {

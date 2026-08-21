@@ -9,11 +9,19 @@ import (
 
 func TestValidateProcessedVariantsRequiresExactGenerationSet(t *testing.T) {
 	mediaID := uuid.New()
+	sourceKey := media.IngressObjectKey(mediaID.String(), ".jpg")
 	job := WorkerJob{
 		MediaID: mediaID, MediaKind: media.KindImage, Generation: 2, ContentType: "image/jpeg",
-		ProcessingKind: media.ProcessingInitial, Rotation: media.Rotation0,
+		ProcessingKind: media.ProcessingInitial, Rotation: media.Rotation0, UploadMode: UploadModeSource,
+		SourceObjectKey: sourceKey, SourceVersionID: "source-version", SourceChecksum: hex64('a'), SourceSizeBytes: 128,
 	}
-	valid := processedImageVariants(mediaID, 2)
+	valid := make([]media.ProcessedVariant, 0, 4)
+	for _, variant := range []media.Variant{media.VariantOriginal, media.VariantSmall, media.VariantMedium, media.VariantLarge} {
+		valid = append(valid, media.ProcessedVariant{
+			Variant: variant, ObjectKey: sourceKey, ObjectVersionID: job.SourceVersionID,
+			ContentType: job.ContentType, SizeBytes: job.SourceSizeBytes, ChecksumSHA256: job.SourceChecksum,
+		})
+	}
 	if err := validateProcessedVariants(job, valid); err != nil {
 		t.Fatalf("valid exact image set error = %v", err)
 	}
@@ -24,7 +32,7 @@ func TestValidateProcessedVariantsRequiresExactGenerationSet(t *testing.T) {
 	}{
 		{name: "missing", mutate: func(variants []media.ProcessedVariant) []media.ProcessedVariant { return variants[:3] }},
 		{name: "extra", mutate: func(variants []media.ProcessedVariant) []media.ProcessedVariant { return append(variants, variants[0]) }},
-		{name: "wrong generation key", mutate: func(variants []media.ProcessedVariant) []media.ProcessedVariant {
+		{name: "wrong source key", mutate: func(variants []media.ProcessedVariant) []media.ProcessedVariant {
 			variants[0].ObjectKey = media.OriginalObjectKey(mediaID.String(), 1, ".jpg")
 			return variants
 		}},
@@ -33,11 +41,11 @@ func TestValidateProcessedVariantsRequiresExactGenerationSet(t *testing.T) {
 			return variants
 		}},
 		{name: "wrong content type", mutate: func(variants []media.ProcessedVariant) []media.ProcessedVariant {
-			variants[2].ContentType = "image/jpeg"
+			variants[2].ContentType = "image/webp"
 			return variants
 		}},
-		{name: "missing dimensions", mutate: func(variants []media.ProcessedVariant) []media.ProcessedVariant {
-			variants[3].Width = 0
+		{name: "fabricated dimensions", mutate: func(variants []media.ProcessedVariant) []media.ProcessedVariant {
+			variants[3].Width = 1
 			return variants
 		}},
 	}

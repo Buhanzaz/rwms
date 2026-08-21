@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.manager.uploads
 import android.net.Uri
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.manager.media.MediaOwner
+import dev.buhanzaz.rwms.manager.media.imageVariantDirectoryFor
 import dev.buhanzaz.rwms.manager.network.CurrentUserDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.WarehouseAccessDto
@@ -102,6 +103,84 @@ class BackgroundUploadStoreTest {
         assertThat(store.operations.value).isEmpty()
         assertThat(directory.exists()).isFalse()
     }
+
+    @Test
+    fun `ready cleanup deletes scoped original and variants but retains queue recovery state`() =
+        runBlocking {
+            val store = BackgroundUploadStore.get(context)
+            store.initialize()
+            store.activateScope(scopeA)
+            val directory = store.operationDirectory(scopeA, "operation-1")
+            val original = directory.resolve("photo.jpg").apply {
+                writeBytes(byteArrayOf(1, 2, 3))
+            }
+            val variants = imageVariantDirectoryFor(original).apply { mkdirs() }
+            variants.resolve("SMALL.webp").writeBytes(byteArrayOf(4, 5, 6))
+            val readyPhoto = BackgroundUploadPhoto(
+                id = "photo-1",
+                sourceName = "photo.jpg",
+                durableUri = Uri.fromFile(original).toString(),
+                owner = owner(),
+                sortOrder = 0,
+                status = BackgroundPhotoStatus.READY,
+                reference = MediaReferenceDto("media-1", 1),
+            )
+            store.put(operation(photo = readyPhoto))
+
+            val deleted = store.deleteReadyPhotoFiles(
+                scopeA,
+                "operation-1",
+                readyPhoto.durableUri,
+            )
+
+            assertThat(deleted).isTrue()
+            assertThat(original.exists()).isFalse()
+            assertThat(variants.exists()).isFalse()
+            assertThat(store.operation(scopeA, "operation-1")?.photos?.single()?.reference)
+                .isEqualTo(MediaReferenceDto("media-1", 1))
+        }
+
+    @Test
+    fun `cleanup refuses queued originals gallery uris and files outside operation scope`() =
+        runBlocking {
+            val store = BackgroundUploadStore.get(context)
+            store.initialize()
+            store.activateScope(scopeA)
+            val directory = store.operationDirectory(scopeA, "operation-1")
+            val queuedFile = directory.resolve("queued.jpg").apply { writeBytes(byteArrayOf(1)) }
+            val queued = BackgroundUploadPhoto(
+                id = "queued",
+                sourceName = "queued.jpg",
+                durableUri = Uri.fromFile(queuedFile).toString(),
+                owner = owner(),
+                sortOrder = 0,
+            )
+            store.put(operation(photo = queued))
+
+            assertThat(
+                store.deleteReadyPhotoFiles(scopeA, "operation-1", queued.durableUri),
+            ).isFalse()
+            assertThat(queuedFile.exists()).isTrue()
+
+            val external = context.cacheDir.resolve("user-gallery.jpg").apply {
+                writeBytes(byteArrayOf(2))
+            }
+            val protectedUris = listOf(
+                Uri.fromFile(external).toString(),
+                "content://gallery/user-owned-photo",
+            )
+            protectedUris.forEachIndexed { index, uri ->
+                val photo = queued.copy(
+                    id = "protected-$index",
+                    durableUri = uri,
+                    reference = MediaReferenceDto("media-$index", 1),
+                )
+                val operationId = "protected-$index"
+                store.put(operation(photo = photo, id = operationId))
+                assertThat(store.deleteReadyPhotoFiles(scopeA, operationId, uri)).isFalse()
+            }
+            assertThat(external.exists()).isTrue()
+        }
 
     @Test
     fun `cancelled operation stays removed when a running worker reports progress`() = runBlocking {

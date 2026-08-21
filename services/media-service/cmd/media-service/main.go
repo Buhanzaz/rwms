@@ -149,12 +149,10 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	limits := media.ProcessingLimits{
-		MaxImageBytes: configuration.MaxUploadBytes, MaxImageOutputBytes: configuration.MaxImageOutputBytes,
-		MaxDecodedPixels: configuration.MaxDecodedPixels, MaxVideoBytes: configuration.MaxUploadBytes,
-		Timeout: configuration.ProcessingTimeout,
+		MaxVideoBytes: configuration.MaxUploadBytes,
+		Timeout:       configuration.ProcessingTimeout,
 	}
 	processingConsumer := worker.NewConsumer(repository, consumerClient, worker.Processor{
-		Image: media.ImageProcessor{Store: objectStore, Limits: limits},
 		Video: media.VideoProcessor{
 			Store: objectStore, Probe: videoProbe, Transcoder: videoTranscoder,
 			AllowedCodecs: configuration.AllowedVideoCodecs, MaxDuration: configuration.MaxVideoDuration,

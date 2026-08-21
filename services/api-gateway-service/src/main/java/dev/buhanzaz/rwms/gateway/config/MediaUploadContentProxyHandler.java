@@ -18,7 +18,8 @@ import org.springframework.web.servlet.function.ServerRequest;
 import org.springframework.web.servlet.function.ServerResponse;
 
 /**
- * Proxies a bounded media-content upload with a five-minute downstream read deadline.
+ * Proxies a bounded source or client-variant media-content upload with a five-minute downstream
+ * read deadline.
  *
  * <p>It is separate from the ordinary media route so a large but supported upload cannot inherit
  * an unsuitable default proxy timeout. Media ownership and content processing remain in

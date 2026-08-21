@@ -138,6 +138,20 @@ video generation. См.
 и
 [`ManagerMediaCoordinator.kt`](src/main/java/dev/buhanzaz/rwms/manager/ui/coordinator/ManagerMediaCoordinator.kt).
 
+В UI статичное изображение остаётся одним app-owned оригиналом. Durable worker
+разрешает его EXIF-ориентацию до кодирования ровно трёх WebP-частей: `SMALL`,
+`MEDIUM` и `LARGE`; детерминированное снижение качества и разрешения удерживает
+их общий размер не больше 1 MiB, а одновременно декодируется не больше одного
+оригинала высокого разрешения. Оригинал не загружается. Create request
+объявляет только эти варианты, каждая часть использует собственный стабильный
+idempotency key и same-origin PUT
+`/api/media/v1/upload-sessions/{id}/variants/{kind}/content`, а finalize
+отправляет квитанции всех трёх объектов. MP4/WebM и явные compatibility
+source-upload сохраняют прежнюю форму `/content`. См.
+[`ImageUploadBundleEncoder.kt`](src/main/java/dev/buhanzaz/rwms/manager/media/ImageUploadBundleEncoder.kt),
+[`MediaUploadPayloads.kt`](src/main/java/dev/buhanzaz/rwms/manager/media/MediaUploadPayloads.kt)
+и [`MediaUploader.kt`](src/main/java/dev/buhanzaz/rwms/manager/media/MediaUploader.kt).
+
 Локальное хранение намеренно ограничено:
 
 - зашифрованным OAuth-state и предпочтением выбранного склада;
@@ -149,8 +163,11 @@ video generation. См.
   либо долговечного enqueue, поэтому после смерти процесса возобновляется тот
   же осмотр без назначения черновика другому account или warehouse;
 - account-and-workspace-warehouse-scoped документом background-upload,
-  app-private оригиналами media и identity WorkManager, чтобы уже созданная
-  загрузка могла возобновиться только для своего неизменяемого владельца;
+  app-private оригиналами media, restart-safe сгенерированными WebP-частями и
+  identity WorkManager, чтобы уже созданная загрузка могла возобновиться только
+  для своего неизменяемого владельца; после долговечной записи READY-reference
+  outbox удаляет свой scoped оригинал и сгенерированные части, но никогда не
+  удаляет user-owned URI галереи;
 - AES-GCM-зашифрованным snapshot maintenance catalog, разделённым по
   проверенным account и warehouse и защищённым неэкспортируемым ключом Android
   Keystore.
@@ -217,11 +234,13 @@ refresh этого не делает. `409 Conflict` требует от экр�
 бытовки или уже сохранённый/повторный осмотр остаются fail-closed и не могут
 быть перезаписаны повтором из очереди.
 
-Manager запускает одновременно не больше четырёх byte-heavy media upload и
-сохраняет их исходный порядок. После принятого create/upload/finalize ожидание
-серверного READY больше не занимает upload permit, поэтому следующие файлы
-используют uplink, пока media-service обрабатывает предыдущие изображения или
-видео.
+Manager запускает одновременно не больше четырёх логических byte-heavy media
+upload и сохраняет их исходный порядок. Image bundle дополнительно разделяют
+общий предел шести параллельных PUT частей: три части одной фотографии могут
+передаваться одновременно без неограниченного fan-out между фотографиями.
+После принятого create/upload/finalize ожидание READY больше не занимает
+логический upload permit, поэтому следующие файлы используют uplink, пока
+проекция предыдущего media становится видимой.
 
 Workspace получает авторитетный `/me`, допустимую роль, актуальные warehouse
 grants и выбранный warehouse до показа или возобновления долговечной работы.

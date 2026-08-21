@@ -143,9 +143,7 @@ func TestVideoProcessorRejectsPlaybackBeyondConfiguredOutputLimitBeforeObjectWri
 
 func testProcessingLimits() ProcessingLimits {
 	return ProcessingLimits{
-		MaxImageBytes: 1 << 20, MaxImageOutputBytes: 1 << 20,
-		MaxDecodedPixels: 1_000_000, MaxVideoBytes: 1 << 20,
-		Timeout: time.Second,
+		MaxVideoBytes: 1 << 20, Timeout: time.Second,
 	}
 }
 
