@@ -101,10 +101,14 @@ paths:
       description: >-
         Requires only a SERVICE JWT with sub=client_id=inventory-service,
         audience rwms-services and exactly media.inventory. In one serializable
-        media-owned transaction the command validates current active CABIN and
-        INVENTORY_FINDING owner proofs in the same warehouse, validates every
-        unique reference as a READY IMAGE at its exact current generation and
-        requires coverMediaId among those references. It associates the
+        media-owned transaction the command validates a current active CABIN
+        proof and a retained checkpointed INVENTORY_FINDING identity in the
+        same warehouse, validates every unique reference as a READY IMAGE at
+        its exact current generation and requires coverMediaId among those
+        references. The finding proof may already be inactive after completion;
+        that does not reopen public finding reads or uploads. A later unresolved
+        VERSION_GAP is tolerated only when it starts strictly after the retained
+        proof checkpoint. It associates the
         existing assets to one deterministic gallery folder without changing
         media ownership or deleting any PostgreSQL row or MinIO object, makes
         that folder and cover current, and retains every prior folder in the
@@ -597,10 +601,11 @@ paths:
         previews include only associations from the active gallery folder;
         historical folders remain available from the CABIN archive list.
         photoCount counts logical non-deleted IMAGE associations, never derived
-        variant rows. previews contains at most 100 ordered READY images with
-        exactly one SMALL variant per logical image. cover is resolved only
-        through the active folder's canonical pointer and never by a sort-order
-        fallback.
+        variant rows. previews contains at most 100 READY images with exactly
+        one SMALL variant per logical image; the canonical cover is first and
+        the remaining images retain stable association order. cover is resolved
+        only through the active folder's canonical pointer and never by a
+        sort-order fallback.
       requestBody:
         required: true
         content:
@@ -1143,7 +1148,7 @@ components:
             - { type: string, format: uuid }
             - { type: 'null' }
         photos:
-          description: READY current-generation CABIN IMAGE assets with at least one available private presentation variant, in stable presentation order.
+          description: READY current-generation CABIN IMAGE assets with at least one available private presentation variant; the canonical cover is first and the remaining images retain stable association order.
           type: array
           maxItems: 100
           items: { $ref: '#/components/schemas/CabinPresentationPhoto' }
@@ -1154,7 +1159,11 @@ components:
       properties:
         mediaId: { type: string, format: uuid }
         generation: { type: integer, minimum: 1 }
-        sortOrder: { type: integer, format: int64 }
+        sortOrder:
+          description: Zero-based cover-first presentation position; when coverMediaId is non-null its photo has position zero.
+          type: integer
+          format: int64
+          minimum: 0
         availableVariants:
           type: array
           minItems: 1
@@ -1355,7 +1364,7 @@ components:
             - { $ref: '#/components/schemas/CabinCoverVariant' }
             - { type: 'null' }
         previews:
-          description: Ordered READY, non-deleted active-folder images with one exact SMALL variant each.
+          description: READY, non-deleted active-folder images with one exact SMALL variant each; the canonical cover is first and the remaining images retain stable association order.
           type: array
           maxItems: 100
           uniqueItems: true

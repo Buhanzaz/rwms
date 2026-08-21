@@ -31,9 +31,11 @@ func TestTaskBoardWorkerProofGatesEvidenceAndSourceReadsIntegration(t *testing.T
 	repository := NewRepository(database.Pool)
 
 	warehouseID, entryID, workerID, subjectID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	readerOnlyWorkerID := uuid.New()
 	sourceID := readyInventorySourceForTaskBoard(t, ctx, database, repository, warehouseID)
 	proof0 := taskBoardOwnerProofMessage(t, entryID, warehouseID, 0, true, []uuid.UUID{workerID},
-		[]TaskBoardSourceMediaReference{{MediaID: sourceID, Generation: 1}})
+		[]TaskBoardSourceMediaReference{{MediaID: sourceID, Generation: 1}},
+		[]uuid.UUID{workerID, readerOnlyWorkerID})
 	if result, applyErr := repository.ApplyTaskBoardEntryOwnerProofMessage(ctx, proof0); applyErr != nil || result.Duplicate || result.Quarantined {
 		t.Fatalf("apply task-board proof v0 = %#v, %v", result, applyErr)
 	}
@@ -42,6 +44,9 @@ func TestTaskBoardWorkerProofGatesEvidenceAndSourceReadsIntegration(t *testing.T
 	}
 	if err := repository.AuthorizeTaskBoardEntryWorker(ctx, entryID, warehouseID, workerID); err != nil {
 		t.Fatalf("authorize active worker: %v", err)
+	}
+	if err := repository.AuthorizeTaskBoardEntryWorker(ctx, entryID, warehouseID, readerOnlyWorkerID); !errors.Is(err, ErrOwnerProofMissing) {
+		t.Fatalf("authorize reader-only worker error = %v, want ErrOwnerProofMissing", err)
 	}
 	foreignWorkerID := uuid.New()
 	if err := repository.AuthorizeTaskBoardEntryWorker(ctx, entryID, warehouseID, foreignWorkerID); !errors.Is(err, ErrOwnerProofMissing) {
@@ -71,6 +76,10 @@ func TestTaskBoardWorkerProofGatesEvidenceAndSourceReadsIntegration(t *testing.T
 	foreignCreate := taskBoardWorkerEvidenceCommand(entryID, warehouseID, subjectID, foreignWorkerID, uuid.New())
 	if _, _, err := repository.CreateUpload(ctx, foreignCreate); !errors.Is(err, ErrOwnerProofMissing) {
 		t.Fatalf("foreign worker create error = %v, want ErrOwnerProofMissing", err)
+	}
+	readerCreate := taskBoardWorkerEvidenceCommand(entryID, warehouseID, subjectID, readerOnlyWorkerID, uuid.New())
+	if _, _, err := repository.CreateUpload(ctx, readerCreate); !errors.Is(err, ErrOwnerProofMissing) {
+		t.Fatalf("reader-only worker create error = %v, want ErrOwnerProofMissing", err)
 	}
 	wrongWarehouseCreate := taskBoardWorkerEvidenceCommand(entryID, uuid.New(), subjectID, workerID, uuid.New())
 	if _, _, err := repository.CreateUpload(ctx, wrongWarehouseCreate); !errors.Is(err, ErrOwnerProofMissing) {
@@ -122,8 +131,22 @@ func TestTaskBoardWorkerProofGatesEvidenceAndSourceReadsIntegration(t *testing.T
 		}); err != nil || !sourceRead {
 		t.Fatalf("worker exact source original read=%v error=%v", sourceRead, err)
 	}
+	if err := repository.ReadTaskBoardEntryOriginalForWorker(ctx, entryID, warehouseID, readerOnlyWorkerID, sourceID, &sourceGeneration,
+		func(AssetRecord, *VariantRecord) error { return nil }); err != nil {
+		t.Fatalf("reader-only worker source read error = %v", err)
+	}
+	if err := repository.ReadTaskBoardEntryAssetsForWorker(ctx, entryID, warehouseID, readerOnlyWorkerID, 10, nil,
+		func(records []AssetWithVariants) error {
+			if len(records) != 1 || records[0].Asset.ID != asset.ID {
+				t.Fatalf("reader-only worker result list = %#v", records)
+			}
+			return nil
+		}); err != nil {
+		t.Fatalf("reader-only worker list error = %v", err)
+	}
 
-	proof1 := taskBoardOwnerProofMessage(t, entryID, warehouseID, 1, true, []uuid.UUID{workerID}, nil)
+	proof1 := taskBoardOwnerProofMessage(t, entryID, warehouseID, 1, true, []uuid.UUID{workerID}, nil,
+		[]uuid.UUID{workerID, readerOnlyWorkerID})
 	if result, applyErr := repository.ApplyTaskBoardEntryOwnerProofMessage(ctx, proof1); applyErr != nil || result.Duplicate || result.Quarantined {
 		t.Fatalf("apply source-change proof v1 = %#v, %v", result, applyErr)
 	}
@@ -187,7 +210,8 @@ func TestTaskBoardWorkerProofGatesEvidenceAndSourceReadsIntegration(t *testing.T
 		t.Fatalf("logical deleted evidence rows=%d error=%v", deletedEvidenceRows, err)
 	}
 
-	proof2 := taskBoardOwnerProofMessage(t, entryID, warehouseID, 2, false, nil, nil)
+	proof2 := taskBoardOwnerProofMessage(t, entryID, warehouseID, 2, false, []uuid.UUID{workerID},
+		[]TaskBoardSourceMediaReference{{MediaID: sourceID, Generation: sourceGeneration}})
 	if result, applyErr := repository.ApplyTaskBoardEntryOwnerProofMessage(ctx, proof2); applyErr != nil || result.Duplicate || result.Quarantined {
 		t.Fatalf("apply revoked proof v2 = %#v, %v", result, applyErr)
 	}
@@ -195,12 +219,29 @@ func TestTaskBoardWorkerProofGatesEvidenceAndSourceReadsIntegration(t *testing.T
 		t.Fatalf("authorize revoked worker error = %v, want ErrOwnerProofMissing", err)
 	}
 	if err := repository.ReadTaskBoardEntryAssetsForWorker(ctx, entryID, warehouseID, workerID, 10, nil,
-		func([]AssetWithVariants) error { return nil }); !errors.Is(err, ErrOwnerProofMissing) {
-		t.Fatalf("revoked worker list error = %v, want ErrOwnerProofMissing", err)
+		func(records []AssetWithVariants) error {
+			if len(records) != 2 {
+				t.Fatalf("historical worker asset count = %d, want 2", len(records))
+			}
+			return nil
+		}); err != nil {
+		t.Fatalf("historical worker list error = %v", err)
 	}
 	if err := repository.ReadTaskBoardEntryOriginalForWorker(ctx, entryID, warehouseID, workerID, asset.ID, nil,
+		func(AssetRecord, *VariantRecord) error { return nil }); err != nil {
+		t.Fatalf("historical worker result read error = %v", err)
+	}
+	if err := repository.ReadTaskBoardEntryOriginalForWorker(ctx, entryID, warehouseID, workerID, sourceID, &sourceGeneration,
+		func(AssetRecord, *VariantRecord) error { return nil }); err != nil {
+		t.Fatalf("historical worker source read error = %v", err)
+	}
+	if err := repository.ReadTaskBoardEntryOriginalForWorker(ctx, entryID, warehouseID, readerOnlyWorkerID, sourceID, &sourceGeneration,
 		func(AssetRecord, *VariantRecord) error { return nil }); !errors.Is(err, ErrOwnerProofMissing) {
-		t.Fatalf("revoked worker result read error = %v, want ErrOwnerProofMissing", err)
+		t.Fatalf("revoked reader-only worker error = %v, want ErrOwnerProofMissing", err)
+	}
+	if err := repository.ReadTaskBoardEntryOriginalForWorker(ctx, entryID, warehouseID, foreignWorkerID, asset.ID, nil,
+		func(AssetRecord, *VariantRecord) error { return nil }); !errors.Is(err, ErrOwnerProofMissing) {
+		t.Fatalf("foreign historical worker read error = %v, want ErrOwnerProofMissing", err)
 	}
 	if _, _, err := repository.CreateUpload(ctx, taskBoardWorkerEvidenceCommand(entryID, warehouseID, subjectID, workerID, uuid.New())); !errors.Is(err, ErrOwnerProofMissing) {
 		t.Fatalf("revoked worker create error = %v, want ErrOwnerProofMissing", err)
@@ -507,12 +548,23 @@ func taskBoardWorkerEvidenceCommand(entryID, warehouseID, subjectID, workerID, e
 }
 
 func taskBoardOwnerProofMessage(t *testing.T, entryID, warehouseID uuid.UUID, version int64, active bool,
-	workers []uuid.UUID, references []TaskBoardSourceMediaReference,
+	workers []uuid.UUID, references []TaskBoardSourceMediaReference, readers ...[]uuid.UUID,
 ) TaskBoardEntryOwnerProofMessage {
 	t.Helper()
+	if len(readers) > 1 {
+		t.Fatal("task-board proof accepts at most one reader audience")
+	}
+	readerIDs := workers
+	if len(readers) == 1 {
+		readerIDs = readers[0]
+	}
 	workerValues := make([]string, len(workers))
 	for index, workerID := range workers {
 		workerValues[index] = workerID.String()
+	}
+	readerValues := make([]string, len(readerIDs))
+	for index, workerID := range readerIDs {
+		readerValues[index] = workerID.String()
 	}
 	referenceValues := make([]map[string]any, len(references))
 	for index, reference := range references {
@@ -522,7 +574,8 @@ func taskBoardOwnerProofMessage(t *testing.T, entryID, warehouseID uuid.UUID, ve
 	wireBody, err := json.Marshal(map[string]any{
 		"eventType": "task-board.entry-owner-proof.changed.v1", "entryId": entryID.String(),
 		"warehouseId": warehouseID.String(), "version": version, "active": active,
-		"allowedWorkerIds": workerValues, "sourceMediaReferences": referenceValues,
+		"allowedWorkerIds": workerValues, "readerWorkerIds": readerValues,
+		"sourceMediaReferences": referenceValues,
 	})
 	if err != nil {
 		t.Fatalf("marshal task-board proof wire body: %v", err)
@@ -534,6 +587,7 @@ func taskBoardOwnerProofMessage(t *testing.T, entryID, warehouseID uuid.UUID, ve
 		AggregateType: TaskBoardEntryOwnerProofAggregate, AggregateID: entryID, AggregateVersion: version,
 		RecordKey: entryID, RecordedAt: recordedAt, WarehouseID: warehouseID, RouteIndex: 0,
 		Active: active, AllowedWorkerIDs: append([]uuid.UUID(nil), workers...),
+		ReaderWorkerIDs: append([]uuid.UUID(nil), readerIDs...),
 		SourceMediaRefs: append([]TaskBoardSourceMediaReference(nil), references...),
 	}
 }

@@ -18,6 +18,8 @@ type CabinPresentationSnapshotRecord struct {
 
 // CabinPresentationPhotoRecord names one currently displayable cabin image and
 // only the derived variants that may be requested through the private stream.
+// SortOrder is the zero-based cover-first presentation position, not the
+// retained CABIN association order.
 type CabinPresentationPhotoRecord struct {
 	MediaID    uuid.UUID
 	Generation int
@@ -30,7 +32,8 @@ type CabinPresentationPhotoRecord struct {
 // an exact set of cabin IDs. Only active, current CABIN owner bindings and
 // READY image assets at their current generation participate. The owner
 // bindings are share-locked through consume so a concurrent revocation cannot
-// race a presentation snapshot.
+// race a presentation snapshot. Each photo list puts the canonical cover
+// first and then preserves the remaining association order.
 func (repository *Repository) ReadCabinPresentationSnapshots(
 	ctx context.Context,
 	warehouseID uuid.UUID,
@@ -116,27 +119,37 @@ func (repository *Repository) ReadCabinPresentationSnapshots(
 	}
 
 	rows, err = tx.Query(ctx, `/* media_logistics_cabin_presentation_photos */
-		select photo.cabin_id::text,asset.media_id,asset.current_generation,photo.sort_order,
-			(asset.media_id=library.cover_media_id) as is_cover,
-			bool_or(variant.variant='SMALL') as has_small,
-			bool_or(variant.variant='LARGE') as has_large
-		from media_cabin_photo photo
-		join media_cabin_photo_library library on library.cabin_id=photo.cabin_id
-		 and library.active_gallery_folder_id=photo.gallery_folder_id
-		join media_asset asset on asset.media_id=photo.media_id
-		join media_variant variant on variant.media_id=asset.media_id
-		 and variant.generation=asset.current_generation
-		 and variant.variant in ('SMALL','LARGE')
-		 and variant.object_version_id<>''
-		where photo.warehouse_id=$1 and photo.cabin_id::text=any($2::text[])
-		  and photo.media_generation=asset.current_generation
-		  and asset.media_kind='IMAGE' and asset.processing_status='READY'
-		  and asset.current_generation>0 and asset.deleted_at is null
-		  and media_asset_is_available(asset.media_id)
-		group by photo.cabin_id,asset.media_id,asset.current_generation,photo.sort_order,
-			photo.attached_at,library.cover_media_id
-		order by array_position($2::text[], photo.cabin_id::text),
-			photo.sort_order,photo.attached_at,asset.media_id`,
+		with ready_photos as materialized (
+			select photo.cabin_id::text as cabin_id,asset.media_id,
+				asset.current_generation,photo.sort_order as association_sort_order,
+				photo.attached_at,(asset.media_id=library.cover_media_id) as is_cover,
+				bool_or(variant.variant='SMALL') as has_small,
+				bool_or(variant.variant='LARGE') as has_large
+			from media_cabin_photo photo
+			join media_cabin_photo_library library on library.cabin_id=photo.cabin_id
+				 and library.active_gallery_folder_id=photo.gallery_folder_id
+			join media_asset asset on asset.media_id=photo.media_id
+			join media_variant variant on variant.media_id=asset.media_id
+				 and variant.generation=asset.current_generation
+				 and variant.variant in ('SMALL','LARGE')
+				 and variant.object_version_id<>''
+			where photo.warehouse_id=$1 and photo.cabin_id::text=any($2::text[])
+			  and photo.media_generation=asset.current_generation
+			  and asset.media_kind='IMAGE' and asset.processing_status='READY'
+			  and asset.current_generation>0 and asset.deleted_at is null
+			  and media_asset_is_available(asset.media_id)
+			group by photo.cabin_id,asset.media_id,asset.current_generation,photo.sort_order,
+				photo.attached_at,library.cover_media_id
+		)
+		select cabin_id,media_id,current_generation,
+			(row_number() over (
+				partition by cabin_id
+				order by is_cover desc,association_sort_order,attached_at,media_id
+			)-1)::bigint as presentation_sort_order,
+			is_cover,has_small,has_large
+		from ready_photos
+		order by array_position($2::text[], cabin_id),is_cover desc,
+			association_sort_order,attached_at,media_id`,
 		warehouseID, authorized)
 	if err != nil {
 		return err

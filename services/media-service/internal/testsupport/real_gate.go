@@ -222,7 +222,7 @@ func NewMigratedMediaDatabaseThroughV12(t testing.TB, baseURL string) string {
 	return newMigratedMediaDatabase(t, baseURL, false)
 }
 
-func newMigratedMediaDatabase(t testing.TB, baseURL string, includeV13 bool) string {
+func newMigratedMediaDatabase(t testing.TB, baseURL string, includeCurrentMigrations bool) string {
 	t.Helper()
 	databaseURL := NewIsolatedPostgresDatabase(t, baseURL)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -263,9 +263,11 @@ func newMigratedMediaDatabase(t testing.TB, baseURL string, includeV13 bool) str
 		{"bounded media processing recovery", "V11__bounded_media_processing_recovery.sql", mediamigration.V11},
 		{"video playback variant", "V12__video_playback_variant.sql", mediamigration.V12},
 		{"authoritative inventory cabin photos", "V13__authoritative_inventory_cabin_photos.sql", mediamigration.V13},
+		{"task board reader audience", "V14__task_board_reader_audience.sql", mediamigration.V14},
+		{"inventory finding membership markers", "V15__inventory_finding_membership_markers.sql", mediamigration.V15},
 	}
-	if !includeV13 {
-		migrations = migrations[:len(migrations)-1]
+	if !includeCurrentMigrations {
+		migrations = migrations[:len(migrations)-3]
 	}
 	for index, migration := range migrations {
 		started := time.Now()
@@ -275,7 +277,7 @@ func newMigratedMediaDatabase(t testing.TB, baseURL string, includeV13 bool) str
 		if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
 			installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
 		values ($1,$2,$3,'SQL',$4,$5,current_user,$6,true)`, index+1,
-			[]string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13"}[index],
+			[]string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"}[index],
 			migration.description, migration.script, realFlywayChecksum(migration.body),
 			int(time.Since(started)/time.Millisecond)); err != nil {
 			t.Fatalf("record isolated media %s: %v", migration.script, err)

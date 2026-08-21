@@ -147,6 +147,7 @@ type taskBoardOwnerProofPayload struct {
 	RouteIndex            int               `json:"routeIndex"`
 	Active                bool              `json:"active"`
 	AllowedWorkerIDs      []string          `json:"allowedWorkerIds"`
+	ReaderWorkerIDs       []string          `json:"readerWorkerIds"`
 	SourceMediaReferences []json.RawMessage `json:"sourceMediaReferences"`
 }
 
@@ -183,9 +184,15 @@ func parseTaskBoardEntryOwnerProofRecord(record *kgo.Record) (persistence.TaskBo
 		!nullableInventoryUUID(envelope.Correlation.CausationID) || !validTaskBoardOwnerProofActor(envelope.ActorRef) {
 		return persistence.TaskBoardEntryOwnerProofMessage{}, errors.New("invalid task-board owner proof envelope")
 	}
+	legacyReaderAudience := false
 	if err := exactJSONFields(envelope.Payload, "ownerType", "ownerId", "warehouseId", "routeIndex", "active",
-		"allowedWorkerIds", "sourceMediaReferences"); err != nil {
-		return persistence.TaskBoardEntryOwnerProofMessage{}, err
+		"allowedWorkerIds", "sourceMediaReferences"); err == nil {
+		legacyReaderAudience = true
+	} else {
+		if optionalErr := exactJSONFields(envelope.Payload, "ownerType", "ownerId", "warehouseId", "routeIndex", "active",
+			"allowedWorkerIds", "readerWorkerIds", "sourceMediaReferences"); optionalErr != nil {
+			return persistence.TaskBoardEntryOwnerProofMessage{}, optionalErr
+		}
 	}
 	var payload taskBoardOwnerProofPayload
 	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
@@ -195,6 +202,7 @@ func parseTaskBoardEntryOwnerProofRecord(record *kgo.Record) (persistence.TaskBo
 	warehouseID, warehouseErr := strictUUID(payload.WarehouseID)
 	if payload.OwnerType != persistence.OwnerTypeTaskBoardEntry || ownerErr != nil || warehouseErr != nil ||
 		ownerID != entryID || payload.RouteIndex < 0 || len(payload.AllowedWorkerIDs) > 1000 ||
+		len(payload.ReaderWorkerIDs) > 1000 || (!legacyReaderAudience && payload.ReaderWorkerIDs == nil) ||
 		len(payload.SourceMediaReferences) > 1000 {
 		return persistence.TaskBoardEntryOwnerProofMessage{}, errors.New("invalid task-board owner proof payload")
 	}
@@ -210,6 +218,22 @@ func parseTaskBoardEntryOwnerProofRecord(record *kgo.Record) (persistence.TaskBo
 		}
 		seenWorkers[workerID] = struct{}{}
 		workers = append(workers, workerID)
+	}
+	readerWorkers := make([]uuid.UUID, 0, len(payload.ReaderWorkerIDs))
+	seenReaders := make(map[uuid.UUID]struct{}, len(payload.ReaderWorkerIDs))
+	for _, rawWorkerID := range payload.ReaderWorkerIDs {
+		workerID, err := strictUUID(rawWorkerID)
+		if err != nil {
+			return persistence.TaskBoardEntryOwnerProofMessage{}, errors.New("invalid task-board reader worker")
+		}
+		if _, duplicate := seenReaders[workerID]; duplicate {
+			return persistence.TaskBoardEntryOwnerProofMessage{}, errors.New("duplicate task-board reader worker")
+		}
+		seenReaders[workerID] = struct{}{}
+		readerWorkers = append(readerWorkers, workerID)
+	}
+	if legacyReaderAudience {
+		readerWorkers = append([]uuid.UUID(nil), workers...)
 	}
 	references := make([]persistence.TaskBoardSourceMediaReference, 0, len(payload.SourceMediaReferences))
 	seenReferences := make(map[persistence.TaskBoardSourceMediaReference]struct{}, len(payload.SourceMediaReferences))
@@ -238,7 +262,8 @@ func parseTaskBoardEntryOwnerProofRecord(record *kgo.Record) (persistence.TaskBo
 		Topic: record.Topic, EventType: envelope.EventType, AggregateType: envelope.AggregateType,
 		AggregateID: entryID, AggregateVersion: envelope.AggregateVersion, RecordKey: recordKey,
 		RecordedAt: recordedAt.UTC(), WarehouseID: warehouseID, RouteIndex: payload.RouteIndex,
-		Active: payload.Active, AllowedWorkerIDs: workers, SourceMediaRefs: references,
+		Active: payload.Active, AllowedWorkerIDs: workers, ReaderWorkerIDs: readerWorkers,
+		SourceMediaRefs: references,
 	}, nil
 }
 

@@ -25,6 +25,7 @@ func TestParseTaskBoardEntryOwnerProofRecordAcceptsExactWorkerAndSourceScope(t *
 		t.Fatalf("parsed owner proof = %#v", message)
 	}
 	if len(message.AllowedWorkerIDs) != 1 || message.AllowedWorkerIDs[0] != fixture.workerID ||
+		len(message.ReaderWorkerIDs) != 1 || message.ReaderWorkerIDs[0] != fixture.readerWorkerID ||
 		len(message.SourceMediaRefs) != 1 || message.SourceMediaRefs[0].MediaID != fixture.sourceMediaID ||
 		message.SourceMediaRefs[0].Generation != 3 {
 		t.Fatalf("parsed worker/source scope = %#v", message)
@@ -32,6 +33,19 @@ func TestParseTaskBoardEntryOwnerProofRecordAcceptsExactWorkerAndSourceScope(t *
 	sum := sha256.Sum256(fixture.record.Value)
 	if message.BodySHA256 != hex.EncodeToString(sum[:]) {
 		t.Fatalf("BodySHA256 = %s", message.BodySHA256)
+	}
+}
+
+func TestParseTaskBoardEntryOwnerProofRecordFallsBackForLegacyReaderAudience(t *testing.T) {
+	fixture := newTaskBoardOwnerProofRecord(t, 0)
+	delete(fixture.payload(), "readerWorkerIds")
+	fixture.remarshal(t)
+	message, err := parseTaskBoardEntryOwnerProofRecord(fixture.record)
+	if err != nil {
+		t.Fatalf("parse legacy task-board owner proof: %v", err)
+	}
+	if len(message.ReaderWorkerIDs) != 1 || message.ReaderWorkerIDs[0] != fixture.workerID {
+		t.Fatalf("legacy reader audience = %#v", message.ReaderWorkerIDs)
 	}
 }
 
@@ -96,18 +110,20 @@ func (stub *taskBoardOwnerProofPersistenceStub) RecordTaskBoardEntryOwnerProofDL
 }
 
 type taskBoardOwnerProofRecordFixture struct {
-	record        *kgo.Record
-	envelope      map[string]any
-	entryID       uuid.UUID
-	warehouseID   uuid.UUID
-	workerID      uuid.UUID
-	sourceMediaID uuid.UUID
+	record         *kgo.Record
+	envelope       map[string]any
+	entryID        uuid.UUID
+	warehouseID    uuid.UUID
+	workerID       uuid.UUID
+	readerWorkerID uuid.UUID
+	sourceMediaID  uuid.UUID
 }
 
 func newTaskBoardOwnerProofRecord(t *testing.T, version int64) *taskBoardOwnerProofRecordFixture {
 	t.Helper()
 	fixture := &taskBoardOwnerProofRecordFixture{
-		entryID: uuid.New(), warehouseID: uuid.New(), workerID: uuid.New(), sourceMediaID: uuid.New(),
+		entryID: uuid.New(), warehouseID: uuid.New(), workerID: uuid.New(),
+		readerWorkerID: uuid.New(), sourceMediaID: uuid.New(),
 	}
 	fixture.envelope = map[string]any{
 		"envelopeVersion":  2,
@@ -129,6 +145,7 @@ func newTaskBoardOwnerProofRecord(t *testing.T, version int64) *taskBoardOwnerPr
 			"ownerId":   fixture.entryID.String(), "warehouseId": fixture.warehouseID.String(),
 			"routeIndex": 2, "active": true,
 			"allowedWorkerIds": []string{fixture.workerID.String()},
+			"readerWorkerIds":  []string{fixture.readerWorkerID.String()},
 			"sourceMediaReferences": []any{map[string]any{
 				"mediaId": fixture.sourceMediaID.String(), "generation": 3,
 			}},

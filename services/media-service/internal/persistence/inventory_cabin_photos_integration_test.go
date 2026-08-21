@@ -14,7 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestAuthoritativeInventoryCabinPhotosCleanV1ThroughV13Integration(t *testing.T) {
+func TestAuthoritativeInventoryCabinPhotosCleanV1ThroughV15Integration(t *testing.T) {
 	databaseURL := os.Getenv("MEDIA_TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("MEDIA_TEST_DATABASE_URL is not configured")
@@ -78,6 +78,20 @@ func TestAuthoritativeInventoryCabinPhotosCleanV1ThroughV13Integration(t *testin
 		},
 		IdempotencyKey: uuid.New(), RequestSHA256: hex64('d'), CorrelationID: uuid.New(),
 	}
+	gap := inventoryFindingMessage(findingID, warehouseID, 3,
+		"inventory.finding.membership-restored.v1", nil)
+	if projection, err := repository.ApplyInventoryFindingMessage(ctx, gap); err != nil ||
+		!projection.Quarantined {
+		t.Fatalf("apply later finding gap = %#v, %v", projection, err)
+	}
+	proofVersion := assertCompletedInventoryFindingGap(t, ctx, database, findingID)
+	assertInventoryFindingPublicAuthorityClosed(t, ctx, repository, warehouseID,
+		findingID, firstAsset.ID)
+	assertInventoryCabinPhotoQuarantineBoundary(t, ctx, database, repository,
+		command, proofVersion)
+	assertInventoryCabinPhotoValidationRollback(t, ctx, database, repository, command,
+		directAsset.ID)
+
 	result, replayed, changed, err := repository.ApplyInventoryCabinPhotos(ctx, command)
 	if err != nil || replayed || !changed || result.InventoryID != inventoryID ||
 		result.FindingID != findingID || result.CabinID != cabinID ||
@@ -92,6 +106,8 @@ func TestAuthoritativeInventoryCabinPhotosCleanV1ThroughV13Integration(t *testin
 		directAsset, firstAsset, secondAsset, result.FolderID, completedAt)
 	assertInventoryMediaRetained(t, ctx, database, findingID, firstAsset.ID,
 		secondAsset.ID)
+	assertInventoryFindingPublicAuthorityClosed(t, ctx, repository, warehouseID,
+		findingID, firstAsset.ID)
 
 	replayResult, replayed, changed, err := repository.ApplyInventoryCabinPhotos(ctx, command)
 	if err != nil || !replayed || changed || replayResult.InventoryID != result.InventoryID ||
@@ -114,12 +130,16 @@ func TestAuthoritativeInventoryCabinPhotosCleanV1ThroughV13Integration(t *testin
 	if _, _, _, err := repository.ApplyInventoryCabinPhotos(ctx, older); !errors.Is(err, ErrConflict) {
 		t.Fatalf("older completed inventory error = %v, want ErrConflict", err)
 	}
-	equalDifferent := command
-	equalDifferent.IdempotencyKey, equalDifferent.CorrelationID = uuid.New(), uuid.New()
-	equalDifferent.FinalPlanVersion++
-	equalDifferent.RequestSHA256 = hex64('1')
-	if _, _, _, err := repository.ApplyInventoryCabinPhotos(ctx, equalDifferent); !errors.Is(err, ErrConflict) {
-		t.Fatalf("equal-time different source error = %v, want ErrConflict", err)
+	corrected := command
+	corrected.IdempotencyKey, corrected.CorrelationID = uuid.New(), uuid.New()
+	corrected.FinalPlanVersion = 12
+	corrected.FinalPlanSHA256 = hex64('1')
+	corrected.RequestSHA256 = hex64('2')
+	correctedResult, replayed, changed, err := repository.ApplyInventoryCabinPhotos(ctx, corrected)
+	if err != nil || replayed || changed || correctedResult.FolderID != result.FolderID ||
+		correctedResult.LibraryVersion != result.LibraryVersion {
+		t.Fatalf("equal-time corrected source = %#v replay=%v changed=%v error=%v",
+			correctedResult, replayed, changed, err)
 	}
 
 	if _, err := database.Pool.Exec(ctx, `update media_cabin_photo_library
@@ -127,7 +147,7 @@ func TestAuthoritativeInventoryCabinPhotosCleanV1ThroughV13Integration(t *testin
 		where cabin_id=$3`, directAsset.ID, directAsset.FolderID, cabinID); err != nil {
 		t.Fatalf("simulate later task/direct cover: %v", err)
 	}
-	reassert := command
+	reassert := corrected
 	reassert.IdempotencyKey, reassert.CorrelationID = uuid.New(), uuid.New()
 	reassertResult, replayed, changed, err := repository.ApplyInventoryCabinPhotos(ctx, reassert)
 	if err != nil || replayed || !changed || reassertResult.FolderID != result.FolderID ||
@@ -136,8 +156,6 @@ func TestAuthoritativeInventoryCabinPhotosCleanV1ThroughV13Integration(t *testin
 			reassertResult, replayed, changed, err)
 	}
 
-	assertInventoryCabinPhotoValidationRollback(t, ctx, database, repository, command,
-		directAsset.ID)
 	assertInventoryMediaRetained(t, ctx, database, findingID, firstAsset.ID,
 		secondAsset.ID)
 }
@@ -212,6 +230,32 @@ func TestAuthoritativeInventoryCabinPhotosV12ToV13BackfillIntegration(t *testing
 		pool.Close()
 		t.Fatalf("read V13 backfill: %v", err)
 	}
+	started = time.Now()
+	if _, err := pool.Exec(ctx, string(mediamigration.V14)); err != nil {
+		pool.Close()
+		t.Fatalf("apply V14 upgrade: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
+		installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
+	values (16,'14','task board reader audience','SQL',
+		'V14__task_board_reader_audience.sql',$1,current_user,$2,true)`,
+		flywayChecksum(mediamigration.V14), int(time.Since(started)/time.Millisecond)); err != nil {
+		pool.Close()
+		t.Fatalf("record V14 history: %v", err)
+	}
+	started = time.Now()
+	if _, err := pool.Exec(ctx, string(mediamigration.V15)); err != nil {
+		pool.Close()
+		t.Fatalf("apply V15 upgrade: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
+		installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
+	values (17,'15','inventory finding membership markers','SQL',
+		'V15__inventory_finding_membership_markers.sql',$1,current_user,$2,true)`,
+		flywayChecksum(mediamigration.V15), int(time.Since(started)/time.Millisecond)); err != nil {
+		pool.Close()
+		t.Fatalf("record V15 history: %v", err)
+	}
 	pool.Close()
 	if galleryFolderID != folderID || activeFolderID != folderID {
 		t.Fatalf("V13 folder backfill = gallery:%s active:%s, want %s",
@@ -219,7 +263,7 @@ func TestAuthoritativeInventoryCabinPhotosV12ToV13BackfillIntegration(t *testing
 	}
 	verified, err := Open(ctx, databaseURL)
 	if err != nil {
-		t.Fatalf("Open(V13 upgrade) error = %v", err)
+		t.Fatalf("Open(V15-complete upgrade) error = %v", err)
 	}
 	verified.Close()
 }
@@ -273,8 +317,8 @@ func assertCurrentInventoryFolderAndArchive(
 			return nil
 		}); err != nil || len(covers) != 1 || covers[0].PhotoCount != 2 ||
 		covers[0].MediaID != secondAsset.ID || len(covers[0].Previews) != 2 ||
-		covers[0].Previews[0].MediaID != firstAsset.ID ||
-		covers[0].Previews[1].MediaID != secondAsset.ID {
+		covers[0].Previews[0].MediaID != secondAsset.ID ||
+		covers[0].Previews[1].MediaID != firstAsset.ID {
 		t.Fatalf("current inventory cover projection = %#v error=%v", covers, err)
 	}
 	var presentation []CabinPresentationSnapshotRecord
@@ -285,7 +329,11 @@ func assertCurrentInventoryFolderAndArchive(
 		}); err != nil || len(presentation) != 1 ||
 		presentation[0].CoverMediaID == nil ||
 		*presentation[0].CoverMediaID != secondAsset.ID ||
-		len(presentation[0].Photos) != 2 {
+		len(presentation[0].Photos) != 2 ||
+		presentation[0].Photos[0].MediaID != secondAsset.ID ||
+		presentation[0].Photos[0].SortOrder != 0 ||
+		presentation[0].Photos[1].MediaID != firstAsset.ID ||
+		presentation[0].Photos[1].SortOrder != 1 {
 		t.Fatalf("current inventory presentation = %#v error=%v", presentation, err)
 	}
 	var archive []AssetWithVariants
@@ -364,6 +412,24 @@ func assertInventoryCabinPhotoValidationRollback(
 			}
 		})
 	}
+	if _, err := database.Pool.Exec(ctx, `update media_asset
+		set processing_status='FAILED' where media_id=$1`, base.MediaReferences[0].MediaID); err != nil {
+		t.Fatalf("mark inventory photo non-READY: %v", err)
+	}
+	nonReady := base
+	nonReady.MediaReferences = append([]InventoryCabinPhotoReference(nil),
+		base.MediaReferences...)
+	nonReady.CompletedAt = base.CompletedAt.Add(5 * time.Minute)
+	nonReady.IdempotencyKey, nonReady.CorrelationID = uuid.New(), uuid.New()
+	nonReady.RequestSHA256 = hex64('6')
+	_, _, _, nonReadyErr := repository.ApplyInventoryCabinPhotos(ctx, nonReady)
+	if _, err := database.Pool.Exec(ctx, `update media_asset
+		set processing_status='READY' where media_id=$1`, base.MediaReferences[0].MediaID); err != nil {
+		t.Fatalf("restore inventory photo READY state: %v", err)
+	}
+	if !errors.Is(nonReadyErr, ErrConflict) {
+		t.Fatalf("non-READY photo validation error = %v, want ErrConflict", nonReadyErr)
+	}
 	var afterVersion int64
 	var afterReceiptCount, afterAssociationCount int
 	if err := database.Pool.QueryRow(ctx, `select
@@ -378,6 +444,137 @@ func assertInventoryCabinPhotoValidationRollback(
 		t.Fatalf("validation rollback changed state: version %d->%d receipts %d->%d associations %d->%d",
 			beforeVersion, afterVersion, beforeReceiptCount, afterReceiptCount,
 			beforeAssociationCount, afterAssociationCount)
+	}
+}
+
+func assertCompletedInventoryFindingGap(
+	t *testing.T,
+	ctx context.Context,
+	database *Database,
+	findingID uuid.UUID,
+) int64 {
+	t.Helper()
+	var reason string
+	var expectedVersion, observedVersion, proofVersion int64
+	if err := database.Pool.QueryRow(ctx, `select quarantine.reason_code,
+		quarantine.expected_version,quarantine.observed_version,binding.proof_aggregate_version
+		from media_owner_binding binding
+		join media_quarantined_aggregate quarantine
+		  on quarantine.consumer_name=binding.proof_consumer_name
+		 and quarantine.aggregate_type=binding.proof_aggregate_type
+		 and quarantine.aggregate_id=binding.proof_aggregate_id
+		where binding.owner_type='INVENTORY_FINDING' and binding.owner_id=$1
+		  and binding.active and quarantine.reconciled_at is null`, findingID.String()).Scan(
+		&reason, &expectedVersion, &observedVersion, &proofVersion); err != nil {
+		t.Fatalf("read completed finding gap: %v", err)
+	}
+	if reason != "VERSION_GAP" || expectedVersion <= proofVersion ||
+		observedVersion <= expectedVersion {
+		t.Fatalf("completed finding gap = reason:%s expected:%d observed:%d proof:%d",
+			reason, expectedVersion, observedVersion, proofVersion)
+	}
+	return proofVersion
+}
+
+func assertInventoryCabinPhotoQuarantineBoundary(
+	t *testing.T,
+	ctx context.Context,
+	database *Database,
+	repository *Repository,
+	base ApplyInventoryCabinPhotosCommand,
+	proofVersion int64,
+) {
+	t.Helper()
+	assertRejected := func(name, reason string, expectedVersion, observedVersion int64) {
+		t.Run(name, func(t *testing.T) {
+			if _, err := database.Pool.Exec(ctx, `update media_quarantined_aggregate
+				set reason_code=$2,expected_version=$3,observed_version=$4
+				where consumer_name=$1 and aggregate_type='FINDING' and aggregate_id=$5
+				  and reconciled_at is null`, InventoryOwnerConsumerGroup, reason,
+				expectedVersion, observedVersion, base.FindingID); err != nil {
+				t.Fatalf("set quarantine: %v", err)
+			}
+			command := base
+			command.MediaReferences = append([]InventoryCabinPhotoReference(nil),
+				base.MediaReferences...)
+			command.IdempotencyKey, command.CorrelationID = uuid.New(), uuid.New()
+			if _, _, _, err := repository.ApplyInventoryCabinPhotos(ctx, command); !errors.Is(err, ErrConflict) {
+				t.Fatalf("quarantine error = %v, want ErrConflict", err)
+			}
+		})
+	}
+	assertRejected("non-VERSION_GAP", "OWNER_REVISION_REGRESSION", proofVersion,
+		proofVersion)
+	assertRejected("VERSION_GAP at proof", "VERSION_GAP", proofVersion,
+		proofVersion+1)
+	assertRejected("VERSION_GAP before proof", "VERSION_GAP", proofVersion-1,
+		proofVersion)
+	if _, err := database.Pool.Exec(ctx, `update media_quarantined_aggregate
+		set reason_code='VERSION_GAP',expected_version=$2,observed_version=$3
+		where consumer_name=$1 and aggregate_type='FINDING' and aggregate_id=$4
+		  and reconciled_at is null`, InventoryOwnerConsumerGroup, proofVersion+1,
+		proofVersion+2, base.FindingID); err != nil {
+		t.Fatalf("restore later VERSION_GAP quarantine: %v", err)
+	}
+	t.Run("active CABIN quarantine", func(t *testing.T) {
+		if _, err := database.Pool.Exec(ctx, `insert into media_quarantined_aggregate (
+			consumer_name,aggregate_type,aggregate_id,expected_version,observed_version,
+			reason_code,first_event_id)
+		select proof_consumer_name,proof_aggregate_type,proof_aggregate_id,
+			proof_aggregate_version+1,proof_aggregate_version+2,'VERSION_GAP',$2
+		from media_owner_binding where owner_type='CABIN' and owner_id=$1`,
+			base.CabinID.String(), uuid.New()); err != nil {
+			t.Fatalf("insert CABIN quarantine: %v", err)
+		}
+		command := base
+		command.MediaReferences = append([]InventoryCabinPhotoReference(nil),
+			base.MediaReferences...)
+		command.IdempotencyKey, command.CorrelationID = uuid.New(), uuid.New()
+		_, _, _, applyErr := repository.ApplyInventoryCabinPhotos(ctx, command)
+		if _, err := database.Pool.Exec(ctx, `update media_quarantined_aggregate
+			set reconciled_at=clock_timestamp(),resolution_reason='isolated test cleanup',
+				resolved_by_subject_id=$2
+			where consumer_name=$1 and aggregate_type='RENTAL_ITEM' and aggregate_id=$3
+			  and reconciled_at is null`, CabinOwnerConsumerGroup, uuid.New(),
+			base.CabinID); err != nil {
+			t.Fatalf("reconcile CABIN quarantine fixture: %v", err)
+		}
+		if !errors.Is(applyErr, ErrConflict) {
+			t.Fatalf("active CABIN quarantine error = %v, want ErrConflict", applyErr)
+		}
+	})
+}
+
+func assertInventoryFindingPublicAuthorityClosed(
+	t *testing.T,
+	ctx context.Context,
+	repository *Repository,
+	warehouseID, findingID, mediaID uuid.UUID,
+) {
+	t.Helper()
+	if _, _, err := repository.CreateUpload(ctx,
+		createCommand(findingID, warehouseID, media.KindImage, 3)); !errors.Is(err, ErrOwnerProofMissing) {
+		t.Fatalf("quarantined finding upload error = %v, want ErrOwnerProofMissing", err)
+	}
+	if _, err := repository.GetAssetScoped(ctx, mediaID, OwnerTypeInventoryFinding,
+		findingID.String(), warehouseID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("quarantined finding asset read error = %v, want ErrNotFound", err)
+	}
+	assets, err := repository.ListOwner(ctx, OwnerTypeInventoryFinding,
+		findingID.String(), warehouseID, 10, nil)
+	if !errors.Is(err, ErrOwnerProofMissing) || len(assets) != 0 {
+		t.Fatalf("quarantined finding list = %#v, error=%v, want ErrOwnerProofMissing",
+			assets, err)
+	}
+	consumed := false
+	err = repository.ReadOriginal(ctx, mediaID, OwnerTypeInventoryFinding,
+		findingID.String(), warehouseID, nil, func(AssetRecord, *VariantRecord) error {
+			consumed = true
+			return nil
+		})
+	if !errors.Is(err, ErrNotFound) || consumed {
+		t.Fatalf("quarantined finding original error=%v consumed=%v, want ErrNotFound",
+			err, consumed)
 	}
 }
 

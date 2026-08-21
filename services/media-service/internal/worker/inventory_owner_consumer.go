@@ -281,18 +281,19 @@ type inventoryOwnerProofPayload struct {
 }
 
 type inventoryFindingPayload struct {
-	InventoryID     string          `json:"inventoryId"`
-	FindingID       string          `json:"findingId"`
-	WarehouseID     string          `json:"warehouseId"`
-	SessionRevision int64           `json:"sessionRevision"`
-	FindingRevision int64           `json:"findingRevision"`
-	Origin          string          `json:"origin"`
-	Inspection      string          `json:"inspection"`
-	Reconciliation  string          `json:"reconciliation"`
-	AssetID         json.RawMessage `json:"assetId"`
-	SourceAttached  bool            `json:"sourceAttached"`
-	MediaCount      int             `json:"mediaCount"`
-	PlanFingerprint json.RawMessage `json:"planFingerprintSha256"`
+	InventoryID      string          `json:"inventoryId"`
+	FindingID        string          `json:"findingId"`
+	WarehouseID      string          `json:"warehouseId"`
+	SessionRevision  int64           `json:"sessionRevision"`
+	FindingRevision  int64           `json:"findingRevision"`
+	Origin           string          `json:"origin"`
+	Inspection       string          `json:"inspection"`
+	Reconciliation   string          `json:"reconciliation"`
+	MembershipActive *bool           `json:"membershipActive"`
+	AssetID          json.RawMessage `json:"assetId"`
+	SourceAttached   bool            `json:"sourceAttached"`
+	MediaCount       int             `json:"mediaCount"`
+	PlanFingerprint  json.RawMessage `json:"planFingerprintSha256"`
 }
 
 func parseInventoryFindingRecord(record *kgo.Record) (persistence.InventoryFindingMessage, bool, error) {
@@ -340,8 +341,10 @@ func parseInventoryFindingRecord(record *kgo.Record) (persistence.InventoryFindi
 		RecordedAt: recordedAt.UTC(),
 	}
 	switch envelope.EventType {
-	case "inventory.finding.added.v1", "inventory.finding.inspection-saved.v1":
-		warehouseID, err := validateFindingMarker(envelope.Payload, aggregateID)
+	case "inventory.finding.added.v1", "inventory.finding.inspection-saved.v1",
+		"inventory.finding.membership-departed.v1", "inventory.finding.membership-refreshed.v1",
+		"inventory.finding.membership-restored.v1":
+		warehouseID, err := validateFindingMarker(envelope.Payload, aggregateID, envelope.EventType)
 		if err != nil {
 			return persistence.InventoryFindingMessage{}, false, err
 		}
@@ -379,8 +382,13 @@ func validateOwnerProof(raw json.RawMessage, aggregateID uuid.UUID) (persistence
 	}, nil
 }
 
-func validateFindingMarker(raw json.RawMessage, aggregateID uuid.UUID) (uuid.UUID, error) {
-	if err := exactJSONFields(raw, "inventoryId", "findingId", "warehouseId", "sessionRevision",
+func validateFindingMarker(
+	raw json.RawMessage,
+	aggregateID uuid.UUID,
+	eventType string,
+) (uuid.UUID, error) {
+	if err := exactJSONFieldsWithOptional(raw, []string{"membershipActive"},
+		"inventoryId", "findingId", "warehouseId", "sessionRevision",
 		"findingRevision", "origin", "inspection", "reconciliation", "assetId", "sourceAttached",
 		"mediaCount", "planFingerprintSha256"); err != nil {
 		return uuid.Nil, err
@@ -400,7 +408,43 @@ func validateFindingMarker(raw json.RawMessage, aggregateID uuid.UUID) (uuid.UUI
 		!nullableInventoryUUID(payload.AssetID) || !nullableSHA256(payload.PlanFingerprint) {
 		return uuid.Nil, errors.New("invalid inventory finding marker")
 	}
+	if eventType == "inventory.finding.membership-departed.v1" &&
+		(payload.MembershipActive == nil || *payload.MembershipActive) {
+		return uuid.Nil, errors.New("invalid departed inventory finding marker")
+	}
+	if setContains(eventType, "inventory.finding.membership-refreshed.v1",
+		"inventory.finding.membership-restored.v1") &&
+		(payload.MembershipActive == nil || !*payload.MembershipActive) {
+		return uuid.Nil, errors.New("invalid active inventory finding marker")
+	}
 	return warehouseID, nil
+}
+
+func exactJSONFieldsWithOptional(
+	raw json.RawMessage,
+	optional []string,
+	required ...string,
+) error {
+	var value map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return errors.New("invalid JSON object fields")
+	}
+	allowed := make(map[string]struct{}, len(required)+len(optional))
+	for _, name := range required {
+		allowed[name] = struct{}{}
+		if _, exists := value[name]; !exists {
+			return errors.New("invalid JSON object fields")
+		}
+	}
+	for _, name := range optional {
+		allowed[name] = struct{}{}
+	}
+	for name := range value {
+		if _, exists := allowed[name]; !exists {
+			return errors.New("invalid JSON object fields")
+		}
+	}
+	return nil
 }
 
 func exactJSONFields(raw json.RawMessage, expected ...string) error {

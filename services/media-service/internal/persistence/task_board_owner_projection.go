@@ -30,6 +30,7 @@ type TaskBoardEntryOwnerProofMessage struct {
 	RouteIndex       int
 	Active           bool
 	AllowedWorkerIDs []uuid.UUID
+	ReaderWorkerIDs  []uuid.UUID
 	SourceMediaRefs  []TaskBoardSourceMediaReference
 }
 
@@ -201,7 +202,8 @@ func validateTaskBoardEntryOwnerProofMessage(message TaskBoardEntryOwnerProofMes
 	if hex.EncodeToString(sum[:]) != message.BodySHA256 {
 		return ErrIdempotencyMismatch
 	}
-	if len(message.AllowedWorkerIDs) > 1000 || len(message.SourceMediaRefs) > 1000 {
+	if len(message.AllowedWorkerIDs) > 1000 || len(message.ReaderWorkerIDs) > 1000 ||
+		len(message.SourceMediaRefs) > 1000 {
 		return ErrConflict
 	}
 	workers := make(map[uuid.UUID]struct{}, len(message.AllowedWorkerIDs))
@@ -213,6 +215,16 @@ func validateTaskBoardEntryOwnerProofMessage(message TaskBoardEntryOwnerProofMes
 			return ErrConflict
 		}
 		workers[workerID] = struct{}{}
+	}
+	readers := make(map[uuid.UUID]struct{}, len(message.ReaderWorkerIDs))
+	for _, workerID := range message.ReaderWorkerIDs {
+		if workerID == uuid.Nil {
+			return ErrConflict
+		}
+		if _, duplicate := readers[workerID]; duplicate {
+			return ErrConflict
+		}
+		readers[workerID] = struct{}{}
 	}
 	references := make(map[TaskBoardSourceMediaReference]struct{}, len(message.SourceMediaRefs))
 	for _, reference := range message.SourceMediaRefs {
@@ -297,12 +309,19 @@ func applyTaskBoardOwnerProof(ctx context.Context, tx pgx.Tx, message TaskBoardE
 	if _, err := tx.Exec(ctx, `delete from media_task_board_entry_allowed_worker where entry_id=$1`, message.AggregateID); err != nil {
 		return err
 	}
-	if message.Active {
-		for _, workerID := range message.AllowedWorkerIDs {
-			if _, err := tx.Exec(ctx, `insert into media_task_board_entry_allowed_worker (entry_id,worker_id)
+	for _, workerID := range message.AllowedWorkerIDs {
+		if _, err := tx.Exec(ctx, `insert into media_task_board_entry_allowed_worker (entry_id,worker_id)
 				values ($1,$2)`, message.AggregateID, workerID); err != nil {
-				return translateConstraint(err)
-			}
+			return translateConstraint(err)
+		}
+	}
+	if _, err := tx.Exec(ctx, `delete from media_task_board_entry_reader_worker where entry_id=$1`, message.AggregateID); err != nil {
+		return err
+	}
+	for _, workerID := range message.ReaderWorkerIDs {
+		if _, err := tx.Exec(ctx, `insert into media_task_board_entry_reader_worker (entry_id,worker_id)
+				values ($1,$2)`, message.AggregateID, workerID); err != nil {
+			return translateConstraint(err)
 		}
 	}
 	if _, err := tx.Exec(ctx, `delete from media_task_board_entry_source_media_reference where entry_id=$1`, message.AggregateID); err != nil {
@@ -466,6 +485,49 @@ func RequireTaskBoardEntryWorkerAccess(ctx context.Context, database queryer, en
 		      and quarantine.aggregate_id=binding.proof_aggregate_id
 		      and quarantine.reconciled_at is null)
 		for share of binding,allowed`, entryID.String(), warehouseID, workerID).Scan(&found)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrOwnerProofMissing
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// RequireTaskBoardEntryWorkerReadAccess keeps task photos readable to a worker
+// named by the latest read audience while leaving command/upload access
+// gated by RequireTaskBoardEntryWorkerAccess and the proof's active flag.
+func RequireTaskBoardEntryWorkerReadAccess(ctx context.Context, database queryer, entryID, warehouseID, workerID uuid.UUID) error {
+	if entryID == uuid.Nil || warehouseID == uuid.Nil || workerID == uuid.Nil {
+		return ErrOwnerProofMissing
+	}
+	var found string
+	err := database.QueryRow(ctx, `select binding.owner_id
+		from media_owner_binding binding
+		join media_task_board_entry_owner_proof proof
+		  on proof.entry_id=binding.proof_aggregate_id
+		 and proof.warehouse_id=binding.warehouse_id
+		 and proof.aggregate_version=binding.proof_aggregate_version
+		 and proof.proof_event_id=binding.proof_event_id
+		 and not proof.quarantined
+		join media_consumer_aggregate_checkpoint checkpoint
+		  on checkpoint.consumer_name=binding.proof_consumer_name
+		 and checkpoint.aggregate_type=binding.proof_aggregate_type
+		 and checkpoint.aggregate_id=binding.proof_aggregate_id
+		 and checkpoint.aggregate_version>=binding.proof_aggregate_version
+		join media_task_board_entry_reader_worker reader
+		  on reader.entry_id=binding.proof_aggregate_id and reader.worker_id=$3
+		where binding.owner_type='TASK_BOARD_ENTRY' and binding.owner_id=$1
+		  and binding.warehouse_id=$2
+		  and binding.proof_consumer_name=$4
+		  and binding.proof_aggregate_type=$5
+		  and not exists (select 1 from media_quarantined_aggregate quarantine
+		    where quarantine.consumer_name=binding.proof_consumer_name
+		      and quarantine.aggregate_type=binding.proof_aggregate_type
+		      and quarantine.aggregate_id=binding.proof_aggregate_id
+		      and quarantine.reconciled_at is null)
+		for share of binding,proof,reader`, entryID.String(), warehouseID, workerID,
+		TaskBoardEntryOwnerProofConsumer, TaskBoardEntryOwnerProofAggregate).Scan(&found)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrOwnerProofMissing
 	}

@@ -208,8 +208,10 @@ func installMainResidualMigrations(t testing.TB, ctx context.Context, pool *pgxp
 		{"bounded media processing recovery", "V11__bounded_media_processing_recovery.sql", mediamigration.V11},
 		{"video playback variant", "V12__video_playback_variant.sql", mediamigration.V12},
 		{"authoritative inventory cabin photos", "V13__authoritative_inventory_cabin_photos.sql", mediamigration.V13},
+		{"task board reader audience", "V14__task_board_reader_audience.sql", mediamigration.V14},
+		{"inventory finding membership markers", "V15__inventory_finding_membership_markers.sql", mediamigration.V15},
 	}
-	versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13"}
+	versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"}
 	for index, migration := range migrations {
 		if _, err := pool.Exec(ctx, string(migration.body)); err != nil {
 			t.Fatalf("apply command %s: %v", migration.script, err)

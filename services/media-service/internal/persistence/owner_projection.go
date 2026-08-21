@@ -451,7 +451,9 @@ func validateInventoryFindingMessage(message InventoryFindingMessage) error {
 		return ErrIdempotencyMismatch
 	}
 	switch message.EventType {
-	case "inventory.finding.added.v1", "inventory.finding.inspection-saved.v1":
+	case "inventory.finding.added.v1", "inventory.finding.inspection-saved.v1",
+		"inventory.finding.membership-departed.v1", "inventory.finding.membership-refreshed.v1",
+		"inventory.finding.membership-restored.v1":
 		if message.Proof != nil {
 			return ErrConflict
 		}

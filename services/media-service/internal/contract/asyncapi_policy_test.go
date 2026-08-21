@@ -136,7 +136,7 @@ func assertInventoryOwnerInputNarrowing(t *testing.T, payload map[string]any, ex
 		t.Fatalf("inventory owner aggregate type = %q", got)
 	}
 	events, ok := objectAt(t, properties, "eventType")["enum"].([]any)
-	if !ok || len(events) != 3 {
+	if !ok || len(events) != 6 {
 		t.Fatalf("inventory owner event enum = %#v", objectAt(t, properties, "eventType")["enum"])
 	}
 	allowed := map[string]bool{}
@@ -147,7 +147,11 @@ func assertInventoryOwnerInputNarrowing(t *testing.T, payload map[string]any, ex
 		}
 		allowed[text] = true
 	}
-	for _, eventType := range []string{"inventory.finding.added.v1", "inventory.finding.inspection-saved.v1", "inventory.finding.owner-proof.v1"} {
+	for _, eventType := range []string{
+		"inventory.finding.added.v1", "inventory.finding.inspection-saved.v1",
+		"inventory.finding.membership-departed.v1", "inventory.finding.membership-refreshed.v1",
+		"inventory.finding.membership-restored.v1", "inventory.finding.owner-proof.v1",
+	} {
 		if !allowed[eventType] {
 			t.Fatalf("inventory owner event enum misses %s", eventType)
 		}

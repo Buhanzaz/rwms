@@ -51,11 +51,12 @@ type InventoryCabinPhotoResult struct {
 	ChangedAt       time.Time
 }
 
-// ApplyInventoryCabinPhotos validates both active owners and every exact READY
-// image in one serializable media-owned transaction. It retains prior folders,
-// media rows, variants and MinIO versions while moving only the active folder
-// and cover pointers. The booleans report exact-key replay and a new cover
-// transition respectively.
+// ApplyInventoryCabinPhotos validates an active cabin, a retained checkpointed finding and every
+// exact READY image in one serializable media-owned transaction. A completed finding may have
+// inactive public proof; this SERVICE-only command can reuse its retained evidence without
+// reopening uploads. The transaction retains prior folders, media rows, variants and MinIO
+// versions while moving only the active folder and cover pointers. The booleans report exact-key
+// replay and a new cover transition respectively.
 func (repository *Repository) ApplyInventoryCabinPhotos(
 	ctx context.Context,
 	command ApplyInventoryCabinPhotosCommand,
@@ -99,11 +100,16 @@ func (repository *Repository) ApplyInventoryCabinPhotos(
 	if err != nil {
 		return InventoryCabinPhotoResult{}, false, false, err
 	}
-	if err := validateInventoryCabinPhotoWatermark(ctx, tx, command); err != nil {
+	watermarkFolderID, correction, err := validateInventoryCabinPhotoWatermark(
+		ctx, tx, command)
+	if err != nil {
 		return InventoryCabinPhotoResult{}, false, false, err
 	}
+	if watermarkFolderID != uuid.Nil {
+		folderID = watermarkFolderID
+	}
 	now := repository.now().UTC().Truncate(time.Microsecond)
-	if err := associateInventoryCabinPhotos(ctx, tx, command, folderID); err != nil {
+	if err := associateInventoryCabinPhotos(ctx, tx, command, folderID, correction); err != nil {
 		return InventoryCabinPhotoResult{}, false, false, err
 	}
 
@@ -206,6 +212,11 @@ func readInventoryCabinPhotoReceipt(
 	return result, true, nil
 }
 
+// lockInventoryCabinPhotoOwners requires retained, checkpointed owner identities in one warehouse.
+// The finding proof may be inactive, and a later VERSION_GAP may remain quarantined after that
+// proof's checkpoint, because this SERVICE-only completed-outcome command reuses only the exact
+// READY evidence pinned by the command. Public finding authorization and any quarantine at or
+// before the retained proof remain fail-closed.
 func lockInventoryCabinPhotoOwners(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -222,7 +233,6 @@ func lockInventoryCabinPhotoOwners(
 		join media_owner_binding finding
 		  on finding.owner_type='INVENTORY_FINDING'
 		 and finding.owner_id=$2::text and finding.warehouse_id=cabin.warehouse_id
-		 and finding.active
 		join media_consumer_aggregate_checkpoint finding_checkpoint
 		  on finding_checkpoint.consumer_name=finding.proof_consumer_name
 		 and finding_checkpoint.aggregate_type=finding.proof_aggregate_type
@@ -239,7 +249,9 @@ func lockInventoryCabinPhotoOwners(
 		    where quarantine.consumer_name=finding.proof_consumer_name
 		      and quarantine.aggregate_type=finding.proof_aggregate_type
 		      and quarantine.aggregate_id=finding.proof_aggregate_id
-		      and quarantine.reconciled_at is null)
+		      and quarantine.reconciled_at is null
+		      and (quarantine.reason_code<>'VERSION_GAP'
+		        or quarantine.expected_version<=finding.proof_aggregate_version))
 		for share of cabin,finding`, command.CabinID, command.FindingID,
 		command.WarehouseID).Scan(&warehouseID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -302,27 +314,79 @@ func lockInventoryCabinPhotoReferences(
 	return coverGeneration, nil
 }
 
+// inventoryCabinPhotoPlanCorrection identifies the exact prior immutable plan
+// whose unchanged photo association may advance to a newer corrected version.
+type inventoryCabinPhotoPlanCorrection struct {
+	finalPlanVersion int64
+	finalPlanSHA256  string
+}
+
+// validateInventoryCabinPhotoWatermark locks the cabin fence and returns the
+// stable prior folder plus its source metadata only for a valid plan advance.
 func validateInventoryCabinPhotoWatermark(
 	ctx context.Context,
 	tx pgx.Tx,
 	command ApplyInventoryCabinPhotosCommand,
-) error {
+) (uuid.UUID, *inventoryCabinPhotoPlanCorrection, error) {
 	var completedAt time.Time
-	var requestSHA string
-	err := tx.QueryRow(ctx, `select completed_at,request_sha256
+	var requestSHA, finalPlanSHA string
+	var inventoryID, findingID, galleryFolderID uuid.UUID
+	var finalPlanVersion int64
+	err := tx.QueryRow(ctx, `select completed_at,request_sha256,inventory_id,
+		finding_id,final_plan_version,final_plan_sha256,gallery_folder_id
 		from media_inventory_cabin_photo_watermark where cabin_id=$1 for update`,
-		command.CabinID).Scan(&completedAt, &requestSHA)
+		command.CabinID).Scan(&completedAt, &requestSHA, &inventoryID, &findingID,
+		&finalPlanVersion, &finalPlanSHA, &galleryFolderID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
+		return uuid.Nil, nil, nil
 	}
 	if err != nil {
-		return err
+		return uuid.Nil, nil, err
 	}
-	if command.CompletedAt.Before(completedAt) ||
-		(command.CompletedAt.Equal(completedAt) && requestSHA != command.RequestSHA256) {
-		return ErrConflict
+	corrected, err := validateInventoryCabinPhotoWatermarkOrder(command, completedAt,
+		requestSHA, inventoryID, findingID, finalPlanVersion)
+	if err != nil {
+		return uuid.Nil, nil, err
 	}
-	return nil
+	if corrected {
+		return galleryFolderID, &inventoryCabinPhotoPlanCorrection{
+			finalPlanVersion: finalPlanVersion,
+			finalPlanSHA256:  finalPlanSHA,
+		}, nil
+	}
+	if command.CompletedAt.Equal(completedAt) {
+		return galleryFolderID, nil, nil
+	}
+	return uuid.Nil, nil, nil
+}
+
+// validateInventoryCabinPhotoWatermarkOrder permits a completed inventory to
+// correct its own immutable plan with a strictly newer version at the same
+// completion instant. Equal-version requests remain exact replays only.
+func validateInventoryCabinPhotoWatermarkOrder(
+	command ApplyInventoryCabinPhotosCommand,
+	completedAt time.Time,
+	requestSHA string,
+	inventoryID, findingID uuid.UUID,
+	finalPlanVersion int64,
+) (bool, error) {
+	if command.CompletedAt.Before(completedAt) {
+		return false, ErrConflict
+	}
+	if command.CompletedAt.After(completedAt) {
+		return false, nil
+	}
+	if command.InventoryID != inventoryID || command.FindingID != findingID {
+		return false, ErrConflict
+	}
+	if command.FinalPlanVersion > finalPlanVersion {
+		return true, nil
+	}
+	if command.FinalPlanVersion == finalPlanVersion &&
+		command.RequestSHA256 == requestSHA {
+		return false, nil
+	}
+	return false, ErrConflict
 }
 
 func associateInventoryCabinPhotos(
@@ -330,7 +394,12 @@ func associateInventoryCabinPhotos(
 	tx pgx.Tx,
 	command ApplyInventoryCabinPhotosCommand,
 	folderID uuid.UUID,
+	correction *inventoryCabinPhotoPlanCorrection,
 ) error {
+	if correction != nil {
+		return advanceInventoryCabinPhotoAssociations(ctx, tx, command, folderID,
+			*correction)
+	}
 	var firstSortOrder int64
 	if err := tx.QueryRow(ctx, `select coalesce(max(sort_order),-1)+1
 		from media_cabin_photo where cabin_id=$1`, command.CabinID).Scan(&firstSortOrder); err != nil {
@@ -375,6 +444,73 @@ func associateInventoryCabinPhotos(
 			planVersion != command.FinalPlanVersion || planSHA != command.FinalPlanSHA256 {
 			return ErrConflict
 		}
+	}
+	return nil
+}
+
+// advanceInventoryCabinPhotoAssociations fences the exact prior folder set
+// before advancing only its immutable-plan audit fields in the same transaction.
+func advanceInventoryCabinPhotoAssociations(
+	ctx context.Context,
+	tx pgx.Tx,
+	command ApplyInventoryCabinPhotosCommand,
+	folderID uuid.UUID,
+	correction inventoryCabinPhotoPlanCorrection,
+) error {
+	mediaIDs := make([]uuid.UUID, len(command.MediaReferences))
+	generations := make([]int, len(command.MediaReferences))
+	for index, reference := range command.MediaReferences {
+		mediaIDs[index] = reference.MediaID
+		generations[index] = reference.Generation
+	}
+	var actualCount, matchedCount int64
+	err := tx.QueryRow(ctx, `with requested(media_id,generation) as (
+		select media_id,generation
+		from unnest($1::uuid[],$2::integer[]) as value(media_id,generation)
+	), actual as materialized (
+		select media_id,media_generation,warehouse_id,association_source,
+			inventory_id,inventory_finding_id,inventory_completed_at,
+			inventory_source_revision,inventory_final_plan_version,
+			inventory_final_plan_sha256
+		from media_cabin_photo
+		where cabin_id=$3 and gallery_folder_id=$4
+		for update
+	)
+	select (select count(*) from actual),(
+		select count(*) from requested
+		join actual on actual.media_id=requested.media_id
+			and actual.media_generation=requested.generation
+		where actual.warehouse_id=$5 and actual.association_source='INVENTORY'
+			and actual.inventory_id=$6 and actual.inventory_finding_id=$7
+			and actual.inventory_completed_at=$8
+			and actual.inventory_source_revision=$9
+			and actual.inventory_final_plan_version=$10
+			and actual.inventory_final_plan_sha256=$11
+	)`, mediaIDs, generations, command.CabinID, folderID, command.WarehouseID,
+		command.InventoryID, command.FindingID, command.CompletedAt,
+		command.SourceRevision, correction.finalPlanVersion,
+		correction.finalPlanSHA256).Scan(&actualCount, &matchedCount)
+	if err != nil {
+		return err
+	}
+	if actualCount != int64(len(command.MediaReferences)) ||
+		matchedCount != int64(len(command.MediaReferences)) {
+		return ErrConflict
+	}
+	updated, err := tx.Exec(ctx, `update media_cabin_photo
+		set inventory_final_plan_version=$5,inventory_final_plan_sha256=$6
+		where cabin_id=$1 and gallery_folder_id=$2
+			and inventory_id=$3 and inventory_finding_id=$4
+			and inventory_final_plan_version=$7
+			and inventory_final_plan_sha256=$8`, command.CabinID, folderID,
+		command.InventoryID, command.FindingID, command.FinalPlanVersion,
+		command.FinalPlanSHA256, correction.finalPlanVersion,
+		correction.finalPlanSHA256)
+	if err != nil {
+		return translateConstraint(err)
+	}
+	if updated.RowsAffected() != int64(len(command.MediaReferences)) {
+		return ErrConflict
 	}
 	return nil
 }

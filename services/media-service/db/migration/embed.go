@@ -79,3 +79,13 @@ var V12 []byte
 //
 //go:embed V13__authoritative_inventory_cabin_photos.sql
 var V13 []byte
+
+// V14 contains the immutable task-board reader-audience migration bytes.
+//
+//go:embed V14__task_board_reader_audience.sql
+var V14 []byte
+
+// V15 contains the immutable inventory finding-membership marker migration bytes.
+//
+//go:embed V15__inventory_finding_membership_markers.sql
+var V15 []byte

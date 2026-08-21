@@ -947,7 +947,7 @@ func (repository *Repository) ReadOwnerAssets(
 		records, err = readTaskBoardEntryAssetsForUser(ctx, tx, entryID, warehouseID, limit, after)
 	} else {
 		records, err = readOwnerAssets(ctx, tx, ownerType, ownerID, warehouseID, limit, after,
-			repository.now)
+			repository.now, true)
 	}
 	if err != nil {
 		return err
@@ -958,8 +958,8 @@ func (repository *Repository) ReadOwnerAssets(
 	return tx.Commit(ctx)
 }
 
-// ReadTaskBoardEntryAssetsForWorker keeps the worker's active task-board
-// proof and membership row locked through the complete list callback. It must
+// ReadTaskBoardEntryAssetsForWorker keeps the worker's current task-board
+// proof and read-audience row locked through the complete list callback. It must
 // be used instead of AuthorizeTaskBoardEntryWorker followed by ReadOwnerAssets:
 // a proof update between those transactions could otherwise expose a result
 // asset after the worker has been removed or the entry has been revoked.
@@ -980,11 +980,11 @@ func (repository *Repository) ReadTaskBoardEntryAssetsForWorker(
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err := RequireTaskBoardEntryWorkerAccess(ctx, tx, entryID, warehouseID, workerID); err != nil {
+	if err := RequireTaskBoardEntryWorkerReadAccess(ctx, tx, entryID, warehouseID, workerID); err != nil {
 		return err
 	}
 	records, err := readOwnerAssets(ctx, tx, OwnerTypeTaskBoardEntry, entryID.String(), warehouseID,
-		limit, after, repository.now)
+		limit, after, repository.now, false)
 	if err != nil {
 		return err
 	}
@@ -1152,6 +1152,7 @@ func readOwnerAssets(
 	limit int,
 	after *uuid.UUID,
 	now func() time.Time,
+	requireActiveBinding bool,
 ) ([]AssetWithVariants, error) {
 	if limit < 1 || limit > 100 {
 		return nil, ErrConflict
@@ -1183,7 +1184,7 @@ func readOwnerAssets(
 		from media_asset a
 		join media_owner_binding binding
 		  on binding.owner_type=a.owner_type and binding.owner_id=a.owner_id
-		 and binding.warehouse_id=a.warehouse_id and binding.active
+		 and binding.warehouse_id=a.warehouse_id and (not $9::boolean or binding.active)
 		join media_consumer_aggregate_checkpoint checkpoint
 		  on checkpoint.consumer_name=binding.proof_consumer_name
 		 and checkpoint.aggregate_type=binding.proof_aggregate_type
@@ -1213,7 +1214,7 @@ func readOwnerAssets(
 		 and a.processing_status='READY'
 		order by case when a.media_kind='IMAGE' then 0 else 1 end,a.sort_order,a.created_at,
 			a.media_id,variant.variant`, ownerType, ownerID, warehouseID, after,
-		cursorKind, cursorSort, cursorCreated, limit)
+		cursorKind, cursorSort, cursorCreated, limit, requireActiveBinding)
 	if err != nil {
 		return nil, err
 	}
@@ -1250,7 +1251,7 @@ func readOwnerAssets(
 		return nil, err
 	}
 	rows.Close()
-	if len(records) == 0 {
+	if len(records) == 0 && requireActiveBinding {
 		if err := requireOwnerBinding(ctx, tx, ownerType, ownerID, warehouseID,
 			now()); err != nil {
 			return nil, err
@@ -1262,9 +1263,9 @@ func readOwnerAssets(
 // ReadCabinCovers returns one bounded, warehouse-scoped cover projection per
 // requested cabin. The count is based on logical image assets, never on the
 // number of derived variants. Previews contain at most one exact SMALL variant
-// per READY image and are bounded by the owner media limit. Cabin bindings are
-// share-locked for the complete projection callback so a concurrent owner
-// revocation cannot race the read.
+// per READY image, put the explicit cover first, and are bounded by the owner
+// media limit. Cabin bindings are share-locked for the complete projection
+// callback so a concurrent owner revocation cannot race the read.
 // ReadCabinCovers returns bounded ready-image cover and preview projections
 // for CABINs with current, non-quarantined owner bindings.
 func (repository *Repository) ReadCabinCovers(
@@ -1334,7 +1335,8 @@ func (repository *Repository) ReadCabinCovers(
 		with image_assets as materialized (
 			select asset.media_id,photo.cabin_id::text as owner_id,
 				asset.processing_status,asset.current_generation,
-				photo.sort_order,photo.attached_at as created_at
+				photo.sort_order,photo.attached_at as created_at,
+				(asset.media_id=active_library.cover_media_id) as is_cover
 			from media_cabin_photo photo
 			join media_cabin_photo_library active_library
 			  on active_library.cabin_id=photo.cabin_id
@@ -1349,8 +1351,9 @@ func (repository *Repository) ReadCabinCovers(
 		), previews as (
 			select a.owner_id,a.media_id,a.current_generation,v.variant,
 				v.object_version_id,v.content_type,v.size_bytes,v.width,v.height,
-				v.checksum_sha256,row_number() over (
-					partition by a.owner_id order by a.sort_order,a.created_at,a.media_id
+				v.checksum_sha256,a.is_cover,row_number() over (
+					partition by a.owner_id
+					order by a.is_cover desc,a.sort_order,a.created_at,a.media_id
 				) as preview_rank
 			from image_assets a
 			join media_variant v on v.media_id=a.media_id
@@ -1360,10 +1363,8 @@ func (repository *Repository) ReadCabinCovers(
 		)
 		select counts.owner_id,counts.photo_count,preview.media_id,preview.current_generation,
 			preview.variant,preview.object_version_id,preview.content_type,preview.size_bytes,
-			preview.width,preview.height,preview.checksum_sha256,
-			(preview.media_id=library.cover_media_id) as is_cover
+			preview.width,preview.height,preview.checksum_sha256,preview.is_cover
 		from counts
-		join media_cabin_photo_library library on library.cabin_id=counts.owner_id::uuid
 		left join previews preview on preview.owner_id=counts.owner_id
 		 and preview.preview_rank<=100
 		order by counts.owner_id,preview.preview_rank nulls last`, warehouseID, authorized)
@@ -1760,7 +1761,7 @@ func (repository *Repository) ReadTaskBoardEntryOriginalForWorker(
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err := RequireTaskBoardEntryWorkerAccess(ctx, tx, entryID, warehouseID, workerID); err != nil {
+	if err := RequireTaskBoardEntryWorkerReadAccess(ctx, tx, entryID, warehouseID, workerID); err != nil {
 		return err
 	}
 	asset, original, found, err := readTaskBoardResultOriginal(ctx, tx, entryID, warehouseID, mediaID, generation)
@@ -1804,7 +1805,7 @@ func (repository *Repository) ReadTaskBoardEntryVariantForWorker(
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err := RequireTaskBoardEntryWorkerAccess(ctx, tx, entryID, warehouseID, workerID); err != nil {
+	if err := RequireTaskBoardEntryWorkerReadAccess(ctx, tx, entryID, warehouseID, workerID); err != nil {
 		return err
 	}
 	asset, variant, found, err := readTaskBoardResultVariant(ctx, tx, entryID, warehouseID, mediaID, generation, requestedVariant)

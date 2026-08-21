@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"dev.buhanzaz.rwms/media-service/internal/media"
 	"dev.buhanzaz.rwms/media-service/internal/testsupport"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -92,17 +94,17 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 		}
 	})
 
-	t.Run("clean V1 through V13 repeat and checksum drift", func(t *testing.T) {
+	t.Run("clean V1 through V15 repeat and checksum drift", func(t *testing.T) {
 		databaseURL := testsupport.NewIsolatedPostgresDatabase(t, environment.DatabaseURL)
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		pool := openResidualPool(t, ctx, databaseURL)
-		installResidualMigrations(t, ctx, pool, 15)
+		installResidualMigrations(t, ctx, pool, 17)
 		pool.Close()
 
 		first, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open clean V1 through V13 database: %v", err)
+			t.Fatalf("open clean V1 through V15 database: %v", err)
 		}
 		assertTaskBoardV8ConstraintsValidated(t, ctx, first.Pool)
 		first.Close()
@@ -123,6 +125,149 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 		if !errors.Is(err, ErrSchemaNotReady) {
 			t.Fatalf("Open() checksum drift error = %v, want ErrSchemaNotReady", err)
 		}
+	})
+
+	t.Run("V14 backfills existing task-board upload workers as readers", func(t *testing.T) {
+		databaseURL := testsupport.NewIsolatedPostgresDatabase(t, environment.DatabaseURL)
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		pool := openResidualPool(t, ctx, databaseURL)
+		installResidualMigrations(t, ctx, pool, 15)
+		entryID, warehouseID, workerID := uuid.New(), uuid.New(), uuid.New()
+		if _, err := pool.Exec(ctx, `insert into media_task_board_entry_owner_proof (
+			entry_id,warehouse_id,route_index,active,aggregate_version,proof_event_id,
+			body_sha256,quarantined,quarantine_reason)
+		values ($1,$2,0,true,0,$3,repeat('a',64),false,null)`, entryID, warehouseID,
+			uuid.New()); err != nil {
+			pool.Close()
+			t.Fatalf("seed V13 task-board owner proof: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `insert into media_task_board_entry_allowed_worker
+			(entry_id,worker_id) values ($1,$2)`, entryID, workerID); err != nil {
+			pool.Close()
+			t.Fatalf("seed V13 task-board worker: %v", err)
+		}
+		applyResidualMigration(t, ctx, pool, 16, "14", "task board reader audience",
+			"V14__task_board_reader_audience.sql", mediamigration.V14)
+		var readers int
+		if err := pool.QueryRow(ctx, `select count(*)
+			from media_task_board_entry_reader_worker
+			where entry_id=$1 and worker_id=$2`, entryID, workerID).Scan(&readers); err != nil {
+			pool.Close()
+			t.Fatalf("read V14 reader backfill: %v", err)
+		}
+		if readers != 1 {
+			pool.Close()
+			t.Fatalf("V14 reader backfill count=%d, want 1", readers)
+		}
+		applyResidualMigration(t, ctx, pool, 17, "15", "inventory finding membership markers",
+			"V15__inventory_finding_membership_markers.sql", mediamigration.V15)
+		pool.Close()
+		database, err := Open(ctx, databaseURL)
+		if err != nil {
+			t.Fatalf("open V14 reader-backfill database after V15: %v", err)
+		}
+		database.Close()
+	})
+
+	t.Run("V14 to V15 admits membership markers without owner revisions", func(t *testing.T) {
+		databaseURL := testsupport.NewIsolatedPostgresDatabase(t, environment.DatabaseURL)
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		pool := openResidualPool(t, ctx, databaseURL)
+		installResidualMigrations(t, ctx, pool, 16)
+		pending, err := Open(ctx, databaseURL)
+		if pending != nil {
+			pending.Close()
+		}
+		if !errors.Is(err, ErrSchemaNotReady) {
+			pool.Close()
+			t.Fatalf("Open(V14) error = %v, want ErrSchemaNotReady until V15", err)
+		}
+		findingID, warehouseID := uuid.New(), uuid.New()
+		markerBeforeV15 := residualFindingMessage(findingID, warehouseID, uuid.New(), 0,
+			"inventory.finding.membership-restored.v1", 0, true)
+		repository := NewRepository(pool)
+		if _, err := repository.ApplyInventoryFindingMessage(ctx, markerBeforeV15); err == nil {
+			pool.Close()
+			t.Fatal("V14 inbox unexpectedly accepted membership-restored marker")
+		} else {
+			if !errors.Is(err, ErrConflict) ||
+				!strings.Contains(err.Error(), "media_inventory_finding_inbox_check2") {
+				pool.Close()
+				t.Fatalf("V14 restored-marker error = %v, want inbox check2 violation", err)
+			}
+		}
+		applyResidualMigration(t, ctx, pool, 17, "15", "inventory finding membership markers",
+			"V15__inventory_finding_membership_markers.sql", mediamigration.V15)
+		var constraintDefinition string
+		var constraintValidated bool
+		if err := pool.QueryRow(ctx, `select pg_get_constraintdef(oid),convalidated
+			from pg_constraint
+			where conrelid='media_inventory_finding_inbox'::regclass
+			  and conname='media_inventory_finding_inbox_check2'`).
+			Scan(&constraintDefinition, &constraintValidated); err != nil {
+			pool.Close()
+			t.Fatalf("read V15 inbox constraint: %v", err)
+		}
+		for _, eventType := range []string{
+			"inventory.finding.membership-departed.v1",
+			"inventory.finding.membership-refreshed.v1",
+			"inventory.finding.membership-restored.v1",
+		} {
+			if !strings.Contains(constraintDefinition, eventType) {
+				pool.Close()
+				t.Fatalf("V15 constraint omits %s: %s", eventType, constraintDefinition)
+			}
+		}
+		if !constraintValidated {
+			pool.Close()
+			t.Fatal("V15 inbox event constraint is not validated")
+		}
+		streamFindingID := uuid.New()
+		applyResidualOrdered(t, ctx, repository,
+			residualFindingMessage(streamFindingID, warehouseID, uuid.New(), 0,
+				"inventory.finding.added.v1", 0, true),
+			residualFindingMessage(streamFindingID, warehouseID, uuid.New(), 1,
+				InventoryOwnerProofEvent, 0, true),
+			residualFindingMessage(streamFindingID, warehouseID, uuid.New(), 2,
+				"inventory.finding.membership-departed.v1", 0, false),
+			residualFindingMessage(streamFindingID, warehouseID, uuid.New(), 3,
+				"inventory.finding.membership-refreshed.v1", 0, true),
+			residualFindingMessage(streamFindingID, warehouseID, uuid.New(), 4,
+				"inventory.finding.membership-restored.v1", 0, true))
+		var markers, markerOwnerRevisions int
+		if err := pool.QueryRow(ctx, `select count(*),count(owner_revision)
+			from media_inventory_finding_inbox
+			where aggregate_id=$1 and event_type like 'inventory.finding.membership-%'`,
+			streamFindingID).Scan(&markers, &markerOwnerRevisions); err != nil {
+			pool.Close()
+			t.Fatalf("read V15 membership inbox rows: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `update media_inventory_finding_inbox
+			set owner_revision=1
+			where aggregate_id=$1 and event_type='inventory.finding.membership-restored.v1'`,
+			streamFindingID); err == nil {
+			pool.Close()
+			t.Fatal("V15 membership marker unexpectedly accepted a non-null owner revision")
+		} else {
+			var constraintError *pgconn.PgError
+			if !errors.As(err, &constraintError) ||
+				constraintError.ConstraintName != "media_inventory_finding_inbox_check2" {
+				pool.Close()
+				t.Fatalf("V15 non-null marker owner revision error = %v, want inbox check2 violation", err)
+			}
+		}
+		pool.Close()
+		if markers != 3 || markerOwnerRevisions != 0 {
+			t.Fatalf("V15 membership rows=%d owner revisions=%d, want 3/0",
+				markers, markerOwnerRevisions)
+		}
+		upgraded, err := Open(ctx, databaseURL)
+		if err != nil {
+			t.Fatalf("Open(V15 membership-marker upgrade) error = %v", err)
+		}
+		upgraded.Close()
 	})
 
 	t.Run("V2 binding becomes inactive quarantined and public fail closed", func(t *testing.T) {
@@ -168,10 +313,14 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			"V12__video_playback_variant.sql", mediamigration.V12)
 		applyResidualMigration(t, ctx, pool, 15, "13", "authoritative inventory cabin photos",
 			"V13__authoritative_inventory_cabin_photos.sql", mediamigration.V13)
+		applyResidualMigration(t, ctx, pool, 16, "14", "task board reader audience",
+			"V14__task_board_reader_audience.sql", mediamigration.V14)
+		applyResidualMigration(t, ctx, pool, 17, "15", "inventory finding membership markers",
+			"V15__inventory_finding_membership_markers.sql", mediamigration.V15)
 		pool.Close()
 		database, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open upgraded V13 database: %v", err)
+			t.Fatalf("open upgraded V15 database: %v", err)
 		}
 		defer database.Close()
 		assertTaskBoardV8ConstraintsValidated(t, ctx, database.Pool)
@@ -245,7 +394,7 @@ func TestInventoryOwnerResidualStreamAndReconciliationGateReal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	pool := openResidualPool(t, ctx, databaseURL)
-	installResidualMigrations(t, ctx, pool, 14)
+	installResidualMigrations(t, ctx, pool, 17)
 	pool.Close()
 	database, err := Open(ctx, databaseURL)
 	if err != nil {
@@ -526,10 +675,12 @@ func installResidualMigrations(t testing.TB, ctx context.Context, pool *pgxpool.
 		{"bounded media processing recovery", "V11__bounded_media_processing_recovery.sql", mediamigration.V11},
 		{"video playback variant", "V12__video_playback_variant.sql", mediamigration.V12},
 		{"authoritative inventory cabin photos", "V13__authoritative_inventory_cabin_photos.sql", mediamigration.V13},
+		{"task board reader audience", "V14__task_board_reader_audience.sql", mediamigration.V14},
+		{"inventory finding membership markers", "V15__inventory_finding_membership_markers.sql", mediamigration.V15},
 	}
 	for index := 0; index < through; index++ {
 		migration := migrations[index]
-		versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13"}
+		versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"}
 		applyResidualMigration(t, ctx, pool, index+1, versions[index], migration.description,
 			migration.script, migration.body)
 	}

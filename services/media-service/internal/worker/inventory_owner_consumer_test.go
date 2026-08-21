@@ -16,13 +16,18 @@ import (
 )
 
 func TestParseInventoryFindingRecordAcceptsMarkerProofAndIgnoresSession(t *testing.T) {
-	marker := newInventoryRecord(t, "inventory.finding.added.v1", 0, false)
+	marker := newInventoryRecord(t, "inventory.finding.added.v1", 0, true)
 	message, ignored, err := parseInventoryFindingRecord(marker.record)
 	if err != nil || ignored || message.Proof != nil || message.AggregateVersion != 0 {
 		t.Fatalf("marker parse = %#v, ignored=%v, error=%v", message, ignored, err)
 	}
 	if message.WarehouseID != marker.warehouseID {
 		t.Fatalf("marker warehouse = %s, want %s", message.WarehouseID, marker.warehouseID)
+	}
+	restored := newInventoryRecord(t, "inventory.finding.membership-restored.v1", 2, true)
+	message, ignored, err = parseInventoryFindingRecord(restored.record)
+	if err != nil || ignored || message.Proof != nil || message.AggregateVersion != 2 {
+		t.Fatalf("restored marker parse = %#v, ignored=%v, error=%v", message, ignored, err)
 	}
 	proof := newInventoryRecord(t, persistence.InventoryOwnerProofEvent, 1, true)
 	message, ignored, err = parseInventoryFindingRecord(proof.record)
@@ -283,7 +288,7 @@ func newInventoryRecord(t *testing.T, eventType string, version int64, active bo
 			"warehouseId": fixture.warehouseID.String(), "sessionRevision": 0,
 			"findingRevision": 0, "origin": "EXPECTED", "inspection": "NOT_INSPECTED",
 			"reconciliation": "MISSING", "assetId": uuid.NewString(), "sourceAttached": false,
-			"mediaCount": 0, "planFingerprintSha256": nil,
+			"membershipActive": active, "mediaCount": 0, "planFingerprintSha256": nil,
 		}
 	}
 	fixture.envelope = map[string]any{
