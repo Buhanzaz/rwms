@@ -159,7 +159,7 @@ repair в очередь и либо сразу регистрирует
 Каждый snapshot стадии обычного ремонта ставит выбранную обложку ремонта первой в упорядоченном
 `sourceMedia`; остальные общие фото сохраняют стабильный порядок, а каждая строка работы содержит
 только ID собственных фотографий. Общим заголовком задания служит рассчитанная maintenance
-сложность (`Лёгкий ремонт`, `Средний ремонт`, `Сложный ремонт` или `Капитальный ремонт`) вместо
+сложность (`Лёгкий ремонт`, `Средний ремонт`, `Тяжёлый ремонт` или `Капитальный ремонт`) вместо
 технического `Maintenance repair`; task-board сохраняет этот source-owned title через существующий
 контракт. Эту worker-facing проекцию строит
 [`MaintenanceTaskBoardSupport`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceTaskBoardSupport.java).
@@ -172,11 +172,14 @@ repair в очередь и либо сразу регистрирует
 При старте maintenance идемпотентно ставит существующий pre-start update workflow в очередь для
 всех уже зарегистрированных ожидающих ремонтов. Этот owner-local проход не выполняет remote I/O и
 позволяет обычному reconciliation worker исправить старые presentation snapshots, включая порядок
-обложки и заголовок сложности, без прямой мутации хранилища task-board. Ранее quarantined stable
-refresh остаётся в quarantine для reviewed resume, учитывается и пропускается; он не может сорвать
+обложки и заголовок сложности, без прямой мутации хранилища task-board. Presentation generation v3
+использует новый stable key, поэтому eligible queued work получает канонический заголовок, а
+quarantined v2 work не возобновляется и не изменяется напрямую. Quarantined stable refresh текущего
+поколения остаётся в quarantine для reviewed resume, учитывается и пропускается; он не может сорвать
 application-ready event или запустить цикл рестартов. Любой другой конфликт stable identity
-по-прежнему отклоняется fail-closed. Задание, начатое во время этого ограниченного recovery,
-остаётся без изменений и не может ухудшить delivery state ремонта; см.
+по-прежнему отклоняется fail-closed. Существующая task-board pre-start command ставит fence для
+задания, начатого во время этого ограниченного recovery, а refresh не может ухудшить delivery state
+ремонта; см.
 [`MaintenanceWorkerCoverReconciliation`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceWorkerCoverReconciliation.java).
 Если catalog-enforced капремонт сохраняет `movementToRepair=true`, тот же frozen-выбор создаёт или
 переиспользует `CAPITAL_TO_PRODUCTION`; пересчёт не очищает этот выбор только потому, что целевой

@@ -380,14 +380,9 @@ final class MaintenanceTaskBoardSupport {
         .toList();
   }
 
-  /** Maps maintenance-owned complexity to the concise WorkerApp repair title. */
+  /** Returns the canonical maintenance-owned complexity label used as the WorkerApp task title. */
   static String workerTaskTitle(RepairComplexity complexity) {
-    return switch (complexity) {
-      case LIGHT -> "Лёгкий ремонт";
-      case MEDIUM -> "Средний ремонт";
-      case COMPLEX -> "Сложный ремонт";
-      case CAPITAL -> "Капитальный ремонт";
-    };
+    return complexity.displayName();
   }
 
   protected static List<MaintenanceDependencyGateway.TaskWork> taskWorkSnapshots(

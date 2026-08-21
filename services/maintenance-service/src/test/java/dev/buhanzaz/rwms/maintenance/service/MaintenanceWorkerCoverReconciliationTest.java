@@ -85,6 +85,11 @@ class MaintenanceWorkerCoverReconciliationTest {
     assertThat(key.getValue())
         .isEqualTo(
             UUID.nameUUIDFromBytes(
+                ("worker-presentation-v3:" + repairId)
+                    .getBytes(StandardCharsets.UTF_8)));
+    assertThat(key.getValue())
+        .isNotEqualTo(
+            UUID.nameUUIDFromBytes(
                 ("worker-presentation-v2:" + repairId)
                     .getBytes(StandardCharsets.UTF_8)));
   }
@@ -162,7 +167,7 @@ class MaintenanceWorkerCoverReconciliationTest {
     assertThat(MaintenanceTaskBoardSupport.workerTaskTitle(RepairComplexity.MEDIUM))
         .isEqualTo("Средний ремонт");
     assertThat(MaintenanceTaskBoardSupport.workerTaskTitle(RepairComplexity.COMPLEX))
-        .isEqualTo("Сложный ремонт");
+        .isEqualTo("Тяжёлый ремонт");
     assertThat(MaintenanceTaskBoardSupport.workerTaskTitle(RepairComplexity.CAPITAL))
         .isEqualTo("Капитальный ремонт");
   }

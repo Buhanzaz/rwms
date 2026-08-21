@@ -28,13 +28,15 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <p>The startup pass performs only owner-local reads and durable reconciliation inserts. Existing
  * task-board update orchestration performs every remote call later, outside the local transaction.
  * A versioned stable key makes the pass safe across restarts and multiple application instances.
+ * Advancing that version schedules a fresh pre-start update without resuming or changing
+ * quarantined work from an earlier presentation generation.
  */
 @Service
 public class MaintenanceWorkerCoverReconciliation {
   private static final Logger log =
       LoggerFactory.getLogger(MaintenanceWorkerCoverReconciliation.class);
   private static final int PAGE_SIZE = 100;
-  private static final String RECONCILIATION_VERSION = "worker-presentation-v2";
+  private static final String RECONCILIATION_VERSION = "worker-presentation-v3";
   private static final String QUARANTINED_RECONCILIATION_CODE =
       "MAINTENANCE_RECONCILIATION_QUARANTINED";
 
@@ -57,8 +59,9 @@ public class MaintenanceWorkerCoverReconciliation {
   /**
    * Enqueues one idempotent pre-start task update per eligible repair after application startup.
    * No remote dependency is contacted on the application-ready thread. An existing quarantined
-   * stable update remains quarantined for reviewed resume and is skipped without failing startup;
-   * every other conflict still fails closed.
+   * stable update in the current generation remains quarantined for reviewed resume and is skipped
+   * without failing startup. Older-generation work keeps its existing state and identity; every
+   * other conflict still fails closed.
    */
   @EventListener(ApplicationReadyEvent.class)
   public void enqueueWorkerPresentationSnapshots() {

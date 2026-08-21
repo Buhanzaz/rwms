@@ -157,7 +157,7 @@ it queues the repair and either registers the task-board task directly or, when
 Every ordinary repair-stage snapshot puts the selected repair cover first in ordered
 `sourceMedia`; the remaining aggregate photos retain their stable order, while each work line lists
 only its own photo IDs. The common task title is the maintenance-calculated complexity label
-(`Лёгкий ремонт`, `Средний ремонт`, `Сложный ремонт` or `Капитальный ремонт`) instead of the
+(`Лёгкий ремонт`, `Средний ремонт`, `Тяжёлый ремонт` or `Капитальный ремонт`) instead of the
 technical `Maintenance repair`; task-board stores that source-owned title through its existing
 contract. This worker-facing projection is built by
 [`MaintenanceTaskBoardSupport`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceTaskBoardSupport.java).
@@ -169,11 +169,13 @@ warehouse; the unfiltered endpoint retains its existing paged behavior. This rea
 At startup, maintenance idempotently enqueues the existing pre-start task update workflow for
 every already registered queued repair. This owner-local pass performs no remote I/O and lets the
 normal reconciliation worker correct old presentation snapshots, including cover order and
-complexity title, without mutating task-board storage directly. A previously quarantined stable
-refresh remains quarantined for reviewed resume and is counted then skipped; it cannot fail the
+complexity title, without mutating task-board storage directly. Presentation generation v3 uses a
+fresh stable key, so eligible queued work receives the canonical title while quarantined v2 work is
+neither resumed nor changed directly. A quarantined stable refresh in the current generation
+remains quarantined for reviewed resume and is counted then skipped; it cannot fail the
 application-ready event or start a restart loop. Any other stable-identity conflict still fails
-closed. A task started during that bounded recovery is left untouched and cannot degrade the
-repair's delivery state; see
+closed. The existing task-board pre-start command fences a task started during that bounded
+recovery, and the refresh cannot degrade the repair's delivery state; see
 [`MaintenanceWorkerCoverReconciliation`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceWorkerCoverReconciliation.java).
 When catalog-enforced capital work retains `movementToRepair=true`, the same frozen choice creates
 or reuses `CAPITAL_TO_PRODUCTION`; recalculation never clears that choice merely because the target
