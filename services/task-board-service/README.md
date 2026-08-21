@@ -56,14 +56,19 @@ the contract-defined version and status. Route order, eligibility, assignment,
 and terminal transitions remain server-owned.
 
 The ordinary repair board is one aggregate warehouse view, not a calendar. Each queue exposes all
-`IN_PROGRESS` and `PAUSED` real entries plus only the first `availableTaskLimit` waiting real entries
-in canonical priority order. Active work stays at the front in aggregate-position order; waiting
-work follows by priority and aggregate position. A take is rejected when the card is outside that
-server-owned window.
-Future route stages remain hidden until their predecessor completes; a holding/SES stage is the only
-ordinary card for its task until treatment finishes. The public board has no date selector, shadow
-mode, manual entry move, date swap, daily-capacity scheduling, or overdue rollover scan. Dated driver
-and shipment planning remains on the separate logistics surfaces. These invariants are defined by
+`IN_PROGRESS` and `PAUSED` real entries plus only the first `availableTaskLimit` waiting real
+entries. Registration priority is already reflected in the persisted queue position; reads do not
+sort by priority a second time. Active work stays first, waiting real work follows in pinned/queue
+position order, and visible future `SHADOW` entries follow without consuming the actionable limit.
+Thus a directly executable electricity stage skips earlier inactive shadows, while promotion
+restores an earlier shadow's persisted place and pushes a later unpinned real card down; a pinned
+real card stays ahead. `TAKE` is rejected outside the same server-owned real window, and a shadow is
+never actionable.
+
+A holding/SES stage is the only ordinary card for its task until treatment finishes; none of that
+task's repair shadows appears on either the panel or WorkerApp during the gate. The public board has
+no date selector, manual entry move, date swap, daily-capacity scheduling, or overdue rollover scan.
+Dated driver and shipment planning remains on the separate logistics surfaces. These invariants are defined by
 [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
 [`TaskBoardReadProjectionService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardReadProjectionService.java),
 and [`OrdinaryQueueAvailabilityPolicy`](src/main/java/dev/buhanzaz/rwms/taskboard/service/OrdinaryQueueAvailabilityPolicy.java).
@@ -213,10 +218,11 @@ persistence schema or event payload shape.
 first position. Each `WorkerWork.sourceMediaIds` is the exact link from a work line to its own
 references in that array; task-board does not flatten or infer that association.
 
-Every `WorkerFeedEntry` exposes zero-based `routeIndex` and positive `routeStepCount`. The latter
-is counted from the task's complete persisted `queue_entry` route, including stages hidden from the
-current worker. Route cardinality and READY evidence counts are loaded for the selected feed page
-in one database projection rather than one query per card.
+Every `WorkerFeedEntry` exposes zero-based `routeIndex`, positive `routeStepCount`, required
+`entryType` (`REAL` or `SHADOW`) and required `pinned`. WorkerApp therefore receives the same
+server order as the panel, can render future stages without enabling commands, and does not infer
+pin or action state locally. Route cardinality and READY evidence counts are loaded for the selected
+feed page in one database projection rather than one query per card.
 
 The worker action path validates the worker identity, current assignment,
 entry version, action/status transition, and offline lease where applicable.

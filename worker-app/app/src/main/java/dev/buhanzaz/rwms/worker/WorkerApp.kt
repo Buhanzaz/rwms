@@ -135,9 +135,16 @@ private data object DownloadsRoute : NavKey
 @Serializable
 internal data class PhotoRoute(
     val title: String,
+    val previewPaths: List<String>,
     val readPaths: List<String>,
     val initialIndex: Int,
-) : NavKey
+) : NavKey {
+    init {
+        require(previewPaths.size == readPaths.size) {
+            "Photo preview and original collections must have equal size"
+        }
+    }
+}
 
 @Composable
 private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -> Unit) {
@@ -236,8 +243,8 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                         openCamera(routeIndex to completeAfterSave)
                     },
                     onGallery = openGallery,
-                    onMedia = { title, paths, initialIndex ->
-                        backStack.add(PhotoRoute(title, paths, initialIndex))
+                    onMedia = { title, previewPaths, readPaths, initialIndex ->
+                        backStack.add(PhotoRoute(title, previewPaths, readPaths, initialIndex))
                     },
                     onCompletionQueued = { showTopLevel(BoardRoute) },
                     viewModel = taskViewModel,
@@ -287,7 +294,8 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
             entry<PhotoRoute> { route ->
                 PhotoPagerScreen(
                     title = route.title,
-                    paths = route.readPaths,
+                    previewPaths = route.previewPaths,
+                    readPaths = route.readPaths,
                     initialIndex = route.initialIndex,
                     onBack = { backStack.removeLastOrNull() },
                 )

@@ -82,6 +82,38 @@ class TaskQueueSectionsTest {
     }
 
     @Test
+    fun `active then pinned and promoted real tasks stay ahead of stored shadows`() {
+        val sections = buildTaskQueueSections(
+            categories = listOf(category("electric", "Электрика", sortOrder = 10)),
+            tasks = listOf(
+                task("shadow-first", "electric", "Электрика", 10, queuePosition = 0)
+                    .copy(entryType = "SHADOW", priority = 99),
+                task("promoted", "electric", "Электрика", 10, queuePosition = 1)
+                    .copy(entryType = "REAL", status = "WAITING", priority = 1),
+                task("pinned", "electric", "Электрика", 10, queuePosition = 5)
+                    .copy(entryType = "REAL", status = "WAITING", priority = 1, pinned = true),
+                task("later-real", "electric", "Электрика", 10, queuePosition = 6)
+                    .copy(entryType = "REAL", status = "WAITING", priority = 5),
+                task("active", "electric", "Электрика", 10, queuePosition = 8)
+                    .copy(entryType = "REAL", status = "IN_PROGRESS"),
+                task("shadow-last", "electric", "Электрика", 10, queuePosition = 9)
+                    .copy(entryType = "SHADOW"),
+            ),
+        )
+
+        assertThat(sections.single().tasks.map { it.entryId })
+            .containsExactly(
+                "active",
+                "pinned",
+                "promoted",
+                "later-real",
+                "shadow-first",
+                "shadow-last",
+            )
+            .inOrder()
+    }
+
+    @Test
     fun keepsVersionOneTaskSectionsVisibleUntilCategoryProjectionIsSynced() {
         val sections = buildTaskQueueSections(
             categories = emptyList(),

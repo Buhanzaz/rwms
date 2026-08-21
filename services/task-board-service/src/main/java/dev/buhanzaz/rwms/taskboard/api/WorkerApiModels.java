@@ -130,6 +130,8 @@ public final class WorkerApiModels {
    * logistics-driver tables.
    *
    * @param routeStepCount positive number of steps in the task's authoritative route
+   * @param entryType server-owned executable-versus-shadow classification
+   * @param pinned whether a manager fixed the task ahead of newly promoted unpinned work
    * @param driverAudience logistics driver audience, or {@code null} for ordinary work
    */
   public record WorkerFeedEntry(
@@ -145,6 +147,8 @@ public final class WorkerApiModels {
       OffsetDateTime deadlineAt,
       int priority,
       int queuePosition,
+      String entryType,
+      boolean pinned,
       String status,
       String availabilityMode,
       @JsonInclude(JsonInclude.Include.ALWAYS) DriverTaskAudienceDto driverAudience,

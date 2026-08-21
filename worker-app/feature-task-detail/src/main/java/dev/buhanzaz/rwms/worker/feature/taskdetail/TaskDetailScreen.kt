@@ -65,7 +65,12 @@ fun TaskDetailScreen(
     entryId: String,
     onBack: (() -> Unit)? = null,
     onCamera: (routeIndex: Int, completeAfterSave: Boolean) -> Unit,
-    onMedia: (title: String, readPaths: List<String>, initialIndex: Int) -> Unit,
+    onMedia: (
+        title: String,
+        previewPaths: List<String>,
+        readPaths: List<String>,
+        initialIndex: Int,
+    ) -> Unit,
     onGallery: (routeIndex: Int) -> Unit = {},
     onMenu: (() -> Unit)? = null,
     profileMonogram: String? = null,
@@ -151,6 +156,7 @@ fun TaskDetailScreen(
         currentWorkerId = userId,
         taskStatus = displayedStatus,
         availabilityMode = detail?.availabilityMode,
+        entryType = task?.entryType ?: "SHADOW",
         queuePurpose = state.queuePurpose,
         assignments = state.assignments,
         locallyPending = task?.locallyPending == true,
@@ -196,6 +202,7 @@ fun TaskDetailScreen(
                     onOpen = { index ->
                         onMedia(
                             mediaTitle,
+                            generalSourceMedia.map { it.thumbnailPath ?: it.readPath },
                             generalSourceMedia.map(WorkerMediaReferenceDto::readPath),
                             index,
                         )
@@ -221,6 +228,9 @@ fun TaskDetailScreen(
                         onOpen = { index ->
                             onMedia(
                                 mediaTitle,
+                                readyServerEvidence.map {
+                                    it.thumbnailPath ?: requireNotNull(it.readPath)
+                                },
                                 readyServerEvidence.map { requireNotNull(it.readPath) },
                                 index,
                             )
@@ -259,6 +269,7 @@ fun TaskDetailScreen(
                         onMedia = { index ->
                             onMedia(
                                 "$mediaTitle · ${work.name}",
+                                workMedia.map { it.thumbnailPath ?: it.readPath },
                                 workMedia.map(WorkerMediaReferenceDto::readPath),
                                 index,
                             )

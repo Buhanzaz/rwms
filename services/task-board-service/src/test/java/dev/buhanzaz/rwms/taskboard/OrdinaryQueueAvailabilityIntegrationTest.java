@@ -149,6 +149,158 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
   }
 
   @Test
+  void realStageSkipsEarlierShadowsUntilTheEarlierRouteStageIsPromoted() {
+    WorkerClassDto workerClass = registry.createClass(workerClass("real-before-shadow"));
+    WorkQueueDto exterior = queue("exterior", QueueType.REPAIR, 6, 0, workerClass.id());
+    WorkQueueDto electricity =
+        queue("electricity", QueueType.REPAIR, 6, 1, workerClass.id());
+    WorkerDto worker = worker(workerClass.id());
+    WorkerGroupDto group = group(workerClass.id(), worker.id());
+
+    board.createTask(
+        WAREHOUSE_ID,
+        new CreateBoardTaskRequest(
+            null,
+            "route-first",
+            "CAB-ROUTE",
+            null,
+            null,
+            null,
+            List.of(
+                new RouteStepRequest(exterior.definitionId(), "Внешние работы", null),
+                new RouteStepRequest(electricity.definitionId(), "Электрика", null)),
+            LocalDate.of(2026, 8, 21),
+            3));
+    create(
+        electricity.definitionId(),
+        "electricity-only",
+        LocalDate.of(2026, 8, 21),
+        3);
+
+    TaskBoardSnapshot beforePromotion = board.snapshot(WAREHOUSE_ID);
+    assertThat(column(beforePromotion, electricity.id()).entries())
+        .extracting(BoardEntryDto::title, BoardEntryDto::entryType)
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple("electricity-only", EntryType.REAL),
+            org.assertj.core.groups.Tuple.tuple("route-first", EntryType.SHADOW));
+
+    BoardEntryDto exteriorEntry = entry(beforePromotion, "route-first", exterior.id());
+    BoardEntryDto taken =
+        board.take(
+            WAREHOUSE_ID,
+            exteriorEntry.id(),
+            new TakeEntryRequest(exteriorEntry.version(), group.id(), worker.id()),
+            null);
+    board.complete(
+        WAREHOUSE_ID, taken.id(), new VersionCommand(taken.version()), null);
+
+    assertThat(column(board.snapshot(WAREHOUSE_ID), electricity.id()).entries())
+        .extracting(BoardEntryDto::title, BoardEntryDto::entryType)
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple("route-first", EntryType.REAL),
+            org.assertj.core.groups.Tuple.tuple("electricity-only", EntryType.REAL));
+  }
+
+  @Test
+  void pinnedRealStageStaysAheadWhenAnEarlierShadowIsPromoted() {
+    WorkerClassDto workerClass = registry.createClass(workerClass("pinned-before-promotion"));
+    WorkQueueDto exterior =
+        queue("pinned-exterior", QueueType.REPAIR, 6, 0, workerClass.id());
+    WorkQueueDto electricity =
+        queue("pinned-electricity", QueueType.REPAIR, 6, 1, workerClass.id());
+    WorkerDto worker = worker(workerClass.id());
+    WorkerGroupDto group = group(workerClass.id(), worker.id());
+
+    board.createTask(
+        WAREHOUSE_ID,
+        new CreateBoardTaskRequest(
+            null,
+            "pinned-route-first",
+            "CAB-PIN-ROUTE",
+            null,
+            null,
+            null,
+            List.of(
+                new RouteStepRequest(exterior.definitionId(), "Внешние работы", null),
+                new RouteStepRequest(electricity.definitionId(), "Электрика", null)),
+            LocalDate.of(2026, 8, 21),
+            3));
+    create(
+        electricity.definitionId(),
+        "pinned-electricity-only",
+        LocalDate.of(2026, 8, 21),
+        3);
+
+    TaskBoardSnapshot initial = board.snapshot(WAREHOUSE_ID);
+    BoardEntryDto electricityOnly =
+        entry(initial, "pinned-electricity-only", electricity.id());
+    board.pin(
+        WAREHOUSE_ID,
+        electricityOnly.taskId(),
+        new PinTaskRequest(electricityOnly.taskVersion(), true));
+
+    BoardEntryDto exteriorEntry = entry(initial, "pinned-route-first", exterior.id());
+    BoardEntryDto taken =
+        board.take(
+            WAREHOUSE_ID,
+            exteriorEntry.id(),
+            new TakeEntryRequest(exteriorEntry.version(), group.id(), worker.id()),
+            null);
+    board.complete(
+        WAREHOUSE_ID, taken.id(), new VersionCommand(taken.version()), null);
+
+    assertThat(column(board.snapshot(WAREHOUSE_ID), electricity.id()).entries())
+        .extracting(BoardEntryDto::title, BoardEntryDto::entryType, BoardEntryDto::pinned)
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(
+                "pinned-electricity-only", EntryType.REAL, true),
+            org.assertj.core.groups.Tuple.tuple(
+                "pinned-route-first", EntryType.REAL, false));
+  }
+
+  @Test
+  void futureShadowsRemainVisibleEvenWhenTheirCurrentRealStageExceedsAnotherQueueLimit() {
+    WorkerClassDto workerClass = registry.createClass(workerClass("complete-shadow-route"));
+    WorkQueueDto exterior =
+        queue("limited-exterior", QueueType.REPAIR, 1, 0, workerClass.id());
+    WorkQueueDto electricity =
+        queue("complete-electricity", QueueType.REPAIR, 1, 0, workerClass.id());
+
+    for (String title : List.of("route-one", "route-two")) {
+      board.createTask(
+          WAREHOUSE_ID,
+          new CreateBoardTaskRequest(
+              null,
+              title,
+              "CAB-" + title,
+              null,
+              null,
+              null,
+              List.of(
+                  new RouteStepRequest(exterior.definitionId(), "Внешние работы", null),
+                  new RouteStepRequest(electricity.definitionId(), "Электрика", null)),
+              LocalDate.of(2026, 8, 21),
+              3));
+    }
+    create(
+        electricity.definitionId(),
+        "electricity-only-visible-real",
+        LocalDate.of(2026, 8, 21),
+        3);
+
+    assertThat(column(board.snapshot(WAREHOUSE_ID), exterior.id()).entries())
+        .extracting(BoardEntryDto::title)
+        .containsExactly("route-one");
+    assertThat(column(board.snapshot(WAREHOUSE_ID), electricity.id()).entries())
+        .extracting(BoardEntryDto::title, BoardEntryDto::entryType)
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(
+                "electricity-only-visible-real", EntryType.REAL),
+            org.assertj.core.groups.Tuple.tuple("route-one", EntryType.SHADOW),
+            org.assertj.core.groups.Tuple.tuple("route-two", EntryType.SHADOW));
+  }
+
+  @Test
   void ordinaryQueueKeepsAggregateInsertionOrderInsteadOfSortingByHistoricDate() {
     WorkerClassDto workerClass = registry.createClass(workerClass("aggregate-order"));
     WorkQueueDto queue = queue("aggregate-order", QueueType.REPAIR, 6, 0, workerClass.id());

@@ -49,8 +49,9 @@ public interface QueueEntryRepository extends JpaRepository<QueueEntry, UUID> {
    * Selects the bounded actionable ordinary-board entry IDs in canonical availability order.
    *
    * <p>Every REAL started or paused entry is retained. Waiting rows are ranked per physical queue
-   * in the same priority/position/identity order used by TAKE and capped by the queue's
-   * persisted availability limit before any entity is materialized.
+   * in the same pinned/position/identity order used by TAKE and capped by the queue's persisted
+   * availability limit before any entity is materialized. Priority is already reflected by the
+   * persisted insertion position and is not applied a second time during reads.
    */
   @Query(
       value =
@@ -75,7 +76,7 @@ public interface QueueEntryRepository extends JpaRepository<QueueEntry, UUID> {
                    and entry.queue_id = queue.id
                    and entry.status = 'WAITING'
                    and entry.entry_type = 'REAL'
-                 order by task.priority,
+                 order by case when task.pinned then 0 else 1 end,
                           entry.queue_position,
                           task.id,
                           entry.route_index,

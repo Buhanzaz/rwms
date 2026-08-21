@@ -465,9 +465,9 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
             ((List<?>) child(schemas, "WorkerFeedEntry").get("required")).stream()
                 .map(String::valueOf)
                 .toList())
-        .contains("routeStepCount", "driverAudience");
+        .contains("routeStepCount", "entryType", "pinned", "driverAudience");
     assertThat(child(child(schemas, "WorkerFeedEntry"), "properties"))
-        .containsKeys("routeStepCount", "driverAudience");
+        .containsKeys("routeStepCount", "entryType", "pinned", "driverAudience");
     assertThat(
             child(
                 child(child(schemas, "WorkerFeedEntry"), "properties"),

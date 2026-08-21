@@ -638,6 +638,45 @@ class WorkerDatabaseCreateOpenRobolectricTest {
         context.deleteDatabase(name)
     }
 
+    @Test
+    fun migrationNineToTenMakesCachedEntriesRealAndUnpinned() {
+        val context = RuntimeEnvironment.getApplication()
+        val name = "worker-room-route-visibility-migration.db"
+        context.deleteDatabase(name)
+        val versionNine = openHelper(
+            context = context,
+            name = name,
+            version = 9,
+            onCreate = { database ->
+                database.execSQL(
+                    "CREATE TABLE `worker_task` (`localId` TEXT NOT NULL PRIMARY KEY)",
+                )
+                database.execSQL("INSERT INTO `worker_task` VALUES ('worker:entry')")
+            },
+        )
+        versionNine.writableDatabase
+        versionNine.close()
+
+        val versionTen = openHelper(
+            context = context,
+            name = name,
+            version = 10,
+            onCreate = { error("Expected the version 9 database to exist") },
+            onUpgrade = { database -> WorkerDatabase.MIGRATION_9_10.migrate(database) },
+        )
+        val database = versionTen.writableDatabase
+
+        database.query(
+            "SELECT `entryType`, `pinned` FROM `worker_task` WHERE `localId`='worker:entry'",
+        ).use { cursor ->
+            assertThat(cursor.moveToFirst()).isTrue()
+            assertThat(cursor.getString(0)).isEqualTo("REAL")
+            assertThat(cursor.getInt(1)).isEqualTo(0)
+        }
+        versionTen.close()
+        context.deleteDatabase(name)
+    }
+
     private fun columns(database: SupportSQLiteDatabase, table: String): List<String> =
         database.query("PRAGMA table_info(`$table`)").use { cursor ->
             buildList {

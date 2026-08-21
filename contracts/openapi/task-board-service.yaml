@@ -2836,7 +2836,7 @@ components:
       additionalProperties: false
     WorkerFeedEntry:
       type: object
-      required: [entryId, version, taskId, routeIndex, routeStepCount, title, unitNumber, taskText, scheduledDate, deadlineAt, priority, queuePosition, status, availabilityMode, driverAudience, plannedDurationMinutes, activeStartedAt, activeWorkSeconds, timerSnapshot, assignments, readyEvidenceCount, resultPhotoMinCount]
+      required: [entryId, version, taskId, routeIndex, routeStepCount, title, unitNumber, taskText, scheduledDate, deadlineAt, priority, queuePosition, entryType, pinned, status, availabilityMode, driverAudience, plannedDurationMinutes, activeStartedAt, activeWorkSeconds, timerSnapshot, assignments, readyEvidenceCount, resultPhotoMinCount]
       properties:
         entryId: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
@@ -2853,6 +2853,13 @@ components:
         deadlineAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
         priority: { type: integer, minimum: 1, maximum: 5 }
         queuePosition: { type: integer, minimum: 0 }
+        entryType:
+          description: REAL is executable; SHADOW reserves a future route position and is read-only.
+          type: string
+          enum: [REAL, SHADOW]
+        pinned:
+          description: Manager pin that keeps a real card ahead of newly promoted unpinned work.
+          type: boolean
         status: { type: string, enum: [WAITING, IN_PROGRESS, PAUSED, DONE, CANCELLED] }
         availabilityMode: { type: string, enum: [AVAILABLE, MANDATORY, SECONDARY_PENDING, REQUIRED_JOIN, OPTIONAL_JOIN] }
         driverAudience:

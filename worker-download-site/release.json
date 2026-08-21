@@ -1,13 +1,13 @@
 {
   "applicationName": "RWMS Worker",
   "packageName": "dev.buhanzaz.rwms.worker",
-  "versionCode": 25,
-  "versionName": "0.1.24",
+  "versionCode": 26,
+  "versionName": "0.1.25",
   "status": "published",
   "minimumAndroidVersion": "Android 6.0",
   "publicGateway": "https://77-90-158-90.sslip.io",
-  "artifactPath": "/downloads/rwms-worker-0.1.24.apk",
-  "downloadUrl": "https://77-90-158-90.sslip.io/downloads/rwms-worker-0.1.24.apk",
-  "sha256": "8df753ac6f9d5534fb03a1ed0cdedc4ebff098f42ebaaf1118562e59003d4f2f",
+  "artifactPath": "/downloads/rwms-worker-0.1.25.apk",
+  "downloadUrl": "https://77-90-158-90.sslip.io/downloads/rwms-worker-0.1.25.apk",
+  "sha256": "a89f12f2b3b250cb0cbe7f20953597221f494ef7b1997b2455c4d2a250d6c1f3",
   "publishedAt": "2026-08-21"
 }

@@ -137,6 +137,8 @@ class TaskBoardControllerConditionalGetTest {
             null,
             3,
             0,
+            "REAL",
+            false,
             "WAITING",
             "AVAILABLE",
             null,
@@ -149,6 +151,8 @@ class TaskBoardControllerConditionalGetTest {
             1);
     var feedJson = mapper.valueToTree(feedEntry);
     assertThat(feedJson.required("routeStepCount").asInt()).isOne();
+    assertThat(feedJson.required("entryType").asText()).isEqualTo("REAL");
+    assertThat(feedJson.required("pinned").asBoolean()).isFalse();
     assertThat(feedJson.has("driverAudience")).isTrue();
     assertThat(feedJson.required("driverAudience").isNull()).isTrue();
   }

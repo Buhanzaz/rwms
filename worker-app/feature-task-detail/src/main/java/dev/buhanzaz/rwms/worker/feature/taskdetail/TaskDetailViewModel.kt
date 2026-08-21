@@ -226,6 +226,7 @@ class TaskDetailViewModel @Inject constructor(
             currentWorkerId = current.userId,
             taskStatus = if (task.locallyPending) state.detail?.status ?: task.status else task.status,
             availabilityMode = state.detail?.availabilityMode,
+            entryType = task.entryType,
             queuePurpose = state.queuePurpose,
             assignments = state.assignments,
             locallyPending = task.locallyPending,

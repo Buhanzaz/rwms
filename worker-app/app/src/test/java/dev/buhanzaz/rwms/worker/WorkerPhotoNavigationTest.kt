@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.worker
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.IntSize
 import com.google.common.truth.Truth.assertThat
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.runners.JUnit4
@@ -14,6 +15,7 @@ class WorkerPhotoNavigationTest {
     fun `selected thumbnail index survives navigation`() {
         val route = PhotoRoute(
             title = "Общие фото",
+            previewPaths = listOf("/media/one/small", "/media/two/small", "/media/three/small"),
             readPaths = listOf("/media/one", "/media/two", "/media/three"),
             initialIndex = 1,
         )
@@ -26,6 +28,18 @@ class WorkerPhotoNavigationTest {
         assertThat(photoPagerInitialPage(-4, 3)).isEqualTo(0)
         assertThat(photoPagerInitialPage(8, 3)).isEqualTo(2)
         assertThat(photoPagerInitialPage(8, 0)).isEqualTo(0)
+    }
+
+    @Test
+    fun `photo route rejects a preview collection with a different size`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            PhotoRoute(
+                title = "Общие фото",
+                previewPaths = listOf("/media/one/small"),
+                readPaths = listOf("/media/one", "/media/two"),
+                initialIndex = 0,
+            )
+        }
     }
 
     @Test

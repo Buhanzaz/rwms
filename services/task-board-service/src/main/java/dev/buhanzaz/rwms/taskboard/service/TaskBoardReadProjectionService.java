@@ -80,7 +80,13 @@ class TaskBoardReadProjectionService {
     this.driverAudiences = driverAudiences;
   }
 
-  /** Builds the bounded aggregate ordinary board without exposing future route stages. */
+  /**
+   * Builds the aggregate ordinary board with a bounded actionable window and persisted shadows.
+   *
+   * <p>The availability limit admits real cards first. Every eligible future shadow remains
+   * visible in its persisted queue position and never consumes that actionable limit. SES/HOLDING
+   * routes expose only their real gate until it completes.
+   */
   public TaskBoardSnapshot snapshot(UUID warehouseId) {
     var columns = new ArrayList<BoardColumnDto>();
     var allEntries = ordinaryEntries(warehouseId);
@@ -395,10 +401,71 @@ class TaskBoardReadProjectionService {
     return task;
   }
 
-  /** Resolves the bounded actionable ID window before hydrating ordinary entry entities. */
+  /**
+   * Resolves the bounded actionable window and all eligible future shadows in one additional ID
+   * query. An unfinished holding route contributes only its selected SES gate and no shadows.
+   */
   private List<QueueEntry> ordinaryEntries(UUID warehouseId) {
-    List<UUID> entryIds = entries.findVisibleOrdinaryEntryIds(warehouseId);
-    return entryIds.isEmpty() ? List.of() : entries.findAllWithTaskAndQueueByIdIn(entryIds);
+    List<UUID> actionableEntryIds = entries.findVisibleOrdinaryEntryIds(warehouseId);
+    if (actionableEntryIds.isEmpty()) return List.of();
+    List<UUID> routeEntryIds = visibleOrdinaryEntryIds(warehouseId, actionableEntryIds);
+    return routeEntryIds.isEmpty()
+        ? List.of()
+        : entries.findAllWithTaskAndQueueByIdIn(routeEntryIds);
+  }
+
+  /**
+   * Adds every waiting shadow whose task has an unfinished real ordinary stage and no unfinished
+   * SES gate. Dynamic placeholders bind UUID values only; no caller-controlled SQL fragment is
+   * accepted.
+   */
+  private List<UUID> visibleOrdinaryEntryIds(
+      UUID warehouseId, List<UUID> actionableEntryIds) {
+    List<UUID> shadowEntryIds =
+        jdbc.query(
+        """
+        select shadow.id
+          from queue_entry shadow
+          join board_task task on task.id = shadow.task_id
+          join work_queue queue on queue.id = shadow.queue_id
+          join queue_definition definition on definition.id = queue.definition_id
+         where task.warehouse_id = ?
+           and task.status = 'ACTIVE'
+           and shadow.entry_type = 'SHADOW'
+           and shadow.status = 'WAITING'
+           and queue.active
+           and not queue.hidden
+           and definition.queue_purpose <> 'LOGISTICS_DRIVER'
+           and exists (
+             select 1
+               from queue_entry current_entry
+               join work_queue current_queue on current_queue.id = current_entry.queue_id
+               join queue_definition current_definition
+                 on current_definition.id = current_queue.definition_id
+              where current_entry.task_id = shadow.task_id
+                and current_entry.entry_type = 'REAL'
+                and current_entry.status in ('WAITING', 'IN_PROGRESS', 'PAUSED')
+                and current_queue.active
+                and not current_queue.hidden
+                and current_definition.queue_purpose <> 'LOGISTICS_DRIVER'
+           )
+           and not exists (
+             select 1
+               from queue_entry holding
+               join work_queue holding_queue on holding_queue.id = holding.queue_id
+               join queue_definition holding_definition
+                 on holding_definition.id = holding_queue.definition_id
+              where holding.task_id = shadow.task_id
+                and holding.status in ('WAITING', 'IN_PROGRESS', 'PAUSED')
+                and holding_definition.queue_type = 'HOLDING'
+           )
+        """,
+            (result, rowNumber) -> UUID.fromString(result.getString("id")),
+            warehouseId);
+    var entryIds = new ArrayList<UUID>(actionableEntryIds.size() + shadowEntryIds.size());
+    entryIds.addAll(actionableEntryIds);
+    entryIds.addAll(shadowEntryIds);
+    return entryIds;
   }
 
   private List<QueueEntry> activeEntries(WorkQueue queue) {

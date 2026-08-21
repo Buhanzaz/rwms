@@ -27,7 +27,7 @@ import javax.inject.Singleton
         WorkerConflictEntity::class,
         WorkerInvalidationEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = true,
 )
 /**
@@ -426,6 +426,18 @@ abstract class WorkerDatabase : RoomDatabase() {
                 )
             }
         }
+
+        /** Adds server-owned real/shadow visibility and stable pinning to cached task rows. */
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `worker_task` ADD COLUMN `entryType` TEXT NOT NULL DEFAULT 'REAL'",
+                )
+                db.execSQL(
+                    "ALTER TABLE `worker_task` ADD COLUMN `pinned` INTEGER NOT NULL DEFAULT 0",
+                )
+            }
+        }
     }
 }
 
@@ -448,6 +460,7 @@ object WorkerDatabaseModule {
                 WorkerDatabase.MIGRATION_6_7,
                 WorkerDatabase.MIGRATION_7_8,
                 WorkerDatabase.MIGRATION_8_9,
+                WorkerDatabase.MIGRATION_9_10,
             )
             .build()
 }

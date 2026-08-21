@@ -152,14 +152,26 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
             .flatMap(column -> column.entries().stream())
             .findFirst()
             .orElseThrow();
-    var feedEntry =
+    var routeFeed =
         workerBoard.feed(worker.id(), WAREHOUSE, null, 50).feed().categories().stream()
             .flatMap(category -> category.entries().stream())
+            .filter(candidate -> candidate.taskId().equals(entry.taskId()))
+            .sorted(java.util.Comparator.comparingInt(candidate -> candidate.routeIndex()))
+            .toList();
+    assertThat(routeFeed)
+        .extracting(candidate -> candidate.entryType())
+        .containsExactly("REAL", "SHADOW", "SHADOW");
+    assertThat(routeFeed)
+        .allSatisfy(candidate -> assertThat(candidate.pinned()).isFalse());
+    var feedEntry =
+        routeFeed.stream()
             .filter(candidate -> candidate.entryId().equals(entry.id()))
             .findFirst()
             .orElseThrow();
     assertThat(feedEntry.routeIndex()).isZero();
     assertThat(feedEntry.routeStepCount()).isEqualTo(3);
+    assertThat(feedEntry.entryType()).isEqualTo("REAL");
+    assertThat(feedEntry.pinned()).isFalse();
 
     BoardEntryDto active =
         board.take(

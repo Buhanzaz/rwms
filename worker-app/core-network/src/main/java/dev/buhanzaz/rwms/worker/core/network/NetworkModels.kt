@@ -136,6 +136,8 @@ data class WorkerFeedEntryDto(
     val taskId: String,
     val routeIndex: Int,
     val routeStepCount: Int,
+    val entryType: String,
+    val pinned: Boolean,
     val title: String,
     val unitNumber: String?,
     val taskText: String?,

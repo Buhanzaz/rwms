@@ -205,10 +205,27 @@ internal fun WorkerCategoryEntity.groupIds(): Set<String> =
 
 private fun List<WorkerTaskEntity>.orderedWithinQueue(): List<WorkerTaskEntity> =
     sortedWith(
-        compareBy<WorkerTaskEntity> { it.queuePosition }
-            .thenByDescending { it.priority }
+        compareBy<WorkerTaskEntity> { it.workerBoardRank() }
+            .thenBy { task ->
+                if (task.entryType == REAL_ENTRY_TYPE && task.status !in ACTIVE_TASK_STATUSES) {
+                    if (task.pinned) 0 else 1
+                } else {
+                    0
+                }
+            }
+            .thenBy { it.queuePosition }
             .thenBy { it.localId },
     )
+
+/**
+ * Keeps active work ahead of takeable REAL entries and renders every SHADOW only after them.
+ * Unknown entry types fail closed in the shadow rank instead of exposing an action.
+ */
+private fun WorkerTaskEntity.workerBoardRank(): Int = when {
+    entryType != REAL_ENTRY_TYPE -> 2
+    status in ACTIVE_TASK_STATUSES -> 0
+    else -> 1
+}
 
 private fun signedQueueDurationLabel(seconds: Long): String {
     val sign = if (seconds < 0) "−" else ""
@@ -225,3 +242,5 @@ private fun unsignedQueueDurationLabel(seconds: Long): String =
 private const val GROUP_IDS_SEPARATOR = '\u001F'
 private const val QUALIFICATION_COLUMN_PREFIX = "qualification-"
 private const val LOGISTICS_DRIVER_QUEUE_PURPOSE = "LOGISTICS_DRIVER"
+private const val REAL_ENTRY_TYPE = "REAL"
+private val ACTIVE_TASK_STATUSES = setOf("IN_PROGRESS", "PAUSED")

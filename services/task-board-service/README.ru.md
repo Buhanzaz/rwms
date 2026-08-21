@@ -57,13 +57,19 @@ terminal transitions остаются server-owned.
 
 Обычная доска ремонтов — единое агрегированное представление склада, а не календарь. Каждая
 очередь показывает все реальные entries в `IN_PROGRESS` и `PAUSED` и только первые
-`availableTaskLimit` ожидающих реальных entries в каноническом порядке приоритета. Активная работа
-остаётся первой в порядке агрегатной позиции; ожидающие задачи следуют по приоритету и агрегатной
-позиции. Take отклоняется, если карточка находится за пределами этого server-owned окна. Будущие стадии маршрута скрыты до
-завершения предыдущей; стадия holding/СЭС остаётся единственной обычной карточкой задачи до конца
-обработки. В публичной доске нет выбора даты, shadow-режима, ручного перемещения entry, обмена дат,
-планирования по daily capacity и фонового rollover просрочки. Датированное планирование водителей и
-отгрузок остаётся в отдельных logistics surfaces. Инварианты подтверждаются
+`availableTaskLimit` ожидающих реальных entries. Приоритет регистрации уже отражён в сохранённой
+позиции очереди; чтение не сортирует по приоритету второй раз. Сначала идёт активная работа, затем
+ожидающие REAL в порядке pin/позиции, а после них — видимые будущие `SHADOW`, которые не расходуют
+лимит доступных заданий. Поэтому сразу исполнимая электрика перепрыгивает через более ранние
+неактивные shadow, но при promotion ранний shadow возвращает сохранённое место и сдвигает вниз
+более поздний незакреплённый REAL; закреплённый REAL остаётся впереди. `TAKE` отклоняется за
+пределами того же server-owned окна REAL, а shadow никогда не является исполнимым.
+
+Стадия holding/СЭС остаётся единственной обычной карточкой задачи до конца обработки; repair
+shadows этой задачи не показываются ни в панели, ни в WorkerApp во время gate. В публичной доске
+нет выбора даты, ручного перемещения entry, обмена дат, планирования по daily capacity и фонового
+rollover просрочки. Датированное планирование водителей и отгрузок остаётся в отдельных logistics
+surfaces. Инварианты подтверждаются
 [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
 [`TaskBoardReadProjectionService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardReadProjectionService.java) и
 [`OrdinaryQueueAvailabilityPolicy`](src/main/java/dev/buhanzaz/rwms/taskboard/service/OrdinaryQueueAvailabilityPolicy.java).
@@ -214,10 +220,11 @@ audit для каждого, выдаёт существующий queue-entry c
 первой позиции. Каждый `WorkerWork.sourceMediaIds` является точной связью строки работы с её
 собственными references в этом массиве; task-board не выравнивает и не угадывает эту связь.
 
-Каждый `WorkerFeedEntry` возвращает zero-based `routeIndex` и положительный `routeStepCount`.
-Последний считается по полному сохранённому в `queue_entry` маршруту задачи, включая скрытые от
-текущего работника этапы. Route cardinality и число READY evidence загружаются для выбранной
-страницы feed одной database projection, а не отдельным запросом для каждой карточки.
+Каждый `WorkerFeedEntry` возвращает zero-based `routeIndex`, положительный `routeStepCount`,
+обязательный `entryType` (`REAL` или `SHADOW`) и обязательный `pinned`. Поэтому WorkerApp получает
+тот же server order, что и панель, показывает будущие этапы без команд и не угадывает pin/action
+state локально. Route cardinality и число READY evidence загружаются для выбранной страницы feed
+одной database projection, а не отдельным запросом для каждой карточки.
 
 Worker action проверяет identity работника, current assignment, entry version,
 action/status transition и offline lease, где он нужен. Evidence сначала

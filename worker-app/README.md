@@ -71,6 +71,16 @@ categories keep their own panels; queues and task cards can also collapse.
 Panels stack on a narrow screen and use a two-column horizontal board from
 720 dp.
 
+Each queue persists the task-board `entryType` and `pinned` fields. Active REAL
+work is shown first, followed by pinned and then ordinary waiting REAL entries
+in the authoritative server queue position; SHADOW entries remain visible afterwards in
+their stored queue position. A newly promoted earlier shadow therefore moves
+ahead of an unpinned waiting entry but never ahead of a pinned one. SHADOW cards
+are subdued, explicitly labelled as waiting for a previous stage, and fail
+closed without TAKE or any other worker action. A route whose first required
+stage is electricity arrives as REAL in the electricity queue and can be taken
+immediately; SES blocking and route promotion remain server-owned.
+
 The centered board header is `Доска задач`; it does not repeat a group-role
 caption or routine sync-progress text. Its refresh icon rotates while a current
 sync stage is active, while offline and blocked-evidence failures remain
@@ -78,8 +88,9 @@ explicit. Group and queue headers show their disclosure controls without an
 aggregate task count. A task-card header vertically aligns the cabin number,
 status and disclosure icon; the scheduled date is absent. A waiting card shows
 `Выделенное время` and the bare maintenance-owned difficulty (`Легкий ремонт`,
-`Средний ремонт` or `Тяжелый ремонт`) once. An active card instead shows `Время работы`
-with KPI on the right. Expansion shows `Этап X из Y`, `Приоритет N`, and one
+`Средний ремонт` or `Тяжелый ремонт`) once. An active card shows the same
+difficulty together with `Время работы` and KPI on the right, without requiring
+expansion. Expansion shows `Этап X из Y`, `Приоритет N`, and one
 integer uploaded-photo count; it never renders a required-photo fraction or a
 `таймер остановлен` suffix. A task card never renders the technical maintenance
 title. These behaviors are owned by
@@ -104,9 +115,14 @@ The entry/resume action stays in a safe-area-aware static footer rather than
 scrolling with task content. Its button spans the available width, and the
 ordinary TAKE label is `Взять задание`.
 
-Authenticated full-screen media keeps only the selected image and its immediate
-neighbours, loads at most two concurrently, and decodes each to at most four
-million pixels. Task-detail thumbnails
+Authenticated full-screen media first loads the SMALL preview for the selected
+page and its immediate neighbours, then progressively replaces the selected
+preview with the original. Per-path jobs are cancelled independently during a
+swipe. A 16-entry preview LRU keeps viewed pages available for back-swipes,
+while at most three originals remain decoded; downloads are capped at three in
+parallel, previews at 256,000 pixels, and originals at four million pixels.
+Evicted and route-cleared bitmaps are recycled after the published UI state no
+longer references them. Task-detail thumbnails
 are decoded to at most 256,000 pixels, at most three are fetched/decoded in
 parallel, and the ViewModel retains no more than 16 recent entries while
 recycling evicted bitmaps. Camera confirmation uses a separate two-million-pixel preview.

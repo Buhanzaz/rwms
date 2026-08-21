@@ -176,7 +176,7 @@ class TaskQueueListComposeTest {
     }
 
     @Test
-    fun activeTaskOmitsDateAndShowsElapsedTimeWithKpiThenOpensFullScreenTask() {
+    fun activeTaskShowsComplexityWithoutExpansionAndOpensFullScreenTask() {
         var openedEntryId: String? = null
         val section = TaskQueueSection(
             queueId = "repair",
@@ -185,6 +185,7 @@ class TaskQueueListComposeTest {
             sortOrder = 10,
             tasks = listOf(
                 task("timed-task").copy(
+                    title = "Тяжёлый ремонт",
                     status = "IN_PROGRESS",
                     activeWorkSeconds = 65,
                     timerCountedActiveSeconds = 65,
@@ -209,6 +210,7 @@ class TaskQueueListComposeTest {
         compose.onAllNodesWithText("Дата: 2026-08-10").assertCountEquals(0)
         compose.onNodeWithText("Время работы: 0:01:05").assertIsDisplayed()
         compose.onNodeWithText("KPI: 50.0%").assertIsDisplayed()
+        compose.onNodeWithText("Тяжелый ремонт").assertIsDisplayed()
         compose.onNodeWithText("Открыть задание").assertIsDisplayed().performClick()
         assertThat(openedEntryId).isEqualTo("timed-task")
     }
@@ -238,6 +240,28 @@ class TaskQueueListComposeTest {
         compose.onNodeWithText("Выделенное время: 1:15:00").assertIsDisplayed()
         compose.onAllNodesWithText("Легкий ремонт").assertCountEquals(1)
         compose.onAllNodesWithText("Время работы: 0:00:00").assertCountEquals(0)
+    }
+
+    @Test
+    fun shadowTaskIsExplicitlySubduedAndNeverShowsATakeAction() {
+        val section = TaskQueueSection(
+            queueId = "electric",
+            name = "Электрика",
+            queuePurpose = "GENERAL",
+            sortOrder = 10,
+            tasks = listOf(task("shadow").copy(entryType = "SHADOW")),
+        )
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.size(width = 360.dp, height = 500.dp)) {
+                    TaskQueueList(sections = listOf(section), onTask = {})
+                }
+            }
+        }
+
+        compose.onNodeWithTag("task-shadow-shadow").assertIsDisplayed()
+        compose.onNodeWithText("Теневая задача · ожидает предыдущего этапа").assertIsDisplayed()
+        compose.onAllNodesWithText("Взять задание").assertCountEquals(0)
     }
 
     @Test

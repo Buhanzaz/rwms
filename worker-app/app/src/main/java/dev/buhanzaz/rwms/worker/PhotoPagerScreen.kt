@@ -43,14 +43,18 @@ import kotlin.math.min
 @Composable
 fun PhotoPagerScreen(
     title: String,
-    paths: List<String>,
+    previewPaths: List<String>,
+    readPaths: List<String>,
     initialIndex: Int,
     onBack: () -> Unit,
     viewModel: PhotoViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    require(previewPaths.size == readPaths.size) {
+        "Photo preview and original collections must have equal size"
+    }
 
-    if (paths.isEmpty()) {
+    if (readPaths.isEmpty()) {
         WorkerScreenScaffold(title = "0/0 · $title", onBack = onBack) { padding ->
             Box(Modifier.fillMaxSize().padding(padding)) {
                 Text(
@@ -62,19 +66,25 @@ fun PhotoPagerScreen(
         return
     }
 
-    val pager = rememberPagerState(
-        initialPage = photoPagerInitialPage(initialIndex, paths.size),
-        pageCount = { paths.size },
-    )
-    val currentPage = pager.currentPage.coerceIn(paths.indices)
-    LaunchedEffect(paths, currentPage) {
-        viewModel.show(photoPagerLoadWindow(paths, currentPage))
+    val items = remember(previewPaths, readPaths) {
+        readPaths.indices.map { index ->
+            PhotoMediaItem(previewPath = previewPaths[index], readPath = readPaths[index])
+        }
     }
-    var currentPageZoomed by remember(paths) { mutableStateOf(false) }
+
+    val pager = rememberPagerState(
+        initialPage = photoPagerInitialPage(initialIndex, items.size),
+        pageCount = { items.size },
+    )
+    val currentPage = pager.currentPage.coerceIn(items.indices)
+    LaunchedEffect(items, currentPage) {
+        viewModel.show(items, currentPage)
+    }
+    var currentPageZoomed by remember(items) { mutableStateOf(false) }
     LaunchedEffect(currentPage) { currentPageZoomed = false }
 
     WorkerScreenScaffold(
-        title = "${currentPage + 1}/${paths.size} · $title",
+        title = "${currentPage + 1}/${items.size} · $title",
         onBack = onBack,
     ) { padding ->
         HorizontalPager(
@@ -82,7 +92,7 @@ fun PhotoPagerScreen(
             userScrollEnabled = !currentPageZoomed,
             modifier = Modifier.fillMaxSize().padding(padding),
         ) { page ->
-            val path = paths[page]
+            val path = items[page].readPath
             val bitmap = state.bitmaps[path]
             Box(Modifier.fillMaxSize()) {
                 if (bitmap == null) {
@@ -101,12 +111,26 @@ fun PhotoPagerScreen(
                 } else {
                     ZoomableBitmap(
                         bitmap = bitmap.asImageBitmap(),
+                        photoKey = path,
                         active = page == currentPage,
                         onZoomStateChanged = { zoomed ->
                             if (page == pager.currentPage) currentPageZoomed = zoomed
                         },
                         modifier = Modifier.fillMaxSize(),
                     )
+                    if (path in state.loadingOriginals && path !in state.originalPaths) {
+                        Text(
+                            "Загружаем оригинал…",
+                            modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
+                        )
+                    } else if (state.errors[path] != null) {
+                        TextButton(
+                            onClick = { viewModel.retry(path) },
+                            modifier = Modifier.align(Alignment.BottomCenter).padding(8.dp),
+                        ) {
+                            Text("Повторить загрузку оригинала")
+                        }
+                    }
                 }
             }
         }
@@ -117,7 +141,7 @@ fun PhotoPagerScreen(
 internal fun photoPagerInitialPage(initialIndex: Int, photoCount: Int): Int =
     if (photoCount <= 0) 0 else initialIndex.coerceIn(0, photoCount - 1)
 
-/** Keeps only the selected full-size photo and its immediate pager neighbours in memory. */
+/** Returns the selected photo and immediate neighbours whose preview work remains useful. */
 internal fun photoPagerLoadWindow(paths: List<String>, selectedIndex: Int): List<String> {
     if (paths.isEmpty()) return emptyList()
     val selected = photoPagerInitialPage(selectedIndex, paths.size)
@@ -167,13 +191,14 @@ internal fun boundedPhotoOffset(
 @Composable
 private fun ZoomableBitmap(
     bitmap: ImageBitmap,
+    photoKey: String,
     active: Boolean,
     onZoomStateChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var scale by remember(bitmap) { mutableFloatStateOf(MIN_PHOTO_SCALE) }
-    var offset by remember(bitmap) { mutableStateOf(Offset.Zero) }
-    var viewportSize by remember(bitmap) { mutableStateOf(IntSize.Zero) }
+    var scale by remember(photoKey) { mutableFloatStateOf(MIN_PHOTO_SCALE) }
+    var offset by remember(photoKey) { mutableStateOf(Offset.Zero) }
+    var viewportSize by remember(photoKey) { mutableStateOf(IntSize.Zero) }
     val imageSize = remember(bitmap) { IntSize(bitmap.width, bitmap.height) }
 
     fun applyTransform(nextScale: Float, proposedOffset: Offset) {
@@ -212,7 +237,7 @@ private fun ZoomableBitmap(
                 viewportSize = size
                 offset = boundedPhotoOffset(offset, scale, viewportSize, imageSize)
             }
-            .pointerInput(bitmap) {
+            .pointerInput(photoKey) {
                 detectTapGestures(
                     onDoubleTap = { tapPosition ->
                         if (scale > MIN_PHOTO_SCALE) {

@@ -46,6 +46,8 @@ class WorkerLogisticsContractTest {
               "taskId":"task",
               "routeIndex":0,
               "routeStepCount":3,
+              "entryType":"REAL",
+              "pinned":true,
               "title":"Погрузить бытовку",
               "unitNumber":"БТ-1",
               "taskText":null,
@@ -82,6 +84,8 @@ class WorkerLogisticsContractTest {
         assertThat(entry.availabilityMode).isEqualTo("OPTIONAL_JOIN")
         assertThat(entry.assignments).hasSize(1)
         assertThat(entry.routeStepCount).isEqualTo(3)
+        assertThat(entry.entryType).isEqualTo("REAL")
+        assertThat(entry.pinned).isTrue()
         assertThat(entry.resultPhotoMinCount).isEqualTo(1)
     }
 

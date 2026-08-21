@@ -118,6 +118,12 @@ data class WorkerTaskEntity(
     /** Total stages in the task route supplied by task-board. */
     @ColumnInfo(defaultValue = "1")
     val routeStepCount: Int = 1,
+    /** Server-owned route visibility: only REAL entries may expose worker actions. */
+    @ColumnInfo(defaultValue = "'REAL'")
+    val entryType: String = "REAL",
+    /** Keeps a claimed or explicitly fixed REAL entry ahead of later route promotions. */
+    @ColumnInfo(defaultValue = "0")
+    val pinned: Boolean = false,
 )
 
 @Entity(tableName = "worker_assignment", indices = [Index(value = ["userId", "entryId"])])

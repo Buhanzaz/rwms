@@ -39,6 +39,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -388,9 +389,11 @@ private fun TaskRow(
     presentationKey: String,
 ) {
     var expanded by rememberSaveable(presentationKey) { mutableStateOf(false) }
+    val isShadow = task.entryType != REAL_ENTRY_TYPE
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
             .testTag("task-card-$presentationKey")
+            .alpha(if (isShadow) SHADOW_TASK_ALPHA else 1f)
             .animateContentSize(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
@@ -429,15 +432,20 @@ private fun TaskRow(
                 },
                 overdueColor = kpiPalette?.overdueColor,
             )
+            if (isShadow) {
+                Text(
+                    "Теневая задача · ожидает предыдущего этапа",
+                    modifier = Modifier.testTag("task-shadow-${task.entryId}"),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (task.status == "WAITING") {
                 Text(
                     "Выделенное время: ${allocatedQueueDurationLabel(task.plannedDurationMinutes)}",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                complexity?.let {
-                    Text(it, style = MaterialTheme.typography.labelMedium)
-                }
             } else {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -457,6 +465,9 @@ private fun TaskRow(
                     )
                 }
             }
+            complexity?.let {
+                Text(it, style = MaterialTheme.typography.labelMedium)
+            }
             if (expanded) {
                 Text(
                     "Этап ${workerTaskStageOrdinal(task.routeIndex, task.routeStepCount, " из ")}",
@@ -466,11 +477,6 @@ private fun TaskRow(
                     "Приоритет ${task.priority}",
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                if (task.status != "WAITING") {
-                    complexity?.let {
-                        Text(it, style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
                 task.deadlineAt?.let {
                     Text("Срок: $it", style = MaterialTheme.typography.bodyMedium)
                 }
@@ -552,3 +558,5 @@ private const val REFRESH_ROTATION_DURATION_MILLIS = 900
 private const val SYNC_PROGRESS_FRESHNESS_MILLIS = 60_000L
 private const val WAITING_FOR_EVIDENCE_STAGE = "WAITING_FOR_EVIDENCE"
 private val ACTIVE_SYNC_STAGES = setOf("CONTEXT", "COMMANDS", "EVIDENCE", "UPLOAD")
+private const val REAL_ENTRY_TYPE = "REAL"
+private const val SHADOW_TASK_ALPHA = 0.62f

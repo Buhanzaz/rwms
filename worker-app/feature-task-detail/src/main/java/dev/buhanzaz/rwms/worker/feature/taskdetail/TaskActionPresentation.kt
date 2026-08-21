@@ -43,19 +43,21 @@ internal fun selectedGroupForAction(
 }
 
 /**
- * Fails closed for waiting logistics entries: WorkerApp can only JOIN an
+ * Fails closed for every SHADOW and for waiting logistics entries: WorkerApp can only JOIN an
  * already active shared task and can act further only after assignment.
  */
 internal fun taskActionPresentation(
     currentWorkerId: String,
     taskStatus: String?,
     availabilityMode: String?,
+    entryType: String = REAL_ENTRY_TYPE,
     queuePurpose: String? = null,
     assignments: List<WorkerAssignmentEntity>,
     locallyPending: Boolean,
     hasCurrentGroup: Boolean = true,
     operationalAvailability: String = "AVAILABLE",
 ): TaskActionPresentation {
+    val isShadow = entryType != REAL_ENTRY_TYPE
     val isSecondaryLogistics = queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE
     val liveAssignments = assignments.filter { it.status == "ACTIVE" || it.status == "PAUSED" }
     val currentWorkerHasActiveAssignment = liveAssignments.any {
@@ -98,6 +100,7 @@ internal fun taskActionPresentation(
         else -> emptyList()
     }
     val actions = when {
+        isShadow -> emptyList()
         operationalAvailability != "AVAILABLE" -> emptyList()
         !hasCurrentGroup &&
             candidateActions.any { it == WorkerTaskAction.TAKE || it == WorkerTaskAction.JOIN } ->
@@ -111,6 +114,7 @@ internal fun taskActionPresentation(
     }.distinct()
     val message = when {
         locallyPending -> "Действие ожидает синхронизации"
+        isShadow -> "Теневая задача ожидает завершения предыдущего этапа"
         operationalAvailability != "AVAILABLE" -> "Рабочий временно недоступен"
         !hasCurrentGroup &&
             candidateActions.any { it == WorkerTaskAction.TAKE || it == WorkerTaskAction.JOIN } ->
@@ -158,3 +162,4 @@ internal fun queuedCompletionEvidenceId(queuePurpose: String?, capturedEvidenceI
     capturedEvidenceId.takeIf { queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE }
 
 internal const val LOGISTICS_DRIVER_QUEUE_PURPOSE = "LOGISTICS_DRIVER"
+private const val REAL_ENTRY_TYPE = "REAL"

@@ -966,6 +966,8 @@ public class WorkerTaskBoardService {
         null,
         entry.priority(),
         entry.queuePosition(),
+        entry.entryType().name(),
+        entry.pinned(),
         entry.status().name(),
         availabilityMode(category, entry.status().name()),
         entry.driverAudience(),

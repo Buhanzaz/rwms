@@ -174,6 +174,8 @@ class FullSyncConflictResolutionRobolectricTest {
             taskId = "task",
             routeIndex = 1,
             routeStepCount = 3,
+            entryType = "SHADOW",
+            pinned = true,
             title = "Средний ремонт",
             unitNumber = "БТ-42",
             taskText = null,
@@ -203,6 +205,8 @@ class FullSyncConflictResolutionRobolectricTest {
         val persisted = database.taskDao().task(USER_ID, ENTRY_ID)
         assertThat(persisted?.routeIndex).isEqualTo(2)
         assertThat(persisted?.routeStepCount).isEqualTo(3)
+        assertThat(persisted?.entryType).isEqualTo("SHADOW")
+        assertThat(persisted?.pinned).isTrue()
     }
 
     private fun context(

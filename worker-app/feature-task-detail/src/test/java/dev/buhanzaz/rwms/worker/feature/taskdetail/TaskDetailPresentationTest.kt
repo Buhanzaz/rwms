@@ -12,6 +12,30 @@ import org.junit.Test
 
 class TaskDetailPresentationTest {
     @Test
+    fun `real electricity-only entry is takeable while shadow entry fails closed`() {
+        val real = taskActionPresentation(
+            currentWorkerId = "worker",
+            taskStatus = "WAITING",
+            availabilityMode = "AVAILABLE",
+            entryType = "REAL",
+            assignments = emptyList(),
+            locallyPending = false,
+        )
+        val shadow = taskActionPresentation(
+            currentWorkerId = "worker",
+            taskStatus = "WAITING",
+            availabilityMode = "AVAILABLE",
+            entryType = "SHADOW",
+            assignments = emptyList(),
+            locallyPending = false,
+        )
+
+        assertThat(real.actions).containsExactly(WorkerTaskAction.TAKE)
+        assertThat(shadow.actions).isEmpty()
+        assertThat(shadow.message).isEqualTo("Теневая задача ожидает завершения предыдущего этапа")
+    }
+
+    @Test
     fun `thumbnail cache keeps only the most recently requested paths`() {
         assertThat(
             workerThumbnailCachePaths(

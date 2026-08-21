@@ -402,6 +402,8 @@ class WorkerProjectionWriter @Inject constructor(
         timerServerTime = timerSnapshot?.serverTime,
         routeIndex = routeIndex,
         routeStepCount = routeStepCount,
+        entryType = entryType,
+        pinned = pinned,
     )
 
     private fun WorkerAssignmentDto.toEntity(userId: String, entryId: String) =

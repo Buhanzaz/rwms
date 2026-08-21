@@ -72,6 +72,12 @@ object WorkerAppModule {
 
     @Provides
     @Singleton
+    fun photoBitmapSource(
+        gateway: dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient,
+    ): PhotoBitmapSource = GatewayPhotoBitmapSource(gateway)
+
+    @Provides
+    @Singleton
     fun workerSseClient(client: OkHttpClient, baseUrl: HttpUrl, json: Json): WorkerSseClient =
         WorkerSseClient(client, baseUrl, json)
 
