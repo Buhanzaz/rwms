@@ -50,37 +50,84 @@ projections, Problem Details, media payloads, and every other DTO.
 
 ## Screens and server-owned work
 
-The root menu contains Work, Downloads, and Profile. Work displays only the
-categories, groups, assignments, KPI palette, task identifiers, materials,
-works, comments, and media references supplied in the worker feed. WorkerApp
-has no driver work surface or driver trip read. Task-board exposes a joint
-`LOGISTICS_DRIVER` task here only after its primary performer has taken it and
-only to an eligible secondary worker; a stale cached waiting entry is hidden
-locally as an additional fail-closed guard.
+The navigation drawer contains Task Board and Downloads; the app-bar monogram
+opens Profile. The board displays only categories, groups, assignments, the KPI
+palette, and task summaries supplied in the worker feed. WorkerApp has no driver
+work surface or driver trip read. Task-board exposes a joint `LOGISTICS_DRIVER`
+task here only after its primary performer has taken it and only to an eligible
+secondary worker; a stale cached waiting entry is hidden locally as an
+additional fail-closed guard.
 
 The eligible slinger takes an active joint task with the current group ID when
 one exists: the visible `Взять задание` control sends the `JOIN` wire action.
 The owning service pauses the previous assignment timer for that group and
 later resumes it according to the server workflow. Slinger participation is
 optional, so the driver may complete with a ready result photo before anyone
-joins. Once joined, the slinger can pause, resume, or complete the shared task.
-Completion requires at least one server-`READY` photo from either active
-participant; the server closes the same task for both. Ordinary group-bound
-roles and qualification-only categories keep their own panels; queues and task
-cards can also collapse. Panels stack on a narrow screen and use a two-column
-horizontal board from 720 dp. A card shows cabin, scheduled date and
-authoritative elapsed time; its expanded state adds status, optional budget
-timer and photo count. `Открыть задание` always opens a dedicated full-screen
-task destination, including on tablets and unfolded devices. The task screen
-presents identity and object type first, then separate swipeable general photos,
-materials, ordered works with their own photo strips, comments and result
-evidence. Selecting any thumbnail opens that exact item in the full-screen paged
-and zoomable viewer. After TAKE/JOIN, the app bar immediately shows timer startup
-and then the task-board-owned reverse countdown; breaks, off-shift time and
-pauses remain server-owned. Result capture and the completion command stay at
-the end of the execution flow. Downloads remains the recovery surface for failed
-or pending uploads and explicit retry. The task screen records a work result and
-JPEG evidence but never decides a task transition locally.
+joins. WorkerApp does not present a pause action; a joined slinger can resume a
+server-paused task or complete the shared task. Completion requires at least
+one server-`READY` photo from either active participant; the server closes the
+same task for both. Ordinary group-bound roles and qualification-only
+categories keep their own panels; queues and task cards can also collapse.
+Panels stack on a narrow screen and use a two-column horizontal board from
+720 dp.
+
+The centered board header is `Доска задач`; it does not repeat a group-role
+caption or routine sync-progress text. Its refresh icon rotates while a current
+sync stage is active, while offline and blocked-evidence failures remain
+explicit. Group and queue headers show their disclosure controls without an
+aggregate task count. A task-card header vertically aligns the cabin number,
+status and disclosure icon; the scheduled date is absent. Expanding the card
+shows the source queue as its stage, the numeric priority and the
+maintenance-owned repair complexity (`Лёгкий`, `Средний`, `Сложный` or
+`Капитальный ремонт`). A task card never renders the technical maintenance
+title. These behaviors are owned by
+[`TasksScreen.kt`](feature-tasks/src/main/java/dev/buhanzaz/rwms/worker/feature/tasks/TasksScreen.kt).
+
+`Открыть задание` opens a dedicated full-screen task destination, including on
+tablets and unfolded devices. Its app bar contains only the cabin number. The
+content starts with a swipeable general-photo pager; when the task source
+defines a cover, that title image is the first frame. A full-width
+elapsed/remaining/KPI timer is followed immediately by the task stage,
+priority and maintenance-owned repair complexity; the result-photo collection
+follows. Every work is a single card with quantity opposite its name and only that work's
+`sourceMediaIds` photos directly below it under `Фото к работе`; materials
+follow in the same readable form. Task descriptions and manager comments are
+not rendered. Selecting a photo opens that exact item in the full-screen paged
+and zoomable viewer, whose title also identifies the work for work-linked
+photos. Breaks, off-shift time and pauses remain server-owned, but the screen
+has no pause or direct result-photo button. The unsupported
+`Сообщить о проблеме` action is not shown until a server command exists; the layout is defined in
+[`TaskDetailScreen.kt`](feature-task-detail/src/main/java/dev/buhanzaz/rwms/worker/feature/taskdetail/TaskDetailScreen.kt).
+The entry/resume action stays in a safe-area-aware static footer rather than
+scrolling with task content. Its button spans the available width, and the
+ordinary TAKE label is `Взять задание`.
+
+Authenticated full-screen media keeps only the selected image and its immediate
+neighbours, each decoded to at most four million pixels. Task-detail thumbnails
+are decoded to at most 256,000 pixels and the ViewModel retains no more than 16
+recent entries. Camera confirmation uses a separate two-million-pixel preview.
+These bounds prevent a large retained inventory archive from becoming an
+Android heap-sized bitmap cache. Evidence:
+[`PhotoViewModel.kt`](app/src/main/java/dev/buhanzaz/rwms/worker/PhotoViewModel.kt),
+[`TaskMediaThumbnailViewModel.kt`](feature-task-detail/src/main/java/dev/buhanzaz/rwms/worker/feature/taskdetail/TaskMediaThumbnailViewModel.kt), and
+[`CameraScreen.kt`](feature-camera/src/main/java/dev/buhanzaz/rwms/worker/feature/camera/CameraScreen.kt).
+
+For a maintenance repair, the task-board detail already combines every work and material from the
+current consecutive same-queue package. WorkerApp renders those server-ordered arrays and sends one
+TAKE/COMPLETE for the representative entry; it does not split, repeat, or locally close individual
+repair-stage lines. The same COMPLETE closes every remaining member of that package on the server.
+Other task sources retain entry-level execution.
+
+Completing a task opens three equal-width, vertically stacked actions: CameraX,
+Android photo picker, and cancel. The picker accepts up to ten images. Every
+selected image is normalized to a bounded upright JPEG, encrypted, and durably
+queued in selection order before the completion callback is emitted; the final
+saved evidence ID is attached only where the logistics completion contract
+requires a selected photo. The sync coordinator never sends `COMPLETE` until
+the queued evidence has been processed and required evidence is server-`READY`.
+Downloads remains the recovery surface for failed or pending uploads and
+explicit retry. The task screen records a work result and JPEG evidence but
+never decides a task transition locally.
 
 Server-provided KPI ranges determine colors; no local green/yellow/red policy
 is invented. Worker-facing work data does not expose price/cost fields.
@@ -133,6 +180,15 @@ response was lost.
 Worker evidence is JPEG-only. The camera normalizes physical orientation into
 pixels and writes EXIF 'Orientation=1' before encryption; it limits normalized
 images to 8 MP and the evidence contract to 15 MB. Ultra HDR is not used.
+Gallery images use Android's multi-select photo picker with a ten-image limit.
+They are copied sequentially into transient private cache and pass through the
+same orientation, 8 MP, 15 MB and encrypted evidence pipeline before each
+temporary copy is removed. A partial batch keeps and schedules already durable
+evidence while reporting the exact saved count; it is never reported as full
+success. The capture/import behavior is owned by
+[`CameraScreen.kt`](feature-camera/src/main/java/dev/buhanzaz/rwms/worker/feature/camera/CameraScreen.kt)
+and
+[`CameraViewModel.kt`](feature-camera/src/main/java/dev/buhanzaz/rwms/worker/feature/camera/CameraViewModel.kt).
 The WorkerApp CameraX surface carries the ManagerApp photo controls needed in
 the field: rear/front selection, supported optical zoom, focus/metering, night
 mode, flash/torch, framing grid and exposure. While the camera is active, either

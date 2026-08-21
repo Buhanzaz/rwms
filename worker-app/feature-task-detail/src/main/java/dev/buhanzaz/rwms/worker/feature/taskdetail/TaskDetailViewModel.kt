@@ -201,6 +201,23 @@ class TaskDetailViewModel @Inject constructor(
     }
 
     fun perform(action: String, evidenceId: String? = null) {
+        perform(action, evidenceId, allowPendingEvidence = false)
+    }
+
+    /**
+     * Queues completion immediately after camera/gallery persistence. The sync coordinator keeps
+     * the command behind evidence reservation, upload and READY processing before contacting the
+     * task-board service.
+     */
+    fun completeAfterEvidence(evidenceId: String) {
+        perform(
+            action = WorkerTaskAction.COMPLETE.wireValue,
+            evidenceId = evidenceId,
+            allowPendingEvidence = true,
+        )
+    }
+
+    private fun perform(action: String, evidenceId: String?, allowPendingEvidence: Boolean) {
         val current = key.value ?: return
         val state = uiState.value
         val task = state.task ?: return
@@ -230,11 +247,18 @@ class TaskDetailViewModel @Inject constructor(
                         .map { it.evidenceId },
                 )
             }
-        val selectedEvidenceId = completionEvidenceId(
-            queuePurpose = state.queuePurpose,
-            readyEvidenceIds = readyEvidenceIds,
-            selectedEvidenceId = evidenceId,
-        )
+        val selectedEvidenceId = if (
+            allowPendingEvidence &&
+            requestedAction == WorkerTaskAction.COMPLETE
+        ) {
+            queuedCompletionEvidenceId(state.queuePurpose, requireNotNull(evidenceId))
+        } else {
+            completionEvidenceId(
+                queuePurpose = state.queuePurpose,
+                readyEvidenceIds = readyEvidenceIds,
+                selectedEvidenceId = evidenceId,
+            )
+        }
         if (
             requestedAction == WorkerTaskAction.COMPLETE &&
             state.queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE &&

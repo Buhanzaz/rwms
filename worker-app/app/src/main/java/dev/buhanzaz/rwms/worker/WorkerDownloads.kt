@@ -1,6 +1,5 @@
 package dev.buhanzaz.rwms.worker
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -19,7 +18,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -150,72 +148,27 @@ internal fun workerDownloadItems(
 }
 
 @Composable
-fun WorkerMainMenuScreen(
+fun WorkerDownloadsScreen(
     userId: String,
-    displayName: String,
-    onWorks: () -> Unit,
-    onDownloads: () -> Unit,
+    onMenu: () -> Unit,
+    profileMonogram: String,
     onProfile: () -> Unit,
     viewModel: WorkerDownloadsViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(userId) { viewModel.bind(userId) }
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val menuItems = workerMenuItems(state.items.size)
-    WorkerScreenScaffold(title = "RWMS Рабочий") { padding ->
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            item {
-                Text(
-                    displayName,
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
-                )
-            }
-            items(menuItems, key = WorkerMenuItem::title) { item ->
-                Card(
-                    modifier = Modifier.fillMaxWidth().clickable(
-                        onClick = when (item.destination) {
-                            WorkerMenuDestination.WORKS -> onWorks
-                            WorkerMenuDestination.DOWNLOADS -> onDownloads
-                            WorkerMenuDestination.PROFILE -> onProfile
-                        },
-                    ),
-                ) {
-                    Row(Modifier.fillMaxWidth().padding(18.dp)) {
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(item.title, style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                item.description,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Text("›", color = item.accent, style = MaterialTheme.typography.headlineSmall)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun WorkerDownloadsScreen(
-    userId: String,
-    onBack: () -> Unit,
-    viewModel: WorkerDownloadsViewModel = hiltViewModel(),
-) {
-    LaunchedEffect(userId) { viewModel.bind(userId) }
-    val state by viewModel.state.collectAsStateWithLifecycle()
-    WorkerScreenScaffold(title = "Загрузки", onBack = onBack) { padding ->
+    WorkerScreenScaffold(
+        title = "Загрузки",
+        onMenu = onMenu,
+        profileMonogram = profileMonogram,
+        onProfile = onProfile,
+    ) { padding ->
         if (state.items.isEmpty()) {
             Column(
                 modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("Нет активных загрузок", style = MaterialTheme.typography.titleLarge)
+                Text("Нет активных загрузок", style = MaterialTheme.typography.titleMedium)
                 Text(
                     "Успешно отправленные действия и фотографии исчезают отсюда автоматически.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -227,15 +180,6 @@ fun WorkerDownloadsScreen(
                 contentPadding = PaddingValues(14.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Фоновая отправка", style = MaterialTheme.typography.titleLarge)
-                        Text(
-                            "Можно продолжать работу. Ошибочные отправки сохраняются и доступны для повтора.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
                 items(state.items, key = WorkerDownloadItem::id) { item ->
                     WorkerDownloadCard(item = item, onRetry = viewModel::retry)
                 }
@@ -275,46 +219,6 @@ private fun WorkerDownloadCard(item: WorkerDownloadItem, onRetry: () -> Unit) {
         }
     }
 }
-
-/**
- * Defines worker UI/presentation state; it does not decide a server task transition.
- */
-internal data class WorkerMenuItem(
-    val title: String,
-    val description: String,
-    val accent: Color,
-    val destination: WorkerMenuDestination,
-)
-
-/**
- * Defines worker UI/presentation state; it does not decide a server task transition.
- */
-internal enum class WorkerMenuDestination { WORKS, DOWNLOADS, PROFILE }
-
-internal fun workerMenuItems(pendingDownloadCount: Int): List<WorkerMenuItem> = listOf(
-    WorkerMenuItem(
-        title = "Работы",
-        description = "Задания на день по назначенным группам",
-        accent = Color(0xFF0069A8),
-        destination = WorkerMenuDestination.WORKS,
-    ),
-    WorkerMenuItem(
-        title = "Загрузки",
-        description = if (pendingDownloadCount == 0) {
-            "Нет ожидающих отправок"
-        } else {
-            "Операций в работе: $pendingDownloadCount"
-        },
-        accent = Color(0xFF0069A8),
-        destination = WorkerMenuDestination.DOWNLOADS,
-    ),
-    WorkerMenuItem(
-        title = "Профиль",
-        description = "Группы, доступность и выход из приложения",
-        accent = Color(0xFF0069A8),
-        destination = WorkerMenuDestination.PROFILE,
-    ),
-)
 
 private fun evidenceStatus(evidence: TaskEvidenceEntity): String = when (evidence.state) {
     "CAPTURED" -> "Ожидает отправки"

@@ -9,6 +9,43 @@ import org.junit.Test
 
 class TaskQueueSectionsTest {
     @Test
+    fun `board title and cabin task headings use product language`() {
+        assertThat(TASK_BOARD_TITLE).isEqualTo("Доска задач")
+        assertThat(taskCardTitle("БТ-42")).isEqualTo("БТ-42")
+        assertThat(taskCardTitle(null)).isEqualTo("Задание")
+        assertThat(taskCardTitle("550e8400-e29b-41d4-a716-446655440000")).isEqualTo("Задание")
+    }
+
+    @Test
+    fun `technical maintenance queue label is matched without case or spacing sensitivity`() {
+        assertThat(taskBoardQueueLabel("Maintenance repair")).isEqualTo("Работы")
+        assertThat(taskBoardQueueLabel("  MAINTENANCE   REPAIR ")).isEqualTo("Работы")
+        assertThat(taskBoardQueueLabel("Maintenance rapair")).isEqualTo("Работы")
+        assertThat(taskBoardQueueLabel("Погрузка")).isEqualTo("Погрузка")
+    }
+
+    @Test
+    fun `refresh animation requires a recent active synchronization stage`() {
+        val now = 1_000_000L
+
+        assertThat(shouldAnimateTaskBoardRefresh("CONTEXT", now - 1_000, now)).isTrue()
+        assertThat(shouldAnimateTaskBoardRefresh("UPLOAD", now - 60_000, now)).isTrue()
+        assertThat(shouldAnimateTaskBoardRefresh("CONTEXT", now - 60_001, now)).isFalse()
+        assertThat(shouldAnimateTaskBoardRefresh("IDLE", now, now)).isFalse()
+        assertThat(shouldAnimateTaskBoardRefresh("WAITING_FOR_EVIDENCE", now, now)).isFalse()
+        assertThat(shouldAnimateTaskBoardRefresh("CONTEXT", now + 1, now)).isFalse()
+    }
+
+    @Test
+    fun `board notice hides progress chatter but keeps offline and blocked truth`() {
+        assertThat(taskBoardSyncNotice(true, "CONTEXT", "Проверяем доступ")).isNull()
+        assertThat(taskBoardSyncNotice(false, "CONTEXT", "Проверяем доступ"))
+            .isEqualTo("Нет связи с RWMS")
+        assertThat(taskBoardSyncNotice(true, "WAITING_FOR_EVIDENCE", "Фото ожидает отправки"))
+            .isEqualTo("Фото ожидает отправки")
+    }
+
+    @Test
     fun rendersEveryAuthorizedQueueInServerOrderIncludingEmptyQueues() {
         val sections = buildTaskQueueSections(
             categories = listOf(

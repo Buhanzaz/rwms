@@ -1,14 +1,15 @@
 package dev.buhanzaz.rwms.worker.feature.taskdetail
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient
+import dev.buhanzaz.rwms.worker.core.ui.decodeWorkerBitmap
+import dev.buhanzaz.rwms.worker.core.ui.readWorkerImageBytes
 import javax.inject.Inject
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,9 +36,30 @@ class TaskMediaThumbnailViewModel @Inject constructor(
 ) : ViewModel() {
     private val mutableThumbnails = MutableStateFlow<Map<String, TaskMediaThumbnail>>(emptyMap())
     val thumbnails: StateFlow<Map<String, TaskMediaThumbnail>> = mutableThumbnails.asStateFlow()
+    private val admittedPaths = linkedSetOf<String>()
+    private val requestedGenerations = mutableMapOf<String, Long>()
+    private var loadGeneration = 0L
 
+    /** Loads one thumbnail while bounding the task-detail cache to recent visible media. */
     fun load(path: String) {
-        if (path.isBlank() || mutableThumbnails.value.containsKey(path)) return
+        if (path.isBlank()) return
+        val previousPaths = admittedPaths.toSet()
+        val nextPaths = workerThumbnailCachePaths(
+            currentPaths = admittedPaths,
+            requestedPath = path,
+            maxEntries = MAX_CACHED_THUMBNAILS,
+        )
+        admittedPaths.clear()
+        admittedPaths.addAll(nextPaths)
+        val evicted = previousPaths - admittedPaths
+        if (evicted.isNotEmpty()) {
+            requestedGenerations.keys.removeAll(evicted)
+            mutableThumbnails.value = mutableThumbnails.value - evicted
+        }
+        if (mutableThumbnails.value.containsKey(path)) return
+        loadGeneration += 1
+        val generation = loadGeneration
+        requestedGenerations[path] = generation
         mutableThumbnails.value = mutableThumbnails.value + (path to TaskMediaThumbnail.Loading)
         viewModelScope.launch {
             val next: TaskMediaThumbnail = try {
@@ -47,10 +69,10 @@ class TaskMediaThumbnailViewModel @Inject constructor(
                         require(declaredSize < 0 || declaredSize <= MAX_MEDIA_BYTES) {
                             "Файл слишком большой для миниатюры"
                         }
-                        val bytes = body.byteStream().use { input -> input.readBounded(MAX_MEDIA_BYTES) }
-                        requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size)) {
-                            "RWMS вернул не изображение"
+                        val bytes = body.byteStream().use { input ->
+                            input.readWorkerImageBytes(MAX_MEDIA_BYTES)
                         }
+                        decodeWorkerBitmap(bytes, MAX_THUMBNAIL_PIXELS)
                     }
                 }
                     .let(TaskMediaThumbnail::Ready)
@@ -59,24 +81,33 @@ class TaskMediaThumbnailViewModel @Inject constructor(
             } catch (error: Throwable) {
                 TaskMediaThumbnail.Failed(error.message ?: "Не удалось загрузить фото")
             }
+            if (path !in admittedPaths || requestedGenerations[path] != generation) {
+                if (next is TaskMediaThumbnail.Ready && !next.bitmap.isRecycled) {
+                    next.bitmap.recycle()
+                }
+                return@launch
+            }
             mutableThumbnails.value = mutableThumbnails.value + (path to next)
         }
     }
 
     private companion object {
         const val MAX_MEDIA_BYTES = 15 * 1024 * 1024
+        const val MAX_THUMBNAIL_PIXELS = 256_000L
+        const val MAX_CACHED_THUMBNAILS = 16
     }
 }
 
-private fun java.io.InputStream.readBounded(maxBytes: Int): ByteArray {
-    val output = java.io.ByteArrayOutputStream(minOf(maxBytes, 64 * 1024))
-    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-    var total = 0
-    while (true) {
-        val count = read(buffer)
-        if (count < 0) return output.toByteArray()
-        total += count
-        require(total <= maxBytes) { "Файл слишком большой для миниатюры" }
-        output.write(buffer, 0, count)
-    }
+/** Returns a recency-ordered, duplicate-free thumbnail cache bounded by [maxEntries]. */
+internal fun workerThumbnailCachePaths(
+    currentPaths: Collection<String>,
+    requestedPath: String,
+    maxEntries: Int,
+): List<String> {
+    require(maxEntries > 0) { "Thumbnail cache size must be positive" }
+    val ordered = LinkedHashSet(currentPaths)
+    ordered.remove(requestedPath)
+    ordered.add(requestedPath)
+    while (ordered.size > maxEntries) ordered.remove(ordered.first())
+    return ordered.toList()
 }

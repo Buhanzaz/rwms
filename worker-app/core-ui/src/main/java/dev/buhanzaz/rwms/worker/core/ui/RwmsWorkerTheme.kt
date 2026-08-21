@@ -7,15 +7,23 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
 private val LightColors = lightColorScheme(
-    primary = Color(0xFF0059B2),
-    secondary = Color(0xFF3E5F88),
-    tertiary = Color(0xFF745A00),
+    primary = Color(0xFF6750A4),
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFFEADDFF),
+    onPrimaryContainer = Color(0xFF21005D),
+    secondary = Color(0xFF625B71),
+    tertiary = Color(0xFF7D5260),
+    background = Color(0xFFFEF7FF),
+    surface = Color(0xFFFEF7FF),
+    onSurface = Color(0xFF1D1B20),
+    surfaceVariant = Color(0xFFE7E0EC),
+    outlineVariant = Color(0xFFCAC4D0),
 )
 
 private val DarkColors = darkColorScheme(
-    primary = Color(0xFFAAC7FF),
-    secondary = Color(0xFFB4C8E8),
-    tertiary = Color(0xFFFFDEA1),
+    primary = Color(0xFFD0BCFF),
+    secondary = Color(0xFFCCC2DC),
+    tertiary = Color(0xFFEFB8C8),
 )
 
 /** Applies the RWMS worker color schemes and Material typography to [content]. */

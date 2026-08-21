@@ -5,8 +5,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -138,7 +140,43 @@ class TaskQueueListComposeTest {
     }
 
     @Test
-    fun collapsedTaskShowsDateAndElapsedTimeThenOpensFullScreenTask() {
+    fun groupHeaderShowsOnlyNameAndChevronWithoutTaskTotal() {
+        val section = TaskQueueSection(
+            queueId = "repair",
+            name = "Ремонты",
+            queuePurpose = "GENERAL",
+            sortOrder = 10,
+            tasks = (1..8).map { index -> task("repair-$index") },
+        )
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.size(width = 360.dp, height = 500.dp)) {
+                    WorkBoardColumns(
+                        columns = listOf(
+                            WorkBoardColumn(
+                                id = "general-workers",
+                                name = "Бригада разнорабочих 1",
+                                personal = false,
+                                sections = listOf(section),
+                            ),
+                        ),
+                        kpiPalette = null,
+                        onTask = {},
+                    )
+                }
+            }
+        }
+
+        compose.onNodeWithText("Бригада разнорабочих 1").assertIsDisplayed()
+        compose.onAllNodesWithText("8").assertCountEquals(0)
+        compose.onNodeWithTag("work-column-chevron-general-workers", useUnmergedTree = true)
+            .assertWidthIsEqualTo(36.dp)
+            .assertHeightIsEqualTo(36.dp)
+        compose.onAllNodesWithText("Групповая роль").assertCountEquals(0)
+    }
+
+    @Test
+    fun collapsedTaskOmitsDateAndShowsElapsedTimeThenOpensFullScreenTask() {
         var openedEntryId: String? = null
         val section = TaskQueueSection(
             queueId = "repair",
@@ -158,14 +196,44 @@ class TaskQueueListComposeTest {
             }
         }
 
-        compose.onNodeWithText("Дата: 2026-08-10").assertIsDisplayed()
+        compose.onAllNodesWithText("Дата: 2026-08-10").assertCountEquals(0)
         compose.onNodeWithText("Время работы: 0:01:05").assertIsDisplayed()
         compose.onNodeWithText("Открыть задание").assertIsDisplayed().performClick()
         assertThat(openedEntryId).isEqualTo("timed-task")
     }
 
     @Test
-    fun groupedLogisticsTaskUsesPluralCabinCaptionAndShowsFullTaskTextWhenExpanded() {
+    fun expandedRepairTaskShowsStagePriorityAndComplexity() {
+        val section = TaskQueueSection(
+            queueId = "repair",
+            name = "Ремонты",
+            queuePurpose = "GENERAL",
+            sortOrder = 10,
+            tasks = listOf(
+                task("metadata").copy(
+                    categoryName = "Внутренние работы",
+                    priority = 4,
+                    title = "Средний ремонт",
+                ),
+            ),
+        )
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.size(width = 360.dp, height = 500.dp)) {
+                    TaskQueueList(sections = listOf(section), onTask = {})
+                }
+            }
+        }
+
+        compose.onNodeWithTag("task-card-toggle-repair-metadata").performClick()
+
+        compose.onNodeWithText("Этап: Внутренние работы").assertIsDisplayed()
+        compose.onNodeWithText("Приоритет: 4").assertIsDisplayed()
+        compose.onNodeWithText("Ремонт: Средний ремонт").assertIsDisplayed()
+    }
+
+    @Test
+    fun groupedLogisticsTaskUsesCabinSummaryAsTitleAndNeverShowsTaskText() {
         val taskText = "Клиент: ООО «Ромашка» · Бытовки: БТ-101, БТ-102, БТ-103"
         val section = TaskQueueSection(
             queueId = "logistics",
@@ -187,15 +255,14 @@ class TaskQueueListComposeTest {
             }
         }
 
-        compose.onNodeWithText("Бытовки: 3").assertIsDisplayed()
-        compose.onAllNodesWithText("Бытовка: 3 бытовки").assertCountEquals(0)
+        compose.onNodeWithText("3 бытовки").assertIsDisplayed()
         compose.onAllNodesWithText(taskText).assertCountEquals(0)
         compose.onNodeWithTag("task-card-toggle-logistics-shipment-group").performClick()
-        compose.onNodeWithText(taskText).assertIsDisplayed()
+        compose.onAllNodesWithText(taskText).assertCountEquals(0)
     }
 
     @Test
-    fun oneCabinTaskKeepsSingularCabinCaption() {
+    fun oneCabinTaskUsesOnlyCabinNumberAsCardTitle() {
         val section = TaskQueueSection(
             queueId = "logistics",
             name = "Логистика",
@@ -211,7 +278,33 @@ class TaskQueueListComposeTest {
             }
         }
 
-        compose.onNodeWithText("Бытовка: БТ-101").assertIsDisplayed()
+        compose.onNodeWithText("БТ-101").assertIsDisplayed()
+        compose.onAllNodesWithText("Бытовка: БТ-101").assertCountEquals(0)
+    }
+
+    @Test
+    fun technicalMaintenanceTitleIsNeverRendered() {
+        val technicalTitle = "  MaInTeNaNcE   RePaIr  "
+        val section = TaskQueueSection(
+            queueId = "repair",
+            name = technicalTitle,
+            queuePurpose = "GENERAL",
+            sortOrder = 10,
+            tasks = listOf(
+                task("maintenance").copy(title = technicalTitle, unitNumber = "БТ-314"),
+            ),
+        )
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.size(width = 360.dp, height = 500.dp)) {
+                    TaskQueueList(sections = listOf(section), onTask = {})
+                }
+            }
+        }
+
+        compose.onNodeWithText("Работы").assertIsDisplayed()
+        compose.onNodeWithText("БТ-314").assertIsDisplayed()
+        compose.onAllNodesWithText(technicalTitle).assertCountEquals(0)
     }
 
     private fun task(entryId: String) = WorkerTaskEntity(
@@ -230,7 +323,7 @@ class TaskQueueListComposeTest {
         deadlineAt = null,
         priority = 3,
         queuePosition = 0,
-        status = "AVAILABLE",
+        status = "WAITING",
         availabilityMode = "AVAILABLE",
         plannedDurationMinutes = null,
         activeStartedAt = null,

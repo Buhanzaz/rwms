@@ -1,6 +1,9 @@
 package dev.buhanzaz.rwms.worker.feature.tasks
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -9,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -28,10 +32,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
@@ -42,54 +50,86 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.buhanzaz.rwms.worker.core.database.WorkerTaskEntity
 import dev.buhanzaz.rwms.worker.core.network.WorkerKpiPaletteDto
-import dev.buhanzaz.rwms.worker.core.ui.SyncStatusBanner
 import dev.buhanzaz.rwms.worker.core.ui.TaskStatusChip
 import dev.buhanzaz.rwms.worker.core.ui.WorkerKpiColorRange
 import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
 import dev.buhanzaz.rwms.worker.core.ui.cabinNumberForDisplay
+import dev.buhanzaz.rwms.worker.core.ui.workerRepairComplexityLabel
 import dev.buhanzaz.rwms.worker.core.ui.workerKpiTimeColor
+import dev.buhanzaz.rwms.worker.core.ui.workerTaskStageLabel
+import kotlinx.coroutines.delay
 
 /** Renders the worker task board from the locally synchronized projection. */
 @Composable
 fun TasksScreen(
     userId: String,
     onTask: (String) -> Unit,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)? = null,
+    onMenu: (() -> Unit)? = null,
+    profileMonogram: String? = null,
+    onProfile: (() -> Unit)? = null,
     viewModel: TasksViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(userId) { viewModel.bind(userId) }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val hasFreshSyncProgress = rememberFreshSyncProgress(
+        stage = state.progress?.stage,
+        updatedAtEpochMillis = state.progress?.updatedAtEpochMillis,
+    )
+    val refreshInProgress = state.online && hasFreshSyncProgress
+    val refreshRotation = remember { Animatable(0f) }
+    LaunchedEffect(refreshInProgress) {
+        if (!refreshInProgress) {
+            refreshRotation.snapTo(0f)
+        } else {
+            while (true) {
+                refreshRotation.snapTo(0f)
+                refreshRotation.animateTo(
+                    targetValue = 360f,
+                    animationSpec = tween(
+                        durationMillis = REFRESH_ROTATION_DURATION_MILLIS,
+                        easing = LinearEasing,
+                    ),
+                )
+            }
+        }
+    }
     WorkerScreenScaffold(
-        title = "Работы",
+        title = TASK_BOARD_TITLE,
         onBack = onBack,
+        onMenu = onMenu,
+        profileMonogram = profileMonogram,
+        onProfile = onProfile,
         actions = {
-            IconButton(onClick = viewModel::syncNow) {
-                Icon(Icons.Filled.Refresh, contentDescription = "Синхронизировать")
+            IconButton(
+                onClick = viewModel::syncNow,
+                modifier = Modifier.testTag("task-board-refresh"),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Refresh,
+                    contentDescription = if (refreshInProgress) {
+                        "Синхронизация выполняется"
+                    } else {
+                        "Синхронизировать"
+                    },
+                    modifier = Modifier.graphicsLayer { rotationZ = refreshRotation.value },
+                )
             }
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            SyncStatusBanner(
+            taskBoardSyncNotice(
                 online = state.online,
                 stage = state.progress?.stage,
-                completed = state.progress?.completedUnits ?: 0,
-                total = state.progress?.totalUnits ?: 0,
                 message = state.progress?.message,
-            )
-            Text(
-                when {
-                    state.groups.isNotEmpty() -> "Группы: ${state.groups.joinToString { it.name }}"
-                    state.categories.any { it.groupIds().isEmpty() } -> "Доступны личные задания"
-                    else -> "Группы не назначены руководителем"
-                },
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (state.session?.operationalAvailability == "DISABLED") {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
+            )?.let { notice ->
+                Text(
+                    notice,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             if (state.session?.operationalAvailability == "DISABLED") {
                 Text(
                     "Рабочий временно недоступен — новые задания взять нельзя",
@@ -227,23 +267,17 @@ private fun WorkBoardColumnPane(
                     }
                     .padding(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(column.name, style = MaterialTheme.typography.titleLarge)
-                    Text(
-                        column.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
                 Text(
-                    column.sections.sumOf { it.tasks.size }.toString(),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    column.name,
+                    modifier = Modifier.weight(1f).testTag("work-column-title-${column.id}"),
+                    style = MaterialTheme.typography.titleLarge,
                 )
                 Icon(
                     imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                    contentDescription = if (expanded) "Свернуть роль" else "Развернуть роль",
+                    contentDescription = if (expanded) "Свернуть раздел" else "Развернуть раздел",
+                    modifier = Modifier.size(36.dp).testTag("work-column-chevron-${column.id}"),
                 )
             }
             if (expanded && independentlyScrollable) {
@@ -313,14 +347,9 @@ private fun TaskQueueSectionPanel(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    section.name,
+                    taskBoardQueueLabel(section.name),
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.titleMedium,
-                )
-                Text(
-                    section.tasks.size.toString(),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Icon(
                     imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
@@ -377,9 +406,10 @@ private fun TaskRow(
                         stateDescription = if (expanded) "Развернуто" else "Свернуто"
                     },
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    task.title,
+                    taskCardTitle(task.unitNumber),
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.titleMedium,
                 )
@@ -389,8 +419,6 @@ private fun TaskRow(
                     contentDescription = if (expanded) "Свернуть задание" else "Развернуть задание",
                 )
             }
-            taskCabinCaption(task.unitNumber)?.let { caption -> Text(caption) }
-            Text("Дата: ${task.scheduledDate}", style = MaterialTheme.typography.bodyMedium)
             val timer = queueTaskTimerPresentation(task)
             val elapsed = timer?.elapsed ?: queueTaskElapsedLabel(task)
             elapsed?.let {
@@ -401,13 +429,25 @@ private fun TaskRow(
                 )
             }
             if (expanded) {
-                task.taskText?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+                Text(
+                    "Этап: ${workerTaskStageLabel(task.categoryName) ?: "—"}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "Приоритет: ${task.priority}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                workerRepairComplexityLabel(task.title)?.let { complexity ->
+                    Text(
+                        "Ремонт: $complexity",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
                 task.deadlineAt?.let {
                     Text("Срок: $it", style = MaterialTheme.typography.bodyMedium)
                 }
                 Text(
-                    "${task.categoryName} · очередь ${task.queuePosition + 1} · " +
-                        "фото ${task.readyEvidenceCount}/${task.resultPhotoMinCount}",
+                    "Фото результата: ${task.readyEvidenceCount}/${task.resultPhotoMinCount}",
                     style = MaterialTheme.typography.labelMedium,
                 )
                 timer?.let {
@@ -444,24 +484,60 @@ private fun TaskRow(
     }
 }
 
+/** Returns the only task-card heading that may represent a cabin-owned task. */
+internal fun taskCardTitle(unitNumber: String?): String =
+    cabinNumberForDisplay(unitNumber) ?: "Задание"
+
+/** Replaces the backend's technical maintenance queue label in the worker UI. */
+internal fun taskBoardQueueLabel(name: String): String =
+    workerTaskStageLabel(name) ?: name
+
 /**
- * Uses a plural caption for the grouped shipment summary supplied by logistics
- * while keeping individual cabin numbers in the familiar singular form.
+ * Reports whether a durable progress row is both an active stage and recent
+ * enough to prove that synchronization is still running.
  */
-private fun taskCabinCaption(unitNumber: String?): String? {
-    val unit = cabinNumberForDisplay(unitNumber) ?: return null
-    val groupedCabinCount = GROUPED_CABIN_SUMMARY.matchEntire(unit)
-        ?.groupValues
-        ?.get(1)
-        ?.toIntOrNull()
-        ?.takeIf { it > 1 }
-    return groupedCabinCount?.let { "Бытовки: $it" } ?: "Бытовка: $unit"
+internal fun shouldAnimateTaskBoardRefresh(
+    stage: String?,
+    updatedAtEpochMillis: Long?,
+    nowEpochMillis: Long,
+): Boolean {
+    if (stage !in ACTIVE_SYNC_STAGES || updatedAtEpochMillis == null) return false
+    val ageMillis = nowEpochMillis - updatedAtEpochMillis
+    return ageMillis in 0..SYNC_PROGRESS_FRESHNESS_MILLIS
 }
 
+/** Keeps durable offline or blocked-sync truth without exposing progress chatter. */
+internal fun taskBoardSyncNotice(online: Boolean, stage: String?, message: String?): String? =
+    when {
+        !online -> "Нет связи с RWMS"
+        stage == WAITING_FOR_EVIDENCE_STAGE ->
+            message?.trim()?.takeIf(String::isNotEmpty) ?: "Синхронизация требует внимания"
+        else -> null
+    }
+
+@Composable
+private fun rememberFreshSyncProgress(stage: String?, updatedAtEpochMillis: Long?): Boolean {
+    var nowEpochMillis by remember(stage, updatedAtEpochMillis) {
+        mutableLongStateOf(System.currentTimeMillis())
+    }
+    LaunchedEffect(stage, updatedAtEpochMillis) {
+        nowEpochMillis = System.currentTimeMillis()
+        val expiresAt = updatedAtEpochMillis?.plus(SYNC_PROGRESS_FRESHNESS_MILLIS)
+            ?: return@LaunchedEffect
+        val remainingMillis = expiresAt - nowEpochMillis
+        if (remainingMillis >= 0) {
+            delay(remainingMillis + 1)
+            nowEpochMillis = System.currentTimeMillis()
+        }
+    }
+    return shouldAnimateTaskBoardRefresh(stage, updatedAtEpochMillis, nowEpochMillis)
+}
+
+internal const val TASK_BOARD_TITLE = "Доска задач"
 private val TWO_COLUMN_MIN_WIDTH = 720.dp
 private val BOARD_GAP = 12.dp
 private val BOARD_HORIZONTAL_PADDING = 12.dp
-private val GROUPED_CABIN_SUMMARY = Regex(
-    pattern = "^(\\d+)\\s+бытов(?:ка|ки|ок)$",
-    option = RegexOption.IGNORE_CASE,
-)
+private const val REFRESH_ROTATION_DURATION_MILLIS = 900
+private const val SYNC_PROGRESS_FRESHNESS_MILLIS = 60_000L
+private const val WAITING_FOR_EVIDENCE_STAGE = "WAITING_FOR_EVIDENCE"
+private val ACTIVE_SYNC_STAGES = setOf("CONTEXT", "COMMANDS", "EVIDENCE", "UPLOAD")

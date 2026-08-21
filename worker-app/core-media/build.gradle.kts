@@ -24,8 +24,10 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.hilt.android)
     implementation(libs.coroutines.android)
+    implementation("androidx.exifinterface:exifinterface:1.4.2")
     ksp(libs.hilt.compiler)
     testImplementation(libs.junit)
     testImplementation(libs.truth)
     testImplementation(libs.coroutines.test)
+    testImplementation(libs.robolectric)
 }

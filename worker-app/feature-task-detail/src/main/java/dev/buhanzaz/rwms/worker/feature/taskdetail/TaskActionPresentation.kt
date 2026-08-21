@@ -129,7 +129,7 @@ internal fun taskActionPresentation(
         actionsEnabled = actions.isNotEmpty() && !locallyPending,
         message = message,
         performers = performers,
-        takeLabel = if (canJoinMandatoryTask) "Взять срочное" else "Взять",
+        takeLabel = "Взять задание",
         joinLabel = if (
             isSecondaryLogistics && (canJoinOptionalLogisticsTask || canJoinRequiredTask)
         ) {
@@ -152,5 +152,9 @@ internal fun completionEvidenceId(
         else -> selectedEvidenceId?.takeIf(readyEvidenceIds::contains)
     }
 }
+
+/** Attaches the new photo only where the task-board contract requires a completion selection. */
+internal fun queuedCompletionEvidenceId(queuePurpose: String?, capturedEvidenceId: String): String? =
+    capturedEvidenceId.takeIf { queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE }
 
 internal const val LOGISTICS_DRIVER_QUEUE_PURPOSE = "LOGISTICS_DRIVER"

@@ -6,13 +6,13 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
 import android.media.MediaActionSound
 import android.net.Uri
 import android.provider.Settings
 import android.view.OrientationEventListener
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
@@ -97,22 +97,29 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.buhanzaz.rwms.worker.core.media.EncryptedEvidenceFileStore
+import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
+import dev.buhanzaz.rwms.worker.core.ui.decodeWorkerBitmapFile
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
 private val WorkerCameraBlue = Color(0xFF3B82F6)
 private val WorkerCameraPanel = Color(0xE6191919)
+private const val CAMERA_CONFIRMATION_MAX_PIXELS = 2_000_000L
 
+/** Captures and confirms one CameraX result JPEG for the selected task route. */
 @Composable
 fun CameraScreen(
     userId: String,
     entryId: String,
     routeIndex: Int,
     onBack: () -> Unit,
-    onSaved: () -> Unit,
+    onSaved: (evidenceIds: List<String>) -> Unit,
+    requestSyncAfterSave: Boolean = true,
     viewModel: CameraViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
@@ -149,10 +156,10 @@ fun CameraScreen(
             permissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
-    LaunchedEffect(state.savedEvidenceId) {
-        state.savedEvidenceId?.let { evidenceId ->
-            viewModel.consumeSavedCapture(evidenceId)
-            onSaved()
+    LaunchedEffect(state.savedEvidenceIds) {
+        state.savedEvidenceIds.takeIf { it.isNotEmpty() }?.let { evidenceIds ->
+            viewModel.consumeSavedCaptures(evidenceIds)
+            onSaved(evidenceIds)
         }
     }
 
@@ -175,8 +182,93 @@ fun CameraScreen(
             saving = state.saving,
             saveError = state.error,
             onBack = onBack,
-            onConfirm = { file -> viewModel.confirmCapture(userId, entryId, routeIndex, file) },
+            onConfirm = { file ->
+                viewModel.confirmCapture(
+                    userId,
+                    entryId,
+                    routeIndex,
+                    file,
+                    requestSyncAfterSave,
+                )
+            },
         )
+    }
+}
+
+/**
+ * Opens Android's photo picker and imports up to ten selected images as encrypted task evidence.
+ * Completion callers defer sync until the matching task action has entered the outbox.
+ */
+@Composable
+fun GalleryImportScreen(
+    userId: String,
+    entryId: String,
+    routeIndex: Int,
+    onBack: () -> Unit,
+    onSaved: (evidenceIds: List<String>) -> Unit,
+    requestSyncAfterSave: Boolean = true,
+    viewModel: CameraViewModel = hiltViewModel(),
+) {
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    var pickerOpened by rememberSaveable { mutableStateOf(false) }
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(10),
+    ) { uris ->
+        if (uris.isEmpty()) {
+            onBack()
+        } else {
+            viewModel.confirmGallery(userId, entryId, routeIndex, uris, requestSyncAfterSave)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (!pickerOpened) {
+            pickerOpened = true
+            picker.launch(
+                PickVisualMediaRequest(
+                    ActivityResultContracts.PickVisualMedia.ImageOnly,
+                ),
+            )
+        }
+    }
+    LaunchedEffect(state.savedEvidenceIds) {
+        state.savedEvidenceIds.takeIf { it.isNotEmpty() }?.let { evidenceIds ->
+            viewModel.consumeSavedCaptures(evidenceIds)
+            onSaved(evidenceIds)
+        }
+    }
+
+    WorkerScreenScaffold(title = "Фото из галереи", onBack = onBack) { padding ->
+        Column(
+            modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            when {
+                state.saving -> {
+                    CircularProgressIndicator()
+                    Text("Подготавливаем фотографии…", modifier = Modifier.padding(top = 16.dp))
+                }
+                state.error != null -> {
+                    Text(
+                        requireNotNull(state.error),
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center,
+                    )
+                    Button(
+                        onClick = {
+                            picker.launch(
+                                PickVisualMediaRequest(
+                                    ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                ),
+                            )
+                        },
+                        modifier = Modifier.padding(top = 16.dp),
+                    ) { Text("Выбрать другие фото") }
+                }
+                else -> Text("Открываем галерею…")
+            }
+        }
     }
 }
 
@@ -217,9 +309,12 @@ private fun WorkerCameraExperience(
     var nightExtensionActive by remember { mutableStateOf(false) }
     val pendingForDisposal by rememberUpdatedState(pendingFile)
     val shutterSound = remember { MediaActionSound().apply { load(MediaActionSound.SHUTTER_CLICK) } }
+    val cameraExperienceDisposed = remember { AtomicBoolean(false) }
 
-    DisposableEffect(shutterSound, photoFileExecutor) {
+    DisposableEffect(shutterSound, photoFileExecutor, cameraExperienceDisposed) {
+        cameraExperienceDisposed.set(false)
         onDispose {
+            cameraExperienceDisposed.set(true)
             shutterSound.release()
             photoFileExecutor.shutdown()
             pendingForDisposal?.delete()
@@ -418,38 +513,55 @@ private fun WorkerCameraExperience(
         shutterSound.play(MediaActionSound.SHUTTER_CLICK)
         val target = File(context.cacheDir, "rwms-capture-${System.nanoTime()}.jpg")
         capture.targetRotation = captureTargetRotation
-        capture.takePicture(
-            photoFileExecutor,
-            object : ImageCapture.OnImageCapturedCallback() {
-                override fun onCaptureSuccess(image: ImageProxy) {
-                    val normalized = persistWorkerCameraImageProxy(image, target)
-                    mainExecutor.execute {
-                        captureInProgress = false
-                        if (normalized == null) {
+        try {
+            capture.takePicture(
+                photoFileExecutor,
+                object : ImageCapture.OnImageCapturedCallback() {
+                    override fun onCaptureSuccess(image: ImageProxy) {
+                        if (cameraExperienceDisposed.get()) {
+                            image.close()
                             target.delete()
-                            message = "Не удалось подготовить фотографию"
-                            return@execute
+                            return
                         }
-                        if (normalized != target) target.delete()
-                        when (val result = validateCameraXSave(normalized)) {
-                            is CameraXSaveResult.Saved -> pendingFile = result.file
-                            is CameraXSaveResult.Failed -> {
-                                normalized.delete()
-                                message = result.message
+                        val normalized = persistWorkerCameraImageProxy(image, target)
+                        mainExecutor.execute {
+                            if (cameraExperienceDisposed.get()) {
+                                normalized?.delete()
+                                target.delete()
+                                return@execute
+                            }
+                            captureInProgress = false
+                            if (normalized == null) {
+                                target.delete()
+                                message = "Не удалось подготовить фотографию"
+                                return@execute
+                            }
+                            if (normalized != target) target.delete()
+                            when (val result = validateCameraXSave(normalized)) {
+                                is CameraXSaveResult.Saved -> pendingFile = result.file
+                                is CameraXSaveResult.Failed -> {
+                                    normalized.delete()
+                                    message = result.message
+                                }
                             }
                         }
                     }
-                }
 
-                override fun onError(exception: ImageCaptureException) {
-                    target.delete()
-                    mainExecutor.execute {
-                        captureInProgress = false
-                        message = "Не удалось сохранить фотографию"
+                    override fun onError(exception: ImageCaptureException) {
+                        target.delete()
+                        mainExecutor.execute {
+                            if (cameraExperienceDisposed.get()) return@execute
+                            captureInProgress = false
+                            message = "Не удалось сохранить фотографию"
+                        }
                     }
-                }
-            },
-        )
+                },
+            )
+        } catch (_: RuntimeException) {
+            target.delete()
+            captureInProgress = false
+            message = "Не удалось запустить съёмку"
+        }
     }
 
     val volumeShutterAction by rememberUpdatedState { takePhoto() }
@@ -745,7 +857,14 @@ private fun CaptureConfirmation(
     onConfirm: () -> Unit,
 ) {
     val bitmap = remember(file) {
-        BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply { inSampleSize = 2 })
+        runCatching {
+            decodeWorkerBitmapFile(file, CAMERA_CONFIRMATION_MAX_PIXELS)
+        }.getOrNull()
+    }
+    DisposableEffect(bitmap) {
+        onDispose {
+            if (bitmap != null && !bitmap.isRecycled) bitmap.recycle()
+        }
     }
     Column(
         Modifier.fillMaxSize().background(Color.Black).statusBarsPadding().navigationBarsPadding().padding(16.dp),
@@ -835,10 +954,15 @@ private fun workerCameraJpegBytes(image: ImageProxy): ByteArray? {
     if (image.format != ImageFormat.JPEG) return null
     val plane = image.planes.singleOrNull() ?: return null
     val buffer = plane.buffer.duplicate()
+    if (!workerCameraJpegSizeAllowed(buffer.remaining())) return null
     val bytes = ByteArray(buffer.remaining())
     buffer.get(bytes)
     return bytes.takeIf { it.isWorkerCameraJpeg() }
 }
+
+/** Rejects an oversized CameraX buffer before allocating a second byte array of the same size. */
+internal fun workerCameraJpegSizeAllowed(byteCount: Int): Boolean =
+    byteCount in 4..EncryptedEvidenceFileStore.MAX_JPEG_BYTES.toInt()
 
 private fun ByteArray.isWorkerCameraJpeg(): Boolean =
     size >= 4 &&

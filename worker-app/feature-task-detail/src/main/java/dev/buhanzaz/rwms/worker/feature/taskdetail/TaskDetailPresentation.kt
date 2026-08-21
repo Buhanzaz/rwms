@@ -199,15 +199,6 @@ internal fun taskHeaderTimerPresentation(
     }
 }
 
-/** Converts the canonical task object discriminator to a worker-facing type label. */
-internal fun workerTaskObjectKindLabel(kind: String?): String = when (kind) {
-    "CABIN" -> "Бытовка"
-    "EQUIPMENT" -> "Оборудование"
-    "OTHER" -> "Другой объект"
-    null -> "Не указан"
-    else -> kind
-}
-
 /** Worker-facing work metadata deliberately has no price/cost field. */
 internal fun workPresentation(work: WorkerWorkDto): WorkPresentation = WorkPresentation(
     quantity = quantityLabel(work.quantity, work.unit),

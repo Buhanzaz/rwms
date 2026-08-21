@@ -1,23 +1,28 @@
 package dev.buhanzaz.rwms.worker
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient
+import dev.buhanzaz.rwms.worker.core.ui.decodeWorkerBitmap
+import dev.buhanzaz.rwms.worker.core.ui.readWorkerImageBytes
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Defines worker application UI or lifecycle state; it does not decide a server task transition.
  */
 data class PhotoUiState(
     val bitmaps: Map<String, Bitmap> = emptyMap(),
-    val error: String? = null,
+    val errors: Map<String, String> = emptyMap(),
+    val loading: Set<String> = emptySet(),
 )
 
 @HiltViewModel
@@ -29,43 +34,87 @@ class PhotoViewModel @Inject constructor(
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(PhotoUiState())
     val state: StateFlow<PhotoUiState> = mutableState.asStateFlow()
+    private var requestedGeneration = 0L
+    private var requestedPaths: Set<String> = emptySet()
 
-    fun load(paths: List<String>) {
-        val missing = paths.filterNot { mutableState.value.bitmaps.containsKey(it) }
-        if (missing.isEmpty()) return
-        viewModelScope.launch {
-            val fetched = mutableState.value.bitmaps.toMutableMap()
-            missing.forEach { path ->
-                runCatching {
-                    gateway.mediaContent(path).use { body ->
-                        val declaredSize = body.contentLength()
-                        require(declaredSize < 0 || declaredSize <= MAX_IMAGE_BYTES) {
-                            "Файл слишком большой для просмотра"
-                        }
-                        val bytes = body.byteStream().use { input -> input.readBounded(MAX_IMAGE_BYTES) }
-                        requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size)) { "RWMS вернул не изображение" }
-                    }
-                }.onSuccess { bitmap -> fetched[path] = bitmap }
-                    .onFailure { error -> mutableState.value = mutableState.value.copy(error = error.message ?: "Не удалось открыть фото") }
-            }
-            mutableState.value = mutableState.value.copy(bitmaps = fetched)
+    /**
+     * Retains only the current pager window and loads its missing images. A cabin archive can
+     * contain hundreds of photos, so decoding the complete route eagerly would exhaust the
+     * Android heap even though the pager displays only one image at a time.
+     */
+    fun show(paths: List<String>) {
+        val requested = paths.filter(String::isNotBlank).distinct()
+        requestedGeneration += 1
+        val generation = requestedGeneration
+        requestedPaths = requested.toSet()
+        val current = mutableState.value
+        mutableState.value = current.copy(
+            bitmaps = current.bitmaps.filterKeys(requestedPaths::contains),
+            errors = current.errors.filterKeys(requestedPaths::contains),
+            // A retained path may still belong to the previous generation's in-flight request.
+            // Clear the marker so this generation owns a request that can publish its result.
+            loading = emptySet(),
+        )
+        loadMissing(requested, generation)
+    }
+
+    private fun loadMissing(paths: List<String>, generation: Long) {
+        val current = mutableState.value
+        val missing = paths.filterNot {
+            it in current.bitmaps || it in current.loading || it in current.errors
         }
+        if (missing.isEmpty()) return
+        mutableState.value = current.copy(loading = current.loading + missing)
+        viewModelScope.launch {
+            missing.forEach { path ->
+                try {
+                    val bitmap = withContext(Dispatchers.IO) {
+                        gateway.mediaContent(path).use { body ->
+                            val declaredSize = body.contentLength()
+                            require(declaredSize < 0 || declaredSize <= MAX_IMAGE_BYTES) {
+                                "Файл слишком большой для просмотра"
+                            }
+                            val bytes = body.byteStream().use { input ->
+                                input.readWorkerImageBytes(MAX_IMAGE_BYTES)
+                            }
+                            decodeWorkerBitmap(bytes, MAX_FULL_SCREEN_PIXELS)
+                        }
+                    }
+                    if (generation != requestedGeneration || path !in requestedPaths) {
+                        bitmap.recycle()
+                        return@forEach
+                    }
+                    val next = mutableState.value
+                    mutableState.value = next.copy(
+                        bitmaps = next.bitmaps + (path to bitmap),
+                        errors = next.errors - path,
+                        loading = next.loading - path,
+                    )
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    if (generation != requestedGeneration || path !in requestedPaths) {
+                        return@forEach
+                    }
+                    val next = mutableState.value
+                    mutableState.value = next.copy(
+                        errors = next.errors + (path to (error.message ?: "Не удалось открыть фото")),
+                        loading = next.loading - path,
+                    )
+                }
+            }
+        }
+    }
+
+    /** Clears a path-local failure before making one explicit retry. */
+    fun retry(path: String) {
+        if (path !in requestedPaths) return
+        mutableState.value = mutableState.value.copy(errors = mutableState.value.errors - path)
+        loadMissing(listOf(path), requestedGeneration)
     }
 
     private companion object {
         const val MAX_IMAGE_BYTES = 15 * 1024 * 1024
-    }
-}
-
-private fun java.io.InputStream.readBounded(maxBytes: Int): ByteArray {
-    val output = java.io.ByteArrayOutputStream(minOf(maxBytes, 64 * 1024))
-    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-    var total = 0
-    while (true) {
-        val count = read(buffer)
-        if (count < 0) return output.toByteArray()
-        total += count
-        require(total <= maxBytes) { "Файл слишком большой для просмотра" }
-        output.write(buffer, 0, count)
+        const val MAX_FULL_SCREEN_PIXELS = 4_000_000L
     }
 }

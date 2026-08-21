@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -47,7 +48,6 @@ fun PhotoPagerScreen(
     onBack: () -> Unit,
     viewModel: PhotoViewModel = hiltViewModel(),
 ) {
-    LaunchedEffect(paths) { viewModel.load(paths) }
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     if (paths.isEmpty()) {
@@ -67,6 +67,9 @@ fun PhotoPagerScreen(
         pageCount = { paths.size },
     )
     val currentPage = pager.currentPage.coerceIn(paths.indices)
+    LaunchedEffect(paths, currentPage) {
+        viewModel.show(photoPagerLoadWindow(paths, currentPage))
+    }
     var currentPageZoomed by remember(paths) { mutableStateOf(false) }
     LaunchedEffect(currentPage) { currentPageZoomed = false }
 
@@ -83,10 +86,18 @@ fun PhotoPagerScreen(
             val bitmap = state.bitmaps[path]
             Box(Modifier.fillMaxSize()) {
                 if (bitmap == null) {
-                    Text(
-                        text = state.error ?: "Загружаем защищённое фото…",
+                    val error = state.errors[path]
+                    androidx.compose.foundation.layout.Column(
                         modifier = Modifier.align(Alignment.Center).padding(24.dp),
-                    )
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(error ?: "Загружаем фото…")
+                        if (error != null) {
+                            TextButton(onClick = { viewModel.retry(path) }) {
+                                Text("Повторить")
+                            }
+                        }
+                    }
                 } else {
                     ZoomableBitmap(
                         bitmap = bitmap.asImageBitmap(),
@@ -105,6 +116,18 @@ fun PhotoPagerScreen(
 /** Clamps a thumbnail index without producing an invalid page for an empty media collection. */
 internal fun photoPagerInitialPage(initialIndex: Int, photoCount: Int): Int =
     if (photoCount <= 0) 0 else initialIndex.coerceIn(0, photoCount - 1)
+
+/** Keeps only the selected full-size photo and its immediate pager neighbours in memory. */
+internal fun photoPagerLoadWindow(paths: List<String>, selectedIndex: Int): List<String> {
+    if (paths.isEmpty()) return emptyList()
+    val selected = photoPagerInitialPage(selectedIndex, paths.size)
+    return sequenceOf(selected, selected - 1, selected + 1)
+        .filter(paths.indices::contains)
+        .map(paths::get)
+        .filter(String::isNotBlank)
+        .distinct()
+        .toList()
+}
 
 /**
  * Keeps a fitted photo inside the visible viewport after zooming or panning.

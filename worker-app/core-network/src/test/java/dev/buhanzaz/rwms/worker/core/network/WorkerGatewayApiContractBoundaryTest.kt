@@ -17,6 +17,7 @@ import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.Headers
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Url
@@ -88,6 +89,15 @@ class WorkerGatewayApiContractBoundaryTest {
             .create(WorkerGatewayApi::class.java)
 
         assertThat(api).isNotNull()
+    }
+
+    @Test
+    fun `media content explicitly requests an image response`() {
+        val method = WorkerGatewayApi::class.java.declaredMethods
+            .single { candidate -> candidate.name == "mediaContent" && !candidate.isSynthetic }
+        val headers = method.getAnnotation(Headers::class.java)?.value?.toList().orEmpty()
+
+        assertThat(headers).contains("Accept: image/*")
     }
 
     @Test

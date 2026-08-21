@@ -8,14 +8,6 @@ import org.junit.Test
 
 class WorkerDownloadsTest {
     @Test
-    fun `menu starts with works and exposes downloads and profile in Russian`() {
-        val items = workerMenuItems(pendingDownloadCount = 2)
-
-        assertThat(items.map { it.title }).containsExactly("Работы", "Загрузки", "Профиль").inOrder()
-        assertThat(items[1].description).contains("2")
-    }
-
-    @Test
     fun `download projection hides successful evidence and encrypted storage fields`() {
         val pending = evidence("pending", state = "UPLOADING", percent = 63, lastError = null)
         val ready = evidence("ready", state = "READY", percent = 100, lastError = null)

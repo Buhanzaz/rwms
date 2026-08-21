@@ -12,6 +12,24 @@ import org.junit.Test
 
 class TaskDetailPresentationTest {
     @Test
+    fun `thumbnail cache keeps only the most recently requested paths`() {
+        assertThat(
+            workerThumbnailCachePaths(
+                currentPaths = listOf("/one", "/two", "/three"),
+                requestedPath = "/four",
+                maxEntries = 3,
+            ),
+        ).containsExactly("/two", "/three", "/four").inOrder()
+        assertThat(
+            workerThumbnailCachePaths(
+                currentPaths = listOf("/one", "/two", "/three"),
+                requestedPath = "/one",
+                maxEntries = 3,
+            ),
+        ).containsExactly("/two", "/three", "/one").inOrder()
+    }
+
+    @Test
     fun `photo button is visibly unavailable until its route index is loaded`() {
         val presentation = photoCapturePresentation(
             hasLoadedDetail = false,
@@ -195,27 +213,47 @@ class TaskDetailPresentationTest {
     }
 
     @Test
-    fun `work photos are separated from general task photos by source media ids`() {
-        val workPhoto = media("media-work")
-        val generalPhoto = media("media-general")
-        val work = WorkerWorkDto(
+    fun `cover stays first while each work receives only its linked photos`() {
+        val coverPhoto = media("media-cover")
+        val firstWorkPhoto = media("media-work-1")
+        val secondWorkPhoto = media("media-work-2")
+        val additionalTaskPhoto = media("media-task-2")
+        val firstWork = WorkerWorkDto(
             id = "work-1",
             name = "Замена профлиста",
             quantity = 1.0,
             unit = "шт",
             durationMinutes = 30,
             comment = null,
-            sourceMediaIds = listOf(workPhoto.mediaId),
+            sourceMediaIds = listOf(firstWorkPhoto.mediaId),
+        )
+        val secondWork = WorkerWorkDto(
+            id = "work-2",
+            name = "Замена буклета",
+            quantity = 2.0,
+            unit = "шт",
+            durationMinutes = 15,
+            comment = null,
+            sourceMediaIds = listOf(secondWorkPhoto.mediaId),
         )
 
         val presentation = taskSourceMediaPresentation(
-            works = listOf(work),
-            sourceMedia = listOf(generalPhoto, workPhoto),
+            works = listOf(firstWork, secondWork),
+            sourceMedia = listOf(
+                coverPhoto,
+                firstWorkPhoto,
+                additionalTaskPhoto,
+                secondWorkPhoto,
+            ),
         )
 
-        assertThat(presentation.general.map { it.mediaId }).containsExactly("media-general")
+        assertThat(presentation.general.map { it.mediaId })
+            .containsExactly("media-cover", "media-task-2")
+            .inOrder()
         assertThat(presentation.byWorkId.getValue("work-1").map { it.mediaId })
-            .containsExactly("media-work")
+            .containsExactly("media-work-1")
+        assertThat(presentation.byWorkId.getValue("work-2").map { it.mediaId })
+            .containsExactly("media-work-2")
     }
 
     @Test
@@ -482,6 +520,13 @@ class TaskDetailPresentationTest {
     }
 
     @Test
+    fun `new completion photo is selected only for logistics`() {
+        assertThat(queuedCompletionEvidenceId("LOGISTICS_DRIVER", "evidence-1"))
+            .isEqualTo("evidence-1")
+        assertThat(queuedCompletionEvidenceId("GENERAL", "evidence-1")).isNull()
+    }
+
+    @Test
     fun `active logistics slinger can complete with a selected ready photo`() {
         val presentation = taskActionPresentation(
             currentWorkerId = "slinger",
@@ -537,6 +582,7 @@ class TaskDetailPresentationTest {
 
         assertThat(unassigned.actions).containsExactly(WorkerTaskAction.TAKE)
         assertThat(unassigned.actionsEnabled).isTrue()
+        assertThat(unassigned.takeLabel).isEqualTo("Взять задание")
         assertThat(assignedToOther.actions).isEmpty()
         assertThat(assignedToOther.message).isEqualTo("Задание выполняет другой рабочий")
     }
@@ -554,7 +600,7 @@ class TaskDetailPresentationTest {
         assertThat(presentation.actions).isEmpty()
         assertThat(presentation.actionsEnabled).isFalse()
         assertThat(presentation.message).isEqualTo("Ожидает основного исполнителя")
-        assertThat(presentation.takeLabel).isEqualTo("Взять")
+        assertThat(presentation.takeLabel).isEqualTo("Взять задание")
     }
 
     @Test
@@ -603,7 +649,7 @@ class TaskDetailPresentationTest {
 
         assertThat(presentation.actions).containsExactly(WorkerTaskAction.TAKE)
         assertThat(presentation.actionsEnabled).isTrue()
-        assertThat(presentation.takeLabel).isEqualTo("Взять срочное")
+        assertThat(presentation.takeLabel).isEqualTo("Взять задание")
         assertThat(presentation.message).isEqualTo("Срочное задание: присоединитесь к выполнению")
         assertThat(presentation.performers).containsExactly("Основной исполнитель")
     }
@@ -703,14 +749,6 @@ class TaskDetailPresentationTest {
                 running = true,
             ),
         )
-    }
-
-    @Test
-    fun `task object type uses worker-facing labels`() {
-        assertThat(workerTaskObjectKindLabel("CABIN")).isEqualTo("Бытовка")
-        assertThat(workerTaskObjectKindLabel("EQUIPMENT")).isEqualTo("Оборудование")
-        assertThat(workerTaskObjectKindLabel("OTHER")).isEqualTo("Другой объект")
-        assertThat(workerTaskObjectKindLabel(null)).isEqualTo("Не указан")
     }
 
     private fun assignment(

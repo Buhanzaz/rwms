@@ -1,19 +1,39 @@
 package dev.buhanzaz.rwms.worker
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.ViewKanban
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -29,10 +49,12 @@ import androidx.navigation3.ui.NavDisplay
 import dev.buhanzaz.rwms.worker.core.ui.RwmsWorkerTheme
 import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
 import dev.buhanzaz.rwms.worker.feature.camera.CameraScreen
+import dev.buhanzaz.rwms.worker.feature.camera.GalleryImportScreen
 import dev.buhanzaz.rwms.worker.feature.login.LoginScreen
 import dev.buhanzaz.rwms.worker.feature.taskdetail.TaskDetailScreen
 import dev.buhanzaz.rwms.worker.feature.tasks.TasksScreen
 import java.util.UUID
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 
 @Composable
@@ -59,9 +81,6 @@ fun WorkerApp(
 }
 
 @Serializable
-private data object MenuRoute : NavKey
-
-@Serializable
 private data object BoardRoute : NavKey
 
 @Serializable
@@ -78,10 +97,33 @@ internal data class CameraRoute(
     val entryId: String,
     val routeIndex: Int,
     val captureSessionId: String,
+    val completeAfterSave: Boolean,
+    val fromGallery: Boolean,
 ) : NavKey
 
-internal fun newCameraRoute(entryId: String, routeIndex: Int): CameraRoute =
-    CameraRoute(entryId, routeIndex, UUID.randomUUID().toString())
+internal fun newCameraRoute(
+    entryId: String,
+    routeIndex: Int,
+    completeAfterSave: Boolean = true,
+    fromGallery: Boolean = false,
+): CameraRoute = CameraRoute(
+    entryId = entryId,
+    routeIndex = routeIndex,
+    captureSessionId = UUID.randomUUID().toString(),
+    completeAfterSave = completeAfterSave,
+    fromGallery = fromGallery,
+)
+
+/** One-shot camera or gallery result delivered to the task entry that opened the capture flow. */
+internal data class CapturedEvidenceResult(
+    val entryId: String,
+    val evidenceIds: List<String>,
+    val completeAfterSave: Boolean,
+)
+
+/** Selects the final durable photo in a capture batch as the completion command's evidence. */
+internal fun CapturedEvidenceResult.completionEvidenceId(): String? =
+    evidenceIds.lastOrNull(String::isNotBlank)
 
 @Serializable
 private data object ProfileRoute : NavKey
@@ -99,28 +141,47 @@ internal data class PhotoRoute(
 
 @Composable
 private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -> Unit) {
-    val backStack = rememberNavBackStack(MenuRoute)
-    NavDisplay(
-        backStack = backStack,
-        onBack = { backStack.removeLastOrNull() },
-        // Navigation 3 does not scope ViewModels to entries by default. Both
-        // task detail and camera are Hilt ViewModels, so install its standard
-        // state + ViewModel entry decorators. This makes every CameraRoute
-        // independent and destroys a completed camera state after returning.
-        entryDecorators = listOf(
-            rememberSaveableStateHolderNavEntryDecorator(),
-            rememberViewModelStoreNavEntryDecorator(),
-        ),
-        entryProvider = entryProvider {
-            entry<MenuRoute> {
-                WorkerMainMenuScreen(
-                    userId = userId,
-                    displayName = displayName,
-                    onWorks = dropUnlessResumed { backStack.add(BoardRoute) },
-                    onDownloads = dropUnlessResumed { backStack.add(DownloadsRoute) },
-                    onProfile = dropUnlessResumed { backStack.add(ProfileRoute) },
-                )
-            }
+    val backStack = rememberNavBackStack(BoardRoute)
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+    var capturedEvidenceResult by remember { mutableStateOf<CapturedEvidenceResult?>(null) }
+    val profileMonogram = displayName.trim().firstOrNull()?.uppercase() ?: "А"
+
+    fun openDrawer() {
+        scope.launch { drawerState.open() }
+    }
+
+    fun showTopLevel(route: NavKey) {
+        backStack.removeAll { true }
+        backStack.add(route)
+        scope.launch { drawerState.close() }
+    }
+
+    fun openProfile() {
+        backStack.removeAll { it is ProfileRoute }
+        backStack.add(ProfileRoute)
+    }
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = backStack.lastOrNull() !is CameraRoute && backStack.lastOrNull() !is PhotoRoute,
+        drawerContent = {
+            WorkerDrawerContent(
+                current = backStack.firstOrNull(),
+                onBoard = { showTopLevel(BoardRoute) },
+                onDownloads = { showTopLevel(DownloadsRoute) },
+            )
+        },
+    ) {
+        NavDisplay(
+            backStack = backStack,
+            onBack = { backStack.removeLastOrNull() },
+            // Navigation 3 scopes saveable state and Hilt ViewModels to entries.
+            entryDecorators = listOf(
+                rememberSaveableStateHolderNavEntryDecorator(),
+                rememberViewModelStoreNavEntryDecorator(),
+            ),
+            entryProvider = entryProvider {
             entry<BoardRoute> {
                 val openTask: (String) -> Unit = dropUnlessResumedWithArgument { entryId ->
                     backStack.removeAll { it is TaskRoute }
@@ -129,38 +190,99 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                 TasksScreen(
                     userId = userId,
                     onTask = openTask,
-                    onBack = { backStack.removeLastOrNull() },
+                    onMenu = ::openDrawer,
+                    profileMonogram = profileMonogram,
+                    onProfile = ::openProfile,
                 )
             }
             entry<TaskRoute> { route ->
-                val openCamera: (Int) -> Unit = dropUnlessResumedWithArgument { routeIndex ->
-                    backStack.add(newCameraRoute(route.entryId, routeIndex))
+                val openCamera: (Pair<Int, Boolean>) -> Unit = dropUnlessResumedWithArgument { request ->
+                    backStack.add(
+                        newCameraRoute(
+                            route.entryId,
+                            request.first,
+                            completeAfterSave = request.second,
+                        ),
+                    )
+                }
+                val openGallery: (Int) -> Unit = dropUnlessResumedWithArgument { routeIndex ->
+                    backStack.add(
+                        newCameraRoute(
+                            route.entryId,
+                            routeIndex,
+                            completeAfterSave = true,
+                            fromGallery = true,
+                        ),
+                    )
+                }
+                val taskViewModel = hiltViewModel<dev.buhanzaz.rwms.worker.feature.taskdetail.TaskDetailViewModel>()
+                LaunchedEffect(capturedEvidenceResult, route.entryId) {
+                    capturedEvidenceResult?.let { result ->
+                        if (result.entryId == route.entryId) {
+                            capturedEvidenceResult = null
+                            if (result.completeAfterSave) {
+                                result.completionEvidenceId()?.let(taskViewModel::completeAfterEvidence)
+                            }
+                        }
+                    }
                 }
                 TaskDetailScreen(
                     userId = userId,
                     entryId = route.entryId,
-                    onBack = { backStack.removeLastOrNull() },
-                    onCamera = openCamera,
+                    onMenu = ::openDrawer,
+                    profileMonogram = profileMonogram,
+                    onProfile = ::openProfile,
+                    onCamera = { routeIndex, completeAfterSave ->
+                        openCamera(routeIndex to completeAfterSave)
+                    },
+                    onGallery = openGallery,
                     onMedia = { title, paths, initialIndex ->
                         backStack.add(PhotoRoute(title, paths, initialIndex))
                     },
+                    onCompletionQueued = { showTopLevel(BoardRoute) },
+                    viewModel = taskViewModel,
                 )
             }
             entry<CameraRoute> { route ->
                 val closeCamera = dropUnlessResumed { backStack.removeLastOrNull() }
-                CameraScreen(
-                    userId = userId,
-                    entryId = route.entryId,
-                    routeIndex = route.routeIndex,
-                    onBack = closeCamera,
-                    onSaved = closeCamera,
-                )
+                val onSaved: (List<String>) -> Unit = { evidenceIds ->
+                    capturedEvidenceResult = CapturedEvidenceResult(
+                        entryId = route.entryId,
+                        evidenceIds = evidenceIds,
+                        completeAfterSave = route.completeAfterSave,
+                    )
+                    closeCamera()
+                }
+                if (route.fromGallery) {
+                    GalleryImportScreen(
+                        userId = userId,
+                        entryId = route.entryId,
+                        routeIndex = route.routeIndex,
+                        onBack = closeCamera,
+                        onSaved = onSaved,
+                        requestSyncAfterSave = !route.completeAfterSave,
+                    )
+                } else {
+                    CameraScreen(
+                        userId = userId,
+                        entryId = route.entryId,
+                        routeIndex = route.routeIndex,
+                        onBack = closeCamera,
+                        onSaved = onSaved,
+                        requestSyncAfterSave = !route.completeAfterSave,
+                    )
+                }
             }
             entry<ProfileRoute> {
                 ProfileScreen(userId, displayName, onBack = { backStack.removeLastOrNull() }, onLogout = onLogout)
             }
             entry<DownloadsRoute> {
-                WorkerDownloadsScreen(userId, onBack = { backStack.removeLastOrNull() })
+                WorkerDownloadsScreen(
+                    userId = userId,
+                    onMenu = ::openDrawer,
+                    profileMonogram = profileMonogram,
+                    onProfile = ::openProfile,
+                )
             }
             entry<PhotoRoute> { route ->
                 PhotoPagerScreen(
@@ -170,8 +292,40 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                     onBack = { backStack.removeLastOrNull() },
                 )
             }
-        },
-    )
+            },
+        )
+    }
+}
+
+/** Contains only the two top-level destinations defined by the WorkerApp design. */
+@Composable
+private fun WorkerDrawerContent(
+    current: NavKey?,
+    onBoard: () -> Unit,
+    onDownloads: () -> Unit,
+) {
+    ModalDrawerSheet(modifier = Modifier.widthIn(max = 320.dp)) {
+        Image(
+            painter = painterResource(dev.buhanzaz.rwms.worker.core.ui.R.drawable.rwms_blockbox_logo),
+            contentDescription = "BlockBox",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 28.dp, vertical = 32.dp),
+        )
+        NavigationDrawerItem(
+            icon = { Icon(Icons.Filled.ViewKanban, contentDescription = null) },
+            label = { Text("Доска задач") },
+            selected = current is BoardRoute,
+            onClick = onBoard,
+            modifier = Modifier.padding(horizontal = 12.dp),
+        )
+        NavigationDrawerItem(
+            icon = { Icon(Icons.Filled.Download, contentDescription = null) },
+            label = { Text("Загрузки") },
+            selected = current is DownloadsRoute,
+            onClick = onDownloads,
+            modifier = Modifier.padding(horizontal = 12.dp),
+        )
+    }
 }
 
 /** Same lifecycle guard as dropUnlessResumed, for callbacks with a route argument. */
@@ -190,11 +344,20 @@ private fun <T> dropUnlessResumedWithArgument(block: (T) -> Unit): (T) -> Unit {
 
 @Composable
 private fun LoadingScreen(message: String) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) { Text(message) }
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(24.dp),
+        ) {
+            Image(
+                painter = painterResource(dev.buhanzaz.rwms.worker.core.ui.R.drawable.rwms_blockbox_mark),
+                contentDescription = "BlockBox",
+                modifier = Modifier.size(96.dp),
+            )
+            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 3.dp)
+            Text(message, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
 }
 
 @Composable

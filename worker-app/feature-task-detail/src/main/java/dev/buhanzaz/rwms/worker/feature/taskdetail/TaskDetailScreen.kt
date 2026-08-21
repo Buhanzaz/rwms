@@ -10,24 +10,31 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -37,27 +44,33 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import dev.buhanzaz.rwms.worker.core.database.TaskEvidenceEntity
-import dev.buhanzaz.rwms.worker.core.network.TaskEvidenceDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerMediaReferenceDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerWorkDto
-import dev.buhanzaz.rwms.worker.core.ui.TaskStatusChip
 import dev.buhanzaz.rwms.worker.core.ui.WorkerKpiColorRange
 import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
 import dev.buhanzaz.rwms.worker.core.ui.cabinNumberForDisplay
+import dev.buhanzaz.rwms.worker.core.ui.workerRepairComplexityLabel
 import dev.buhanzaz.rwms.worker.core.ui.workerKpiTimeColor
+import dev.buhanzaz.rwms.worker.core.ui.workerTaskStageLabel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /** Renders one task, its evidence and the actions allowed by the synchronized server state. */
 @Composable
 fun TaskDetailScreen(
     userId: String,
     entryId: String,
-    onBack: (() -> Unit)?,
-    onCamera: (routeIndex: Int) -> Unit,
+    onBack: (() -> Unit)? = null,
+    onCamera: (routeIndex: Int, completeAfterSave: Boolean) -> Unit,
     onMedia: (title: String, readPaths: List<String>, initialIndex: Int) -> Unit,
+    onGallery: (routeIndex: Int) -> Unit = {},
+    onMenu: (() -> Unit)? = null,
+    profileMonogram: String? = null,
+    onProfile: (() -> Unit)? = null,
+    onCompletionQueued: () -> Unit = {},
     viewModel: TaskDetailViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(userId, entryId) { viewModel.bind(userId, entryId) }
@@ -86,14 +99,7 @@ fun TaskDetailScreen(
         addAll(state.evidence.filter { it.state == "READY" }.map { it.evidenceId })
     }
     val readyEvidenceCount = readyEvidenceIds.size
-    var explicitlySelectedEvidenceId by remember(entryId, readyEvidenceIds) {
-        mutableStateOf<String?>(null)
-    }
-    val selectedCompletionEvidenceId = completionEvidenceId(
-        queuePurpose = state.queuePurpose,
-        readyEvidenceIds = readyEvidenceIds,
-        selectedEvidenceId = explicitlySelectedEvidenceId,
-    )
+    var showCompletionDialog by remember(entryId) { mutableStateOf(false) }
     val localEvidenceWithoutServerPhoto = state.evidence.filterNot { local ->
         readyServerEvidence.any { remote -> remote.evidenceId == local.evidenceId }
     }
@@ -123,6 +129,15 @@ fun TaskDetailScreen(
         sourceMedia = detail?.sourceMedia.orEmpty(),
     )
     val generalSourceMedia = sourceMediaPresentation.general
+    val detailRouteIndex = detail?.routeIndex
+    val stageLabel = workerTaskStageLabel(
+        detail?.relatedSteps
+            ?.firstOrNull { it.routeIndex == detailRouteIndex }
+            ?.queueName
+            ?: task?.categoryName,
+    )
+    val repairComplexity = workerRepairComplexityLabel(detail?.title ?: task?.title)
+    val showRepairComplexity = detail?.source?.type == "MAINTENANCE_REPAIR" || repairComplexity != null
     LaunchedEffect(timerSnapshot?.nextTransitionAt, timerSnapshot?.serverTime) {
         val snapshot = timerSnapshot ?: return@LaunchedEffect
         val nextTransitionAt = snapshot.nextTransitionAt ?: return@LaunchedEffect
@@ -145,41 +160,29 @@ fun TaskDetailScreen(
         hasCurrentGroup = session?.currentGroupId != null,
         operationalAvailability = session?.operationalAvailability ?: "DISABLED",
     )
+    val footerActions = actionPresentation.actions.filter {
+        it == WorkerTaskAction.TAKE || it == WorkerTaskAction.JOIN || it == WorkerTaskAction.RESUME
+    }
     LaunchedEffect(readyEvidenceCount) { viewModel.refresh() }
-    val taskTitle = detail?.title ?: state.task?.title ?: "Задание"
-    val headerTimer = taskHeaderTimerPresentation(
-        taskStatus = displayedStatus,
-        locallyPending = task?.locallyPending == true,
-        timerState = timerSnapshot?.timerState,
-        remaining = timing.remaining,
-    )
+    val mediaTitle = cabinNumber ?: "Задание"
+    LaunchedEffect(displayedStatus, task?.locallyPending) {
+        if (displayedStatus == "DONE" && task?.locallyPending == true) {
+            onCompletionQueued()
+        }
+    }
     WorkerScreenScaffold(
-        title = cabinNumber?.let { "Бытовка $it" } ?: "Задание",
+        title = cabinNumber ?: "Задание",
         onBack = onBack,
-        actions = {
-            headerTimer?.let { timer ->
-                Column(
-                    modifier = Modifier.padding(end = 8.dp).testTag("task-header-countdown"),
-                    horizontalAlignment = Alignment.End,
-                ) {
-                    Text(
-                        timer.label,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    timer.countdown?.let { countdown ->
-                        Text(
-                            countdown,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = if (timer.running) {
-                                kpiTimeColor ?: MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                }
+        onMenu = onMenu,
+        profileMonogram = profileMonogram,
+        onProfile = onProfile,
+        bottomBar = {
+            if (footerActions.isNotEmpty()) {
+                TaskEntryActionFooter(
+                    actions = footerActions,
+                    presentation = actionPresentation,
+                    onAction = { viewModel.perform(it.wireValue) },
+                )
             }
         },
     ) { padding ->
@@ -189,116 +192,77 @@ fun TaskDetailScreen(
             contentPadding = PaddingValues(bottom = 28.dp),
         ) {
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-                        .testTag("task-summary"),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    ),
-                ) {
-                    Column(
-                        Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text(
-                            taskTitle,
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold,
+                TaskMediaPager(
+                    thumbnailPaths = generalSourceMedia.map { it.thumbnailPath ?: it.readPath },
+                    contentDescription = "Фото задания",
+                    emptyMessage = "Фотографии отсутствуют",
+                    onOpen = { index ->
+                        onMedia(
+                            mediaTitle,
+                            generalSourceMedia.map(WorkerMediaReferenceDto::readPath),
+                            index,
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            displayedStatus?.let { TaskStatusChip(it) }
-                            detail?.availabilityMode?.let {
-                                Text(
-                                    when (it) {
-                                        "MANDATORY" -> "Обязательное"
-                                        "REQUIRED_JOIN" -> "Требуется присоединение"
-                                        "SECONDARY_PENDING" -> "Ожидает основного исполнителя"
-                                        "OPTIONAL_JOIN" -> "Можно присоединиться"
-                                        else -> "Доступное"
-                                    },
-                                )
-                            }
-                        }
-                        cabinNumber?.let { Text("Бытовка: $it") }
-                        (detail?.taskId ?: task?.taskId)?.let { Text("Номер задания: $it") }
-                        Text("Тип объекта: ${workerTaskObjectKindLabel(detail?.taskObject?.kind)}")
-                        detail?.taskObject?.label?.takeIf { it.isNotBlank() && it != cabinNumber }
-                            ?.let { Text("Объект: $it") }
-                        detail?.description?.takeIf(String::isNotBlank)?.let { Text(it) }
-                        detail?.taskText?.takeIf(String::isNotBlank)?.let {
-                            Text(
-                                it,
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.Medium,
+                    },
+                )
+            }
+            item { TaskTimerCard(timing = timing, kpiColor = kpiTimeColor) }
+            item {
+                TaskMetadataCard(
+                    stage = stageLabel,
+                    priority = detail?.priority ?: task?.priority,
+                    repairComplexity = repairComplexity,
+                    showRepairComplexity = showRepairComplexity,
+                )
+            }
+            if (readyServerEvidence.isNotEmpty()) {
+                item {
+                    TaskMediaPager(
+                        thumbnailPaths = readyServerEvidence.map {
+                            it.thumbnailPath ?: requireNotNull(it.readPath)
+                        },
+                        contentDescription = "Фото результата",
+                        onOpen = { index ->
+                            onMedia(
+                                mediaTitle,
+                                readyServerEvidence.map { requireNotNull(it.readPath) },
+                                index,
                             )
-                        }
-                        Text(
-                            "Плановое время: ${timing.planned ?: "не задано"}",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        Text(
-                            "${timing.activeLabel}: ${timing.activeElapsed}",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        timing.remaining?.let { remaining ->
-                            Text(
-                                "Осталось: $remaining${timing.remainingPercent?.let { " · $it" }.orEmpty()}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = kpiTimeColor ?: MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontWeight = if (kpiTimeColor == null) {
-                                    FontWeight.Normal
-                                } else {
-                                    FontWeight.Bold
-                                },
-                            )
-                        }
-                        Text(
-                            "Группа: ${session?.currentGroupName ?: "не выбрана руководителем"}",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        if (session?.operationalAvailability == "DISABLED") {
-                            Text(
-                                "Группа временно недоступна",
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                        state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                    }
+                        },
+                    )
                 }
             }
-            item {
-                Column(
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    ProgressActionButtons(
-                        presentation = actionPresentation,
-                        onAction = { viewModel.perform(it.wireValue) },
+            if (localEvidenceWithoutServerPhoto.isNotEmpty()) {
+                items(localEvidenceWithoutServerPhoto, key = { "local-${it.evidenceId}" }) { evidence ->
+                    EvidenceRow(
+                        evidence = evidence,
+                        hasValidReservationPayload = evidence.evidenceId in state.retryableEvidenceIds,
+                        onRetry = { viewModel.retryEvidence(evidence.evidenceId) },
                     )
-                    actionPresentation.message?.let {
-                        Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    if (actionPresentation.performers.isNotEmpty()) {
-                        Text(
-                            "Исполнители: ${actionPresentation.performers.joinToString()}",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
+                }
+            }
+            state.error?.let { error ->
+                item {
+                    Text(
+                        error,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
             }
 
-            item { TaskSectionTitle("Общие фото", "Фото, приложенные к заданию") }
-            if (generalSourceMedia.isEmpty()) {
-                item { EmptyTaskSection("Общих фотографий нет") }
+            item { TaskSectionTitle("Работы:") }
+            if (detail?.works.isNullOrEmpty()) {
+                item { EmptyTaskSection("Состав работ не указан") }
             } else {
-                item {
-                    SourceMediaStrip(
-                        media = generalSourceMedia,
-                        contentDescription = "Общее фото задания",
-                        onOpen = { index ->
+                items(requireNotNull(detail).works, key = { it.id }) { work ->
+                    val workMedia = sourceMediaPresentation.byWorkId[work.id].orEmpty()
+                    WorkRow(
+                        work = work,
+                        sourceMedia = workMedia,
+                        onMedia = { index ->
                             onMedia(
-                                "$taskTitle · общие фото",
-                                generalSourceMedia.map(WorkerMediaReferenceDto::readPath),
+                                "$mediaTitle · ${work.name}",
+                                workMedia.map(WorkerMediaReferenceDto::readPath),
                                 index,
                             )
                         },
@@ -306,7 +270,7 @@ fun TaskDetailScreen(
                 }
             }
 
-            item { TaskSectionTitle("Материалы", "Что подготовить для выполнения") }
+            item { TaskSectionTitle("Материалы:") }
             if (detail?.materials.isNullOrEmpty()) {
                 item { EmptyTaskSection("Материалы не указаны") }
             } else {
@@ -331,210 +295,160 @@ fun TaskDetailScreen(
                 }
             }
 
-            item { TaskSectionTitle("Работы", "Что именно нужно сделать") }
-            if (detail?.works.isNullOrEmpty()) {
-                item { EmptyTaskSection("Состав работ не указан") }
-            } else {
-                items(requireNotNull(detail).works, key = { it.id }) { work ->
-                    val media = sourceMediaPresentation.byWorkId[work.id].orEmpty()
-                    WorkRow(
-                        work = work,
-                        sourceMedia = media,
-                        onMedia = { index ->
-                            onMedia(
-                                "$taskTitle · ${work.name}",
-                                media.map(WorkerMediaReferenceDto::readPath),
-                                index,
-                            )
-                        },
-                    )
-                }
-            }
-
-            if (detail?.comments?.isNotEmpty() == true) {
-                item { TaskSectionTitle("Комментарии", "Уточнения к выполнению") }
-                items(detail.comments, key = { it.id }) { comment ->
-                    Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text(
-                                comment.authorDisplayName ?: "RWMS",
-                                style = MaterialTheme.typography.labelMedium,
-                            )
-                            Text(comment.text)
-                        }
-                    }
-                }
-            }
-
-            item { TaskSectionTitle("Фото результата", "Снимите выполненную работу перед завершением") }
-            item {
-                Row(
-                    Modifier.padding(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Button(
-                        onClick = { onCamera(requireNotNull(detail).routeIndex) },
-                        enabled = photoCapture.enabled,
-                    ) { Text("Сфотографировать результат") }
-                    Text("Готово: $readyEvidenceCount")
-                }
-                photoCapture.message?.let { message ->
-                    Text(
-                        message,
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            if (readyServerEvidence.isNotEmpty()) {
-                item {
-                    EvidenceMediaStrip(
-                        evidence = readyServerEvidence,
-                        onOpen = { index ->
-                            onMedia(
-                                "$taskTitle · фото результата",
-                                readyServerEvidence.map { requireNotNull(it.readPath) },
-                                index,
-                            )
-                        },
-                    )
-                }
-            }
-            if (localEvidenceWithoutServerPhoto.isNotEmpty()) {
-                items(localEvidenceWithoutServerPhoto, key = { "local-${it.evidenceId}" }) { evidence ->
-                    EvidenceRow(
-                        evidence = evidence,
-                        hasValidReservationPayload = evidence.evidenceId in state.retryableEvidenceIds,
-                        onRetry = { viewModel.retryEvidence(evidence.evidenceId) },
-                    )
-                }
-            }
-
-            if (
-                state.queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE &&
-                WorkerTaskAction.COMPLETE in actionPresentation.actions
-            ) {
-                item {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        when {
-                            readyEvidenceIds.isEmpty() -> Text(
-                                "Для завершения добавьте фотографию бытовки",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            readyEvidenceIds.size == 1 -> Text(
-                                "Единственная готовая фотография выбрана автоматически",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            else -> {
-                                Text(
-                                    "Выберите фотографию, которая станет титульной",
-                                    style = MaterialTheme.typography.titleSmall,
-                                )
-                                readyEvidenceIds.sorted().forEachIndexed { index, evidenceId ->
-                                    OutlinedButton(
-                                        onClick = { explicitlySelectedEvidenceId = evidenceId },
-                                        modifier = Modifier.fillMaxWidth(),
-                                    ) {
-                                        Text(
-                                            if (explicitlySelectedEvidenceId == evidenceId) {
-                                                "Фото ${index + 1} · выбрано"
-                                            } else {
-                                                "Выбрать фото ${index + 1}"
-                                            },
-                                        )
-                                    }
-                                }
-                            }
-                        }
+            if (footerActions.isEmpty()) {
+                actionPresentation.message?.let { message ->
+                    item {
+                        Text(
+                            message,
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }
 
             if (WorkerTaskAction.COMPLETE in actionPresentation.actions) {
                 item {
-                    val completionAllowed = (
-                        (detail?.completionAllowed == true) ||
-                            (task?.let { readyEvidenceCount >= it.resultPhotoMinCount } == true)
-                        ) &&
-                        (
-                            state.queuePurpose != LOGISTICS_DRIVER_QUEUE_PURPOSE ||
-                                selectedCompletionEvidenceId != null
-                            )
-                    Button(
-                        onClick = {
-                            viewModel.perform(
-                                action = WorkerTaskAction.COMPLETE.wireValue,
-                                evidenceId = selectedCompletionEvidenceId,
-                            )
-                        },
-                        enabled = actionPresentation.actionsEnabled && completionAllowed,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-                            .testTag("task-complete"),
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text("Завершить задание")
+                        Button(
+                            onClick = { showCompletionDialog = true },
+                            enabled = actionPresentation.actionsEnabled && photoCapture.enabled,
+                            modifier = Modifier.fillMaxWidth().testTag("task-complete"),
+                        ) { Text("Завершить задание") }
+                        photoCapture.message?.let { message ->
+                            Text(
+                                message,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                     }
+                }
+            }
+        }
+    }
+
+    if (showCompletionDialog) {
+        Dialog(
+            onDismissRequest = { showCompletionDialog = false },
+        ) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("Завершить задание", style = MaterialTheme.typography.headlineSmall)
+                    Text("Добавьте фотографии результата. После сохранения задание закроется автоматически.")
+                    OutlinedButton(
+                        onClick = {
+                            showCompletionDialog = false
+                            onCamera(requireNotNull(detail).routeIndex, true)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Сделать фото") }
+                    OutlinedButton(
+                        onClick = {
+                            showCompletionDialog = false
+                            onGallery(requireNotNull(detail).routeIndex)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Из галереи") }
+                    OutlinedButton(
+                        onClick = { showCompletionDialog = false },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Отмена") }
                 }
             }
         }
     }
 }
 
-/** Shows take/join and pause/resume controls before the completion section. */
+/** Keeps task entry and resume actions visible in a safe-area-aware, full-width footer. */
 @Composable
-private fun ProgressActionButtons(
+private fun TaskEntryActionFooter(
+    actions: List<WorkerTaskAction>,
     presentation: TaskActionPresentation,
     onAction: (WorkerTaskAction) -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    Surface(
+        modifier = Modifier.fillMaxWidth().navigationBarsPadding().testTag("task-action-footer"),
+        tonalElevation = 3.dp,
+        shadowElevation = 6.dp,
     ) {
-        if (WorkerTaskAction.TAKE in presentation.actions) {
-            Button(
-                onClick = { onAction(WorkerTaskAction.TAKE) },
-                enabled = presentation.actionsEnabled,
-            ) { Text(presentation.takeLabel) }
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            presentation.message?.let { message ->
+                Text(
+                    message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            actions.forEach { action ->
+                Button(
+                    onClick = { onAction(action) },
+                    enabled = presentation.actionsEnabled,
+                    modifier = Modifier.fillMaxWidth().testTag(
+                        "task-action-${action.wireValue.lowercase()}",
+                    ),
+                ) {
+                    Text(
+                        when (action) {
+                            WorkerTaskAction.TAKE -> presentation.takeLabel
+                            WorkerTaskAction.JOIN -> presentation.joinLabel
+                            WorkerTaskAction.RESUME -> "Продолжить"
+                            else -> action.wireValue
+                        },
+                    )
+                }
+            }
         }
-        if (WorkerTaskAction.JOIN in presentation.actions) {
-            Button(
-                onClick = { onAction(WorkerTaskAction.JOIN) },
-                enabled = presentation.actionsEnabled,
-            ) { Text(presentation.joinLabel) }
-        }
-        if (WorkerTaskAction.PAUSE in presentation.actions) {
-            OutlinedButton(
-                onClick = { onAction(WorkerTaskAction.PAUSE) },
-                enabled = presentation.actionsEnabled,
-            ) { Text("Пауза") }
-        }
-        if (WorkerTaskAction.RESUME in presentation.actions) {
-            Button(
-                onClick = { onAction(WorkerTaskAction.RESUME) },
-                enabled = presentation.actionsEnabled,
-            ) { Text("Продолжить") }
+    }
+}
+
+/** Shows source-owned task classification immediately below the authoritative timer. */
+@Composable
+private fun TaskMetadataCard(
+    stage: String?,
+    priority: Int?,
+    repairComplexity: String?,
+    showRepairComplexity: Boolean,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).testTag("task-metadata"),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text("Этап: ${stage ?: "—"}", style = MaterialTheme.typography.bodyLarge)
+            Text("Приоритет: ${priority ?: "—"}", style = MaterialTheme.typography.bodyLarge)
+            if (showRepairComplexity) {
+                Text(
+                    "Ремонт: ${repairComplexity ?: "—"}",
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            }
         }
     }
 }
 
 /** Renders a consistent heading for one stage of task execution. */
 @Composable
-private fun TaskSectionTitle(title: String, description: String) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        Text(
-            description,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
+private fun TaskSectionTitle(title: String) = Text(
+    text = title,
+    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+    style = MaterialTheme.typography.titleLarge,
+    fontWeight = FontWeight.Bold,
+)
 
 /** Makes a missing optional server section explicit without fabricating content. */
 @Composable
@@ -547,82 +461,125 @@ private fun EmptyTaskSection(message: String) {
     )
 }
 
-/** Displays source photos as a swipeable strip and opens the exact selected item. */
+/** Displays one edge-to-edge-in-content photo at a time with swipe and explicit pager controls. */
 @Composable
-private fun SourceMediaStrip(
-    media: List<WorkerMediaReferenceDto>,
+private fun TaskMediaPager(
+    thumbnailPaths: List<String>,
     contentDescription: String,
     onOpen: (index: Int) -> Unit,
+    emptyMessage: String? = null,
+    modifier: Modifier = Modifier.padding(horizontal = 16.dp),
+    testTag: String = "task-photo-pager",
+) {
+    if (thumbnailPaths.isEmpty()) {
+        if (emptyMessage != null) {
+            Card(
+                modifier = modifier.fillMaxWidth().height(208.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                ),
+            ) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(emptyMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        return
+    }
+    val pagerState = rememberPagerState(pageCount = { thumbnailPaths.size })
+    val scope = rememberCoroutineScope()
+    Box(
+        modifier = modifier.fillMaxWidth().height(208.dp).testTag(testTag),
+    ) {
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize(),
+        ) { page ->
+            Card(
+                modifier = Modifier.fillMaxSize().clickable { onOpen(page) },
+            ) {
+                RemoteMediaThumbnail(
+                    path = thumbnailPaths[page],
+                    contentDescription = "$contentDescription ${page + 1}",
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        IconButton(
+            onClick = {
+                scope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) }
+            },
+            enabled = pagerState.currentPage > 0,
+            modifier = Modifier.align(Alignment.CenterStart).size(56.dp),
+        ) {
+            Icon(
+                Icons.Filled.ChevronLeft,
+                contentDescription = "Предыдущее фото",
+                modifier = Modifier.size(40.dp),
+            )
+        }
+        IconButton(
+            onClick = {
+                scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
+            },
+            enabled = pagerState.currentPage < thumbnailPaths.lastIndex,
+            modifier = Modifier.align(Alignment.CenterEnd).size(56.dp),
+        ) {
+            Icon(
+                Icons.Filled.ChevronRight,
+                contentDescription = "Следующее фото",
+                modifier = Modifier.size(40.dp),
+            )
+        }
+        Text(
+            text = "${pagerState.currentPage + 1}/${thumbnailPaths.size}",
+            modifier = Modifier.align(Alignment.BottomCenter).padding(8.dp),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+/** Presents elapsed time, remaining time and authoritative KPI percent across the full width. */
+@Composable
+private fun TaskTimerCard(timing: TaskTimingPresentation, kpiColor: androidx.compose.ui.graphics.Color?) {
+    Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp).testTag("task-timer")) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 16.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TimerMetric("Таймер", timing.activeElapsed, Modifier.weight(1f))
+            TimerMetric("Осталось", timing.remaining ?: "—", Modifier.weight(1f), kpiColor)
+            TimerMetric("KPI", timing.remainingPercent ?: "—", Modifier.weight(1f), kpiColor)
+        }
+    }
+}
+
+/** Keeps one timer metric centered and readable on compact phone widths. */
+@Composable
+private fun TimerMetric(
+    label: String,
+    value: String,
     modifier: Modifier = Modifier,
-    contentPadding: PaddingValues = PaddingValues(horizontal = 16.dp),
+    color: androidx.compose.ui.graphics.Color? = null,
 ) {
-    LazyRow(
-        modifier = modifier.fillMaxWidth().testTag("task-source-photo-strip"),
-        contentPadding = contentPadding,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        itemsIndexed(media, key = { _, item -> item.mediaId }) { index, item ->
-            TaskMediaTile(
-                thumbnailPath = item.thumbnailPath ?: item.readPath,
-                contentDescription = "$contentDescription ${index + 1}",
-                subtitle = item.recordedAt,
-                onClick = { onOpen(index) },
-            )
-        }
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.titleMedium,
+            color = color ?: MaterialTheme.colorScheme.onSurface,
+            fontWeight = FontWeight.Bold,
+        )
     }
 }
 
-/** Displays uploaded result evidence separately from source photos. */
-@Composable
-private fun EvidenceMediaStrip(
-    evidence: List<TaskEvidenceDto>,
-    onOpen: (index: Int) -> Unit,
-) {
-    LazyRow(
-        modifier = Modifier.fillMaxWidth().testTag("task-result-photo-strip"),
-        contentPadding = PaddingValues(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        itemsIndexed(evidence, key = { _, item -> item.evidenceId }) { index, item ->
-            TaskMediaTile(
-                thumbnailPath = item.thumbnailPath ?: requireNotNull(item.readPath),
-                contentDescription = "Фото результата ${index + 1}",
-                subtitle = item.recordedAt,
-                onClick = { onOpen(index) },
-            )
-        }
-    }
-}
-
-/** One compact photo preview shared by general, work and result carousels. */
-@Composable
-private fun TaskMediaTile(
-    thumbnailPath: String,
-    contentDescription: String,
-    subtitle: String,
-    onClick: () -> Unit,
-) {
-    Card(
-        modifier = Modifier.width(168.dp).clickable(onClick = onClick),
-    ) {
-        Column {
-            RemoteMediaThumbnail(
-                path = thumbnailPath,
-                contentDescription = contentDescription,
-                modifier = Modifier.fillMaxWidth().height(112.dp),
-            )
-            Text(
-                subtitle,
-                modifier = Modifier.fillMaxWidth().padding(10.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
+/** Keeps each source photo inside the card of the work identified by its server media IDs. */
 @Composable
 private fun WorkRow(
     work: WorkerWorkDto,
@@ -631,26 +588,34 @@ private fun WorkRow(
 ) {
     val presentation = workPresentation(work)
     Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(work.name, style = MaterialTheme.typography.titleSmall)
-            Text("Количество: ${presentation.quantity}", style = MaterialTheme.typography.bodyMedium)
-            presentation.plannedDuration?.let {
-                Text("Плановое время: $it", style = MaterialTheme.typography.bodyMedium)
-            }
-            presentation.comment?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-            if (sourceMedia.isNotEmpty()) {
-                Text("Фото к работе", style = MaterialTheme.typography.titleSmall)
-                SourceMediaStrip(
-                    media = sourceMedia,
-                    contentDescription = "Фото работы ${work.name}",
-                    onOpen = onMedia,
-                    contentPadding = PaddingValues(0.dp),
-                )
-            } else {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
-                    "Фотографий к этой работе нет",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    work.name,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(presentation.quantity, fontWeight = FontWeight.Bold)
+            }
+            if (sourceMedia.isNotEmpty()) {
+                Text(
+                    "Фото к работе",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                )
+                TaskMediaPager(
+                    thumbnailPaths = sourceMedia.map { it.thumbnailPath ?: it.readPath },
+                    contentDescription = "Фото к работе ${work.name}",
+                    onOpen = onMedia,
+                    modifier = Modifier,
+                    testTag = "task-work-photo-pager-${work.id}",
                 )
             }
         }
@@ -665,12 +630,15 @@ private fun RemoteMediaThumbnail(
     viewModel: TaskMediaThumbnailViewModel = hiltViewModel(),
 ) {
     val thumbnails by viewModel.thumbnails.collectAsStateWithLifecycle()
-    LaunchedEffect(path) { viewModel.load(path) }
+    val thumbnail = thumbnails[path]
+    LaunchedEffect(path, thumbnail) {
+        if (thumbnail == null) viewModel.load(path)
+    }
     Box(
         modifier = modifier,
         contentAlignment = Alignment.Center,
     ) {
-        when (val thumbnail = thumbnails[path]) {
+        when (thumbnail) {
             is TaskMediaThumbnail.Ready -> Image(
                 bitmap = thumbnail.bitmap.asImageBitmap(),
                 contentDescription = contentDescription,

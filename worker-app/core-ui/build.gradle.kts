@@ -22,4 +22,5 @@ dependencies {
     implementation(libs.coil.network.okhttp)
     implementation(libs.androidx.core.ktx)
     testImplementation(libs.junit)
+    testImplementation(libs.truth)
 }

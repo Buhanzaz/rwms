@@ -24,7 +24,6 @@ internal data class WorkBoardColumn(
     val name: String,
     val personal: Boolean,
     val sections: List<TaskQueueSection>,
-    val description: String = if (personal) "Личная квалификация" else "Групповая роль",
 )
 
 /**

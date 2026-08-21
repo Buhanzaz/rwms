@@ -40,7 +40,7 @@ class NativeLoginScreenTest {
             }
         }
 
-        compose.onNodeWithText("Вход для рабочего").assertIsDisplayed()
+        compose.onNodeWithContentDescription("BlockBox").assertIsDisplayed()
         compose.onNodeWithTag("worker-login").performTextInput(" worker.login ")
         compose.onNodeWithTag("worker-password").performTextInput("secret password")
         compose.onNodeWithContentDescription("Показать пароль").performClick()

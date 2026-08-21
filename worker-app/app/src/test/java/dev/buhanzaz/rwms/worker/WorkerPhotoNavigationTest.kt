@@ -29,6 +29,21 @@ class WorkerPhotoNavigationTest {
     }
 
     @Test
+    fun `full size decoder is bounded to selected page and immediate neighbours`() {
+        val paths = listOf("/one", "/two", "/three", "/four", "/five")
+
+        assertThat(photoPagerLoadWindow(paths, 2))
+            .containsExactly("/three", "/two", "/four")
+            .inOrder()
+        assertThat(photoPagerLoadWindow(paths, 0))
+            .containsExactly("/one", "/two")
+            .inOrder()
+        assertThat(photoPagerLoadWindow(paths, 9))
+            .containsExactly("/five", "/four")
+            .inOrder()
+    }
+
+    @Test
     fun `zoomed fitted photo cannot be panned beyond visible bounds`() {
         val bounded = boundedPhotoOffset(
             proposed = Offset(80f, 40f),
