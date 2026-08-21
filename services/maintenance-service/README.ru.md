@@ -181,12 +181,15 @@ task-board исправляет полностью ожидающие актив
 позволяет обычному reconciliation worker исправить старые presentation snapshots, включая порядок
 стадий, обложки и заголовок сложности, без прямой мутации хранилища task-board. Presentation generation v4
 использовала новый stable key, но live-запуск выявил расхождение owner-version, поэтому это поколение
-остаётся неизменяемым audit evidence, а не успешным recovery. Presentation generation v5 использует
-следующий stable key, перед replacement читает текущую source-owned регистрацию task-board и передаёт
-версию владельца. Task-board принимает полностью идентичный snapshot как replay без мутации;
-изменённые данные сохраняют version- и pre-start-fence. Поэтому eligible queued work получает
-канонический порядок стадий, обложку и заголовок, а quarantined v2/v3/v4 work не возобновляется и не
-изменяется напрямую. Quarantined stable refresh текущего
+остаётся неизменяемым audit evidence, а не успешным recovery. Generation v5 начала читать текущую
+source-owned версию task-board, после чего live gate выявил вторую половину того же recovery gap:
+успешный pre-start replacement сменил route-entry ID, которые maintenance всё ещё считал
+неизменяемыми. Presentation generation v6 использует следующий stable key, сохраняет чтение
+owner-version и разрешает только этому presentation recovery перепривязать уже подтверждённую
+стадию `QUEUED/GENERATED` к возвращённому owner entry. Task-board принимает полностью идентичный
+snapshot как replay без мутации; изменённые данные сохраняют version- и pre-start-fence. Поэтому
+eligible queued work получает канонический порядок стадий, обложку и заголовок, а quarantined
+v2/v3/v4/v5 work не возобновляется и не изменяется напрямую. Quarantined stable refresh текущего
 поколения остаётся в quarantine для reviewed resume, учитывается и пропускается; он не может сорвать
 application-ready event или запустить цикл рестартов. Любой другой конфликт stable identity
 по-прежнему отклоняется fail-closed. Существующая task-board pre-start command ставит fence для

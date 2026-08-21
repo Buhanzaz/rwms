@@ -371,7 +371,11 @@ final class MaintenanceTaskReconciliationUseCases {
               events.lockCurrentVersion(MaintenanceAggregateType.REPAIR, repair.getId());
           commandSupport.assertVersion(repair.getVersion(), expectedVersion);
           MaintenanceReconciliationSupport.validateTaskTruth(repair, task, plan.stages().size());
-          taskBoardSupport.confirmTaskRegistration(repair.getId(), task);
+          if ("REFRESH_WORKER_MEDIA".equals(work.operation())) {
+            taskBoardSupport.confirmPreStartTaskReplacement(repair.getId(), task);
+          } else {
+            taskBoardSupport.confirmTaskRegistration(repair.getId(), task);
+          }
           repair.markTaskGenerated(task.version());
           repair.markReconciled();
           MaintenanceRepair saved = repairs.saveAndFlush(repair);

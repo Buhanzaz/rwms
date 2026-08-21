@@ -178,11 +178,14 @@ every already registered queued repair. This owner-local pass performs no remote
 normal reconciliation worker correct old presentation snapshots, including cover order and
 complexity title, without mutating task-board storage directly. Presentation generation v4 used a
 fresh stable key, but its live run exposed owner-version drift and therefore remains immutable audit
-evidence rather than a successful recovery generation. Presentation generation v5 uses another
-stable key, reads task-board's current source-owned registration before replacement and submits that
-owner version. Task-board accepts an identical complete snapshot as a mutation-free replay; changed
-content remains version- and pre-start-fenced. Eligible queued work therefore receives the canonical
-stage order, cover and title while quarantined v2/v3/v4 work is neither resumed nor changed directly.
+evidence rather than a successful recovery generation. Generation v5 began observing task-board's
+current source-owned version, then its live gate exposed the second half of the same recovery gap: a
+successful pre-start replacement rotated route-entry IDs which maintenance still treated as
+immutable. Presentation generation v6 uses another stable key, retains the owner-version read and
+lets only this presentation recovery rebind an already confirmed `QUEUED/GENERATED` stage to the
+returned owner entry. Task-board accepts an identical complete snapshot as a mutation-free replay;
+changed content remains version- and pre-start-fenced. Eligible queued work therefore receives the
+canonical stage order, cover and title while quarantined v2/v3/v4/v5 work is neither resumed nor changed directly.
 A quarantined stable refresh in the current generation
 remains quarantined for reviewed resume and is counted then skipped; it cannot fail the
 application-ready event or start a restart loop. Any other stable-identity conflict still fails

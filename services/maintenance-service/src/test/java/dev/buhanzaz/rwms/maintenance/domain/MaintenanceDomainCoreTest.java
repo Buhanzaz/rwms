@@ -85,6 +85,29 @@ class MaintenanceDomainCoreTest {
     assertThatThrownBy(() -> stage.confirmTaskBoardRegistration(UUID.randomUUID(), 4))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("cannot be replaced");
+
+    UUID replacementEntryId = UUID.randomUUID();
+    stage.confirmPreStartTaskBoardReplacement(replacementEntryId, 4);
+    assertThat(stage.getExternalQueueEntryId()).isEqualTo(replacementEntryId);
+    assertThat(stage.getTaskBoardVersion()).isEqualTo(4);
+    stage.started(5);
+    assertThatThrownBy(
+            () ->
+                stage.confirmPreStartTaskBoardReplacement(
+                    UUID.randomUUID(), 6))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("queued stage");
+
+    RepairStage unconfirmed = new RepairStage(
+        UUID.randomUUID(), UUID.randomUUID(), 0, RepairStageKind.REPAIR_WORK,
+        UUID.randomUUID(), "REPAIR", "REPAIR", null);
+    unconfirmed.queued();
+    assertThatThrownBy(
+            () ->
+                unconfirmed.confirmPreStartTaskBoardReplacement(
+                    UUID.randomUUID(), 1))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("confirmed mapping");
   }
 
   @Test

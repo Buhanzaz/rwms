@@ -133,7 +133,10 @@ the complete route: that value-identical request returns the current registratio
 versions, route-entry identities or events even when the supplied task version is stale. Any
 differing snapshot still requires the current version and an entirely unstarted route. Maintenance
 uses GET to observe that owner version before a presentation-only recovery PUT; ordinary repair-plan
-commands continue using the version captured with their durable business intent.
+commands continue using the version captured with their durable business intent. When task-board
+returns replacement route-entry IDs, maintenance may rebind only already confirmed local
+`QUEUED/GENERATED` stage mappings in that presentation recovery. Initial registration and every
+started-stage mapping retain their immutable identity fence.
 
 ### Native Driver And Slinger Task Surfaces
 

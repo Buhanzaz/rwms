@@ -2688,7 +2688,7 @@ class MaintenanceCorePostgresIntegrationTest {
   }
 
   @Test
-  void workerPresentationRefreshUsesCurrentTaskBoardVersionAndConfirmsExactReplay() {
+  void workerPresentationRefreshUsesCurrentVersionAndRebindsPreStartEntries() {
     RegisteredRepairFixture registered = createRegisteredPrimaryRepair();
     RepairFixture fixture = registered.repair();
     MaintenanceRepair before = repairs.findById(fixture.repairId()).orElseThrow();
@@ -2714,6 +2714,7 @@ class MaintenanceCorePostgresIntegrationTest {
                 fixture.warehouseId(),
                 "БТ-42",
                 "REPAIR"));
+    UUID replacementEntryId = UUID.randomUUID();
     MaintenanceDependencyGateway.TaskSnapshot currentTask =
         new MaintenanceDependencyGateway.TaskSnapshot(
             fixture.externalTaskId(),
@@ -2721,7 +2722,7 @@ class MaintenanceCorePostgresIntegrationTest {
             "ACTIVE",
             List.of(
                 new MaintenanceDependencyGateway.TaskStageSnapshot(
-                    0, registered.queueEntryId(), 0)));
+                    0, replacementEntryId, 7)));
     when(dependencies.getTask(fixture.externalTaskId())).thenReturn(currentTask);
     when(
             dependencies.updatePreStartTask(
@@ -2758,6 +2759,12 @@ class MaintenanceCorePostgresIntegrationTest {
         .isEqualTo("CONFIRMED");
     assertThat(repairs.findById(fixture.repairId()).orElseThrow().getTaskBoardVersion())
         .isEqualTo(currentTaskBoardVersion);
+    assertThat(
+            jdbc.queryForObject(
+                "select external_queue_entry_id from repair_stage where repair_id=?",
+                UUID.class,
+                fixture.repairId()))
+        .isEqualTo(replacementEntryId);
   }
 
   @Test

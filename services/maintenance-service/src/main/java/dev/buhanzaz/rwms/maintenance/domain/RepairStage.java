@@ -220,6 +220,33 @@ public class RepairStage {
     deliveryUpdatedAt = MaintenanceTime.now();
   }
 
+  /**
+   * Rebinds this stage to task-board truth after a source-owned pre-start replacement succeeded.
+   *
+   * <p>A changed task-board response proves that no route entry or assignment started before it
+   * replaced the complete route; an exact replay may return that already replaced route later.
+   * Only an already confirmed, still queued local stage may therefore exchange its external entry
+   * identity. Ordinary registration keeps the stronger immutable-mapping rule.
+   */
+  public void confirmPreStartTaskBoardReplacement(
+      UUID taskBoardEntryId, long entryVersion) {
+    if (taskBoardEntryId == null || entryVersion < 0) {
+      throw new IllegalArgumentException("Task-board registration identity is invalid");
+    }
+    if (state != RepairStageState.QUEUED
+        || externalQueueEntryId == null
+        || taskBoardVersion == null
+        || !"GENERATED".equals(taskGenerationState)) {
+      throw new IllegalStateException(
+          "Only a queued stage with a confirmed mapping can accept a pre-start replacement");
+    }
+    externalQueueEntryId = taskBoardEntryId;
+    taskBoardVersion = entryVersion;
+    deliveryState = "DELIVERED";
+    deliveryAttempts = Math.addExact(deliveryAttempts, 1);
+    deliveryUpdatedAt = MaintenanceTime.now();
+  }
+
   public void markTaskDeliveryFailed(boolean quarantined) {
     deliveryAttempts = Math.addExact(deliveryAttempts, 1);
     deliveryState = quarantined ? "QUARANTINED" : "RETRY_PENDING";

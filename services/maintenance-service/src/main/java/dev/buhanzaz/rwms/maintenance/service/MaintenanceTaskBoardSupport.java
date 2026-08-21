@@ -225,6 +225,22 @@ final class MaintenanceTaskBoardSupport {
   /** Confirms task-board entry identities against the same canonical route published by maintenance. */
   protected void confirmTaskRegistration(
       UUID repairId, MaintenanceDependencyGateway.TaskSnapshot task) {
+    confirmTaskRegistration(repairId, task, false);
+  }
+
+  /**
+   * Confirms task-board entry identities after its source-owned pre-start replacement fence.
+   * Existing queued mappings may move to the replacement route IDs; started mappings cannot.
+   */
+  protected void confirmPreStartTaskReplacement(
+      UUID repairId, MaintenanceDependencyGateway.TaskSnapshot task) {
+    confirmTaskRegistration(repairId, task, true);
+  }
+
+  private void confirmTaskRegistration(
+      UUID repairId,
+      MaintenanceDependencyGateway.TaskSnapshot task,
+      boolean preStartReplacement) {
     List<RepairStage> stages =
         RepairPhaseSequence.canonicalStages(
             repairStages.findAllByRepairIdOrderByStageNo(repairId));
@@ -249,8 +265,13 @@ final class MaintenanceTaskBoardSupport {
             org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
             "Task-board routeIndex is missing");
       }
-      stage.confirmTaskBoardRegistration(
-          external.taskBoardEntryId(), external.entryVersion());
+      if (preStartReplacement) {
+        stage.confirmPreStartTaskBoardReplacement(
+            external.taskBoardEntryId(), external.entryVersion());
+      } else {
+        stage.confirmTaskBoardRegistration(
+            external.taskBoardEntryId(), external.entryVersion());
+      }
     }
     repairStages.saveAllAndFlush(stages);
   }
