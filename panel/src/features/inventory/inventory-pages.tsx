@@ -2377,11 +2377,12 @@ export function InventoryHistoryDetailPage() {
       })
       if (
         outcome.inventoryId !== session.id ||
-        outcome.finalPlanVersion !== completedFinalPlan.finalPlanVersion ||
-        outcome.finalPlanSha256 !== completedFinalPlan.finalPlanSha256
+        outcome.finalPlanVersion < completedFinalPlan.finalPlanVersion ||
+        (outcome.finalPlanVersion === completedFinalPlan.finalPlanVersion &&
+          outcome.finalPlanSha256 !== completedFinalPlan.finalPlanSha256)
       ) {
         throw new Error(
-          "Сервис вернул пересчёт для другой версии итогового плана"
+          "Сервис вернул пересчёт для устаревшей или конфликтующей версии итогового плана"
         )
       }
       return outcome

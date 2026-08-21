@@ -128,6 +128,7 @@ public final class DossierEnvelopeValidator {
         throw invalid("SOURCE_PAYLOAD_REJECTED", exception);
       }
       requireObjectFields(payload, eventPolicy.payloadFields(), eventPolicy.requiredFields());
+      requireInventoryMembershipState(eventType, payload);
       rejectProhibited(payload);
       eventPolicy.identityField().ifPresent(field -> require(uuid(payload, field, false).equals(aggregateId)));
 
@@ -254,11 +255,21 @@ public final class DossierEnvelopeValidator {
         Map.entry("maintenance.repair.accepted.v1", "REPAIR_ACCEPTED"),
         Map.entry("maintenance.repair.written-off.v1", "REPAIR_WRITTEN_OFF")));
 
-    Set<String> finding = Set.of("inventoryId", "findingId", "warehouseId", "sessionRevision", "findingRevision", "origin", "inspection", "reconciliation", "assetId", "sourceAttached", "mediaCount", "planFingerprintSha256");
-    add(result, "rwms.inventory.session.v1", "FINDING", SubjectKind.INVENTORY_FINDING, finding, finding,
+    Set<String> finding = Set.of("inventoryId", "findingId", "warehouseId", "sessionRevision", "findingRevision", "origin", "inspection", "reconciliation", "membershipActive", "assetId", "sourceAttached", "mediaCount", "planFingerprintSha256");
+    Set<String> requiredFinding = new HashSet<>(finding);
+    requiredFinding.remove("membershipActive");
+    Set<String> immutableRequiredFinding = Set.copyOf(requiredFinding);
+    add(result, "rwms.inventory.session.v1", "FINDING", SubjectKind.INVENTORY_FINDING, finding, immutableRequiredFinding,
         "findingId", "INVENTORY_FINDING_ADDED", "inventory.finding.added.v1");
-    add(result, "rwms.inventory.session.v1", "FINDING", SubjectKind.INVENTORY_FINDING, finding, finding,
+    add(result, "rwms.inventory.session.v1", "FINDING", SubjectKind.INVENTORY_FINDING, finding, immutableRequiredFinding,
         "findingId", "INVENTORY_INSPECTION_SAVED", "inventory.finding.inspection-saved.v1");
+    for (String event : Set.of(
+        "inventory.finding.membership-departed.v1",
+        "inventory.finding.membership-refreshed.v1",
+        "inventory.finding.membership-restored.v1")) {
+      add(result, "rwms.inventory.session.v1", "FINDING", SubjectKind.INVENTORY_FINDING,
+          finding, immutableRequiredFinding, "findingId", null, event);
+    }
     Set<String> ownerProof = Set.of("ownerType", "ownerId", "warehouseId", "ownerRevision", "active");
     add(result, "rwms.inventory.session.v1", "FINDING", SubjectKind.INVENTORY_OWNER_PROOF,
         ownerProof, ownerProof, "ownerId", null, "inventory.finding.owner-proof.v1");
@@ -327,6 +338,22 @@ public final class DossierEnvelopeValidator {
       add(result, "rwms.task-board.queue-entry.v1", "QUEUE_ENTRY", SubjectKind.NONE, queueEntry, queueEntry, "queueEntryId", null, "task-board.queue-entry." + suffix + ".v1");
     }
     return Map.copyOf(result);
+  }
+
+  private static void requireInventoryMembershipState(String eventType, JsonNode payload) {
+    Boolean expected =
+        switch (eventType) {
+          case "inventory.finding.membership-departed.v1" -> false;
+          case "inventory.finding.membership-refreshed.v1",
+              "inventory.finding.membership-restored.v1" -> true;
+          default -> null;
+        };
+    if (expected == null) return;
+    JsonNode membershipActive = payload.get("membershipActive");
+    require(
+        membershipActive != null
+            && membershipActive.isBoolean()
+            && membershipActive.booleanValue() == expected);
   }
 
   private static Set<String> logisticsEvents(String family) {

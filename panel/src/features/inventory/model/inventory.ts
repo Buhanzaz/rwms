@@ -7,7 +7,10 @@ import type {
   RepairPriority,
 } from "@/features/repair-estimates/model/repair-estimate"
 import type { RentalItemStatus } from "@/features/rental-items/model/rental-item"
-import type { InventoryObservation } from "@/features/inventory/model/inventory-service"
+import type {
+  InventoryAssetOutcomeStatus,
+  InventoryObservation,
+} from "@/features/inventory/model/inventory-service"
 
 export type InventoryPermission = "VIEW" | "EDIT" | "MANAGE"
 export type InventorySessionStatus = "ACTIVE" | "COMPLETED" | "CANCELLED"
@@ -146,6 +149,8 @@ export type InventoryFindingDto = {
   publicationStatus: InventoryFindingPublicationStatus
   publicationOperationKey: string | null
   publishedRepairTaskId: string | null
+  /** Owner-issued outcome status; null only when this finding has no outcome operation. */
+  desiredAssetStatus: InventoryAssetOutcomeStatus | null
   publicationError: string | null
 }
 

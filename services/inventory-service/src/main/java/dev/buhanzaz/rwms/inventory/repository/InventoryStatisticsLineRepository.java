@@ -12,4 +12,6 @@ public interface InventoryStatisticsLineRepository
     extends JpaRepository<InventoryStatisticsLine, UUID> {
   List<InventoryStatisticsLine> findAllByInventoryIdOrderByLineTypeAscCatalogVersionIdAscCatalogNodeIdAscNormalizedDescriptionAscUnitAscUnitPriceMinorAsc(
       UUID inventoryId);
+
+  void deleteByInventoryId(UUID inventoryId);
 }

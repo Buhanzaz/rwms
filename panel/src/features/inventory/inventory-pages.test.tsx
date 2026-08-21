@@ -323,6 +323,7 @@ function finding(
     publicationStatus: "NOT_REQUIRED",
     publicationOperationKey: null,
     publishedRepairTaskId: null,
+    desiredAssetStatus: null,
     publicationError: null,
     ...overrides,
   }
@@ -459,6 +460,7 @@ function outcomeRecalculation(
           sourceRevision: 1,
           attemptCount: 1,
           maintenanceRepairId: null,
+          desiredAssetStatus: "REPAIR" as const,
           failureCode: null,
         },
       ],
@@ -2186,7 +2188,10 @@ describe("InventoryHistoryDetailPage authoritative outcome recovery", () => {
         reviewStage: "FURNITURE",
       }
     )
-    const outcome = outcomeRecalculation()
+    const outcome = outcomeRecalculation({
+      finalPlanVersion: 2,
+      finalPlanSha256: "d".repeat(64),
+    })
     inventoryApi.getInventory.mockResolvedValue(completed)
     inventoryApi.getInventoryFinalPlan.mockResolvedValue(completedFinalPlan(2))
     inventoryApi.recalculateInventoryOutcome.mockResolvedValue(outcome)

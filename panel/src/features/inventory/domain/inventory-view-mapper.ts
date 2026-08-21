@@ -352,6 +352,7 @@ export function toInventoryFindingView(
     publicationStatus: publicationStatus(finding.publication),
     publicationOperationKey: finding.publication?.id ?? null,
     publishedRepairTaskId: finding.publication?.maintenanceRepairId ?? null,
+    desiredAssetStatus: finding.publication?.desiredAssetStatus ?? null,
     publicationError: finding.publication?.failureCode ?? null,
   }
 }
@@ -478,6 +479,7 @@ export function applyInventoryOutcomeRecalculation(
         publicationStatus: publicationStatus(intent),
         publicationOperationKey: intent.id,
         publishedRepairTaskId: intent.maintenanceRepairId,
+        desiredAssetStatus: intent.desiredAssetStatus,
         publicationError: intent.failureCode,
       }
     }),

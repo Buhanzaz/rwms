@@ -32,9 +32,10 @@ import tools.jackson.databind.ObjectMapper;
  * Rebuilds durable downstream work from immutable completed-inventory evidence.
  *
  * <p>The command performs no remote I/O. It locks the completed session and exact final plan,
- * creates missing outcomes, requeues every existing publication and unresolved furniture
- * delivery in one shared next reapplication generation, and leaves schedulers to call each owning
- * service with durable idempotency.
+ * restores any explicit observations lost by the obsolete automatic-membership rule, creates
+ * missing outcomes, requeues every existing publication and unresolved furniture delivery in one
+ * shared next reapplication generation, and leaves schedulers to call each owning service with
+ * durable idempotency.
  */
 @Service
 final class InventoryOutcomeRecoveryService extends InventoryTechnicalRuntimeSupport {
@@ -45,6 +46,7 @@ final class InventoryOutcomeRecoveryService extends InventoryTechnicalRuntimeSup
   private final InventoryFurnitureReconciliationIntentRepository furnitureReconciliations;
   private final InventoryIdempotencyPort idempotency;
   private final InventoryPublicationService publicationService;
+  private final CompletedInventoryPlanCorrectionService planCorrection;
 
   InventoryOutcomeRecoveryService(
       InventorySessionRepository sessions,
@@ -54,6 +56,7 @@ final class InventoryOutcomeRecoveryService extends InventoryTechnicalRuntimeSup
       InventoryFurnitureReconciliationIntentRepository furnitureReconciliations,
       InventoryIdempotencyPort idempotency,
       InventoryPublicationService publicationService,
+      CompletedInventoryPlanCorrectionService planCorrection,
       ObjectMapper mapper,
       InventoryCanonicalJsonPort canonicalJson,
       InventoryAuthorizer authorizer,
@@ -66,6 +69,7 @@ final class InventoryOutcomeRecoveryService extends InventoryTechnicalRuntimeSup
     this.furnitureReconciliations = furnitureReconciliations;
     this.idempotency = idempotency;
     this.publicationService = publicationService;
+    this.planCorrection = planCorrection;
   }
 
   /**
@@ -111,6 +115,17 @@ final class InventoryOutcomeRecoveryService extends InventoryTechnicalRuntimeSup
             inventoryId, plan.getFinalPlanVersion());
     if (entries.isEmpty()) {
       throw InventoryException.conflict("Inventory final plan has no findings");
+    }
+    CompletedInventoryPlanCorrectionService.CorrectionResult correction =
+        planCorrection.correct(session, plan, entries, actor(jwt));
+    plan = correction.plan();
+    entries = correction.entries();
+    if (correction.restoredCount() > 0) {
+      log.info(
+          "Restored {} explicit inventory observations into corrected plan {} v{}",
+          correction.restoredCount(),
+          inventoryId,
+          plan.getFinalPlanVersion());
     }
 
     Map<UUID, InventoryPublicationIntent> byFinding = new LinkedHashMap<>();

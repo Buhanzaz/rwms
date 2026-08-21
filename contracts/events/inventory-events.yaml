@@ -94,6 +94,9 @@ components:
                 enum:
                   - inventory.finding.added.v1
                   - inventory.finding.inspection-saved.v1
+                  - inventory.finding.membership-departed.v1
+                  - inventory.finding.membership-refreshed.v1
+                  - inventory.finding.membership-restored.v1
     FindingOwnerProofV1:
       name: inventory.finding.owner-proof.v1
       description: >-

@@ -224,6 +224,9 @@ class DossierContractTopologyTest {
     assertThat(findingMap)
         .containsEntry("inventory.finding.added.v1", "INVENTORY_FINDING_ADDED")
         .containsEntry("inventory.finding.inspection-saved.v1", "INVENTORY_INSPECTION_SAVED")
+        .containsEntry("inventory.finding.membership-departed.v1", null)
+        .containsEntry("inventory.finding.membership-refreshed.v1", null)
+        .containsEntry("inventory.finding.membership-restored.v1", null)
         .containsEntry("inventory.finding.owner-proof.v1", null);
   }
 

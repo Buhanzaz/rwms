@@ -155,6 +155,7 @@ const finding: InventoryFinding = {
     sourceRevision: 4,
     attemptCount: 1,
     maintenanceRepairId: "00000000-0000-4000-8000-000000000212",
+    desiredAssetStatus: "CAPITAL_REPAIR",
     failureCode: null,
   },
 }
@@ -253,6 +254,7 @@ describe("inventory service view mapper", () => {
       logisticsScheduledDate: null,
       publicationStatus: "PUBLISHED",
       publishedRepairTaskId: "00000000-0000-4000-8000-000000000212",
+      desiredAssetStatus: "CAPITAL_REPAIR",
       lines: [
         {
           id: "00000000-0000-4000-8000-000000000206",
@@ -309,6 +311,7 @@ describe("inventory service view mapper", () => {
             sourceRevision: 4,
             attemptCount: 3,
             maintenanceRepairId: null,
+            desiredAssetStatus: "FREE",
             failureCode: null,
           },
         ],
@@ -324,6 +327,7 @@ describe("inventory service view mapper", () => {
           publicationStatus: "READY",
           publicationOperationKey: "00000000-0000-4000-8000-000000000260",
           publishedRepairTaskId: null,
+          desiredAssetStatus: "FREE",
           publicationError: null,
         },
       ],

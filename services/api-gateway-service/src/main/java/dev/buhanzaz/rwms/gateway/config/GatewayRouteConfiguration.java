@@ -292,7 +292,34 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
-  /** Relays public inventory APIs while keeping inventory-service private and internal paths unreachable. */
+  /**
+   * Uses a dedicated sixty-second proxy for completed-inventory outcome recalculation.
+   *
+   * <p>The lower order and generic-route exclusion guarantee that only this exact command receives
+   * the extended bounded downstream read deadline.
+   */
+  @Bean
+  @Order(-78)
+  RouterFunction<ServerResponse> inventoryOutcomeRecalculateRoute(
+      GatewayProperties properties,
+      GatewayUpstreamProblemHandler upstreamProblems,
+      InventoryOutcomeRecalculateProxyHandler inventoryOutcomeRecalculateProxyHandler) {
+    RequestPredicate inventoryOutcomeRecalculatePath =
+        path("/api/inventory/v1/sessions/*/outcome/recalculate")
+            .and(method(HttpMethod.POST))
+            .and(request -> safePath(request.path()));
+    return route("inventory-outcome-recalculate")
+        .route(inventoryOutcomeRecalculatePath, inventoryOutcomeRecalculateProxyHandler)
+        .before(uri(properties.getRoutes().getInventoryUri()))
+        .before(removeRequestHeader(HttpHeaders.COOKIE))
+        .onError(upstreamProblems::supports, upstreamProblems::handle)
+        .build();
+  }
+
+  /**
+   * Relays ordinary public inventory APIs while keeping private/internal paths unreachable and
+   * excluding the dedicated outcome-recalculation command.
+   */
   @Bean
   RouterFunction<ServerResponse> inventoryRoutes(
       GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
@@ -304,7 +331,8 @@ public class GatewayRouteConfiguration {
                   String decoded = decodedPath(request.path());
                   return !decoded.startsWith("/api/inventory/internal")
                       && !decoded.startsWith("/api/inventory/private");
-                });
+                })
+            .and(request -> !isInventoryOutcomeRecalculateRequest(request));
     return route("inventory-service")
         .route(publicInventoryPath, http())
         .before(uri(properties.getRoutes().getInventoryUri()))
@@ -437,6 +465,12 @@ public class GatewayRouteConfiguration {
     return request.method() == HttpMethod.PUT
         && decodedPath(request.path())
             .matches("^/api/media/v1/upload-sessions/[^/]+/content$");
+  }
+
+  private static boolean isInventoryOutcomeRecalculateRequest(ServerRequest request) {
+    return request.method() == HttpMethod.POST
+        && decodedPath(request.path())
+            .matches("^/api/inventory/v1/sessions/[^/]+/outcome/recalculate$");
   }
 
   private static boolean safePath(String path) {

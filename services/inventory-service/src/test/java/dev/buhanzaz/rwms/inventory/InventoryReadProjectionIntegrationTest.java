@@ -438,6 +438,84 @@ class InventoryReadProjectionIntegrationTest {
   }
 
   @Test
+  void historyRecoveryRestoresOmittedRentedObservationIntoANewerCompletedPlan() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID inventoryId = UUID.randomUUID();
+    String originalPlanSha256 = "8".repeat(64);
+    seedSession(inventoryId, warehouseId);
+    InventoryFinding retained =
+        stageRecoveryFinding(inventoryId, warehouseId, "REC-RETAINED", false);
+    InventoryFinding omitted = stageRentedFinalPlanFinding(inventoryId, warehouseId, "230847");
+    events.initialize(
+        "FINDING",
+        omitted.getId(),
+        "inventory.finding.added.v1",
+        "rwms.inventory.session.v1",
+        mapper.createObjectNode().put("origin", "UNEXPECTED_EXISTING"),
+        UUID.randomUUID(),
+        null,
+        null);
+    omitted.changeMembership(false);
+    omitted = findings.saveAndFlush(omitted);
+    assertThat(omitted.isOwnerProofActive()).isFalse();
+    seedCompletedFinalPlan(
+        inventoryId,
+        originalPlanSha256,
+        List.of(recoveryFinalPlanEntry(inventoryId, retained, 0, false, false)));
+    UUID commandKey = UUID.randomUUID();
+    RecalculateInventoryOutcomeRequest request =
+        new RecalculateInventoryOutcomeRequest(1L, 1L, originalPlanSha256);
+
+    OutcomeRecalculation corrected =
+        service.recalculateOutcome(jwt(), inventoryId, commandKey, request);
+
+    assertThat(corrected.finalPlanVersion()).isEqualTo(2L);
+    assertThat(corrected.finalPlanSha256()).isNotEqualTo(originalPlanSha256);
+    assertThat(corrected.createdPublicationCount()).isEqualTo(2);
+    assertThat(corrected.requeuedPublicationCount()).isZero();
+    assertThat(corrected.publicationBatch().intents())
+        .extracting(value -> value.findingId(), value -> value.desiredAssetStatus())
+        .containsExactlyInAnyOrder(
+            org.assertj.core.groups.Tuple.tuple(retained.getId(), InventoryAssetOutcomeStatus.FREE),
+            org.assertj.core.groups.Tuple.tuple(
+                omitted.getId(), InventoryAssetOutcomeStatus.REPAIR));
+    InventoryFinding restored = findings.findById(omitted.getId()).orElseThrow();
+    assertThat(restored.isMembershipActive()).isTrue();
+    assertThat(restored.isOwnerProofActive()).isFalse();
+    assertThat(restored.getCurrentStatus()).isEqualTo("RENTED");
+    assertThat(restored.getReconciliation()).isEqualTo(ReconciliationState.MATCHED);
+    assertThat(
+            finalPlanEntries.findByInventoryIdAndFinalPlanVersionOrderByOrderAscFindingIdAsc(
+                inventoryId, 2L))
+        .hasSize(2)
+        .extracting(InventoryFinalPlanEntry::getFindingId)
+        .containsExactly(retained.getId(), omitted.getId());
+    assertThat(
+            jdbc.queryForMap(
+                "select inspected_count,ready_count,with_work_count,unexpected_existing_count "
+                    + "from inventory_completion_statistics where inventory_id=?",
+                inventoryId))
+        .containsEntry("inspected_count", 2)
+        .containsEntry("ready_count", 1)
+        .containsEntry("with_work_count", 1)
+        .containsEntry("unexpected_existing_count", 2);
+    assertThat(
+            jdbc.queryForList(
+                "select event_type from domain_event where aggregate_type='FINDING' "
+                    + "and aggregate_id=? order by aggregate_version",
+                String.class,
+                omitted.getId().toString()))
+        .containsExactly("inventory.finding.added.v1", "inventory.finding.membership-restored.v1");
+
+    OutcomeRecalculation replay =
+        service.recalculateOutcome(jwt(), inventoryId, commandKey, request);
+    JsonNode replayJson = mapper.valueToTree(replay);
+    JsonNode correctedJson = mapper.valueToTree(corrected);
+    assertThat(replayJson).isEqualTo(correctedJson);
+    verify(dependencies, times(0)).preflightReconciliation(any(), any());
+  }
+
+  @Test
   void publishesCompletedNoWorkPhotosAndSkipsMediaForAnExactRevisionWithoutImages() {
     UUID warehouseId = UUID.randomUUID();
     UUID inventoryId = UUID.randomUUID();
@@ -3175,6 +3253,70 @@ class InventoryReadProjectionIntegrationTest {
         .isOne();
   }
 
+  @ParameterizedTest
+  @EnumSource(
+      value = FindingOrigin.class,
+      names = {"UNEXPECTED_EXISTING", "ADDED_USED"})
+  void refreshKeepsExplicitObservationsThatAreAbsentFromAutomaticCapture(FindingOrigin origin) {
+    UUID warehouseId = UUID.randomUUID();
+    UUID inventoryId = UUID.randomUUID();
+    seedSession(inventoryId, warehouseId);
+    InventoryFinding finding =
+        InventoryFinding.unexpected(
+            inventoryId,
+            origin,
+            UUID.randomUUID(),
+            1L,
+            warehouseId,
+            "RENTED",
+            "Арендатор до инвентаризации",
+            "230847",
+            "230847",
+            ReconciliationState.MATCHED,
+            ACTOR);
+    finding.saveInspection(
+        InspectionState.READY,
+        ReconciliationState.MATCHED,
+        ObservationPresence.ABSENT,
+        null,
+        ObservationPresence.ABSENT,
+        null,
+        null,
+        ACTOR);
+    finding = findings.saveAndFlush(finding);
+    events.initialize(
+        "FINDING",
+        finding.getId(),
+        "inventory.finding.added.v1",
+        "rwms.inventory.session.v1",
+        mapper.createObjectNode().put("origin", origin.name()),
+        UUID.randomUUID(),
+        null,
+        null);
+    stubRefreshCapture(warehouseId, List.of(), null);
+
+    SessionView refreshed =
+        service.refresh(
+            jwt(),
+            inventoryId,
+            UUID.randomUUID(),
+            new RefreshSessionRequest(service.session(jwt(), inventoryId).sessionRevision()));
+
+    InventoryFinding retained = findings.findById(finding.getId()).orElseThrow();
+    assertThat(refreshed.findingCount()).isOne();
+    assertThat(refreshed.membershipMovements()).isEmpty();
+    assertThat(retained.isMembershipActive()).isTrue();
+    assertThat(retained.getCurrentStatus()).isEqualTo("RENTED");
+    assertThat(retained.getInspection()).isEqualTo(InspectionState.READY);
+    assertThat(
+            jdbc.queryForList(
+                "select event_type from domain_event where aggregate_type='FINDING' "
+                    + "and aggregate_id=? order by aggregate_version",
+                String.class,
+                finding.getId().toString()))
+        .containsExactly("inventory.finding.added.v1");
+  }
+
   @Test
   void nonMediaRevisionBumpRollsBackInsteadOfMixingDifferentTargetMedia() {
     UUID warehouseId = UUID.randomUUID();
@@ -4453,6 +4595,17 @@ class InventoryReadProjectionIntegrationTest {
 
   private InventoryFinding stageFinalPlanFinding(
       UUID inventoryId, UUID warehouseId, boolean movementToRepair) {
+    return stageFinalPlanFinding(
+        inventoryId, warehouseId, movementToRepair, "WAREHOUSE", "БЫТ-FINAL-PLAN");
+  }
+
+  private InventoryFinding stageRentedFinalPlanFinding(
+      UUID inventoryId, UUID warehouseId, String number) {
+    return stageFinalPlanFinding(inventoryId, warehouseId, false, "RENTED", number);
+  }
+
+  private InventoryFinding stageFinalPlanFinding(
+      UUID inventoryId, UUID warehouseId, boolean movementToRepair, String status, String number) {
     UUID assetId = UUID.randomUUID();
     InventoryFinding finding =
         InventoryFinding.unexpected(
@@ -4461,10 +4614,10 @@ class InventoryReadProjectionIntegrationTest {
             assetId,
             1L,
             warehouseId,
-            "WAREHOUSE",
+            status,
             null,
-            "БЫТ-FINAL-PLAN",
-            "БЫТFINALPLAN",
+            number,
+            number.replace("-", ""),
             ReconciliationState.MATCHED,
             ACTOR);
     ObjectNode snapshot = mapper.createObjectNode();

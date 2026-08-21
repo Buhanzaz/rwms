@@ -621,7 +621,7 @@ class InventoryContractSchemaTest {
             "jwt",
             "secret");
     assertThat(root.required("properties").required("eventType").required("enum").size())
-        .isEqualTo(12);
+        .isEqualTo(15);
     assertThat(root.required("properties").required("aggregateVersion").required("minimum").asInt())
         .isZero();
     assertThat(root.required("properties").required("aggregateType").required("enum").toString())

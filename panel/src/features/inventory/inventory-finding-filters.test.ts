@@ -60,6 +60,7 @@ function finding(
     publicationStatus: "NOT_REQUIRED",
     publicationOperationKey: null,
     publishedRepairTaskId: null,
+    desiredAssetStatus: null,
     publicationError: null,
     ...overrides,
   }

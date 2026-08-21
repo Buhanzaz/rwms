@@ -127,6 +127,45 @@ class InventoryDomainStateMachineTest {
   }
 
   @Test
+  void completedExplicitObservationRestoresMembershipWithoutReopeningOwnerProof() {
+    UUID warehouseId = UUID.randomUUID();
+    InventoryFinding finding =
+        InventoryFinding.unexpected(
+            UUID.randomUUID(),
+            FindingOrigin.UNEXPECTED_EXISTING,
+            UUID.randomUUID(),
+            4L,
+            warehouseId,
+            "RENTED",
+            "Арендатор до инвентаризации",
+            "230847",
+            "230847",
+            ReconciliationState.MATCHED,
+            ACTOR);
+    finding.saveInspection(
+        InspectionState.READY,
+        ReconciliationState.MATCHED,
+        ObservationPresence.ABSENT,
+        null,
+        ObservationPresence.ABSENT,
+        null,
+        null,
+        ACTOR);
+
+    assertThat(finding.changeMembership(false)).isTrue();
+    assertThat(finding.isOwnerProofActive()).isFalse();
+
+    assertThat(finding.restoreCompletedExplicitObservation()).isTrue();
+
+    assertThat(finding.isMembershipActive()).isTrue();
+    assertThat(finding.isOwnerProofActive()).isFalse();
+    assertThat(finding.getCurrentWarehouseId()).isEqualTo(warehouseId);
+    assertThat(finding.getCurrentStatus()).isEqualTo("RENTED");
+    assertThat(finding.getCurrentTenantSnapshot()).isEqualTo("Арендатор до инвентаризации");
+    assertThat(finding.getReconciliation()).isEqualTo(ReconciliationState.MATCHED);
+  }
+
+  @Test
   void conflictResolutionKeepsOrRebasesTheInspectionRegistrySnapshotExplicitly() {
     UUID warehouseId = UUID.randomUUID();
     InventoryFinding finding =

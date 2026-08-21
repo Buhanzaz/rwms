@@ -28,6 +28,9 @@
         "inventory.session.started.v1",
         "inventory.finding.added.v1",
         "inventory.finding.inspection-saved.v1",
+        "inventory.finding.membership-departed.v1",
+        "inventory.finding.membership-refreshed.v1",
+        "inventory.finding.membership-restored.v1",
         "inventory.finding.owner-proof.v1",
         "inventory.session.completed.v1",
         "inventory.session.cancelled.v1",
@@ -177,7 +180,10 @@
         "eventType": {
           "enum": [
             "inventory.finding.added.v1",
-            "inventory.finding.inspection-saved.v1"
+            "inventory.finding.inspection-saved.v1",
+            "inventory.finding.membership-departed.v1",
+            "inventory.finding.membership-refreshed.v1",
+            "inventory.finding.membership-restored.v1"
           ]
         },
         "payload": {"$ref": "#/$defs/findingFact"}
@@ -308,6 +314,7 @@
         },
         "inspection": {"enum": ["NOT_INSPECTED", "READY", "WORK_STAGED"]},
         "reconciliation": {"enum": ["MATCHED", "MISSING", "CONFLICT"]},
+        "membershipActive": {"type": "boolean"},
         "assetId": {"$ref": "#/$defs/nullableUuid"},
         "sourceAttached": {"type": "boolean"},
         "mediaCount": {"type": "integer", "minimum": 0, "maximum": 100},

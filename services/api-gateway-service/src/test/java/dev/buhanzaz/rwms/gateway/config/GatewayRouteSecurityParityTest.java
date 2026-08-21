@@ -129,6 +129,34 @@ class GatewayRouteSecurityParityTest {
   }
 
   @Test
+  void inventoryOutcomeRecalculateHasOneSafeDedicatedRoute() {
+    List<RouteCandidate> routes = domainRoutes();
+    RouteKey recalculation =
+        new RouteKey(
+            HttpMethod.POST,
+            "/api/inventory/v1/sessions/{}/outcome/recalculate");
+
+    assertThat(matchingRoutes(routes, recalculation))
+        .singleElement()
+        .extracting(RouteCandidate::name)
+        .isEqualTo("inventoryOutcomeRecalculateRoute");
+    assertThat(
+            matchingRoutes(
+                routes,
+                new RouteKey(
+                    HttpMethod.POST,
+                    "/api/inventory/v1/sessions/inventory%2f1/outcome/recalculate")))
+        .isEmpty();
+    assertThat(
+            matchingRoutes(
+                routes,
+                new RouteKey(
+                    HttpMethod.POST,
+                    "/api/inventory/private/v1/sessions/{}/outcome/recalculate")))
+        .isEmpty();
+  }
+
+  @Test
   void canonicalInternalOperationsAndReservedAliasesHaveZeroGatewayRoutes() throws Exception {
     ContractInventory inventory = contractInventory();
     List<RouteCandidate> routes = publicRoutes();
@@ -337,6 +365,8 @@ class GatewayRouteSecurityParityTest {
     SseProxyHandler sse = mock(SseProxyHandler.class);
     HtmlImportCommitProxyHandler htmlImport = mock(HtmlImportCommitProxyHandler.class);
     MediaUploadContentProxyHandler mediaUpload = mock(MediaUploadContentProxyHandler.class);
+    InventoryOutcomeRecalculateProxyHandler inventoryRecalculate =
+        mock(InventoryOutcomeRecalculateProxyHandler.class);
     AssistantTurnsProxyHandler assistantTurns = mock(AssistantTurnsProxyHandler.class);
     List<RouteCandidate> routes =
         List.of(
@@ -379,6 +409,11 @@ class GatewayRouteSecurityParityTest {
                 "mediaUploadContentRoute",
                 configuration.mediaUploadContentRoute(properties, upstream, mediaUpload)),
             candidate(MEDIA_OWNER, "mediaRoutes", configuration.mediaRoutes(properties, upstream)),
+            candidate(
+                "inventory-service",
+                "inventoryOutcomeRecalculateRoute",
+                configuration.inventoryOutcomeRecalculateRoute(
+                    properties, upstream, inventoryRecalculate)),
             candidate(
                 "inventory-service",
                 "inventoryRoutes",
@@ -568,6 +603,11 @@ class GatewayRouteSecurityParityTest {
         Map.entry(
             new RouteKey(HttpMethod.PUT, "/api/media/v1/upload-sessions/{}/content"),
             "mediaUploadContentRoute"),
+        Map.entry(
+            new RouteKey(
+                HttpMethod.POST,
+                "/api/inventory/v1/sessions/{}/outcome/recalculate"),
+            "inventoryOutcomeRecalculateRoute"),
         Map.entry(
             new RouteKey(HttpMethod.POST, "/api/assistant/v1/conversations/{}/turns"),
             "assistantTurnsRoute"));

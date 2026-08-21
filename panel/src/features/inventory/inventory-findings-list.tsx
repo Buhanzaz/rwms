@@ -58,6 +58,59 @@ function FindingState({
   return <InventoryFindingStatusBadge finding={finding} mode={statusMode} />
 }
 
+function findingSnapshotStatus(finding: InventoryFindingDto) {
+  return (
+    finding.currentSnapshot?.status ?? finding.expectedSnapshot?.status ?? null
+  )
+}
+
+function findingAssetStatusSortValue(
+  finding: InventoryFindingDto,
+  statusMode: InventoryFindingStatusMode
+) {
+  if (
+    statusMode === "COMPLETION" &&
+    finding.publicationStatus === "PUBLISHED" &&
+    finding.desiredAssetStatus
+  ) {
+    return `${finding.desiredAssetStatus}:${finding.movementToRepair}`
+  }
+  if (statusMode === "COMPLETION" && finding.publicationOperationKey !== null) {
+    return "NOT_APPLIED"
+  }
+  return findingSnapshotStatus(finding) ?? ""
+}
+
+function FindingAssetStatus({
+  finding,
+  statusMode,
+}: {
+  finding: InventoryFindingDto
+  statusMode: InventoryFindingStatusMode
+}) {
+  if (
+    statusMode === "COMPLETION" &&
+    finding.publicationStatus === "PUBLISHED" &&
+    finding.desiredAssetStatus
+  ) {
+    return (
+      <div className="flex flex-wrap items-center gap-1.5">
+        <RentalItemStatusBadge status={finding.desiredAssetStatus} />
+        {finding.movementToRepair ? (
+          <Badge variant="outline">Перемещение</Badge>
+        ) : null}
+      </div>
+    )
+  }
+
+  if (statusMode === "COMPLETION" && finding.publicationOperationKey !== null) {
+    return <Badge variant="secondary">Не применён</Badge>
+  }
+
+  const status = findingSnapshotStatus(finding)
+  return status ? <RentalItemStatusBadge status={status} /> : "—"
+}
+
 function FindingAction({
   finding,
   canInspect,
@@ -132,18 +185,16 @@ export function InventoryFindingsList({
             },
             {
               id: "status",
-              label: "Текущий статус",
+              label:
+                statusMode === "COMPLETION"
+                  ? "Статус по итогу"
+                  : "Текущий статус",
               className: "w-44",
               getSortValue: (finding) =>
-                finding.currentSnapshot?.status ??
-                finding.expectedSnapshot?.status ??
-                "",
-              render: (finding) => {
-                const status =
-                  finding.currentSnapshot?.status ??
-                  finding.expectedSnapshot?.status
-                return status ? <RentalItemStatusBadge status={status} /> : "—"
-              },
+                findingAssetStatusSortValue(finding, statusMode),
+              render: (finding) => (
+                <FindingAssetStatus finding={finding} statusMode={statusMode} />
+              ),
             },
             {
               id: "state",
@@ -195,19 +246,16 @@ export function InventoryFindingsList({
               <dl className="grid grid-cols-2 gap-2 text-sm">
                 <dt className="text-muted-foreground">Источник</dt>
                 <dd>{findingSourceLabel(finding)}</dd>
-                <dt className="text-muted-foreground">Текущий статус</dt>
+                <dt className="text-muted-foreground">
+                  {statusMode === "COMPLETION"
+                    ? "Статус по итогу"
+                    : "Текущий статус"}
+                </dt>
                 <dd>
-                  {(finding.currentSnapshot?.status ??
-                  finding.expectedSnapshot?.status) ? (
-                    <RentalItemStatusBadge
-                      status={
-                        finding.currentSnapshot?.status ??
-                        finding.expectedSnapshot!.status
-                      }
-                    />
-                  ) : (
-                    "—"
-                  )}
+                  <FindingAssetStatus
+                    finding={finding}
+                    statusMode={statusMode}
+                  />
                 </dd>
               </dl>
               <FindingState finding={finding} statusMode={statusMode} />

@@ -373,6 +373,51 @@ public class InventoryFinding implements Persistable<UUID> {
     return true;
   }
 
+  /**
+   * Returns whether this finding was created from an explicit warehouse observation rather than
+   * from the automatic asset population captured at session start.
+   */
+  public boolean isExplicitObservation() {
+    return origin != FindingOrigin.EXPECTED;
+  }
+
+  /**
+   * Restores an inspected explicit observation that an obsolete automatic-membership projection
+   * removed from a completed session.
+   *
+   * <p>The inspection baseline is the last human-confirmed warehouse evidence, so it becomes the
+   * current snapshot again. Media owner authorization deliberately remains closed because the
+   * session is already completed; downstream outcome publication uses the service-owned completed
+   * finding evidence instead of reopening worker uploads.
+   */
+  public boolean restoreCompletedExplicitObservation() {
+    if (membershipActive) return false;
+    if (!isExplicitObservation()
+        || inspection == InspectionState.NOT_INSPECTED
+        || assetId == null
+        || inspectionAssetVersion == null
+        || inspectionWarehouseId == null
+        || inspectionStatus == null
+        || inspectionDisplayCanonicalNumber == null
+        || inspectionPassportSnapshot == null
+        || inspectionContentsSnapshot == null
+        || inspectionRepairsSnapshot == null) {
+      throw new IllegalStateException(
+          "Only a complete inspected explicit observation may be restored");
+    }
+    assetVersion = inspectionAssetVersion;
+    currentWarehouseId = inspectionWarehouseId;
+    currentStatus = inspectionStatus;
+    currentTenantSnapshot = inspectionTenantSnapshot;
+    currentDisplayCanonicalNumber = inspectionDisplayCanonicalNumber;
+    currentPassportSnapshot = inspectionPassportSnapshot;
+    currentContentsSnapshot = inspectionContentsSnapshot;
+    currentRepairsSnapshot = inspectionRepairsSnapshot;
+    reconciliation = ReconciliationState.MATCHED;
+    membershipActive = true;
+    return true;
+  }
+
   public void beginSourceCreate() {
     requireIdle();
     if (assetId != null

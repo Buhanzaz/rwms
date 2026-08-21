@@ -361,6 +361,17 @@ final class InventoryStatisticsService extends InventoryStatisticsWorkflowSuppor
     }
   }
 
+  /**
+   * Replaces frozen completion statistics after a completed-plan correction restored explicit
+   * observations that were absent from the original population.
+   */
+  void replacePersistedStatistics(InventorySession session, List<InventoryFinding> activeFindings) {
+    FrozenStatistics corrected = calculatePersistedStatistics(session, activeFindings);
+    statisticsLines.deleteByInventoryId(session.getId());
+    statisticsLines.flush();
+    persistStatistics(session, corrected);
+  }
+
   private BigDecimal raw(List<PlanTotal> values, String type) {
     return values.stream()
         .filter(value -> type.equals(value.type()))

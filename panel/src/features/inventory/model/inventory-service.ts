@@ -21,6 +21,8 @@ export type InventoryPublicationState =
   | "CLOSED_BLOCKED"
 export type InventoryAggregatePublicationState =
   "NOT_REQUESTED" | "PENDING" | "PARTIAL" | "SUCCEEDED" | "BLOCKED"
+/** Asset-service status selected by the authoritative inventory outcome. */
+export type InventoryAssetOutcomeStatus = "FREE" | "REPAIR" | "CAPITAL_REPAIR"
 
 export type InventoryWeekday =
   | "MONDAY"
@@ -301,6 +303,7 @@ export type InventoryPublicationIntent = {
   sourceRevision: number
   attemptCount: number
   maintenanceRepairId: string | null
+  desiredAssetStatus: InventoryAssetOutcomeStatus
   failureCode: string | null
 }
 

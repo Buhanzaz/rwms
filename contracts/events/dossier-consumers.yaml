@@ -212,6 +212,9 @@ components:
       x-rwms-activity-code-map:
         inventory.finding.added.v1: INVENTORY_FINDING_ADDED
         inventory.finding.inspection-saved.v1: INVENTORY_INSPECTION_SAVED
+        inventory.finding.membership-departed.v1: null
+        inventory.finding.membership-refreshed.v1: null
+        inventory.finding.membership-restored.v1: null
         inventory.finding.owner-proof.v1: null
     InventorySessionFactV1:
       name: dossier.input.inventory.session.v1
@@ -377,6 +380,9 @@ components:
           enum:
             - inventory.finding.added.v1
             - inventory.finding.inspection-saved.v1
+            - inventory.finding.membership-departed.v1
+            - inventory.finding.membership-refreshed.v1
+            - inventory.finding.membership-restored.v1
             - inventory.finding.owner-proof.v1
         eventVersion: { const: 1 }
     InventorySessionDiscriminator:

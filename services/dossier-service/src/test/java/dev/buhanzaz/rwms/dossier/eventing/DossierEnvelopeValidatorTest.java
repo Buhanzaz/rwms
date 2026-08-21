@@ -76,6 +76,63 @@ class DossierEnvelopeValidatorTest {
   }
 
   @Test
+  void acceptsRestoredInventoryMembershipAsJournalOnlyFindingEvidence() {
+    UUID findingId = UUID.fromString("40000000-0000-0000-0000-000000000012");
+    UUID inventoryId = UUID.fromString("40000000-0000-0000-0000-000000000013");
+    String fact =
+        envelope(
+            "inventory.finding.membership-restored.v1",
+            "inventory-service",
+            "FINDING",
+            findingId,
+            """
+            {"inventoryId":"%s","findingId":"%s","warehouseId":"%s","sessionRevision":80,"findingRevision":3,"origin":"UNEXPECTED_EXISTING","inspection":"WORK_STAGED","reconciliation":"MATCHED","membershipActive":true,"assetId":"%s","sourceAttached":false,"mediaCount":0,"planFingerprintSha256":"%s"}
+            """
+                .formatted(inventoryId, findingId, WAREHOUSE_ID, CABIN_ID, "a".repeat(64)));
+
+    DossierValidatedEvent event =
+        validator.validate(
+            "rwms.inventory.session.v1",
+            0,
+            3,
+            findingId.toString(),
+            fact.getBytes(StandardCharsets.UTF_8));
+
+    assertThat(event.activityCode()).isNull();
+    assertThat(event.subjectCapable()).isTrue();
+    assertThat(event.secondaryId()).isEqualTo(findingId);
+    assertThat(event.cabinId()).isEqualTo(CABIN_ID);
+    assertThat(event.warehouseId()).isEqualTo(WAREHOUSE_ID);
+  }
+
+  @Test
+  void rejectsInventoryMembershipMarkerWithContradictoryState() {
+    UUID findingId = UUID.fromString("40000000-0000-0000-0000-000000000014");
+    UUID inventoryId = UUID.fromString("40000000-0000-0000-0000-000000000015");
+    String fact =
+        envelope(
+            "inventory.finding.membership-restored.v1",
+            "inventory-service",
+            "FINDING",
+            findingId,
+            """
+            {"inventoryId":"%s","findingId":"%s","warehouseId":"%s","sessionRevision":80,"findingRevision":3,"origin":"UNEXPECTED_EXISTING","inspection":"WORK_STAGED","reconciliation":"MATCHED","membershipActive":false,"assetId":"%s","sourceAttached":false,"mediaCount":0,"planFingerprintSha256":"%s"}
+            """
+                .formatted(inventoryId, findingId, WAREHOUSE_ID, CABIN_ID, "a".repeat(64)));
+
+    assertThatThrownBy(
+            () ->
+                validator.validate(
+                    "rwms.inventory.session.v1",
+                    0,
+                    4,
+                    findingId.toString(),
+                    fact.getBytes(StandardCharsets.UTF_8)))
+        .isInstanceOf(DossierValidationException.class)
+        .hasMessage("SOURCE_SCHEMA_REJECTED");
+  }
+
+  @Test
   void acceptsOwnerProofAsAssociationOnlyEvidence() {
     UUID findingId = UUID.fromString("40000000-0000-0000-0000-000000000002");
     String fact =

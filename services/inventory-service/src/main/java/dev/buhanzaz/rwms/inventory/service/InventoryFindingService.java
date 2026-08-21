@@ -286,8 +286,10 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
               || !storedJsonEquals(
                   finding.getCurrentContentsSnapshot(),
                   current == null ? null : current.contentsSnapshot());
+      boolean preserveExplicitObservation = finding.isExplicitObservation() && current == null;
       boolean snapshotRefreshed =
           snapshotChanged
+              && !preserveExplicitObservation
               && (finding.getMutationState()
                       == dev.buhanzaz.rwms.inventory.domain.MutationState.IDLE
                   || finding.getMutationState()
@@ -334,10 +336,11 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
                     : finding.getCurrentRepairsSnapshot(),
             nextReconciliation);
       }
-      // Departure changes the session's live population even when the source snapshot happened
-      // to be identical to the last one we observed. Historical findings remain immutable audit
-      // evidence, but every active projection and completion barrier must see them as gone.
-      boolean membershipChanged = departed && finding.changeMembership(false);
+      // Automatic EXPECTED population follows registry departures. Explicit operator observations
+      // remain in the table and final-plan population: an eligibility filter or later capture may
+      // not erase the fact that the cabin was physically found during this inventory.
+      boolean membershipChanged =
+          departed && !finding.isExplicitObservation() && finding.changeMembership(false);
       if (!snapshotRefreshed && !membershipChanged) continue;
       InventoryFinding savedFinding = findings.saveAndFlush(finding);
       findingPersistence.carryForwardMediaReferences(
@@ -962,6 +965,22 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
     appendFindingFacts(finding, session, actor, eventType, correlationId(), null);
   }
 
+  /**
+   * Appends the audit fact for a completed-session observation repair without reopening media owner
+   * authorization that completion already closed.
+   */
+  void appendCompletedObservationRestored(
+      InventoryFinding finding, InventorySession session, OpaqueActorReference actor) {
+    appendFindingFact(
+        finding,
+        session,
+        actor,
+        "inventory.finding.membership-restored.v1",
+        correlationId(),
+        null,
+        false);
+  }
+
   private void appendFindingFacts(
       InventoryFinding finding,
       InventorySession session,
@@ -969,6 +988,17 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
       String eventType,
       UUID correlationId,
       UUID causationId) {
+    appendFindingFact(finding, session, actor, eventType, correlationId, causationId, true);
+  }
+
+  private void appendFindingFact(
+      InventoryFinding finding,
+      InventorySession session,
+      OpaqueActorReference actor,
+      String eventType,
+      UUID correlationId,
+      UUID causationId,
+      boolean appendOwnerProof) {
     ObjectNode payload = mapper.createObjectNode();
     payload.put("inventoryId", finding.getInventoryId().toString());
     payload.put("findingId", finding.getId().toString());
@@ -978,6 +1008,7 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
     payload.put("origin", finding.getOrigin().name());
     payload.put("inspection", finding.getInspection().name());
     payload.put("reconciliation", finding.getReconciliation().name());
+    payload.put("membershipActive", finding.isMembershipActive());
     if (finding.getAssetId() == null) payload.putNull("assetId");
     else payload.put("assetId", finding.getAssetId().toString());
     payload.put(
@@ -1015,7 +1046,9 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
               causationId,
               actor);
     }
-    appendOwnerProof(finding, session.getWarehouseId(), actor, appended.aggregateVersion());
+    if (appendOwnerProof) {
+      appendOwnerProof(finding, session.getWarehouseId(), actor, appended.aggregateVersion());
+    }
   }
 
   void appendOwnerProof(

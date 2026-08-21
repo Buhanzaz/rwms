@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import { cleanup, render, screen } from "@testing-library/react"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { InventoryFindingsList } from "@/features/inventory/inventory-findings-list"
 import {
@@ -10,6 +10,8 @@ import type {
   InventoryFindingDto,
   InventorySessionDto,
 } from "@/features/inventory/model/inventory"
+
+afterEach(cleanup)
 
 function finding(
   id: string,
@@ -59,8 +61,26 @@ function finding(
     publicationStatus,
     publicationOperationKey: null,
     publishedRepairTaskId: null,
+    desiredAssetStatus: null,
     publicationError: null,
     ...overrides,
+  }
+}
+
+function snapshot(
+  id: string,
+  status: NonNullable<InventoryFindingDto["currentSnapshot"]>["status"]
+): NonNullable<InventoryFindingDto["currentSnapshot"]> {
+  return {
+    rentalItemId: `rental-${id}`,
+    number: id,
+    canonicalNumber: id,
+    warehouseId: "spb",
+    status,
+    tenant: null,
+    passportSnapshot: {},
+    contentsSnapshot: [],
+    repairsSnapshot: [],
   }
 }
 
@@ -176,6 +196,106 @@ describe("inventory history publication presentation", () => {
     expect(screen.getAllByText("Не найдено").length).toBeGreaterThan(0)
     expect(screen.getAllByText("Направлено в ремонт").length).toBeGreaterThan(0)
     expect(screen.getAllByText("Проверено").length).toBeGreaterThan(0)
+  })
+
+  it("shows the published repair outcome and movement instead of the rented inspection snapshot", () => {
+    render(
+      <InventoryFindingsList
+        findings={[
+          finding("230847", "PUBLISHED", {
+            currentSnapshot: snapshot("230847", "RENTED"),
+            desiredAssetStatus: "REPAIR",
+            movementToRepair: true,
+            publicationOperationKey: "publication-230847",
+          }),
+        ]}
+        canInspect={false}
+        showPublication
+        statusMode="COMPLETION"
+        onOpen={vi.fn()}
+      />
+    )
+
+    expect(screen.getAllByText("Статус по итогу")).toHaveLength(2)
+    expect(screen.getAllByText("В ремонте")).toHaveLength(2)
+    expect(screen.getAllByText("Перемещение")).toHaveLength(2)
+    expect(screen.queryByText("Аренда")).toBeNull()
+  })
+
+  it("maps published free and capital outcomes from owner truth", () => {
+    render(
+      <InventoryFindingsList
+        findings={[
+          finding("СПБ-1", "PUBLISHED", {
+            currentSnapshot: snapshot("СПБ-1", "RENTED"),
+            desiredAssetStatus: "FREE",
+            publicationOperationKey: "publication-free",
+          }),
+          finding("СПБ-2", "PUBLISHED", {
+            currentSnapshot: snapshot("СПБ-2", "RENTED"),
+            desiredAssetStatus: "CAPITAL_REPAIR",
+            publicationOperationKey: "publication-capital",
+          }),
+        ]}
+        canInspect={false}
+        statusMode="COMPLETION"
+        onOpen={vi.fn()}
+      />
+    )
+
+    expect(screen.getAllByText("Свободна")).toHaveLength(2)
+    expect(screen.getAllByText("Капремонт")).toHaveLength(2)
+    expect(screen.queryByText("Аренда")).toBeNull()
+  })
+
+  it("does not present a pending or failed operation as an applied status", () => {
+    render(
+      <InventoryFindingsList
+        findings={[
+          finding("СПБ-1", "READY", {
+            currentSnapshot: snapshot("СПБ-1", "RENTED"),
+            desiredAssetStatus: "REPAIR",
+            publicationOperationKey: "publication-pending",
+          }),
+          finding("СПБ-2", "FAILED", {
+            currentSnapshot: snapshot("СПБ-2", "RENTED"),
+            desiredAssetStatus: "CAPITAL_REPAIR",
+            publicationOperationKey: "publication-failed",
+          }),
+        ]}
+        canInspect={false}
+        showPublication
+        statusMode="COMPLETION"
+        onOpen={vi.fn()}
+      />
+    )
+
+    expect(screen.getAllByText("Не применён")).toHaveLength(4)
+    expect(screen.queryByText("Аренда")).toBeNull()
+    expect(screen.queryByText("В ремонте")).toBeNull()
+    expect(screen.queryByText("Капремонт")).toBeNull()
+  })
+
+  it("keeps the active view based on the inspection snapshot", () => {
+    render(
+      <InventoryFindingsList
+        findings={[
+          finding("230847", "PUBLISHED", {
+            currentSnapshot: snapshot("230847", "RENTED"),
+            desiredAssetStatus: "REPAIR",
+            movementToRepair: true,
+            publicationOperationKey: "publication-230847",
+          }),
+        ]}
+        canInspect={false}
+        onOpen={vi.fn()}
+      />
+    )
+
+    expect(screen.getAllByText("Текущий статус")).toHaveLength(2)
+    expect(screen.getAllByText("Аренда")).toHaveLength(2)
+    expect(screen.queryByText("В ремонте")).toBeNull()
+    expect(screen.queryByText("Перемещение")).toBeNull()
   })
 
   it("renders localized per-finding statuses, task id, and publication error", () => {

@@ -79,7 +79,7 @@ class InventoryJpaValidationIntegrationTest {
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from flyway_schema_history where success", Integer.class))
-        .isEqualTo(23);
+        .isEqualTo(24);
     assertThat(
             jdbc.queryForObject(
                 """
