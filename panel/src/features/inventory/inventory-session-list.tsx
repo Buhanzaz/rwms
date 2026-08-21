@@ -2,10 +2,10 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { OperationsListGrid } from "@/components/operations-list-grid"
-import type { InventorySessionDto } from "@/features/inventory/model/inventory"
+import type { InventorySessionSummaryDto } from "@/features/inventory/model/inventory"
 
 const publicationLabel: Record<
-  InventorySessionDto["publicationStatus"],
+  InventorySessionSummaryDto["publicationStatus"],
   string
 > = {
   NOT_REQUESTED: "Не запрашивалась",
@@ -22,37 +22,29 @@ function formatDateTime(value: string) {
   }).format(new Date(value))
 }
 
-function sessionStatus(session: InventorySessionDto) {
+function sessionStatus(session: InventorySessionSummaryDto) {
   if (session.status === "ACTIVE") return "Активна"
   if (session.status === "CANCELLED") return "Отменена"
   return "Завершена"
 }
 
-function sessionStatusVariant(session: InventorySessionDto) {
+function sessionStatusVariant(session: InventorySessionSummaryDto) {
   if (session.status === "ACTIVE") return "default" as const
   if (session.status === "CANCELLED") return "destructive" as const
   return "secondary" as const
 }
 
-function sessionPublication(session: InventorySessionDto) {
+function sessionPublication(session: InventorySessionSummaryDto) {
   return session.status === "CANCELLED"
     ? "Не применяется"
     : publicationLabel[session.publicationStatus]
 }
 
-function formatDuration(seconds: number) {
-  const hours = Math.floor(seconds / 3600)
-  const minutes = Math.floor((seconds % 3600) / 60)
-  return hours > 0 ? `${hours} ч ${minutes} мин` : `${minutes} мин`
-}
-
-function sessionSummary(session: InventorySessionDto) {
-  if (!session.statistics) return "—"
+function sessionSummary(session: InventorySessionSummaryDto) {
   return [
-    formatDuration(session.statistics.durationSeconds),
-    `не найдено: ${session.statistics.missingCount}`,
-    `конфликты: ${session.statistics.conflictCount}`,
-    `добавлено: ${session.statistics.addedCount}`,
+    `ожидалось: ${session.expectedCount}`,
+    `записей: ${session.findingCount}`,
+    `проверено: ${session.inspectedCount}`,
   ].join(" · ")
 }
 
@@ -60,8 +52,8 @@ export function InventorySessionList({
   sessions,
   onOpen,
 }: {
-  sessions: InventorySessionDto[]
-  onOpen: (session: InventorySessionDto) => void
+  sessions: InventorySessionSummaryDto[]
+  onOpen: (session: InventorySessionSummaryDto) => void
 }) {
   return (
     <>
@@ -99,23 +91,15 @@ export function InventorySessionList({
               id: "progress",
               label: "Сверка",
               className: "w-48",
-              getSortValue: (session) =>
-                session.findings.filter(
-                  (finding) => finding.inspectionStatus !== "NOT_INSPECTED"
-                ).length,
-              render: (session) => {
-                const inspected = session.findings.filter(
-                  (finding) => finding.inspectionStatus !== "NOT_INSPECTED"
-                ).length
-                return `${inspected} из ${session.findings.length}`
-              },
+              getSortValue: (session) => session.inspectedCount,
+              render: (session) =>
+                `${session.inspectedCount} из ${session.findingCount}`,
             },
             {
               id: "summary",
-              label: "Итоги",
+              label: "Объём",
               className: "min-w-96",
-              getSortValue: (session) =>
-                session.statistics?.durationSeconds ?? null,
+              getSortValue: (session) => session.expectedCount,
               render: (session) => sessionSummary(session),
             },
             {
@@ -162,27 +146,10 @@ export function InventorySessionList({
                 <dd>{session.author.displayName}</dd>
                 <dt className="text-muted-foreground">Проверено</dt>
                 <dd>
-                  {
-                    session.findings.filter(
-                      (finding) => finding.inspectionStatus !== "NOT_INSPECTED"
-                    ).length
-                  }{" "}
-                  из {session.findings.length}
+                  {session.inspectedCount} из {session.findingCount}
                 </dd>
-                {session.statistics ? (
-                  <>
-                    <dt className="text-muted-foreground">Длительность</dt>
-                    <dd>
-                      {formatDuration(session.statistics.durationSeconds)}
-                    </dd>
-                    <dt className="text-muted-foreground">Не найдено</dt>
-                    <dd>{session.statistics.missingCount}</dd>
-                    <dt className="text-muted-foreground">Конфликты</dt>
-                    <dd>{session.statistics.conflictCount}</dd>
-                    <dt className="text-muted-foreground">Добавлено</dt>
-                    <dd>{session.statistics.addedCount}</dd>
-                  </>
-                ) : null}
+                <dt className="text-muted-foreground">Ожидалось</dt>
+                <dd>{session.expectedCount}</dd>
                 <dt className="text-muted-foreground">Ремонты</dt>
                 <dd>{sessionPublication(session)}</dd>
               </dl>

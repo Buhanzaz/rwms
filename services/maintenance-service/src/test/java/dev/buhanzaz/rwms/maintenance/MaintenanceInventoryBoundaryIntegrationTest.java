@@ -342,7 +342,7 @@ class MaintenanceInventoryBoundaryIntegrationTest {
     when(dependencies.registerTask(
         any(), eq(queued.getExternalTaskId()), eq(created.repairId()), eq(warehouseId),
         eq(rentalItemId), nullable(String.class),
-        any(LocalDate.class), anyInt(), eq(6), anyList()))
+        any(LocalDate.class), anyInt(), anyList()))
         .thenReturn(new MaintenanceDependencyGateway.TaskSnapshot(
             queued.getExternalTaskId(), 0, "ACTIVE",
             List.of(new MaintenanceDependencyGateway.TaskStageSnapshot(0, queueEntryId, 0))));
@@ -2600,7 +2600,6 @@ class MaintenanceInventoryBoundaryIntegrationTest {
             eq("RECOVERED-001"),
             any(LocalDate.class),
             anyInt(),
-            anyInt(),
             anyList()))
         .thenReturn(new MaintenanceDependencyGateway.TaskSnapshot(
             expectedReplacementTaskId,
@@ -2641,7 +2640,6 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         eq(assetId),
         eq("RECOVERED-001"),
         any(LocalDate.class),
-        anyInt(),
         anyInt(),
         anyList());
     verify(dependencies, times(1)).releaseLease(

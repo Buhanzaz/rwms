@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.asset.service;
 
 import static dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryOutcomeRequest;
 import static dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryOutcomeResponse;
+import static dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryOutcomeShipmentContent;
 
 import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
@@ -20,6 +21,7 @@ import dev.buhanzaz.rwms.asset.repository.InventoryAssetOutcomeWatermarkReposito
 import dev.buhanzaz.rwms.asset.repository.OrderUnitReservationRepository;
 import dev.buhanzaz.rwms.asset.repository.PresentationUnitHoldRepository;
 import dev.buhanzaz.rwms.asset.repository.RentalItemRepository;
+import dev.buhanzaz.rwms.asset.service.InventoryRentalContentsService.Content;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
@@ -40,7 +42,9 @@ import tools.jackson.databind.JsonNode;
  * <p>The inventory service remains the saga owner. This component owns only asset state: it
  * serializes the cabin, resolves observed passport names against the active catalogue, ends live
  * asset-owned bindings without deleting history, updates passport/status/transfer state, emits
- * ordinary asset facts, and advances the per-cabin inventory watermark in the same transaction.
+ * ordinary asset facts, and advances the per-cabin inventory watermark in the same transaction. A
+ * RENTED outcome also replaces the cabin's exact active-catalog contents without reading or
+ * changing STOCK.
  */
 @Service
 final class InventoryAssetOutcomeService {
@@ -61,6 +65,7 @@ final class InventoryAssetOutcomeService {
   private final PresentationUnitHoldRepository presentationHolds;
   private final AssetLeaseService leases;
   private final AssetEquipmentLedgerService equipmentLedger;
+  private final InventoryRentalContentsService rentalContents;
   private final AssetRentalProjectionService projections;
   private final CabinCompositionService cabinComposition;
   private final AssetEventStore events;
@@ -75,6 +80,7 @@ final class InventoryAssetOutcomeService {
       PresentationUnitHoldRepository presentationHolds,
       AssetLeaseService leases,
       AssetEquipmentLedgerService equipmentLedger,
+      InventoryRentalContentsService rentalContents,
       AssetRentalProjectionService projections,
       CabinCompositionService cabinComposition,
       AssetEventStore events,
@@ -87,6 +93,7 @@ final class InventoryAssetOutcomeService {
     this.presentationHolds = presentationHolds;
     this.leases = leases;
     this.equipmentLedger = equipmentLedger;
+    this.rentalContents = rentalContents;
     this.projections = projections;
     this.cabinComposition = cabinComposition;
     this.events = events;
@@ -174,8 +181,14 @@ final class InventoryAssetOutcomeService {
         previous == RentalItemStatus.IN_TRANSFER || asset.getTransferOriginStatus() != null;
     asset = applyPassport(asset, passport);
     long expectedVersion = asset.getVersion();
-    if (asset.applyCompletedInventoryOutcome(plan.desiredStatus())) {
+    boolean statusChanged = asset.applyCompletedInventoryOutcome(plan.desiredStatus());
+    if (statusChanged) {
       asset = rentalItems.saveAndFlush(asset);
+    }
+    if (plan.desiredStatus() == RentalItemStatus.RENTED) {
+      rentalContents.replace(plan.warehouseId(), plan.assetId(), plan.shipmentContents());
+    }
+    if (statusChanged) {
       events.append(
           AssetAggregateType.RENTAL_ITEM,
           asset.getId(),
@@ -183,7 +196,9 @@ final class InventoryAssetOutcomeService {
           AssetEventType.RENTAL_ITEM_STATUS_CHANGED,
           projections.fact(asset),
           projections.snapshot(asset));
-      equipmentLedger.reclassifyCabinBalances(asset, previous);
+      if (plan.desiredStatus() != RentalItemStatus.RENTED) {
+        equipmentLedger.reclassifyCabinBalances(asset, previous);
+      }
     }
 
     if (watermark == null) {
@@ -198,7 +213,8 @@ final class InventoryAssetOutcomeService {
               plan.finalPlanSha256(),
               plan.findingRevision(),
               plan.desiredStatus(),
-              plan.passport().sha256());
+              plan.passport().sha256(),
+              plan.shipmentContentsSha256());
     } else {
       watermark.replace(
           plan.inventoryId(),
@@ -209,7 +225,8 @@ final class InventoryAssetOutcomeService {
           plan.finalPlanSha256(),
           plan.findingRevision(),
           plan.desiredStatus(),
-          plan.passport().sha256());
+          plan.passport().sha256(),
+          plan.shipmentContentsSha256());
     }
     watermarks.saveAndFlush(watermark);
 
@@ -292,7 +309,8 @@ final class InventoryAssetOutcomeService {
             plan.finalPlanSha256(),
             plan.findingRevision(),
             plan.desiredStatus(),
-            plan.passport().sha256())
+            plan.passport().sha256(),
+            plan.shipmentContentsSha256())
         || watermark.isLegacySameSource(
             plan.inventoryId(),
             plan.findingId(),
@@ -314,6 +332,7 @@ final class InventoryAssetOutcomeService {
             ? null
             : RentalItemStatus.valueOf(request.desiredStatus().name());
     PassportObservationPlan passport = normalizePassport(request);
+    List<Content> shipmentContents = normalizeShipmentContents(desiredStatus, request.shipmentContents());
     return new OutcomePlan(
         inventoryId,
         findingId,
@@ -324,7 +343,41 @@ final class InventoryAssetOutcomeService {
         requireSha256(request.finalPlanSha256()),
         requirePositive(request.findingRevision(), "findingRevision"),
         Objects.requireNonNull(desiredStatus, "desiredStatus"),
-        passport);
+        passport,
+        shipmentContents,
+        shipmentContents == null ? null : codec.canonicalHash(shipmentContents));
+  }
+
+  private static List<Content> normalizeShipmentContents(
+      RentalItemStatus desiredStatus, List<InventoryOutcomeShipmentContent> contents) {
+    if (desiredStatus != RentalItemStatus.RENTED) {
+      if (contents != null) {
+        throw new IllegalArgumentException(
+            "shipmentContents must be null unless desiredStatus is RENTED");
+      }
+      return null;
+    }
+    if (contents == null || contents.size() > 100) {
+      throw new IllegalArgumentException("RENTED inventory outcome requires shipmentContents");
+    }
+    Set<UUID> equipmentIds = new HashSet<>();
+    List<Content> normalized = new ArrayList<>(contents.size());
+    for (InventoryOutcomeShipmentContent content : contents) {
+      if (content == null
+          || content.equipmentId() == null
+          || content.catalogVersion() == null
+          || content.catalogVersion() < 0
+          || content.quantity() == null
+          || content.quantity() < 1
+          || !equipmentIds.add(content.equipmentId())) {
+        throw new IllegalArgumentException(
+            "shipmentContents require unique equipment and positive quantities");
+      }
+      normalized.add(
+          new Content(content.equipmentId(), content.catalogVersion(), content.quantity()));
+    }
+    normalized.sort(Comparator.comparing(value -> value.equipmentId().toString()));
+    return List.copyOf(normalized);
   }
 
   private PassportObservationPlan normalizePassport(InventoryOutcomeRequest request) {
@@ -476,7 +529,9 @@ final class InventoryAssetOutcomeService {
       String finalPlanSha256,
       long findingRevision,
       RentalItemStatus desiredStatus,
-      PassportObservationPlan passport) {}
+      PassportObservationPlan passport,
+      List<Content> shipmentContents,
+      String shipmentContentsSha256) {}
 
   /** Frozen and validated inventory-side passport observation included in request identity. */
   private record PassportObservationPlan(

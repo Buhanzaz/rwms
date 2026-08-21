@@ -22,6 +22,7 @@ public class InventoryApplicationService {
   private final InventorySessionService sessionService;
   private final InventoryReadService readService;
   private final InventoryFindingService findingService;
+  private final InventoryCabinDispositionService cabinDispositionService;
   private final InventoryReviewService reviewService;
   private final InventoryPlanningService planningService;
   private final InventoryCompletionService completionService;
@@ -32,6 +33,7 @@ public class InventoryApplicationService {
       InventorySessionService sessionService,
       InventoryReadService readService,
       InventoryFindingService findingService,
+      InventoryCabinDispositionService cabinDispositionService,
       InventoryReviewService reviewService,
       InventoryPlanningService planningService,
       InventoryCompletionService completionService,
@@ -40,6 +42,7 @@ public class InventoryApplicationService {
     this.sessionService = sessionService;
     this.readService = readService;
     this.findingService = findingService;
+    this.cabinDispositionService = cabinDispositionService;
     this.reviewService = reviewService;
     this.planningService = planningService;
     this.completionService = completionService;
@@ -162,6 +165,30 @@ public class InventoryApplicationService {
   public RegistryReviewView registryReview(
       Jwt jwt, UUID inventoryId, RegistryReviewRequest request) {
     return reviewService.registryReview(jwt, inventoryId, request);
+  }
+
+  /** Returns the current server-owned return/shipment review. */
+  public InventoryCabinDispositionReviewView cabinDispositionReview(
+      Jwt jwt, UUID inventoryId) {
+    return cabinDispositionService.review(jwt, inventoryId);
+  }
+
+  /** Confirms every found-rented historical return. */
+  public InventoryCabinDispositionReviewView confirmInventoryReturns(
+      Jwt jwt,
+      UUID inventoryId,
+      UUID idempotencyKey,
+      ConfirmInventoryReturnsRequest request) {
+    return cabinDispositionService.confirmReturns(jwt, inventoryId, idempotencyKey, request);
+  }
+
+  /** Confirms selected shipments and automatically classifies every omitted missing cabin. */
+  public InventoryCabinDispositionReviewView confirmInventoryShipments(
+      Jwt jwt,
+      UUID inventoryId,
+      UUID idempotencyKey,
+      ConfirmInventoryShipmentsRequest request) {
+    return cabinDispositionService.confirmShipments(jwt, inventoryId, idempotencyKey, request);
   }
 
   public FurnitureReviewView startFurnitureReview(

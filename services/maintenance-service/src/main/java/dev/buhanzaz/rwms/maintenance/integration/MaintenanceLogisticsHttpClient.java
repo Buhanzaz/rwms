@@ -19,6 +19,7 @@ final class MaintenanceLogisticsHttpClient {
   private final MaintenanceHttpTransport transport;
   private final String driverTaskIntakeUrl;
   private final String propertyEquipmentMovementTaskUrl;
+  private final String returnArrivalUrl;
 
   MaintenanceLogisticsHttpClient(
       MaintenanceHttpTransport transport, MaintenanceDependencyProperties.Validated properties) {
@@ -28,6 +29,43 @@ final class MaintenanceLogisticsHttpClient {
     propertyEquipmentMovementTaskUrl =
         MaintenanceHttpTransport.strip(properties.logisticsBaseUrl().toString())
             + "/api/internal/logistics/v1/maintenance/equipment-movement-tasks";
+    returnArrivalUrl =
+        MaintenanceHttpTransport.strip(properties.logisticsBaseUrl().toString())
+            + "/api/internal/logistics/v1/maintenance/return-arrivals/{rentalItemId}"
+            + "?warehouseId={warehouseId}";
+  }
+
+  ReturnArrival returnArrival(UUID warehouseId, UUID rentalItemId) {
+    if (warehouseId == null || rentalItemId == null) {
+      throw new IllegalArgumentException("Return arrival identity is required");
+    }
+    try {
+      ReturnArrivalResponse response =
+          transport
+              .client()
+              .get()
+              .uri(returnArrivalUrl, rentalItemId, warehouseId)
+              .header(
+                  HttpHeaders.AUTHORIZATION,
+                  transport.bearer(LOGISTICS_CLIENT, LOGISTICS_SCOPE))
+              .retrieve()
+              .body(ReturnArrivalResponse.class);
+      if (response == null
+          || !warehouseId.equals(response.warehouseId())
+          || !rentalItemId.equals(response.rentalItemId())
+          || response.returnDocumentId() == null
+          || response.arrivedAt() == null) {
+        throw MaintenanceHttpTransport.malformed(
+            "Logistics-service returned malformed return arrival truth");
+      }
+      return new ReturnArrival(
+          response.warehouseId(),
+          response.rentalItemId(),
+          response.returnDocumentId(),
+          response.arrivedAt());
+    } catch (RuntimeException exception) {
+      throw transport.dependencyFailure(exception);
+    }
   }
 
   PropertyEquipmentMovementTask createPropertyEquipmentMovementTask(
@@ -305,4 +343,11 @@ final class MaintenanceLogisticsHttpClient {
       OffsetDateTime taskBoardDoneAt,
       UUID repairPlaceAllocationId,
       Long repairPlaceAllocationVersion) {}
+
+  /** Private logistics response containing no customer or party data. */
+  private record ReturnArrivalResponse(
+      UUID warehouseId,
+      UUID rentalItemId,
+      UUID returnDocumentId,
+      OffsetDateTime arrivedAt) {}
 }

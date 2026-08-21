@@ -88,8 +88,10 @@ final class InventoryReadService extends InventoryReadWorkflowSupport {
             .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
     Map<UUID, InventoryProjectionService.SessionCounts> counts =
         projectionService.sessionCounts(inventoryIds);
-    Map<UUID, List<PublicationView>> publicationViews =
-        projectionService.sessionPublicationViews(inventoryIds);
+    Map<UUID, String> publicationStates =
+        projectionService.sessionPublicationStates(inventoryIds);
+    Map<UUID, dev.buhanzaz.rwms.inventory.domain.FurnitureReconciliationState>
+        furnitureStates = projectionService.sessionFurnitureStates(pageContent);
     return new PageResponse<>(
         pageContent.stream()
             .map(
@@ -97,7 +99,11 @@ final class InventoryReadService extends InventoryReadWorkflowSupport {
                     projectionService.sessionSummary(
                         value,
                         counts.getOrDefault(value.getId(), InventoryProjectionService.SessionCounts.EMPTY),
-                        publicationViews.getOrDefault(value.getId(), List.of())))
+                        publicationStates.getOrDefault(value.getId(), "NOT_REQUESTED"),
+                        furnitureStates.getOrDefault(
+                            value.getId(),
+                            dev.buhanzaz.rwms.inventory.domain.FurnitureReconciliationState
+                                .NOT_REQUIRED)))
             .toList(),
         new PageMetadata(page, size, result.getTotalElements(), result.getTotalPages()));
   }

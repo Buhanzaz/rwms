@@ -24,7 +24,19 @@ public interface InventoryFurnitureReconciliationIntentRepository
   Optional<InventoryFurnitureReconciliationIntent> findByInventoryIdForUpdate(
       @Param("inventoryId") UUID inventoryId);
 
+  @Query(
+      "select intent.inventoryId as inventoryId, intent.state as state from InventoryFurnitureReconciliationIntent intent where intent.inventoryId in :inventoryIds order by intent.inventoryId")
+  List<InventoryFurnitureStateProjection> findStatesByInventoryIds(
+      @Param("inventoryIds") Collection<UUID> inventoryIds);
+
   List<InventoryFurnitureReconciliationIntent>
       findTop20ByStateInAndNextAttemptAtLessThanEqualOrderByNextAttemptAtAscInventoryIdAsc(
           Collection<FurnitureReconciliationState> states, OffsetDateTime now);
+
+  /** Lightweight history-row projection that never hydrates the furniture request JSON. */
+  interface InventoryFurnitureStateProjection {
+    UUID getInventoryId();
+
+    FurnitureReconciliationState getState();
+  }
 }

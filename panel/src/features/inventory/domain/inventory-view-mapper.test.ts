@@ -5,6 +5,7 @@ import {
   applyInventoryCompletionPreview,
   toInventoryFurnitureReviewView,
   toInventoryFindingView,
+  toInventorySessionSummaryView,
   toInventorySessionView,
 } from "@/features/inventory/domain/inventory-view-mapper"
 import type {
@@ -219,6 +220,32 @@ const session: InventorySessionDetail = {
 }
 
 describe("inventory service view mapper", () => {
+  it("maps the bounded history summary without requiring findings or statistics", () => {
+    const result = toInventorySessionSummaryView(session)
+
+    expect(result).toEqual({
+      id: session.id,
+      version: 5,
+      warehouseId: session.warehouseId,
+      status: "COMPLETED",
+      author: {
+        id: session.author.id,
+        displayName: "Кладовщик Иван",
+        permissions: [],
+        authorizedWarehouseIds: null,
+      },
+      businessDate: "2026-07-22",
+      startedAt: "2026-07-22T08:00:00Z",
+      completedAt: "2026-07-22T09:00:00Z",
+      expectedCount: 1,
+      findingCount: 1,
+      inspectedCount: 1,
+      publicationStatus: "PUBLISHED",
+      reviewStage: "FURNITURE",
+      furnitureReconciliationState: "SUCCEEDED",
+    })
+  })
+
   it("restores the old-panel finding shape from authoritative service data", () => {
     const result = toInventoryFindingView(finding)
 
@@ -282,7 +309,7 @@ describe("inventory service view mapper", () => {
     })
   })
 
-  it("updates the cached publication and furniture state from an outcome recalculation", () => {
+  it("updates only the cached revision and furniture state from an outcome recalculation", () => {
     const view = toInventorySessionView({
       session,
       findings: [finding],
@@ -297,37 +324,18 @@ describe("inventory service view mapper", () => {
       furnitureReconciliationState: "PENDING",
       createdPublicationCount: 0,
       requeuedPublicationCount: 1,
-      preservedSucceededPublicationCount: 0,
-      publicationBatch: {
-        inventoryId: session.id,
-        aggregateState: "PENDING",
-        intents: [
-          {
-            id: "00000000-0000-4000-8000-000000000260",
-            inventoryId: session.id,
-            findingId: finding.id,
-            publicationRevision: 7,
-            state: "READY",
-            sourceRevision: 4,
-            attemptCount: 3,
-            maintenanceRepairId: null,
-            desiredAssetStatus: "FREE",
-            failureCode: null,
-          },
-        ],
-      },
     })
 
     expect(recalculated).toMatchObject({
       version: 6,
-      publicationStatus: "PENDING",
+      publicationStatus: "PUBLISHED",
       furnitureReconciliationState: "PENDING",
       findings: [
         {
-          publicationStatus: "READY",
-          publicationOperationKey: "00000000-0000-4000-8000-000000000260",
-          publishedRepairTaskId: null,
-          desiredAssetStatus: "FREE",
+          publicationStatus: "PUBLISHED",
+          publicationOperationKey: "00000000-0000-4000-8000-000000000211",
+          publishedRepairTaskId: "00000000-0000-4000-8000-000000000212",
+          desiredAssetStatus: "CAPITAL_REPAIR",
           publicationError: null,
         },
       ],

@@ -42,6 +42,9 @@ class LogisticsDocumentReadProjection {
         summary.scheduledDate(),
         summary.rentalOrderId(),
         summary.rentalShipmentId(),
+        summary.inventorySourceId(),
+        summary.inventorySourceFindingId(),
+        summary.inventorySourceDispositionKind(),
         responseMapper.toLineViews(
             lineRepository.findAllByDocument_IdOrderByLineNumber(summary.id())),
         summary.createdAt(),

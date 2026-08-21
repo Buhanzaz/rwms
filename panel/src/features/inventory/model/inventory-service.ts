@@ -1,5 +1,8 @@
 export type InventorySessionLifecycle = "ACTIVE" | "COMPLETED" | "CANCELLED"
 export type InventoryReviewStage = "CABINS" | "FURNITURE"
+export type InventoryCabinDispositionReviewPhase =
+  "RETURNS" | "SHIPMENTS" | "COMPLETED"
+export type InventoryCabinDispositionKind = "LOCAL" | "SHIPMENT" | "WRITE_OFF"
 export type InventoryFurnitureReconciliationState =
   | "NOT_REQUIRED"
   | "READY"
@@ -22,7 +25,8 @@ export type InventoryPublicationState =
 export type InventoryAggregatePublicationState =
   "NOT_REQUESTED" | "PENDING" | "PARTIAL" | "SUCCEEDED" | "BLOCKED"
 /** Asset-service status selected by the authoritative inventory outcome. */
-export type InventoryAssetOutcomeStatus = "FREE" | "REPAIR" | "CAPITAL_REPAIR"
+export type InventoryAssetOutcomeStatus =
+  "FREE" | "REPAIR" | "CAPITAL_REPAIR" | "RENTED"
 
 export type InventoryWeekday =
   | "MONDAY"
@@ -97,6 +101,8 @@ export type InventoryFinalPlanEntry = {
   collisionCandidates: InventoryCollisionCandidate[]
   reconciliationDecision: InventoryReconciliationDecision | null
   forceCapitalRepair: boolean
+  dispositionKind: InventoryCabinDispositionKind
+  dispositionDetails: Record<string, unknown>
 }
 
 export type InventoryFinalPlan = {
@@ -436,7 +442,55 @@ export type FurnitureReviewView = {
 export type StartFurnitureReviewRequest = {
   expectedSessionRevision: number
   findingRevisions: InventoryRevisionExpectation[]
-  acknowledgeIncomplete: boolean
+}
+
+export type InventoryCabinDispositionCandidate = {
+  findingId: string
+  findingRevision: number
+  assetId: string
+  assetVersion: number
+  cabinNumber: string
+  candidateKind: "RETURN" | "MISSING"
+  dispositionKind: InventoryCabinDispositionKind | null
+  dispositionDetails: Record<string, unknown> | null
+}
+
+export type InventoryCabinDispositionReview = {
+  inventoryId: string
+  sessionRevision: number
+  reviewRevision: number
+  phase: InventoryCabinDispositionReviewPhase
+  returnCandidates: InventoryCabinDispositionCandidate[]
+  missingCandidates: InventoryCabinDispositionCandidate[]
+}
+
+export type ConfirmInventoryReturnsRequest = {
+  expectedSessionRevision: number
+  expectedReviewRevision: number
+  returns: Array<{
+    findingId: string
+    expectedFindingRevision: number
+    returnedOn: string
+    clientId: string
+    clientSnapshot: string
+  }>
+}
+
+export type ConfirmInventoryShipmentsRequest = {
+  expectedSessionRevision: number
+  expectedReviewRevision: number
+  shipments: Array<{
+    findingId: string
+    expectedFindingRevision: number
+    departedOn: string
+    clientId: string
+    clientSnapshot: string
+    furniture: Array<{
+      equipmentId: string
+      catalogVersion: number
+      quantity: number
+    }>
+  }>
 }
 
 export type RefreshInventorySessionRequest = {
@@ -575,8 +629,6 @@ export type OutcomeRecalculation = {
   furnitureReconciliationState: InventoryFurnitureReconciliationState
   createdPublicationCount: number
   requeuedPublicationCount: number
-  preservedSucceededPublicationCount: number
-  publicationBatch: InventoryPublicationBatch
 }
 
 export type InventoryCreateIntent = {

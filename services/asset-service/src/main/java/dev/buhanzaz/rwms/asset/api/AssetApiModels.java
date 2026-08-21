@@ -772,8 +772,15 @@ public final class AssetApiModels {
   public enum InventoryOutcomeStatus {
     FREE,
     REPAIR,
-    CAPITAL_REPAIR
+    CAPITAL_REPAIR,
+    RENTED
   }
+
+  /** One exact active-catalog furniture quantity published by an inventory shipment. */
+  public record InventoryOutcomeShipmentContent(
+      @NotNull UUID equipmentId,
+      @NotNull @Min(0) Long catalogVersion,
+      @NotNull @Min(1) Long quantity) {}
 
   /** Immutable final-plan evidence used to apply one authoritative found-cabin outcome. */
   public record InventoryOutcomeRequest(
@@ -785,7 +792,8 @@ public final class AssetApiModels {
       @NotNull @Min(1) Long findingRevision,
       @NotNull InventoryOutcomeStatus desiredStatus,
       @NotNull JsonNode passportObservation,
-      @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String passportObservationSha256) {}
+      @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String passportObservationSha256,
+      @Size(max = 100) List<@NotNull @Valid InventoryOutcomeShipmentContent> shipmentContents) {}
 
   /** Durable result and operational bindings superseded by one completed-inventory command. */
   public record InventoryOutcomeResponse(

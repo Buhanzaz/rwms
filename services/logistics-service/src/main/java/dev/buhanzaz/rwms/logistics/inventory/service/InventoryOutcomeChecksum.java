@@ -20,7 +20,27 @@ final class InventoryOutcomeChecksum {
     for (InventoryOutcomeCommand.AssetOutcome outcome : command.outcomes()) {
       append(canonical, outcome.findingId().toString());
       append(canonical, outcome.assetId().toString());
+      append(canonical, outcome.dispositionKind());
       append(canonical, outcome.desiredStatus());
+      if (outcome.formerRental() == null) {
+        append(canonical, "-");
+      } else {
+        append(canonical, outcome.formerRental().returnedOn().toString());
+        append(canonical, outcome.formerRental().clientId().toString());
+        append(canonical, outcome.formerRental().clientSnapshot());
+      }
+      if (outcome.shipment() == null) {
+        append(canonical, "-");
+      } else {
+        append(canonical, outcome.shipment().departedOn().toString());
+        append(canonical, outcome.shipment().clientId().toString());
+        append(canonical, outcome.shipment().clientSnapshot());
+        for (InventoryOutcomeCommand.ShipmentFurniture furniture : outcome.shipment().furniture()) {
+          append(canonical, furniture.equipmentId().toString());
+          append(canonical, Long.toString(furniture.catalogVersion()));
+          append(canonical, Long.toString(furniture.quantity()));
+        }
+      }
     }
     try {
       return HexFormat.of()

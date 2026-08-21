@@ -11,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -25,6 +26,7 @@ import org.springframework.stereotype.Component;
     name = "relay-enabled",
     havingValue = "true")
 class DriverTaskRelay {
+  private static final int MAX_TASKS_PER_PASS = 100;
   private static final Logger log = LoggerFactory.getLogger(DriverTaskRelay.class);
   private static final List<DriverTaskState> ACTIVE_STATES =
       List.of(
@@ -43,7 +45,10 @@ class DriverTaskRelay {
       initialDelayString = "${rwms.logistics.driver-queue.relay-initial-delay:1s}")
   void relay() {
     for (UUID taskId :
-        tasks.findDueIds(ACTIVE_STATES, OffsetDateTime.now(ZoneOffset.UTC))) {
+        tasks.findDueIds(
+            ACTIVE_STATES,
+            OffsetDateTime.now(ZoneOffset.UTC),
+            PageRequest.of(0, MAX_TASKS_PER_PASS))) {
       try {
         processor.processUntilIdle(taskId);
       } catch (RuntimeException exception) {

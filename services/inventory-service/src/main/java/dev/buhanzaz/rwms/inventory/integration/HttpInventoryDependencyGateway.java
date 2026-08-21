@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.inventory.integration;
 
 import dev.buhanzaz.rwms.inventory.service.InventoryException;
+import dev.buhanzaz.rwms.platform.contracts.ApiProblem;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.zone.ZoneRulesException;
@@ -538,6 +539,49 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
     return response;
   }
 
+  @Override
+  public InventoryCabinWriteOffOutcome createInventoryCabinWriteOff(
+      UUID idempotencyKey, InventoryCabinWriteOffRequest request) {
+    JsonNode response =
+        postIdempotentWithSingleTransientRetry(
+            maintenanceBase + "/api/internal/maintenance/v1/inventory/cabin-write-offs",
+            idempotencyKey,
+            request,
+            JsonNode.class,
+            bearer(MAINTENANCE_CLIENT, MAINTENANCE_SCOPE));
+    try {
+      UUID id = uuid(response, "id");
+      long version = response.path("version").asLong(-1);
+      UUID inventorySessionId = uuid(response, "inventorySessionId");
+      UUID findingId = uuid(response, "findingId");
+      UUID warehouseId = uuid(response, "warehouseId");
+      UUID cabinId = uuid(response, "assetId");
+      String disposition = response.path("disposition").asText();
+      String state = response.path("state").asText();
+      if (version < 0
+          || !"CABIN".equals(response.path("assetKind").asText())
+          || !"WRITE_OFF".equals(disposition)
+          || !"INVENTORY".equals(response.path("source").asText())
+          || state.isBlank()) {
+        throw new IllegalArgumentException();
+      }
+      return new InventoryCabinWriteOffOutcome(
+          id,
+          version,
+          inventorySessionId,
+          findingId,
+          warehouseId,
+          cabinId,
+          disposition,
+          state);
+    } catch (RuntimeException exception) {
+      if (exception instanceof InventoryException inventoryException) {
+        throw inventoryException;
+      }
+      throw malformed("Maintenance-service returned malformed cabin write-off decision");
+    }
+  }
+
   private boolean malformedRepairAssetSnapshot(RepairAssetSnapshot asset) {
     if (asset.assetId() == null || asset.repairs() == null) return true;
     UUID previous = null;
@@ -940,6 +984,8 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
     if (failure instanceof InventoryException exception) return exception;
     if (failure instanceof RestClientResponseException response) {
       int status = response.getStatusCode().value();
+      InventoryException structured = structuredRejection(response, status);
+      if (structured != null) return structured;
       if (status == 404) {
         return InventoryException.notFound("Required dependency resource was not found");
       }
@@ -954,6 +1000,32 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
       }
     }
     return InventoryException.dependency("Mandatory inventory dependency is unavailable");
+  }
+
+  /**
+   * Retains only the bounded stable code and human-safe detail from an RWMS Problem Details body.
+   * Invalid or non-RWMS response bodies deliberately fall back to the generic mapping above.
+   */
+  private static InventoryException structuredRejection(
+      RestClientResponseException response, int responseStatus) {
+    if (responseStatus < 400 || responseStatus >= 500) return null;
+    try {
+      ApiProblem problem = response.getResponseBodyAs(ApiProblem.class);
+      if (problem == null
+          || problem.status() != responseStatus
+          || problem.code() == null
+          || !problem.code().matches("^[A-Z][A-Z0-9_]{0,63}$")
+          || problem.detail() == null) {
+        return null;
+      }
+      String detail = problem.detail().trim().replaceAll("[\\p{Z}\\s]+", " ");
+      if (detail.isEmpty() || detail.length() > 512) return null;
+      HttpStatus status = HttpStatus.resolve(responseStatus);
+      if (status == null) return null;
+      return new InventoryException(status, problem.code(), detail);
+    } catch (RuntimeException ignored) {
+      return null;
+    }
   }
 
   private static InventoryException malformed(String message) {

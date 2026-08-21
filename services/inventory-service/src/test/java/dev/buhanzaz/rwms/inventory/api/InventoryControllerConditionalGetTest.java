@@ -10,7 +10,6 @@ import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.InventoryActorView;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.RefreshSessionRequest;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.RecalculateInventoryOutcomeRequest;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.OutcomeRecalculation;
-import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.PublicationBatch;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.SessionView;
 import dev.buhanzaz.rwms.inventory.domain.FurnitureReconciliationState;
 import dev.buhanzaz.rwms.inventory.domain.InventoryReviewStage;
@@ -130,9 +129,7 @@ class InventoryControllerConditionalGetTest {
             sha256,
             FurnitureReconciliationState.PENDING,
             10,
-            81,
-            52,
-            new PublicationBatch(inventoryId, "PENDING", List.of()));
+            81);
     when(inventory.recalculateOutcome(jwt, inventoryId, idempotencyKey, request))
         .thenReturn(result);
 

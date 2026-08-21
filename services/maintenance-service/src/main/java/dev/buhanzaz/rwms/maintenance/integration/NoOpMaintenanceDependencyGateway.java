@@ -44,6 +44,12 @@ final class NoOpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   }
 
   @Override
+  public ReturnArrival returnArrival(UUID warehouseId, UUID rentalItemId) {
+    return new ReturnArrival(
+        warehouseId, rentalItemId, UUID.randomUUID(), OffsetDateTime.now(ZoneOffset.UTC));
+  }
+
+  @Override
   public void markWarehouseOperation(
       UUID warehouseId, UUID operationId, OffsetDateTime occurredAt) {}
 
@@ -219,7 +225,6 @@ final class NoOpMaintenanceDependencyGateway implements MaintenanceDependencyGat
       String unitNumber,
       java.time.LocalDate scheduledDate,
       int priority,
-      int dailyCapacity,
       List<TaskStage> stages) {
     return task(externalTaskId, stages, 0, "ACTIVE");
   }

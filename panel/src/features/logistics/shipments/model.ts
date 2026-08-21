@@ -24,6 +24,12 @@ export const SHIPMENT_LINE_STATES = [
 
 export type ShipmentLineState = (typeof SHIPMENT_LINE_STATES)[number]
 
+export type InventoryShipmentFurniture = {
+  equipmentId: string
+  catalogVersion: number
+  quantity: number
+}
+
 export type ShipmentLine = {
   id: string
   version: number
@@ -33,6 +39,7 @@ export type ShipmentLine = {
   state: ShipmentLineState
   tenantSnapshot: string | null
   rentalOrderId: string | null
+  inventoryShipmentFurniture: InventoryShipmentFurniture[] | null
 }
 
 export type ShipmentDocument = {

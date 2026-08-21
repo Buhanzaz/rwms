@@ -10,6 +10,7 @@ import dev.buhanzaz.rwms.inventory.domain.FindingPlanSnapshot;
 import dev.buhanzaz.rwms.inventory.domain.InspectionState;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlan;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlanEntry;
+import dev.buhanzaz.rwms.inventory.domain.InventoryCabinDispositionKind;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinding;
 import dev.buhanzaz.rwms.inventory.domain.InventoryPlanningSettings;
 import dev.buhanzaz.rwms.inventory.domain.InventorySession;
@@ -55,6 +56,8 @@ import tools.jackson.databind.node.ObjectNode;
  */
 @Service
 final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
+  private final InventoryCabinDispositionService cabinDispositions;
+
   InventoryPlanningService(
       InventorySessionRepository sessions,
       InventoryFindingRepository findings,
@@ -66,6 +69,7 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
       InventoryDependencyGateway dependencies,
       InventoryIdempotencyPort idempotency,
       InventoryFrozenPlanFingerprint frozenPlanFingerprint,
+      InventoryCabinDispositionService cabinDispositions,
       ObjectMapper mapper,
       InventoryCanonicalJsonPort canonicalJson,
       InventoryAuthorizer authorizer,
@@ -85,6 +89,7 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
         canonicalJson,
         authorizer,
         transactionManager);
+    this.cabinDispositions = cabinDispositions;
   }
 
   public PlanningSettingsView planningSettings(Jwt jwt, UUID warehouseId) {
@@ -387,10 +392,15 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
   }
 
   List<FinalPlanDraft> initialFinalPlanDrafts(InventorySession session) {
+    List<InventoryFinding> active =
+        findings.findAllByInventoryIdAndMembershipActiveTrueOrderById(session.getId());
+    Map<UUID, InventoryCabinDispositionService.DispositionSnapshot> dispositions =
+        cabinDispositions.requireCompleted(session, active);
     List<FinalPlanDraft> draft = new ArrayList<>();
-    for (InventoryFinding finding :
-        findings.findAllByInventoryIdAndMembershipActiveTrueOrderById(session.getId())) {
-      draft.add(finalPlanDraft(finding, null, null, null, null));
+    for (InventoryFinding finding : active) {
+      draft.add(
+          finalPlanDraft(finding, null, null, null, null)
+              .withDisposition(requireDisposition(finding, dispositions)));
     }
     draft.sort(
         Comparator.comparing((FinalPlanDraft value) -> value.hasWork() ? 0 : 1)
@@ -409,6 +419,8 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
     if (submitted == null) throw new IllegalArgumentException("Final-plan entries are required");
     List<InventoryFinding> active =
         findings.findAllByInventoryIdAndMembershipActiveTrueOrderById(session.getId());
+    Map<UUID, InventoryCabinDispositionService.DispositionSnapshot> dispositions =
+        cabinDispositions.requireCompleted(session, active);
     if (submitted.size() != active.size()) {
       throw InventoryException.conflict("Final plan must contain every active finding exactly once");
     }
@@ -438,7 +450,8 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
               input.priority(),
               input.movementToRepair(),
               input.movementScheduledDate(),
-              input.repairScheduledDate());
+              input.repairScheduledDate())
+              .withDisposition(requireDisposition(finding, dispositions));
       if (!draft.hasWork()) {
         if (input.priority() != null
             || input.movementToRepair()
@@ -484,16 +497,30 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
         finding,
         snapshot,
         true,
-        "AFTER_RENT".equals(finding.getCurrentStatus())
-            ? FinalPlanTargetKind.ESTIMATE
-            : FinalPlanTargetKind.REPAIR,
+        FinalPlanTargetKind.REPAIR,
         0,
         priority,
         movement,
         requestedMovementDate,
         requestedRepairDate,
         "[]",
-        null);
+        null,
+        InventoryCabinDispositionKind.LOCAL,
+        "{\"formerRental\":null}");
+  }
+
+  private static InventoryCabinDispositionService.DispositionSnapshot requireDisposition(
+      InventoryFinding finding,
+      Map<UUID, InventoryCabinDispositionService.DispositionSnapshot> dispositions) {
+    InventoryCabinDispositionService.DispositionSnapshot disposition =
+        dispositions.get(finding.getId());
+    if (disposition == null
+        || disposition.findingRevision() != finding.getRevision()
+        || !java.util.Objects.equals(disposition.assetId(), finding.getAssetId())
+        || !java.util.Objects.equals(disposition.assetVersion(), finding.getAssetVersion())) {
+      throw InventoryException.conflict("Inventory cabin disposition evidence is stale");
+    }
+    return disposition;
   }
 
   void validateFinalPlanPriority(Integer value) {
@@ -645,6 +672,8 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
       value.put("forceCapitalRepair", entry.forceCapitalRepair());
       value.put("movementScheduledDate", entry.movementScheduledDate());
       value.put("repairScheduledDate", entry.repairScheduledDate());
+      value.put("dispositionKind", entry.dispositionKind());
+      value.put("dispositionDetails", convert(read(entry.dispositionDetails()), Object.class));
       value.put(
           "reconciliationDecision",
           entry.reconciliationDecision() == null ? null : convert(read(entry.reconciliationDecision()), Object.class));
@@ -947,7 +976,9 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
         entry.movementScheduledDate(),
         entry.repairScheduledDate(),
         entry.collisionCandidates(),
-        entry.reconciliationDecision());
+        entry.reconciliationDecision(),
+        entry.dispositionKind(),
+        entry.dispositionDetails());
   }
 
   FinalPlanView finalPlanView(
@@ -980,7 +1011,9 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
         entry.getReconciliationDecision() == null
             ? null
             : finalPlanDecision(read(entry.getReconciliationDecision())),
-        entry.isForceCapitalRepair());
+        entry.isForceCapitalRepair(),
+        entry.getDispositionKind(),
+        read(entry.getDispositionDetails()));
   }
 
   List<FinalPlanCandidateView> finalPlanCandidates(JsonNode candidates) {
@@ -1160,6 +1193,10 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
       InventorySession session, InventoryFinalPlan plan, List<InventoryFinalPlanEntry> entries) {
     List<InventoryFinding> active =
         findings.findAllByInventoryIdAndMembershipActiveTrueOrderById(session.getId());
+    Map<UUID, InventoryCabinDispositionService.DispositionSnapshot> dispositions =
+        session.getLifecycle() == SessionLifecycle.COMPLETED
+            ? Map.of()
+            : cabinDispositions.requireCompleted(session, active);
     if (active.size() != entries.size()) {
       throw InventoryException.conflict("Inventory final plan no longer covers the active population");
     }
@@ -1176,11 +1213,23 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
       if (entry == null || entry.getFindingRevision() != finding.getRevision()) {
         throw InventoryException.conflict("Inventory final plan finding evidence is stale");
       }
+      InventoryCabinDispositionService.DispositionSnapshot disposition =
+          session.getLifecycle() == SessionLifecycle.COMPLETED
+              ? frozenDisposition(finding, entry)
+              : requireDisposition(finding, dispositions);
+      if (entry.getDispositionKind() != disposition.kind()
+          || !canonicalJsonTreeHash(read(entry.getDispositionDetails()))
+              .equals(canonicalJsonTreeHash(read(disposition.details())))) {
+        throw InventoryException.conflict("Inventory final plan disposition evidence is stale");
+      }
       if (!entry.isHasWork()) {
         if (finding.getInspection() == InspectionState.WORK_STAGED) {
           throw InventoryException.conflict("Inventory final plan omitted staged maintenance work");
         }
-        result.add(FinalPlanDraft.noWork(finding).withOrder(entry.getOrder()));
+        result.add(
+            FinalPlanDraft.noWork(finding)
+                .withDisposition(disposition)
+                .withOrder(entry.getOrder()));
         continue;
       }
       if (finding.getInspection() != InspectionState.WORK_STAGED
@@ -1193,17 +1242,19 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
       FindingPlanSnapshot snapshot =
           activePlanSnapshot(finding)
               .orElseThrow(() -> InventoryException.conflict("Frozen maintenance plan is missing"));
-      FinalPlanTargetKind expectedTarget =
-          "AFTER_RENT".equals(finding.getCurrentStatus())
-              ? FinalPlanTargetKind.ESTIMATE
-              : FinalPlanTargetKind.REPAIR;
-      if (!snapshot.getFingerprint().equals(entry.getPlanFingerprintSha256())
-          || entry.getTargetKind() != expectedTarget
-          || entry.getPriority() == null
-          || entry.getRepairScheduledDate() == null
-          || entry.isForceCapitalRepair() != snapshot.isForceCapitalRepair()
+      FinalPlanTargetKind expectedTarget = FinalPlanTargetKind.REPAIR;
+      if (!snapshot.getFingerprint().equals(entry.getPlanFingerprintSha256())) {
+        throw InventoryException.conflict("Inventory final-plan work fingerprint is stale");
+      }
+      if (entry.getTargetKind() != expectedTarget || entry.getPriority() == null) {
+        throw InventoryException.conflict("Inventory final-plan work routing is invalid");
+      }
+      if (entry.getRepairScheduledDate() == null
           || entry.isMovementToRepair() != (entry.getMovementScheduledDate() != null)) {
-        throw InventoryException.conflict("Inventory final-plan work fields are invalid");
+        throw InventoryException.conflict("Inventory final-plan work schedule is invalid");
+      }
+      if (entry.isForceCapitalRepair() != snapshot.isForceCapitalRepair()) {
+        throw InventoryException.conflict("Inventory final-plan capital choice is stale");
       }
       result.add(
           new FinalPlanDraft(
@@ -1217,10 +1268,32 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
               entry.getMovementScheduledDate(),
               entry.getRepairScheduledDate(),
               entry.getCollisionCandidates(),
-              entry.getReconciliationDecision()));
+              entry.getReconciliationDecision(),
+              disposition.kind(),
+              disposition.details()));
     }
     result.sort(Comparator.comparingInt(FinalPlanDraft::order));
     return List.copyOf(result);
+  }
+
+  /** Reconstructs a completed plan's immutable disposition without consulting mutable review rows. */
+  private static InventoryCabinDispositionService.DispositionSnapshot frozenDisposition(
+      InventoryFinding finding, InventoryFinalPlanEntry entry) {
+    if (entry.getDispositionKind() == null
+        || entry.getDispositionDetails() == null
+        || !entry.getFindingId().equals(finding.getId())
+        || entry.getFindingRevision() != finding.getRevision()
+        || !java.util.Objects.equals(entry.getAssetId(), finding.getAssetId())
+        || !java.util.Objects.equals(entry.getAssetVersion(), finding.getAssetVersion())) {
+      throw InventoryException.conflict("Inventory final plan disposition evidence is stale");
+    }
+    return new InventoryCabinDispositionService.DispositionSnapshot(
+        entry.getFindingId(),
+        entry.getFindingRevision(),
+        entry.getAssetId(),
+        entry.getAssetVersion(),
+        entry.getDispositionKind(),
+        entry.getDispositionDetails());
   }
 
   /**
@@ -1245,10 +1318,24 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
       LocalDate movementScheduledDate,
       LocalDate repairScheduledDate,
       String collisionCandidates,
-      String reconciliationDecision) {
+      String reconciliationDecision,
+      InventoryCabinDispositionKind dispositionKind,
+      String dispositionDetails) {
     static FinalPlanDraft noWork(InventoryFinding finding) {
       return new FinalPlanDraft(
-          finding, null, false, null, 0, null, false, null, null, "[]", null);
+          finding,
+          null,
+          false,
+          null,
+          0,
+          null,
+          false,
+          null,
+          null,
+          "[]",
+          null,
+          InventoryCabinDispositionKind.LOCAL,
+          "{\"formerRental\":null}");
     }
 
     String planFingerprintSha256() {
@@ -1272,7 +1359,9 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
           movementScheduledDate,
           repairScheduledDate,
           collisionCandidates,
-          reconciliationDecision);
+          reconciliationDecision,
+          dispositionKind,
+          dispositionDetails);
     }
 
     FinalPlanDraft withDates(LocalDate movement, LocalDate repair) {
@@ -1287,7 +1376,9 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
           movement,
           repair,
           collisionCandidates,
-          reconciliationDecision);
+          reconciliationDecision,
+          dispositionKind,
+          dispositionDetails);
     }
 
     FinalPlanDraft withCandidates(String candidates) {
@@ -1302,7 +1393,9 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
           movementScheduledDate,
           repairScheduledDate,
           candidates,
-          reconciliationDecision);
+          reconciliationDecision,
+          dispositionKind,
+          dispositionDetails);
     }
 
     FinalPlanDraft withDecision(String decision) {
@@ -1317,7 +1410,43 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
           movementScheduledDate,
           repairScheduledDate,
           collisionCandidates,
-          decision);
+          decision,
+          dispositionKind,
+          dispositionDetails);
+    }
+
+    FinalPlanDraft withDisposition(
+        InventoryCabinDispositionService.DispositionSnapshot disposition) {
+      if (disposition.kind() != InventoryCabinDispositionKind.LOCAL) {
+        return new FinalPlanDraft(
+            finding,
+            null,
+            false,
+            null,
+            order,
+            null,
+            false,
+            null,
+            null,
+            "[]",
+            null,
+            disposition.kind(),
+            disposition.details());
+      }
+      return new FinalPlanDraft(
+          finding,
+          snapshot,
+          hasWork,
+          targetKind,
+          order,
+          priority,
+          movementToRepair,
+          movementScheduledDate,
+          repairScheduledDate,
+          collisionCandidates,
+          reconciliationDecision,
+          disposition.kind(),
+          disposition.details());
     }
   }
 

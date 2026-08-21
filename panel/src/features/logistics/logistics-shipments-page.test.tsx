@@ -191,6 +191,7 @@ function shipmentDocument(
         state: "PENDING",
         tenantSnapshot: null,
         rentalOrderId: ORDER_ID,
+        inventoryShipmentFurniture: null,
       },
     ],
     createdAt: "2026-07-18T08:00:00Z",
@@ -385,6 +386,43 @@ describe("LogisticsShipmentsPage", () => {
     expect(screen.getAllByText(/Отгрузил:/).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/Привёз:/).length).toBeGreaterThan(0)
     expect(screen.getAllByText("Петров Пётр").length).toBeGreaterThan(0)
+  })
+
+  it("shows the exact furniture recorded by an inventory shipment without a false action warning", async () => {
+    const directInventoryShipment = shipmentDocument(DRAFT_ID, "SHIPPED", 6)
+    directInventoryShipment.rentalOrderId = null
+    directInventoryShipment.lines = [
+      {
+        ...directInventoryShipment.lines[0],
+        rentalOrderId: null,
+        inventoryShipmentFurniture: [
+          {
+            equipmentId: EQUIPMENT_ID,
+            catalogVersion: 7,
+            quantity: 3,
+          },
+        ],
+      },
+    ]
+    shipmentApi.listShipments.mockResolvedValue([directInventoryShipment])
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Показать состав" }))[0]!
+    )
+
+    expect(
+      screen.getAllByRole("region", { name: "Отгрузка по инвентаризации" })
+        .length
+    ).toBeGreaterThan(0)
+    expect(
+      screen.getAllByText("Отгружено по инвентаризации").length
+    ).toBeGreaterThan(0)
+    expect(screen.getAllByText("Стол — 3 шт.").length).toBeGreaterThan(0)
+    expect(screen.queryByText("Требуются действия")).toBeNull()
+    expect(screen.queryByText("Данные заказа и клиента недоступны.")).toBeNull()
+    expect(screen.queryByText("Срок аренды недоступен.")).toBeNull()
   })
 
   it("keeps unavailable owner data neutral instead of claiming a filling mismatch", async () => {

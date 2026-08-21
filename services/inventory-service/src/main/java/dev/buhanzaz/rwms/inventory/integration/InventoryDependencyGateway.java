@@ -61,6 +61,10 @@ public interface InventoryDependencyGateway {
   InventoryLossDisposition createInventoryLossDisposition(
       UUID idempotencyKey, InventoryLossDispositionRequest request);
 
+  /** Creates or replays one maintenance-owned pending cabin write-off proposal. */
+  InventoryCabinWriteOffOutcome createInventoryCabinWriteOff(
+      UUID idempotencyKey, InventoryCabinWriteOffRequest request);
+
   FrozenPlan freezePlan(UUID idempotencyKey, JsonNode request);
 
   /**
@@ -316,6 +320,27 @@ public interface InventoryDependencyGateway {
       UUID findingId,
       UUID warehouseId,
       UUID assetId,
+      String disposition,
+      String state) {}
+
+  /** Immutable inventory evidence used by maintenance to propose a missing cabin write-off. */
+  record InventoryCabinWriteOffRequest(
+      UUID inventorySessionId,
+      UUID findingId,
+      UUID warehouseId,
+      UUID cabinId,
+      long expectedAssetVersion,
+      String reason,
+      String evidenceLink) {}
+
+  /** Validated identity of the maintenance-owned disposition decision. */
+  record InventoryCabinWriteOffOutcome(
+      UUID id,
+      long version,
+      UUID inventorySessionId,
+      UUID findingId,
+      UUID warehouseId,
+      UUID cabinId,
       String disposition,
       String state) {}
 

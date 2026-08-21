@@ -151,6 +151,11 @@ work, которому нужна logistics driver/equipment orchestration. Он
 `DELIVER_TO_REPAIR` и отдельное исходящее задание `CAPITAL_TO_PRODUCTION`, источником которого
 является внешний капремонт; обе работы принадлежат logistics и не обходят упорядоченную очередь
 водителей.
+Когда обычный возврат завершает физическую приёмку, logistics один раз записывает immutable
+`returnArrivedAt` документа. Maintenance-only чтение прибытия использует ограниченную JPA-проекцию
+этого owner field; Flyway V52 заполняет существующие строки из их точного события
+`RETURN_INSPECTION_REQUIRED`. Созданные инвентаризацией исторические возвраты обходят приёмку,
+оставляют поле null и не могут стать искусственным источником сметы.
 Если свежий private maintenance-запрос `FIXED_DATE` приходит в logistics после указанного
 warehouse-local дня, scheduler сохраняет fixed-date/source intent, но записывает текущий local day
 как эффективный `scheduledDate`. Это восстановление действует только для service-owned maintenance
@@ -175,6 +180,18 @@ source-owned general cancellation task-board даже после старта, �
 Сам batch не создаёт работу ремонта или капремонта: maintenance запускается после него через
 существующие integrations, а same-source reassertion защищает `INVENTORY` movement, чей `sourceId`
 является finding текущего batch, продолжая отменять более старый inventory-source movement.
+
+У каждого outcome есть одно строгое disposition. `LOCAL` с замороженным evidence бывшей аренды
+создаёт или переиспользует терминальный публичный `RETURN` (`ACCEPTED`/`ARRIVED`) без intake, сметы
+или задания. `SHIPMENT` создаёт или переиспользует терминальный публичный `SHIPMENT`
+(`SHIPPED`/`DEPARTED`) без водителя, hold, задания или распределения складского остатка; его строка
+показывает точный nullable snapshot `inventoryShipmentFurniture`. `WRITE_OFF` создаёт только
+durable marker и освобождает predecessor logistics state: без документа, `FREE` или terminal asset
+outcome, поскольку финальным disposition владеет maintenance. V51 хранит эти точные
+source/disposition facts, а preparation сохраняет batch с ограниченным числом flush вместо flush
+на каждый outcome. Отсортированный набор per-asset advisory locks захватывается за один database
+round trip, а оставшиеся active rental terms проверяются один раз для всего набора заказов, поэтому
+число запросов не растёт на один lock или active-term query для каждого outcome.
 Inventory-displaced logistics guard остаётся в reconciliation, пока asset-service не подтвердит его
 exact typed document-line lease как `RELEASED` или `EXPIRED`; release выполняется вне database
 transaction со стабильным dependency idempotency key, а несовпадение owner/fence работает fail closed.
@@ -288,6 +305,11 @@ client-credential tokens для asset, warehouse, task-board, maintenance и med
 исключение remote-under-lock — public move целой ходки: task/document pre-start locks удерживаются на
 время bounded version-fenced вызова task-board, чтобы закрыть гонку local-start/remote-`WAITING`, а
 существующий status poll сводит remote success с последующим local rollback.
+
+Driver relay обрабатывает не более 100 готовых заданий за проход. Неизменившийся task-board snapshot
+`SCHEDULED` или `CURRENT` откладывает fallback poll на 30 секунд без увеличения business aggregate
+version; команды оператора по-прежнему запускают немедленную обработку. Поэтому неактивный парк не
+создаёт один cross-service HTTP-запрос на каждое задание каждую секунду.
 
 ## Хранение, события и восстановление
 

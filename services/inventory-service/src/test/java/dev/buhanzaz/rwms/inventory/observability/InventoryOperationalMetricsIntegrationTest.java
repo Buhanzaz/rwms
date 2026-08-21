@@ -49,6 +49,9 @@ class InventoryOperationalMetricsIntegrationTest {
           "rwms.inventory.publication.in_flight.current",
           "rwms.inventory.publication.failed.current",
           "rwms.inventory.publication.oldest.unresolved.age.seconds",
+          "rwms.inventory.logistics.plan.unresolved.current",
+          "rwms.inventory.logistics.plan.failed.current",
+          "rwms.inventory.logistics.plan.oldest.unresolved.age.seconds",
           "rwms.inventory.furniture.reconciliation.unresolved.current",
           "rwms.inventory.furniture.reconciliation.failed.current",
           "rwms.inventory.furniture.reconciliation.oldest.unresolved.age.seconds",
@@ -117,6 +120,9 @@ class InventoryOperationalMetricsIntegrationTest {
     insertPublication(publicationInventoryId, "PENDING", 240);
     insertPublication(publicationInventoryId, "TRANSIENT_FAILED", 360);
     insertPublication(publicationInventoryId, "BLOCKED", 480);
+    insertPlanLogisticsEffect("PENDING", 160);
+    insertPlanLogisticsEffect("TRANSIENT_FAILED", 280);
+    insertPlanLogisticsEffect("BLOCKED", 400);
 
     insertFurnitureReconciliation("PENDING", 180);
     insertFurnitureReconciliation("TRANSIENT_FAILED", 300);
@@ -135,6 +141,9 @@ class InventoryOperationalMetricsIntegrationTest {
     assertThat(metric("rwms.inventory.publication.in_flight.current")).isEqualTo(1.0);
     assertThat(metric("rwms.inventory.publication.failed.current")).isEqualTo(2.0);
     assertAgeAtLeast("rwms.inventory.publication.oldest.unresolved.age.seconds", 475.0);
+    assertThat(metric("rwms.inventory.logistics.plan.unresolved.current")).isEqualTo(3.0);
+    assertThat(metric("rwms.inventory.logistics.plan.failed.current")).isEqualTo(2.0);
+    assertAgeAtLeast("rwms.inventory.logistics.plan.oldest.unresolved.age.seconds", 395.0);
     assertThat(metric("rwms.inventory.furniture.reconciliation.unresolved.current")).isEqualTo(3.0);
     assertThat(metric("rwms.inventory.furniture.reconciliation.failed.current")).isEqualTo(2.0);
     assertAgeAtLeast(
@@ -391,6 +400,33 @@ class InventoryOperationalMetricsIntegrationTest {
         ACTOR,
         now,
         now);
+  }
+
+  private void insertPlanLogisticsEffect(String state, int ageSeconds) {
+    UUID inventoryId = insertSession();
+    boolean blocked = "BLOCKED".equals(state);
+    String failureCode =
+        "PENDING".equals(state) ? null : "LOGISTICS_DEPENDENCY_UNAVAILABLE";
+    OffsetDateTime completedAt = blocked ? OffsetDateTime.now(ZoneOffset.UTC) : null;
+    jdbc.update(
+        """
+        insert into inventory_plan_logistics_effect(
+          id,effect_revision,inventory_id,final_plan_version,final_plan_sha256,
+          outcome_reapplication_no,state,idempotency_key,request_sha256,request_body,
+          attempt_count,next_attempt_at,failure_code,created_at,updated_at,completed_at)
+        values (?,0,?,1,?,0,?,?,?,?::jsonb,1,clock_timestamp(),?,
+          clock_timestamp()-(? * interval '1 second'),clock_timestamp(),?)
+        """,
+        UUID.randomUUID(),
+        inventoryId,
+        HASH_A,
+        state,
+        UUID.randomUUID(),
+        HASH_B,
+        "{}",
+        failureCode,
+        ageSeconds,
+        completedAt);
   }
 
   private void insertFurnitureReconciliation(String state, int ageSeconds) {

@@ -92,6 +92,7 @@ import {
   SHIPMENT_STATE_LABELS,
   type ShipmentDocument,
   type ShipmentFurnitureReadiness,
+  type InventoryShipmentFurniture,
   type ShipmentFurnitureTaskStatus,
   type ShipmentDocumentState,
 } from "@/features/logistics/shipments/model"
@@ -1255,17 +1256,37 @@ function ShipmentDetails({
     : undefined
   const order =
     orderReference?.status === "available" ? orderReference.order : null
+  const inventoryShipment = shipment.lines.some(
+    (line) => line.inventoryShipmentFurniture !== null
+  )
 
   return (
     <div className="grid min-w-0 gap-3">
-      <OrderCustomerOverview
-        order={order}
-        orderId={orderId}
-        orderNumber={
-          orderId ? referenceLabels.orderNumbers.get(orderId) : undefined
-        }
-        state={orderReference?.status ?? "unavailable"}
-      />
+      {inventoryShipment && !orderId ? (
+        <section
+          aria-label="Отгрузка по инвентаризации"
+          className="grid min-w-0 gap-2 rounded-lg border bg-muted/20 p-3 text-sm"
+        >
+          <h3 className="font-semibold">Отгрузка по инвентаризации</h3>
+          <p className="break-words">
+            <span className="text-muted-foreground">Клиент:</span>{" "}
+            {shipment.partySnapshot}
+          </p>
+          <p>
+            <span className="text-muted-foreground">Когда уехала:</span>{" "}
+            {formatOptionalDate(shipment.scheduledDate)}
+          </p>
+        </section>
+      ) : (
+        <OrderCustomerOverview
+          order={order}
+          orderId={orderId}
+          orderNumber={
+            orderId ? referenceLabels.orderNumbers.get(orderId) : undefined
+          }
+          state={orderReference?.status ?? "unavailable"}
+        />
+      )}
       <ShipmentLines
         shipment={shipment}
         referenceLabels={referenceLabels}
@@ -1318,11 +1339,18 @@ function ShipmentCabinFillingSummaries({
             <p className="text-sm font-medium break-words">
               Бытовка {logisticsAssetLabel(referenceLabels, line.assetId)}
             </p>
-            <CabinFurnitureSummary
-              desired={desired}
-              actual={actual}
-              unavailable={unavailable}
-            />
+            {line.inventoryShipmentFurniture !== null ? (
+              <InventoryShipmentFurnitureSummary
+                furniture={line.inventoryShipmentFurniture}
+                actual={actual}
+              />
+            ) : (
+              <CabinFurnitureSummary
+                desired={desired}
+                actual={actual}
+                unavailable={unavailable}
+              />
+            )}
           </div>
         )
       })}
@@ -1402,6 +1430,8 @@ function ShipmentLines({
                   >
                     Заказ {logisticsOrderLabel(referenceLabels, orderId)}
                   </Link>
+                ) : line.inventoryShipmentFurniture !== null ? (
+                  "Создано по итогам инвентаризации"
                 ) : (
                   "Заказ не указан"
                 )}
@@ -1425,7 +1455,7 @@ function ShipmentLines({
                   {linkedReturnDriverLabel(linkedReturn, linkedReturnsState)}
                 </p>
               </div>
-              {rentalTerm ? (
+              {line.inventoryShipmentFurniture !== null ? null : rentalTerm ? (
                 <div className="grid gap-1 rounded-lg border bg-muted/20 p-3 text-sm">
                   <p className="font-medium">
                     Срок аренды: {rentalMonthLabel(rentalTerm.rentalMonths)}
@@ -1441,11 +1471,18 @@ function ShipmentLines({
                   Срок аренды недоступен.
                 </p>
               )}
-              <CabinFurnitureSummary
-                desired={desiredContents}
-                actual={actualContents}
-                unavailable={fillingUnavailable}
-              />
+              {line.inventoryShipmentFurniture !== null ? (
+                <InventoryShipmentFurnitureSummary
+                  furniture={line.inventoryShipmentFurniture}
+                  actual={actualContents}
+                />
+              ) : (
+                <CabinFurnitureSummary
+                  desired={desiredContents}
+                  actual={actualContents}
+                  unavailable={fillingUnavailable}
+                />
+              )}
               {furnitureTasks.length > 0 ? (
                 <FurnitureMovementTasks
                   assetId={line.assetId}
@@ -1467,6 +1504,43 @@ type EquipmentLabelItem = {
   equipmentName?: string | null
   name?: string
   quantity: number
+}
+
+function InventoryShipmentFurnitureSummary({
+  furniture,
+  actual,
+}: {
+  furniture: readonly InventoryShipmentFurniture[]
+  actual: readonly EquipmentLabelItem[]
+}) {
+  const equipmentNames = new Map(
+    actual.map((item) => [
+      item.equipmentId,
+      item.equipmentName?.trim() || item.name?.trim(),
+    ])
+  )
+
+  return (
+    <section
+      aria-label="Мебель, отгруженная по инвентаризации"
+      className="grid gap-2 rounded-lg border bg-muted/20 p-3 text-sm"
+    >
+      <h4 className="font-medium">Отгружено по инвентаризации</h4>
+      {furniture.length === 0 ? (
+        <p className="text-muted-foreground">Мебель не указана.</p>
+      ) : (
+        <ul className="grid gap-1">
+          {furniture.map((item) => (
+            <li key={item.equipmentId} className="break-words">
+              {equipmentNames.get(item.equipmentId) ??
+                `Оборудование ${item.equipmentId}`}{" "}
+              — {item.quantity} шт.
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
 }
 
 function FurnitureMovementTasks({

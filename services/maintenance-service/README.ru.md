@@ -47,6 +47,13 @@ caller-ом merge или replacement.
 не создаёт смету или ремонт и не оставляет non-terminal maintenance target для finding со статусом
 `FREE`.
 
+`POST /api/internal/maintenance/v1/inventory/cabin-write-offs` — узкая companion-граница для
+бытовки, оставшейся ненайденной после review отгрузок инвентаризации. Она принимает только точный
+credential inventory-service и один стабильный source/key, читает текущее наполнение бытовки из
+asset-service и замораживает его как `DISPOSE_WITH_CABIN` в обычном решении о списании
+`PENDING_APPROVAL`. Терминальный статус здесь не применяется: единственным терминальным путём
+остаётся существующее согласование глобальным администратором и durable property-disposition saga.
+
 Work- и no-work-потоки durable фиксируют каждую non-terminal DRAFT смету и активный ремонт,
 отменяют принадлежащие maintenance задания task-board и перемещение водителя, освобождают operation
 leases и ремонтные места через их владельцев и только затем supersede локальные сметы, ремонты и
@@ -149,6 +156,25 @@ inventory завершением работы и не создаёт обычн�
 repair в очередь и либо сразу регистрирует
 задание task-board, либо при `movementToRepair=true` создаёт logistics driver task
 `DELIVER_TO_REPAIR` и регистрирует ремонтную работу после доставки.
+Каждый snapshot стадии обычного ремонта ставит выбранную обложку ремонта первой в упорядоченном
+`sourceMedia`; остальные общие фото сохраняют стабильный порядок, а каждая строка работы содержит
+только ID собственных фотографий. Общим заголовком задания служит рассчитанная maintenance
+сложность (`Лёгкий ремонт`, `Средний ремонт`, `Сложный ремонт` или `Капитальный ремонт`) вместо
+технического `Maintenance repair`; task-board сохраняет этот source-owned title через существующий
+контракт. Эту worker-facing проекцию строит
+[`MaintenanceTaskBoardSupport`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceTaskBoardSupport.java).
+Публичная коллекция ремонтов применяет склад, состояния, бытовку, опциональный ограниченный фильтр
+`repairIds` и пагинацию в PostgreSQL до сборки DTO ремонтов. Потребители task-board используют этот
+добавочный ID-фильтр порциями не более 200, поэтому обновление доски никогда не гидратирует все
+ремонты склада; нефильтрованный endpoint сохраняет прежнее постраничное поведение. Этот read path
+принадлежит
+[`MaintenanceRepairUseCases`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceRepairUseCases.java).
+При старте maintenance идемпотентно ставит существующий pre-start update workflow в очередь для
+всех уже зарегистрированных ожидающих ремонтов. Этот owner-local проход не выполняет remote I/O и
+позволяет обычному reconciliation worker исправить старые presentation snapshots, включая порядок
+обложки и заголовок сложности, без прямой мутации хранилища task-board. Задание, начатое во время
+этого ограниченного recovery, остаётся без изменений и не может ухудшить delivery state ремонта; см.
+[`MaintenanceWorkerCoverReconciliation`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceWorkerCoverReconciliation.java).
 Если catalog-enforced капремонт сохраняет `movementToRepair=true`, тот же frozen-выбор создаёт или
 переиспользует `CAPITAL_TO_PRODUCTION`; пересчёт не очищает этот выбор только потому, что целевой
 repair является капитальным. Капремонт всё равно остаётся `QUEUED/NOT_READY` до завершения работ.
@@ -192,6 +218,13 @@ logistics. HTTP security chain — stateless OAuth2/JWT; dev auth bypass огр�
 task-board, media, logistics и warehouse-service. Нельзя выполнять remote call, пока local
 write-транзакция удерживает maintenance locks. Application flow фиксирует local preparation до
 remote preflight/effects, затем продолжает local fenced state через durable recovery records.
+
+Каждый склад также владеет version-fenced настройкой окна создания сметы (`1..3650` дней, по
+умолчанию `7`). Новая ручная смета читает последнее физическое прибытие возврата из logistics, а
+автоматический источник возврата передаёт то же immutable evidence прибытия. Maintenance считает
+inclusive deadline в часовом поясе склада. При прибытии 1 августа и семи днях создание разрешено
+по 8 августа включительно, а с 9 августа возвращает `ESTIMATE_CREATION_WINDOW_EXPIRED`; независимая
+команда прямого ремонта остаётся доступной.
 
 ## Явный выбор капитального ремонта
 
@@ -246,7 +279,7 @@ workflow замены бытовки.
 | Семейство collaborators | Владеющая ответственность |
 | --- | --- |
 | `MaintenanceCatalogUseCases` и catalog model/support types | Чтения catalog versions, draft mutation, forking, validation и activation |
-| `MaintenanceEstimateUseCases` и estimate/furniture/revision supports | Lifecycle сметы, lines, plans, furniture admission и immutable revisions |
+| `MaintenanceEstimateUseCases`, `MaintenanceEstimateCreationUseCases` и estimate/furniture/revision supports | Фасад lifecycle сметы; admission/deadline/idempotency создания; lines, plans, furniture admission и immutable revisions |
 | `MaintenanceRepairUseCases` и repair lifecycle/model/media/task-board supports | Создание ремонта, queueing, execution, acceptance и подготовка rework |
 | `MaintenanceTransferUseCases` и `MaintenanceTransferSupport` | Maintenance continuation при transfer departure/arrival |
 | `MaintenanceInboundUseCases` и `MaintenanceInboundFactProjectionUseCases` | Приём owner facts и обновление projections |

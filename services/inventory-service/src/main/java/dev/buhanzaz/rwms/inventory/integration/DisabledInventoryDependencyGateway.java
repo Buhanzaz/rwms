@@ -118,6 +118,12 @@ final class DisabledInventoryDependencyGateway implements InventoryDependencyGat
   }
 
   @Override
+  public InventoryCabinWriteOffOutcome createInventoryCabinWriteOff(
+      UUID idempotencyKey, InventoryCabinWriteOffRequest request) {
+    throw unavailable();
+  }
+
+  @Override
   public FrozenPlan freezePlan(UUID key, JsonNode request) {
     throw unavailable();
   }

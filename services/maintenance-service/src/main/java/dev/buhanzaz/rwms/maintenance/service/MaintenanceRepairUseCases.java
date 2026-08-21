@@ -24,6 +24,10 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
 
@@ -31,7 +35,7 @@ import tools.jackson.databind.JsonNode;
 @Service
 public class MaintenanceRepairUseCases {
   private static final Set<String> EMPTY_DIRECT_REPAIR_SOURCE_STATUSES =
-      Set.of("FREE", "WAREHOUSE", "OWN_NEEDS");
+      Set.of("FREE", "WAREHOUSE", "OWN_NEEDS", "AFTER_RENT");
   private final MaintenanceRepairRepository repairs;
   private final RepairStageRepository repairStages;
   private final MaintenanceEventStore events;
@@ -81,8 +85,52 @@ public class MaintenanceRepairUseCases {
     this.taskBoardSupport = taskBoardSupport;
   }
 
-  public List<RepairResponse> repairs(UUID warehouseId) {
-    return repairs.findAllByWarehouseIdOrderByCreatedAtDesc(warehouseId).stream().map(repairModelSupport::repairResponse).toList();
+  /**
+   * Reads one filtered repair page in PostgreSQL before hydrating the response models. An optional
+   * bounded ID set lets task-board presentation resolve only its visible maintenance sources.
+   */
+  public PageResponse<RepairResponse> repairs(
+      UUID warehouseId,
+      RepairExecutionState executionState,
+      RepairAcceptanceState acceptanceState,
+      UUID rentalItemId,
+      Set<UUID> repairIds,
+      int page,
+      int size) {
+    if (repairIds != null && repairIds.isEmpty()) {
+      return new PageResponse<>(List.of(), page, size, 0);
+    }
+    Specification<MaintenanceRepair> filter =
+        (root, query, criteria) -> {
+          List<jakarta.persistence.criteria.Predicate> predicates = new ArrayList<>();
+          predicates.add(criteria.equal(root.get("warehouseId"), warehouseId));
+          if (executionState != null) {
+            predicates.add(criteria.equal(root.get("executionState"), executionState));
+          }
+          if (acceptanceState != null) {
+            predicates.add(criteria.equal(root.get("acceptanceState"), acceptanceState));
+          }
+          if (rentalItemId != null) {
+            predicates.add(criteria.equal(root.get("rentalItemId"), rentalItemId));
+          }
+          if (repairIds != null) {
+            predicates.add(root.get("id").in(repairIds));
+          }
+          return criteria.and(
+              predicates.toArray(jakarta.persistence.criteria.Predicate[]::new));
+        };
+    Page<MaintenanceRepair> result =
+        repairs.findAll(
+            filter,
+            PageRequest.of(
+                page,
+                size,
+                Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"))));
+    return new PageResponse<>(
+        result.getContent().stream().map(repairModelSupport::repairResponse).toList(),
+        result.getNumber(),
+        result.getSize(),
+        result.getTotalElements());
   }
 
   public List<RepairResponse> activeCapitalRepairs(UUID warehouseId) {

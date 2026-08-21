@@ -2,9 +2,12 @@ package dev.buhanzaz.rwms.maintenance.service;
 
 import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.*;
 
+import dev.buhanzaz.rwms.maintenance.domain.RepairAcceptanceState;
+import dev.buhanzaz.rwms.maintenance.domain.RepairExecutionState;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -185,9 +188,25 @@ public class MaintenanceApplicationService {
       UUID subjectId, UUID key, UUID id, AmendEstimateRequest request) {
     return facadeResult(estimates.amendEstimate(subjectId, key, id, request));
   }
+
+  /** Delegates the warehouse-fenced, database-paged repair collection read. */
   @Transactional(readOnly = true)
-  public List<RepairResponse> repairs(UUID warehouseId) {
-    return repairs.repairs(warehouseId);
+  public PageResponse<RepairResponse> repairs(
+      UUID warehouseId,
+      RepairExecutionState executionState,
+      RepairAcceptanceState acceptanceState,
+      UUID rentalItemId,
+      Set<UUID> repairIds,
+      int page,
+      int size) {
+    return repairs.repairs(
+        warehouseId,
+        executionState,
+        acceptanceState,
+        rentalItemId,
+        repairIds,
+        page,
+        size);
   }
 
   @Transactional(readOnly = true)

@@ -228,6 +228,37 @@ public class InventoryController {
     return inventory.resolveConflict(jwt, inventoryId, findingId, request);
   }
 
+  /** Returns the server-owned return/shipment review and rebuilds stale derived candidates. */
+  @GetMapping("/sessions/{inventoryId}/cabin-disposition-review")
+  public InventoryCabinDispositionReviewView cabinDispositionReview(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID inventoryId) {
+    return inventory.cabinDispositionReview(jwt, inventoryId);
+  }
+
+  /** Confirms the exact found-rented candidate set before shipment review begins. */
+  @PostMapping("/sessions/{inventoryId}/cabin-disposition-review/returns/confirm")
+  public ResponseEntity<InventoryCabinDispositionReviewView> confirmInventoryReturns(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID inventoryId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody ConfirmInventoryReturnsRequest request) {
+    return idempotent(
+        inventory.confirmInventoryReturns(jwt, inventoryId, idempotencyKey, request),
+        HttpStatus.OK);
+  }
+
+  /** Confirms selected shipments and automatically writes off every omitted missing candidate. */
+  @PostMapping("/sessions/{inventoryId}/cabin-disposition-review/shipments/confirm")
+  public ResponseEntity<InventoryCabinDispositionReviewView> confirmInventoryShipments(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID inventoryId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody ConfirmInventoryShipmentsRequest request) {
+    return idempotent(
+        inventory.confirmInventoryShipments(jwt, inventoryId, idempotencyKey, request),
+        HttpStatus.OK);
+  }
+
   @PostMapping("/sessions/{inventoryId}/furniture-review/start")
   public ResponseEntity<FurnitureReviewView> startFurnitureReview(
       @AuthenticationPrincipal Jwt jwt,

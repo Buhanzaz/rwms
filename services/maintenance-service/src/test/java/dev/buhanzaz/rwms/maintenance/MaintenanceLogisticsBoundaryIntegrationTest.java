@@ -12,6 +12,8 @@ import dev.buhanzaz.rwms.maintenance.service.LogisticsReturnShortageService;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceConflictException;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceValidationException;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -88,12 +90,14 @@ class MaintenanceLogisticsBoundaryIntegrationTest {
     UUID firstMedia = UUID.randomUUID();
     UUID secondMedia = UUID.randomUUID();
     LocalDate dispatchDate = LocalDate.of(2026, 7, 27);
+    OffsetDateTime arrivedAt = OffsetDateTime.now(ZoneOffset.UTC).minusHours(1);
     UpsertLogisticsReturnEstimateSourceRequest request =
         new UpsertLogisticsReturnEstimateSourceRequest(
             warehouseId,
             rentalItemId,
             7L,
             dispatchDate,
+            arrivedAt,
             List.of(
                 new MediaReferenceInput(secondMedia, 3L),
                 new MediaReferenceInput(firstMedia, 1L)));
@@ -109,6 +113,7 @@ class MaintenanceLogisticsBoundaryIntegrationTest {
                 rentalItemId,
                 7L,
                 dispatchDate,
+                arrivedAt,
                 List.of(
                     new MediaReferenceInput(firstMedia, 1L),
                     new MediaReferenceInput(secondMedia, 3L))));
@@ -192,6 +197,7 @@ class MaintenanceLogisticsBoundaryIntegrationTest {
                         rentalItemId,
                         8L,
                         dispatchDate,
+                        arrivedAt,
                         List.of(
                             new MediaReferenceInput(firstMedia, 1L),
                             new MediaReferenceInput(secondMedia, 3L)))))
@@ -209,6 +215,7 @@ class MaintenanceLogisticsBoundaryIntegrationTest {
             UUID.randomUUID(),
             0L,
             LocalDate.of(2026, 7, 27),
+            OffsetDateTime.now(ZoneOffset.UTC).minusHours(1),
             List.of(new MediaReferenceInput(UUID.randomUUID(), 1L)));
     CountDownLatch start = new CountDownLatch(1);
     var executor = Executors.newFixedThreadPool(2);
@@ -250,6 +257,7 @@ class MaintenanceLogisticsBoundaryIntegrationTest {
                         UUID.randomUUID(),
                         0L,
                         LocalDate.of(2026, 7, 27),
+                        OffsetDateTime.now(ZoneOffset.UTC).minusHours(1),
                         List.of(
                             new MediaReferenceInput(duplicateMedia, 1L),
                             new MediaReferenceInput(duplicateMedia, 1L)))))

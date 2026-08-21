@@ -20,6 +20,24 @@ public interface EquipmentBalanceRepository extends JpaRepository<EquipmentBalan
       long minimumQuantity,
       Collection<BalanceLocationKind> locationKinds);
 
+  /** Discovers every cabin bucket so the caller can acquire canonical advisory keys before locking. */
+  List<EquipmentBalance> findAllByRentalItemIdAndLocationKindInOrderByEquipmentIdAscWarehouseIdAsc(
+      UUID rentalItemId, Collection<BalanceLocationKind> locationKinds);
+
+  /** Locks every historical/current cabin bucket before an exact inventory shipment replacement. */
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select balance
+      from EquipmentBalance balance
+      where balance.rentalItemId = :rentalItemId
+        and balance.locationKind in :locationKinds
+      order by balance.equipmentId, balance.warehouseId, balance.locationKind, balance.id
+      """)
+  List<EquipmentBalance> findAllCabinBalancesForUpdate(
+      @Param("rentalItemId") UUID rentalItemId,
+      @Param("locationKinds") Collection<BalanceLocationKind> locationKinds);
+
   @Query(
       """
       select balance

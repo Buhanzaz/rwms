@@ -425,9 +425,9 @@ paths:
       operationId: startInventoryFurnitureReview
       description: >-
         Requires USER, rwms.write and warehouse EDIT. Freezes the cabin-review
-        stage on one asset-service furniture snapshot. Registry conflicts must
-        be resolved first; only missing or uninspected cabins can be explicitly
-        acknowledged as incomplete.
+        stage on one asset-service furniture snapshot only after the server-owned
+        return and shipment review reaches COMPLETED. Registry conflicts must be
+        resolved first. Only LOCAL cabins enter the furniture snapshot.
       requestBody:
         required: true
         content:
@@ -442,6 +442,68 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationFailure' }
         '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/inventory/v1/sessions/{inventoryId}/cabin-disposition-review:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+    get:
+      tags: [Completion]
+      operationId: getInventoryCabinDispositionReview
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. Returns or rebuilds the exact
+        server-owned return/missing candidate set from current active finding revisions.
+      responses:
+        '200': { $ref: '#/components/responses/CabinDispositionReviewResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+  /api/inventory/v1/sessions/{inventoryId}/cabin-disposition-review/returns/confirm:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Completion]
+      operationId: confirmInventoryReturns
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. The request must contain every
+        found-rented candidate exactly once at its current finding revision. This records
+        historical return facts only and creates neither acceptance nor estimates.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConfirmInventoryReturnsRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/CabinDispositionReviewIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/inventory/v1/sessions/{inventoryId}/cabin-disposition-review/shipments/confirm:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Completion]
+      operationId: confirmInventoryShipments
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. The request contains only missing
+        cabins known to have shipped. Every omitted missing candidate deterministically becomes
+        WRITE_OFF pending maintenance approval. Shipment furniture does not consume STOCK.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConfirmInventoryShipmentsRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/CabinDispositionReviewIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/inventory/v1/sessions/{inventoryId}/furniture-review:
     parameters:
       - { $ref: '#/components/parameters/InventoryId' }
@@ -577,12 +639,13 @@ paths:
       tags: [Publication]
       operationId: recalculateInventoryOutcome
       description: >-
-        Requires USER, rwms.write and warehouse MANAGE. Locks the exact completed final plan,
-        creates missing asset-status outcomes, requeues every existing publication for an
-        authoritative pass through all current downstream effects, and returns after durable local scheduling.
-        A successful furniture effect is preserved; other furniture states become eligible. The completed inventory is
-        authoritative: no work means FREE, work means REPAIR, and an explicit capital choice
-        means CAPITAL_REPAIR. Evidence, photos and prior attempt history are retained.
+        Requires USER, rwms.write and warehouse MANAGE. Fences the submitted completed plan,
+        copies its exact reviewed entries and dispositions into one strictly newer immutable
+        final-plan generation, and durably requeues its downstream effects. An idempotency replay
+        returns the first response without creating another generation. LOCAL no-work means FREE,
+        LOCAL work means REPAIR or explicit CAPITAL_REPAIR, SHIPMENT means RENTED with frozen
+        furniture, and WRITE_OFF remains asset-less pending maintenance approval. Evidence, photos
+        and prior attempt history are retained.
       requestBody:
         required: true
         content:
@@ -779,6 +842,14 @@ components:
       description: Idempotent furniture-review start result.
       headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }
       content: { application/json: { schema: { $ref: '#/components/schemas/FurnitureReview' } } }
+    CabinDispositionReviewResponse:
+      description: Current server-owned return and shipment review.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/InventoryCabinDispositionReview' } } }
+    CabinDispositionReviewIdempotentResponse:
+      description: Idempotent return or shipment review result.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/InventoryCabinDispositionReview' } } }
     PublicationBatchIdempotentResponse:
       description: Per-finding publication results and derived aggregate state.
       headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }
@@ -819,7 +890,9 @@ components:
     RentalItemStatus:
       type: string
       enum: [RENTED, BOOKED, REPAIR, WAITING_REPAIR_CHECK, WRITTEN_OFF, LOST, CAPITAL_REPAIR, AFTER_RENT, WAITING_ESTIMATE_CONFIRMATION, SALE, USED_SALE, RESERVED, FREE, WAREHOUSE, OWN_NEEDS, IN_TRANSFER]
-    InventoryAssetOutcomeStatus: { type: string, enum: [FREE, REPAIR, CAPITAL_REPAIR] }
+    InventoryAssetOutcomeStatus: { type: string, enum: [FREE, REPAIR, CAPITAL_REPAIR, RENTED] }
+    InventoryCabinDispositionReviewPhase: { type: string, enum: [RETURNS, SHIPMENTS, COMPLETED] }
+    InventoryCabinDispositionKind: { type: string, enum: [LOCAL, SHIPMENT, WRITE_OFF] }
     InspectionState: { type: string, enum: [NOT_INSPECTED, READY, WORK_STAGED] }
     LogisticsPlanningMode: { type: string, enum: [AUTO, FIXED_DATE] }
     ReconciliationState: { type: string, enum: [MATCHED, MISSING, CONFLICT] }
@@ -1142,7 +1215,7 @@ components:
     StartFurnitureReviewRequest:
       type: object
       additionalProperties: false
-      required: [expectedSessionRevision, findingRevisions, acknowledgeIncomplete]
+      required: [expectedSessionRevision, findingRevisions]
       properties:
         expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
         findingRevisions:
@@ -1150,7 +1223,90 @@ components:
           maxItems: 10000
           uniqueItems: true
           items: { $ref: '#/components/schemas/RevisionExpectation' }
-        acknowledgeIncomplete: { type: boolean }
+    InventoryShipmentFurnitureInput:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, catalogVersion, quantity]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        catalogVersion: { type: integer, format: int64, minimum: 0 }
+        quantity: { type: integer, format: int64, minimum: 1 }
+    InventoryReturnInput:
+      type: object
+      additionalProperties: false
+      required: [findingId, expectedFindingRevision, returnedOn, clientId, clientSnapshot]
+      properties:
+        findingId: { type: string, format: uuid }
+        expectedFindingRevision: { type: integer, format: int64, minimum: 0 }
+        returnedOn: { type: string, format: date }
+        clientId: { type: string, format: uuid }
+        clientSnapshot: { type: string, minLength: 1, maxLength: 512 }
+    InventoryShipmentInput:
+      type: object
+      additionalProperties: false
+      required: [findingId, expectedFindingRevision, departedOn, clientId, clientSnapshot, furniture]
+      properties:
+        findingId: { type: string, format: uuid }
+        expectedFindingRevision: { type: integer, format: int64, minimum: 0 }
+        departedOn: { type: string, format: date }
+        clientId: { type: string, format: uuid }
+        clientSnapshot: { type: string, minLength: 1, maxLength: 512 }
+        furniture:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/InventoryShipmentFurnitureInput' }
+    ConfirmInventoryReturnsRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, expectedReviewRevision, returns]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        expectedReviewRevision: { type: integer, format: int64, minimum: 0 }
+        returns:
+          type: array
+          maxItems: 10000
+          items: { $ref: '#/components/schemas/InventoryReturnInput' }
+    ConfirmInventoryShipmentsRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, expectedReviewRevision, shipments]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        expectedReviewRevision: { type: integer, format: int64, minimum: 0 }
+        shipments:
+          type: array
+          maxItems: 10000
+          items: { $ref: '#/components/schemas/InventoryShipmentInput' }
+    InventoryCabinDispositionCandidate:
+      type: object
+      additionalProperties: false
+      required: [findingId, findingRevision, assetId, assetVersion, cabinNumber, candidateKind, dispositionKind, dispositionDetails]
+      properties:
+        findingId: { type: string, format: uuid }
+        findingRevision: { type: integer, format: int64, minimum: 0 }
+        assetId: { type: string, format: uuid }
+        assetVersion: { type: integer, format: int64, minimum: 0 }
+        cabinNumber: { type: string, minLength: 1, maxLength: 128 }
+        candidateKind: { type: string, enum: [RETURN, MISSING] }
+        dispositionKind:
+          oneOf: [{ $ref: '#/components/schemas/InventoryCabinDispositionKind' }, { type: 'null' }]
+        dispositionDetails:
+          oneOf: [{ type: object, additionalProperties: true }, { type: 'null' }]
+    InventoryCabinDispositionReview:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, sessionRevision, reviewRevision, phase, returnCandidates, missingCandidates]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        sessionRevision: { type: integer, format: int64, minimum: 0 }
+        reviewRevision: { type: integer, format: int64, minimum: 0 }
+        phase: { $ref: '#/components/schemas/InventoryCabinDispositionReviewPhase' }
+        returnCandidates:
+          type: array
+          items: { $ref: '#/components/schemas/InventoryCabinDispositionCandidate' }
+        missingCandidates:
+          type: array
+          items: { $ref: '#/components/schemas/InventoryCabinDispositionCandidate' }
     FurnitureReviewCabinInput:
       type: object
       additionalProperties: false
@@ -1309,7 +1465,7 @@ components:
     FinalPlanEntry:
       type: object
       additionalProperties: false
-      required: [findingId, findingRevision, planFingerprintSha256, hasWork, targetKind, order, priority, movementToRepair, movementScheduledDate, repairScheduledDate, collisionCandidates, reconciliationDecision, forceCapitalRepair]
+      required: [findingId, findingRevision, planFingerprintSha256, hasWork, targetKind, order, priority, movementToRepair, movementScheduledDate, repairScheduledDate, collisionCandidates, reconciliationDecision, forceCapitalRepair, dispositionKind, dispositionDetails]
       properties:
         findingId: { type: string, format: uuid }
         findingRevision: { type: integer, format: int64, minimum: 0 }
@@ -1325,6 +1481,8 @@ components:
         reconciliationDecision:
           oneOf: [{ $ref: '#/components/schemas/FinalPlanReconciliationDecision' }, { type: 'null' }]
         forceCapitalRepair: { type: boolean }
+        dispositionKind: { $ref: '#/components/schemas/InventoryCabinDispositionKind' }
+        dispositionDetails: { type: object, additionalProperties: true }
     FinalPlan:
       type: object
       additionalProperties: false
@@ -1920,7 +2078,7 @@ components:
     OutcomeRecalculation:
       type: object
       additionalProperties: false
-      required: [inventoryId, sessionRevision, finalPlanVersion, finalPlanSha256, furnitureReconciliationState, createdPublicationCount, requeuedPublicationCount, preservedSucceededPublicationCount, publicationBatch]
+      required: [inventoryId, sessionRevision, finalPlanVersion, finalPlanSha256, furnitureReconciliationState, createdPublicationCount, requeuedPublicationCount]
       properties:
         inventoryId: { type: string, format: uuid }
         sessionRevision: { type: integer, format: int64, minimum: 0 }
@@ -1929,11 +2087,6 @@ components:
         furnitureReconciliationState: { $ref: '#/components/schemas/FurnitureReconciliationState' }
         createdPublicationCount: { type: integer, minimum: 0 }
         requeuedPublicationCount: { type: integer, minimum: 0 }
-        preservedSucceededPublicationCount:
-          type: integer
-          minimum: 0
-          description: Reserved compatibility count; current authoritative recalculation requeues every existing publication and returns zero.
-        publicationBatch: { $ref: '#/components/schemas/PublicationBatch' }
     SessionStatistics:
       type: object
       additionalProperties: false

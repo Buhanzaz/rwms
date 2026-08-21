@@ -148,6 +148,20 @@ public class LogisticsDocumentLine {
   @Column(name = "inventory_final_plan_sha256", length = 64)
   private String inventoryFinalPlanSha256;
 
+  /** Inventory source for a newly created historical return or shipment line. */
+  @Column(name = "inventory_source_id")
+  private UUID inventorySourceId;
+
+  @Column(name = "inventory_source_finding_id")
+  private UUID inventorySourceFindingId;
+
+  @Column(name = "inventory_source_disposition_kind", length = 24)
+  private String inventorySourceDispositionKind;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "inventory_shipment_furniture", columnDefinition = "jsonb")
+  private JsonNode inventoryShipmentFurniture;
+
   public static LogisticsDocumentLine create(
       LogisticsDocument document,
       int lineNumber,
@@ -176,6 +190,44 @@ public class LogisticsDocumentLine {
     line.state = LogisticsLineState.PENDING;
     line.tenantSnapshot = optionalSnapshot(tenantSnapshot);
     line.rentalOrderId = rentalOrderId;
+    return line;
+  }
+
+  /**
+   * Creates a terminal line for an inventory-created historical document. Shipment furniture is an
+   * immutable fact and is never interpreted as an asset stock reservation.
+   */
+  public static LogisticsDocumentLine createInventoryDisposition(
+      LogisticsDocument document,
+      UUID assetId,
+      UUID inventoryId,
+      UUID findingId,
+      String dispositionKind,
+      String clientSnapshot,
+      JsonNode shipmentFurniture) {
+    if (document == null
+        || assetId == null
+        || inventoryId == null
+        || findingId == null
+        || !java.util.Set.of("LOCAL", "SHIPMENT").contains(dispositionKind)) {
+      throw new IllegalArgumentException("Inventory document line source is invalid");
+    }
+    if (("SHIPMENT".equals(dispositionKind)) != (shipmentFurniture != null)) {
+      throw new IllegalArgumentException("Inventory shipment furniture source is invalid");
+    }
+    if (shipmentFurniture != null && !shipmentFurniture.isArray()) {
+      throw new IllegalArgumentException("Inventory shipment furniture must be an array");
+    }
+    LogisticsDocumentLine line = create(document, 1, assetId, 0, clientSnapshot);
+    line.state =
+        "SHIPMENT".equals(dispositionKind)
+            ? LogisticsLineState.DEPARTED
+            : LogisticsLineState.ARRIVED;
+    line.inventorySourceId = inventoryId;
+    line.inventorySourceFindingId = findingId;
+    line.inventorySourceDispositionKind = dispositionKind;
+    line.inventoryShipmentFurniture =
+        shipmentFurniture == null ? null : shipmentFurniture.deepCopy();
     return line;
   }
 
@@ -219,7 +271,9 @@ public class LogisticsDocumentLine {
       String finalPlanSha256) {
     if (inventoryId == null
         || findingId == null
-        || !java.util.Set.of("FREE", "REPAIR", "CAPITAL_REPAIR").contains(desiredStatus)
+        || !java.util.Set.of(
+                "FREE", "REPAIR", "CAPITAL_REPAIR", "RENTED", "WRITE_OFF_PENDING")
+            .contains(desiredStatus)
         || completedAt == null
         || finalPlanVersion < 1
         || finalPlanSha256 == null

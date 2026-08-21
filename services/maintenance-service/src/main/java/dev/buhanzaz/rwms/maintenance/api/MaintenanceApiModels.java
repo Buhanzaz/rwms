@@ -94,6 +94,7 @@ public final class MaintenanceApiModels {
       @NotNull UUID rentalItemId,
       @NotNull @Min(0) Long rentalItemVersion,
       @NotNull LocalDate dispatchDate,
+      @NotNull OffsetDateTime arrivedAt,
       @NotNull @Size(min = 1, max = 20) List<@Valid MediaReferenceInput> mediaReferences) {}
   public record ReturnEstimateSource(
       UUID returnId,

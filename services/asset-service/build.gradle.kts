@@ -41,4 +41,6 @@ dependencies {
 
 tasks.test {
     systemProperty("rwms.contracts.dir", rootProject.file("contracts").absolutePath)
+    // Unique Testcontainers contexts otherwise accumulate until the 512 MiB test worker is exhausted.
+    systemProperty("spring.test.context.cache.maxSize", "1")
 }

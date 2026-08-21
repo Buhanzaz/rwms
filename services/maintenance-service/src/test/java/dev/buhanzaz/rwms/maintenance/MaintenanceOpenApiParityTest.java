@@ -12,6 +12,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceCatalogController;
+import dev.buhanzaz.rwms.maintenance.api.EstimateCreationWindowSettingsController;
+import dev.buhanzaz.rwms.maintenance.api.EstimateCreationWindowSettingsResponse;
 import dev.buhanzaz.rwms.maintenance.api.FurnitureEquipmentLinkController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceEstimateController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceInventoryController;
@@ -31,6 +33,7 @@ import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModel
 import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreateCabinPropertyDispositionRequest;
 import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreateEquipmentPropertyDispositionRequest;
 import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreateInventoryLossDispositionRequest;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreateInventoryCabinWriteOffRequest;
 import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreatePropertyDispositionRequest;
 import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreateResult;
 import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.PropertyDispositionDecisionResponse;
@@ -58,6 +61,7 @@ import dev.buhanzaz.rwms.maintenance.api.RepairComplexityColorsController;
 import dev.buhanzaz.rwms.maintenance.api.RepairComplexityColorsResponse;
 import dev.buhanzaz.rwms.maintenance.api.RepairCapacitySettingsResponse;
 import dev.buhanzaz.rwms.maintenance.api.ReplaceRepairCapacitySettingsRequest;
+import dev.buhanzaz.rwms.maintenance.api.ReplaceEstimateCreationWindowSettingsRequest;
 import dev.buhanzaz.rwms.maintenance.api.ReplaceRepairComplexityColorsRequest;
 import dev.buhanzaz.rwms.maintenance.api.RepairPlaceAllocationResponse;
 import dev.buhanzaz.rwms.maintenance.api.RepairPlaceController;
@@ -77,6 +81,7 @@ import dev.buhanzaz.rwms.maintenance.domain.RepairStageKind;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageState;
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
+import dev.buhanzaz.rwms.maintenance.service.EstimateCreationWindowSettingsService;
 import dev.buhanzaz.rwms.maintenance.service.FurnitureEquipmentLinkReviewService;
 import dev.buhanzaz.rwms.maintenance.service.InventoryAuthoritativeOutcomeService;
 import dev.buhanzaz.rwms.maintenance.service.InventoryMaintenanceService;
@@ -149,12 +154,12 @@ class MaintenanceOpenApiParityTest {
   private static final List<OperationSpec> OPERATIONS = canonicalOperations();
 
   @Test
-  void allFiftySixPathsAndSixtySevenOperationsExactlyMatchTheApprovedAcceptanceMatrix()
+  void allFiftyEightPathsAndSeventyOperationsExactlyMatchTheApprovedAcceptanceMatrix()
       throws Exception {
     Map<String, Object> document = openApi();
-    assertThat(child(document, "paths")).hasSize(56);
-    assertThat(openApiOperationCount(document)).isEqualTo(67);
-    assertThat(controllerOperations()).hasSize(67);
+    assertThat(child(document, "paths")).hasSize(58);
+    assertThat(openApiOperationCount(document)).isEqualTo(70);
+    assertThat(controllerOperations()).hasSize(70);
 
     for (OperationSpec expected : OPERATIONS) {
       assertOpenApiOperation(document, expected);
@@ -171,6 +176,7 @@ class MaintenanceOpenApiParityTest {
 
     assertThat(inventoryPaths).containsExactly(
         "/api/internal/maintenance/v1/inventory/dispositions",
+        "/api/internal/maintenance/v1/inventory/cabin-write-offs",
         "/api/internal/maintenance/v1/inventory/plans",
         "/api/internal/maintenance/v1/inventory/repair-snapshots",
         "/api/internal/maintenance/v1/inventory/sources/{inventoryId}/findings/{findingId}",
@@ -529,6 +535,7 @@ class MaintenanceOpenApiParityTest {
         authoritativeOutcomesFixture();
     LogisticsReturnShortageService logistics = logisticsFixture();
     RepairCapacitySettingsService settings = settingsFixture();
+    EstimateCreationWindowSettingsService creationWindow = creationWindowFixture();
     RepairComplexitySettingsService complexitySettings = complexitySettingsFixture();
     RepairComplexityColorsService colors = colorsFixture();
     RepairPlaceService repairPlaces = repairPlacesFixture();
@@ -553,6 +560,7 @@ class MaintenanceOpenApiParityTest {
             new MaintenanceRepairPlaceLogisticsController(
                 repairPlaces, service, authorizer),
             new MaintenanceSettingsController(settings, authorizer),
+            new EstimateCreationWindowSettingsController(creationWindow, authorizer),
             new RepairComplexitySettingsController(complexitySettings, authorizer),
             new RepairPlaceController(repairPlaces, authorizer),
             new RepairComplexityColorsController(colors, authorizer))
@@ -689,6 +697,20 @@ class MaintenanceOpenApiParityTest {
         idempotency,
         CreateInventoryLossDispositionRequest.class,
         "CreateInventoryLossDispositionRequest",
+        "200",
+        "201",
+        "PropertyDispositionDecision",
+        true,
+        "400", "401", "403", "409"));
+    result.add(opWithAlternateSuccess(
+        "POST",
+        "/api/internal/maintenance/v1/inventory/cabin-write-offs",
+        "createInventoryCabinWriteOff",
+        PropertyDispositionInventoryController.class,
+        "createCabinWriteOff",
+        idempotency,
+        CreateInventoryCabinWriteOffRequest.class,
+        "CreateInventoryCabinWriteOffRequest",
         "200",
         "201",
         "PropertyDispositionDecision",
@@ -914,6 +936,7 @@ class MaintenanceOpenApiParityTest {
             query("executionState", false, "$RepairExecutionState", null),
             query("acceptanceState", false, "$RepairAcceptanceState", null),
             query("rentalItemId", false, "uuid", null),
+            query("repairIds", false, "array", null),
             optionalHeader("If-None-Match")),
         null, null, "200", "RepairPage", false, "304", "401", "403"));
     result.add(op("GET", "/api/maintenance/v1/repairs/capital", "listActiveCapitalRepairs",
@@ -1027,6 +1050,20 @@ class MaintenanceOpenApiParityTest {
         repairCapacityWarehouse,
         ReplaceRepairCapacitySettingsRequest.class, "ReplaceRepairCapacitySettingsRequest",
         "200", "RepairCapacitySettings", false,
+        "400", "401", "403", "409"));
+    result.add(op("GET",
+        "/api/maintenance/v1/settings/estimate-creation-window/{warehouseId}",
+        "getEstimateCreationWindowSettings", EstimateCreationWindowSettingsController.class, "get",
+        repairCapacityWarehouse, null, null, "200", "EstimateCreationWindowSettings", false,
+        "401", "403"));
+    result.add(op("PUT",
+        "/api/maintenance/v1/settings/estimate-creation-window/{warehouseId}",
+        "replaceEstimateCreationWindowSettings",
+        EstimateCreationWindowSettingsController.class, "replace",
+        repairCapacityWarehouse,
+        ReplaceEstimateCreationWindowSettingsRequest.class,
+        "ReplaceEstimateCreationWindowSettingsRequest",
+        "200", "EstimateCreationWindowSettings", false,
         "400", "401", "403", "409"));
     result.add(op("GET",
         "/api/maintenance/v1/settings/repair-complexity/{warehouseId}",
@@ -1173,6 +1210,7 @@ class MaintenanceOpenApiParityTest {
   private static String javaWireType(Class<?> type) {
     if (type == UUID.class) return "uuid";
     if (type == String.class) return "string";
+    if (Set.class.isAssignableFrom(type)) return "array";
     if (type == int.class || type == Integer.class || type == long.class || type == Long.class) {
       return "integer";
     }
@@ -1477,7 +1515,9 @@ class MaintenanceOpenApiParityTest {
       case "estimate", "updateEstimate" -> sample(EstimateResponse.class, "estimate");
       case "createEstimate" -> createResult(EstimateResponse.class);
       case "completeEstimate", "amendEstimate" -> createResult(EstimateCommandResult.class);
-      case "repairs", "activeCapitalRepairs" -> List.of(sample(RepairResponse.class, "repair"));
+      case "repairs" ->
+          new PageResponse<>(List.of(sample(RepairResponse.class, "repair")), 0, 50, 1);
+      case "activeCapitalRepairs" -> List.of(sample(RepairResponse.class, "repair"));
       case "repair", "activeCapitalRepair", "updateRepairPlan" ->
           sample(RepairResponse.class, "repair");
       case "repairWorkerEvidence" ->
@@ -1539,6 +1579,9 @@ class MaintenanceOpenApiParityTest {
             org.mockito.ArgumentMatchers.any()))
         .thenReturn(created);
     when(service.createInventoryLoss(
+            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+        .thenReturn(created);
+    when(service.createInventoryCabinWriteOff(
             org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
         .thenReturn(created);
     when(service.get(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
@@ -1677,6 +1720,20 @@ class MaintenanceOpenApiParityTest {
     when(settings.get(org.mockito.ArgumentMatchers.any())).thenReturn(response);
     when(settings.replace(
         org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+        .thenReturn(response);
+    return settings;
+  }
+
+  private static EstimateCreationWindowSettingsService creationWindowFixture()
+      throws Exception {
+    EstimateCreationWindowSettingsService settings =
+        mock(EstimateCreationWindowSettingsService.class);
+    EstimateCreationWindowSettingsResponse response =
+        (EstimateCreationWindowSettingsResponse)
+            sample(EstimateCreationWindowSettingsResponse.class, "estimateCreationWindowSettings");
+    when(settings.get(org.mockito.ArgumentMatchers.any())).thenReturn(response);
+    when(settings.replace(
+            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
         .thenReturn(response);
     return settings;
   }
@@ -1900,6 +1957,7 @@ class MaintenanceOpenApiParityTest {
       return ((Enum<?>) type.getEnumConstants()[0]).name();
     }
     if ("uuid".equals(parameter.wireType())) return ID.toString();
+    if ("array".equals(parameter.wireType())) return ID.toString();
     if ("integer".equals(parameter.wireType())) return parameter.defaultValue() == null
         ? "1" : parameter.defaultValue();
     if ("string".equals(parameter.wireType())) return "W/\"cached\"";
@@ -1918,6 +1976,9 @@ class MaintenanceOpenApiParityTest {
         CreateEquipmentPropertyDispositionRequest.class,
         "CreateEquipmentPropertyDispositionRequest");
     values.put(CreateInventoryLossDispositionRequest.class, "CreateInventoryLossDispositionRequest");
+    values.put(
+        CreateInventoryCabinWriteOffRequest.class,
+        "CreateInventoryCabinWriteOffRequest");
     values.put(ApprovePropertyDispositionRequest.class, "ApprovePropertyDispositionRequest");
     values.put(RejectPropertyDispositionRequest.class, "RejectPropertyDispositionRequest");
     values.put(RecoverPropertyDispositionRequest.class, "RecoverPropertyDispositionRequest");
@@ -1965,6 +2026,8 @@ class MaintenanceOpenApiParityTest {
     values.put(
         ReplaceRepairCapacitySettingsRequest.class, "ReplaceRepairCapacitySettingsRequest");
     values.put(RepairCapacitySettingsResponse.class, "RepairCapacitySettings");
+    values.put(
+        EstimateCreationWindowSettingsResponse.class, "EstimateCreationWindowSettings");
     values.put(
         ReplaceRepairComplexitySettingsRequest.class,
         "ReplaceRepairComplexitySettingsRequest");
@@ -2111,6 +2174,9 @@ class MaintenanceOpenApiParityTest {
         CreateEquipmentPropertyDispositionRequest.class,
         "CreateEquipmentPropertyDispositionRequest");
     values.put(CreateInventoryLossDispositionRequest.class, "CreateInventoryLossDispositionRequest");
+    values.put(
+        CreateInventoryCabinWriteOffRequest.class,
+        "CreateInventoryCabinWriteOffRequest");
     values.put(ApprovePropertyDispositionRequest.class, "ApprovePropertyDispositionRequest");
     values.put(RejectPropertyDispositionRequest.class, "RejectPropertyDispositionRequest");
     values.put(RecoverPropertyDispositionRequest.class, "RecoverPropertyDispositionRequest");
@@ -2272,6 +2338,7 @@ class MaintenanceOpenApiParityTest {
         MaintenanceTransferRepairController.class,
         MaintenanceRepairPlaceLogisticsController.class,
         MaintenanceSettingsController.class,
+        EstimateCreationWindowSettingsController.class,
         RepairComplexitySettingsController.class,
         RepairPlaceController.class,
         RepairComplexityColorsController.class,

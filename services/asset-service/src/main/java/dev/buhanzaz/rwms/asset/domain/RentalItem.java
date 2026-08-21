@@ -310,7 +310,8 @@ public class RentalItem {
   public boolean applyCompletedInventoryOutcome(RentalItemStatus next) {
     if (next != RentalItemStatus.FREE
         && next != RentalItemStatus.REPAIR
-        && next != RentalItemStatus.CAPITAL_REPAIR) {
+        && next != RentalItemStatus.CAPITAL_REPAIR
+        && next != RentalItemStatus.RENTED) {
       throw new IllegalArgumentException("Completed inventory outcome status is invalid");
     }
     if (status.isTerminalDispositionStatus()) {

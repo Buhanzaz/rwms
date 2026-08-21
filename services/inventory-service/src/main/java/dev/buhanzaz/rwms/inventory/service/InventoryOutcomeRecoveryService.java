@@ -8,6 +8,7 @@ import dev.buhanzaz.rwms.inventory.domain.FurnitureReconciliationState;
 import dev.buhanzaz.rwms.inventory.domain.InventoryAssetOutcomeStatus;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlan;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlanEntry;
+import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlanOutcomePolicy;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFurnitureReconciliationIntent;
 import dev.buhanzaz.rwms.inventory.domain.InventoryPublicationIntent;
 import dev.buhanzaz.rwms.inventory.domain.InventorySession;
@@ -18,6 +19,7 @@ import dev.buhanzaz.rwms.inventory.repository.InventoryFurnitureReconciliationIn
 import dev.buhanzaz.rwms.inventory.repository.InventoryPublicationIntentRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventorySessionRepository;
 import dev.buhanzaz.rwms.inventory.security.InventoryAuthorizer;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -46,6 +48,8 @@ final class InventoryOutcomeRecoveryService extends InventoryTechnicalRuntimeSup
   private final InventoryFurnitureReconciliationIntentRepository furnitureReconciliations;
   private final InventoryIdempotencyPort idempotency;
   private final InventoryPublicationService publicationService;
+  private final InventoryPlanLogisticsReconciliationService planLogistics;
+  private final InventoryCabinWriteOffService cabinWriteOffs;
   private final CompletedInventoryPlanCorrectionService planCorrection;
 
   InventoryOutcomeRecoveryService(
@@ -56,6 +60,8 @@ final class InventoryOutcomeRecoveryService extends InventoryTechnicalRuntimeSup
       InventoryFurnitureReconciliationIntentRepository furnitureReconciliations,
       InventoryIdempotencyPort idempotency,
       InventoryPublicationService publicationService,
+      InventoryPlanLogisticsReconciliationService planLogistics,
+      InventoryCabinWriteOffService cabinWriteOffs,
       CompletedInventoryPlanCorrectionService planCorrection,
       ObjectMapper mapper,
       InventoryCanonicalJsonPort canonicalJson,
@@ -69,6 +75,8 @@ final class InventoryOutcomeRecoveryService extends InventoryTechnicalRuntimeSup
     this.furnitureReconciliations = furnitureReconciliations;
     this.idempotency = idempotency;
     this.publicationService = publicationService;
+    this.planLogistics = planLogistics;
+    this.cabinWriteOffs = cabinWriteOffs;
     this.planCorrection = planCorrection;
   }
 
@@ -127,6 +135,11 @@ final class InventoryOutcomeRecoveryService extends InventoryTechnicalRuntimeSup
           inventoryId,
           plan.getFinalPlanVersion());
     }
+    if (correction.restoredCount() == 0) {
+      correction = planCorrection.advanceExactGeneration(session, plan, entries);
+      plan = correction.plan();
+      entries = correction.entries();
+    }
 
     Map<UUID, InventoryPublicationIntent> byFinding = new LinkedHashMap<>();
     publications
@@ -143,13 +156,20 @@ final class InventoryOutcomeRecoveryService extends InventoryTechnicalRuntimeSup
             "Inventory outcome reapplication generation is inconsistent");
       }
     }
+    currentReapplicationNo =
+        Math.max(
+            currentReapplicationNo,
+            planLogistics.latestGeneration(inventoryId, plan.getFinalPlanVersion()));
     long nextReapplicationNo = nextReapplicationNo(currentReapplicationNo);
     int created = 0;
     int requeued = 0;
+    List<InventoryPublicationIntent> changed = new ArrayList<>(entries.size());
+    Map<UUID, Boolean> createdByFinding = new LinkedHashMap<>();
     for (InventoryFinalPlanEntry entry : entries) {
       requireOutcomeIdentity(entry);
+      if (!InventoryFinalPlanOutcomePolicy.assetPublicationRequired(entry)) continue;
       InventoryAssetOutcomeStatus desired = desiredStatus(entry);
-      FinalPlanTargetKind target = entry.isHasWork() ? FinalPlanTargetKind.REPAIR : null;
+      FinalPlanTargetKind target = InventoryFinalPlanOutcomePolicy.maintenanceTarget(entry);
       long sourceRevision = Math.max(1, entry.getFindingRevision());
       InventoryPublicationIntent intent = byFinding.get(entry.getFindingId());
       if (intent == null) {
@@ -164,8 +184,7 @@ final class InventoryOutcomeRecoveryService extends InventoryTechnicalRuntimeSup
                 desired,
                 nextReapplicationNo,
                 publicationService.frozenPassportObservation(entry));
-        intent = publications.saveAndFlush(intent);
-        publicationService.appendPublicationReady(intent, session, actor(jwt), true);
+        createdByFinding.put(entry.getFindingId(), true);
         created++;
       } else {
         intent.requeueForAuthoritativeOutcome(
@@ -178,11 +197,18 @@ final class InventoryOutcomeRecoveryService extends InventoryTechnicalRuntimeSup
           throw InventoryException.conflict(
               "Inventory outcome reapplication generation is inconsistent");
         }
-        intent = publications.saveAndFlush(intent);
-        publicationService.appendPublicationReady(intent, session, actor(jwt), false);
+        createdByFinding.put(entry.getFindingId(), false);
         requeued++;
       }
+      changed.add(intent);
     }
+    for (InventoryPublicationIntent intent : publications.saveAllAndFlush(changed)) {
+      publicationService.appendPublicationReady(
+          intent, session, actor(jwt), createdByFinding.get(intent.getFindingId()));
+    }
+    planLogistics.schedule(session, plan, entries, nextReapplicationNo);
+    cabinWriteOffs.requeue(
+        inventoryId, plan.getFinalPlanVersion(), nextReapplicationNo);
 
     FurnitureReconciliationState furnitureState = FurnitureReconciliationState.NOT_REQUIRED;
     InventoryFurnitureReconciliationIntent furniture =
@@ -199,9 +225,7 @@ final class InventoryOutcomeRecoveryService extends InventoryTechnicalRuntimeSup
         plan.getFinalPlanSha256(),
         furnitureState,
         created,
-        requeued,
-        0,
-        publicationService.publicationBatch(inventoryId));
+        requeued);
   }
 
   private InventorySession requireScopedCompleted(
@@ -227,10 +251,7 @@ final class InventoryOutcomeRecoveryService extends InventoryTechnicalRuntimeSup
   }
 
   private static InventoryAssetOutcomeStatus desiredStatus(InventoryFinalPlanEntry entry) {
-    if (!entry.isHasWork()) return InventoryAssetOutcomeStatus.FREE;
-    return entry.isForceCapitalRepair()
-        ? InventoryAssetOutcomeStatus.CAPITAL_REPAIR
-        : InventoryAssetOutcomeStatus.REPAIR;
+    return InventoryFinalPlanOutcomePolicy.desiredAssetStatus(entry);
   }
 
   private static long nextReapplicationNo(long currentReapplicationNo) {

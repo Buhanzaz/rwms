@@ -11,9 +11,13 @@ import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/re
 const auth = vi.hoisted(() => ({ getUser: vi.fn() }))
 const inventoryHttp = vi.hoisted(() => ({
   cancelInventorySession: vi.fn(),
+  confirmCabinDispositionReturns: vi.fn(),
+  confirmCabinDispositionShipments: vi.fn(),
+  getCabinDispositionReview: vi.fn(),
   getFurnitureReview: vi.fn(),
   getInventoryPreliminaryStatistics: vi.fn(),
   getInventorySession: vi.fn(),
+  listInventorySessions: vi.fn(),
   recalculateInventoryOutcome: vi.fn(),
   refreshInventorySession: vi.fn(),
   resolveInventoryNumber: vi.fn(),
@@ -39,8 +43,12 @@ vi.mock("@/features/repair-estimates/api/warehouse-queue-capabilities", () => ({
 
 import {
   cancelInventory,
+  confirmInventoryReturns,
+  confirmInventoryShipments,
+  getInventoryCabinDispositionReview,
   getInventoryFurnitureReview,
   getInventoryPreliminaryStatistics,
+  listInventories,
   recalculateInventoryOutcome,
   refreshInventorySession,
   resolveInventoryFindingConflict,
@@ -191,6 +199,44 @@ describe("inventory API", () => {
     })
   })
 
+  it("loads one bounded history page without requesting session details or findings", async () => {
+    inventoryHttp.listInventorySessions.mockResolvedValue({
+      content: [refreshedSession],
+      page: {
+        page: 3,
+        size: 50,
+        totalElements: 231,
+        totalPages: 5,
+      },
+    })
+
+    const result = await listInventories(WAREHOUSE_ID, 3)
+
+    expect(inventoryHttp.listInventorySessions).toHaveBeenCalledTimes(1)
+    expect(inventoryHttp.listInventorySessions).toHaveBeenCalledWith(
+      "inventory-token",
+      WAREHOUSE_ID,
+      3
+    )
+    expect(inventoryHttp.getInventorySession).not.toHaveBeenCalled()
+    expect(result).toEqual({
+      content: [
+        expect.objectContaining({
+          id: INVENTORY_ID,
+          expectedCount: 0,
+          findingCount: 0,
+          inspectedCount: 0,
+        }),
+      ],
+      page: {
+        page: 3,
+        size: 50,
+        totalElements: 231,
+        totalPages: 5,
+      },
+    })
+  })
+
   it("cancels with the exact session revision and a trimmed reason", async () => {
     const cancelledAt = "2026-07-27T09:00:00Z"
     inventoryHttp.cancelInventorySession.mockResolvedValue({
@@ -297,12 +343,6 @@ describe("inventory API", () => {
       furnitureReconciliationState: "PENDING" as const,
       createdPublicationCount: 75,
       requeuedPublicationCount: 89,
-      preservedSucceededPublicationCount: 52,
-      publicationBatch: {
-        inventoryId: INVENTORY_ID,
-        aggregateState: "PENDING" as const,
-        intents: [],
-      },
     }
     inventoryHttp.recalculateInventoryOutcome.mockResolvedValue(outcome)
 
@@ -446,6 +486,73 @@ describe("inventory API", () => {
     })
   })
 
+  it("passes cabin disposition reads and exact phase commands through the authenticated adapter", async () => {
+    const review = {
+      inventoryId: INVENTORY_ID,
+      sessionRevision: 8,
+      reviewRevision: 0,
+      phase: "RETURNS" as const,
+      returnCandidates: [],
+      missingCandidates: [],
+    }
+    inventoryHttp.getCabinDispositionReview.mockResolvedValue(review)
+    inventoryHttp.confirmCabinDispositionReturns.mockResolvedValue({
+      ...review,
+      reviewRevision: 1,
+      phase: "SHIPMENTS",
+    })
+    inventoryHttp.confirmCabinDispositionShipments.mockResolvedValue({
+      ...review,
+      reviewRevision: 2,
+      phase: "COMPLETED",
+    })
+
+    await getInventoryCabinDispositionReview(INVENTORY_ID)
+    await confirmInventoryReturns({
+      inventoryId: INVENTORY_ID,
+      request: {
+        expectedSessionRevision: 8,
+        expectedReviewRevision: 0,
+        returns: [],
+      },
+    })
+    await confirmInventoryShipments({
+      inventoryId: INVENTORY_ID,
+      request: {
+        expectedSessionRevision: 8,
+        expectedReviewRevision: 1,
+        shipments: [],
+      },
+    })
+
+    expect(inventoryHttp.getCabinDispositionReview).toHaveBeenCalledWith(
+      "inventory-token",
+      INVENTORY_ID
+    )
+    expect(inventoryHttp.confirmCabinDispositionReturns).toHaveBeenCalledWith({
+      accessToken: "inventory-token",
+      inventoryId: INVENTORY_ID,
+      idempotencyKey: expect.any(String),
+      request: {
+        expectedSessionRevision: 8,
+        expectedReviewRevision: 0,
+        returns: [],
+      },
+    })
+    expect(inventoryHttp.confirmCabinDispositionShipments).toHaveBeenCalledWith(
+      {
+        accessToken: "inventory-token",
+        inventoryId: INVENTORY_ID,
+        idempotencyKey: expect.any(String),
+        request: {
+          expectedSessionRevision: 8,
+          expectedReviewRevision: 1,
+          shipments: [],
+        },
+      }
+    )
+  })
+
   it("starts and saves furniture review with the current cabin finding revisions", async () => {
     const review = {
       inventoryId: INVENTORY_ID,
@@ -492,7 +599,6 @@ describe("inventory API", () => {
 
     const started = await startInventoryFurnitureReview({
       session: mappedSession,
-      acknowledgeIncomplete: true,
     })
     const loaded = await getInventoryFurnitureReview(INVENTORY_ID)
     const saved = await saveInventoryFurnitureReview({
@@ -520,7 +626,6 @@ describe("inventory API", () => {
             expectedFindingRevision: rawFinding.findingRevision,
           },
         ],
-        acknowledgeIncomplete: true,
       },
       idempotencyKey: expect.any(String),
     })

@@ -435,7 +435,7 @@ class HttpInventoryDependencyGatewayTest {
     mediaPublicationStatus.set(status);
     String expectedMessage =
         switch (status) {
-          case 409 -> "Dependency rejected stale inventory state";
+          case 409 -> "The selected repair was completed by another inventory";
           case 400, 422 -> "Dependency rejected invalid inventory input";
           default -> "Mandatory inventory dependency is unavailable";
         };
@@ -447,8 +447,14 @@ class HttpInventoryDependencyGatewayTest {
                     UUID.randomUUID(),
                     UUID.randomUUID(),
                     mapper.createObjectNode()))
-        .isInstanceOf(InventoryException.class)
-        .hasMessage(expectedMessage);
+        .isInstanceOfSatisfying(
+            InventoryException.class,
+            exception -> {
+              assertThat(exception).hasMessage(expectedMessage);
+              if (status == 409) {
+                assertThat(exception.code()).isEqualTo("MAINTENANCE_TARGET_COMPLETED");
+              }
+            });
 
     assertThat(mediaPublicationCalls.get()).isOne();
     assertThat(mediaPublicationAuthorization.get()).isEqualTo("Bearer inventory-media-token");
@@ -885,7 +891,22 @@ class HttpInventoryDependencyGatewayTest {
     mediaPublicationBody.set(body);
     Integer status = mediaPublicationStatus.get();
     if (status != null) {
-      respond(exchange, status, "{}");
+      if (status == 409) {
+        respond(
+            exchange,
+            status,
+            """
+            {"type":"https://rwms.invalid/problems/maintenance-target-completed",
+             "title":"Conflict","status":409,
+             "detail":"The selected repair was completed by another inventory",
+             "instance":"/api/internal/media/v1/inventory/outcomes",
+             "code":"MAINTENANCE_TARGET_COMPLETED","violations":[],
+             "correlation":{"correlationId":"00000000-0000-0000-0000-000000000701",
+                            "causationId":null}}
+            """);
+      } else {
+        respond(exchange, status, "{}");
+      }
       return;
     }
     JsonNode request = mapper.readTree(body);

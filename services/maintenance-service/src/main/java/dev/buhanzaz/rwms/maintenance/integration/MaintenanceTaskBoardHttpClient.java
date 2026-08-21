@@ -51,7 +51,6 @@ final class MaintenanceTaskBoardHttpClient {
       String unitNumber,
       LocalDate scheduledDate,
       int priority,
-      int dailyCapacity,
       List<TaskStage> stages) {
     String canonicalUnitNumber = requireTaskUnitNumber(unitNumber);
     TaskResponse response = transport.post(
@@ -63,15 +62,14 @@ final class MaintenanceTaskBoardHttpClient {
             sourceRepairId == null
                 ? null
                 : new TaskSourceReference("MAINTENANCE_REPAIR", sourceRepairId),
-            "Maintenance repair",
+            taskTitle(stages),
             canonicalUnitNumber,
             null,
             duration(stages),
             commonDeadline(stages),
             route(stages),
             scheduledDate,
-            priority,
-            dailyCapacity),
+            priority),
         TaskResponse.class,
         TASK_CLIENT,
         TASK_SCOPE);
@@ -98,7 +96,7 @@ final class MaintenanceTaskBoardHttpClient {
         key,
         new UpdateTaskRequest(
             expectedVersion,
-            "Maintenance repair",
+            taskTitle(stages),
             canonicalUnitNumber,
             null,
             duration(stages),
@@ -438,6 +436,21 @@ final class MaintenanceTaskBoardHttpClient {
         .toList();
   }
 
+  /** Requires one source-owned repair title across every route stage in a task package. */
+  private static String taskTitle(List<TaskStage> stages) {
+    if (stages == null || stages.isEmpty()) {
+      throw new MaintenanceDependencyException(
+          HttpStatus.UNPROCESSABLE_ENTITY, "Repair task requires at least one route stage");
+    }
+    List<String> titles = stages.stream().map(TaskStage::taskTitle).distinct().toList();
+    if (titles.size() != 1 || titles.getFirst() == null || titles.getFirst().isBlank()) {
+      throw new MaintenanceDependencyException(
+          HttpStatus.UNPROCESSABLE_ENTITY,
+          "Repair route stages must carry one common worker task title");
+    }
+    return titles.getFirst();
+  }
+
   private static Integer duration(List<TaskStage> stages) {
     if (stages == null || stages.isEmpty()) {
       throw new MaintenanceDependencyException(
@@ -532,8 +545,7 @@ final class MaintenanceTaskBoardHttpClient {
       OffsetDateTime deadlineAt,
       List<RouteStep> route,
       LocalDate scheduledDate,
-      int priority,
-      int dailyCapacity) {}
+      int priority) {}
 
   /**
    * Replaces a not-yet-started task route under the caller's observed task version; task-board

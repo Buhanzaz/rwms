@@ -30,14 +30,19 @@ final class PropertyDispositionEligibilityService {
 
   void assertCabinStatusAllowsDisposition(RentalItem cabin) {
     if (!cabinStatusAllowsDisposition(cabin)) {
-      throw new AssetConflictException("Cabin is rented, reserved, transferred, or terminal");
+      throw new AssetConflictException("Cabin is reserved, transferred, or terminal");
     }
   }
 
+  /**
+   * Evaluates only the status component of eligibility. RENTED is deliberately accepted because a
+   * completed inventory write-off marker can supersede logistics custody before the terminal
+   * maintenance decision while the rental status remains a lagging projection. Every caller also
+   * checks current reservations, foreign holds and leases under its transaction locks.
+   */
   boolean cabinStatusAllowsDisposition(RentalItem cabin) {
     RentalItemStatus status = cabin.getStatus();
     return !status.isTerminalDispositionStatus()
-        && status != RentalItemStatus.RENTED
         && status != RentalItemStatus.BOOKED
         && status != RentalItemStatus.RESERVED
         && status != RentalItemStatus.IN_TRANSFER
@@ -87,13 +92,22 @@ final class PropertyDispositionEligibilityService {
     return Boolean.TRUE.equals(active);
   }
 
-  void assertLeaseProof(UUID rentalItemId, MaintenancePropertyDispositionLeaseProof proof) {
-    LeaseRow active = activeLeaseForUpdate(rentalItemId).orElse(null);
+  /**
+   * Locks and validates the current operation lease before PREPARE. A lagging RENTED cabin cannot
+   * reuse even a maintenance lease: logistics custody must first be durably released, leaving the
+   * asset version and status untouched, before maintenance may fence the terminal decision.
+   */
+  void assertLeaseProof(RentalItem cabin, MaintenancePropertyDispositionLeaseProof proof) {
+    LeaseRow active = activeLeaseForUpdate(cabin.getId()).orElse(null);
     if (active == null) {
       if (proof != null) {
         throw new AssetConflictException("Provided maintenance lease is no longer active");
       }
       return;
+    }
+    if (cabin.getStatus() == RentalItemStatus.RENTED) {
+      throw new AssetConflictException(
+          "Inventory-marked rented cabin still has an active operation lease");
     }
     if (proof == null
         || !active.id().equals(proof.leaseId())
@@ -108,13 +122,19 @@ final class PropertyDispositionEligibilityService {
   /**
    * A prepared fence may outlive the maintenance operation lease that fenced its preparation. A
    * later lease is still a competing workflow and must block APPLY; the absence of the original
-   * lease is safe because this fence owns the cabin and content holds until terminalization.
+   * lease is safe because this fence owns the cabin and content holds until terminalization. A
+   * lagging RENTED cabin is stricter: any active lease means logistics custody returned and blocks
+   * terminalization, even if its identity matches the originally prepared maintenance proof.
    */
   void assertFenceLeaseAllowsApply(
-      UUID rentalItemId, MaintenancePropertyDispositionLeaseProof preparedProof) {
-    LeaseRow active = activeLeaseForUpdate(rentalItemId).orElse(null);
+      RentalItem cabin, MaintenancePropertyDispositionLeaseProof preparedProof) {
+    LeaseRow active = activeLeaseForUpdate(cabin.getId()).orElse(null);
     if (active == null) {
       return;
+    }
+    if (cabin.getStatus() == RentalItemStatus.RENTED) {
+      throw new AssetConflictException(
+          "Inventory-marked rented cabin acquired an active operation lease");
     }
     if (preparedProof == null
         || !active.id().equals(preparedProof.leaseId())

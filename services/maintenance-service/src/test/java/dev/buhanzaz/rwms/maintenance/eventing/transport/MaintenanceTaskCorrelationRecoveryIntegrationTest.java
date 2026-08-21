@@ -477,7 +477,6 @@ class MaintenanceTaskCorrelationRecoveryIntegrationTest {
                 org.mockito.ArgumentMatchers.nullable(String.class),
                 any(java.time.LocalDate.class),
                 anyInt(),
-                eq(6),
                 anyList()))
         .thenReturn(
             new MaintenanceDependencyGateway.TaskSnapshot(
@@ -619,7 +618,7 @@ class MaintenanceTaskCorrelationRecoveryIntegrationTest {
               "aggregateType":"BOARD_TASK","aggregateId":"%s","aggregateVersion":%d,
               "correlation":{"correlationId":"%s","causationId":null},"actorRef":null,
               "payload":{"boardTaskId":"%s","warehouseId":"%s","externalTaskId":"%s",
-              "status":"ACTIVE","scheduledDate":"%s","priority":3,"pinned":false,
+              "status":"ACTIVE","lane":"CURRENT","scheduledDate":"%s","priority":3,"pinned":false,
               "plannedDurationMinutes":20,"deadlineAt":null,"doneAt":null,
               "deleted":false}
             }

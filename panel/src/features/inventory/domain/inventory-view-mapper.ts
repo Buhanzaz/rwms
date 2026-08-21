@@ -21,6 +21,7 @@ import type {
   InventoryPublicationStatus,
   InventoryRepairPlanSnapshotDto,
   InventorySessionDto,
+  InventorySessionSummaryDto,
   InventoryStatisticsDto,
   InventoryWarehouseSnapshot,
 } from "@/features/inventory/model/inventory"
@@ -449,40 +450,44 @@ export function toInventorySessionView(input: {
   }
 }
 
+export function toInventorySessionSummaryView(
+  session: InventorySessionSummary
+): InventorySessionSummaryDto {
+  return {
+    id: session.id,
+    version: session.sessionRevision,
+    warehouseId: session.warehouseId,
+    status: session.lifecycle,
+    author: {
+      id: session.author.id,
+      displayName: session.author.displayName,
+      permissions: [],
+      authorizedWarehouseIds: null,
+    },
+    businessDate: session.businessDate,
+    startedAt: session.startedAt,
+    completedAt: session.terminalAt,
+    expectedCount: session.expectedCount,
+    findingCount: session.findingCount,
+    inspectedCount: session.inspectedCount,
+    publicationStatus: aggregatePublicationStatus(session.publicationState),
+    reviewStage: session.reviewStage,
+    furnitureReconciliationState: session.furnitureReconciliationState,
+  }
+}
+
 export function applyInventoryOutcomeRecalculation(
   session: InventorySessionDto,
   outcome: OutcomeRecalculation
 ): InventorySessionDto {
-  if (
-    outcome.inventoryId !== session.id ||
-    outcome.publicationBatch.inventoryId !== session.id
-  ) {
+  if (outcome.inventoryId !== session.id) {
     throw new Error("Сервис вернул результат для другой инвентаризации")
   }
-
-  const intentsByFindingId = new Map(
-    outcome.publicationBatch.intents.map((intent) => [intent.findingId, intent])
-  )
 
   return {
     ...session,
     version: outcome.sessionRevision,
-    publicationStatus: aggregatePublicationStatus(
-      outcome.publicationBatch.aggregateState
-    ),
     furnitureReconciliationState: outcome.furnitureReconciliationState,
-    findings: session.findings.map((finding) => {
-      const intent = intentsByFindingId.get(finding.id)
-      if (!intent) return finding
-      return {
-        ...finding,
-        publicationStatus: publicationStatus(intent),
-        publicationOperationKey: intent.id,
-        publishedRepairTaskId: intent.maintenanceRepairId,
-        desiredAssetStatus: intent.desiredAssetStatus,
-        publicationError: intent.failureCode,
-      }
-    }),
   }
 }
 

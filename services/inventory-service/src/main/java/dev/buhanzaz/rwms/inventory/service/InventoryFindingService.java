@@ -815,7 +815,7 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
       throw new InventoryException(
           HttpStatus.UNPROCESSABLE_ENTITY,
           "INVENTORY_VALIDATION_FAILED",
-          "Для приёмки бытовки после аренды загрузите хотя бы одну фотографию");
+          "Чтобы зафиксировать найденную после аренды бытовку, загрузите хотя бы одну фотографию");
     }
     validateReadyMedia(
         findingId,

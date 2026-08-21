@@ -44,10 +44,11 @@ public interface RentalOrderUnitTermRepository extends JpaRepository<RentalOrder
   List<RentalOrderUnitTerm> findAllForUpdateByRentalItemIdIn(
       @Param("assetIds") Collection<UUID> assetIds);
 
+  /** Reads remaining active terms for a complete selected order set in one query. */
   @Query(
-      "select count(term) from RentalOrderUnitTerm term where term.order.id=:orderId and"
-          + " term.inventorySupersededBy is null")
-  long countActiveByOrderId(@Param("orderId") UUID orderId);
+      "select distinct term.order.id from RentalOrderUnitTerm term where term.order.id in :orderIds"
+          + " and term.inventorySupersededBy is null")
+  List<UUID> findActiveOrderIdsByOrderIdIn(@Param("orderIds") Collection<UUID> orderIds);
 
   void deleteAllByOrder_IdAndRentalItemId(UUID orderId, UUID rentalItemId);
 }

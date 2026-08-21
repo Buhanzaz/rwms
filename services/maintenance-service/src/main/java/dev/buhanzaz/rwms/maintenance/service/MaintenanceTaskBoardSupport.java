@@ -4,6 +4,7 @@ import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.*;
 
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceRepair;
 import dev.buhanzaz.rwms.maintenance.domain.MediaFactProjection;
+import dev.buhanzaz.rwms.maintenance.domain.RepairComplexity;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStage;
 import dev.buhanzaz.rwms.maintenance.integration.MaintenanceDependencyGateway;
 import dev.buhanzaz.rwms.maintenance.repository.MaintenanceRepairRepository;
@@ -305,8 +306,18 @@ final class MaintenanceTaskBoardSupport {
     return repair;
   }
 
+  /** Builds worker snapshots with the selected repair cover first and line media linked by work ID. */
   protected List<MaintenanceDependencyGateway.TaskStage> taskStages(MaintenanceRepair repair) {
     List<MediaReferenceInput> repairMedia = new ArrayList<>(mediaSupport.repairMedia(repair));
+    String taskTitle =
+        workerTaskTitle(repairModelSupport.repairComplexityFromStoredStages(repair).type());
+    UUID coverMediaId =
+        MaintenanceMediaSupport.effectiveCoverMediaId(repair.getCoverMediaId(), repairMedia);
+    if (coverMediaId != null) {
+      repairMedia.sort(
+          Comparator.comparingInt(
+              reference -> coverMediaId.equals(reference.mediaId()) ? 0 : 1));
+    }
     return repairStages.findAllByRepairIdOrderByStageNo(repair.getId()).stream()
         .map(
             stage -> {
@@ -363,9 +374,20 @@ final class MaintenanceTaskBoardSupport {
                   sourceMedia.values().stream()
                       .map(reference -> taskSourceMedia(reference, repair.getCreatedAt()))
                       .toList(),
-                  plannedDurationMinutes(work));
+                  plannedDurationMinutes(work),
+                  taskTitle);
             })
         .toList();
+  }
+
+  /** Maps maintenance-owned complexity to the concise WorkerApp repair title. */
+  static String workerTaskTitle(RepairComplexity complexity) {
+    return switch (complexity) {
+      case LIGHT -> "Лёгкий ремонт";
+      case MEDIUM -> "Средний ремонт";
+      case COMPLEX -> "Сложный ремонт";
+      case CAPITAL -> "Капитальный ремонт";
+    };
   }
 
   protected static List<MaintenanceDependencyGateway.TaskWork> taskWorkSnapshots(

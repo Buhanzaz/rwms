@@ -103,6 +103,7 @@ final class LogisticsMaintenanceDependencyClient {
       UUID rentalItemId,
       long rentalItemVersion,
       LocalDate dispatchDate,
+      OffsetDateTime arrivedAt,
       List<MediaReference> mediaReferences) {
     ReturnEstimateSourceResponse response =
         transport.putWithoutIdempotency(
@@ -112,6 +113,7 @@ final class LogisticsMaintenanceDependencyClient {
                 rentalItemId,
                 rentalItemVersion,
                 dispatchDate,
+                arrivedAt,
                 mediaReferences.stream()
                     .map(
                         reference ->
@@ -439,6 +441,7 @@ final class LogisticsMaintenanceDependencyClient {
       UUID rentalItemId,
       long rentalItemVersion,
       LocalDate dispatchDate,
+      OffsetDateTime arrivedAt,
       List<MaintenanceMediaReferenceRequest> mediaReferences) {}
 
   /**

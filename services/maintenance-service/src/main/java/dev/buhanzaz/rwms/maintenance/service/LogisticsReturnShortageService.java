@@ -49,6 +49,18 @@ public class LogisticsReturnShortageService {
                     request.rentalItemId(),
                     request.rentalItemVersion(),
                     request.dispatchDate(),
+                    request.arrivedAt(),
+                    mediaReferences)));
+    String legacySourceSha256 =
+        sha256(
+            write(
+                new LegacySourceFingerprint(
+                    returnId,
+                    lineId,
+                    request.warehouseId(),
+                    request.rentalItemId(),
+                    request.rentalItemVersion(),
+                    request.dispatchDate(),
                     mediaReferences)));
     LogisticsReturnShortage candidate =
         LogisticsReturnShortage.receive(
@@ -56,6 +68,7 @@ public class LogisticsReturnShortageService {
             request.warehouseId(),
             request.rentalItemId(),
             request.rentalItemVersion(),
+            request.arrivedAt(),
             sourceSha256,
             snapshotSha256,
             snapshot);
@@ -74,7 +87,9 @@ public class LogisticsReturnShortageService {
                     new MaintenanceConflictException(
                         "LOGISTICS_RETURN_ESTIMATE_SOURCE_CONCURRENT_WRITE",
                         "Logistics return estimate source was not persisted"));
-    if (!sourceSha256.equals(source.getSourceSha256())) {
+    boolean historicalReplay =
+        source.getArrivedAt() == null && legacySourceSha256.equals(source.getSourceSha256());
+    if (!sourceSha256.equals(source.getSourceSha256()) && !historicalReplay) {
       throw new MaintenanceConflictException(
           "LOGISTICS_RETURN_ESTIMATE_SOURCE_CONFLICT",
           "Return-line source is already bound to a different immutable estimate source");
@@ -152,7 +167,19 @@ public class LogisticsReturnShortageService {
 
   public record UpsertResult(ReturnEstimateSource response, boolean replayed) {}
 
+  /** Current immutable source identity, including logistics-owned physical arrival time. */
   private record SourceFingerprint(
+      UUID returnId,
+      UUID lineId,
+      UUID warehouseId,
+      UUID rentalItemId,
+      long rentalItemVersion,
+      java.time.LocalDate dispatchDate,
+      java.time.OffsetDateTime arrivedAt,
+      List<MediaReferenceInput> mediaReferences) {}
+
+  /** Pre-V46 fingerprint retained only so an already-created immutable source can still replay. */
+  private record LegacySourceFingerprint(
       UUID returnId,
       UUID lineId,
       UUID warehouseId,

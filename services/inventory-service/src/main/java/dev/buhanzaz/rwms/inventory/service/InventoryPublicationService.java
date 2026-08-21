@@ -9,8 +9,10 @@ import dev.buhanzaz.rwms.inventory.domain.FindingPlanSnapshot;
 import dev.buhanzaz.rwms.inventory.domain.FurnitureReconciliationState;
 import dev.buhanzaz.rwms.inventory.domain.InspectionState;
 import dev.buhanzaz.rwms.inventory.domain.InventoryAssetOutcomeStatus;
+import dev.buhanzaz.rwms.inventory.domain.InventoryCabinDispositionKind;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlan;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlanEntry;
+import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlanOutcomePolicy;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinding;
 import dev.buhanzaz.rwms.inventory.domain.InventoryPublicationAttempt;
 import dev.buhanzaz.rwms.inventory.domain.InventoryPublicationAttemptResult;
@@ -35,6 +37,7 @@ import dev.buhanzaz.rwms.inventory.repository.InventorySessionRepository;
 import dev.buhanzaz.rwms.inventory.security.InventoryAuthorizer;
 import dev.buhanzaz.rwms.platform.contracts.OpaqueActorReference;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -66,6 +69,11 @@ import tools.jackson.databind.node.ObjectNode;
  */
 @Service
 final class InventoryPublicationService extends InventoryPublicationWorkflowSupport {
+  private static final int MAX_AUTOMATIC_ATTEMPTS = 8;
+  private static final Duration INITIAL_RETRY_DELAY = Duration.ofSeconds(5);
+  private static final Duration MAX_RETRY_DELAY = Duration.ofMinutes(5);
+  private final InventoryPlanLogisticsReconciliationService planLogistics;
+
   InventoryPublicationService(
       InventorySessionRepository sessions,
       InventoryFindingRepository findings,
@@ -78,6 +86,7 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
       FindingPlanSnapshotRepository planSnapshots,
       FindingMediaReferenceRepository mediaReferences,
       InventoryDependencyGateway dependencies,
+      InventoryPlanLogisticsReconciliationService planLogistics,
       InventoryEventStore events,
       InventoryIdempotencyPort idempotency,
       InventoryPlanningService planningService,
@@ -106,6 +115,7 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
         canonicalJson,
         authorizer,
         transactionManager);
+    this.planLogistics = planLogistics;
   }
 
   public PublicationBatch publish(
@@ -237,19 +247,25 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
       InventoryFinalPlan finalPlan,
       List<InventoryFinalPlanEntry> entries,
       OpaqueActorReference actor) {
+    if (!entries.isEmpty()) {
+      planLogistics.schedule(session, finalPlan, entries, 0);
+    }
+    List<InventoryPublicationIntent> created = new ArrayList<>(entries.size());
     for (InventoryFinalPlanEntry entry : entries) {
+      if (!InventoryFinalPlanOutcomePolicy.assetPublicationRequired(entry)) continue;
       InventoryAssetOutcomeStatus desiredStatus = desiredStatus(entry);
-      InventoryPublicationIntent intent =
-          publications.saveAndFlush(
-              InventoryPublicationIntent.readyForOutcome(
-                  session.getId(),
-                  entry.getFindingId(),
-                  Math.max(1, entry.getFindingRevision()),
-                  finalPlan.getFinalPlanVersion(),
-                  finalPlan.getFinalPlanSha256(),
-                  entry.isHasWork() ? FinalPlanTargetKind.REPAIR : null,
-                  desiredStatus,
-                  frozenPassportObservation(entry)));
+      created.add(
+          InventoryPublicationIntent.readyForOutcome(
+              session.getId(),
+              entry.getFindingId(),
+              Math.max(1, entry.getFindingRevision()),
+              finalPlan.getFinalPlanVersion(),
+              finalPlan.getFinalPlanSha256(),
+              InventoryFinalPlanOutcomePolicy.maintenanceTarget(entry),
+              desiredStatus,
+              frozenPassportObservation(entry)));
+    }
+    for (InventoryPublicationIntent intent : publications.saveAllAndFlush(created)) {
       if (intent.getState() == PublicationState.READY) {
         appendPublicationReady(intent, session, actor, true);
       }
@@ -373,41 +389,6 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
     }
   }
 
-  /**
-   * Completion writes READY intents inside its terminal transaction and dispatches only after the
-   * transaction commits. A process failure in between therefore leaves a durable READY intent for
-   * the scheduler, while a failure after the PENDING transition reuses its durable attempt key.
-   */
-  void dispatchReadyPublications(UUID inventoryId) {
-    InventorySession session;
-    try {
-      session = requireCompleted(inventoryId);
-    } catch (RuntimeException exception) {
-      log.error("Unable to load completed inventory {} for publication dispatch", inventoryId, exception);
-      return;
-    }
-    for (InventoryPublicationIntent intent :
-        publications.findAllByInventoryIdOrderByFindingId(inventoryId)) {
-      if (intent.getState() != PublicationState.READY) continue;
-      try {
-        dispatchPublication(
-            PUBLICATION_RECOVERY_ACTOR,
-            session,
-            intent,
-            servicePublicationIdempotencyKey(intent),
-            false,
-            null);
-      } catch (RuntimeException exception) {
-        // The ready intent is durable and will be picked up by the recovery scheduler.
-        log.error(
-            "Unable to dispatch ready inventory publication {} for inventory {}",
-            intent.getId(),
-            inventoryId,
-            exception);
-      }
-    }
-  }
-
   UUID servicePublicationIdempotencyKey(InventoryPublicationIntent intent) {
     return UUID.nameUUIDFromBytes(
         ("rwms:inventory-service:publication:"
@@ -440,16 +421,23 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
           InventoryPublicationIntent intent =
               requirePublicationForUpdate(session.getId(), findingId);
           if (intent.getState() != PublicationState.PENDING) return;
-          boolean blocked = exception.status() == HttpStatus.CONFLICT;
-          if (blocked) intent.block("SOURCE_PRECONDITION_CONFLICT");
-          else intent.transientFailure();
+          boolean semantic = semanticRejection(exception);
+          boolean exhausted =
+              !semantic && intent.getGenerationAttemptCount() >= MAX_AUTOMATIC_ATTEMPTS;
+          boolean blocked = semantic || exhausted;
+          String failureCode =
+              semantic
+                  ? publicationFailureCode(exception)
+                  : exhausted ? "PUBLICATION_RETRY_EXHAUSTED" : "DEPENDENCY_UNAVAILABLE";
+          if (blocked) intent.block(failureCode);
+          else intent.transientFailure(nextRetryAt(intent.getGenerationAttemptCount()));
           InventoryPublicationIntent saved = publications.saveAndFlush(intent);
           insertPublicationAttempt(
               saved,
               idempotencyKey,
               reconcile,
               blocked ? "BLOCKED" : "TRANSIENT_FAILED",
-              blocked ? "SOURCE_PRECONDITION_CONFLICT" : "DEPENDENCY_UNAVAILABLE",
+              failureCode,
               null);
           appendPublication(
               saved,
@@ -464,15 +452,14 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
   /** Reclaims publication intents whose durable state requires another at-least-once dispatch. */
   @Scheduled(fixedDelayString = "${rwms.inventory.publication-recovery-delay-ms:5000}")
   public void recoverPendingPublications() {
-    for (InventoryPublicationIntent transientFailure :
-        publications.findTop20ByStateOrderByUpdatedAtAsc(PublicationState.TRANSIENT_FAILED)) {
-      recoverRetryablePublication(transientFailure);
+    OffsetDateTime current = OffsetDateTime.now(ZoneOffset.UTC);
+    for (InventoryPublicationIntent retryable :
+        publications
+            .findTop20ByStateInAndNextAttemptAtLessThanEqualOrderByNextAttemptAtAscIdAsc(
+                Set.of(PublicationState.READY, PublicationState.TRANSIENT_FAILED), current)) {
+      recoverRetryablePublication(retryable);
     }
-    for (InventoryPublicationIntent ready :
-        publications.findTop20ByStateOrderByUpdatedAtAsc(PublicationState.READY)) {
-      recoverRetryablePublication(ready);
-    }
-    OffsetDateTime eligibleBefore = OffsetDateTime.now(ZoneOffset.UTC).minusSeconds(30);
+    OffsetDateTime eligibleBefore = current.minusSeconds(30);
     for (InventoryPublicationIntent pending :
         publications.findTop20ByStateOrderByUpdatedAtAsc(PublicationState.PENDING)) {
       try {
@@ -524,8 +511,25 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
     }
   }
 
-  void recoverReadyPublication(InventoryPublicationIntent ready) {
-    recoverRetryablePublication(ready);
+  private static boolean semanticRejection(InventoryException exception) {
+    return switch (exception.status()) {
+      case BAD_REQUEST, NOT_FOUND, CONFLICT, UNPROCESSABLE_ENTITY -> true;
+      default -> false;
+    };
+  }
+
+  private static OffsetDateTime nextRetryAt(int generationAttemptCount) {
+    int exponent = Math.min(6, Math.max(0, generationAttemptCount - 1));
+    Duration delay = INITIAL_RETRY_DELAY.multipliedBy(1L << exponent);
+    if (delay.compareTo(MAX_RETRY_DELAY) > 0) delay = MAX_RETRY_DELAY;
+    return OffsetDateTime.now(ZoneOffset.UTC).plus(delay);
+  }
+
+  private static String publicationFailureCode(InventoryException exception) {
+    String code = exception.code();
+    return code != null && code.matches("^[A-Z][A-Z0-9_]{0,63}$")
+        ? code
+        : "SOURCE_PRECONDITION_CONFLICT";
   }
 
   private void recoverRetryablePublication(InventoryPublicationIntent retryable) {
@@ -557,11 +561,17 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
                   .orElseThrow(
                       () -> new IllegalStateException("Pending publication has no durable attempt"));
           InventorySession session = requireCompleted(intent.getInventoryId());
-          boolean blocked = exception.status() == HttpStatus.CONFLICT;
-          if (blocked) intent.block("SOURCE_PRECONDITION_CONFLICT");
-          else intent.transientFailure();
+          boolean semantic = semanticRejection(exception);
+          boolean exhausted =
+              !semantic && intent.getGenerationAttemptCount() >= MAX_AUTOMATIC_ATTEMPTS;
+          boolean blocked = semantic || exhausted;
+          String failureCode =
+              semantic
+                  ? publicationFailureCode(exception)
+                  : exhausted ? "PUBLICATION_RETRY_EXHAUSTED" : "DEPENDENCY_UNAVAILABLE";
+          if (blocked) intent.block(failureCode);
+          else intent.transientFailure(nextRetryAt(intent.getGenerationAttemptCount()));
           InventoryPublicationIntent saved = publications.saveAndFlush(intent);
-          String failureCode = blocked ? "SOURCE_PRECONDITION_CONFLICT" : "DEPENDENCY_UNAVAILABLE";
           insertPublicationAttempt(
               saved,
               attempt.getIdempotencyKey(),
@@ -621,7 +631,7 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
         || entry.getAssetId() == null
         || entry.getAssetVersion() == null
         || intent.getDesiredAssetStatus() != desiredStatus
-        || intent.getTargetKind() != (entry.isHasWork() ? FinalPlanTargetKind.REPAIR : null)) {
+        || intent.getTargetKind() != InventoryFinalPlanOutcomePolicy.maintenanceTarget(entry)) {
       throw InventoryException.conflict("Publication final-plan outcome evidence is invalid");
     }
     ObjectNode request = mapper.createObjectNode();
@@ -633,6 +643,16 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
     assetOutcome.put("finalPlanSha256", intent.getFinalPlanSha256());
     assetOutcome.put("findingRevision", entry.getFindingRevision());
     assetOutcome.put("desiredStatus", desiredStatus.name());
+    JsonNode dispositionDetails = read(entry.getDispositionDetails());
+    if (entry.getDispositionKind() == InventoryCabinDispositionKind.SHIPMENT) {
+      JsonNode furniture = dispositionDetails.path("shipment").path("furniture");
+      if (!furniture.isArray()) {
+        throw InventoryException.conflict("Shipment furniture evidence is invalid");
+      }
+      assetOutcome.set("shipmentContents", furniture);
+    } else {
+      assetOutcome.putNull("shipmentContents");
+    }
     JsonNode passportObservation = normalizedPassportObservation(intent);
     assetOutcome.set("passportObservation", passportObservation);
     assetOutcome.put(
@@ -640,7 +660,6 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
     JsonNode cabinPhotos = completedFindingPhotoRequest(session, intent, entry);
     if (cabinPhotos == null) request.putNull("cabinPhotos");
     else request.set("cabinPhotos", cabinPhotos);
-    request.set("logistics", completedPlanLogisticsRequest(session, intent));
     if (!entry.isHasWork()) {
       request.putNull("maintenance");
       return request;
@@ -782,37 +801,11 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
     return List.copyOf(normalized);
   }
 
-  private ObjectNode completedPlanLogisticsRequest(
-      InventorySession session, InventoryPublicationIntent intent) {
-    List<InventoryFinalPlanEntry> entries =
-        finalPlanEntries.findByInventoryIdAndFinalPlanVersionOrderByOrderAscFindingIdAsc(
-            session.getId(), intent.getFinalPlanVersion());
-    if (entries.isEmpty()) {
-      throw InventoryException.conflict("Publication final plan has no outcomes");
-    }
-    ObjectNode request = mapper.createObjectNode();
-    request.put("warehouseId", session.getWarehouseId().toString());
-    request.put("inventoryCompletedAt", session.getCompletedAt().toString());
-    request.put("finalPlanVersion", intent.getFinalPlanVersion());
-    request.put("finalPlanSha256", intent.getFinalPlanSha256());
-    ArrayNode outcomes = request.putArray("outcomes");
-    for (InventoryFinalPlanEntry entry : entries) {
-      if (entry.getAssetId() == null) {
-        throw InventoryException.conflict("Publication final-plan asset identity is missing");
-      }
-      outcomes
-          .addObject()
-          .put("findingId", entry.getFindingId().toString())
-          .put("assetId", entry.getAssetId().toString())
-          .put("desiredStatus", desiredStatus(entry).name());
-    }
-    return request;
-  }
-
   private JsonNode completedFindingPhotoRequest(
       InventorySession session,
       InventoryPublicationIntent intent,
       InventoryFinalPlanEntry entry) {
+    if (entry.getDispositionKind() != InventoryCabinDispositionKind.LOCAL) return null;
     List<FindingMediaReference> images =
         mediaReferences
             .findAllByFindingIdAndFindingRevisionOrderByMediaIdAscGenerationAsc(
@@ -897,16 +890,18 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
               session.getId(), intent.getFindingId(), ownerEffectKey, cabinPhotos);
       requireMatchingCabinPhotoOutcome(session, intent, cabinPhotos, photoOutcome);
     }
-    JsonNode logisticsSource = request.get("logistics");
-    if (logisticsSource == null || !logisticsSource.isObject()) {
-      throw InventoryException.conflict("Authoritative logistics outcomes request is missing");
-    }
-    JsonNode logisticsOutcome =
-        dependencies.applyLogisticsOutcomes(
-            session.getId(), completedPlanLogisticsKey(session, intent), logisticsSource);
-    requireMatchingLogisticsOutcome(session, intent, logisticsOutcome);
+    planLogistics.requireApplied(session, intent);
     JsonNode maintenanceSource = request.get("maintenance");
     if (maintenanceSource == null || maintenanceSource.isNull()) {
+      InventoryFinalPlanEntry entry =
+          finalPlanEntries
+              .findByInventoryIdAndFinalPlanVersionAndFindingId(
+                  session.getId(), intent.getFinalPlanVersion(), intent.getFindingId())
+              .orElseThrow(
+                  () -> InventoryException.conflict("Publication final-plan finding is missing"));
+      if (entry.getDispositionKind() == InventoryCabinDispositionKind.SHIPMENT) {
+        return new PublicationTarget(null);
+      }
       ObjectNode noWorkRequest = completedNoWorkRequest(assetRequest, assetOutcome.assetVersion());
       JsonNode noWorkOutcome =
           dependencies.applyNoWorkDisposition(
@@ -942,21 +937,6 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
     return request;
   }
 
-  private UUID completedPlanLogisticsKey(
-      InventorySession session, InventoryPublicationIntent intent) {
-    long reapplicationNo = requireSharedPlanReapplicationNo(session, intent);
-    return UUID.nameUUIDFromBytes(
-        ("rwms:inventory-service:logistics-outcomes:"
-                + session.getId()
-                + ":"
-                + intent.getFinalPlanVersion()
-                + ":"
-                + intent.getFinalPlanSha256()
-                + ":reapplication:"
-                + reapplicationNo)
-            .getBytes(StandardCharsets.UTF_8));
-  }
-
   private UUID authoritativeOutcomeIdempotencyKey(InventoryPublicationIntent intent) {
     return UUID.nameUUIDFromBytes(
         ("rwms:inventory-service:authoritative-outcome:"
@@ -964,36 +944,6 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
                 + ":reapplication:"
                 + intent.getOutcomeReapplicationNo())
             .getBytes(StandardCharsets.UTF_8));
-  }
-
-  private long requireSharedPlanReapplicationNo(
-      InventorySession session, InventoryPublicationIntent intent) {
-    Map<UUID, InventoryPublicationIntent> byFinding = new LinkedHashMap<>();
-    publications
-        .findAllByInventoryIdOrderByFindingId(session.getId())
-        .forEach(value -> byFinding.put(value.getFindingId(), value));
-    for (InventoryFinalPlanEntry entry :
-        finalPlanEntries.findByInventoryIdAndFinalPlanVersionOrderByOrderAscFindingIdAsc(
-            session.getId(), intent.getFinalPlanVersion())) {
-      InventoryPublicationIntent planIntent = byFinding.get(entry.getFindingId());
-      if (planIntent == null
-          || !intent.getFinalPlanVersion().equals(planIntent.getFinalPlanVersion())
-          || !intent.getFinalPlanSha256().equals(planIntent.getFinalPlanSha256())
-          || intent.getOutcomeReapplicationNo() != planIntent.getOutcomeReapplicationNo()) {
-        throw InventoryException.conflict(
-            "Inventory outcome reapplication generation is inconsistent");
-      }
-    }
-    return intent.getOutcomeReapplicationNo();
-  }
-
-  private void requireMatchingLogisticsOutcome(
-      InventorySession session, InventoryPublicationIntent intent, JsonNode result) {
-    if (!result.isObject()
-        || !session.getId().toString().equals(result.path("inventoryId").asText())
-        || result.path("finalPlanVersion").asLong(-1) != intent.getFinalPlanVersion()) {
-      throw InventoryException.dependency("Logistics-service returned mismatched inventory outcomes");
-    }
   }
 
   private void requireMatchingNoWorkOutcome(
@@ -1216,10 +1166,7 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
   }
 
   private static InventoryAssetOutcomeStatus desiredStatus(InventoryFinalPlanEntry entry) {
-    if (!entry.isHasWork()) return InventoryAssetOutcomeStatus.FREE;
-    return entry.isForceCapitalRepair()
-        ? InventoryAssetOutcomeStatus.CAPITAL_REPAIR
-        : InventoryAssetOutcomeStatus.REPAIR;
+    return InventoryFinalPlanOutcomePolicy.desiredAssetStatus(entry);
   }
 
   /**

@@ -148,7 +148,8 @@ class AssetOpenApiParityTest {
             "findingRevision",
             "desiredStatus",
             "passportObservation",
-            "passportObservationSha256");
+            "passportObservationSha256",
+            "shipmentContents");
     Map<String, Object> passportObservation =
         child(schemas, "InventoryOutcomePassportObservation");
     assertThat(list(passportObservation.get("oneOf"))).hasSize(2);
@@ -163,7 +164,14 @@ class AssetOpenApiParityTest {
             "characteristics",
             "linoleum");
     assertThat(list(child(schemas, "InventoryOutcomeStatus").get("enum")))
-        .containsExactly("FREE", "REPAIR", "CAPITAL_REPAIR");
+        .containsExactly("FREE", "REPAIR", "CAPITAL_REPAIR", "RENTED");
+    Map<String, Object> shipmentContent = child(schemas, "InventoryOutcomeShipmentContent");
+    assertThat(list(shipmentContent.get("required")))
+        .containsExactly("equipmentId", "catalogVersion", "quantity");
+    assertThat(child(shipmentContent, "properties").keySet())
+        .containsExactly("equipmentId", "catalogVersion", "quantity");
+    assertThat(child(child(inventoryOutcomeRequest, "properties"), "shipmentContents").toString())
+        .contains("InventoryOutcomeShipmentContent", "type=null", "maxItems=100");
     assertThat(list(child(schemas, "InventoryOutcomeResponse").get("required")))
         .containsExactly(
             "inventoryId",

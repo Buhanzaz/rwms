@@ -153,7 +153,6 @@ final class LogisticsTaskBoardDependencyClient {
                 List.of(new DriverRouteStepRequest(queueDefinitionId, description, null)),
                 scheduledDate,
                 priority,
-                null,
                 new DriverTaskSourceRequest("LOGISTICS_DRIVER_TASK", sourceId),
                 "SCHEDULED",
                 audienceRequest(driverAudience)),
@@ -556,8 +555,8 @@ final class LogisticsTaskBoardDependencyClient {
       UUID queueDefinitionId, String taskText, Integer plannedDurationMinutes) {}
 
   /**
-   * Complete driver-task registration command carrying scheduling, route, capacity, source, and
-   * lane data owned by the logistics workflow.
+   * Complete driver-task registration command carrying scheduling, route, source, lane, and
+   * driver-audience data owned by the logistics workflow.
    */
   private record RegisterDriverTaskRequest(
       UUID warehouseId,
@@ -570,7 +569,6 @@ final class LogisticsTaskBoardDependencyClient {
       List<DriverRouteStepRequest> route,
       LocalDate scheduledDate,
       Integer priority,
-      Integer dailyCapacity,
       DriverTaskSourceRequest source,
       String lane,
       DriverTaskAudienceRequest driverAudience) {}

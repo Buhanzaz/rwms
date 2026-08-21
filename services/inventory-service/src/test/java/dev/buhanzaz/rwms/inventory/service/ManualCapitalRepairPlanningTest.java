@@ -11,6 +11,7 @@ import dev.buhanzaz.rwms.inventory.domain.FinalPlanTargetKind;
 import dev.buhanzaz.rwms.inventory.domain.FindingPlanSnapshot;
 import dev.buhanzaz.rwms.inventory.domain.InspectionState;
 import dev.buhanzaz.rwms.inventory.domain.InventoryAssetOutcomeStatus;
+import dev.buhanzaz.rwms.inventory.domain.InventoryCabinDispositionKind;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlan;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlanEntry;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinding;
@@ -33,6 +34,7 @@ import dev.buhanzaz.rwms.inventory.security.InventoryAuthorizer;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -46,7 +48,7 @@ class ManualCapitalRepairPlanningTest {
   private static final String FINAL_PLAN_HASH = "b".repeat(64);
 
   @Test
-  void finalPlanUpdateRetainsFrozenCapitalRepairChoice() {
+  void finalPlanUpdateRoutesAfterRentWorkDirectlyToRepairAndRetainsCapitalChoice() {
     UUID inventoryId = UUID.randomUUID();
     UUID findingId = UUID.randomUUID();
     InventoryFinding finding = stagedFinding(inventoryId, findingId, 2);
@@ -63,7 +65,22 @@ class ManualCapitalRepairPlanningTest {
         .thenReturn(Optional.of(snapshot));
     when(fingerprint.sha256(org.mockito.ArgumentMatchers.any(JsonNode.class)))
         .thenReturn(PLAN_HASH);
-    InventoryPlanningService service = planningService(findings, snapshots, fingerprint);
+    InventoryCabinDispositionService cabinDispositions =
+        mock(InventoryCabinDispositionService.class);
+    UUID assetId = finding.getAssetId();
+    when(cabinDispositions.requireCompleted(session, List.of(finding)))
+        .thenReturn(
+            Map.of(
+                findingId,
+                new InventoryCabinDispositionService.DispositionSnapshot(
+                    findingId,
+                    2,
+                    assetId,
+                    7L,
+                    InventoryCabinDispositionKind.LOCAL,
+                    "{\"formerRental\":null}")));
+    InventoryPlanningService service =
+        planningService(findings, snapshots, fingerprint, cabinDispositions);
 
     List<InventoryPlanningService.FinalPlanDraft> updated =
         service.updateFinalPlanDrafts(
@@ -80,6 +97,7 @@ class ManualCapitalRepairPlanningTest {
                     null)));
     InventoryFinalPlanEntry persisted = service.finalPlanEntry(inventoryId, 3, updated.getFirst());
 
+    assertThat(persisted.getTargetKind()).isEqualTo(FinalPlanTargetKind.REPAIR);
     assertThat(persisted.isForceCapitalRepair()).isTrue();
     assertThat(service.finalPlanEntryView(persisted).forceCapitalRepair()).isTrue();
   }
@@ -234,7 +252,8 @@ class ManualCapitalRepairPlanningTest {
   private InventoryPlanningService planningService(
       InventoryFindingRepository findings,
       FindingPlanSnapshotRepository snapshots,
-      InventoryFrozenPlanFingerprint fingerprint) {
+      InventoryFrozenPlanFingerprint fingerprint,
+      InventoryCabinDispositionService cabinDispositions) {
     return new InventoryPlanningService(
         mock(InventorySessionRepository.class),
         findings,
@@ -246,6 +265,7 @@ class ManualCapitalRepairPlanningTest {
         mock(InventoryDependencyGateway.class),
         mock(InventoryIdempotencyPort.class),
         fingerprint,
+        cabinDispositions,
         JsonMapper.builder().findAndAddModules().build(),
         mock(InventoryCanonicalJsonPort.class),
         mock(InventoryAuthorizer.class),
@@ -271,6 +291,7 @@ class ManualCapitalRepairPlanningTest {
         snapshots,
         mock(FindingMediaReferenceRepository.class),
         mock(InventoryDependencyGateway.class),
+        mock(InventoryPlanLogisticsReconciliationService.class),
         mock(InventoryEventStore.class),
         mock(InventoryIdempotencyPort.class),
         planning,

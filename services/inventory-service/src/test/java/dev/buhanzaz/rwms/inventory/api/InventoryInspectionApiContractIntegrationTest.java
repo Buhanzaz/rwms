@@ -258,6 +258,7 @@ class InventoryInspectionApiContractIntegrationTest {
                 .toString());
     assertThat(inspection.statusCode()).withFailMessage(inspection.body()).isEqualTo(200);
     long findingRevision = mapper.readTree(inspection.body()).required("findingRevision").asLong();
+    completeCabinDispositionReview(fixture);
 
     String snapshotSha256 = "3".repeat(64);
     when(dependencies.furnitureSnapshot(fixture.warehouseId(), List.of(fixture.assetId())))
@@ -268,7 +269,6 @@ class InventoryInspectionApiContractIntegrationTest {
                 List.of()));
     ObjectNode start = mapper.createObjectNode();
     start.put("expectedSessionRevision", 0);
-    start.put("acknowledgeIncomplete", false);
     start.putArray("findingRevisions")
         .addObject()
         .put("findingId", fixture.findingId().toString())
@@ -384,7 +384,6 @@ class InventoryInspectionApiContractIntegrationTest {
             fixture.inventoryId());
     ObjectNode restart = mapper.createObjectNode();
     restart.put("expectedSessionRevision", review.sessionRevision());
-    restart.put("acknowledgeIncomplete", false);
     restart
         .putArray("findingRevisions")
         .addObject()
@@ -441,6 +440,7 @@ class InventoryInspectionApiContractIntegrationTest {
     assertThat(accepted.statusCode()).withFailMessage(accepted.body()).isEqualTo(200);
     long acceptedFindingRevision =
         mapper.readTree(accepted.body()).required("findingRevision").asLong();
+    completeCabinDispositionReview(fixture);
 
     String emptySnapshotSha256 = "a".repeat(64);
     when(dependencies.furnitureSnapshot(fixture.warehouseId(), List.of()))
@@ -449,7 +449,6 @@ class InventoryInspectionApiContractIntegrationTest {
                 fixture.warehouseId(), emptySnapshotSha256, List.of()));
     ObjectNode start = mapper.createObjectNode();
     start.put("expectedSessionRevision", 0);
-    start.put("acknowledgeIncomplete", false);
     start
         .putArray("findingRevisions")
         .addObject()
@@ -505,6 +504,15 @@ class InventoryInspectionApiContractIntegrationTest {
   @Test
   void rejectsFurnitureSnapshotThatOmitsASelectedCabin() throws Exception {
     Fixture fixture = fixture("READY");
+    HttpResponse<String> inspection =
+        request(
+            inspectionPath(fixture),
+            requestBody(fixture, ObservationPresence.EXPLICIT_EMPTY, mapper.createArrayNode())
+                .toString());
+    assertThat(inspection.statusCode()).withFailMessage(inspection.body()).isEqualTo(200);
+    long findingRevision =
+        mapper.readTree(inspection.body()).required("findingRevision").asLong();
+    completeCabinDispositionReview(fixture);
     UUID equipmentId = UUID.randomUUID();
     when(dependencies.furnitureSnapshot(fixture.warehouseId(), List.of(fixture.assetId())))
         .thenReturn(
@@ -516,11 +524,10 @@ class InventoryInspectionApiContractIntegrationTest {
                         equipmentId, 1L, "Стол", 0L, 0L, List.of()))));
     ObjectNode start = mapper.createObjectNode();
     start.put("expectedSessionRevision", 0);
-    start.put("acknowledgeIncomplete", true);
     start.putArray("findingRevisions")
         .addObject()
         .put("findingId", fixture.findingId().toString())
-        .put("expectedFindingRevision", 0);
+        .put("expectedFindingRevision", findingRevision);
 
     HttpResponse<String> response =
         post(
@@ -640,10 +647,10 @@ class InventoryInspectionApiContractIntegrationTest {
     assertThat(inspection.statusCode()).withFailMessage(inspection.body()).isEqualTo(200);
     long inspectionFindingRevision =
         mapper.readTree(inspection.body()).required("findingRevision").asLong();
+    completeCabinDispositionReview(fixture);
 
     ObjectNode start = mapper.createObjectNode();
     start.put("expectedSessionRevision", 0);
-    start.put("acknowledgeIncomplete", false);
     start
         .putArray("findingRevisions")
         .addObject()
@@ -1048,13 +1055,13 @@ class InventoryInspectionApiContractIntegrationTest {
     assertThat(inspection.statusCode()).withFailMessage(inspection.body()).isEqualTo(200);
     long inspectionFindingRevision =
         mapper.readTree(inspection.body()).required("findingRevision").asLong();
+    completeCabinDispositionReview(fixture);
     when(dependencies.furnitureSnapshot(fixture.warehouseId(), List.of(fixture.assetId())))
         .thenReturn(
             new InventoryDependencyGateway.FurnitureSnapshot(
                 fixture.warehouseId(), snapshotSha256, List.of()));
     ObjectNode start = mapper.createObjectNode();
     start.put("expectedSessionRevision", 0);
-    start.put("acknowledgeIncomplete", false);
     start.putArray("findingRevisions")
         .addObject()
         .put("findingId", fixture.findingId().toString())
@@ -1083,6 +1090,50 @@ class InventoryInspectionApiContractIntegrationTest {
             "select finding_revision from inventory_finding where id=?",
             Long.class,
             fixture.findingId()));
+  }
+
+  /** Completes the mandatory server-owned cabin disposition phases for furniture tests. */
+  private void completeCabinDispositionReview(Fixture fixture) throws Exception {
+    String path =
+        "/api/inventory/v1/sessions/"
+            + fixture.inventoryId()
+            + "/cabin-disposition-review";
+    HttpResponse<String> loaded = get(path);
+    assertThat(loaded.statusCode()).withFailMessage(loaded.body()).isEqualTo(200);
+    JsonNode review = mapper.readTree(loaded.body());
+    if ("RETURNS".equals(review.required("phase").asText())) {
+      ObjectNode request = mapper.createObjectNode();
+      request.put("expectedSessionRevision", review.required("sessionRevision").asLong());
+      request.put("expectedReviewRevision", review.required("reviewRevision").asLong());
+      ArrayNode returns = request.putArray("returns");
+      for (JsonNode candidate : review.required("returnCandidates")) {
+        returns
+            .addObject()
+            .put("findingId", candidate.required("findingId").asText())
+            .put("expectedFindingRevision", candidate.required("findingRevision").asLong())
+            .put(
+                "returnedOn",
+                jdbc.queryForObject(
+                    "select business_date::text from inventory_session where id=?",
+                    String.class,
+                    fixture.inventoryId()))
+            .put("clientId", UUID.randomUUID().toString())
+            .put("clientSnapshot", "Клиент API-теста");
+      }
+      HttpResponse<String> confirmed = post(path + "/returns/confirm", request.toString());
+      assertThat(confirmed.statusCode()).withFailMessage(confirmed.body()).isEqualTo(200);
+      review = mapper.readTree(confirmed.body());
+    }
+    if ("SHIPMENTS".equals(review.required("phase").asText())) {
+      ObjectNode request = mapper.createObjectNode();
+      request.put("expectedSessionRevision", review.required("sessionRevision").asLong());
+      request.put("expectedReviewRevision", review.required("reviewRevision").asLong());
+      request.putArray("shipments");
+      HttpResponse<String> confirmed = post(path + "/shipments/confirm", request.toString());
+      assertThat(confirmed.statusCode()).withFailMessage(confirmed.body()).isEqualTo(200);
+      review = mapper.readTree(confirmed.body());
+    }
+    assertThat(review.required("phase").asText()).isEqualTo("COMPLETED");
   }
 
   private FinalPlanFixture prepareFinalPlan(Fixture fixture, long expectedSessionRevision)

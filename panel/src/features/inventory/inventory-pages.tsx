@@ -43,7 +43,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -57,19 +56,24 @@ import { Textarea } from "@/components/ui/textarea"
 import {
   INVENTORY_QUERY_KEY,
   cancelInventory,
+  confirmInventoryReturns,
+  confirmInventoryShipments,
   completeInventory,
   getInventoryFinalPlan,
+  getInventoryCabinDispositionReview,
   getInventoryFurnitureReview,
   getInventoryPlanningSettings,
   getInventoryPreliminaryStatistics,
   getActiveInventory,
   getInventory,
   inventoryActiveQueryKey,
+  inventoryCabinDispositionReviewQueryKey,
   inventoryDetailQueryKey,
   inventoryFinishPreviewQueryKey,
   inventoryFinalPlanQueryKey,
   inventoryFurnitureReviewQueryKey,
   inventoryListQueryKey,
+  inventoryListPageQueryKey,
   inventoryPreliminaryStatisticsQueryKey,
   inventoryPlanningSettingsQueryKey,
   inventoryPublicationQueryKey,
@@ -100,6 +104,7 @@ import { InventoryFindingFilters } from "@/features/inventory/inventory-finding-
 import { InventoryFindingsList } from "@/features/inventory/inventory-findings-list"
 import { InventoryFurnitureObservationDialog } from "@/features/inventory/inventory-inspection-details"
 import { InventoryFurnitureReview } from "@/features/inventory/inventory-furniture-review"
+import { InventoryCabinDispositionReviewCard } from "@/features/inventory/inventory-cabin-disposition-review"
 import { InventoryFinalPlanEditor } from "@/features/inventory/inventory-final-plan"
 import {
   inventoryFurnitureReconciliationCompletionNotice,
@@ -119,7 +124,6 @@ import { InventorySessionList } from "@/features/inventory/inventory-session-lis
 import { InventoryStartDialog } from "@/features/inventory/inventory-start-dialog"
 import { InventoryStatistics } from "@/features/inventory/inventory-statistics"
 import {
-  inventoryCompletionRiskSignature,
   inventoryRepairMovementCount,
   toInventoryRepairPlanSnapshot,
 } from "@/features/inventory/domain/inventory-domain"
@@ -1131,11 +1135,8 @@ export function InventorySessionPage() {
 export function InventoryFinishPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { currentUser } = useAuth()
+  const { currentUser, accessToken } = useAuth()
   const { actor, query, session } = useInventoryDetailRoute()
-  const [acknowledgedRiskSignature, setAcknowledgedRiskSignature] = useState<
-    string | null
-  >(null)
   const [keepInspectionFinding, setKeepInspectionFinding] = useState<{
     finding: InventoryFindingDto
     reviewSession: InventorySessionDto
@@ -1202,6 +1203,23 @@ export function InventoryFinishPage() {
       session.status === "ACTIVE" &&
       session.reviewStage === "FURNITURE"
     ),
+  })
+  const cabinDispositionReviewQueryKey =
+    inventoryCabinDispositionReviewQueryKey(session?.id ?? null)
+  const cabinDispositionReviewQuery = useQuery({
+    queryKey: cabinDispositionReviewQueryKey,
+    queryFn: () =>
+      session
+        ? getInventoryCabinDispositionReview(session.id)
+        : Promise.resolve(null),
+    enabled: Boolean(
+      session &&
+      actor &&
+      canManage &&
+      session.status === "ACTIVE" &&
+      session.reviewStage === "CABINS"
+    ),
+    refetchOnWindowFocus: "always",
   })
   const preliminaryStatisticsQuery = useQuery({
     queryKey: inventoryPreliminaryStatisticsQueryKey(
@@ -1323,7 +1341,6 @@ export function InventoryFinishPage() {
     },
     onSuccess: (updated) => {
       queryClient.setQueryData(inventoryDetailQueryKey(updated.id), updated)
-      setAcknowledgedRiskSignature(null)
       setKeepInspectionFinding(null)
       setKeepInspectionReason("")
       setKeepInspectionSubmitted(false)
@@ -1344,16 +1361,14 @@ export function InventoryFinishPage() {
     },
   })
   const startFurnitureReviewMutation = useMutation({
-    mutationFn: (acknowledgeIncomplete: boolean) => {
+    mutationFn: () => {
       if (!session) throw new Error("Инвентаризация недоступна")
       return startInventoryFurnitureReview({
         session,
-        acknowledgeIncomplete,
       })
     },
     onSuccess: (review) => {
       queryClient.setQueryData(furnitureReviewQueryKey, review)
-      setAcknowledgedRiskSignature(null)
       setFurnitureReviewDirty(false)
       setFinalPlanDirty(false)
       void queryClient.invalidateQueries({
@@ -1366,6 +1381,42 @@ export function InventoryFinishPage() {
         setDataChangedDialogOpen(true)
       }
       void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
+    },
+  })
+  const confirmReturnsMutation = useMutation({
+    mutationFn: (
+      request: Parameters<typeof confirmInventoryReturns>[0]["request"]
+    ) => {
+      if (!session) throw new Error("Инвентаризация недоступна")
+      return confirmInventoryReturns({ inventoryId: session.id, request })
+    },
+    onSuccess: (review) => {
+      queryClient.setQueryData(cabinDispositionReviewQueryKey, review)
+      toast.success("Возвраты подтверждены. Проверьте отгрузки.")
+    },
+    onError: () => {
+      void queryClient.invalidateQueries({
+        queryKey: cabinDispositionReviewQueryKey,
+      })
+    },
+  })
+  const confirmShipmentsMutation = useMutation({
+    mutationFn: (
+      request: Parameters<typeof confirmInventoryShipments>[0]["request"]
+    ) => {
+      if (!session) throw new Error("Инвентаризация недоступна")
+      return confirmInventoryShipments({ inventoryId: session.id, request })
+    },
+    onSuccess: (review) => {
+      queryClient.setQueryData(cabinDispositionReviewQueryKey, review)
+      toast.success(
+        "Отгрузки подтверждены. Остальные ненайденные бытовки отправлены в списание."
+      )
+    },
+    onError: () => {
+      void queryClient.invalidateQueries({
+        queryKey: cabinDispositionReviewQueryKey,
+      })
     },
   })
   const registryReviewMutation = useMutation({
@@ -1384,7 +1435,6 @@ export function InventoryFinishPage() {
         reviewed
       )
       queryClient.setQueryData(inventoryDetailQueryKey(reviewed.id), reviewed)
-      setAcknowledgedRiskSignature(null)
       setDataChangedDialogOpen(false)
       startFurnitureReviewMutation.reset()
       if (!hasConflicts) {
@@ -1505,13 +1555,6 @@ export function InventoryFinishPage() {
         inventoryActiveQueryKey(completed.warehouseId),
         null
       )
-      queryClient.setQueryData<InventorySessionDto[]>(
-        inventoryListQueryKey(completed.warehouseId),
-        (sessions) =>
-          sessions?.map((session) =>
-            session.id === completed.id ? completed : session
-          )
-      )
       navigate(`/inventory/history/${completed.id}`, { replace: true })
       void queryClient.invalidateQueries({
         queryKey: inventoryActiveQueryKey(completed.warehouseId),
@@ -1548,6 +1591,9 @@ export function InventoryFinishPage() {
         queryKey: inventoryFurnitureReviewQueryKey(updated.id),
       })
       queryClient.removeQueries({
+        queryKey: inventoryCabinDispositionReviewQueryKey(updated.id),
+      })
+      queryClient.removeQueries({
         queryKey: [...INVENTORY_QUERY_KEY, "final-plan", updated.id],
       })
       queryClient.removeQueries({
@@ -1560,7 +1606,6 @@ export function InventoryFinishPage() {
         queryKey: [...INVENTORY_QUERY_KEY, "registry-review", updated.id],
       })
       queryClient.setQueryData(inventoryDetailQueryKey(updated.id), updated)
-      setAcknowledgedRiskSignature(null)
       setKeepInspectionFinding(null)
       setKeepInspectionReason("")
       setKeepInspectionSubmitted(false)
@@ -1571,6 +1616,8 @@ export function InventoryFinishPage() {
       conflictNavigationRequested.current = false
       resolutionMutation.reset()
       startFurnitureReviewMutation.reset()
+      confirmReturnsMutation.reset()
+      confirmShipmentsMutation.reset()
       registryReviewMutation.reset()
       saveFurnitureReviewMutation.reset()
       prepareFinalPlanMutation.reset()
@@ -1593,6 +1640,8 @@ export function InventoryFinishPage() {
   )
   if (
     query.isLoading ||
+    (session?.reviewStage === "CABINS" &&
+      cabinDispositionReviewQuery.isLoading) ||
     (session?.reviewStage === "FURNITURE" && furnitureReviewQuery.isLoading)
   ) {
     return <InventoryLoading />
@@ -1616,6 +1665,8 @@ export function InventoryFinishPage() {
     refreshSessionMutation.isPending ||
     resolutionMutation.isPending ||
     startFurnitureReviewMutation.isPending ||
+    confirmReturnsMutation.isPending ||
+    confirmShipmentsMutation.isPending ||
     registryReviewMutation.isPending ||
     saveFurnitureReviewMutation.isPending ||
     prepareFinalPlanMutation.isPending ||
@@ -1732,12 +1783,6 @@ export function InventoryFinishPage() {
     ],
     ["Перемещения на ремонт и вывозы", repairMovementCount],
   ] as const
-  const riskSignature = inventoryCompletionRiskSignature(
-    activeReviewSession.findings
-  )
-  const confirmationRequired = riskSignature.length > 0
-  const confirmed =
-    !confirmationRequired || acknowledgedRiskSignature === riskSignature
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto">
       <PageToolbar>
@@ -1749,6 +1794,35 @@ export function InventoryFinishPage() {
       {refreshSessionCard}
       {session.reviewStage === "CABINS" ? (
         <>
+          {cabinDispositionReviewQuery.data && accessToken ? (
+            <InventoryCabinDispositionReviewCard
+              review={cabinDispositionReviewQuery.data}
+              accessToken={accessToken}
+              warehouseId={session.warehouseId}
+              defaultDate={session.businessDate}
+              pending={
+                confirmReturnsMutation.isPending ||
+                confirmShipmentsMutation.isPending
+              }
+              error={
+                confirmReturnsMutation.error
+                  ? errorMessage(confirmReturnsMutation.error)
+                  : confirmShipmentsMutation.error
+                    ? errorMessage(confirmShipmentsMutation.error)
+                    : null
+              }
+              onConfirmReturns={(request) =>
+                confirmReturnsMutation.mutate(request)
+              }
+              onConfirmShipments={(request) =>
+                confirmShipmentsMutation.mutate(request)
+              }
+            />
+          ) : cabinDispositionReviewQuery.error ? (
+            <p role="alert" className="text-sm text-destructive">
+              {errorMessage(cabinDispositionReviewQuery.error)}
+            </p>
+          ) : null}
           <Card>
             <CardHeader>
               <CardTitle>Итоговая сверка бытовок</CardTitle>
@@ -1771,25 +1845,6 @@ export function InventoryFinishPage() {
                   </Badge>
                 ) : null}
               </div>
-              {confirmationRequired ? (
-                <Field orientation="horizontal">
-                  <Checkbox
-                    id="inventory-finish-confirm"
-                    checked={confirmed}
-                    onCheckedChange={(value) =>
-                      setAcknowledgedRiskSignature(
-                        value === true ? riskSignature : null
-                      )
-                    }
-                  />
-                  <FieldLabel
-                    htmlFor="inventory-finish-confirm"
-                    className="font-normal"
-                  >
-                    Я проверил непроверенные и ненайденные бытовки
-                  </FieldLabel>
-                </Field>
-              ) : null}
               {unresolvedConflicts ? (
                 <p role="alert" className="text-sm text-destructive">
                   Урегулируйте все конфликты реестра перед переходом к сверке
@@ -1808,7 +1863,7 @@ export function InventoryFinishPage() {
                 type="button"
                 disabled={
                   startFurnitureReviewMutation.isPending ||
-                  (confirmationRequired && !confirmed)
+                  cabinDispositionReviewQuery.data?.phase !== "COMPLETED"
                 }
                 onClick={() => {
                   startFurnitureReviewMutation.reset()
@@ -1816,7 +1871,7 @@ export function InventoryFinishPage() {
                     setDataChangedDialogOpen(true)
                     return
                   }
-                  startFurnitureReviewMutation.mutate(confirmationRequired)
+                  startFurnitureReviewMutation.mutate()
                 }}
               >
                 Завершить проверку бытовок и перейти к мебели
@@ -2274,14 +2329,17 @@ export function InventoryFinishPage() {
 export function InventoryHistoryPage() {
   useInventorySync()
   const navigate = useNavigate()
+  const [page, setPage] = useState(0)
   const { currentUser } = useAuth()
   const { selectedWarehouse } = useWarehouse()
+  const warehouseId = selectedWarehouse?.id ?? "none"
+  useEffect(() => setPage(0), [warehouseId])
   const canView = selectedWarehouse
     ? hasInventoryWarehouseAccess(currentUser, selectedWarehouse.id, "VIEW")
     : false
   const query = useQuery({
-    queryKey: inventoryListQueryKey(selectedWarehouse?.id ?? "none"),
-    queryFn: () => listInventories(selectedWarehouse!.id),
+    queryKey: inventoryListPageQueryKey(warehouseId, page),
+    queryFn: () => listInventories(selectedWarehouse!.id, page),
     enabled: Boolean(selectedWarehouse && canView),
   })
   if (!canView)
@@ -2300,7 +2358,8 @@ export function InventoryHistoryPage() {
         description={errorMessage(query.error)}
       />
     )
-  const sessions = query.data ?? []
+  const sessions = query.data?.content ?? []
+  const pageMetadata = query.data?.page
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <div className="min-h-0 flex-1 overflow-y-auto md:flex">
@@ -2320,6 +2379,35 @@ export function InventoryHistoryPage() {
           <InventoryEmptyState>Инвентаризаций пока нет.</InventoryEmptyState>
         )}
       </div>
+      {pageMetadata ? (
+        <div className="flex items-center justify-between gap-3 border-t px-3 py-2 text-sm text-muted-foreground">
+          <span>
+            Страница {pageMetadata.page + 1} из{" "}
+            {Math.max(pageMetadata.totalPages, 1)} · всего{" "}
+            {pageMetadata.totalElements}
+          </span>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={page === 0 || query.isFetching}
+              onClick={() => setPage((current) => Math.max(0, current - 1))}
+            >
+              Назад
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={page + 1 >= pageMetadata.totalPages || query.isFetching}
+              onClick={() => setPage((current) => current + 1)}
+            >
+              Вперёд
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -2388,10 +2476,6 @@ export function InventoryHistoryDetailPage() {
       return outcome
     },
     onSuccess: async (outcome) => {
-      queryClient.setQueryData(
-        inventoryPublicationQueryKey(outcome.inventoryId),
-        outcome.publicationBatch
-      )
       queryClient.setQueryData<InventorySessionDto>(
         inventoryDetailQueryKey(outcome.inventoryId),
         (cached) =>
@@ -2400,6 +2484,9 @@ export function InventoryHistoryDetailPage() {
       await Promise.all([
         queryClient.invalidateQueries({
           queryKey: inventoryDetailQueryKey(outcome.inventoryId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: inventoryPublicationQueryKey(outcome.inventoryId),
         }),
         queryClient.invalidateQueries({
           queryKey: [...INVENTORY_QUERY_KEY, "final-plan", outcome.inventoryId],
@@ -2417,7 +2504,7 @@ export function InventoryHistoryDetailPage() {
       ])
       setOutcomeDialogOpen(false)
       toast.success(
-        `Пересчёт запущен: создано ${outcome.createdPublicationCount}, заново поставлено ${outcome.requeuedPublicationCount}, уже полностью применено ${outcome.preservedSucceededPublicationCount}.`
+        `Пересчёт запущен: создано ${outcome.createdPublicationCount}, заново поставлено ${outcome.requeuedPublicationCount}.`
       )
     },
   })

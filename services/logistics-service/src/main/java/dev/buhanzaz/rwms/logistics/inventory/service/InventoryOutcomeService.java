@@ -4,9 +4,12 @@ import dev.buhanzaz.rwms.logistics.inventory.api.InventoryOutcomeApiModels.Apply
 import dev.buhanzaz.rwms.logistics.inventory.api.InventoryOutcomeApiModels.ApplyInventoryOutcomeResponse;
 import dev.buhanzaz.rwms.logistics.inventory.api.InventoryOutcomeApiModels.InventoryAssetOutcome;
 import dev.buhanzaz.rwms.logistics.inventory.service.InventoryOutcomeCommand.AssetOutcome;
+import dev.buhanzaz.rwms.logistics.inventory.service.InventoryOutcomeCommand.FormerRental;
+import dev.buhanzaz.rwms.logistics.inventory.service.InventoryOutcomeCommand.Shipment;
+import dev.buhanzaz.rwms.logistics.inventory.service.InventoryOutcomeCommand.ShipmentFurniture;
 import dev.buhanzaz.rwms.logistics.inventory.service.InventoryOutcomePreparationStore.Preparation;
-import java.time.temporal.ChronoUnit;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
@@ -65,12 +68,14 @@ public class InventoryOutcomeService {
       if (outcome == null
           || outcome.findingId() == null
           || outcome.assetId() == null
+          || outcome.dispositionKind() == null
           || outcome.desiredStatus() == null
           || !findingIds.add(outcome.findingId())
           || !assetIds.add(outcome.assetId())) {
         throw new IllegalArgumentException(
             "Inventory outcomes require unique findingId and assetId values");
       }
+      validateDisposition(outcome);
     }
     List<AssetOutcome> outcomes =
         request.outcomes().stream()
@@ -79,7 +84,10 @@ public class InventoryOutcomeService {
                     new AssetOutcome(
                         outcome.findingId(),
                         outcome.assetId(),
-                        outcome.desiredStatus().name()))
+                        outcome.dispositionKind().name(),
+                        outcome.desiredStatus().name(),
+                        canonicalFormerRental(outcome),
+                        canonicalShipment(outcome)))
             .sorted(
                 Comparator.comparing((AssetOutcome outcome) -> outcome.assetId().toString())
                     .thenComparing(outcome -> outcome.findingId().toString()))
@@ -94,5 +102,105 @@ public class InventoryOutcomeService {
         request.finalPlanVersion(),
         request.finalPlanSha256(),
         outcomes);
+  }
+
+  private static void validateDisposition(InventoryAssetOutcome outcome) {
+    switch (outcome.dispositionKind()) {
+      case LOCAL -> {
+        if (!Set.of("FREE", "REPAIR", "CAPITAL_REPAIR")
+                .contains(outcome.desiredStatus().name())
+            || outcome.shipment() != null) {
+          throw new IllegalArgumentException("LOCAL inventory disposition is invalid");
+        }
+        if (outcome.formerRental() != null) {
+          requireClient(
+              outcome.formerRental().returnedOn(),
+              outcome.formerRental().clientId(),
+              outcome.formerRental().clientSnapshot(),
+              "formerRental");
+        }
+      }
+      case SHIPMENT -> {
+        if (outcome.desiredStatus()
+                != dev.buhanzaz.rwms.logistics.inventory.api.InventoryOutcomeApiModels
+                    .InventoryDesiredStatus.RENTED
+            || outcome.formerRental() != null
+            || outcome.shipment() == null) {
+          throw new IllegalArgumentException("SHIPMENT inventory disposition is invalid");
+        }
+        requireClient(
+            outcome.shipment().departedOn(),
+            outcome.shipment().clientId(),
+            outcome.shipment().clientSnapshot(),
+            "shipment");
+        if (outcome.shipment().furniture() == null
+            || outcome.shipment().furniture().size() > 100) {
+          throw new IllegalArgumentException("Inventory shipment furniture is invalid");
+        }
+        Set<UUID> equipmentIds = new HashSet<>();
+        outcome.shipment().furniture().forEach(
+            furniture -> {
+              if (furniture == null
+                  || furniture.equipmentId() == null
+                  || furniture.catalogVersion() == null
+                  || furniture.catalogVersion() < 0
+                  || furniture.quantity() == null
+                  || furniture.quantity() < 1
+                  || !equipmentIds.add(furniture.equipmentId())) {
+                throw new IllegalArgumentException(
+                    "Inventory shipment furniture IDs must be unique and quantities positive");
+              }
+            });
+      }
+      case WRITE_OFF -> {
+        if (outcome.desiredStatus()
+                != dev.buhanzaz.rwms.logistics.inventory.api.InventoryOutcomeApiModels
+                    .InventoryDesiredStatus.WRITE_OFF_PENDING
+            || outcome.formerRental() != null
+            || outcome.shipment() != null) {
+          throw new IllegalArgumentException("WRITE_OFF inventory disposition is invalid");
+        }
+      }
+    }
+  }
+
+  private static FormerRental canonicalFormerRental(InventoryAssetOutcome outcome) {
+    if (outcome.formerRental() == null) return null;
+    return new FormerRental(
+        outcome.formerRental().returnedOn(),
+        outcome.formerRental().clientId(),
+        normalizeSnapshot(outcome.formerRental().clientSnapshot(), "formerRental.clientSnapshot"));
+  }
+
+  private static Shipment canonicalShipment(InventoryAssetOutcome outcome) {
+    if (outcome.shipment() == null) return null;
+    return new Shipment(
+        outcome.shipment().departedOn(),
+        outcome.shipment().clientId(),
+        normalizeSnapshot(outcome.shipment().clientSnapshot(), "shipment.clientSnapshot"),
+        outcome.shipment().furniture().stream()
+            .map(
+                value ->
+                    new ShipmentFurniture(
+                        value.equipmentId(), value.catalogVersion(), value.quantity()))
+            .sorted(Comparator.comparing(value -> value.equipmentId().toString()))
+            .toList());
+  }
+
+  private static void requireClient(
+      java.time.LocalDate date, UUID clientId, String snapshot, String field) {
+    if (date == null || clientId == null) {
+      throw new IllegalArgumentException(field + " date and clientId are required");
+    }
+    normalizeSnapshot(snapshot, field + ".clientSnapshot");
+  }
+
+  private static String normalizeSnapshot(String value, String field) {
+    if (value == null) throw new IllegalArgumentException(field + " is required");
+    String normalized = value.trim();
+    if (normalized.isEmpty() || normalized.length() > 512) {
+      throw new IllegalArgumentException(field + " must contain 1 to 512 characters");
+    }
+    return normalized;
   }
 }

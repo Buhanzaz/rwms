@@ -217,6 +217,23 @@ export type InventorySessionDto = {
   furnitureReconciliationState: InventoryFurnitureReconciliationState
 }
 
+export type InventorySessionSummaryDto = {
+  id: string
+  version: number
+  warehouseId: string
+  status: InventorySessionStatus
+  author: InventoryActorSnapshot
+  businessDate: string
+  startedAt: string
+  completedAt: string | null
+  expectedCount: number
+  findingCount: number
+  inspectedCount: number
+  publicationStatus: InventoryPublicationStatus
+  reviewStage: InventoryReviewStage
+  furnitureReconciliationState: InventoryFurnitureReconciliationState
+}
+
 export type InventoryFurnitureReviewCabinDto = {
   findingId: string
   assetId: string

@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.inventory.repository;
 
 import dev.buhanzaz.rwms.inventory.domain.InventoryPublicationIntent;
 import dev.buhanzaz.rwms.inventory.domain.PublicationState;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -33,5 +34,22 @@ public interface InventoryPublicationIntentRepository
   List<InventoryPublicationIntent> findAllByInventoryIdInOrderByInventoryIdAscFindingIdAsc(
       Set<UUID> inventoryIds);
 
+  @Query(
+      "select intent.inventoryId as inventoryId, intent.state as state from InventoryPublicationIntent intent where intent.inventoryId in :inventoryIds order by intent.inventoryId, intent.findingId")
+  List<InventoryPublicationStateProjection> findStatesByInventoryIds(
+      @Param("inventoryIds") Set<UUID> inventoryIds);
+
   List<InventoryPublicationIntent> findTop20ByStateOrderByUpdatedAtAsc(PublicationState state);
+
+  /** Selects one bounded due batch shared by new and transient publication work. */
+  List<InventoryPublicationIntent>
+      findTop20ByStateInAndNextAttemptAtLessThanEqualOrderByNextAttemptAtAscIdAsc(
+          Set<PublicationState> states, OffsetDateTime dueAt);
+
+  /** Lightweight history-row projection that never hydrates publication JSON evidence. */
+  interface InventoryPublicationStateProjection {
+    UUID getInventoryId();
+
+    PublicationState getState();
+  }
 }

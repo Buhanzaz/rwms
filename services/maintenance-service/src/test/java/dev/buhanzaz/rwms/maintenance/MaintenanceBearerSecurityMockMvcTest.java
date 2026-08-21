@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceCatalogController;
+import dev.buhanzaz.rwms.maintenance.api.EstimateCreationWindowSettingsController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceEstimateController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceInventoryController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceLogisticsController;
@@ -19,6 +20,8 @@ import dev.buhanzaz.rwms.maintenance.config.SecurityConfiguration;
 import dev.buhanzaz.rwms.maintenance.disposition.application.PropertyDispositionApplicationService;
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
 import dev.buhanzaz.rwms.maintenance.service.InventoryMaintenanceService;
+import dev.buhanzaz.rwms.maintenance.service.InventoryAuthoritativeOutcomeService;
+import dev.buhanzaz.rwms.maintenance.service.EstimateCreationWindowSettingsService;
 import dev.buhanzaz.rwms.maintenance.service.InventoryPublicationReconciliationService;
 import dev.buhanzaz.rwms.maintenance.service.LogisticsReturnShortageService;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
@@ -49,7 +52,8 @@ import org.springframework.test.web.servlet.MockMvc;
       MaintenanceLogisticsController.class,
       MaintenanceRepairController.class,
       MaintenanceRepairPlaceLogisticsController.class,
-      MaintenanceSettingsController.class
+      MaintenanceSettingsController.class,
+      EstimateCreationWindowSettingsController.class
     },
     properties = {
       "rwms.cors.allowed-origins=http://localhost:5173",
@@ -70,9 +74,11 @@ class MaintenanceBearerSecurityMockMvcTest {
   @MockitoBean MaintenanceApplicationService service;
   @MockitoBean InventoryMaintenanceService inventoryService;
   @MockitoBean InventoryPublicationReconciliationService publicationService;
+  @MockitoBean InventoryAuthoritativeOutcomeService inventoryAuthoritativeOutcomeService;
   @MockitoBean LogisticsReturnShortageService logisticsService;
   @MockitoBean PropertyDispositionApplicationService propertyDispositionService;
   @MockitoBean RepairCapacitySettingsService repairCapacitySettingsService;
+  @MockitoBean EstimateCreationWindowSettingsService estimateCreationWindowSettingsService;
   @MockitoBean RepairPlaceService repairPlaceService;
   @MockitoBean JwtDecoder jwtDecoder;
 

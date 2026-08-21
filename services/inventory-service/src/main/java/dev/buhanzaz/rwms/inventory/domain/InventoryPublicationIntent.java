@@ -106,6 +106,12 @@ public class InventoryPublicationIntent {
   @Column(name = "attempt_count", nullable = false)
   private int attemptCount;
 
+  @Column(name = "generation_attempt_count", nullable = false)
+  private int generationAttemptCount;
+
+  @Column(name = "next_attempt_at", nullable = false)
+  private OffsetDateTime nextAttemptAt;
+
   @Column(name = "blocked_failure_code", length = 64)
   private String blockedFailureCode;
 
@@ -304,6 +310,8 @@ public class InventoryPublicationIntent {
     assetOutcomeResult = null;
     requestSha256 = null;
     currentPreconditionSha256 = null;
+    generationAttemptCount = 0;
+    nextAttemptAt = OffsetDateTime.now(ZoneOffset.UTC);
     blockedFailureCode = null;
     closedReason = null;
     closedActorRef = null;
@@ -317,6 +325,7 @@ public class InventoryPublicationIntent {
     requestSha256 = hash(requestHash);
     currentPreconditionSha256 = preconditionHash == null ? null : hash(preconditionHash);
     attemptCount = Math.addExact(attemptCount, 1);
+    generationAttemptCount = Math.addExact(generationAttemptCount, 1);
     state = PublicationState.PENDING;
   }
 
@@ -335,10 +344,11 @@ public class InventoryPublicationIntent {
     assetOutcomeResult = canonicalResult.trim();
   }
 
-  /** Completes a no-work finding after its authoritative FREE status was applied. */
+  /** Completes an asset-only FREE or inventory shipment RENTED outcome. */
   public void succeedAssetOnly() {
     requirePending();
-    if (desiredAssetStatus != InventoryAssetOutcomeStatus.FREE
+    if ((desiredAssetStatus != InventoryAssetOutcomeStatus.FREE
+            && desiredAssetStatus != InventoryAssetOutcomeStatus.RENTED)
         || targetKind != null
         || effectiveAssetVersion == null
         || assetOutcomeResult == null) {
@@ -412,8 +422,10 @@ public class InventoryPublicationIntent {
     state = PublicationState.SUCCEEDED;
   }
 
-  public void transientFailure() {
+  /** Defers a failed owner delivery until the persisted recovery deadline. */
+  public void transientFailure(OffsetDateTime retryAt) {
     requirePending();
+    nextAttemptAt = java.util.Objects.requireNonNull(retryAt, "Retry time is required");
     state = PublicationState.TRANSIENT_FAILED;
   }
 
@@ -430,6 +442,8 @@ public class InventoryPublicationIntent {
     currentPreconditionSha256 = hash(preconditionHash);
     blockedFailureCode = null;
     attemptCount = Math.addExact(attemptCount, 1);
+    generationAttemptCount = 1;
+    nextAttemptAt = OffsetDateTime.now(ZoneOffset.UTC);
     state = PublicationState.PENDING;
   }
 
@@ -478,8 +492,11 @@ public class InventoryPublicationIntent {
   private static void requireOutcomeShape(
       FinalPlanTargetKind targetKind, InventoryAssetOutcomeStatus desiredAssetStatus) {
     if (desiredAssetStatus == null
-        || (desiredAssetStatus == InventoryAssetOutcomeStatus.FREE && targetKind != null)
-        || (desiredAssetStatus != InventoryAssetOutcomeStatus.FREE
+        || ((desiredAssetStatus == InventoryAssetOutcomeStatus.FREE
+                || desiredAssetStatus == InventoryAssetOutcomeStatus.RENTED)
+            && targetKind != null)
+        || ((desiredAssetStatus == InventoryAssetOutcomeStatus.REPAIR
+                || desiredAssetStatus == InventoryAssetOutcomeStatus.CAPITAL_REPAIR)
             && targetKind != FinalPlanTargetKind.REPAIR)) {
       throw new IllegalArgumentException("Inventory outcome target is invalid");
     }
@@ -490,6 +507,7 @@ public class InventoryPublicationIntent {
     OffsetDateTime current = OffsetDateTime.now(ZoneOffset.UTC);
     createdAt = current;
     updatedAt = current;
+    if (nextAttemptAt == null) nextAttemptAt = current;
   }
 
   @PreUpdate
@@ -535,6 +553,16 @@ public class InventoryPublicationIntent {
 
   public int getAttemptCount() {
     return attemptCount;
+  }
+
+  /** Returns attempts consumed in the current explicit outcome-reapplication generation. */
+  public int getGenerationAttemptCount() {
+    return generationAttemptCount;
+  }
+
+  /** Returns the earliest instant at which automatic recovery may reclaim this intent. */
+  public OffsetDateTime getNextAttemptAt() {
+    return nextAttemptAt;
   }
 
   public UUID getMaintenanceRepairId() {

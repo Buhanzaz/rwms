@@ -275,6 +275,27 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/maintenance/v1/inventory/cabin-write-offs:
+    post:
+      tags: [Internal]
+      operationId: createInventoryCabinWriteOff
+      description: >-
+        Exact inventory-service boundary requiring sub=client_id=inventory-service
+        and exactly maintenance.inventory. Records one PENDING_APPROVAL WRITE_OFF
+        decision for a cabin that remained missing after the inventory shipment
+        review. Maintenance reads and freezes the current cabin contents itself as
+        DISPOSE_WITH_CABIN evidence; neither inventory-service nor the browser
+        fabricates asset balance versions. The cabin remains non-terminal until an
+        administrator approves the existing disposition saga.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateInventoryCabinWriteOffRequest' } } } }
+      responses:
+        '200': { description: Existing idempotent cabin write-off decision., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
+        '201': { description: Newly recorded cabin write-off decision awaiting administrator approval., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/internal/maintenance/v1/inventory/plans:
     post:
       tags: [Inventory Integration]
@@ -418,8 +439,9 @@ paths:
         Private direct-service boundary. Requires principal_type=SERVICE,
         sub=client_id=logistics-service, audience rwms-services and exactly the
         maintenance.logistics scope. The permanent returnId:lineId source accepts
-        the immutable dispatch-date and return-inspection-photo snapshot and atomically
-        owns one empty DRAFT estimate in the active catalog.
+        the immutable dispatch-date, physical-arrival occurred_at and return-inspection-photo
+        snapshot and atomically owns one empty DRAFT estimate in the active catalog while the
+        configured warehouse-local creation window remains open.
         Identical replay returns the same estimate. This boundary never creates a
         repair; normal estimate completion owns that transition.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpsertLogisticsReturnEstimateSourceRequest' } } } }
@@ -628,7 +650,10 @@ paths:
     post:
       tags: [Estimates]
       operationId: createEstimate
-      description: Requires USER, rwms.write and warehouse EDIT access.
+      description: >-
+        Requires USER, rwms.write and warehouse EDIT access. A new estimate is allowed only while
+        the warehouse-local date is no later than the latest logistics-owned physical return date
+        plus the configured estimate-creation window. Existing drafts remain editable after it.
       parameters:
         - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateEstimateRequest' } } } }
@@ -745,6 +770,16 @@ paths:
         - name: rentalItemId
           in: query
           schema: { type: string, format: uuid }
+        - name: repairIds
+          in: query
+          description: Optional bounded maintenance-owned IDs used to resolve only visible task-board repairs.
+          style: form
+          explode: false
+          schema:
+            type: array
+            maxItems: 200
+            uniqueItems: true
+            items: { type: string, format: uuid }
         - { $ref: '#/components/parameters/IfNoneMatch' }
       responses:
         '200': { description: Repair page., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, ETag: { $ref: '#/components/headers/ETag' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPage' } } } }
@@ -1211,6 +1246,36 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /api/maintenance/v1/settings/estimate-creation-window/{warehouseId}:
+    parameters:
+      - name: warehouseId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Settings]
+      operationId: getEstimateCreationWindowSettings
+      description: >-
+        Returns the warehouse-local window for opening a new estimate after physical return.
+        An absent row is represented as version 0, days 7, and null timestamps. Requires USER,
+        rwms.write and warehouse MANAGE access.
+      responses:
+        '200': { description: Estimate-creation window or its non-persisted default., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/EstimateCreationWindowSettings' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    put:
+      tags: [Settings]
+      operationId: replaceEstimateCreationWindowSettings
+      description: >-
+        Creates or replaces the setting with strict optimistic CAS. Creation requires
+        expectedVersion 0. Requires USER, rwms.write and warehouse MANAGE access.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceEstimateCreationWindowSettingsRequest' } } } }
+      responses:
+        '200': { description: Persisted estimate-creation window., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/EstimateCreationWindowSettings' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/maintenance/v1/settings/repair-complexity/{warehouseId}:
     parameters:
       - name: warehouseId
@@ -1303,7 +1368,7 @@ components:
       description: >-
         Public reads require a USER token with rwms.read and warehouse VIEW;
         writes require rwms.write and EDIT. Catalog import/activation and
-        maintenance write-off and repair-capacity settings additionally require
+        maintenance write-off, repair-capacity and estimate-creation-window settings additionally require
         warehouse MANAGE.
   parameters:
     WarehouseIdQuery:
@@ -1388,6 +1453,7 @@ components:
           enum:
             - MAINTENANCE_UNAUTHORIZED
             - MAINTENANCE_VALIDATION_FAILED
+            - ESTIMATE_CREATION_WINDOW_EXPIRED
             - MAINTENANCE_NOT_FOUND
             - MAINTENANCE_VERSION_CONFLICT
             - MAINTENANCE_IDEMPOTENCY_CONFLICT
@@ -1568,6 +1634,25 @@ components:
         version: { type: integer, format: int64, minimum: 0 }
         repairPlaceCount: { type: integer, minimum: 1 }
         automaticRefillDelayMinutes: { type: integer, minimum: 1, maximum: 1440 }
+        createdAt:
+          oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+        updatedAt:
+          oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+    ReplaceEstimateCreationWindowSettingsRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, days]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        days: { type: integer, minimum: 1, maximum: 3650 }
+    EstimateCreationWindowSettings:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, version, days, createdAt, updatedAt]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        days: { type: integer, minimum: 1, maximum: 3650 }
         createdAt:
           oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
         updatedAt:
@@ -3149,12 +3234,16 @@ components:
     UpsertLogisticsReturnEstimateSourceRequest:
       type: object
       additionalProperties: false
-      required: [warehouseId, rentalItemId, rentalItemVersion, dispatchDate, mediaReferences]
+      required: [warehouseId, rentalItemId, rentalItemVersion, dispatchDate, arrivedAt, mediaReferences]
       properties:
         warehouseId: { type: string, format: uuid }
         rentalItemId: { type: string, format: uuid }
         rentalItemVersion: { type: integer, format: int64, minimum: 0 }
         dispatchDate: { type: string, format: date }
+        arrivedAt:
+          type: string
+          format: date-time
+          description: Immutable occurred_at of the logistics.return.inspection-required.v1 event.
         mediaReferences:
           type: array
           minItems: 1
@@ -3599,6 +3688,23 @@ components:
         expectedSourceBalanceVersion: { type: integer, format: int64, minimum: 0 }
         reason:
           description: Inventory-owned nonblank shortage explanation frozen into the decision.
+          type: string
+          minLength: 1
+          maxLength: 2000
+        evidenceLink:
+          oneOf: [ { type: string, format: uri, maxLength: 2000 }, { type: 'null' } ]
+    CreateInventoryCabinWriteOffRequest:
+      type: object
+      additionalProperties: false
+      required: [inventorySessionId, findingId, warehouseId, cabinId, expectedAssetVersion, reason]
+      properties:
+        inventorySessionId: { type: string, format: uuid }
+        findingId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        cabinId: { type: string, format: uuid }
+        expectedAssetVersion: { type: integer, format: int64, minimum: 0 }
+        reason:
+          description: Inventory-owned explanation that the cabin remained missing after shipment review.
           type: string
           minLength: 1
           maxLength: 2000

@@ -37,6 +37,9 @@ public class LogisticsReturnShortage {
   @Column(name = "rental_item_version_snapshot", nullable = false)
   private long rentalItemVersionSnapshot;
 
+  @Column(name = "arrived_at")
+  private OffsetDateTime arrivedAt;
+
   @Column(name = "estimate_id", nullable = false)
   private UUID estimateId;
 
@@ -60,6 +63,7 @@ public class LogisticsReturnShortage {
       UUID warehouseId,
       UUID rentalItemId,
       long rentalItemVersionSnapshot,
+      OffsetDateTime arrivedAt,
       String sourceSha256,
       String snapshotSha256,
       String estimateSourceSnapshot) {
@@ -67,6 +71,7 @@ public class LogisticsReturnShortage {
         || warehouseId == null
         || rentalItemId == null
         || rentalItemVersionSnapshot < 0
+        || arrivedAt == null
         || !sha256(sourceSha256)
         || !sha256(snapshotSha256)
         || estimateSourceSnapshot == null
@@ -78,6 +83,7 @@ public class LogisticsReturnShortage {
     value.warehouseId = warehouseId;
     value.rentalItemId = rentalItemId;
     value.rentalItemVersionSnapshot = rentalItemVersionSnapshot;
+    value.arrivedAt = arrivedAt;
     value.sourceSha256 = sourceSha256;
     value.snapshotSha256 = snapshotSha256;
     value.estimateSourceSnapshot = estimateSourceSnapshot;

@@ -541,6 +541,30 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/internal/logistics/v1/maintenance/return-arrivals/{rentalItemId}:
+    parameters:
+      - name: rentalItemId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: "#/components/parameters/WarehouseIdQuery"
+    get:
+      operationId: getMaintenanceReturnArrival
+      description: >-
+        Returns the latest immutable physical-intake arrival for the exact rental item and
+        warehouse. Normal returns freeze this owner field when intake reaches inspection-required;
+        inventory-created historical returns bypass intake and are excluded. Requires a SERVICE token with
+        sub=client_id=maintenance-service, audience rwms-services, and exactly the
+        logistics.maintenance scope. The response deliberately contains no party data.
+      responses:
+        "200":
+          description: Latest logistics-owned physical return arrival.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenanceReturnArrival" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/internal/logistics/v1/maintenance/driver-tasks:
     post:
       operationId: createMaintenanceDriverTask
@@ -620,8 +644,14 @@ paths:
         logistics.inventory. The latest completed inventory is authoritative by canonical assetId:
         selected active document lines and rental terms are retained but superseded, complete
         selected nonterminal documents and orders become terminal, and every selected unfinished
-        logistics-owned task receives a durable cancellation checkpoint. A document containing an
-        unrelated active line rejects the complete batch before any local or remote effect. Remote
+        logistics-owned task receives a durable cancellation checkpoint. LOCAL former-rental data
+        creates a terminal RETURN fact without acceptance or estimate workflows; SHIPMENT creates a
+        terminal shipment and line without driver, hold or stock-allocation workflows; WRITE_OFF
+        retains only a logistics marker for the downstream disposition owner. It creates no
+        shipment, publishes no FREE/terminal asset status and does not change the asset version;
+        terminalization remains maintenance-owned after the logistics lease is released. A
+        document containing an unrelated active line rejects the complete batch before any local or
+        remote effect. Remote
         task-board cancellation is never executed inside a database transaction; a lost response is
         reconciled by task read on retry. An exact logistics asset lease is released through a
         durable typed-owner checkpoint outside the transaction; RELEASED/EXPIRED is terminal and
@@ -1989,6 +2019,15 @@ components:
       required: true
       schema: { type: string, minLength: 1, maxLength: 64 }
   schemas:
+    MaintenanceReturnArrival:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, rentalItemId, returnDocumentId, arrivedAt]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        returnDocumentId: { type: string, format: uuid }
+        arrivedAt: { type: string, format: date-time }
     ApplyInventoryOutcomeRequest:
       type: object
       additionalProperties: false
@@ -2009,11 +2048,74 @@ components:
     InventoryAssetOutcome:
       type: object
       additionalProperties: false
-      required: [findingId, assetId, desiredStatus]
+      required: [findingId, assetId, dispositionKind, desiredStatus, formerRental, shipment]
       properties:
         findingId: { type: string, format: uuid }
         assetId: { type: string, format: uuid }
-        desiredStatus: { type: string, enum: [FREE, REPAIR, CAPITAL_REPAIR] }
+        dispositionKind: { $ref: "#/components/schemas/InventoryDispositionKind" }
+        desiredStatus:
+          {
+            type: string,
+            enum: [FREE, REPAIR, CAPITAL_REPAIR, RENTED, WRITE_OFF_PENDING],
+          }
+        formerRental:
+          oneOf:
+            - { $ref: "#/components/schemas/InventoryFormerRental" }
+            - { type: "null" }
+        shipment:
+          oneOf:
+            - { $ref: "#/components/schemas/InventoryShipment" }
+            - { type: "null" }
+    InventoryDispositionKind:
+      type: string
+      enum: [LOCAL, SHIPMENT, WRITE_OFF]
+    InventoryFormerRental:
+      type: object
+      additionalProperties: false
+      required: [returnedOn, clientId, clientSnapshot]
+      properties:
+        returnedOn: { type: string, format: date }
+        clientId: { type: string, format: uuid }
+        clientSnapshot: { type: string, minLength: 1, maxLength: 512 }
+    InventoryShipmentFurniture:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, catalogVersion, quantity]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        catalogVersion: { type: integer, format: int64, minimum: 0 }
+        quantity: { type: integer, format: int64, minimum: 1 }
+    InventoryShipment:
+      type: object
+      additionalProperties: false
+      required: [departedOn, clientId, clientSnapshot, furniture]
+      properties:
+        departedOn: { type: string, format: date }
+        clientId: { type: string, format: uuid }
+        clientSnapshot: { type: string, minLength: 1, maxLength: 512 }
+        furniture:
+          type: array
+          maxItems: 100
+          description: >-
+            equipmentId values must be unique. These reviewed physical contents deliberately do not
+            reserve or decrement STOCK.
+          items: { $ref: "#/components/schemas/InventoryShipmentFurniture" }
+    InventoryDispositionResult:
+      type: object
+      additionalProperties: false
+      required: [findingId, assetId, dispositionKind, markerId, documentId, lineId]
+      properties:
+        findingId: { type: string, format: uuid }
+        assetId: { type: string, format: uuid }
+        dispositionKind: { $ref: "#/components/schemas/InventoryDispositionKind" }
+        markerId: { type: string, format: uuid }
+        documentId:
+          {
+            type: [string, "null"],
+            format: uuid,
+            description: Null for WRITE_OFF and LOCAL outcomes without formerRental.,
+          }
+        lineId: { type: [string, "null"], format: uuid }
     ApplyInventoryOutcomeResponse:
       type: object
       additionalProperties: false
@@ -2023,6 +2125,7 @@ components:
         - supersededDocumentIds
         - supersededRentalOrderIds
         - cancelledDriverTaskIds
+        - dispositions
         - supersededLineCount
         - supersededRentalUnitCount
         - replay
@@ -2041,6 +2144,10 @@ components:
           type: array
           uniqueItems: true
           items: { type: string, format: uuid }
+        dispositions:
+          type: array
+          description: Every stored disposition marker and any created or exact-source reused document facts.
+          items: { $ref: "#/components/schemas/InventoryDispositionResult" }
         supersededLineCount: { type: integer, format: int64, minimum: 0 }
         supersededRentalUnitCount: { type: integer, format: int64, minimum: 0 }
         replay: { type: boolean }
@@ -2063,6 +2170,9 @@ components:
           scheduledDate,
           rentalOrderId,
           rentalShipmentId,
+          inventorySourceId,
+          inventorySourceFindingId,
+          inventorySourceDispositionKind,
           lines,
           createdAt,
           updatedAt,
@@ -2147,6 +2257,15 @@ components:
             format: uuid,
           description: Shipment that produced this cabin-level rental return; null for shipments and generic documents.,
           }
+        inventorySourceId:
+          {
+            type: [string, "null"],
+            format: uuid,
+            description: Completed inventory that directly created this historical document.,
+          }
+        inventorySourceFindingId: { type: [string, "null"], format: uuid }
+        inventorySourceDispositionKind:
+          { type: [string, "null"], enum: [LOCAL, SHIPMENT, null] }
         lines:
           type: array
           minItems: 1
@@ -2166,6 +2285,7 @@ components:
           state,
           tenantSnapshot,
           rentalOrderId,
+          inventoryShipmentFurniture,
         ]
       properties:
         id: { type: string, format: uuid }
@@ -2194,6 +2314,12 @@ components:
             format: uuid,
             description: Rental order that owns the return or shipment cabin reservation.,
           }
+        inventoryShipmentFurniture:
+          oneOf:
+            - type: array
+              maxItems: 100
+              items: { $ref: "#/components/schemas/InventoryShipmentFurniture" }
+            - { type: "null" }
     EquipmentMovementLocationKind:
       type: string
       enum: [STOCK, CABIN_NON_RENTED, CABIN_RENTED]

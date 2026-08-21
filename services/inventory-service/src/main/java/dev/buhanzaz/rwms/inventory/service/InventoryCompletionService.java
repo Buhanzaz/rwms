@@ -39,6 +39,7 @@ import tools.jackson.databind.node.ObjectNode;
 @Service
 final class InventoryCompletionService extends InventoryCompletionWorkflowSupport {
   private final InventoryFindingPersistenceService findingPersistence;
+  private final InventoryCabinWriteOffService cabinWriteOffs;
 
   InventoryCompletionService(
       InventorySessionRepository sessions,
@@ -55,6 +56,7 @@ final class InventoryCompletionService extends InventoryCompletionWorkflowSuppor
       InventoryStatisticsService statisticsService,
       InventoryFindingService findingService,
       InventoryFindingPersistenceService findingPersistence,
+      InventoryCabinWriteOffService cabinWriteOffs,
       InventoryPublicationService publicationService,
       InventoryProjectionService projectionService,
       ObjectMapper mapper,
@@ -82,6 +84,7 @@ final class InventoryCompletionService extends InventoryCompletionWorkflowSuppor
         authorizer,
         transactionManager);
     this.findingPersistence = findingPersistence;
+    this.cabinWriteOffs = cabinWriteOffs;
   }
 
   public CompletionPreview preview(
@@ -276,6 +279,7 @@ final class InventoryCompletionService extends InventoryCompletionWorkflowSuppor
               reviewService.createFurnitureLossIntents(result);
               reviewService.createFurnitureReconciliationIntent(result);
               publicationService.createPublicationIntents(result, lockedFinalPlan, lockedPlanEntries, actor(jwt));
+              cabinWriteOffs.createIntents(result, lockedFinalPlan, lockedPlanEntries);
               events.append(
                   "SESSION",
                   result.getId(),

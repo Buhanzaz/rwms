@@ -94,10 +94,17 @@ reserve мебели. Ошибка в любой паре откатывает �
 `PUT /api/internal/asset/v1/inventory/outcomes/{inventoryId}/findings/{findingId}` принимает только
 точный credential `inventory-service` и immutable evidence завершённого плана. Для найденной
 нетерминальной бытовки последняя завершённая инвентаризация является истиной: первый или более новый
-source `FREE`, `REPAIR` или `CAPITAL_REPAIR` освобождает active operation leases, order-unit
+source `FREE`, `REPAIR`, `CAPITAL_REPAIR` или `RENTED` освобождает active operation leases, order-unit
 reservations и presentation holds, очищает transfer state и затем становится текущим статусом
 бытовки. Rows и обычные lease/asset events сохраняются; media metadata и object storage не входят в
 эту команду.
+
+`RENTED` допустим только с обязательным (в том числе пустым) `shipmentContents` отгрузки. Каждая
+уникальная строка обязана ссылаться на active catalog row `FURNITURE` точной версии. Под cabin locks
+asset полностью заменяет все equipment buckets бытовки этими количествами в `CABIN_RENTED`;
+пропущенное прежнее наполнение становится нулевым. Доступность stock не читается, а `STOCK` не
+меняется. Flyway V40 расширяет hash permanent outcome watermark, поэтому exact replay и строго
+более новая correction плана fence-ят payload мебели вместе со статусом и evidence паспорта.
 
 Та же команда передаёт замороженное наблюдение паспорта finding. `ABSENT` сохраняет текущий
 паспорт. `PRESENT` авторитетно заменяет тип бытовки, совместимые габариты, отделку, категорию,
@@ -188,6 +195,11 @@ Preparation выполняет существующую warehouse check до с�
 application и snapshot используют общие eligibility и ledger leaves, не
 вызывая друг друга или facade.
 
+Отстающий статус `RENTED` допускается к disposition только после освобождения logistics всех active
+leases и при отсутствии reservation, foreign hold или disposition fence. Preparation и application
+повторяют эти guards под lock. Освобождение logistics lease не переписывает статус или версию
+rental item; только финальный одобренный maintenance APPLY может перевести его в `WRITTEN_OFF`.
+
 ## Безопасность, изоляция складов и fencing
 
 HTTP-слой — stateless OAuth2/JWT resource server. `AssetAuthorizer` проверяет пользовательские
@@ -277,6 +289,12 @@ bash ./gradlew :services:asset-service:bootRun --args='--spring.profiles.active=
 
 Используйте disabled dependency boundaries только для изолированной разработки или тестов. Live
 integrations используют private URLs и service credentials; browser callers используют gateway.
+
+Test task модуля ограничивает кеш Spring test context одним контекстом. Интеграционные suites asset
+используют много разных Testcontainers application contexts, а общий Gradle test worker ограничен
+512 МиБ; немедленное вытеснение не даёт широкому запуску удерживать несвязанные контексты до
+`OutOfMemoryError`. Полный gate запускается последовательно:
+`bash ./gradlew :services:asset-service:test --rerun-tasks --max-workers=1 --no-parallel`.
 
 ## Production Kafka safety
 

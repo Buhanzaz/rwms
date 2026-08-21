@@ -15,8 +15,10 @@ import static org.mockito.Mockito.when;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsGuard;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsGuardState;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsLineState;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
@@ -29,7 +31,11 @@ import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.Operat
 import dev.buhanzaz.rwms.logistics.inventory.api.InventoryOutcomeApiModels.ApplyInventoryOutcomeRequest;
 import dev.buhanzaz.rwms.logistics.inventory.api.InventoryOutcomeApiModels.ApplyInventoryOutcomeResponse;
 import dev.buhanzaz.rwms.logistics.inventory.api.InventoryOutcomeApiModels.InventoryAssetOutcome;
+import dev.buhanzaz.rwms.logistics.inventory.api.InventoryOutcomeApiModels.InventoryDispositionKind;
 import dev.buhanzaz.rwms.logistics.inventory.api.InventoryOutcomeApiModels.InventoryDesiredStatus;
+import dev.buhanzaz.rwms.logistics.inventory.api.InventoryOutcomeApiModels.InventoryFormerRental;
+import dev.buhanzaz.rwms.logistics.inventory.api.InventoryOutcomeApiModels.InventoryShipment;
+import dev.buhanzaz.rwms.logistics.inventory.api.InventoryOutcomeApiModels.InventoryShipmentFurniture;
 import dev.buhanzaz.rwms.logistics.inventory.service.InventoryOutcomeService;
 import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
 import dev.buhanzaz.rwms.logistics.order.domain.DesiredDeliveryWindow;
@@ -44,6 +50,8 @@ import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsGuardRepository;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
+import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
+import jakarta.persistence.EntityManagerFactory;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -52,6 +60,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.hibernate.SessionFactory;
 import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -73,6 +82,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 @SpringBootTest(
     properties = {
       "spring.jpa.hibernate.ddl-auto=validate",
+      "spring.jpa.properties.hibernate.generate_statistics=true",
       "rwms.platform.kafka.enabled=false",
       "rwms.logistics.return-registration.relay-enabled=false",
       "rwms.logistics.return-completion.relay-enabled=false",
@@ -112,6 +122,8 @@ class InventoryOutcomeIntegrationTest {
   @Autowired OrderClientRepository clients;
   @Autowired RentalOrderRepository rentalOrders;
   @Autowired RentalOrderUnitTermRepository rentalTerms;
+  @Autowired LogisticsDocumentService documentService;
+  @Autowired EntityManagerFactory entityManagerFactory;
 
   @MockitoBean LogisticsDependencyGateway dependencies;
 
@@ -259,6 +271,69 @@ class InventoryOutcomeIntegrationTest {
   }
 
   @Test
+  void createsTwoHundredThirtyDispositionFactsWithABoundedNumberOfFlushes() {
+    List<InventoryAssetOutcome> batch = new ArrayList<>();
+    for (int index = 0; index < 230; index++) {
+      batch.add(
+          new InventoryAssetOutcome(
+              UUID.randomUUID(),
+              UUID.randomUUID(),
+              InventoryDispositionKind.SHIPMENT,
+              InventoryDesiredStatus.RENTED,
+              null,
+              new InventoryShipment(
+                  LocalDate.of(2026, 8, 16),
+                  UUID.randomUUID(),
+                  "Арендатор " + index,
+                  List.of())));
+    }
+    ApplyInventoryOutcomeRequest request =
+        new ApplyInventoryOutcomeRequest(
+            WAREHOUSE, COMPLETED_AT, 35, PLAN_SHA256, List.copyOf(batch));
+    var statistics = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
+    statistics.clear();
+
+    ApplyInventoryOutcomeResponse applied =
+        outcomes.apply(INVENTORY, UUID.randomUUID(), request);
+
+    assertThat(applied.dispositions()).hasSize(230);
+    assertThat(applied.dispositions())
+        .allSatisfy(
+            disposition -> {
+              assertThat(disposition.markerId()).isNotNull();
+              assertThat(disposition.documentId()).isNotNull();
+              assertThat(disposition.lineId()).isNotNull();
+            });
+    assertThat(count("logistics_document")).isEqualTo(230);
+    assertThat(count("logistics_document_line")).isEqualTo(230);
+    assertThat(statistics.getFlushCount()).isLessThanOrEqualTo(8L);
+  }
+
+  @Test
+  void closesFortyRentalOrdersWithoutPerOrderActiveTermQueries() {
+    OrderClient client = createClient();
+    List<UUID> assets = new ArrayList<>();
+    List<RentalOrder> orders = new ArrayList<>();
+    for (int index = 0; index < 40; index++) {
+      UUID assetId = UUID.randomUUID();
+      assets.add(assetId);
+      orders.add(
+          createOrder(client, RentalOrderStatus.SAVED, List.of(assetId), 100 + index));
+    }
+    var statistics = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
+    statistics.clear();
+
+    ApplyInventoryOutcomeResponse applied =
+        outcomes.apply(INVENTORY, UUID.randomUUID(), request(INVENTORY, COMPLETED_AT, 36, assets));
+
+    assertThat(applied.supersededRentalOrderIds())
+        .containsExactlyInAnyOrderElementsOf(orders.stream().map(RentalOrder::getId).toList());
+    assertThat(statistics.getQueryExecutionCount())
+        .as("active rental terms must be checked once for the whole selected order set")
+        .isLessThan(30L);
+  }
+
+  @Test
   void retriesAReplyLostAfterRemoteCancellationWithoutRepeatingTheRemoteEffect() {
     UUID asset = UUID.randomUUID();
     DriverLogisticsTask task =
@@ -323,8 +398,8 @@ class InventoryOutcomeIntegrationTest {
             10,
             PLAN_SHA256,
             List.of(
-                new InventoryAssetOutcome(finding, asset, InventoryDesiredStatus.FREE),
-                new InventoryAssetOutcome(finding, UUID.randomUUID(), InventoryDesiredStatus.REPAIR)));
+                localOutcome(finding, asset, InventoryDesiredStatus.FREE),
+                localOutcome(finding, UUID.randomUUID(), InventoryDesiredStatus.REPAIR)));
 
     assertThatThrownBy(() -> outcomes.apply(INVENTORY, UUID.randomUUID(), duplicate))
         .isInstanceOf(IllegalArgumentException.class)
@@ -443,8 +518,7 @@ class InventoryOutcomeIntegrationTest {
                         22,
                         "2".repeat(64),
                         List.of(
-                            new InventoryAssetOutcome(
-                                finding, asset, InventoryDesiredStatus.REPAIR)))))
+                            localOutcome(finding, asset, InventoryDesiredStatus.REPAIR)))))
         .isInstanceOf(LogisticsConflictException.class)
         .hasMessageContaining("same completion time");
 
@@ -493,13 +567,12 @@ class InventoryOutcomeIntegrationTest {
             31,
             correctedPlanSha256,
             List.of(
-                new InventoryAssetOutcome(
-                    carriedFinding, carriedAsset, InventoryDesiredStatus.FREE),
-                new InventoryAssetOutcome(
+                localOutcome(carriedFinding, carriedAsset, InventoryDesiredStatus.FREE),
+                localOutcome(
                     restoredFindings.get(0), restoredAssets.get(0), InventoryDesiredStatus.FREE),
-                new InventoryAssetOutcome(
+                localOutcome(
                     restoredFindings.get(1), restoredAssets.get(1), InventoryDesiredStatus.REPAIR),
-                new InventoryAssetOutcome(
+                localOutcome(
                     restoredFindings.get(2),
                     restoredAssets.get(2),
                     InventoryDesiredStatus.CAPITAL_REPAIR)));
@@ -561,6 +634,264 @@ class InventoryOutcomeIntegrationTest {
                 correctedPlanSha256))
         .isEqualTo(4);
     assertThat(count("inventory_outcome_receipt")).isEqualTo(2);
+  }
+
+  @Test
+  void createsAndPubliclyReadsACompletedFormerRentalReturnAndReusesItOnEveryRetryPath() {
+    UUID asset = UUID.randomUUID();
+    UUID finding = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    LocalDate returnedOn = LocalDate.of(2026, 8, 18);
+    ApplyInventoryOutcomeRequest request =
+        new ApplyInventoryOutcomeRequest(
+            WAREHOUSE,
+            COMPLETED_AT,
+            32,
+            PLAN_SHA256,
+            List.of(
+                new InventoryAssetOutcome(
+                    finding,
+                    asset,
+                    InventoryDispositionKind.LOCAL,
+                    InventoryDesiredStatus.FREE,
+                    new InventoryFormerRental(returnedOn, clientId, "Бывший арендатор"),
+                    null)));
+    UUID idempotencyKey = UUID.randomUUID();
+
+    ApplyInventoryOutcomeResponse applied = outcomes.apply(INVENTORY, idempotencyKey, request);
+    ApplyInventoryOutcomeResponse replayed = outcomes.apply(INVENTORY, idempotencyKey, request);
+    ApplyInventoryOutcomeResponse reasserted =
+        outcomes.apply(INVENTORY, UUID.randomUUID(), request);
+
+    assertThat(applied.dispositions()).singleElement().satisfies(
+        disposition -> {
+          assertThat(disposition.findingId()).isEqualTo(finding);
+          assertThat(disposition.assetId()).isEqualTo(asset);
+          assertThat(disposition.dispositionKind()).isEqualTo(InventoryDispositionKind.LOCAL);
+          assertThat(disposition.markerId()).isNotNull();
+          assertThat(disposition.documentId()).isNotNull();
+          assertThat(disposition.lineId()).isNotNull();
+        });
+    assertThat(replayed.replay()).isTrue();
+    assertThat(replayed.dispositions()).isEqualTo(applied.dispositions());
+    assertThat(reasserted.replay()).isFalse();
+    assertThat(reasserted.dispositions().getFirst().markerId())
+        .isNotEqualTo(applied.dispositions().getFirst().markerId());
+    assertThat(reasserted.dispositions().getFirst().documentId())
+        .isEqualTo(applied.dispositions().getFirst().documentId());
+    assertThat(reasserted.dispositions().getFirst().lineId())
+        .isEqualTo(applied.dispositions().getFirst().lineId());
+
+    var view =
+        documentService.get(
+            applied.dispositions().getFirst().documentId(), LogisticsDocumentType.RETURN);
+    assertThat(view.state()).isEqualTo(LogisticsDocumentState.ACCEPTED);
+    assertThat(view.warehouseId()).isEqualTo(WAREHOUSE);
+    assertThat(view.clientId()).isEqualTo(clientId);
+    assertThat(view.partySnapshot()).isEqualTo("Бывший арендатор");
+    assertThat(view.scheduledDate()).isEqualTo(returnedOn);
+    assertThat(view.driverSnapshot()).isNull();
+    assertThat(view.driverWorkerId()).isNull();
+    assertThat(view.inventorySourceId()).isEqualTo(INVENTORY);
+    assertThat(view.inventorySourceFindingId()).isEqualTo(finding);
+    assertThat(view.inventorySourceDispositionKind()).isEqualTo("LOCAL");
+    assertThat(view.lines()).singleElement().satisfies(
+        line -> {
+          assertThat(line.id()).isEqualTo(applied.dispositions().getFirst().lineId());
+          assertThat(line.assetId()).isEqualTo(asset);
+          assertThat(line.state()).isEqualTo(LogisticsLineState.ARRIVED);
+          assertThat(line.inventoryShipmentFurniture()).isNull();
+        });
+    assertThat(documentService.list(LogisticsDocumentType.RETURN, WAREHOUSE))
+        .extracting(value -> value.id())
+        .containsExactly(view.id());
+    assertThat(count("logistics_document")).isOne();
+    assertThat(count("logistics_document_line")).isOne();
+    assertThat(count("driver_logistics_task")).isZero();
+    assertThat(count("logistics_guard")).isZero();
+  }
+
+  @Test
+  void createsAndPubliclyReadsACompletedShipmentWithFurnitureButNoOperationalWorkflow() {
+    UUID asset = UUID.randomUUID();
+    UUID finding = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    UUID firstEquipment = UUID.fromString("20000000-0000-0000-0000-000000000001");
+    UUID secondEquipment = UUID.fromString("20000000-0000-0000-0000-000000000002");
+    LocalDate departedOn = LocalDate.of(2026, 8, 17);
+    ApplyInventoryOutcomeRequest request =
+        new ApplyInventoryOutcomeRequest(
+            WAREHOUSE,
+            COMPLETED_AT,
+            33,
+            PLAN_SHA256,
+            List.of(
+                new InventoryAssetOutcome(
+                    finding,
+                    asset,
+                    InventoryDispositionKind.SHIPMENT,
+                    InventoryDesiredStatus.RENTED,
+                    null,
+                    new InventoryShipment(
+                        departedOn,
+                        clientId,
+                        "Найденный арендатор",
+                        List.of(
+                            new InventoryShipmentFurniture(secondEquipment, 8L, 3L),
+                            new InventoryShipmentFurniture(firstEquipment, 5L, 2L))))));
+
+    ApplyInventoryOutcomeResponse applied =
+        outcomes.apply(INVENTORY, UUID.randomUUID(), request);
+    var disposition = applied.dispositions().getFirst();
+    var view = documentService.get(disposition.documentId(), LogisticsDocumentType.SHIPMENT);
+
+    assertThat(applied.dispositions()).hasSize(1);
+    assertThat(disposition.dispositionKind()).isEqualTo(InventoryDispositionKind.SHIPMENT);
+    assertThat(disposition.markerId()).isNotNull();
+    assertThat(disposition.documentId()).isNotNull();
+    assertThat(disposition.lineId()).isNotNull();
+    assertThat(view.state()).isEqualTo(LogisticsDocumentState.SHIPPED);
+    assertThat(view.clientId()).isEqualTo(clientId);
+    assertThat(view.partySnapshot()).isEqualTo("Найденный арендатор");
+    assertThat(view.scheduledDate()).isEqualTo(departedOn);
+    assertThat(view.driverSnapshot()).isNull();
+    assertThat(view.driverWorkerId()).isNull();
+    assertThat(view.inventorySourceId()).isEqualTo(INVENTORY);
+    assertThat(view.inventorySourceFindingId()).isEqualTo(finding);
+    assertThat(view.inventorySourceDispositionKind()).isEqualTo("SHIPMENT");
+    assertThat(view.lines()).singleElement().satisfies(
+        line -> {
+          assertThat(line.id()).isEqualTo(disposition.lineId());
+          assertThat(line.assetId()).isEqualTo(asset);
+          assertThat(line.state()).isEqualTo(LogisticsLineState.DEPARTED);
+          assertThat(line.inventoryShipmentFurniture()).isNotNull();
+          assertThat(line.inventoryShipmentFurniture().isArray()).isTrue();
+          assertThat(line.inventoryShipmentFurniture()).hasSize(2);
+          assertThat(line.inventoryShipmentFurniture().get(0).get("equipmentId").asText())
+              .isEqualTo(firstEquipment.toString());
+          assertThat(line.inventoryShipmentFurniture().get(0).get("quantity").asLong())
+              .isEqualTo(2L);
+          assertThat(line.inventoryShipmentFurniture().get(1).get("equipmentId").asText())
+              .isEqualTo(secondEquipment.toString());
+        });
+    assertThat(documentService.list(LogisticsDocumentType.SHIPMENT, WAREHOUSE))
+        .extracting(value -> value.id())
+        .containsExactly(view.id());
+    assertThat(count("driver_logistics_task")).isZero();
+    assertThat(count("logistics_guard")).isZero();
+    assertThat(count("logistics_task_reference")).isZero();
+    assertThat(count("shipment_furniture_movement_task")).isZero();
+    assertThat(count("equipment_movement_task")).isZero();
+
+    ApplyInventoryOutcomeRequest drifted =
+        new ApplyInventoryOutcomeRequest(
+            WAREHOUSE,
+            COMPLETED_AT,
+            33,
+            PLAN_SHA256,
+            List.of(
+                new InventoryAssetOutcome(
+                    finding,
+                    asset,
+                    InventoryDispositionKind.SHIPMENT,
+                    InventoryDesiredStatus.RENTED,
+                    null,
+                    new InventoryShipment(
+                        departedOn,
+                        clientId,
+                        "Другой арендатор",
+                        request.outcomes().getFirst().shipment().furniture()))));
+    assertThatThrownBy(() -> outcomes.apply(INVENTORY, UUID.randomUUID(), drifted))
+        .isInstanceOf(LogisticsConflictException.class)
+        .hasMessageContaining("document conflicts");
+    assertThat(count("logistics_document")).isOne();
+  }
+
+  @Test
+  void writeOffIsOnlyADurableMarkerAndSupersessionWithoutShipmentOrFreeState() {
+    UUID asset = UUID.randomUUID();
+    UUID finding = UUID.randomUUID();
+    LogisticsDocumentLine previous =
+        createShipmentLine(asset, LogisticsDocumentState.DRAFT, WAREHOUSE);
+    LogisticsGuard guard = createGuard(previous);
+    when(dependencies.releaseOperationLease(
+            any(UUID.class),
+            eq(guard.getLeaseId()),
+            eq(guard.getLeaseVersion()),
+            eq(guard.getFenceToken()),
+            eq(LogisticsOwnerType.LOGISTICS_SHIPMENT),
+            eq(previous.getDocument().getId()),
+            eq(previous.getId())))
+        .thenReturn(terminalLease(guard, "RELEASED"));
+    ApplyInventoryOutcomeRequest request =
+        new ApplyInventoryOutcomeRequest(
+            WAREHOUSE,
+            COMPLETED_AT,
+            34,
+            PLAN_SHA256,
+            List.of(
+                new InventoryAssetOutcome(
+                    finding,
+                    asset,
+                    InventoryDispositionKind.WRITE_OFF,
+                    InventoryDesiredStatus.WRITE_OFF_PENDING,
+                    null,
+                    null)));
+
+    ApplyInventoryOutcomeResponse applied =
+        outcomes.apply(INVENTORY, UUID.randomUUID(), request);
+    var disposition = applied.dispositions().getFirst();
+
+    assertThat(disposition.findingId()).isEqualTo(finding);
+    assertThat(disposition.assetId()).isEqualTo(asset);
+    assertThat(disposition.dispositionKind()).isEqualTo(InventoryDispositionKind.WRITE_OFF);
+    assertThat(disposition.markerId()).isNotNull();
+    assertThat(disposition.documentId()).isNull();
+    assertThat(disposition.lineId()).isNull();
+    assertThat(applied.supersededDocumentIds())
+        .containsExactly(previous.getDocument().getId());
+    assertThat(documentState(previous.getDocument().getId()))
+        .isEqualTo(LogisticsDocumentState.CANCELLED.name());
+    assertThat(count("logistics_document")).isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_document where inventory_source_id=?",
+                Long.class,
+                INVENTORY))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_document where state='SHIPPED'", Long.class))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select desired_status from inventory_outcome_receipt_asset where id=?",
+                String.class,
+                disposition.markerId()))
+        .isEqualTo("WRITE_OFF_PENDING");
+    assertThat(
+            jdbc.queryForObject(
+                "select inventory_desired_status from logistics_document_line where id=?",
+                String.class,
+                previous.getId()))
+        .isEqualTo("WRITE_OFF_PENDING");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from inventory_outcome_receipt_asset where desired_status='FREE'",
+                Long.class))
+        .isZero();
+    assertThat(guardState(guard.getId())).isEqualTo(LogisticsGuardState.RELEASED.name());
+    verify(dependencies)
+        .releaseOperationLease(
+            any(UUID.class),
+            eq(guard.getLeaseId()),
+            eq(guard.getLeaseVersion()),
+            eq(guard.getFenceToken()),
+            eq(LogisticsOwnerType.LOGISTICS_SHIPMENT),
+            eq(previous.getDocument().getId()),
+            eq(previous.getId()));
+    assertThat(count("driver_logistics_task")).isZero();
+    assertThat(count("logistics_guard")).isOne();
   }
 
   @Test
@@ -1072,7 +1403,7 @@ class InventoryOutcomeIntegrationTest {
         assetIds.stream()
             .map(
                 assetId ->
-                    new InventoryAssetOutcome(
+                    localOutcome(
                         UUID.nameUUIDFromBytes(
                             (inventoryId + ":finding:" + assetId).getBytes(java.nio.charset.StandardCharsets.UTF_8)),
                         assetId,
@@ -1094,7 +1425,13 @@ class InventoryOutcomeIntegrationTest {
         completedAt,
         planVersion,
         planSha256,
-        List.of(new InventoryAssetOutcome(findingId, assetId, status)));
+        List.of(localOutcome(findingId, assetId, status)));
+  }
+
+  private static InventoryAssetOutcome localOutcome(
+      UUID findingId, UUID assetId, InventoryDesiredStatus status) {
+    return new InventoryAssetOutcome(
+        findingId, assetId, InventoryDispositionKind.LOCAL, status, null, null);
   }
 
   private long count(String table) {

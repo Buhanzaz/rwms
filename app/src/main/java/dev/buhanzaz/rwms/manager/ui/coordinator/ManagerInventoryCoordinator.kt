@@ -33,10 +33,6 @@ import kotlinx.coroutines.withContext
 import retrofit2.HttpException
 
 /**
- * Defines manager UI state or presentation policy; server state and command authorization remain authoritative.
- */
-
-/**
  * Coordinates inventory refreshes, reinspection editors and background inspection uploads.
  * Its operations reduce the shared state flow and deliberately retain the existing cache, fencing
  * and outbox behavior.

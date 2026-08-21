@@ -2,6 +2,9 @@ import { bearerRequest } from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 import type {
   FurnitureReviewView,
+  InventoryCabinDispositionReview,
+  ConfirmInventoryReturnsRequest,
+  ConfirmInventoryShipmentsRequest,
   InventoryCompletionPreview,
   InventoryFinalPlan,
   InventoryFinding,
@@ -330,6 +333,56 @@ export function startFurnitureReview(input: {
     requireInventoryAccessToken(input.accessToken),
     endpoint(
       `/sessions/${encodeURIComponent(input.inventoryId)}/furniture-review/start`
+    ),
+    {
+      method: "POST",
+      headers: commandHeaders(input.idempotencyKey),
+      body: JSON.stringify(input.request),
+    }
+  )
+}
+
+export function getCabinDispositionReview(
+  accessToken: string | null,
+  inventoryId: string
+) {
+  return bearerRequest<InventoryCabinDispositionReview>(
+    requireInventoryAccessToken(accessToken),
+    endpoint(
+      `/sessions/${encodeURIComponent(inventoryId)}/cabin-disposition-review`
+    )
+  )
+}
+
+export function confirmCabinDispositionReturns(input: {
+  accessToken: string | null
+  inventoryId: string
+  request: ConfirmInventoryReturnsRequest
+  idempotencyKey: string
+}) {
+  return bearerRequest<InventoryCabinDispositionReview>(
+    requireInventoryAccessToken(input.accessToken),
+    endpoint(
+      `/sessions/${encodeURIComponent(input.inventoryId)}/cabin-disposition-review/returns/confirm`
+    ),
+    {
+      method: "POST",
+      headers: commandHeaders(input.idempotencyKey),
+      body: JSON.stringify(input.request),
+    }
+  )
+}
+
+export function confirmCabinDispositionShipments(input: {
+  accessToken: string | null
+  inventoryId: string
+  request: ConfirmInventoryShipmentsRequest
+  idempotencyKey: string
+}) {
+  return bearerRequest<InventoryCabinDispositionReview>(
+    requireInventoryAccessToken(input.accessToken),
+    endpoint(
+      `/sessions/${encodeURIComponent(input.inventoryId)}/cabin-disposition-review/shipments/confirm`
     ),
     {
       method: "POST",

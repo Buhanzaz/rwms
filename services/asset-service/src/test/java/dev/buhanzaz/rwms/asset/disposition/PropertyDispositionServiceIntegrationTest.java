@@ -13,12 +13,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireMaintenanceOperationLeaseRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireOperationLeaseRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireLogisticsEquipmentMovementReservationRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateRentalItemRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.EquipmentResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.ExecuteLogisticsEquipmentMovementReservationLine;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.ExecuteLogisticsEquipmentMovementReservationsRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.FencedStatusRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsEquipmentMovementPurpose;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceFencedStatusRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceFurnitureCustodyClaim;
@@ -27,6 +29,7 @@ import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceLeaseOwnerType;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceStatusAction;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.OperationLeaseResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.ReleaseOperationLeaseRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.TransferEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateStatusRequest;
 import dev.buhanzaz.rwms.asset.disposition.PropertyDispositionApiModels.ApplyMaintenancePropertyDispositionRequest;
@@ -353,6 +356,110 @@ class PropertyDispositionServiceIntegrationTest {
                 reservation.reservationId(),
                 selectedEquipment.id()))
         .isEqualTo(1);
+  }
+
+  @Test
+  void inventoryWriteOffCanTerminalizeALaggingRentedCabinOnlyAfterLogisticsLeaseRelease() {
+    UUID subjectId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    RentalItemResponse free = createFreeCabin(subjectId, warehouseId);
+    OperationLeaseResponse logisticsLease =
+        assets
+            .acquireLease(
+                subjectId,
+                UUID.randomUUID(),
+                new AcquireOperationLeaseRequest(
+                    free.id(), "LOGISTICS_SHIPMENT", UUID.randomUUID().toString(), free.version()))
+            .response();
+    RentalItemResponse rented =
+        assets.fencedStatus(
+            free.id(),
+            new FencedStatusRequest(
+                free.version(),
+                RentalItemStatus.RENTED,
+                logisticsLease.id(),
+                logisticsLease.fencingToken()));
+    UUID decisionId = UUID.randomUUID();
+    PrepareMaintenancePropertyDispositionRequest request =
+        new PrepareMaintenancePropertyDispositionRequest(
+            warehouseId,
+            CABIN,
+            rented.id(),
+            WRITE_OFF,
+            rented.version(),
+            null,
+            null,
+            null,
+            null,
+            null,
+            List.of(),
+            null);
+
+    assertThat(dispositions.snapshot(CABIN, rented.id(), warehouseId).dispositionAllowed())
+        .isFalse();
+    assertThatThrownBy(
+            () ->
+                dispositions.prepare(
+                    subjectId, decisionId, UUID.randomUUID(), request))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("active operation lease");
+    assertThat(assets.rentalItem(rented.id()).status()).isEqualTo(RentalItemStatus.RENTED);
+
+    assets.releaseLease(
+        subjectId,
+        UUID.randomUUID(),
+        logisticsLease.id(),
+        new ReleaseOperationLeaseRequest(
+            logisticsLease.version(), logisticsLease.fencingToken()));
+    RentalItemResponse afterRelease = assets.rentalItem(rented.id());
+    assertThat(afterRelease.status()).isEqualTo(RentalItemStatus.RENTED);
+    assertThat(afterRelease.version()).isEqualTo(rented.version());
+    assertThat(dispositions.snapshot(CABIN, rented.id(), warehouseId).dispositionAllowed())
+        .isTrue();
+
+    var prepared =
+        dispositions.prepare(subjectId, decisionId, UUID.randomUUID(), request);
+    assertThat(prepared.response().state().name()).isEqualTo("PREPARED");
+    RentalItemResponse afterPrepare = assets.rentalItem(rented.id());
+    assertThat(afterPrepare.status()).isEqualTo(RentalItemStatus.RENTED);
+    assertThat(afterPrepare.version()).isEqualTo(rented.version());
+
+    OperationLeaseResponse competingLease =
+        assets
+            .acquireLease(
+                subjectId,
+                UUID.randomUUID(),
+                new AcquireOperationLeaseRequest(
+                    rented.id(), "LOGISTICS_SHIPMENT", UUID.randomUUID().toString(), rented.version()))
+            .response();
+    assertThatThrownBy(
+            () ->
+                dispositions.apply(
+                    subjectId,
+                    decisionId,
+                    UUID.randomUUID(),
+                    new ApplyMaintenancePropertyDispositionRequest(null)))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("active operation lease");
+    assertThat(assets.rentalItem(rented.id()).status()).isEqualTo(RentalItemStatus.RENTED);
+    assertThat(fenceState(decisionId)).isEqualTo("PREPARED");
+
+    assets.releaseLease(
+        subjectId,
+        UUID.randomUUID(),
+        competingLease.id(),
+        new ReleaseOperationLeaseRequest(
+            competingLease.version(), competingLease.fencingToken()));
+    var applied =
+        dispositions.apply(
+            subjectId,
+            decisionId,
+            UUID.randomUUID(),
+            new ApplyMaintenancePropertyDispositionRequest(null));
+
+    assertThat(applied.response().equipmentMovements()).isEmpty();
+    assertThat(assets.rentalItem(rented.id()).status())
+        .isEqualTo(RentalItemStatus.WRITTEN_OFF);
   }
 
   @Test

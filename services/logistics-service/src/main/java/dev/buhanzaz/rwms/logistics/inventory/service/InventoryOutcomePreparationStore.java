@@ -3,8 +3,10 @@ package dev.buhanzaz.rwms.logistics.inventory.service;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsGuard;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsGuardState;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsLineState;
 import dev.buhanzaz.rwms.logistics.domain.ShipmentFurnitureMovementTask;
 import dev.buhanzaz.rwms.logistics.domain.TransferFurnitureMovementTask;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
@@ -14,6 +16,8 @@ import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTask;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import dev.buhanzaz.rwms.logistics.equipment.repository.EquipmentMovementTaskRepository;
 import dev.buhanzaz.rwms.logistics.inventory.api.InventoryOutcomeApiModels.ApplyInventoryOutcomeResponse;
+import dev.buhanzaz.rwms.logistics.inventory.api.InventoryOutcomeApiModels.InventoryDispositionKind;
+import dev.buhanzaz.rwms.logistics.inventory.api.InventoryOutcomeApiModels.InventoryDispositionResult;
 import dev.buhanzaz.rwms.logistics.inventory.domain.InventoryAssetOutcomeWatermark;
 import dev.buhanzaz.rwms.logistics.inventory.domain.InventoryOutcomeReceipt;
 import dev.buhanzaz.rwms.logistics.inventory.domain.InventoryOutcomeReceiptAsset;
@@ -37,6 +41,7 @@ import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import dev.buhanzaz.rwms.logistics.repository.ShipmentFurnitureMovementTaskRepository;
 import dev.buhanzaz.rwms.logistics.repository.TransferFurnitureMovementTaskRepository;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
+import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -45,6 +50,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
@@ -56,8 +62,9 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Owns the single-transaction validation and local supersession half of completed inventory. It
- * deliberately records task actions instead of invoking any remote dependency under the lock.
+ * Owns the single-transaction validation, local supersession and disposition-fact half of completed
+ * inventory. It deliberately records task actions instead of invoking any remote dependency under
+ * the lock, and persists a full disposition batch without per-outcome flushes.
  */
 @Component
 @RequiredArgsConstructor
@@ -70,6 +77,8 @@ public class InventoryOutcomePreparationStore {
           LogisticsDocumentState.COMPLETED,
           LogisticsDocumentState.CANCELLED);
   private static final UUID EMPTY_QUERY_SENTINEL = new UUID(0, 0);
+  private static final UUID INVENTORY_SERVICE_SUBJECT =
+      UUID.nameUUIDFromBytes("rwms:inventory-service".getBytes(StandardCharsets.UTF_8));
 
   private final InventoryOutcomeReceiptRepository receipts;
   private final InventoryOutcomeReceiptAssetRepository receiptAssets;
@@ -89,9 +98,9 @@ public class InventoryOutcomePreparationStore {
   private final ObjectMapper json;
 
   /**
-   * Validates the entire batch and persists every local marker or rolls everything back. An equal
-   * completion time can advance only the same warehouse/inventory source to a strictly greater
-   * immutable final-plan version.
+   * Validates the entire batch and persists every local marker/document or rolls everything back.
+   * An equal completion time can advance only the same warehouse/inventory source to a strictly
+   * greater immutable final-plan version.
    */
   @Transactional
   public Preparation prepare(
@@ -125,13 +134,22 @@ public class InventoryOutcomePreparationStore {
                       throw new IllegalArgumentException("Inventory outcome contains duplicate assetId");
                     },
                     LinkedHashMap::new));
-    byAsset.keySet().stream()
-        .sorted(Comparator.comparing(UUID::toString))
-        .forEach(assetId -> transactionLock.acquire("inventory-outcome:asset:" + assetId));
+    transactionLock.acquireAll(
+        byAsset.keySet().stream().map(assetId -> "inventory-outcome:asset:" + assetId).toList());
     validateAndAdvanceWatermarks(command, byAsset.keySet());
 
     List<LogisticsDocumentLine> candidateLines =
         documentLines.findAllForUpdateByAssetIdIn(byAsset.keySet());
+    List<LogisticsDocument> currentSourceDocuments =
+        documents.findAllInventorySourceDocumentsForUpdate(
+            command.inventoryId(), command.finalPlanVersion());
+    Map<UUID, LogisticsDocument> currentSourceByFinding =
+        validateCurrentSourceDocuments(command, currentSourceDocuments);
+    Set<UUID> currentSourceDocumentIds =
+        currentSourceDocuments.stream()
+            .map(LogisticsDocument::getId)
+            .collect(Collectors.toUnmodifiableSet());
+
     candidateLines.stream()
         .map(LogisticsDocumentLine::getDocument)
         .filter(document -> !HISTORICAL_DOCUMENT_STATES.contains(document.getState()))
@@ -144,6 +162,7 @@ public class InventoryOutcomePreparationStore {
             });
     List<LogisticsDocumentLine> selectedLines =
         candidateLines.stream()
+            .filter(line -> !currentSourceDocumentIds.contains(line.getDocument().getId()))
             .filter(line -> line.getDocument().getState() != LogisticsDocumentState.CANCELLED)
             .filter(line -> relevantWarehouse(line.getDocument(), command.warehouseId()))
             .toList();
@@ -212,7 +231,7 @@ public class InventoryOutcomePreparationStore {
                 json.valueToTree(sortedOrderIds),
                 selectedLines.size(),
                 selectedTerms.size()));
-    receiptAssets.saveAll(
+    List<InventoryOutcomeReceiptAsset> dispositionMarkers =
         command.outcomes().stream()
             .map(
                 outcome ->
@@ -220,11 +239,17 @@ public class InventoryOutcomePreparationStore {
                         receipt.getId(),
                         outcome.findingId(),
                         outcome.assetId(),
+                        outcome.dispositionKind(),
                         outcome.desiredStatus()))
-            .toList());
-
+            .toList();
     applyDocumentMarkers(command, byAsset, selectedLines, selectedDocuments, selectedGuards);
     applyRentalMarkers(command, byAsset, selectedTerms, selectedOrders);
+    applyDispositionFacts(
+        command,
+        byAsset,
+        currentSourceByFinding,
+        candidateLines,
+        dispositionMarkers);
     createTaskActions(
         receipt.getId(), selectedDriverTasks, documentTaskIds, selectedEquipmentTasks, selectedGuards);
     return new Preparation(receipt.getId(), false, null);
@@ -264,6 +289,7 @@ public class InventoryOutcomePreparationStore {
             uuidList(receipt.getSupersededDocumentIds()),
             uuidList(receipt.getSupersededRentalOrderIds()),
             cancelledDriverTaskIds,
+            dispositionResults(receiptId),
             receipt.getSupersededLineCount(),
             receipt.getSupersededRentalUnitCount(),
             false);
@@ -331,6 +357,69 @@ public class InventoryOutcomePreparationStore {
       advanced.add(watermark);
     }
     watermarks.saveAll(advanced);
+  }
+
+  private static Map<UUID, LogisticsDocument> validateCurrentSourceDocuments(
+      InventoryOutcomeCommand command,
+      List<LogisticsDocument> currentDocuments) {
+    Map<UUID, InventoryOutcomeCommand.AssetOutcome> byFinding =
+        command.outcomes().stream()
+            .collect(
+                Collectors.toMap(
+                    InventoryOutcomeCommand.AssetOutcome::findingId, Function.identity()));
+    Map<UUID, LogisticsDocument> result = new LinkedHashMap<>();
+    for (LogisticsDocument document : currentDocuments) {
+      InventoryOutcomeCommand.AssetOutcome outcome =
+          byFinding.get(document.getInventorySourceFindingId());
+      if (outcome == null
+          || !requiresDocument(outcome)
+          || !document.matchesInventorySource(
+              command.inventoryId(),
+              outcome.findingId(),
+              outcome.dispositionKind(),
+              command.finalPlanVersion(),
+              command.finalPlanSha256())
+          || !matchesDispositionDocument(command, outcome, document)
+          || result.putIfAbsent(outcome.findingId(), document) != null) {
+        throw new LogisticsConflictException(
+            "Stored inventory disposition document conflicts with the final plan");
+      }
+    }
+    return Map.copyOf(result);
+  }
+
+  private static boolean matchesDispositionDocument(
+      InventoryOutcomeCommand command,
+      InventoryOutcomeCommand.AssetOutcome outcome,
+      LogisticsDocument document) {
+    boolean local = outcome.formerRental() != null;
+    LocalDocumentIdentity expected =
+        local
+            ? new LocalDocumentIdentity(
+                LogisticsDocumentType.RETURN,
+                LogisticsDocumentState.ACCEPTED,
+                outcome.formerRental().returnedOn(),
+                outcome.formerRental().clientId(),
+                outcome.formerRental().clientSnapshot())
+            : new LocalDocumentIdentity(
+                LogisticsDocumentType.SHIPMENT,
+                LogisticsDocumentState.SHIPPED,
+                outcome.shipment().departedOn(),
+                outcome.shipment().clientId(),
+                outcome.shipment().clientSnapshot());
+    return Objects.equals(document.getWarehouseId(), command.warehouseId())
+        && document.getDocumentType() == expected.type()
+        && document.getState() == expected.state()
+        && Objects.equals(document.getScheduledDate(), expected.date())
+        && Objects.equals(document.getClientId(), expected.clientId())
+        && Objects.equals(document.getPartySnapshot(), expected.clientSnapshot())
+        && Objects.equals(
+            document.getInventorySourceCompletedAt(), command.inventoryCompletedAt())
+        && document.getDriverSnapshot() == null
+        && document.getDriverWorkerId() == null
+        && document.getEquipmentMovementTaskId() == null
+        && document.getRentalOrderId() == null
+        && document.getRentalShipmentId() == null;
   }
 
   private void validateCompleteDocuments(
@@ -497,13 +586,132 @@ public class InventoryOutcomePreparationStore {
           command.finalPlanSha256());
     }
     rentalTerms.saveAllAndFlush(selectedTerms);
+    List<UUID> selectedOrderIds = selectedOrders.stream().map(RentalOrder::getId).toList();
+    Set<UUID> activeOrderIds =
+        selectedOrderIds.isEmpty()
+            ? Set.of()
+            : Set.copyOf(rentalTerms.findActiveOrderIdsByOrderIdIn(selectedOrderIds));
     for (RentalOrder order : selectedOrders) {
-      if (rentalTerms.countActiveByOrderId(order.getId()) == 0) {
+      if (!activeOrderIds.contains(order.getId())) {
         order.supersedeByCompletedInventory(
             command.inventoryId(), command.inventoryCompletedAt());
       }
     }
     rentalOrders.saveAll(selectedOrders);
+  }
+
+  private void applyDispositionFacts(
+      InventoryOutcomeCommand command,
+      Map<UUID, InventoryOutcomeCommand.AssetOutcome> byAsset,
+      Map<UUID, LogisticsDocument> currentSourceByFinding,
+      List<LogisticsDocumentLine> candidateLines,
+      List<InventoryOutcomeReceiptAsset> markers) {
+    Map<UUID, InventoryOutcomeReceiptAsset> markerByAsset =
+        markers.stream()
+            .collect(
+                Collectors.toMap(
+                    InventoryOutcomeReceiptAsset::getAssetId, Function.identity()));
+    Map<UUID, List<LogisticsDocumentLine>> linesByDocument =
+        candidateLines.stream()
+            .collect(Collectors.groupingBy(line -> line.getDocument().getId()));
+    List<DispositionFact> facts = new ArrayList<>();
+    List<LogisticsDocument> newDocuments = new ArrayList<>();
+    List<LogisticsDocumentLine> newLines = new ArrayList<>();
+    for (InventoryOutcomeCommand.AssetOutcome outcome : byAsset.values()) {
+      if (!requiresDocument(outcome)) continue;
+      LogisticsDocument document = currentSourceByFinding.get(outcome.findingId());
+      LogisticsDocumentLine line;
+      if (document != null) {
+        List<LogisticsDocumentLine> existingLines =
+            linesByDocument.getOrDefault(document.getId(), List.of());
+        if (existingLines.size() != 1
+            || !matchesDispositionLine(command, outcome, existingLines.getFirst())) {
+          throw new LogisticsConflictException(
+              "Stored inventory disposition line conflicts with the final plan");
+        }
+        line = existingLines.getFirst();
+      } else {
+        document = createDispositionDocument(command, outcome);
+        line =
+            LogisticsDocumentLine.createInventoryDisposition(
+                document,
+                outcome.assetId(),
+                command.inventoryId(),
+                outcome.findingId(),
+                outcome.dispositionKind(),
+                dispositionClientSnapshot(outcome),
+                outcome.shipment() == null ? null : json.valueToTree(outcome.shipment().furniture()));
+        newDocuments.add(document);
+        newLines.add(line);
+      }
+      facts.add(new DispositionFact(markerByAsset.get(outcome.assetId()), document, line));
+    }
+    documents.saveAll(newDocuments);
+    documentLines.saveAll(newLines);
+    facts.forEach(
+        fact -> fact.marker().attachDocument(fact.document().getId(), fact.line().getId()));
+    receiptAssets.saveAllAndFlush(markers);
+  }
+
+  private boolean matchesDispositionLine(
+      InventoryOutcomeCommand command,
+      InventoryOutcomeCommand.AssetOutcome outcome,
+      LogisticsDocumentLine line) {
+    JsonNode expectedFurniture =
+        outcome.shipment() == null ? null : json.valueToTree(outcome.shipment().furniture());
+    LogisticsLineState expectedState =
+        outcome.shipment() == null ? LogisticsLineState.ARRIVED : LogisticsLineState.DEPARTED;
+    return outcome.assetId().equals(line.getAssetId())
+        && line.getAssetVersion() == 0
+        && line.getState() == expectedState
+        && Objects.equals(line.getTenantSnapshot(), dispositionClientSnapshot(outcome))
+        && line.getRentalOrderId() == null
+        && command.inventoryId().equals(line.getInventorySourceId())
+        && outcome.findingId().equals(line.getInventorySourceFindingId())
+        && outcome.dispositionKind().equals(line.getInventorySourceDispositionKind())
+        && Objects.equals(expectedFurniture, line.getInventoryShipmentFurniture());
+  }
+
+  private static LogisticsDocument createDispositionDocument(
+      InventoryOutcomeCommand command, InventoryOutcomeCommand.AssetOutcome outcome) {
+    if (outcome.formerRental() != null) {
+      return LogisticsDocument.createInventoryReturn(
+          command.warehouseId(),
+          outcome.formerRental().clientId(),
+          outcome.formerRental().clientSnapshot(),
+          outcome.formerRental().returnedOn(),
+          command.inventoryId(),
+          outcome.findingId(),
+          command.inventoryCompletedAt(),
+          command.finalPlanVersion(),
+          command.finalPlanSha256(),
+          INVENTORY_SERVICE_SUBJECT);
+    }
+    if (outcome.shipment() != null) {
+      return LogisticsDocument.createInventoryShipment(
+          command.warehouseId(),
+          outcome.shipment().clientId(),
+          outcome.shipment().clientSnapshot(),
+          outcome.shipment().departedOn(),
+          command.inventoryId(),
+          outcome.findingId(),
+          command.inventoryCompletedAt(),
+          command.finalPlanVersion(),
+          command.finalPlanSha256(),
+          INVENTORY_SERVICE_SUBJECT);
+    }
+    throw new IllegalArgumentException("Inventory disposition does not create a document");
+  }
+
+  private static boolean requiresDocument(InventoryOutcomeCommand.AssetOutcome outcome) {
+    return outcome.formerRental() != null || outcome.shipment() != null;
+  }
+
+  private static String dispositionClientSnapshot(
+      InventoryOutcomeCommand.AssetOutcome outcome) {
+    if (outcome.formerRental() != null) return outcome.formerRental().clientSnapshot();
+    if (outcome.shipment() != null) return outcome.shipment().clientSnapshot();
+    return null;
   }
 
   private void createTaskActions(
@@ -594,6 +802,34 @@ public class InventoryOutcomePreparationStore {
     }
   }
 
+  private List<InventoryDispositionResult> dispositionResults(UUID receiptId) {
+    return receiptAssets.findAllByReceiptIdOrderByAssetIdAsc(receiptId).stream()
+        .map(
+            marker ->
+                new InventoryDispositionResult(
+                    marker.getFindingId(),
+                    marker.getAssetId(),
+                    InventoryDispositionKind.valueOf(marker.getDispositionKind()),
+                    marker.getId(),
+                    marker.getCreatedDocumentId(),
+                    marker.getCreatedLineId()))
+        .toList();
+  }
+
+  /** Immutable fields that distinguish a direct inventory document from an ordinary workflow. */
+  private record LocalDocumentIdentity(
+      LogisticsDocumentType type,
+      LogisticsDocumentState state,
+      java.time.LocalDate date,
+      UUID clientId,
+      String clientSnapshot) {}
+
+  /** Marker and document pair attached after the complete batch has been persisted once. */
+  private record DispositionFact(
+      InventoryOutcomeReceiptAsset marker,
+      LogisticsDocument document,
+      LogisticsDocumentLine line) {}
+
   private static ApplyInventoryOutcomeResponse withReplay(ApplyInventoryOutcomeResponse response) {
     return new ApplyInventoryOutcomeResponse(
         response.inventoryId(),
@@ -601,6 +837,7 @@ public class InventoryOutcomePreparationStore {
         response.supersededDocumentIds(),
         response.supersededRentalOrderIds(),
         response.cancelledDriverTaskIds(),
+        response.dispositions(),
         response.supersededLineCount(),
         response.supersededRentalUnitCount(),
         true);

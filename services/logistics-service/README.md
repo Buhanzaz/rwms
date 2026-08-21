@@ -144,6 +144,11 @@ repair work requiring logistics driver/equipment orchestration. It uses service 
 not a client route. Its driver-task intake accepts ordinary inbound `DELIVER_TO_REPAIR` work and a
 separate outbound `CAPITAL_TO_PRODUCTION` task whose source is the external capital repair; both
 remain logistics-owned scheduled work and never bypass the ordered driver queue.
+When a normal return finishes physical intake, logistics records one immutable
+`returnArrivedAt` on the document. The maintenance-only return-arrival read uses a bounded JPA
+projection over this owner field; Flyway V52 backfills existing rows from their exact
+`RETURN_INSPECTION_REQUIRED` event. Inventory-created historical returns bypass intake, keep this
+field null and cannot become a synthetic estimate source.
 When a fresh private maintenance `FIXED_DATE` request reaches logistics after that warehouse-local
 day has passed, the scheduler preserves the fixed-date/source intent but persists the current local
 day as the effective `scheduledDate`. This recovery applies only to service-owned maintenance
@@ -168,6 +173,17 @@ through task-board's source-owned general cancellation even after start, while c
 preserved. The batch does not create repair or capital-repair work: maintenance runs afterward
 through the existing integrations, and a same-source reassertion protects the `INVENTORY` movement
 whose `sourceId` is a current finding while still cancelling older inventory-source movement.
+
+Each outcome has one strict disposition. `LOCAL` with frozen former-rental evidence creates or
+reuses a terminal public `RETURN` (`ACCEPTED`/`ARRIVED`) without intake, estimate or task creation.
+`SHIPMENT` creates or reuses a terminal public `SHIPMENT` (`SHIPPED`/`DEPARTED`) with no driver,
+hold, task or stock allocation; its line exposes the exact nullable `inventoryShipmentFurniture`
+snapshot. `WRITE_OFF` creates only a durable marker and releases predecessor logistics state: it
+creates no document, no `FREE` or terminal asset outcome and leaves final disposition to
+maintenance. V51 stores these exact source/disposition facts, and preparation saves the batch with
+bounded flushes rather than flushing per outcome. It acquires the sorted per-asset advisory-lock
+set in one database round trip and checks remaining active rental terms once for the complete order
+set, so request query count does not grow by one lock or active-term query per outcome.
 An inventory-displaced logistics guard enters reconciliation until asset-service confirms its exact
 typed document-line lease as `RELEASED` or `EXPIRED`; the release runs outside the database
 transaction with a stable dependency idempotency key, and an owner/fence mismatch fails closed.
@@ -281,6 +297,11 @@ relayed after local commit. The sole deliberate remote-under-lock exception is a
 board move: it retains the task/document pre-start locks across task-board's bounded version-fenced
 call to close the local-start/remote-`WAITING` race, and the existing status poll converges a remote
 success followed by local rollback.
+
+The driver relay handles at most 100 due tasks per pass. An unchanged `SCHEDULED` or `CURRENT`
+task-board snapshot defers its fallback poll for 30 seconds without advancing the business
+aggregate version; operator commands still trigger immediate processing. This prevents an idle
+fleet from generating one cross-service HTTP request per task every second.
 
 ## Persistence, events and recovery
 

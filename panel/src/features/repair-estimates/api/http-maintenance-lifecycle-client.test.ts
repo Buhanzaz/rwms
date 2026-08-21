@@ -35,6 +35,7 @@ const evidenceId = "00000000-0000-4000-8000-000000000010"
 const workerId = "00000000-0000-4000-8000-000000000011"
 const workerGroupId = "00000000-0000-4000-8000-000000000012"
 const mediaId = "00000000-0000-4000-8000-000000000013"
+const secondRepairId = "00000000-0000-4000-8000-000000000014"
 
 const stage: MaintenancePlanStageInput = {
   id: stageId,
@@ -98,6 +99,7 @@ describe("maintenance lifecycle HTTP client", () => {
       executionState: "QUEUED",
       acceptanceState: "NOT_READY",
       rentalItemId,
+      repairIds: [repairId, secondRepairId],
     })
     await getMaintenanceRepair("token", warehouseId, repairId)
     await listMaintenanceAcceptance("token", warehouseId)
@@ -126,6 +128,9 @@ describe("maintenance lifecycle HTTP client", () => {
     expect(String(fetchMock.mock.calls[3]![0])).toContain(
       "executionState=QUEUED"
     )
+    expect(
+      new URL(String(fetchMock.mock.calls[3]![0])).searchParams.get("repairIds")
+    ).toBe(`${repairId},${secondRepairId}`)
     expect(String(fetchMock.mock.calls[5]![0])).toContain("state=PENDING")
   })
 

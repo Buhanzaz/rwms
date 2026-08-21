@@ -16,16 +16,19 @@ public class LogisticsReturnShortageRegistrar {
   private final LogisticsReturnShortageRepository sources;
   private final MaintenanceApplicationService maintenance;
   private final WarehouseLifecycleOperations warehouseLifecycle;
+  private final EstimateCreationWindowPolicy creationWindow;
   private final TransactionTemplate transactions;
 
   public LogisticsReturnShortageRegistrar(
       LogisticsReturnShortageRepository sources,
       MaintenanceApplicationService maintenance,
       WarehouseLifecycleOperations warehouseLifecycle,
+      EstimateCreationWindowPolicy creationWindow,
       PlatformTransactionManager transactionManager) {
     this.sources = sources;
     this.maintenance = maintenance;
     this.warehouseLifecycle = warehouseLifecycle;
+    this.creationWindow = creationWindow;
     this.transactions = new TransactionTemplate(transactionManager);
   }
 
@@ -44,6 +47,8 @@ public class LogisticsReturnShortageRegistrar {
       return false;
     }
     warehouseLifecycle.requireIncoming(candidate.getWarehouseId());
+    creationWindow.requireTrustedCreationOpen(
+        candidate.getWarehouseId(), candidate.getArrivedAt());
     Boolean registered =
         transactions.execute(
             status -> registerAfterAdmission(candidate, dispatchDate, mediaReferences));

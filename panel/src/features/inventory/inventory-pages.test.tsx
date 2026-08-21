@@ -15,6 +15,7 @@ import type {
   InventoryFindingDto,
   InventoryFurnitureReviewDto,
   InventorySessionDto,
+  InventorySessionSummaryDto,
   InventoryStatisticsDto,
 } from "@/features/inventory/model/inventory"
 import type { OutcomeRecalculation } from "@/features/inventory/model/inventory-service"
@@ -28,11 +29,15 @@ import { ApiError } from "@/lib/api-client"
 const inventoryApi = vi.hoisted(() => ({
   cancelInventory: vi.fn(),
   completeInventory: vi.fn(),
+  confirmInventoryReturns: vi.fn(),
+  confirmInventoryShipments: vi.fn(),
+  getInventoryCabinDispositionReview: vi.fn(),
   getInventoryFinalPlan: vi.fn(),
   getInventoryFurnitureReview: vi.fn(),
   getInventoryPlanningSettings: vi.fn(),
   getInventoryPreliminaryStatistics: vi.fn(),
   getInventory: vi.fn(),
+  listInventories: vi.fn(),
   prepareInventoryFinalPlan: vi.fn(),
   previewInventoryCompletion: vi.fn(),
   recalculateInventoryOutcome: vi.fn(),
@@ -57,7 +62,10 @@ const auth = vi.hoisted(() => ({ useAuth: vi.fn() }))
 const warehouse = vi.hoisted(() => ({ useWarehouse: vi.fn() }))
 const viewport = vi.hoisted(() => ({ isMobile: false }))
 const queueCapabilities = vi.hoisted(() => ({ get: vi.fn() }))
-const assetApi = vi.hoisted(() => ({ getRentalItemCreationOptions: vi.fn() }))
+const assetApi = vi.hoisted(() => ({
+  getEquipmentItems: vi.fn(),
+  getRentalItemCreationOptions: vi.fn(),
+}))
 
 vi.mock("sonner", () => ({ toast }))
 vi.mock("@/features/auth/use-auth", () => ({ useAuth: auth.useAuth }))
@@ -73,9 +81,14 @@ vi.mock("@/features/inventory/api/inventory-api", async () => {
     ...actual,
     cancelInventory: inventoryApi.cancelInventory,
     getInventory: inventoryApi.getInventory,
+    listInventories: inventoryApi.listInventories,
     getInventoryPreliminaryStatistics:
       inventoryApi.getInventoryPreliminaryStatistics,
     completeInventory: inventoryApi.completeInventory,
+    confirmInventoryReturns: inventoryApi.confirmInventoryReturns,
+    confirmInventoryShipments: inventoryApi.confirmInventoryShipments,
+    getInventoryCabinDispositionReview:
+      inventoryApi.getInventoryCabinDispositionReview,
     getInventoryFinalPlan: inventoryApi.getInventoryFinalPlan,
     getInventoryFurnitureReview: inventoryApi.getInventoryFurnitureReview,
     getInventoryPlanningSettings: inventoryApi.getInventoryPlanningSettings,
@@ -113,6 +126,12 @@ vi.mock("@/features/rental-items/api/asset-rental-items-api", async () => {
     ...actual,
     getRentalItemCreationOptions: assetApi.getRentalItemCreationOptions,
   }
+})
+vi.mock("@/api/equipment-api", async () => {
+  const actual = await vi.importActual<typeof import("@/api/equipment-api")>(
+    "@/api/equipment-api"
+  )
+  return { ...actual, getEquipmentItems: assetApi.getEquipmentItems }
 })
 vi.mock("@/features/inventory/inventory-inspection-workspace", () => ({
   InventoryInspectionWorkspace: ({
@@ -207,6 +226,7 @@ vi.mock("@/features/repair-estimates/repair-work-completion-dialog", () => ({
 
 import {
   InventoryFinishPage,
+  InventoryHistoryPage,
   InventoryHistoryDetailPage,
   InventorySessionPage,
 } from "@/features/inventory/inventory-pages"
@@ -366,6 +386,33 @@ function activeSession(
   }
 }
 
+function historySummary(
+  overrides: Partial<InventorySessionSummaryDto> = {}
+): InventorySessionSummaryDto {
+  return {
+    id: INVENTORY_ID,
+    version: 4,
+    warehouseId: WAREHOUSE_ID,
+    status: "COMPLETED",
+    author: {
+      id: currentUser.id,
+      displayName: currentUser.displayName,
+      permissions: [],
+      authorizedWarehouseIds: null,
+    },
+    businessDate: "2026-07-27",
+    startedAt: "2026-07-27T08:00:00Z",
+    completedAt: "2026-07-27T09:00:00Z",
+    expectedCount: 6,
+    findingCount: 5,
+    inspectedCount: 3,
+    publicationStatus: "PUBLISHED",
+    reviewStage: "FURNITURE",
+    furnitureReconciliationState: "SUCCEEDED",
+    ...overrides,
+  }
+}
+
 function furnitureReview(
   overrides: Partial<InventoryFurnitureReviewDto> = {}
 ): InventoryFurnitureReviewDto {
@@ -446,25 +493,6 @@ function outcomeRecalculation(
     furnitureReconciliationState: "PENDING" as const,
     createdPublicationCount: 75,
     requeuedPublicationCount: 141,
-    preservedSucceededPublicationCount: 0,
-    publicationBatch: {
-      inventoryId: INVENTORY_ID,
-      aggregateState: "PENDING" as const,
-      intents: [
-        {
-          id: "99999999-9999-4999-8999-999999999999",
-          inventoryId: INVENTORY_ID,
-          findingId: FINDING_ID,
-          publicationRevision: 2,
-          state: "READY" as const,
-          sourceRevision: 1,
-          attemptCount: 1,
-          maintenanceRepairId: null,
-          desiredAssetStatus: "REPAIR" as const,
-          failureCode: null,
-        },
-      ],
-    },
     ...overrides,
   }
 }
@@ -518,6 +546,7 @@ function renderPage(
             path="/inventory/history/:inventoryId"
             element={<InventoryHistoryDetailPage />}
           />
+          <Route path="/inventory/history" element={<InventoryHistoryPage />} />
         </Routes>
       </QueryClientProvider>
     </MemoryRouter>
@@ -546,6 +575,15 @@ beforeEach(() => {
   viewport.isMobile = false
   inventoryApi.saveInventoryFinding.mockResolvedValue(finding("AFTER_RENT"))
   inventoryApi.getInventoryPreliminaryStatistics.mockResolvedValue(null)
+  inventoryApi.listInventories.mockResolvedValue({
+    content: [historySummary()],
+    page: {
+      page: 0,
+      size: 50,
+      totalElements: 1,
+      totalPages: 1,
+    },
+  })
   inventoryApi.getInventoryPlanningSettings.mockResolvedValue({
     warehouseId: WAREHOUSE_ID,
     settingsRevision: 1,
@@ -555,6 +593,14 @@ beforeEach(() => {
     holidays: [],
   })
   inventoryApi.getInventoryFinalPlan.mockResolvedValue(finalPlan())
+  inventoryApi.getInventoryCabinDispositionReview.mockResolvedValue({
+    inventoryId: INVENTORY_ID,
+    sessionRevision: 8,
+    reviewRevision: 2,
+    phase: "COMPLETED",
+    returnCandidates: [],
+    missingCandidates: [],
+  })
   inventoryApi.prepareInventoryFinalPlan.mockResolvedValue(finalPlan())
   inventoryApi.saveInventoryFinalPlan.mockResolvedValue(finalPlan())
   queueCapabilities.get.mockResolvedValue({
@@ -573,11 +619,57 @@ beforeEach(() => {
       { typeId: "type-1", dimensionId: "dimension-1", sortOrder: 0 },
     ],
   })
+  assetApi.getEquipmentItems.mockResolvedValue([])
 })
 
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+})
+
+describe("InventoryHistoryPage bounded history", () => {
+  it("loads one summary page at a time and moves through server pages", async () => {
+    const user = userEvent.setup()
+    inventoryApi.listInventories.mockImplementation(
+      async (_warehouseId: string, page: number) => ({
+        content: [
+          historySummary({
+            id:
+              page === 0
+                ? INVENTORY_ID
+                : "99999999-9999-4999-8999-999999999999",
+            expectedCount: page === 0 ? 6 : 2,
+            findingCount: page === 0 ? 5 : 2,
+            inspectedCount: page === 0 ? 3 : 2,
+          }),
+        ],
+        page: {
+          page,
+          size: 50,
+          totalElements: 51,
+          totalPages: 2,
+        },
+      })
+    )
+
+    renderPage("/inventory/history")
+
+    expect((await screen.findAllByText("3 из 5")).length).toBeGreaterThan(0)
+    expect(inventoryApi.listInventories).toHaveBeenCalledTimes(1)
+    expect(inventoryApi.listInventories).toHaveBeenLastCalledWith(
+      WAREHOUSE_ID,
+      0
+    )
+
+    await user.click(screen.getByRole("button", { name: "Вперёд" }))
+
+    expect((await screen.findAllByText("2 из 2")).length).toBeGreaterThan(0)
+    expect(inventoryApi.listInventories).toHaveBeenCalledTimes(2)
+    expect(inventoryApi.listInventories).toHaveBeenLastCalledWith(
+      WAREHOUSE_ID,
+      1
+    )
+  })
 })
 
 describe("InventorySessionPage inspection", () => {
@@ -1099,13 +1191,36 @@ describe("InventoryFinishPage conflict resolution", () => {
     }
   }
 
-  it("moves from cabin review without a completion preview and sends the incomplete acknowledgement", async () => {
+  it("requires the server return and shipment phases before moving to furniture", async () => {
     const user = userEvent.setup()
     const reviewed = activeSession(finding("FREE"), { version: 8 })
     inventoryApi.getInventory.mockResolvedValue(reviewed)
     inventoryApi.startInventoryFurnitureReview.mockResolvedValue(
       furnitureReview()
     )
+    const returnsReview = {
+      inventoryId: INVENTORY_ID,
+      sessionRevision: 8,
+      reviewRevision: 0,
+      phase: "RETURNS" as const,
+      returnCandidates: [],
+      missingCandidates: [],
+    }
+    const shipmentsReview = {
+      ...returnsReview,
+      reviewRevision: 1,
+      phase: "SHIPMENTS" as const,
+    }
+    const completedReview = {
+      ...returnsReview,
+      reviewRevision: 2,
+      phase: "COMPLETED" as const,
+    }
+    inventoryApi.getInventoryCabinDispositionReview.mockResolvedValue(
+      returnsReview
+    )
+    inventoryApi.confirmInventoryReturns.mockResolvedValue(shipmentsReview)
+    inventoryApi.confirmInventoryShipments.mockResolvedValue(completedReview)
 
     renderPage(`/inventory/${INVENTORY_ID}/finish`)
 
@@ -1119,19 +1234,42 @@ describe("InventoryFinishPage conflict resolution", () => {
       })
     ).toBeNull()
 
-    await user.click(screen.getByRole("checkbox"))
+    await user.click(
+      screen.getByRole("button", { name: "Подтвердить возвраты" })
+    )
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Подтвердить отгрузки и списание остальных",
+      })
+    )
+    await waitFor(() => expect(transition.disabled).toBe(false))
     await user.click(transition)
 
     await waitFor(() =>
       expect(inventoryApi.startInventoryFurnitureReview).toHaveBeenCalledWith({
         session: reviewed,
-        acknowledgeIncomplete: true,
       })
     )
     expect(inventoryApi.previewInventoryCompletion).not.toHaveBeenCalled()
+    expect(inventoryApi.confirmInventoryReturns).toHaveBeenCalledWith({
+      inventoryId: INVENTORY_ID,
+      request: {
+        expectedSessionRevision: 8,
+        expectedReviewRevision: 0,
+        returns: [],
+      },
+    })
+    expect(inventoryApi.confirmInventoryShipments).toHaveBeenCalledWith({
+      inventoryId: INVENTORY_ID,
+      request: {
+        expectedSessionRevision: 8,
+        expectedReviewRevision: 1,
+        shipments: [],
+      },
+    })
   })
 
-  it("does not acknowledge incomplete cabins when every cabin has been inspected", async () => {
+  it("moves to furniture after the server disposition review is completed", async () => {
     const user = userEvent.setup()
     const reviewed = activeSession(
       finding("FREE", { inspectionStatus: "READY" }),
@@ -1153,7 +1291,6 @@ describe("InventoryFinishPage conflict resolution", () => {
     await waitFor(() =>
       expect(inventoryApi.startInventoryFurnitureReview).toHaveBeenCalledWith({
         session: reviewed,
-        acknowledgeIncomplete: false,
       })
     )
   })
@@ -1604,7 +1741,6 @@ describe("InventoryFinishPage conflict resolution", () => {
     await waitFor(() => expect(refresh.disabled).toBe(true))
     expect(inventoryApi.startInventoryFurnitureReview).toHaveBeenCalledWith({
       session: reviewed,
-      acknowledgeIncomplete: false,
     })
     expect(inventoryApi.refreshInventorySession).not.toHaveBeenCalled()
   })
@@ -2177,7 +2313,7 @@ describe("InventoryHistoryDetailPage authoritative outcome recovery", () => {
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
   })
 
-  it("stores the publication response, refreshes exact caches and reports all counts", async () => {
+  it("refreshes exact caches and reports the created and requeued counts", async () => {
     const user = userEvent.setup()
     const completed = activeSession(
       finding("FREE", { inspectionStatus: "READY" }),
@@ -2212,14 +2348,14 @@ describe("InventoryHistoryDetailPage authoritative outcome recovery", () => {
 
     await waitFor(() =>
       expect(toast.success).toHaveBeenCalledWith(
-        "Пересчёт запущен: создано 75, заново поставлено 141, уже полностью применено 0."
+        "Пересчёт запущен: создано 75, заново поставлено 141."
       )
     )
-    expect(
-      queryClient.getQueryData(inventoryPublicationQueryKey(INVENTORY_ID))
-    ).toEqual(outcome.publicationBatch)
     expect(invalidateQueries).toHaveBeenCalledWith({
       queryKey: ["inventory-service", "detail", INVENTORY_ID],
+    })
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: inventoryPublicationQueryKey(INVENTORY_ID),
     })
     expect(invalidateQueries).toHaveBeenCalledWith({
       queryKey: ["inventory-service", "final-plan", INVENTORY_ID],

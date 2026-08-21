@@ -86,9 +86,14 @@ references ревизии finding
 `media.inventory`. Media-service делает папку завершённой инвентаризации текущим набором фото
 бытовки; прежние папки приёмки или инвентаризаций остаются отдельным историческим evidence и не
 смешиваются с текущим набором. Для finding без изображений этот эффект пропускается. Затем
-inventory передаёт весь неизменяемый итоговый план в logistics-service с одним стабильным для
-плана key и точным токеном `logistics.inventory`. Logistics замещает active rental, shipment,
-transfer и driver-task state перечисленных бытовок, сохраняя audit rows. В конце finding с работами
+inventory сохраняет один
+[`InventoryPlanLogisticsEffect`](src/main/java/dev/buhanzaz/rwms/inventory/domain/InventoryPlanLogisticsEffect.java)
+на generation всего неизменяемого итогового плана. Точные байты запроса, SHA-256 и idempotency key
+замораживаются до remote I/O. Короткий независимо закоммиченный claim отправляет этот запрос в
+logistics-service ровно один раз для успешно применённой generation с токеном
+`logistics.inventory`; повторы отдельных findings проверяют общий receipt, а не собирают и не
+отправляют полный план заново. Logistics замещает active rental, shipment, transfer и driver-task
+state перечисленных бытовок, сохраняя audit rows. В конце finding с работами
 передаётся в maintenance вместе с эффективной версией asset и временем завершения: maintenance
 авторитетно замещает прежние active ремонтные работы перед созданием требуемого ремонта или
 капремонта. Finding без работ идёт в отдельную no-work границу maintenance, которая замещает active
@@ -96,7 +101,12 @@ estimates, repairs, leases и tasks, а не только меняет стат�
 проецируется из результата asset и содержит только поля maintenance-контракта; asset-only поля
 наблюдения паспорта и его hash через эту границу не передаются. Отказ любого обязательного
 эффекта не позволяет отметить публикацию успешной, поэтому recovery повторно подтверждает asset,
-media, общий эффект logistics и maintenance именно в таком порядке. Этот поток никогда не удаляет
+media, общий эффект logistics и maintenance именно в таком порядке. Ограниченный код RWMS Problem
+Details из семантического downstream `400`, `404`, `409` или `422` сохраняется в blocked
+publication. `408`, `425`, `429`, transport-ошибки и malformed responses остаются повторяемыми
+dependency failures. Автоматический recovery публикаций выбирает один due batch максимум из 20
+строк, сохраняет экспоненциальную паузу и останавливается после восьми delivery attempts в одной
+generation повторного применения результата. Этот поток никогда не удаляет
 фотографии, evidence finding, доменную историю и объекты media-service/MinIO.
 
 `POST /api/inventory/v1/sessions/{inventoryId}/outcome/recalculate` — MANAGE-команда восстановления
@@ -114,8 +124,10 @@ remote I/O или downstream mutation. Media owner authorization завершё�
 не могут доказать выполнение более новых logistics, media и no-work эффектов. Она также делает
 незавершённую сверку мебели немедленно доступной для повтора. Attempts и прежние результаты
 maintenance остаются append-only audit evidence; schedulers применяют очередь со стабильной
-idempotency. Поэтому compatibility-поле `preservedSucceededPublicationCount` для текущей
-авторитетной команды равно нулю. Миграция
+idempotency. Publication intents записываются одним локальным batch, а ответ содержит только fences
+session/плана, состояние мебели и количества созданных/повторно поставленных строк. Панель
+инвалидирует и заново читает авторитетную projection публикации вместо получения и кеширования всех
+intents внутри ответа `202`. Миграция
 [`V19__authoritative_inventory_outcome_recovery.sql`](src/main/resources/db/migration/V19__authoritative_inventory_outcome_recovery.sql)
 добавляет желаемый статус и сохранённый asset result без удаления прежней истории публикации.
 Миграция
@@ -128,6 +140,35 @@ generation повторного применения и тем самым пол
 запрос с паспортом. Миграция
 [`V24__restore_explicit_inventory_observations.sql`](src/main/resources/db/migration/V24__restore_explicit_inventory_observations.sql)
 разрешает audit event восстановления без перезаписи существующих findings, plans или publication rows.
+Миграция
+[`V25__plan_wide_logistics_effect.sql`](src/main/resources/db/migration/V25__plan_wide_logistics_effect.sql)
+добавляет durable запрос logistics для generation плана и его lease/retry/result state. Существующие
+completed plans планируются лениво при первом повторе, поэтому migration не выполняет remote call.
+Миграция
+[`V27__bound_inventory_publication_recovery.sql`](src/main/resources/db/migration/V27__bound_inventory_publication_recovery.sql)
+добавляет локальный для generation лимит попыток и due time. Явный перерасчёт из истории сбрасывает
+только этот лимит generation; lifetime attempt counter и append-only строки attempts/results не
+изменяются.
+
+Перед сверкой мебели inventory теперь владеет durable review решений по бытовкам с фазами
+`RETURNS`, `SHIPMENTS` и `COMPLETED`. Для каждой найденной бытовки, чей inspection snapshot был
+`RENTED`, обязателен точный исторический возврат. Среди ненайденных бытовок request перечисляет
+только фактические отгрузки; каждый пропущенный кандидат автоматически становится `WRITE_OFF`.
+Мебель отгрузки сохраняет identity/version каталога и любое положительное количество без проверки
+складского остатка. Эти решения копируются в каждую неизменяемую generation итогового плана.
+`LOCAL` использует обычную публикацию free/repair, `SHIPMENT` публикует `RENTED` с замороженным
+содержимым, а `WRITE_OFF` не меняет asset state и не попадает в мебель, фотографии или ремонтную
+публикацию.
+
+Миграция
+[`V26__inventory_cabin_dispositions.sql`](src/main/resources/db/migration/V26__inventory_cabin_dispositions.sql)
+добавляет aggregate фаз, точные candidate rows, disposition evidence итогового плана и durable
+intent списания бытовки. Completion сохраняет общий logistics effect плана перед write-off intent в
+одной транзакции. Recovery списаний выбирает только точную logistics generation в `SUCCEEDED` или
+`BLOCKED`: success разрешает стабильную maintenance-команду, а upstream block явно завершает
+зависимый intent как blocked. Автоматическая доставка logistics и write-off ограничена восемью
+попытками; MANAGE recovery command может создать новую неизменяемую generation плана и повторно
+поставить незавершённую работу.
 
 ## Безопасность, изоляция складов и fencing
 

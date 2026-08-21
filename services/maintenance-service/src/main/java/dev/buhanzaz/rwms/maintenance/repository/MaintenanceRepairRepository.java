@@ -9,13 +9,15 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
 /** Spring Data persistence boundary for MaintenanceRepair; business transitions remain in the owning service. */
-public interface MaintenanceRepairRepository extends JpaRepository<MaintenanceRepair, UUID> {
+public interface MaintenanceRepairRepository
+    extends JpaRepository<MaintenanceRepair, UUID>, JpaSpecificationExecutor<MaintenanceRepair> {
   List<MaintenanceRepair> findAllByWarehouseIdOrderByCreatedAtDesc(UUID warehouseId);
   List<MaintenanceRepair> findAllByWarehouseIdAndExecutionStateInOrderByCreatedAtAscIdAsc(
       UUID warehouseId,

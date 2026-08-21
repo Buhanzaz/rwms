@@ -46,6 +46,13 @@ full authoritative replacement. The exact no-work boundary
 `PUT /api/internal/maintenance/v1/inventory/outcomes/{inventoryId}/findings/{findingId}/no-work`
 creates no estimate or repair and leaves no non-terminal maintenance target for a `FREE` finding.
 
+`POST /api/internal/maintenance/v1/inventory/cabin-write-offs` is the narrow companion for a cabin
+left missing after inventory shipment review. It accepts only the exact inventory-service
+credential and one stable source/key, loads current cabin contents from asset-service, and freezes
+them as `DISPOSE_WITH_CABIN` in a normal `PENDING_APPROVAL` write-off decision. It does not apply a
+terminal status; the existing global-administrator approval and durable property-disposition saga
+remain the only terminal path.
+
 Both work and no-work flows durably capture every non-terminal DRAFT estimate and active repair,
 cancel maintenance-owned task-board work and driver movement, release operation leases and repair
 places through their owners, and only then supersede local estimates, repairs, and stages. Rows,
@@ -147,6 +154,24 @@ inventory publication as completed work, and creates no ordinary task-board task
 it queues the repair and either registers the task-board task directly or, when
 `movementToRepair=true`, creates the logistics
 `DELIVER_TO_REPAIR` driver task and registers repair work after delivery.
+Every ordinary repair-stage snapshot puts the selected repair cover first in ordered
+`sourceMedia`; the remaining aggregate photos retain their stable order, while each work line lists
+only its own photo IDs. The common task title is the maintenance-calculated complexity label
+(`Лёгкий ремонт`, `Средний ремонт`, `Сложный ремонт` or `Капитальный ремонт`) instead of the
+technical `Maintenance repair`; task-board stores that source-owned title through its existing
+contract. This worker-facing projection is built by
+[`MaintenanceTaskBoardSupport`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceTaskBoardSupport.java).
+The public repair collection applies warehouse, state, cabin, and optional bounded `repairIds`
+filters plus paging in PostgreSQL before assembling repair DTOs. Task-board consumers use that
+additive ID filter in batches of at most 200, so a board refresh never hydrates every repair in a
+warehouse; the unfiltered endpoint retains its existing paged behavior. This read path is owned by
+[`MaintenanceRepairUseCases`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceRepairUseCases.java).
+At startup, maintenance idempotently enqueues the existing pre-start task update workflow for
+every already registered queued repair. This owner-local pass performs no remote I/O and lets the
+normal reconciliation worker correct old presentation snapshots, including cover order and
+complexity title, without mutating task-board storage directly. A task started during that bounded
+recovery is left untouched and cannot degrade the repair's delivery state; see
+[`MaintenanceWorkerCoverReconciliation`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceWorkerCoverReconciliation.java).
 When catalog-enforced capital work retains `movementToRepair=true`, the same frozen choice creates
 or reuses `CAPITAL_TO_PRODUCTION`; recalculation never clears that choice merely because the target
 repair is capital. The capital repair still remains `QUEUED/NOT_READY` until execution completes.
@@ -190,6 +215,13 @@ Remote truth is accessed through `MaintenanceDependencyGateway` with client cred
 task-board, media, logistics and warehouse-service. Do not make a remote call while a local write
 transaction holds maintenance locks. The application flow commits local preparation before remote
 preflight/effects, then continues local fenced state through durable recovery records.
+
+Each warehouse also owns a version-fenced estimate-creation window setting (`1..3650` days,
+default `7`). A new manual estimate reads the latest physical return arrival from logistics; the
+automatic return source carries the same immutable arrival evidence. Maintenance evaluates an
+inclusive deadline in the warehouse timezone. Arrival on 1 August with seven days is allowed
+through 8 August and fails from 9 August with `ESTIMATE_CREATION_WINDOW_EXPIRED`; the independent
+direct-repair command remains available.
 
 ## Explicit capital-repair choice
 
@@ -242,7 +274,7 @@ application owners:
 | Collaborator family | Owned responsibility |
 | --- | --- |
 | `MaintenanceCatalogUseCases` plus catalog model/support types | Catalog-version reads, draft mutation, forking, validation and activation |
-| `MaintenanceEstimateUseCases` plus estimate/furniture/revision supports | Estimate lifecycle, lines, plans, furniture admission and immutable revisions |
+| `MaintenanceEstimateUseCases`, `MaintenanceEstimateCreationUseCases` and estimate/furniture/revision supports | Estimate lifecycle facade; creation admission/deadline/idempotency; lines, plans, furniture admission and immutable revisions |
 | `MaintenanceRepairUseCases` plus repair lifecycle/model/media/task-board supports | Repair creation, queueing, execution, acceptance and rework preparation |
 | `MaintenanceTransferUseCases` and `MaintenanceTransferSupport` | Transfer departure/arrival maintenance continuation |
 | `MaintenanceInboundUseCases` and `MaintenanceInboundFactProjectionUseCases` | Owner-fact ingestion and projection updates |

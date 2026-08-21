@@ -67,6 +67,7 @@ public class ReturnCompletionProcessor {
                     work.assetId(),
                     work.expectedAssetVersion(),
                     work.dispatchDate(),
+                    work.arrivedAt(),
                     work.references()));
         case RETURN_EQUIPMENT ->
             store.confirmAdditionalEquipmentReceipt(

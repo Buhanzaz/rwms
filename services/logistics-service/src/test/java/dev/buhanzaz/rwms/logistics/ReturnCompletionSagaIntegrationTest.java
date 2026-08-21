@@ -295,6 +295,7 @@ class ReturnCompletionSagaIntegrationTest {
             eq(ASSET),
             eq(8L),
             eq(LocalDate.parse("2026-07-01")),
+            any(OffsetDateTime.class),
             eq(List.of(new LogisticsDependencyGateway.MediaReference(mediaId, 4)))))
         .thenReturn(
             new LogisticsDependencyGateway.ReturnEstimateSource(
@@ -394,6 +395,7 @@ class ReturnCompletionSagaIntegrationTest {
             eq(ASSET),
             eq(8L),
             eq(LocalDate.parse("2026-07-01")),
+            any(OffsetDateTime.class),
             eq(List.of(new LogisticsDependencyGateway.MediaReference(mediaId, 4))));
   }
 

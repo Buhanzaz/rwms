@@ -52,4 +52,18 @@ public interface LogisticsDocumentRepository extends JpaRepository<LogisticsDocu
 
   List<LogisticsDocument> findAllByDocumentTypeAndWarehouseIdOrderByCreatedAtDescIdDesc(
       LogisticsDocumentType documentType, UUID warehouseId);
+
+  /** Finds already-created historical facts for an exact plan reassertion without N+1 reads. */
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select document
+      from LogisticsDocument document
+      where document.inventorySourceId = :inventoryId
+        and document.inventorySourceFinalPlanVersion = :finalPlanVersion
+      order by document.inventorySourceFindingId, document.id
+      """)
+  List<LogisticsDocument> findAllInventorySourceDocumentsForUpdate(
+      @Param("inventoryId") UUID inventoryId,
+      @Param("finalPlanVersion") long finalPlanVersion);
 }

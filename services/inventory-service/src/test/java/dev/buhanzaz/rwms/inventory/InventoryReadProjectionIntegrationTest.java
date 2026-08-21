@@ -5,6 +5,9 @@ import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.ClosePublicatio
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CompleteSessionRequest;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CompletionPreview;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CompletionPreviewRequest;
+import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.ConfirmInventoryReturnsRequest;
+import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.ConfirmInventoryShipmentsRequest;
+import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.InventoryReturnInput;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CompletionRisk;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.ConflictView;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CreateFindingAssetRequest;
@@ -105,6 +108,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.hibernate.SessionFactory;
 import org.hibernate.stat.Statistics;
@@ -138,7 +142,9 @@ import tools.jackson.databind.node.ObjectNode;
       "spring.jpa.hibernate.ddl-auto=validate",
       "spring.jpa.properties.hibernate.generate_statistics=true",
       "rwms.platform.kafka.enabled=false",
-      "rwms.inventory.dependencies.enabled=false"
+      "rwms.inventory.dependencies.enabled=false",
+      "rwms.inventory.cabin-write-off-recovery-delay-ms=600000",
+      "rwms.inventory.plan-logistics-recovery-delay-ms=600000"
     })
 @ActiveProfiles("test")
 class InventoryReadProjectionIntegrationTest {
@@ -267,6 +273,9 @@ class InventoryReadProjectionIntegrationTest {
         stageRecoveryFinding(inventoryId, warehouseId, "REC-LEGACY", true);
     InventoryFinding noWork =
         stageRecoveryFinding(inventoryId, warehouseId, "REC-FREE", false);
+    saveRecoveryPlanSnapshot(inventoryId, capitalWork, true);
+    saveRecoveryPlanSnapshot(inventoryId, succeededWork, false);
+    saveRecoveryPlanSnapshot(inventoryId, legacySucceededWork, false);
     setLifecycle(inventoryId, SessionLifecycle.COMPLETED);
     jdbc.update(
         """
@@ -366,63 +375,82 @@ class InventoryReadProjectionIntegrationTest {
 
     assertThat(result.createdPublicationCount()).isEqualTo(1);
     assertThat(result.requeuedPublicationCount()).isEqualTo(3);
-    assertThat(result.preservedSucceededPublicationCount()).isZero();
+    assertThat(result.finalPlanVersion()).isEqualTo(2L);
+    assertThat(result.finalPlanSha256()).isNotEqualTo(finalPlanSha256);
     assertThat(result.furnitureReconciliationState())
         .isEqualTo(dev.buhanzaz.rwms.inventory.domain.FurnitureReconciliationState.PENDING);
-    assertThat(result.publicationBatch().intents()).hasSize(4);
+    List<InventoryPublicationIntent> recalculated =
+        publications.findAllByInventoryIdOrderByFindingId(inventoryId);
+    assertThat(recalculated).hasSize(4);
     assertThat(
             publications.findAllByInventoryIdOrderByFindingId(inventoryId).stream()
                 .map(InventoryPublicationIntent::getOutcomeReapplicationNo))
         .containsOnly(1L);
     assertThat(
-            result.publicationBatch().intents().stream()
-                .filter(value -> value.findingId().equals(succeededWork.getId()))
-                .findFirst()
-                .orElseThrow())
-        .satisfies(
-            value -> {
-              assertThat(value.state())
-                  .isEqualTo(dev.buhanzaz.rwms.inventory.domain.PublicationState.READY);
-              assertThat(value.targetId()).isNull();
-              assertThat(value.assetOutcomeResult()).isNull();
+            publications.findAllByInventoryIdOrderByFindingId(inventoryId).stream()
+                .map(InventoryPublicationIntent::getFinalPlanVersion))
+        .containsOnly(2L);
+    assertThat(
+            finalPlanEntries.findByInventoryIdAndFinalPlanVersionOrderByOrderAscFindingIdAsc(
+                inventoryId, 2L))
+        .allSatisfy(
+            entry -> {
+              assertThat(entry.getDispositionKind())
+                  .isEqualTo(
+                      dev.buhanzaz.rwms.inventory.domain.InventoryCabinDispositionKind.LOCAL);
+              assertThat(mapper.readTree(entry.getDispositionDetails()))
+                  .isEqualTo(mapper.readTree("{\"formerRental\":null}"));
             });
     assertThat(
-            result.publicationBatch().intents().stream()
-                .filter(value -> value.findingId().equals(capitalWork.getId()))
+            recalculated.stream()
+                .filter(value -> value.getFindingId().equals(succeededWork.getId()))
                 .findFirst()
                 .orElseThrow())
         .satisfies(
             value -> {
-              assertThat(value.state())
+              assertThat(value.getState())
                   .isEqualTo(dev.buhanzaz.rwms.inventory.domain.PublicationState.READY);
-              assertThat(value.desiredAssetStatus())
+              assertThat(value.getTargetId()).isNull();
+              assertThat(value.getAssetOutcomeResult()).isNull();
+            });
+    assertThat(
+            recalculated.stream()
+                .filter(value -> value.getFindingId().equals(capitalWork.getId()))
+                .findFirst()
+                .orElseThrow())
+        .satisfies(
+            value -> {
+              assertThat(value.getState())
+                  .isEqualTo(dev.buhanzaz.rwms.inventory.domain.PublicationState.READY);
+              assertThat(value.getDesiredAssetStatus())
                   .isEqualTo(InventoryAssetOutcomeStatus.CAPITAL_REPAIR);
-              assertThat(value.targetKind()).isEqualTo(FinalPlanTargetKind.REPAIR);
+              assertThat(value.getTargetKind()).isEqualTo(FinalPlanTargetKind.REPAIR);
             });
     assertThat(
-            result.publicationBatch().intents().stream()
-                .filter(value -> value.findingId().equals(legacySucceededWork.getId()))
+            recalculated.stream()
+                .filter(value -> value.getFindingId().equals(legacySucceededWork.getId()))
                 .findFirst()
                 .orElseThrow())
         .satisfies(
             value -> {
-              assertThat(value.state())
+              assertThat(value.getState())
                   .isEqualTo(dev.buhanzaz.rwms.inventory.domain.PublicationState.READY);
-              assertThat(value.desiredAssetStatus()).isEqualTo(InventoryAssetOutcomeStatus.REPAIR);
-              assertThat(value.targetId()).isNull();
-              assertThat(value.assetOutcomeResult()).isNull();
+              assertThat(value.getDesiredAssetStatus())
+                  .isEqualTo(InventoryAssetOutcomeStatus.REPAIR);
+              assertThat(value.getTargetId()).isNull();
+              assertThat(value.getAssetOutcomeResult()).isNull();
             });
     assertThat(
-            result.publicationBatch().intents().stream()
-                .filter(value -> value.findingId().equals(noWork.getId()))
+            recalculated.stream()
+                .filter(value -> value.getFindingId().equals(noWork.getId()))
                 .findFirst()
                 .orElseThrow())
         .satisfies(
             value -> {
-              assertThat(value.state())
+              assertThat(value.getState())
                   .isEqualTo(dev.buhanzaz.rwms.inventory.domain.PublicationState.READY);
-              assertThat(value.desiredAssetStatus()).isEqualTo(InventoryAssetOutcomeStatus.FREE);
-              assertThat(value.targetKind()).isNull();
+              assertThat(value.getDesiredAssetStatus()).isEqualTo(InventoryAssetOutcomeStatus.FREE);
+              assertThat(value.getTargetKind()).isNull();
             });
     OutcomeRecalculation replay =
         service.recalculateOutcome(
@@ -433,6 +461,18 @@ class InventoryReadProjectionIntegrationTest {
     JsonNode replayJson = mapper.valueToTree(replay);
     JsonNode initialJson = mapper.valueToTree(result);
     assertThat(replayJson).isEqualTo(initialJson);
+    assertThat(
+            jdbc.queryForObject(
+                "select final_plan_version from inventory_final_plan where inventory_id=?",
+                Long.class,
+                inventoryId))
+        .isEqualTo(2L);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from inventory_plan_logistics_effect where inventory_id=? and final_plan_version=2",
+                Integer.class,
+                inventoryId))
+        .isEqualTo(1);
     verify(dependencies, times(0)).applyInventoryOutcome(any(), any(), any(), any());
     verify(dependencies, times(0)).applyReconciliation(any(), any(), any(), any());
   }
@@ -473,8 +513,10 @@ class InventoryReadProjectionIntegrationTest {
     assertThat(corrected.finalPlanSha256()).isNotEqualTo(originalPlanSha256);
     assertThat(corrected.createdPublicationCount()).isEqualTo(2);
     assertThat(corrected.requeuedPublicationCount()).isZero();
-    assertThat(corrected.publicationBatch().intents())
-        .extracting(value -> value.findingId(), value -> value.desiredAssetStatus())
+    assertThat(publications.findAllByInventoryIdOrderByFindingId(inventoryId))
+        .extracting(
+            InventoryPublicationIntent::getFindingId,
+            InventoryPublicationIntent::getDesiredAssetStatus)
         .containsExactlyInAnyOrder(
             org.assertj.core.groups.Tuple.tuple(retained.getId(), InventoryAssetOutcomeStatus.FREE),
             org.assertj.core.groups.Tuple.tuple(
@@ -610,25 +652,20 @@ class InventoryReadProjectionIntegrationTest {
             eq(inventoryId), eq(withoutImages.getId()), any(), any());
     ArgumentCaptor<UUID> logisticsKeys = ArgumentCaptor.forClass(UUID.class);
     ArgumentCaptor<JsonNode> logisticsRequests = ArgumentCaptor.forClass(JsonNode.class);
-    verify(dependencies, times(2))
+    verify(dependencies)
         .applyLogisticsOutcomes(
             eq(inventoryId), logisticsKeys.capture(), logisticsRequests.capture());
-    assertThat(logisticsKeys.getAllValues()).containsOnly(logisticsKeys.getValue());
-    assertThat(logisticsRequests.getAllValues())
+    JsonNode logisticsRequest = logisticsRequests.getValue();
+    assertThat(logisticsRequest.path("warehouseId").asText())
+        .isEqualTo(warehouseId.toString());
+    assertThat(logisticsRequest.path("inventoryCompletedAt").asText()).isNotBlank();
+    assertThat(logisticsRequest.path("finalPlanVersion").asLong()).isEqualTo(1);
+    assertThat(logisticsRequest.path("finalPlanSha256").asText())
+        .isEqualTo(finalPlanSha256);
+    assertThat(logisticsRequest.path("outcomes")).hasSize(2);
+    assertThat(logisticsRequest.path("outcomes"))
         .allSatisfy(
-            logisticsRequest -> {
-              assertThat(logisticsRequest.path("warehouseId").asText())
-                  .isEqualTo(warehouseId.toString());
-              assertThat(logisticsRequest.path("inventoryCompletedAt").asText()).isNotBlank();
-              assertThat(logisticsRequest.path("finalPlanVersion").asLong()).isEqualTo(1);
-              assertThat(logisticsRequest.path("finalPlanSha256").asText())
-                  .isEqualTo(finalPlanSha256);
-              assertThat(logisticsRequest.path("outcomes")).hasSize(2);
-              assertThat(logisticsRequest.path("outcomes"))
-                  .allSatisfy(
-                      outcome ->
-                          assertThat(outcome.path("desiredStatus").asText()).isEqualTo("FREE"));
-            });
+            outcome -> assertThat(outcome.path("desiredStatus").asText()).isEqualTo("FREE"));
     verify(dependencies, times(2)).applyNoWorkDisposition(eq(inventoryId), any(), any(), any());
     verify(dependencies, never()).applyReconciliation(any(), any(), any(), any());
     InOrder order = inOrder(dependencies);
@@ -712,14 +749,20 @@ class InventoryReadProjectionIntegrationTest {
     assertThat(failed.getState())
         .isEqualTo(dev.buhanzaz.rwms.inventory.domain.PublicationState.TRANSIENT_FAILED);
     assertThat(failed.getAssetOutcomeResult()).isNotBlank();
+    assertThat(failed.getGenerationAttemptCount()).isEqualTo(1);
+    assertThat(failed.getNextAttemptAt()).isAfter(OffsetDateTime.now(ZoneOffset.UTC));
     verify(dependencies, never()).applyReconciliation(any(), any(), any(), any());
 
+    jdbc.update(
+        "update inventory_publication_intent set next_attempt_at=clock_timestamp()-interval '1 second' where id=?",
+        intent.getId());
     service.recoverPendingPublications();
 
     InventoryPublicationIntent succeeded = publications.findById(intent.getId()).orElseThrow();
     assertThat(succeeded.getState())
         .isEqualTo(dev.buhanzaz.rwms.inventory.domain.PublicationState.SUCCEEDED);
     assertThat(succeeded.getMaintenanceRepairId()).isEqualTo(repairId);
+    assertThat(succeeded.getGenerationAttemptCount()).isEqualTo(2);
     ArgumentCaptor<UUID> assetKeys = ArgumentCaptor.forClass(UUID.class);
     ArgumentCaptor<UUID> mediaKeys = ArgumentCaptor.forClass(UUID.class);
     ArgumentCaptor<UUID> maintenanceKeys = ArgumentCaptor.forClass(UUID.class);
@@ -751,6 +794,75 @@ class InventoryReadProjectionIntegrationTest {
         .applyLogisticsOutcomes(eq(inventoryId), any(), any());
     order.verify(dependencies)
         .applyReconciliation(eq(inventoryId), eq(finding.getId()), any(), any());
+  }
+
+  @Test
+  void publicationRecoveryBacksOffRetryable4xxStopsAtEightAndRecalculationRenewsOnlyBudget() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID inventoryId = UUID.randomUUID();
+    String finalPlanSha256 = "7".repeat(64);
+    seedSession(inventoryId, warehouseId);
+    InventoryFinding finding =
+        stagePublicationFinding(inventoryId, warehouseId, "RETRY-BOUND", false, null, 0);
+    seedCompletedFinalPlan(
+        inventoryId,
+        finalPlanSha256,
+        List.of(recoveryFinalPlanEntry(inventoryId, finding, 0, false, false)));
+    InventoryPublicationIntent intent =
+        saveOutcomePublicationIntent(
+            inventoryId, finding, finalPlanSha256, null, InventoryAssetOutcomeStatus.FREE);
+    List<HttpStatus> retryableStatuses =
+        List.of(HttpStatus.REQUEST_TIMEOUT, HttpStatus.TOO_EARLY, HttpStatus.TOO_MANY_REQUESTS);
+    AtomicInteger attempts = new AtomicInteger();
+    doAnswer(
+            ignored -> {
+              int attempt = attempts.getAndIncrement();
+              HttpStatus status = retryableStatuses.get(Math.min(attempt, 2));
+              throw new InventoryException(status, "OWNER_RETRY_LATER", "Owner asked to retry");
+            })
+        .when(dependencies)
+        .applyInventoryOutcome(any(), any(), any(), any());
+
+    for (int attempt = 1; attempt <= 8; attempt++) {
+      service.recoverPendingPublications();
+      InventoryPublicationIntent current = publications.findById(intent.getId()).orElseThrow();
+      assertThat(current.getAttemptCount()).isEqualTo(attempt);
+      assertThat(current.getGenerationAttemptCount()).isEqualTo(attempt);
+      if (attempt < 8) {
+        assertThat(current.getState())
+            .isEqualTo(dev.buhanzaz.rwms.inventory.domain.PublicationState.TRANSIENT_FAILED);
+        assertThat(current.getNextAttemptAt()).isAfter(OffsetDateTime.now(ZoneOffset.UTC));
+        jdbc.update(
+            "update inventory_publication_intent set next_attempt_at=clock_timestamp()-interval '1 second' where id=?",
+            intent.getId());
+      }
+    }
+
+    InventoryPublicationIntent exhausted = publications.findById(intent.getId()).orElseThrow();
+    assertThat(exhausted.getState())
+        .isEqualTo(dev.buhanzaz.rwms.inventory.domain.PublicationState.BLOCKED);
+    assertThat(exhausted.getBlockedFailureCode()).isEqualTo("PUBLICATION_RETRY_EXHAUSTED");
+    service.recoverPendingPublications();
+    verify(dependencies, times(8)).applyInventoryOutcome(any(), any(), any(), any());
+
+    UUID recalculationKey = UUID.randomUUID();
+    RecalculateInventoryOutcomeRequest request =
+        new RecalculateInventoryOutcomeRequest(1L, 1L, finalPlanSha256);
+    OutcomeRecalculation recalculated =
+        service.recalculateOutcome(jwt(), inventoryId, recalculationKey, request);
+    OutcomeRecalculation replayed =
+        service.recalculateOutcome(jwt(), inventoryId, recalculationKey, request);
+    JsonNode replayedJson = mapper.valueToTree(replayed);
+    JsonNode recalculatedJson = mapper.valueToTree(recalculated);
+    assertThat(replayedJson).isEqualTo(recalculatedJson);
+    assertThat(recalculated.finalPlanVersion()).isEqualTo(2L);
+    InventoryPublicationIntent requeued = publications.findById(intent.getId()).orElseThrow();
+    assertThat(requeued.getState())
+        .isEqualTo(dev.buhanzaz.rwms.inventory.domain.PublicationState.READY);
+    assertThat(requeued.getAttemptCount()).isEqualTo(8);
+    assertThat(requeued.getGenerationAttemptCount()).isZero();
+    assertThat(requeued.getOutcomeReapplicationNo()).isEqualTo(1L);
+    assertThat(requeued.getFinalPlanVersion()).isEqualTo(2L);
   }
 
   @Test
@@ -873,7 +985,7 @@ class InventoryReadProjectionIntegrationTest {
     verify(dependencies, times(3))
         .publishInventoryCabinPhotos(
             eq(inventoryId), eq(work.getId()), mediaKeys.capture(), any());
-    verify(dependencies, times(5))
+    verify(dependencies, times(2))
         .applyLogisticsOutcomes(eq(inventoryId), logisticsKeys.capture(), any());
     verify(dependencies, times(3))
         .applyReconciliation(
@@ -891,10 +1003,14 @@ class InventoryReadProjectionIntegrationTest {
     assertThat(reappliedOwnerKey).isNotEqualTo(initialOwnerKey);
 
     UUID initialLogisticsKey = logisticsKeys.getAllValues().get(0);
-    UUID reappliedLogisticsKey = logisticsKeys.getAllValues().get(3);
-    assertThat(logisticsKeys.getAllValues().subList(0, 3)).containsOnly(initialLogisticsKey);
-    assertThat(logisticsKeys.getAllValues().subList(3, 5)).containsOnly(reappliedLogisticsKey);
+    UUID reappliedLogisticsKey = logisticsKeys.getAllValues().get(1);
     assertThat(reappliedLogisticsKey).isNotEqualTo(initialLogisticsKey);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from inventory_plan_logistics_effect where inventory_id=?",
+                Long.class,
+                inventoryId))
+        .isEqualTo(2L);
     assertThat(
             publications.findAllByInventoryIdOrderByFindingId(inventoryId).stream()
                 .map(InventoryPublicationIntent::getOutcomeReapplicationNo))
@@ -981,6 +1097,32 @@ class InventoryReadProjectionIntegrationTest {
     assertThat(detail.findingCount()).isEqualTo(3);
     assertThat(detail.inspectedCount()).isEqualTo(2);
     assertThat(detail.author().displayName()).isEqualTo("Inventory operator");
+
+    UUID boundedHistoryWarehouseId = UUID.randomUUID();
+    for (int index = 0; index < 12; index++) {
+      UUID boundedInventoryId = UUID.randomUUID();
+      seedSession(boundedInventoryId, boundedHistoryWarehouseId);
+      markCancelled(boundedInventoryId);
+    }
+    Statistics historyStatistics =
+        entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
+    historyStatistics.clear();
+    PageResponse<SessionSummary> boundedHistory =
+        service.sessions(
+            jwt(),
+            boundedHistoryWarehouseId,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            0,
+            20,
+            "startedAt,asc");
+    assertThat(boundedHistory.content()).hasSize(12);
+    assertThat(historyStatistics.getPrepareStatementCount()).isLessThanOrEqualTo(6);
 
     Statistics statistics = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
     statistics.clear();
@@ -1365,6 +1507,12 @@ class InventoryReadProjectionIntegrationTest {
                 preview.validationSha256()));
     assertThat(completed.lifecycle()).isEqualTo(SessionLifecycle.COMPLETED);
     assertThat(publicationKeys).isEmpty();
+    assertThat(
+            jdbc.queryForMap(
+                "select state,attempt_count from inventory_plan_logistics_effect where inventory_id=?",
+                inventoryId))
+        .containsEntry("state", "READY")
+        .containsEntry("attempt_count", 0);
 
     service.recoverPendingPublications();
 
@@ -1376,6 +1524,12 @@ class InventoryReadProjectionIntegrationTest {
         .isNotBlank();
     assertThat(maintenanceApplyRequest.get().required("authoritativeAssetVersion").asLong())
         .isEqualTo(100);
+    assertThat(
+            jdbc.queryForMap(
+                "select state,attempt_count from inventory_plan_logistics_effect where inventory_id=?",
+                inventoryId))
+        .containsEntry("state", "SUCCEEDED")
+        .containsEntry("attempt_count", 1);
 
     UUID recoveryAssetId = UUID.randomUUID();
     InventoryFinding recoveryFinding =
@@ -2553,7 +2707,7 @@ class InventoryReadProjectionIntegrationTest {
   }
 
   @Test
-  void acceptingAfterRentCabinRequiresAtLeastOneReadyPhoto() {
+  void readyAfterRentCabinRequiresAtLeastOneReadyPhotoWithoutCreatingAcceptance() {
     UUID warehouseId = UUID.randomUUID();
     UUID inventoryId = UUID.randomUUID();
     UUID assetId = UUID.randomUUID();
@@ -2823,6 +2977,7 @@ class InventoryReadProjectionIntegrationTest {
                             new InventoryDependencyGateway.FurnitureSnapshotCabin(
                                 assetId, 1, "БЫТ-МЕБЕЛЬ", "WAREHOUSE", 0))))));
 
+    confirmEmptyCabinDisposition(inventoryId);
     FurnitureReviewView review =
         service.startFurnitureReview(
             jwt(),
@@ -2830,8 +2985,7 @@ class InventoryReadProjectionIntegrationTest {
             UUID.randomUUID(),
             new StartFurnitureReviewRequest(
                 0,
-                List.of(new RevisionExpectation(finding.getId(), finding.getRevision())),
-                false));
+                List.of(new RevisionExpectation(finding.getId(), finding.getRevision()))));
 
     assertThat(review.items())
         .anySatisfy(
@@ -3568,12 +3722,13 @@ class InventoryReadProjectionIntegrationTest {
 
     RegistryReviewView review =
         service.registryReview(jwt(), inventoryId, new RegistryReviewRequest(0, revisions));
+    confirmEmptyCabinDisposition(inventoryId);
     FurnitureReviewView furniture =
         service.startFurnitureReview(
             jwt(),
             inventoryId,
             UUID.randomUUID(),
-            new StartFurnitureReviewRequest(0, revisions, false));
+            new StartFurnitureReviewRequest(0, revisions));
 
     assertThat(review.validatedFindings()).singleElement().satisfies(
         validated -> assertThat(validated.conflicts()).isEmpty());
@@ -3940,6 +4095,118 @@ class InventoryReadProjectionIntegrationTest {
                 preview.validationSha256()));
 
     assertThat(completed.lifecycle()).isEqualTo(SessionLifecycle.COMPLETED);
+  }
+
+  @Test
+  void completionPersistsPlanLogisticsBeforeAutomaticWriteOffIntentInOneTransaction() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID inventoryId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    seedSession(inventoryId, warehouseId);
+    events.initialize(
+        "SESSION",
+        inventoryId,
+        "inventory.session.started.v1",
+        "rwms.inventory.session.v1",
+        mapper.createObjectNode().put("inventoryId", inventoryId.toString()),
+        UUID.randomUUID(),
+        null,
+        null);
+    InventoryFinding missing =
+        findings.saveAndFlush(
+            InventoryFinding.unexpected(
+                inventoryId,
+                FindingOrigin.UNEXPECTED_EXISTING,
+                assetId,
+                1L,
+                warehouseId,
+                "WAREHOUSE",
+                null,
+                "БЫТ-WRITE-OFF",
+                "БЫТWRITEOFF",
+                ReconciliationState.MATCHED,
+                ACTOR));
+    events.initialize(
+        "FINDING",
+        missing.getId(),
+        "inventory.finding.added.v1",
+        "rwms.inventory.session.v1",
+        mapper.createObjectNode().put("origin", "UNEXPECTED_EXISTING"),
+        UUID.randomUUID(),
+        null,
+        null);
+    InventoryDependencyGateway.ValidationItem current =
+        new InventoryDependencyGateway.ValidationItem(
+            assetId,
+            true,
+            1L,
+            warehouseId,
+            "WAREHOUSE",
+            "БЫТ-WRITE-OFF",
+            "БЫТWRITEOFF",
+            null,
+            mapper.createObjectNode(),
+            mapper.createArrayNode());
+    List<InventoryDependencyGateway.ValidationItem> currentItems = List.of(current);
+    when(dependencies.validateAssets(List.of(assetId)))
+        .thenReturn(
+            new InventoryDependencyGateway.Validation(
+                OffsetDateTime.now(ZoneOffset.UTC),
+                canonicalJson.sha256(currentItems),
+                currentItems));
+    when(dependencies.repairSnapshots(List.of(assetId)))
+        .thenReturn(
+            new InventoryDependencyGateway.RepairSnapshots(
+                List.of(
+                    new InventoryDependencyGateway.RepairAssetSnapshot(assetId, List.of()))));
+
+    FurnitureReviewState furnitureReview =
+        confirmEmptyFurnitureReview(
+            inventoryId,
+            warehouseId,
+            List.of(new RevisionExpectation(missing.getId(), missing.getRevision())));
+    PreparedFinalPlan finalPlan = prepareFinalPlan(inventoryId, furnitureReview);
+    CompletionPreview preview =
+        service.preview(
+            jwt(),
+            inventoryId,
+            UUID.randomUUID(),
+            completionPreviewRequest(furnitureReview, finalPlan));
+
+    SessionView completed =
+        service.complete(
+            jwt(),
+            inventoryId,
+            UUID.randomUUID(),
+            new CompleteSessionRequest(
+                preview.sessionRevision(),
+                preview.finalPlanVersion(),
+                preview.finalPlanSha256(),
+                preview.findingRevisions(),
+                preview.acknowledgementSha256(),
+                preview.validationSha256()));
+
+    assertThat(completed.lifecycle()).isEqualTo(SessionLifecycle.COMPLETED);
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select write_off.state,write_off.final_plan_version,
+                       write_off.outcome_reapplication_no,
+                       logistics.state as logistics_state
+                  from inventory_cabin_write_off_intent write_off
+                  join inventory_plan_logistics_effect logistics
+                    on logistics.inventory_id=write_off.inventory_id
+                   and logistics.final_plan_version=write_off.final_plan_version
+                   and logistics.outcome_reapplication_no=write_off.outcome_reapplication_no
+                 where write_off.finding_id=?
+                """,
+                missing.getId()))
+        .containsEntry("state", "PENDING")
+        .containsEntry("final_plan_version", finalPlan.version())
+        .containsEntry("outcome_reapplication_no", 0L)
+        .containsEntry("logistics_state", "READY");
+    assertThat(publications.findAllByInventoryIdOrderByFindingId(inventoryId)).isEmpty();
+    verify(dependencies, times(0)).createInventoryCabinWriteOff(any(), any());
   }
 
   @Test
@@ -4376,9 +4643,40 @@ class InventoryReadProjectionIntegrationTest {
         null,
         ObservationPresence.ABSENT,
         null,
-        hasWork ? FINGERPRINT : null,
+        hasWork ? recoveryPlanFingerprint() : null,
         ACTOR);
     return findings.saveAndFlush(finding);
+  }
+
+  private void saveRecoveryPlanSnapshot(
+      UUID inventoryId, InventoryFinding finding, boolean forceCapitalRepair) {
+    ObjectNode source = recoveryPlanSource();
+    planSnapshots.saveAndFlush(
+        new FindingPlanSnapshot(
+            finding.getId(),
+            finding.getRevision(),
+            inventoryId,
+            "AUTO",
+            false,
+            null,
+            null,
+            UUID.randomUUID(),
+            finding.getMaintenancePlanFingerprintSha256(),
+            source.toString(),
+            forceCapitalRepair,
+            2));
+  }
+
+  private String recoveryPlanFingerprint() {
+    return frozenPlanFingerprint.sha256(recoveryPlanSource());
+  }
+
+  private ObjectNode recoveryPlanSource() {
+    ObjectNode source = mapper.createObjectNode();
+    source.put("priority", 3);
+    source.putArray("lines");
+    source.putArray("mediaReferences");
+    return source;
   }
 
   private InventoryFinding stagePublicationFinding(
@@ -4409,7 +4707,9 @@ class InventoryReadProjectionIntegrationTest {
         null,
         ObservationPresence.ABSENT,
         null,
-        hasWork ? FINGERPRINT : null,
+        hasWork
+            ? frozenPlanFingerprint.sha256(publicationPlanSource(coverMediaId, mediaGeneration))
+            : null,
         "",
         coverMediaId,
         ACTOR);
@@ -4428,13 +4728,7 @@ class InventoryReadProjectionIntegrationTest {
 
   private void savePublicationPlanSnapshot(
       UUID inventoryId, InventoryFinding finding, UUID mediaId, long generation) {
-    ObjectNode snapshot = mapper.createObjectNode();
-    snapshot.putArray("lines");
-    snapshot
-        .putArray("mediaReferences")
-        .addObject()
-        .put("mediaId", mediaId.toString())
-        .put("generation", generation);
+    ObjectNode snapshot = publicationPlanSource(mediaId, generation);
     planSnapshots.saveAndFlush(
         new FindingPlanSnapshot(
             finding.getId(),
@@ -4445,9 +4739,20 @@ class InventoryReadProjectionIntegrationTest {
             null,
             null,
             UUID.randomUUID(),
-            FINGERPRINT,
+            finding.getMaintenancePlanFingerprintSha256(),
             snapshot.toString(),
             2));
+  }
+
+  private ObjectNode publicationPlanSource(UUID mediaId, long generation) {
+    ObjectNode snapshot = mapper.createObjectNode();
+    snapshot.putArray("lines");
+    snapshot
+        .putArray("mediaReferences")
+        .addObject()
+        .put("mediaId", mediaId.toString())
+        .put("generation", generation);
+    return snapshot;
   }
 
   private void seedCompletedFinalPlan(
@@ -4499,7 +4804,7 @@ class InventoryReadProjectionIntegrationTest {
         Math.max(1, finding.getRevision()),
         finding.getAssetId(),
         finding.getAssetVersion(),
-        hasWork ? FINGERPRINT : null,
+        hasWork ? finding.getMaintenancePlanFingerprintSha256() : null,
         hasWork,
         hasWork ? FinalPlanTargetKind.REPAIR : null,
         order,
@@ -4536,13 +4841,14 @@ class InventoryReadProjectionIntegrationTest {
         .thenReturn(
             new InventoryDependencyGateway.FurnitureSnapshot(
                 warehouseId, snapshotSha256, List.of()));
+    confirmEmptyCabinDisposition(inventoryId);
     long sessionRevision = service.session(jwt(), inventoryId).sessionRevision();
     FurnitureReviewView started =
         service.startFurnitureReview(
             jwt(),
             inventoryId,
             UUID.randomUUID(),
-            new StartFurnitureReviewRequest(sessionRevision, findingRevisions, true));
+            new StartFurnitureReviewRequest(sessionRevision, findingRevisions));
     FurnitureReviewView confirmed =
         service.saveFurnitureReview(
             jwt(),
@@ -4554,6 +4860,34 @@ class InventoryReadProjectionIntegrationTest {
             .map(value -> new RevisionExpectation(value.getId(), value.getRevision()))
             .toList();
     return new FurnitureReviewState(confirmed.sessionRevision(), updatedFindingRevisions);
+  }
+
+  private void confirmEmptyCabinDisposition(UUID inventoryId) {
+    var returns = service.cabinDispositionReview(jwt(), inventoryId);
+    var shipments =
+        service.confirmInventoryReturns(
+            jwt(),
+            inventoryId,
+            UUID.randomUUID(),
+            new ConfirmInventoryReturnsRequest(
+                returns.sessionRevision(),
+                returns.reviewRevision(),
+                returns.returnCandidates().stream()
+                    .map(
+                        candidate ->
+                            new InventoryReturnInput(
+                                candidate.findingId(),
+                                candidate.findingRevision(),
+                                LocalDate.now(ZoneId.of("Europe/Moscow")),
+                                UUID.randomUUID(),
+                                "Клиент"))
+                    .toList()));
+    service.confirmInventoryShipments(
+        jwt(),
+        inventoryId,
+        UUID.randomUUID(),
+        new ConfirmInventoryShipmentsRequest(
+            shipments.sessionRevision(), shipments.reviewRevision(), List.of()));
   }
 
   private PreparedFinalPlan prepareFinalPlan(

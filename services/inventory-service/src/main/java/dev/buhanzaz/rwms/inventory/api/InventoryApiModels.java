@@ -12,6 +12,9 @@ import dev.buhanzaz.rwms.inventory.domain.FinalPlanTargetKind;
 import dev.buhanzaz.rwms.inventory.domain.InspectionState;
 import dev.buhanzaz.rwms.inventory.domain.InventoryMembershipMovementType;
 import dev.buhanzaz.rwms.inventory.domain.InventoryAssetOutcomeStatus;
+import dev.buhanzaz.rwms.inventory.domain.InventoryCabinDispositionCandidateKind;
+import dev.buhanzaz.rwms.inventory.domain.InventoryCabinDispositionKind;
+import dev.buhanzaz.rwms.inventory.domain.InventoryCabinDispositionReviewPhase;
 import dev.buhanzaz.rwms.inventory.domain.InventoryReviewStage;
 import dev.buhanzaz.rwms.inventory.domain.LogisticsPlanningMode;
 import dev.buhanzaz.rwms.inventory.domain.MaintenancePublicationOutcome;
@@ -210,8 +213,42 @@ public final class InventoryApiModels {
 
   public record StartFurnitureReviewRequest(
       @Min(0) long expectedSessionRevision,
-      @NotNull @Size(max = 10000) List<@Valid RevisionExpectation> findingRevisions,
-      boolean acknowledgeIncomplete) {}
+      @NotNull @Size(max = 10000) List<@Valid RevisionExpectation> findingRevisions) {}
+
+  /** One historical return required for a cabin found while the system still marked it rented. */
+  public record InventoryReturnInput(
+      @NotNull UUID findingId,
+      @Min(0) long expectedFindingRevision,
+      @NotNull LocalDate returnedOn,
+      @NotNull UUID clientId,
+      @NotBlank @Size(max = 512) String clientSnapshot) {}
+
+  /** Arbitrary shipment furniture recorded as historical contents without a stock-balance check. */
+  public record InventoryShipmentFurnitureInput(
+      @NotNull UUID equipmentId,
+      @Min(0) long catalogVersion,
+      @Min(1) long quantity) {}
+
+  /** One missing cabin explicitly confirmed as historically shipped to a client. */
+  public record InventoryShipmentInput(
+      @NotNull UUID findingId,
+      @Min(0) long expectedFindingRevision,
+      @NotNull LocalDate departedOn,
+      @NotNull UUID clientId,
+      @NotBlank @Size(max = 512) String clientSnapshot,
+      @NotNull @Size(max = 100) List<@NotNull @Valid InventoryShipmentFurnitureInput> furniture) {}
+
+  /** Exact optimistic command that advances the server-owned review from returns to shipments. */
+  public record ConfirmInventoryReturnsRequest(
+      @Min(0) long expectedSessionRevision,
+      @Min(0) long expectedReviewRevision,
+      @NotNull @Size(max = 10000) List<@Valid InventoryReturnInput> returns) {}
+
+  /** Selected shipments; every omitted missing candidate becomes an automatic write-off. */
+  public record ConfirmInventoryShipmentsRequest(
+      @Min(0) long expectedSessionRevision,
+      @Min(0) long expectedReviewRevision,
+      @NotNull @Size(max = 10000) List<@Valid InventoryShipmentInput> shipments) {}
 
   public record FurnitureReviewCabinInput(
       @NotNull UUID findingId,
@@ -538,6 +575,26 @@ public final class InventoryApiModels {
       boolean confirmed,
       List<FurnitureReviewItemView> items) {}
 
+  /** One durable review row shown in the return or missing-cabin phase. */
+  public record InventoryCabinDispositionCandidateView(
+      UUID findingId,
+      long findingRevision,
+      UUID assetId,
+      long assetVersion,
+      String cabinNumber,
+      InventoryCabinDispositionCandidateKind candidateKind,
+      InventoryCabinDispositionKind dispositionKind,
+      JsonNode dispositionDetails) {}
+
+  /** Current server-owned cabin disposition phase and its exact candidate sets. */
+  public record InventoryCabinDispositionReviewView(
+      UUID inventoryId,
+      long sessionRevision,
+      long reviewRevision,
+      InventoryCabinDispositionReviewPhase phase,
+      List<InventoryCabinDispositionCandidateView> returnCandidates,
+      List<InventoryCabinDispositionCandidateView> missingCandidates) {}
+
   public record FurnitureReviewItemView(
       UUID equipmentId,
       long catalogVersion,
@@ -614,7 +671,9 @@ public final class InventoryApiModels {
       LocalDate repairScheduledDate,
       List<FinalPlanCandidateView> collisionCandidates,
       FinalPlanReconciliationDecision reconciliationDecision,
-      boolean forceCapitalRepair) {
+      boolean forceCapitalRepair,
+      InventoryCabinDispositionKind dispositionKind,
+      JsonNode dispositionDetails) {
     public FinalPlanEntryView(
         UUID findingId,
         long findingRevision,
@@ -641,7 +700,42 @@ public final class InventoryApiModels {
           repairScheduledDate,
           collisionCandidates,
           reconciliationDecision,
-          false);
+          false,
+          InventoryCabinDispositionKind.LOCAL,
+          null);
+    }
+
+    /** Compatibility constructor for callers that already freeze the capital-repair choice. */
+    public FinalPlanEntryView(
+        UUID findingId,
+        long findingRevision,
+        String planFingerprintSha256,
+        boolean hasWork,
+        FinalPlanTargetKind targetKind,
+        int order,
+        Integer priority,
+        boolean movementToRepair,
+        LocalDate movementScheduledDate,
+        LocalDate repairScheduledDate,
+        List<FinalPlanCandidateView> collisionCandidates,
+        FinalPlanReconciliationDecision reconciliationDecision,
+        boolean forceCapitalRepair) {
+      this(
+          findingId,
+          findingRevision,
+          planFingerprintSha256,
+          hasWork,
+          targetKind,
+          order,
+          priority,
+          movementToRepair,
+          movementScheduledDate,
+          repairScheduledDate,
+          collisionCandidates,
+          reconciliationDecision,
+          forceCapitalRepair,
+          InventoryCabinDispositionKind.LOCAL,
+          null);
     }
   }
 
@@ -773,9 +867,7 @@ public final class InventoryApiModels {
       String finalPlanSha256,
       FurnitureReconciliationState furnitureReconciliationState,
       int createdPublicationCount,
-      int requeuedPublicationCount,
-      int preservedSucceededPublicationCount,
-      PublicationBatch publicationBatch) {}
+      int requeuedPublicationCount) {}
 
   public record SessionStatistics(
       UUID inventoryId,

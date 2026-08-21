@@ -33,7 +33,7 @@ const plan: InventoryFinalPlan = {
       findingId: FIRST_FINDING_ID,
       findingRevision: 7,
       planFingerprintSha256: "b".repeat(64),
-      targetKind: "ESTIMATE",
+      targetKind: "REPAIR",
       hasWork: true,
       order: 0,
       priority: 3,
@@ -63,6 +63,8 @@ const plan: InventoryFinalPlan = {
       ],
       reconciliationDecision: null,
       forceCapitalRepair: true,
+      dispositionKind: "LOCAL",
+      dispositionDetails: { formerRental: null },
     },
     {
       findingId: SECOND_FINDING_ID,
@@ -78,6 +80,8 @@ const plan: InventoryFinalPlan = {
       collisionCandidates: [],
       reconciliationDecision: null,
       forceCapitalRepair: false,
+      dispositionKind: "LOCAL",
+      dispositionDetails: { formerRental: null },
     },
   ],
 }
@@ -148,7 +152,7 @@ describe("inventory final plan", () => {
       />
     )
 
-    expect(screen.getByText("После аренды: сначала смета")).toBeTruthy()
+    expect(screen.getByText("Из инвентаризации: новый ремонт")).toBeTruthy()
     expect(
       screen.getByText(
         "Осмотр без замечаний — запись остаётся только в истории инвентаризации."

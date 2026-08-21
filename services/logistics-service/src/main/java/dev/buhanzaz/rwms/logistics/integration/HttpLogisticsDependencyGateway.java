@@ -339,6 +339,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID rentalItemId,
       long rentalItemVersion,
       LocalDate dispatchDate,
+      OffsetDateTime arrivedAt,
       List<MediaReference> mediaReferences) {
     return maintenance.upsertReturnEstimateSource(
         returnId,
@@ -347,6 +348,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         rentalItemId,
         rentalItemVersion,
         dispatchDate,
+        arrivedAt,
         mediaReferences);
   }
 

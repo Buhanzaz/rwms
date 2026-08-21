@@ -120,6 +120,20 @@ public final class PropertyDispositionApiModels {
       @NotBlank @Size(max = 2000) String reason,
       @Size(max = 2000) String evidenceLink) {}
 
+  /**
+   * Private inventory-service input for one cabin that remained missing after the shipment review.
+   * Maintenance resolves the current cabin contents itself and freezes them as dispose-with-cabin
+   * evidence; inventory must not fabricate balance versions.
+   */
+  public record CreateInventoryCabinWriteOffRequest(
+      @NotNull UUID inventorySessionId,
+      @NotNull UUID findingId,
+      @NotNull UUID warehouseId,
+      @NotNull UUID cabinId,
+      @NotNull @Min(0) Long expectedAssetVersion,
+      @NotBlank @Size(max = 2000) String reason,
+      @Size(max = 2000) String evidenceLink) {}
+
   public record ApprovePropertyDispositionRequest(
       @NotNull @Min(0) Long expectedVersion,
       @Size(max = 2000) String comment) {}

@@ -54,6 +54,11 @@ vi.mock("@/hooks/use-warehouse", () => ({
   useWarehouse: () => ({ selectedWarehouseId: WAREHOUSE_ID }),
 }))
 
+vi.mock(
+  "@/features/settings/estimates-repairs/estimate-creation-window-settings-card",
+  () => ({ EstimateCreationWindowSettingsCard: () => null })
+)
+
 vi.mock("@/features/settings/task-board/api/task-board-settings-api", () => ({
   taskBoardSettingsClient: {
     listQueueDefinitions: mocks.listQueueDefinitions,
@@ -331,6 +336,7 @@ function queueFixture(
     notificationThreshold: null,
     notifyWhenThresholdReached: false,
     resultPhotoMinCount: 1,
+    availableTaskLimit: 6,
     bindings: [],
     ...overrides,
   }

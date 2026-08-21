@@ -17,6 +17,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -81,6 +82,14 @@ public class LogisticsDocument {
   private LocalDate scheduledDate;
 
   /**
+   * Immutable instant when a normal return completed physical intake and became ready for
+   * inspection. Inventory-created historical returns intentionally leave this value absent because
+   * they bypass intake and estimate creation.
+   */
+  @Column(name = "return_arrived_at")
+  private OffsetDateTime returnArrivedAt;
+
+  /**
    * Historical physical column retained for old rows; new date-only logistics never reads or writes
    * it.
    */
@@ -129,6 +138,26 @@ public class LogisticsDocument {
   @JdbcTypeCode(Types.CHAR)
   @Column(name = "inventory_final_plan_sha256", length = 64)
   private String inventoryFinalPlanSha256;
+
+  /** Completed inventory that created this historical document rather than superseding it. */
+  @Column(name = "inventory_source_id")
+  private UUID inventorySourceId;
+
+  @Column(name = "inventory_source_finding_id")
+  private UUID inventorySourceFindingId;
+
+  @Column(name = "inventory_source_disposition_kind", length = 24)
+  private String inventorySourceDispositionKind;
+
+  @Column(name = "inventory_source_completed_at")
+  private OffsetDateTime inventorySourceCompletedAt;
+
+  @Column(name = "inventory_source_final_plan_version")
+  private Long inventorySourceFinalPlanVersion;
+
+  @JdbcTypeCode(Types.CHAR)
+  @Column(name = "inventory_source_final_plan_sha256", length = 64)
+  private String inventorySourceFinalPlanSha256;
 
   public static LogisticsDocument createReturn(
       UUID warehouseId, UUID subjectId, UUID correlationId) {
@@ -271,6 +300,91 @@ public class LogisticsDocument {
     return document;
   }
 
+  /**
+   * Creates an already-completed historical return from reviewed inventory evidence. It deliberately
+   * skips driver, acceptance, estimate, hold and ordinary return workflow states.
+   */
+  public static LogisticsDocument createInventoryReturn(
+      UUID warehouseId,
+      UUID clientId,
+      String clientSnapshot,
+      LocalDate returnedOn,
+      UUID inventoryId,
+      UUID findingId,
+      OffsetDateTime inventoryCompletedAt,
+      long finalPlanVersion,
+      String finalPlanSha256,
+      UUID subjectId) {
+    LogisticsDocument document =
+        createReturn(
+            warehouseId,
+            Objects.requireNonNull(clientId, "clientId"),
+            requiredSnapshot(clientSnapshot, "clientSnapshot"),
+            subjectId,
+            inventoryId);
+    document.scheduledDate = Objects.requireNonNull(returnedOn, "returnedOn");
+    document.state = LogisticsDocumentState.ACCEPTED;
+    document.captureInventorySource(
+        inventoryId,
+        findingId,
+        "LOCAL",
+        inventoryCompletedAt,
+        finalPlanVersion,
+        finalPlanSha256);
+    return document;
+  }
+
+  /**
+   * Creates an already-shipped historical document from inventory evidence without driver, hold,
+   * task or stock-allocation workflow.
+   */
+  public static LogisticsDocument createInventoryShipment(
+      UUID warehouseId,
+      UUID clientId,
+      String clientSnapshot,
+      LocalDate departedOn,
+      UUID inventoryId,
+      UUID findingId,
+      OffsetDateTime inventoryCompletedAt,
+      long finalPlanVersion,
+      String finalPlanSha256,
+      UUID subjectId) {
+    LogisticsDocument document =
+        initialize(
+            LogisticsDocumentType.SHIPMENT,
+            warehouseId,
+            null,
+            requiredSnapshot(clientSnapshot, "clientSnapshot"),
+            null,
+            subjectId,
+            inventoryId);
+    document.clientId = Objects.requireNonNull(clientId, "clientId");
+    document.scheduledDate = Objects.requireNonNull(departedOn, "departedOn");
+    document.state = LogisticsDocumentState.SHIPPED;
+    document.captureInventorySource(
+        inventoryId,
+        findingId,
+        "SHIPMENT",
+        inventoryCompletedAt,
+        finalPlanVersion,
+        finalPlanSha256);
+    return document;
+  }
+
+  /** Returns whether this historical document is the exact reusable fact for one plan outcome. */
+  public boolean matchesInventorySource(
+      UUID inventoryId,
+      UUID findingId,
+      String dispositionKind,
+      long finalPlanVersion,
+      String finalPlanSha256) {
+    return Objects.equals(inventorySourceId, inventoryId)
+        && Objects.equals(inventorySourceFindingId, findingId)
+        && Objects.equals(inventorySourceDispositionKind, dispositionKind)
+        && Objects.equals(inventorySourceFinalPlanVersion, finalPlanVersion)
+        && Objects.equals(inventorySourceFinalPlanSha256, finalPlanSha256);
+  }
+
   /** Refreshes the live client projection while a rental shipment is still a draft. */
   public boolean synchronizeRentalOrderParty(UUID nextClientId, String nextPartySnapshot) {
     if (documentType != LogisticsDocumentType.SHIPMENT
@@ -358,10 +472,15 @@ public class LogisticsDocument {
   }
 
   public void requireReturnInspection() {
+    if (returnArrivedAt != null) {
+      throw new IllegalStateException("Return physical arrival is already recorded");
+    }
+    OffsetDateTime arrivedAt = currentTime();
     transition(
         LogisticsDocumentType.RETURN,
         LogisticsDocumentState.REGISTERING,
         LogisticsDocumentState.INSPECTION_REQUIRED);
+    returnArrivedAt = arrivedAt;
   }
 
   public void returnRegistrationConflict() {
@@ -734,6 +853,28 @@ public class LogisticsDocument {
     document.requestedBySubjectId = subjectId;
     document.correlationId = correlationId;
     return document;
+  }
+
+  private void captureInventorySource(
+      UUID inventoryId,
+      UUID findingId,
+      String dispositionKind,
+      OffsetDateTime completedAt,
+      long finalPlanVersion,
+      String finalPlanSha256) {
+    if (!Set.of("LOCAL", "SHIPMENT").contains(dispositionKind)
+        || completedAt == null
+        || finalPlanVersion < 1
+        || finalPlanSha256 == null
+        || !finalPlanSha256.matches("[0-9a-f]{64}")) {
+      throw new IllegalArgumentException("Inventory document source is invalid");
+    }
+    inventorySourceId = Objects.requireNonNull(inventoryId, "inventoryId");
+    inventorySourceFindingId = Objects.requireNonNull(findingId, "findingId");
+    inventorySourceDispositionKind = dispositionKind;
+    inventorySourceCompletedAt = completedAt;
+    inventorySourceFinalPlanVersion = finalPlanVersion;
+    inventorySourceFinalPlanSha256 = finalPlanSha256;
   }
 
   private void transition(

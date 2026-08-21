@@ -737,7 +737,10 @@ paths:
       description: >-
         Requires SERVICE maintenance-service with exactly asset.maintenance. Returns only the
         canonical versioned cabin or warehouse-stock equipment truth required to create/reconcile a
-        disposition decision, including non-zero cabin contents and blocking workflow flags.
+        disposition decision, including non-zero cabin contents and blocking workflow flags. A
+        lagging RENTED cabin is eligible only after logistics custody has been released: no active
+        reservation, content hold, operation lease or prepared disposition fence may remain. This
+        read never changes the cabin status or version.
       responses:
         '200': { description: Narrow versioned property snapshot., content: { application/json: { schema: { $ref: '#/components/schemas/MaintenancePropertyAssetSnapshot' } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1766,14 +1769,15 @@ paths:
         current passport. Catalogue display names are resolved only inside asset-service and never
         create catalogue rows. Passport and status changes are committed atomically and retain the
         ordinary rental-item event history.
-        A first or newer FREE, REPAIR or CAPITAL_REPAIR source supersedes active order-unit
+        A first or newer FREE, REPAIR, CAPITAL_REPAIR or RENTED source supersedes active order-unit
         reservations, operation leases, presentation holds and transfer state without deleting
         their history. Another key for the same latest immutable source reasserts status,
-        reservations, holds and transfer state but preserves the active operation lease because it
-        may already belong to this finding's repair; maintenance or logistics supersedes an
-        unrelated predecessor lease under its exact owner and fence. The exact idempotency key
-        replays its stored result, while a strictly older completed inventory is rejected
-        permanently.
+        reservations, holds and transfer state. Only a maintenance-repair lease may be retained for
+        a REPAIR or CAPITAL_REPAIR outcome; FREE and RENTED release every predecessor lease. RENTED
+        requires exact active-catalog shipmentContents; asset-service replaces every cabin-content
+        bucket with those CABIN_RENTED quantities without reading, reserving or decrementing STOCK.
+        The exact idempotency key replays its stored result, while a strictly older completed
+        inventory is rejected permanently.
       requestBody:
         required: true
         content:
@@ -3301,7 +3305,12 @@ components:
         activeReservation: { type: boolean }
         activeHold: { type: boolean }
         activeLease: { type: boolean }
-        dispositionAllowed: { type: boolean }
+        dispositionAllowed:
+          type: boolean
+          description: >-
+            Whether current authoritative asset guards permit a new disposition. RENTED may be true
+            only when its logistics lease, reservations and content holds are all absent; the
+            lagging status itself is not rewritten to FREE.
     MaintenancePropertyDispositionLeaseProof:
       type: object
       additionalProperties: false
@@ -3942,11 +3951,11 @@ components:
         assets: { type: array, maxItems: 5000, items: { $ref: '#/components/schemas/InventoryValidationItem' } }
     InventoryOutcomeStatus:
       type: string
-      enum: [FREE, REPAIR, CAPITAL_REPAIR]
+      enum: [FREE, REPAIR, CAPITAL_REPAIR, RENTED]
     InventoryOutcomeRequest:
       type: object
       additionalProperties: false
-      required: [warehouseId, assetId, inventoryCompletedAt, finalPlanVersion, finalPlanSha256, findingRevision, desiredStatus, passportObservation, passportObservationSha256]
+      required: [warehouseId, assetId, inventoryCompletedAt, finalPlanVersion, finalPlanSha256, findingRevision, desiredStatus, passportObservation, passportObservationSha256, shipmentContents]
       properties:
         warehouseId: { type: string, format: uuid }
         assetId: { type: string, format: uuid }
@@ -3957,6 +3966,24 @@ components:
         desiredStatus: { $ref: '#/components/schemas/InventoryOutcomeStatus' }
         passportObservation: { $ref: '#/components/schemas/InventoryOutcomePassportObservation' }
         passportObservationSha256: { $ref: '#/components/schemas/Sha256' }
+        shipmentContents:
+          description: >-
+            Required (an empty array is valid) only when desiredStatus is RENTED; strictly null for
+            all other statuses. equipmentId values must be unique and name active FURNITURE catalog
+            rows at the exact catalogVersion. Quantities replace cabin contents without changing STOCK.
+          oneOf:
+            - type: array
+              maxItems: 100
+              items: { $ref: '#/components/schemas/InventoryOutcomeShipmentContent' }
+            - { type: 'null' }
+    InventoryOutcomeShipmentContent:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, catalogVersion, quantity]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        catalogVersion: { type: integer, format: int64, minimum: 0 }
+        quantity: { type: integer, format: int64, minimum: 1 }
     InventoryOutcomePassportObservation:
       oneOf:
         - type: object

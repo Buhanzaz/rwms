@@ -30,6 +30,11 @@ vi.mock("@/hooks/use-warehouse", () => ({
   useWarehouse: () => ({ selectedWarehouseId: WAREHOUSE_ID }),
 }))
 
+vi.mock(
+  "@/features/settings/estimates-repairs/estimate-creation-window-settings-card",
+  () => ({ EstimateCreationWindowSettingsCard: () => null })
+)
+
 vi.mock("@/api/equipment-api", () => ({
   getEquipmentItems: mocks.getEquipmentItems,
 }))

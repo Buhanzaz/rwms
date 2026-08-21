@@ -122,11 +122,10 @@ final class MaintenanceRepairModelSupport {
   }
 
   protected static void requireDirectRepairSourceStatus(RentalItemFactProjection rentalItem) {
-    if (RENTED_STATUS.equals(rentalItem.getAssetStatus())
-        || AFTER_RENT_STATUS.equals(rentalItem.getAssetStatus())) {
+    if (RENTED_STATUS.equals(rentalItem.getAssetStatus())) {
       throw new MaintenanceValidationException(
           "MAINTENANCE_VALIDATION_FAILED",
-          "Direct repair source rental item must not have RENTED or AFTER_RENT status");
+          "Direct repair source rental item must not have RENTED status");
     }
   }
 

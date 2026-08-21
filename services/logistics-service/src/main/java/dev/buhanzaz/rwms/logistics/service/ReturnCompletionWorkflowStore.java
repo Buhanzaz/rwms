@@ -18,6 +18,8 @@ import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventStore;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.maintenance.api.MaintenanceReturnArrivalResponse;
+import dev.buhanzaz.rwms.logistics.maintenance.service.MaintenanceReturnArrivalService;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsExternalAttemptRepository;
@@ -59,6 +61,7 @@ class ReturnCompletionWorkflowStore {
   private final LogisticsReconciliationRepository reconciliationRepository;
   private final LogisticsEventStore eventStore;
   private final LogisticsDocumentService documents;
+  private final MaintenanceReturnArrivalService returnArrivals;
 
   /**
    * Builds local completion work for exactly one current claim. A transition that has already
@@ -138,12 +141,13 @@ class ReturnCompletionWorkflowStore {
           shortageSnapshotRepository
               .findByLine_Id(line.getId())
               .orElseThrow(() -> malformed("Return estimate settlement has no source snapshot"));
+      MaintenanceReturnArrivalResponse arrival = returnArrival(document, line);
       createAttemptIfMissing(
           document,
           line,
           LogisticsTargetService.MAINTENANCE,
           LogisticsDocumentService.RETURN_MAINTENANCE_ESTIMATE_SOURCE_UPSERT,
-          estimateSourceDigest(document, line, source),
+          estimateSourceDigest(document, line, source, arrival.arrivedAt()),
           completedAt);
     } else {
       createAdditionalEquipmentAttemptOrRelease(document, line, guard, completedAt);
@@ -311,6 +315,7 @@ class ReturnCompletionWorkflowStore {
           shortageSnapshotRepository
               .findByLine_Id(line.getId())
               .orElseThrow(() -> malformed("Return maintenance attempt has no source snapshot"));
+      MaintenanceReturnArrivalResponse arrival = returnArrival(document, line);
       return Optional.of(
           Work.maintenance(
               attempt.getOperationId(),
@@ -320,6 +325,7 @@ class ReturnCompletionWorkflowStore {
               snapshot.getRentalItemId(),
               snapshot.getRentalItemVersion(),
               document.getScheduledDate(),
+              arrival.arrivedAt(),
               mediaReferences(line)));
     }
     if (LogisticsDocumentService.RETURN_ASSET_ADDITIONAL_EQUIPMENT_RECEIVE.equals(
@@ -806,7 +812,8 @@ class ReturnCompletionWorkflowStore {
   private String estimateSourceDigest(
       LogisticsDocument document,
       LogisticsDocumentLine line,
-      LogisticsReturnShortageSnapshot snapshot) {
+      LogisticsReturnShortageSnapshot snapshot,
+      OffsetDateTime arrivedAt) {
     List<String> values = new ArrayList<>();
     values.add(document.getId().toString());
     values.add(line.getId().toString());
@@ -814,6 +821,7 @@ class ReturnCompletionWorkflowStore {
     values.add(snapshot.getRentalItemId().toString());
     values.add(Long.toString(snapshot.getRentalItemVersion()));
     values.add(document.getScheduledDate().toString());
+    values.add(arrivedAt.toString());
     mediaSet(mediaReferences(line)).stream()
         .sorted(Comparator.comparing(value -> value.mediaId().toString()))
         .forEach(
@@ -891,6 +899,13 @@ class ReturnCompletionWorkflowStore {
     return OffsetDateTime.now(ZoneOffset.UTC);
   }
 
+  private MaintenanceReturnArrivalResponse returnArrival(
+      LogisticsDocument document, LogisticsDocumentLine line) {
+    return returnArrivals
+        .forReturn(document.getId(), document.getWarehouseId(), line.getAssetId())
+        .orElseThrow(() -> malformed("Return maintenance attempt has no physical arrival event"));
+  }
+
   private static LogisticsDependencyException malformed(String message) {
     return new LogisticsDependencyException(
         LogisticsDependencyException.FailureKind.CONFIGURATION, message);
@@ -910,7 +925,8 @@ class ReturnCompletionWorkflowStore {
       boolean estimate,
       List<LogisticsDependencyGateway.MediaReference> references,
       List<LogisticsDependencyGateway.ReturnEquipmentReceiptLine> returnEquipment,
-      LocalDate dispatchDate) {
+      LocalDate dispatchDate,
+      OffsetDateTime arrivedAt) {
     static Work media(
         UUID operationId,
         UUID documentId,
@@ -931,6 +947,7 @@ class ReturnCompletionWorkflowStore {
           false,
           mediaSet(references).stream().sorted(Comparator.comparing(value -> value.mediaId().toString())).toList(),
           List.of(),
+          null,
           null);
     }
 
@@ -957,6 +974,7 @@ class ReturnCompletionWorkflowStore {
           estimate,
           List.of(),
           List.of(),
+          null,
           null);
     }
 
@@ -968,6 +986,7 @@ class ReturnCompletionWorkflowStore {
         UUID assetId,
         long assetVersion,
         LocalDate dispatchDate,
+        OffsetDateTime arrivedAt,
         List<LogisticsMediaReference> references) {
       return new Work(
           WorkType.MAINTENANCE,
@@ -985,7 +1004,8 @@ class ReturnCompletionWorkflowStore {
               .sorted(Comparator.comparing(value -> value.mediaId().toString()))
               .toList(),
           List.of(),
-          dispatchDate);
+          dispatchDate,
+          arrivedAt);
     }
 
     static Work returnEquipment(
@@ -1008,6 +1028,7 @@ class ReturnCompletionWorkflowStore {
           false,
           List.of(),
           List.copyOf(equipment),
+          null,
           null);
     }
 
@@ -1033,6 +1054,7 @@ class ReturnCompletionWorkflowStore {
           false,
           List.of(),
           List.of(),
+          null,
           null);
     }
   }

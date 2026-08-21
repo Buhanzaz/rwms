@@ -17,13 +17,21 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireOperationLeaseRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateRentalItemRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.EquipmentResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryOutcomeRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryOutcomeShipmentContent;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryOutcomeStatus;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
+import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
+import dev.buhanzaz.rwms.asset.domain.AssetEventType;
+import dev.buhanzaz.rwms.asset.domain.BalanceLocationKind;
+import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
 import dev.buhanzaz.rwms.asset.domain.OrderUnitReservation;
 import dev.buhanzaz.rwms.asset.domain.PresentationUnitHold;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
+import dev.buhanzaz.rwms.asset.eventing.AssetEventStore;
 import dev.buhanzaz.rwms.asset.repository.OrderUnitReservationRepository;
 import dev.buhanzaz.rwms.asset.repository.PresentationUnitHoldRepository;
 import dev.buhanzaz.rwms.asset.service.AssetConflictException;
@@ -34,6 +42,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -49,6 +58,8 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.JsonNode;
@@ -86,6 +97,8 @@ class InventoryAssetOutcomeIntegrationTest {
   @Autowired JdbcTemplate jdbc;
   @Autowired MockMvc mvc;
   @Autowired ObjectMapper objectMapper;
+  @Autowired AssetEventStore events;
+  @Autowired PlatformTransactionManager transactionManager;
 
   @DynamicPropertySource
   static void properties(DynamicPropertyRegistry registry) {
@@ -444,6 +457,201 @@ class InventoryAssetOutcomeIntegrationTest {
   }
 
   @Test
+  void rentedOutcomeExactlyReplacesCabinContentsWithoutReadingOrChangingStock() {
+    UUID warehouseId = UUID.randomUUID();
+    RentalItemResponse cabin = rentalItem(warehouseId, "OUTCOME-RENTED-CONTENTS-");
+    EquipmentResponse first = equipment("Inventory rented first ");
+    EquipmentResponse second = equipment("Inventory rented second ");
+    EquipmentResponse omitted = equipment("Inventory rented omitted ");
+    UUID firstStock =
+        seedBalance(first.id(), warehouseId, null, BalanceLocationKind.STOCK, 0L);
+    UUID secondStock =
+        seedBalance(second.id(), warehouseId, null, BalanceLocationKind.STOCK, 12L);
+    UUID omittedStock =
+        seedBalance(omitted.id(), warehouseId, null, BalanceLocationKind.STOCK, 13L);
+    seedBalance(
+        first.id(), warehouseId, cabin.id(), BalanceLocationKind.CABIN_NON_RENTED, 4L);
+    seedBalance(
+        second.id(), warehouseId, cabin.id(), BalanceLocationKind.CABIN_RENTED, 7L);
+    seedBalance(
+        omitted.id(), warehouseId, cabin.id(), BalanceLocationKind.CABIN_NON_RENTED, 5L);
+    seedBalance(
+        omitted.id(), warehouseId, cabin.id(), BalanceLocationKind.CABIN_RENTED, 6L);
+    Map<UUID, Long> initialStockVersions =
+        Map.of(
+            firstStock, balanceVersion(firstStock),
+            secondStock, balanceVersion(secondStock),
+            omittedStock, balanceVersion(omittedStock));
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID idempotencyKey = UUID.randomUUID();
+    InventoryOutcomeRequest request =
+        rentedRequest(
+            warehouseId,
+            cabin.id(),
+            now(),
+            List.of(
+                new InventoryOutcomeShipmentContent(second.id(), second.version(), 3L),
+                new InventoryOutcomeShipmentContent(first.id(), first.version(), 2L)));
+
+    InventoryAssetService.OutcomeResult applied =
+        inventory.applyOutcome(
+            UUID.randomUUID(), inventoryId, findingId, idempotencyKey, request);
+
+    assertThat(applied.replayed()).isFalse();
+    assertThat(applied.response().status()).isEqualTo(RentalItemStatus.RENTED);
+    assertThat(applied.response().assetVersion()).isEqualTo(cabin.version() + 1);
+    assertThat(cabinQuantity(first.id(), warehouseId, cabin.id(), BalanceLocationKind.CABIN_RENTED))
+        .isEqualTo(2L);
+    assertThat(
+            cabinQuantity(
+                first.id(), warehouseId, cabin.id(), BalanceLocationKind.CABIN_NON_RENTED))
+        .isZero();
+    assertThat(cabinQuantity(second.id(), warehouseId, cabin.id(), BalanceLocationKind.CABIN_RENTED))
+        .isEqualTo(3L);
+    assertThat(
+            cabinQuantity(
+                omitted.id(), warehouseId, cabin.id(), BalanceLocationKind.CABIN_NON_RENTED))
+        .isZero();
+    assertThat(
+            cabinQuantity(
+                omitted.id(), warehouseId, cabin.id(), BalanceLocationKind.CABIN_RENTED))
+        .isZero();
+    assertThat(balanceQuantity(firstStock)).isZero();
+    assertThat(balanceQuantity(secondStock)).isEqualTo(12L);
+    assertThat(balanceQuantity(omittedStock)).isEqualTo(13L);
+    assertThat(balanceVersion(firstStock)).isEqualTo(initialStockVersions.get(firstStock));
+    assertThat(balanceVersion(secondStock)).isEqualTo(initialStockVersions.get(secondStock));
+    assertThat(balanceVersion(omittedStock)).isEqualTo(initialStockVersions.get(omittedStock));
+    assertThat(
+            jdbc.queryForObject(
+                "select shipment_contents_sha256 from inventory_asset_outcome_watermark where asset_id=?",
+                String.class,
+                cabin.id()))
+        .matches("[0-9a-f]{64}");
+    long cabinBalanceEvents = cabinBalanceEventCount(cabin.id());
+
+    InventoryAssetService.OutcomeResult replay =
+        inventory.applyOutcome(
+            UUID.randomUUID(), inventoryId, findingId, idempotencyKey, request);
+    InventoryAssetService.OutcomeResult reasserted =
+        inventory.applyOutcome(
+            UUID.randomUUID(), inventoryId, findingId, UUID.randomUUID(), request);
+
+    assertThat(replay.replayed()).isTrue();
+    assertThat(replay.response()).isEqualTo(applied.response());
+    assertThat(reasserted.replayed()).isFalse();
+    assertThat(reasserted.response().assetVersion()).isEqualTo(applied.response().assetVersion());
+    assertThat(cabinBalanceEventCount(cabin.id())).isEqualTo(cabinBalanceEvents);
+    assertThat(balanceQuantity(firstStock)).isZero();
+    assertThat(balanceQuantity(secondStock)).isEqualTo(12L);
+    assertThat(balanceQuantity(omittedStock)).isEqualTo(13L);
+
+    InventoryOutcomeRequest changedContents =
+        rentedRequest(
+            warehouseId,
+            cabin.id(),
+            request.inventoryCompletedAt(),
+            List.of(new InventoryOutcomeShipmentContent(first.id(), first.version(), 9L)));
+    assertThatThrownBy(
+            () ->
+                inventory.applyOutcome(
+                    UUID.randomUUID(),
+                    inventoryId,
+                    findingId,
+                    UUID.randomUUID(),
+                    changedContents))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("Equal-time inventory outcome conflicts");
+    assertThat(cabinQuantity(first.id(), warehouseId, cabin.id(), BalanceLocationKind.CABIN_RENTED))
+        .isEqualTo(2L);
+    assertThat(balanceQuantity(firstStock)).isZero();
+  }
+
+  @Test
+  void rejectsMissingForbiddenOrStaleShipmentContentsBeforePersistingAnyOutcome() {
+    UUID warehouseId = UUID.randomUUID();
+    RentalItemResponse cabin = rentalItem(warehouseId, "OUTCOME-RENTED-INVALID-");
+    EquipmentResponse equipment = equipment("Inventory rented stale ");
+    UUID stock = seedBalance(equipment.id(), warehouseId, null, BalanceLocationKind.STOCK, 8L);
+    UUID rentedMissingKey = UUID.randomUUID();
+    InventoryOutcomeRequest rentedMissing =
+        request(warehouseId, cabin.id(), now(), InventoryOutcomeStatus.FREE);
+    rentedMissing =
+        new InventoryOutcomeRequest(
+            rentedMissing.warehouseId(),
+            rentedMissing.assetId(),
+            rentedMissing.inventoryCompletedAt(),
+            rentedMissing.finalPlanVersion(),
+            rentedMissing.finalPlanSha256(),
+            rentedMissing.findingRevision(),
+            InventoryOutcomeStatus.RENTED,
+            rentedMissing.passportObservation(),
+            rentedMissing.passportObservationSha256(),
+            null);
+    InventoryOutcomeRequest finalRentedMissing = rentedMissing;
+
+    assertThatThrownBy(
+            () ->
+                inventory.applyOutcome(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    rentedMissingKey,
+                    finalRentedMissing))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("requires shipmentContents");
+    assertThat(receiptCount(rentedMissingKey)).isZero();
+
+    UUID localContentsKey = UUID.randomUUID();
+    InventoryOutcomeRequest localWithContents =
+        new InventoryOutcomeRequest(
+            finalRentedMissing.warehouseId(),
+            finalRentedMissing.assetId(),
+            finalRentedMissing.inventoryCompletedAt(),
+            finalRentedMissing.finalPlanVersion(),
+            finalRentedMissing.finalPlanSha256(),
+            finalRentedMissing.findingRevision(),
+            InventoryOutcomeStatus.FREE,
+            finalRentedMissing.passportObservation(),
+            finalRentedMissing.passportObservationSha256(),
+            List.of(new InventoryOutcomeShipmentContent(equipment.id(), equipment.version(), 1L)));
+    assertThatThrownBy(
+            () ->
+                inventory.applyOutcome(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    localContentsKey,
+                    localWithContents))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("must be null");
+    assertThat(receiptCount(localContentsKey)).isZero();
+
+    UUID staleKey = UUID.randomUUID();
+    InventoryOutcomeRequest stale =
+        rentedRequest(
+            warehouseId,
+            cabin.id(),
+            now().plusSeconds(1),
+            List.of(
+                new InventoryOutcomeShipmentContent(
+                    equipment.id(), equipment.version() + 1, 2L)));
+    assertThatThrownBy(
+            () ->
+                inventory.applyOutcome(
+                    UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), staleKey, stale))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("catalog identity or version is stale");
+    assertThat(receiptCount(staleKey)).isZero();
+    assertThat(watermarkCount(cabin.id())).isZero();
+    assertThat(currentStatus(cabin.id())).isEqualTo(RentalItemStatus.FREE);
+    assertThat(currentVersion(cabin.id())).isEqualTo(cabin.version());
+    assertThat(balanceQuantity(stock)).isEqualTo(8L);
+    assertThat(balanceVersion(stock)).isZero();
+  }
+
+  @Test
   void overwritesPresentPassportPreservesAbsentAndAdoptsLegacyWatermarkOnce() {
     UUID warehouseId = UUID.randomUUID();
     RentalItemResponse cabin = rentalItem(warehouseId, "OUTCOME-PASSPORT-");
@@ -659,6 +867,142 @@ class InventoryAssetOutcomeIntegrationTest {
         .response();
   }
 
+  private EquipmentResponse equipment(String prefix) {
+    return assets
+        .createEquipment(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            new CreateEquipmentRequest(
+                prefix + UUID.randomUUID(), EquipmentCategory.FURNITURE, null))
+        .response();
+  }
+
+  private InventoryOutcomeRequest rentedRequest(
+      UUID warehouseId,
+      UUID assetId,
+      OffsetDateTime completedAt,
+      List<InventoryOutcomeShipmentContent> shipmentContents) {
+    ObjectNode absent = objectMapper.createObjectNode();
+    absent.put("presence", "ABSENT");
+    absent.putNull("value");
+    return new InventoryOutcomeRequest(
+        warehouseId,
+        assetId,
+        completedAt,
+        2L,
+        "a".repeat(64),
+        3L,
+        InventoryOutcomeStatus.RENTED,
+        absent,
+        passportObservationHash(absent),
+        shipmentContents);
+  }
+
+  private UUID seedBalance(
+      UUID equipmentId,
+      UUID warehouseId,
+      UUID rentalItemId,
+      BalanceLocationKind locationKind,
+      long quantity) {
+    UUID balanceId = UUID.randomUUID();
+    new TransactionTemplate(transactionManager)
+        .executeWithoutResult(
+            ignored -> {
+              jdbc.update(
+                  """
+                  insert into equipment_balance(
+                    id,version,equipment_id,warehouse_id,rental_item_id,location_kind,quantity,
+                    created_at,updated_at)
+                  values (?,0,?,?,?,?,?,clock_timestamp(),clock_timestamp())
+                  """,
+                  balanceId,
+                  equipmentId,
+                  warehouseId,
+                  rentalItemId,
+                  locationKind.name(),
+                  quantity);
+              events.initialize(
+                  AssetAggregateType.EQUIPMENT_BALANCE,
+                  balanceId,
+                  0L,
+                  AssetEventType.EQUIPMENT_BALANCE_CHANGED,
+                  balanceFact(
+                      balanceId,
+                      equipmentId,
+                      warehouseId,
+                      rentalItemId,
+                      locationKind,
+                      quantity),
+                  balanceFact(
+                      balanceId,
+                      equipmentId,
+                      warehouseId,
+                      rentalItemId,
+                      locationKind,
+                      quantity));
+            });
+    return balanceId;
+  }
+
+  private static Map<String, Object> balanceFact(
+      UUID balanceId,
+      UUID equipmentId,
+      UUID warehouseId,
+      UUID rentalItemId,
+      BalanceLocationKind locationKind,
+      long quantity) {
+    Map<String, Object> fact = new LinkedHashMap<>();
+    fact.put("balanceId", balanceId.toString());
+    fact.put("equipmentId", equipmentId.toString());
+    fact.put("warehouseId", warehouseId.toString());
+    fact.put("rentalItemId", rentalItemId == null ? null : rentalItemId.toString());
+    fact.put("locationKind", locationKind.name());
+    fact.put("quantity", quantity);
+    return fact;
+  }
+
+  private long cabinQuantity(
+      UUID equipmentId,
+      UUID warehouseId,
+      UUID rentalItemId,
+      BalanceLocationKind locationKind) {
+    Long value =
+        jdbc.queryForObject(
+            """
+            select quantity
+            from equipment_balance
+            where equipment_id=? and warehouse_id=? and rental_item_id=? and location_kind=?
+            """,
+            Long.class,
+            equipmentId,
+            warehouseId,
+            rentalItemId,
+            locationKind.name());
+    return value == null ? 0 : value;
+  }
+
+  private long balanceQuantity(UUID balanceId) {
+    return jdbc.queryForObject(
+        "select quantity from equipment_balance where id=?", Long.class, balanceId);
+  }
+
+  private long balanceVersion(UUID balanceId) {
+    return jdbc.queryForObject(
+        "select version from equipment_balance where id=?", Long.class, balanceId);
+  }
+
+  private long cabinBalanceEventCount(UUID rentalItemId) {
+    return jdbc.queryForObject(
+        """
+        select count(*)
+        from domain_event event
+        join equipment_balance balance on balance.id::text=event.aggregate_id
+        where event.aggregate_type='EQUIPMENT_BALANCE' and balance.rental_item_id=?
+        """,
+        Long.class,
+        rentalItemId);
+  }
+
   private void setStatus(
       UUID assetId, RentalItemStatus status, RentalItemStatus transferOriginStatus) {
     jdbc.update(
@@ -746,7 +1090,8 @@ class InventoryAssetOutcomeIntegrationTest {
         3L,
         desiredStatus,
         passportObservation,
-        passportObservationHash(passportObservation));
+        passportObservationHash(passportObservation),
+        desiredStatus == InventoryOutcomeStatus.RENTED ? List.of() : null);
   }
 
   private String passportObservationHash(JsonNode observation) {

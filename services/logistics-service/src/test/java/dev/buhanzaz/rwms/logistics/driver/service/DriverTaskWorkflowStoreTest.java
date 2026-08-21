@@ -2,6 +2,8 @@ package dev.buhanzaz.rwms.logistics.driver.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -31,6 +33,7 @@ import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 
 class DriverTaskWorkflowStoreTest {
@@ -314,6 +317,8 @@ class DriverTaskWorkflowStoreTest {
     UUID entryId = UUID.randomUUID();
     task.registerBoardTask(boardTaskId, 3, entryId, "WAITING", "SCHEDULED", null);
     when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
+    when(tasks.deferStatusPoll(any(), anyLong(), any(), any())).thenReturn(1);
+    OffsetDateTime before = OffsetDateTime.now(ZoneOffset.UTC);
 
     store.confirmStatus(
         taskId,
@@ -338,6 +343,19 @@ class DriverTaskWorkflowStoreTest {
 
     assertThat(task.getState()).isEqualTo(DriverTaskState.SCHEDULED);
     verify(tasks, never()).saveAndFlush(any());
+    ArgumentCaptor<OffsetDateTime> nextPoll = ArgumentCaptor.forClass(OffsetDateTime.class);
+    verify(tasks)
+        .deferStatusPoll(
+            eq(taskId),
+            eq(task.getVersion()),
+            eq(DriverTaskState.SCHEDULED),
+            nextPoll.capture());
+    assertThat(nextPoll.getValue())
+        .isAfterOrEqualTo(
+            before.plusSeconds(DriverTaskWorkflowStore.UNCHANGED_STATUS_POLL_DELAY_SECONDS))
+        .isBeforeOrEqualTo(
+            OffsetDateTime.now(ZoneOffset.UTC)
+                .plusSeconds(DriverTaskWorkflowStore.UNCHANGED_STATUS_POLL_DELAY_SECONDS + 1));
   }
 
   @Test

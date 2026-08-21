@@ -9,5 +9,6 @@ package dev.buhanzaz.rwms.inventory.domain;
 public enum InventoryAssetOutcomeStatus {
   FREE,
   REPAIR,
-  CAPITAL_REPAIR
+  CAPITAL_REPAIR,
+  RENTED
 }

@@ -136,6 +136,40 @@ class MaintenanceDependencyGatewayTest {
   }
 
   @Test
+  void returnArrivalUsesExactMaintenanceLogisticsReadBoundaryAndScope() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    UUID returnId = UUID.randomUUID();
+    authorize("logistics-token", "logistics.maintenance");
+    server
+        .expect(
+            requestTo(
+                "http://logistics.test/api/internal/logistics/v1/maintenance/return-arrivals/"
+                    + rentalItemId
+                    + "?warehouseId="
+                    + warehouseId))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer logistics-token"))
+        .andExpect(headerDoesNotExist("Idempotency-Key"))
+        .andRespond(
+            withSuccess(
+                """
+                {"warehouseId":"%s","rentalItemId":"%s","returnDocumentId":"%s","arrivedAt":"2026-08-01T09:00:00Z"}
+                """
+                    .formatted(warehouseId, rentalItemId, returnId),
+                MediaType.APPLICATION_JSON));
+
+    assertThat(gateway.returnArrival(warehouseId, rentalItemId))
+        .isEqualTo(
+            new MaintenanceDependencyGateway.ReturnArrival(
+                warehouseId,
+                rentalItemId,
+                returnId,
+                OffsetDateTime.parse("2026-08-01T09:00:00Z")));
+    server.verify();
+  }
+
+  @Test
   void overdueFixedDriverResponseMayReturnLaterEffectiveDate() {
     UUID key = UUID.randomUUID();
     UUID taskId = UUID.randomUUID();
@@ -842,7 +876,7 @@ class MaintenanceDependencyGatewayTest {
   }
 
   @Test
-  void registerSendsCapacityAndAcceptsTaskBoardAutoSchedulingOnALaterDate() {
+  void registerOmitsMaintenanceCapacityAndAcceptsTaskBoardAutoSchedulingOnALaterDate() {
     UUID externalTaskId = UUID.randomUUID();
     UUID repairId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
@@ -855,7 +889,7 @@ class MaintenanceDependencyGatewayTest {
         .andExpect(content().string(containsString("\"deadlineAt\":null")))
         .andExpect(content().string(containsString("\"scheduledDate\":\"2026-07-24\"")))
         .andExpect(content().string(containsString("\"priority\":1")))
-        .andExpect(content().string(containsString("\"dailyCapacity\":4")))
+        .andExpect(content().string(not(containsString("\"dailyCapacity\""))))
         .andExpect(content().string(containsString(
             "\"source\":{\"type\":\"MAINTENANCE_REPAIR\",\"sourceId\":\""
                 + repairId + "\"}")))
@@ -872,7 +906,7 @@ class MaintenanceDependencyGatewayTest {
     var response = gateway.registerTask(
         UUID.randomUUID(), externalTaskId, repairId, warehouseId, rentalItemId,
         "БТ-42",
-        LocalDate.of(2026, 7, 24), 1, 4,
+        LocalDate.of(2026, 7, 24), 1,
         List.of(taskStage(0, queueId, null)));
 
     assertThat(response.state()).isEqualTo("ACTIVE");
@@ -916,9 +950,11 @@ class MaintenanceDependencyGatewayTest {
                 groupCommentId, "Срочно", "Диспетчер", recordedAt)),
         List.of(new MaintenanceDependencyGateway.TaskSourceMedia(
             mediaId, 2, "image/jpeg", recordedAt.minusMinutes(1), recordedAt)),
-        38);
+        38,
+        "Средний ремонт");
     server.expect(requestTo("http://task.test/api/internal/task-board/v1/tasks"))
         .andExpect(method(HttpMethod.POST))
+        .andExpect(content().string(containsString("\"title\":\"Средний ремонт\"")))
         .andExpect(content().string(containsString("\"plannedDurationMinutes\":38")))
         .andExpect(content().string(containsString(
             "\"works\":[{\"id\":")))
@@ -953,7 +989,6 @@ class MaintenanceDependencyGatewayTest {
         "БТ-42",
         LocalDate.of(2026, 7, 24),
         3,
-        6,
         List.of(stage));
 
     server.verify();
@@ -1003,7 +1038,6 @@ class MaintenanceDependencyGatewayTest {
         "БТ-42",
         LocalDate.of(2026, 7, 24),
         3,
-        6,
         List.of(repair));
 
     server.verify();
@@ -1080,11 +1114,30 @@ class MaintenanceDependencyGatewayTest {
         "БТ-42",
         LocalDate.of(2026, 7, 18),
         3,
-        6,
         List.of(
             taskStage(0, UUID.randomUUID(), first),
             taskStage(1, UUID.randomUUID(), second))))
         .isInstanceOfSatisfying(MaintenanceDependencyException.class,
+            exception -> assertThat(exception.status()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+    server.verify();
+  }
+
+  @Test
+  void conflictingWorkerRepairTitlesAreRejectedBeforeAnyHttpRequest() {
+    assertThatThrownBy(() -> gateway.registerTask(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        null,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "БТ-42",
+        LocalDate.of(2026, 7, 18),
+        3,
+        List.of(
+            taskStage(0, UUID.randomUUID(), null, "Лёгкий ремонт"),
+            taskStage(1, UUID.randomUUID(), null, "Средний ремонт"))))
+        .isInstanceOfSatisfying(
+            MaintenanceDependencyException.class,
             exception -> assertThat(exception.status()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
     server.verify();
   }
@@ -1315,6 +1368,23 @@ class MaintenanceDependencyGatewayTest {
     return new MaintenanceDependencyGateway.TaskStage(
         UUID.randomUUID(), order, RepairStageKind.REPAIR_WORK,
         "Repair stage " + order, queueId, deadline);
+  }
+
+  private static MaintenanceDependencyGateway.TaskStage taskStage(
+      int order, UUID queueId, OffsetDateTime deadline, String taskTitle) {
+    return new MaintenanceDependencyGateway.TaskStage(
+        UUID.randomUUID(),
+        order,
+        RepairStageKind.REPAIR_WORK,
+        "Repair stage " + order,
+        queueId,
+        deadline,
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        null,
+        taskTitle);
   }
 
   private static String taskResponse(

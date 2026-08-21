@@ -63,6 +63,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -173,6 +174,14 @@ class MaintenanceCorePostgresIntegrationTest {
         cascade
         """);
     reset(dependencies);
+    when(dependencies.returnArrival(any(UUID.class), any(UUID.class)))
+        .thenAnswer(
+            invocation ->
+                new MaintenanceDependencyGateway.ReturnArrival(
+                    invocation.getArgument(0),
+                    invocation.getArgument(1),
+                    UUID.randomUUID(),
+                    OffsetDateTime.now(ZoneOffset.UTC).minusDays(1)));
     when(dependencies.preflightMaintenanceRouting(any(UUID.class), anyList()))
         .thenAnswer(invocation -> {
           List<MaintenanceDependencyGateway.RoutingQueueRequirement> requirements =
@@ -510,6 +519,41 @@ class MaintenanceCorePostgresIntegrationTest {
   }
 
   @Test
+  void repairReadFiltersAndPaginatesBeforeResponseHydration() {
+    UUID warehouseId = UUID.randomUUID();
+    List<UUID> repairIds = new ArrayList<>();
+    for (int index = 0; index < 3; index++) {
+      UUID rentalItemId = UUID.randomUUID();
+      rentalItemFacts.saveAndFlush(
+          RentalItemFactProjection.create(rentalItemId, warehouseId, "FREE", index));
+      repairIds.add(
+          service
+              .createDirectRepair(
+                  UUID.randomUUID(),
+                  UUID.randomUUID(),
+                  directRepairRequest(
+                      warehouseId, rentalItemId, LocalDate.of(2026, 8, 1), null))
+              .response()
+              .id());
+    }
+
+    PageResponse<RepairResponse> selected =
+        service.repairs(
+            warehouseId, null, null, null, Set.of(repairIds.get(1)), 0, 200);
+    assertThat(selected.totalElements()).isEqualTo(1);
+    assertThat(selected.items()).extracting(RepairResponse::id).containsExactly(repairIds.get(1));
+
+    PageResponse<RepairResponse> firstPage =
+        service.repairs(warehouseId, null, null, null, null, 0, 2);
+    PageResponse<RepairResponse> secondPage =
+        service.repairs(warehouseId, null, null, null, null, 1, 2);
+    assertThat(firstPage.totalElements()).isEqualTo(3);
+    assertThat(firstPage.items()).hasSize(2);
+    assertThat(secondPage.totalElements()).isEqualTo(3);
+    assertThat(secondPage.items()).hasSize(1);
+  }
+
+  @Test
   void inboundMovementKeepsRepairWorkOffTheBoardUntilDeliveryOccupiesARepairPlace() {
     UUID warehouseId = UUID.randomUUID();
     UUID rentalItemId = UUID.randomUUID();
@@ -748,7 +792,6 @@ class MaintenanceCorePostgresIntegrationTest {
                 eq("БТ-42"),
                 eq(LocalDate.now(ZoneId.of("Europe/Moscow"))),
                 eq(1),
-                eq(6),
                 anyList()))
         .thenReturn(
             new MaintenanceDependencyGateway.TaskSnapshot(
@@ -774,7 +817,6 @@ class MaintenanceCorePostgresIntegrationTest {
             eq("БТ-42"),
             eq(LocalDate.now(ZoneId.of("Europe/Moscow"))),
             eq(1),
-            eq(6),
             taskStagesCaptor.capture());
     assertThat(
             jdbc.queryForObject(
@@ -2424,7 +2466,6 @@ class MaintenanceCorePostgresIntegrationTest {
                 eq("БТ-42"),
                 any(LocalDate.class),
                 eq(2),
-                eq(6),
                 anyList()))
         .thenAnswer(
             invocation -> {
@@ -2469,7 +2510,7 @@ class MaintenanceCorePostgresIntegrationTest {
     verify(dependencies).registerTask(
         any(), eq(first.externalTaskId()), eq(first.repairId()), eq(first.warehouseId()),
         eq(first.rentalItemId()), nullable(String.class),
-        any(LocalDate.class), anyInt(), eq(6), anyList());
+        any(LocalDate.class), anyInt(), anyList());
   }
 
   @Test
@@ -2673,32 +2714,28 @@ class MaintenanceCorePostgresIntegrationTest {
             nullable(String.class),
             any(LocalDate.class),
             anyInt(),
-            anyInt(),
             anyList());
   }
 
   @ParameterizedTest
   @CsvSource({
-      "BOOKED, 3, 5",
-      "REPAIR, 3, 5",
-      "WAITING_REPAIR_CHECK, 3, 5",
-      "WRITTEN_OFF, 3, 5",
-      "CAPITAL_REPAIR, 4, 6",
-      "WAITING_ESTIMATE_CONFIRMATION, 3, 5",
-      "SALE, 3, 5",
-      "USED_SALE, 3, 5",
-      "RESERVED, 3, 5",
-      "FREE, 3, 5",
-      "WAREHOUSE, 3, 5",
-      "OWN_NEEDS, 3, 5",
-      "IN_TRANSFER, 3, 5"
+      "BOOKED, 3",
+      "REPAIR, 3",
+      "WAITING_REPAIR_CHECK, 3",
+      "WRITTEN_OFF, 3",
+      "CAPITAL_REPAIR, 4",
+      "WAITING_ESTIMATE_CONFIRMATION, 3",
+      "SALE, 3",
+      "USED_SALE, 3",
+      "RESERVED, 3",
+      "FREE, 3",
+      "WAREHOUSE, 3",
+      "OWN_NEEDS, 3",
+      "IN_TRANSFER, 3"
   })
   void eligibleRentalItemRepairKeepsSelectedPriorityAndRegistersTask(
-      String sourceStatus, int priority, int dailyCapacity) {
+      String sourceStatus, int priority) {
     RepairFixture repair = createDirectRepair(sourceStatus, 0);
-    repairCapacitySettings.replace(
-        repair.warehouseId(),
-        new ReplaceRepairCapacitySettingsRequest(0L, dailyCapacity, 5));
     service.queueRepair(
         UUID.randomUUID(),
         UUID.randomUUID(),
@@ -2742,7 +2779,6 @@ class MaintenanceCorePostgresIntegrationTest {
         eq("БТ-42"),
         any(LocalDate.class),
         eq(priority),
-        eq(dailyCapacity),
         anyList()))
         .thenReturn(new MaintenanceDependencyGateway.TaskSnapshot(
             repair.externalTaskId(), 0, "ACTIVE",
@@ -2760,7 +2796,6 @@ class MaintenanceCorePostgresIntegrationTest {
         eq("БТ-42"),
         any(LocalDate.class),
         eq(priority),
-        eq(dailyCapacity),
         anyList());
   }
 
@@ -2784,19 +2819,31 @@ class MaintenanceCorePostgresIntegrationTest {
   @Test
   void workerTaskSnapshotUsesCanonicalLinesWithTimeCommentsMaterialsAndMedia() {
     RepairFixture fixture = createDirectRepair();
-    UUID repairMediaId = UUID.randomUUID();
+    UUID secondaryRepairMediaId =
+        UUID.fromString("10000000-0000-4000-8000-000000000001");
+    UUID coverMediaId =
+        UUID.fromString("f0000000-0000-4000-8000-000000000002");
     UUID workMediaId = UUID.randomUUID();
     OffsetDateTime capturedAt = OffsetDateTime.parse("2026-07-23T10:15:30+03:00");
     new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
       service.applyInboundMediaFact(
-          repairMediaId,
+          secondaryRepairMediaId,
           1,
           "MAINTENANCE_REPAIR",
           fixture.repairId(),
           fixture.warehouseId(),
           "READY",
-          "{\"contentType\":\"image/jpeg\",\"capturedAt\":\"2026-07-23T10:15:30+03:00\"}",
+          "{\"contentType\":\"image/webp\"}",
           1);
+      service.applyInboundMediaFact(
+          coverMediaId,
+          2,
+          "MAINTENANCE_REPAIR",
+          fixture.repairId(),
+          fixture.warehouseId(),
+          "READY",
+          "{\"contentType\":\"image/jpeg\",\"capturedAt\":\"2026-07-23T10:15:30+03:00\"}",
+          2);
       service.applyInboundMediaFact(
           workMediaId,
           2,
@@ -2805,7 +2852,7 @@ class MaintenanceCorePostgresIntegrationTest {
           fixture.warehouseId(),
           "READY",
           "{\"contentType\":\"image/png\"}",
-          2);
+          3);
     });
     CreateDirectRepairRequest content = workerTaskContent(
         fixture.warehouseId(),
@@ -2817,8 +2864,10 @@ class MaintenanceCorePostgresIntegrationTest {
             0L,
             content.lines(),
             content.plan(),
-            List.of(new MediaReferenceInput(repairMediaId, 1L)),
-            repairMediaId));
+            List.of(
+                new MediaReferenceInput(secondaryRepairMediaId, 1L),
+                new MediaReferenceInput(coverMediaId, 2L)),
+            coverMediaId));
     service.queueRepair(
         UUID.randomUUID(), UUID.randomUUID(), fixture.repairId(), new VersionCommand(1L));
     stubQueueDependencies(fixture);
@@ -2837,7 +2886,6 @@ class MaintenanceCorePostgresIntegrationTest {
         eq("БТ-42"),
         any(LocalDate.class),
         anyInt(),
-        eq(6),
         stages.capture()))
         .thenReturn(new MaintenanceDependencyGateway.TaskSnapshot(
             fixture.externalTaskId(),
@@ -2875,9 +2923,9 @@ class MaintenanceCorePostgresIntegrationTest {
         .containsExactly("Проверить внешний угол", "Срочно");
     assertThat(snapshot.sourceMedia())
         .extracting(MaintenanceDependencyGateway.TaskSourceMedia::mediaId)
-        .containsExactlyInAnyOrder(repairMediaId, workMediaId);
+        .containsExactly(coverMediaId, secondaryRepairMediaId, workMediaId);
     assertThat(snapshot.sourceMedia())
-        .filteredOn(media -> media.mediaId().equals(repairMediaId))
+        .filteredOn(media -> media.mediaId().equals(coverMediaId))
         .singleElement()
         .satisfies(
             media -> {
@@ -2979,7 +3027,6 @@ class MaintenanceCorePostgresIntegrationTest {
             eq("БТ-42"),
             any(LocalDate.class),
             anyInt(),
-            eq(6),
             stages.capture()))
         .thenReturn(
             new MaintenanceDependencyGateway.TaskSnapshot(
@@ -3128,7 +3175,6 @@ class MaintenanceCorePostgresIntegrationTest {
             eq("БТ-42"),
             any(LocalDate.class),
             anyInt(),
-            eq(6),
             stages.capture()))
         .thenReturn(
             new MaintenanceDependencyGateway.TaskSnapshot(
@@ -3468,7 +3514,7 @@ class MaintenanceCorePostgresIntegrationTest {
         any(), eq(secondFixture.externalTaskId()), eq(secondFixture.repairId()),
         eq(first.warehouseId()),
         eq(first.rentalItemId()), nullable(String.class),
-        any(LocalDate.class), anyInt(), eq(6), anyList());
+        any(LocalDate.class), anyInt(), anyList());
   }
 
   @Test
@@ -3520,7 +3566,7 @@ class MaintenanceCorePostgresIntegrationTest {
     verify(dependencies, times(1)).registerTask(
         any(), eq(second.externalTaskId()), eq(second.repairId()), eq(first.warehouseId()),
         eq(first.rentalItemId()), nullable(String.class),
-        any(LocalDate.class), anyInt(), eq(6), anyList());
+        any(LocalDate.class), anyInt(), anyList());
     verify(dependencies, never()).acquireLease(
         any(), eq(first.rentalItemId()), anyLong(),
         anyString(), eq(second.repairId().toString()));
@@ -5010,7 +5056,7 @@ class MaintenanceCorePostgresIntegrationTest {
         eq(stableKey), eq(fixture.externalTaskId()), eq(fixture.repairId()),
         eq(fixture.warehouseId()),
         eq(fixture.rentalItemId()), nullable(String.class),
-        any(LocalDate.class), anyInt(), eq(6), anyList()))
+        any(LocalDate.class), anyInt(), anyList()))
         .thenThrow(new IllegalStateException("task-board unavailable"));
 
     assertThat(service.reconcileOneTask()).isTrue();
@@ -5035,7 +5081,7 @@ class MaintenanceCorePostgresIntegrationTest {
         eq(stableKey), eq(fixture.externalTaskId()), eq(fixture.repairId()),
         eq(fixture.warehouseId()),
         eq(fixture.rentalItemId()), nullable(String.class),
-        any(LocalDate.class), anyInt(), eq(6), anyList()))
+        any(LocalDate.class), anyInt(), anyList()))
         .thenReturn(new MaintenanceDependencyGateway.TaskSnapshot(
             fixture.externalTaskId(), 0, "ACTIVE",
             List.of(new MaintenanceDependencyGateway.TaskStageSnapshot(0, entryId, 0))));
@@ -5049,7 +5095,7 @@ class MaintenanceCorePostgresIntegrationTest {
         eq(stableKey), eq(fixture.externalTaskId()), eq(fixture.repairId()),
         eq(fixture.warehouseId()),
         eq(fixture.rentalItemId()), nullable(String.class),
-        any(LocalDate.class), anyInt(), eq(6), anyList());
+        any(LocalDate.class), anyInt(), anyList());
   }
 
   @Test
@@ -5069,7 +5115,7 @@ class MaintenanceCorePostgresIntegrationTest {
         eq(stableKey), eq(fixture.externalTaskId()), eq(fixture.repairId()),
         eq(fixture.warehouseId()),
         eq(fixture.rentalItemId()), nullable(String.class),
-        any(LocalDate.class), anyInt(), eq(6), anyList()))
+        any(LocalDate.class), anyInt(), anyList()))
         .thenThrow(new IllegalStateException("task-board unavailable with private details"));
 
     for (int attempt = 1; attempt <= 4; attempt++) {
@@ -5110,7 +5156,7 @@ class MaintenanceCorePostgresIntegrationTest {
         eq(stableKey), eq(fixture.externalTaskId()), eq(fixture.repairId()),
         eq(fixture.warehouseId()),
         eq(fixture.rentalItemId()), nullable(String.class),
-        any(LocalDate.class), anyInt(), eq(6), anyList());
+        any(LocalDate.class), anyInt(), anyList());
   }
 
   @Test
@@ -6276,7 +6322,7 @@ class MaintenanceCorePostgresIntegrationTest {
   }
 
   @Test
-  void estimatesRequireAnAfterRentRentalItemAndDirectRepairsExcludeIt() {
+  void estimatesRequireAnAfterRentRentalItemAndDirectRepairsAllowIt() {
     UUID warehouseId = UUID.randomUUID();
     UUID estimateRentalItemId = UUID.randomUUID();
     rentalItemFacts.saveAndFlush(RentalItemFactProjection.create(
@@ -6300,18 +6346,21 @@ class MaintenanceCorePostgresIntegrationTest {
     rentalItemFacts.saveAndFlush(RentalItemFactProjection.create(
         directRepairRentalItemId, warehouseId, "AFTER_RENT", 7));
 
-    assertThatThrownBy(() -> service.createDirectRepair(
-        UUID.randomUUID(),
-        UUID.randomUUID(),
-        new CreateDirectRepairRequest(
-            warehouseId,
-            directRepairRentalItemId,
-            LocalDate.of(2026, 7, 17),
-            null,
-            List.of(stage()),
-            List.of())))
-        .isInstanceOf(MaintenanceValidationException.class)
-        .hasMessageContaining("must not have RENTED or AFTER_RENT");
+    assertThat(
+            service
+                .createDirectRepair(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    new CreateDirectRepairRequest(
+                        warehouseId,
+                        directRepairRentalItemId,
+                        LocalDate.of(2026, 7, 17),
+                        null,
+                        List.of(stage()),
+                        List.of()))
+                .response()
+                .rentalItemId())
+        .isEqualTo(directRepairRentalItemId);
   }
 
   @Test
@@ -6926,7 +6975,6 @@ class MaintenanceCorePostgresIntegrationTest {
         nullable(String.class),
         any(LocalDate.class),
         anyInt(),
-        eq(6),
         anyList()))
         .thenReturn(new MaintenanceDependencyGateway.TaskSnapshot(
             fixture.externalTaskId(),
@@ -6945,8 +6993,7 @@ class MaintenanceCorePostgresIntegrationTest {
     UUID entryId = UUID.randomUUID();
     when(dependencies.registerTask(any(), eq(fixture.externalTaskId()), eq(fixture.repairId()),
         eq(fixture.warehouseId()), eq(fixture.rentalItemId()), nullable(String.class),
-        any(LocalDate.class), anyInt(),
-        eq(6), anyList()))
+        any(LocalDate.class), anyInt(), anyList()))
         .thenReturn(new MaintenanceDependencyGateway.TaskSnapshot(
             fixture.externalTaskId(), 0, "ACTIVE",
             List.of(new MaintenanceDependencyGateway.TaskStageSnapshot(0, entryId, 0))));

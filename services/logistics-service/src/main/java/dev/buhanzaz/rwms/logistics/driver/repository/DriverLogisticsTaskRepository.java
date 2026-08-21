@@ -10,9 +10,11 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -120,7 +122,28 @@ public interface DriverLogisticsTaskRepository extends JpaRepository<DriverLogis
       order by task.nextAttemptAt asc nulls first, task.id asc
       """)
   List<UUID> findDueIds(
-      @Param("states") Collection<DriverTaskState> states, @Param("now") OffsetDateTime now);
+      @Param("states") Collection<DriverTaskState> states,
+      @Param("now") OffsetDateTime now,
+      Pageable page);
+
+  /**
+   * Defers an unchanged status fallback poll without advancing the business aggregate version.
+   * The workflow store holds the row lock while issuing this technical scheduling update.
+   */
+  @Modifying(flushAutomatically = true)
+  @Query(
+      """
+      update DriverLogisticsTask task
+      set task.nextAttemptAt = :nextAttemptAt
+      where task.id = :id
+        and task.version = :expectedVersion
+        and task.state = :expectedState
+      """)
+  int deferStatusPoll(
+      @Param("id") UUID id,
+      @Param("expectedVersion") long expectedVersion,
+      @Param("expectedState") DriverTaskState expectedState,
+      @Param("nextAttemptAt") OffsetDateTime nextAttemptAt);
 
   @Query(
       """

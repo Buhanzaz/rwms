@@ -122,7 +122,7 @@ function formatCandidateTotal(value: number) {
 }
 
 function targetKindLabel(kind: "ESTIMATE" | "REPAIR" | null) {
-  if (kind === "ESTIMATE") return "Будет создана смета"
+  if (kind === "ESTIMATE") return "Найдена существующая смета"
   if (kind === "REPAIR") return "Будет создан ремонт"
   return "Внешняя задача не создаётся"
 }
@@ -368,8 +368,8 @@ function SortablePlanEntry({
           <Badge variant={entry.hasWork ? "secondary" : "outline"}>
             {entry.hasWork ? "Есть замечания" : "Без замечаний"}
           </Badge>
-          {entry.targetKind === "ESTIMATE" ? (
-            <Badge>После аренды: сначала смета</Badge>
+          {entry.hasWork ? (
+            <Badge>Из инвентаризации: новый ремонт</Badge>
           ) : null}
           {finding?.currentSnapshot?.status ? (
             <Badge variant="outline">

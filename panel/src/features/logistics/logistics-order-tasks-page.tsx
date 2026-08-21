@@ -255,6 +255,7 @@ function pendingOrderShipment(
       state: "PENDING",
       tenantSnapshot: order.client.displayName,
       rentalOrderId: order.id,
+      inventoryShipmentFurniture: null,
     })),
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,

@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.maintenance.disposition.application;
 
 import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.ApprovePropertyDispositionRequest;
 import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreateInventoryLossDispositionRequest;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreateInventoryCabinWriteOffRequest;
 import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreatePropertyDispositionRequest;
 import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreateResult;
 import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.PropertyDispositionDecisionResponse;
@@ -65,6 +66,12 @@ public class PropertyDispositionApplicationService {
   public CreateResult createInventoryLoss(
       UUID idempotencyKey, CreateInventoryLossDispositionRequest request) {
     return creation.createInventoryLoss(idempotencyKey, request);
+  }
+
+  /** Creates or replays the pending write-off decision for one unresolved inventory cabin. */
+  public CreateResult createInventoryCabinWriteOff(
+      UUID idempotencyKey, CreateInventoryCabinWriteOffRequest request) {
+    return creation.createInventoryCabinWriteOff(idempotencyKey, request);
   }
 
   /**

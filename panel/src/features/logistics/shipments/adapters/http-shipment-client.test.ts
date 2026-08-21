@@ -39,6 +39,7 @@ const document: ShipmentDocument = {
       state: "PENDING",
       tenantSnapshot: null,
       rentalOrderId: RENTAL_ORDER_ID,
+      inventoryShipmentFurniture: null,
     },
   ],
   createdAt: "2026-07-18T08:00:00Z",
@@ -222,6 +223,35 @@ describe("HttpShipmentClient", () => {
     )
   })
 
+  it("preserves the exact furniture frozen by an inventory shipment", async () => {
+    const inventoryFurniture = [
+      {
+        equipmentId: EQUIPMENT_ID,
+        catalogVersion: 7,
+        quantity: 3,
+      },
+    ]
+    const response = {
+      ...document,
+      rentalOrderId: null,
+      lines: [
+        {
+          ...document.lines[0],
+          rentalOrderId: null,
+          inventoryShipmentFurniture: inventoryFurniture,
+        },
+      ],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(json(response))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      new HttpShipmentClient().get("shipment-token", DOCUMENT_ID)
+    ).resolves.toMatchObject({
+      lines: [{ inventoryShipmentFurniture: inventoryFurniture }],
+    })
+  })
+
   it("confirms preparation with the current server version", async () => {
     const fetchMock = vi
       .fn()
@@ -348,10 +378,23 @@ describe("HttpShipmentClient", () => {
       .mockResolvedValueOnce(json([{ ...document, partySnapshot: null }]))
       .mockResolvedValueOnce(json([{ ...document, state: "FINALIZING" }]))
       .mockResolvedValueOnce(json([{ ...document, lines: [] }]))
+      .mockResolvedValueOnce(
+        json([
+          {
+            ...document,
+            lines: [
+              {
+                ...document.lines[0],
+                inventoryShipmentFurniture: undefined,
+              },
+            ],
+          },
+        ])
+      )
     vi.stubGlobal("fetch", fetchMock)
     const client = new HttpShipmentClient()
 
-    for (let index = 0; index < 4; index += 1) {
+    for (let index = 0; index < 5; index += 1) {
       await expect(client.list("shipment-token", WAREHOUSE_ID)).rejects.toThrow(
         "Сервис логистики вернул некорректную отгрузку"
       )

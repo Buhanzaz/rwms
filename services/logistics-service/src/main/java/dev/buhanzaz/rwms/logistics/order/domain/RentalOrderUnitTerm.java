@@ -209,7 +209,9 @@ public class RentalOrderUnitTerm {
       String finalPlanSha256) {
     if (inventoryId == null
         || findingId == null
-        || !java.util.Set.of("FREE", "REPAIR", "CAPITAL_REPAIR").contains(desiredStatus)
+        || !java.util.Set.of(
+                "FREE", "REPAIR", "CAPITAL_REPAIR", "RENTED", "WRITE_OFF_PENDING")
+            .contains(desiredStatus)
         || completedAt == null
         || finalPlanVersion < 1
         || finalPlanSha256 == null

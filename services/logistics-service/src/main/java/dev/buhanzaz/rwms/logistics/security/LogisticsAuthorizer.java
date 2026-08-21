@@ -66,6 +66,11 @@ public class LogisticsAuthorizer {
     requireMaintenanceServiceIntake(jwt);
   }
 
+  /** Requires the exact maintenance-service identity for return-arrival reads. */
+  public void requireMaintenanceReturnArrivalRead(Jwt jwt) {
+    requireMaintenanceServiceIntake(jwt);
+  }
+
   /** Requires the exact inventory-service machine identity and its one logistics scope. */
   public void requireInventoryOutcome(Jwt jwt) {
     if (developmentBypass) return;

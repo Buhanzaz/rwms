@@ -79,18 +79,18 @@ class InventoryJpaValidationIntegrationTest {
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from flyway_schema_history where success", Integer.class))
-        .isEqualTo(24);
+        .isEqualTo(27);
     assertThat(
             jdbc.queryForObject(
                 """
                 select count(*) from information_schema.columns
                 where table_schema='public'
                   and table_name='inventory_publication_intent'
-                  and column_name='outcome_reapplication_no'
+                  and column_name in ('outcome_reapplication_no','generation_attempt_count','next_attempt_at')
                   and is_nullable='NO'
                 """,
                 Integer.class))
-        .isOne();
+        .isEqualTo(3);
     assertThat(
             jdbc.queryForObject(
                 """
@@ -109,6 +109,10 @@ class InventoryJpaValidationIntegrationTest {
             "InventoryFinding",
             "InventoryMembershipMovement",
             "InventoryPublicationIntent",
+            "InventoryPlanLogisticsEffect",
+            "InventoryCabinDispositionReview",
+            "InventoryCabinDispositionRow",
+            "InventoryCabinWriteOffIntent",
             "InventoryPlanningSettings",
             "InventoryFinalPlan",
             "InventoryFinalPlanEntry",

@@ -4,8 +4,11 @@ import {
   cancelInventorySession,
   closeBlockedFindingPublication,
   completeInventorySession,
+  confirmCabinDispositionReturns,
+  confirmCabinDispositionShipments,
   createAndAttachInventoryAsset,
   getFurnitureReview,
+  getCabinDispositionReview,
   getActiveInventorySession,
   getInventoryFinalPlan,
   getInventoryPlanningSettings,
@@ -62,6 +65,76 @@ const session = {
 afterEach(() => vi.unstubAllGlobals())
 
 describe("http inventory adapter", () => {
+  it("reads and confirms the server-owned cabin disposition phases with exact command bodies", async () => {
+    const review = {
+      inventoryId: session.id,
+      sessionRevision: 3,
+      reviewRevision: 0,
+      phase: "RETURNS",
+      returnCandidates: [],
+      missingCandidates: [],
+    }
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify(review), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await getCabinDispositionReview("inventory-token", session.id)
+    await confirmCabinDispositionReturns({
+      accessToken: "inventory-token",
+      inventoryId: session.id,
+      idempotencyKey: "00000000-0000-4000-8000-000000000201",
+      request: {
+        expectedSessionRevision: 3,
+        expectedReviewRevision: 0,
+        returns: [],
+      },
+    })
+    await confirmCabinDispositionShipments({
+      accessToken: "inventory-token",
+      inventoryId: session.id,
+      idempotencyKey: "00000000-0000-4000-8000-000000000202",
+      request: {
+        expectedSessionRevision: 3,
+        expectedReviewRevision: 1,
+        shipments: [],
+      },
+    })
+
+    expect(fetchMock.mock.calls[0][0]).toContain(
+      `/sessions/${session.id}/cabin-disposition-review`
+    )
+    expect(fetchMock.mock.calls[0][1].method).toBeUndefined()
+    expect(fetchMock.mock.calls[1][0]).toContain(
+      `/sessions/${session.id}/cabin-disposition-review/returns/confirm`
+    )
+    expect(fetchMock.mock.calls[1][1].method).toBe("POST")
+    expect(
+      new Headers(fetchMock.mock.calls[1][1].headers).get("Idempotency-Key")
+    ).toBe("00000000-0000-4000-8000-000000000201")
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      expectedSessionRevision: 3,
+      expectedReviewRevision: 0,
+      returns: [],
+    })
+    expect(fetchMock.mock.calls[2][0]).toContain(
+      `/sessions/${session.id}/cabin-disposition-review/shipments/confirm`
+    )
+    expect(
+      new Headers(fetchMock.mock.calls[2][1].headers).get("Idempotency-Key")
+    ).toBe("00000000-0000-4000-8000-000000000202")
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({
+      expectedSessionRevision: 3,
+      expectedReviewRevision: 1,
+      shipments: [],
+    })
+  })
+
   it("cancels an active session with revision, reason and idempotency", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
@@ -523,7 +596,6 @@ describe("http inventory adapter", () => {
       request: {
         expectedSessionRevision: 3,
         findingRevisions: [{ findingId, expectedFindingRevision: 8 }],
-        acknowledgeIncomplete: true,
       },
       idempotencyKey: "00000000-0000-4000-8000-000000000154",
     })
@@ -560,7 +632,6 @@ describe("http inventory adapter", () => {
     expect(JSON.parse(start[1].body)).toEqual({
       expectedSessionRevision: 3,
       findingRevisions: [{ findingId, expectedFindingRevision: 8 }],
-      acknowledgeIncomplete: true,
     })
     expect(fetchMock.mock.calls[1][0]).toContain(
       `/sessions/${session.id}/furniture-review`
@@ -851,12 +922,6 @@ describe("http inventory adapter", () => {
       furnitureReconciliationState: "PENDING" as const,
       createdPublicationCount: 75,
       requeuedPublicationCount: 89,
-      preservedSucceededPublicationCount: 52,
-      publicationBatch: {
-        inventoryId: session.id,
-        aggregateState: "PENDING" as const,
-        intents: [],
-      },
     }
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify(response), {

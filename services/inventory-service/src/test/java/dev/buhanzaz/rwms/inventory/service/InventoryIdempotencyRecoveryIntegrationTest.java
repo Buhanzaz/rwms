@@ -16,7 +16,10 @@ import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.NumberResolutionView;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CompletionPreviewRequest;
+import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.ConfirmInventoryReturnsRequest;
+import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.ConfirmInventoryShipmentsRequest;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.FurnitureReviewView;
+import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.InventoryReturnInput;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.PrepareFinalPlanRequest;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.RevisionExpectation;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.SaveFurnitureReviewRequest;
@@ -27,7 +30,9 @@ import dev.buhanzaz.rwms.inventory.domain.FinalPlanScheduleMode;
 import dev.buhanzaz.rwms.inventory.integration.InventoryDependencyGateway;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -642,13 +647,38 @@ class InventoryIdempotencyRecoveryIntegrationTest {
         .thenReturn(
             new InventoryDependencyGateway.FurnitureSnapshot(
                 warehouseId, snapshotSha256, List.of()));
+    var returns = application.cabinDispositionReview(jwt(), inventoryId);
+    var shipments =
+        application.confirmInventoryReturns(
+            jwt(),
+            inventoryId,
+            UUID.randomUUID(),
+            new ConfirmInventoryReturnsRequest(
+                returns.sessionRevision(),
+                returns.reviewRevision(),
+                returns.returnCandidates().stream()
+                    .map(
+                        candidate ->
+                            new InventoryReturnInput(
+                                candidate.findingId(),
+                                candidate.findingRevision(),
+                                LocalDate.now(ZoneId.of("Europe/Moscow")),
+                                UUID.randomUUID(),
+                                "Клиент"))
+                    .toList()));
+    application.confirmInventoryShipments(
+        jwt(),
+        inventoryId,
+        UUID.randomUUID(),
+        new ConfirmInventoryShipmentsRequest(
+            shipments.sessionRevision(), shipments.reviewRevision(), List.of()));
     long sessionRevision = application.session(jwt(), inventoryId).sessionRevision();
     FurnitureReviewView started =
         application.startFurnitureReview(
             jwt(),
             inventoryId,
             UUID.randomUUID(),
-            new StartFurnitureReviewRequest(sessionRevision, findingRevisions, true));
+            new StartFurnitureReviewRequest(sessionRevision, findingRevisions));
     FurnitureReviewView confirmed =
         application.saveFurnitureReview(
             jwt(),

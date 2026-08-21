@@ -10,6 +10,7 @@ import dev.buhanzaz.rwms.inventory.domain.FindingPlanStage;
 import dev.buhanzaz.rwms.inventory.domain.FurnitureReconciliationState;
 import dev.buhanzaz.rwms.inventory.domain.InspectionState;
 import dev.buhanzaz.rwms.inventory.domain.InventoryExpectedItem;
+import dev.buhanzaz.rwms.inventory.domain.InventoryCabinWriteOffIntentState;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinding;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFurnitureReconciliationIntent;
 import dev.buhanzaz.rwms.inventory.domain.InventoryPublicationIntent;
@@ -26,6 +27,7 @@ import dev.buhanzaz.rwms.inventory.repository.FindingPlanLineRepository;
 import dev.buhanzaz.rwms.inventory.repository.FindingPlanSnapshotRepository;
 import dev.buhanzaz.rwms.inventory.repository.FindingPlanStageRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryExpectedItemRepository;
+import dev.buhanzaz.rwms.inventory.repository.InventoryCabinWriteOffIntentRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFindingRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFurnitureReconciliationIntentRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryMembershipMovementRepository;
@@ -57,11 +59,14 @@ import tools.jackson.databind.node.ObjectNode;
  */
 @Service
 final class InventoryProjectionService extends InventoryProjectionWorkflowSupport {
+  private final InventoryCabinWriteOffIntentRepository cabinWriteOffs;
+
   InventoryProjectionService(
       InventorySessionRepository sessions,
       InventoryFindingRepository findings,
       InventoryFurnitureReconciliationIntentRepository furnitureReconciliations,
       InventoryPublicationIntentRepository publications,
+      InventoryCabinWriteOffIntentRepository cabinWriteOffs,
       InventoryExpectedItemRepository expectedItems,
       InventoryMembershipMovementRepository membershipMovements,
       FindingMediaReferenceRepository mediaReferences,
@@ -93,24 +98,29 @@ final class InventoryProjectionService extends InventoryProjectionWorkflowSuppor
         canonicalJson,
         authorizer,
         transactionManager);
+    this.cabinWriteOffs = cabinWriteOffs;
   }
 
   String aggregatePublicationState(List<PublicationView> intents) {
-    List<PublicationView> required =
-        intents.stream().filter(value -> value.state() != PublicationState.NOT_REQUIRED).toList();
+    return aggregatePublicationStates(intents.stream().map(PublicationView::state).toList());
+  }
+
+  String aggregatePublicationStates(List<PublicationState> intents) {
+    List<PublicationState> required =
+        intents.stream().filter(value -> value != PublicationState.NOT_REQUIRED).toList();
     if (required.isEmpty()) return "NOT_REQUESTED";
-    if (required.stream().allMatch(value -> value.state() == PublicationState.SUCCEEDED)) {
+    if (required.stream().allMatch(value -> value == PublicationState.SUCCEEDED)) {
       return "SUCCEEDED";
     }
-    if (required.stream().anyMatch(value -> value.state() == PublicationState.SUCCEEDED)) {
+    if (required.stream().anyMatch(value -> value == PublicationState.SUCCEEDED)) {
       return "PARTIAL";
     }
     if (required.stream()
         .anyMatch(
             value ->
-                value.state() == PublicationState.READY
-                    || value.state() == PublicationState.PENDING
-                    || value.state() == PublicationState.TRANSIENT_FAILED)) {
+                value == PublicationState.READY
+                    || value == PublicationState.PENDING
+                    || value == PublicationState.TRANSIENT_FAILED)) {
       return "PENDING";
     }
     return "BLOCKED";
@@ -271,6 +281,12 @@ final class InventoryProjectionService extends InventoryProjectionWorkflowSuppor
         sessionCounts(inventoryIds).getOrDefault(value.getId(), SessionCounts.EMPTY);
     List<PublicationView> publicationViews =
         sessionPublicationViews(inventoryIds).getOrDefault(value.getId(), List.of());
+    List<PublicationState> aggregateStates =
+        new ArrayList<>(publicationViews.stream().map(PublicationView::state).toList());
+    cabinWriteOffs.findStatesByInventoryIds(inventoryIds).stream()
+        .map(InventoryCabinWriteOffIntentRepository.InventoryCabinWriteOffStateProjection::getState)
+        .map(InventoryProjectionService::writeOffPublicationState)
+        .forEach(aggregateStates::add);
     FrozenStatistics statistics =
         value.getLifecycle() == SessionLifecycle.COMPLETED ? statisticsService.readStatistics(value.getId()) : null;
     CancellationAudit cancellation =
@@ -293,7 +309,7 @@ final class InventoryProjectionService extends InventoryProjectionWorkflowSuppor
         counts.inspectedCount(),
         value.getStartedAt(),
         terminalAt(value),
-        aggregatePublicationState(publicationViews),
+        aggregatePublicationStates(aggregateStates),
         membershipMovements
             .findAllByInventoryIdOrderByOccurredAtAscIdAsc(value.getId())
             .stream()
@@ -304,7 +320,10 @@ final class InventoryProjectionService extends InventoryProjectionWorkflowSuppor
   }
 
   SessionSummary sessionSummary(
-      InventorySession value, SessionCounts counts, List<PublicationView> publicationViews) {
+      InventorySession value,
+      SessionCounts counts,
+      String publicationState,
+      FurnitureReconciliationState furnitureState) {
     return new SessionSummary(
         value.getId(),
         value.getRevision(),
@@ -315,13 +334,13 @@ final class InventoryProjectionService extends InventoryProjectionWorkflowSuppor
         value.getBusinessDate(),
         value.getLifecycle(),
         value.getReviewStage(),
-        furnitureReconciliationState(value),
+        furnitureState,
         value.getExpectedPopulationCount(),
         counts.findingCount(),
         counts.inspectedCount(),
         value.getStartedAt(),
         terminalAt(value),
-        aggregatePublicationState(publicationViews));
+        publicationState);
   }
 
   FurnitureReconciliationState furnitureReconciliationState(InventorySession session) {
@@ -754,6 +773,61 @@ final class InventoryProjectionService extends InventoryProjectionWorkflowSuppor
       result
           .computeIfAbsent(publication.getInventoryId(), ignored -> new ArrayList<>())
           .add(publicationView(publication));
+    }
+    return result;
+  }
+
+  Map<UUID, String> sessionPublicationStates(Set<UUID> inventoryIds) {
+    if (inventoryIds.isEmpty()) return Map.of();
+    Map<UUID, List<PublicationState>> states = new LinkedHashMap<>();
+    for (InventoryPublicationIntentRepository.InventoryPublicationStateProjection projection :
+        publications.findStatesByInventoryIds(inventoryIds)) {
+      states
+          .computeIfAbsent(projection.getInventoryId(), ignored -> new ArrayList<>())
+          .add(projection.getState());
+    }
+    for (InventoryCabinWriteOffIntentRepository.InventoryCabinWriteOffStateProjection projection :
+        cabinWriteOffs.findStatesByInventoryIds(inventoryIds)) {
+      states
+          .computeIfAbsent(projection.getInventoryId(), ignored -> new ArrayList<>())
+          .add(writeOffPublicationState(projection.getState()));
+    }
+    Map<UUID, String> result = new LinkedHashMap<>();
+    states.forEach((inventoryId, values) -> result.put(inventoryId, aggregatePublicationStates(values)));
+    return result;
+  }
+
+  private static PublicationState writeOffPublicationState(
+      InventoryCabinWriteOffIntentState state) {
+    return switch (state) {
+      case PENDING -> PublicationState.PENDING;
+      case TRANSIENT_FAILED -> PublicationState.TRANSIENT_FAILED;
+      case SUCCEEDED -> PublicationState.SUCCEEDED;
+      case BLOCKED -> PublicationState.BLOCKED;
+    };
+  }
+
+  Map<UUID, FurnitureReconciliationState> sessionFurnitureStates(
+      List<InventorySession> pageContent) {
+    if (pageContent.isEmpty()) return Map.of();
+    Set<UUID> inventoryIds =
+        pageContent.stream()
+            .map(InventorySession::getId)
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    Map<UUID, FurnitureReconciliationState> persisted = new LinkedHashMap<>();
+    for (InventoryFurnitureReconciliationIntentRepository.InventoryFurnitureStateProjection
+        projection : furnitureReconciliations.findStatesByInventoryIds(inventoryIds)) {
+      persisted.put(projection.getInventoryId(), projection.getState());
+    }
+    Map<UUID, FurnitureReconciliationState> result = new LinkedHashMap<>();
+    for (InventorySession session : pageContent) {
+      result.put(
+          session.getId(),
+          persisted.getOrDefault(
+              session.getId(),
+              session.getFurnitureReviewSha256() == null || !furnitureReviewHasItems(session)
+                  ? FurnitureReconciliationState.NOT_REQUIRED
+                  : FurnitureReconciliationState.READY));
     }
     return result;
   }

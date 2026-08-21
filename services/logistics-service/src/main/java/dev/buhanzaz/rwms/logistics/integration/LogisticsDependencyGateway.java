@@ -203,6 +203,7 @@ public interface LogisticsDependencyGateway {
       UUID rentalItemId,
       long rentalItemVersion,
       LocalDate dispatchDate,
+      OffsetDateTime arrivedAt,
       List<MediaReference> mediaReferences);
 
   EquipmentHold acquireEquipmentHold(

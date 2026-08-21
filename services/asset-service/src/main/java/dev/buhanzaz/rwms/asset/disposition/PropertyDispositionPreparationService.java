@@ -145,7 +145,7 @@ final class PropertyDispositionPreparationService {
     eligibility.assertVersion(cabin.getVersion(), request.expectedAssetVersion(), "Rental item changed concurrently");
     eligibility.assertCabinStatusAllowsDisposition(cabin);
     eligibility.assertNoActiveCabinReservation(cabin.getId());
-    eligibility.assertLeaseProof(cabin.getId(), request.authorizedMaintenanceLease());
+    eligibility.assertLeaseProof(cabin, request.authorizedMaintenanceLease());
     decisions.assertNoPreparedFence(PropertyAssetKind.CABIN, cabin.getId(), request.warehouseId());
 
     List<PropertyDispositionLedgerService.ContentBalanceRow> actual =

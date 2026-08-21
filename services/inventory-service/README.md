@@ -84,9 +84,14 @@ final-plan finding revision to media-service with the same publication-attempt i
 the narrow `media.inventory` token. Media-service makes that completed-inventory folder the cabin's
 current photo set; earlier acceptance or inventory folders remain separate historical evidence
 instead of being mixed into the current set. A finding without images skips this effect. Inventory
-then sends the whole immutable final plan to logistics-service with one plan-stable key and the
-exact `logistics.inventory` token. Logistics supersedes active rental, shipment, transfer and
-driver-task state for listed cabins while retaining its audit rows. Finally, a work finding goes to
+then persists one generation-scoped
+[`InventoryPlanLogisticsEffect`](src/main/java/dev/buhanzaz/rwms/inventory/domain/InventoryPlanLogisticsEffect.java)
+for the whole immutable final plan. Its request bytes, SHA-256 and idempotency key are frozen before
+remote I/O. A short independently committed claim sends that request to logistics-service exactly
+once per successful plan generation with the `logistics.inventory` token; finding retries verify the
+shared receipt instead of rebuilding and resending the complete plan. Logistics supersedes active
+rental, shipment, transfer and driver-task state for listed cabins while retaining its audit rows.
+Finally, a work finding goes to
 maintenance with the effective asset version and completion timestamp; maintenance authoritatively
 supersedes older active repair work before creating the required repair or capital repair. A
 no-work finding goes to the maintenance no-work boundary, which supersedes active estimates,
@@ -94,8 +99,13 @@ repairs, leases and tasks instead of merely changing the cabin status. The no-wo
 projected explicitly from the asset result and contains only the fields in the maintenance
 contract; asset-only passport observation and hash fields never cross that boundary. A rejected
 required effect prevents publication success, so recovery reasserts asset, media, the plan-wide
-logistics effect and maintenance in that order. Photos, finding evidence, domain history and media-service/MinIO
-objects are never inputs to deletion in this flow.
+logistics effect and maintenance in that order. A bounded RWMS Problem Details code from a semantic
+downstream `400`, `404`, `409` or `422` is retained on the blocked publication. `408`, `425` and
+`429`, transport failures and malformed responses remain retryable dependency failures. Automatic
+publication recovery selects one due batch of at most 20 rows, persists exponential backoff and
+stops after eight delivery attempts in one outcome-reapplication generation. Photos, finding
+evidence, domain history and
+media-service/MinIO objects are never inputs to deletion in this flow.
 
 `POST /api/inventory/v1/sessions/{inventoryId}/outcome/recalculate` is the MANAGE-scoped recovery
 command for a completed history row. It fences the exact session revision, final-plan version and
@@ -112,8 +122,10 @@ in the corrected plan, including rows previously marked
 successful, because older runtime versions cannot prove that newer logistics, media and no-work
 effects ran. The same command also makes an unresolved furniture reconciliation immediately
 eligible. Attempts and prior maintenance results remain append-only audit evidence; schedulers
-apply the queued effects with stable idempotency. The compatibility
-`preservedSucceededPublicationCount` is therefore zero for the current authoritative command.
+apply the queued effects with stable idempotency. Publication intents are written as one local batch
+and the response contains only the session/plan fences, furniture state and created/requeued counts.
+The panel invalidates and rereads the authoritative publication projection instead of receiving and
+caching every intent in the `202` response.
 Migration
 [`V19__authoritative_inventory_outcome_recovery.sql`](src/main/resources/db/migration/V19__authoritative_inventory_outcome_recovery.sql)
 adds the desired status and stored asset result without deleting existing publication history.
@@ -127,6 +139,35 @@ still replay their unchanged response, while the new generation sends the passpo
 Migration
 [`V24__restore_explicit_inventory_observations.sql`](src/main/resources/db/migration/V24__restore_explicit_inventory_observations.sql)
 admits the restoration audit event without rewriting any existing finding, plan or publication row.
+Migration
+[`V25__plan_wide_logistics_effect.sql`](src/main/resources/db/migration/V25__plan_wide_logistics_effect.sql)
+adds the durable plan-generation logistics request and its lease/retry/result state. Existing
+completed plans are scheduled lazily on their first retry, so no remote call is performed by the
+migration.
+Migration
+[`V27__bound_inventory_publication_recovery.sql`](src/main/resources/db/migration/V27__bound_inventory_publication_recovery.sql)
+adds the generation-local attempt budget and due time. Explicit history recalculation resets only
+that generation budget; the lifetime attempt counter and append-only attempt/result rows remain
+unchanged.
+
+Before furniture review, inventory now owns a durable cabin-disposition review with ordered
+`RETURNS`, `SHIPMENTS` and `COMPLETED` phases. Every found cabin whose inspection snapshot was
+`RENTED` requires an exact historical return. Among missing cabins, the request lists only actual
+shipments; every omitted candidate becomes `WRITE_OFF` automatically. Shipment furniture records
+catalog identity/version and any positive quantity without checking warehouse stock. These choices
+are copied into every immutable final-plan generation. `LOCAL` follows the normal free/repair
+publication path, `SHIPMENT` publishes `RENTED` with frozen contents, and `WRITE_OFF` never mutates
+asset state or enters furniture, photos or repair publication.
+
+Migration
+[`V26__inventory_cabin_dispositions.sql`](src/main/resources/db/migration/V26__inventory_cabin_dispositions.sql)
+adds the phase aggregate, exact candidate rows, final-plan disposition evidence and durable cabin
+write-off intent. Completion persists the plan-wide logistics effect before the write-off intent in
+the same transaction. Write-off recovery selects only the exact logistics generation in
+`SUCCEEDED` or `BLOCKED`: success permits the stable maintenance command, while an upstream block
+terminates the dependent intent explicitly. Logistics and write-off automatic delivery are both
+bounded to eight attempts; the MANAGE recovery command can create a new immutable plan generation
+and requeue unresolved work.
 
 ## Security, warehouse isolation and fencing
 

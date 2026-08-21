@@ -112,6 +112,42 @@ class LogisticsFlywayMigrationIntegrationTest {
             "version_gap_quarantine")
         .doesNotContain("warehouse", "rental_item", "inventory_session", "reservation");
     assertThat(toRegclass("databasechangelog")).isNull();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from information_schema.columns
+                where table_schema='public' and table_name='logistics_document'
+                  and column_name in (
+                    'inventory_source_id','inventory_source_finding_id',
+                    'inventory_source_disposition_kind','inventory_source_completed_at',
+                    'inventory_source_final_plan_version','inventory_source_final_plan_sha256')
+                """,
+                Integer.class))
+        .isEqualTo(6);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from information_schema.columns
+                where table_schema='public' and table_name='logistics_document_line'
+                  and column_name in (
+                    'inventory_source_id','inventory_source_finding_id',
+                    'inventory_source_disposition_kind','inventory_shipment_furniture')
+                """,
+                Integer.class))
+        .isEqualTo(4);
+    assertThat(toRegclass("uk_logistics_document_inventory_source")).isNotNull();
+    assertThat(
+            constraintDefinition(
+                "inventory_outcome_receipt_asset",
+                "ck_inventory_outcome_receipt_asset_disposition"))
+        .contains("WRITE_OFF", "WRITE_OFF_PENDING", "SHIPMENT", "RENTED");
+    assertThat(
+            constraintDefinition(
+                "inventory_outcome_receipt_asset",
+                "ck_inventory_outcome_receipt_asset_document"))
+        .contains("WRITE_OFF", "created_document_id IS NULL", "created_line_id IS NULL");
     assertJpaValidationStarts();
   }
 
@@ -2483,6 +2519,97 @@ class LogisticsFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void v52BackfillsOnlyReturnsWithPhysicalInspectionArrivalEvidence() {
+    Flyway beforeV52 = configuration(MIGRATIONS).target("51").load();
+    assertThat(beforeV52.migrate().migrationsExecuted).isEqualTo(51);
+    UUID warehouseId = UUID.randomUUID();
+    UUID subjectId = UUID.randomUUID();
+    UUID arrivedDocumentId = UUID.randomUUID();
+    UUID eventlessDocumentId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    OffsetDateTime arrivedAt = OffsetDateTime.parse("2026-08-01T09:30:00Z");
+    jdbc.update(
+        """
+        insert into logistics_document(
+          id,version,document_type,state,warehouse_id,driver_snapshot,scheduled_date,
+          requested_by_subject_id,correlation_id,created_at,updated_at)
+        values (?,1,'RETURN','INSPECTION_REQUIRED',?,'Водитель V52',date '2026-08-01',?,?,
+          clock_timestamp(),clock_timestamp()),
+          (?,0,'RETURN','DRAFT',?,'Водитель V52',date '2026-08-02',?,?,
+          clock_timestamp(),clock_timestamp())
+        """,
+        arrivedDocumentId,
+        warehouseId,
+        subjectId,
+        UUID.randomUUID(),
+        eventlessDocumentId,
+        warehouseId,
+        subjectId,
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into logistics_document_line(
+          id,version,document_id,line_number,asset_id,asset_version,state,created_at,updated_at)
+        values (?,0,?,1,?,0,'ARRIVED',clock_timestamp(),clock_timestamp())
+        """,
+        UUID.randomUUID(),
+        arrivedDocumentId,
+        assetId);
+    UUID eventId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into event_stream_head(
+          aggregate_type,aggregate_id,current_version,last_event_id,updated_at)
+        values ('RETURN',?,1,?,?)
+        """,
+        arrivedDocumentId.toString(),
+        eventId,
+        arrivedAt);
+    jdbc.update(
+        """
+        insert into domain_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,event_version,
+          occurred_at,recorded_at,correlation_id,payload,payload_sha256,baseline)
+        values (?,'RETURN',?,1,'logistics.return.inspection-required.v1',1,?,?,?,
+          '{}'::jsonb,encode(sha256(convert_to('{}'::jsonb::text,'UTF8')),'hex'),false)
+        """,
+        eventId,
+        arrivedDocumentId.toString(),
+        arrivedAt,
+        arrivedAt,
+        UUID.randomUUID());
+
+    Flyway upgraded = configuration(MIGRATIONS).target("52").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select return_arrived_at from logistics_document where id=?",
+                OffsetDateTime.class,
+                arrivedDocumentId))
+        .isEqualTo(arrivedAt);
+    assertThat(
+            jdbc.queryForObject(
+                "select return_arrived_at from logistics_document where id=?",
+                OffsetDateTime.class,
+                eventlessDocumentId))
+        .isNull();
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    update logistics_document
+                    set document_type='SHIPMENT', party_snapshot='Клиент',
+                        driver_snapshot='Водитель'
+                    where id=?
+                    """,
+                    arrivedDocumentId))
+        .hasMessageContaining("ck_logistics_document_return_arrival");
+    assertJpaValidationStarts();
+  }
+
+  @Test
   void modifiedAppliedMigrationIsRejectedByChecksumValidation(@TempDir Path directory)
       throws IOException {
     Path migration = directory.resolve("V1__logistics_schema.sql");
@@ -2535,6 +2662,14 @@ class LogisticsFlywayMigrationIntegrationTest {
 
   private String toRegclass(String table) {
     return jdbc.queryForObject("select to_regclass(?)", String.class, "public." + table);
+  }
+
+  private String constraintDefinition(String table, String constraint) {
+    return jdbc.queryForObject(
+        "select pg_get_constraintdef(oid) from pg_constraint where conrelid=to_regclass(?) and conname=?",
+        String.class,
+        "public." + table,
+        constraint);
   }
 
   private String logisticsConstraintDefinition(String constraintName) {

@@ -12,8 +12,12 @@ import dev.buhanzaz.rwms.maintenance.domain.RepairExecutionState;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Size;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -41,6 +45,7 @@ public class MaintenanceRepairController {
   private final MaintenanceAuthorizer access;
   private final PropertyDispositionApplicationService dispositions;
 
+  /** Returns one database-paged repair collection with an optional bounded ID filter. */
   @GetMapping("/repairs")
   public ResponseEntity<PageResponse<RepairResponse>> list(
       @AuthenticationPrincipal Jwt jwt,
@@ -50,19 +55,44 @@ public class MaintenanceRepairController {
       @RequestParam(required = false) RepairExecutionState executionState,
       @RequestParam(required = false) RepairAcceptanceState acceptanceState,
       @RequestParam(required = false) UUID rentalItemId,
+      @RequestParam(required = false) @Size(max = 200) Set<UUID> repairIds,
       @RequestHeader(name = HttpHeaders.IF_NONE_MATCH, required = false) String ifNoneMatch) {
     access.requireRead(jwt, warehouseId);
-    List<RepairResponse> values = service.repairs(warehouseId).stream()
-        .filter(value -> executionState == null || value.executionState() == executionState)
-        .filter(value -> acceptanceState == null || value.acceptanceState() == acceptanceState)
-        .filter(value -> rentalItemId == null || value.rentalItemId().equals(rentalItemId))
-        .toList();
-    PageResponse<RepairResponse> response = page(values, page, size);
+    PageResponse<RepairResponse> response =
+        service.repairs(
+            warehouseId,
+            executionState,
+            acceptanceState,
+            rentalItemId,
+            repairIds,
+            page,
+            size);
     return ConditionalGet.response(
-        "repairs:" + warehouseId + ':' + page + ':' + size + ':' + executionState + ':' +
-            acceptanceState + ':' + rentalItemId,
+        "repairs:"
+            + warehouseId
+            + ':'
+            + page
+            + ':'
+            + size
+            + ':'
+            + executionState
+            + ':'
+            + acceptanceState
+            + ':'
+            + rentalItemId
+            + ':'
+            + repairIdsKey(repairIds),
         response,
         ifNoneMatch);
+  }
+
+  /** Returns one stable cache-key component for the optional bounded repair ID filter. */
+  private static String repairIdsKey(Set<UUID> repairIds) {
+    if (repairIds == null) return "all";
+    return repairIds.stream()
+        .sorted(Comparator.comparing(UUID::toString))
+        .map(UUID::toString)
+        .collect(Collectors.joining(","));
   }
 
   @PostMapping("/repairs/direct")

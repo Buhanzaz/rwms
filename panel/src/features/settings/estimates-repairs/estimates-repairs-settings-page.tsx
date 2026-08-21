@@ -139,6 +139,7 @@ import {
   repairEstimateCatalogLinkTypeLabel,
   repairEstimateCatalogNodeTypeLabel,
 } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
+import { EstimateCreationWindowSettingsCard } from "@/features/settings/estimates-repairs/estimate-creation-window-settings-card"
 
 type EstimateScreen =
   | { level: "root" }
@@ -4348,6 +4349,15 @@ export function EstimatesRepairsSettingsPage() {
         onSelect={openEstimateAction}
       />
     ) : null
+  const estimateCreationWindowCard =
+    canManage && accessToken && selectedWarehouseId ? (
+      <div className="shrink-0">
+        <EstimateCreationWindowSettingsCard
+          accessToken={accessToken}
+          warehouseId={selectedWarehouseId}
+        />
+      </div>
+    ) : null
 
   if (estimateScreen.level !== "root") {
     if (!catalogRequest || !currentCatalog) {
@@ -4360,6 +4370,7 @@ export function EstimatesRepairsSettingsPage() {
     }
     return (
       <div className="flex h-full min-h-0 flex-col gap-3">
+        {estimateCreationWindowCard}
         {estimateActionNavigation}
         <EstimateDrilldownView
           request={catalogRequest}
@@ -4383,6 +4394,7 @@ export function EstimatesRepairsSettingsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
+      {estimateCreationWindowCard}
       {!accessToken || !selectedWarehouseId ? (
         <CatalogNavigationState
           kind="error"

@@ -37,7 +37,6 @@ final class MaintenanceTaskReconciliationUseCases {
   private final InventoryRepairSourceRepository inventorySources;
   private final InventoryPublicationSourceRepository publicationSources;
   private final InventoryAuthoritativeOutcomeRepository authoritativeOutcomes;
-  private final RepairCapacitySettingsService repairCapacitySettings;
   private final RepairPlaceService repairPlaces;
   private final InventoryPublicationPrestartReplacementGuard prestartReplacementGuard;
   private final MaintenanceDependencyGateway dependencies;
@@ -54,7 +53,6 @@ final class MaintenanceTaskReconciliationUseCases {
       InventoryRepairSourceRepository inventorySources,
       InventoryPublicationSourceRepository publicationSources,
       InventoryAuthoritativeOutcomeRepository authoritativeOutcomes,
-      RepairCapacitySettingsService repairCapacitySettings,
       RepairPlaceService repairPlaces,
       InventoryPublicationPrestartReplacementGuard prestartReplacementGuard,
       MaintenanceDependencyGateway dependencies,
@@ -69,7 +67,6 @@ final class MaintenanceTaskReconciliationUseCases {
     this.inventorySources = inventorySources;
     this.publicationSources = publicationSources;
     this.authoritativeOutcomes = authoritativeOutcomes;
-    this.repairCapacitySettings = repairCapacitySettings;
     this.repairPlaces = repairPlaces;
     this.prestartReplacementGuard = prestartReplacementGuard;
     this.dependencies = dependencies;
@@ -341,7 +338,6 @@ final class MaintenanceTaskReconciliationUseCases {
             asset.number(),
             scheduledDate,
             priority,
-            plan.dailyCapacity(),
             plan.stages());
     validateTaskPlanTruth(plan, task);
 
@@ -415,7 +411,6 @@ final class MaintenanceTaskReconciliationUseCases {
             scheduledDate,
             priority,
             resolveDeliveredLocalDate,
-            repairCapacitySettings.get(repair.getWarehouseId()).repairPlaceCount(),
             List.copyOf(taskBoardSupport.taskStages(repair))));
   }
 

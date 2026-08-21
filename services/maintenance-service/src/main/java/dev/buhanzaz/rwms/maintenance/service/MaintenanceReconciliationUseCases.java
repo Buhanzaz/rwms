@@ -89,6 +89,7 @@ public class MaintenanceReconciliationUseCases {
       case "COMPLETE_EMPTY_ESTIMATE" -> assetReconciliations.reconcileEmptyEstimateClaim(work);
       case "REGISTER_TASK" -> taskReconciliations.reconcileTaskClaim(work, false);
       case "UPDATE_TASK" -> taskReconciliations.reconcileTaskClaim(work, true);
+      case "REFRESH_WORKER_MEDIA" -> taskReconciliations.reconcileTaskClaim(work, true);
       case "CREATE_DRIVER_TASK" -> taskReconciliations.reconcileDriverLogisticsTaskClaim(work);
       case "SYNC_REPAIR_COMPLEXITY_STATUS" ->
           lifecycleReconciliations.reconcileRepairComplexityStatusClaim(work);
@@ -105,19 +106,29 @@ public class MaintenanceReconciliationUseCases {
     }
   }
 
+  /**
+   * Records retry state while keeping a presentation-only media refresh from degrading the repair.
+   * Normal task delivery failures retain their existing aggregate failure transition.
+   */
   private void recordClaimedTaskFailure(
       MaintenanceReconciliationStore.WorkItem work, RuntimeException exception) {
     try {
       transactions.executeWithoutResult(
           status -> {
             boolean quarantined = reconciliations.failed(work, exception);
-            reconciliationSupport.recordReconciliationFailure(work, quarantined);
+            if (affectsRepairDeliveryState(work.operation())) {
+              reconciliationSupport.recordReconciliationFailure(work, quarantined);
+            }
           });
     } catch (RuntimeException staleClaim) {
       // The claim may have expired while a remote dependency was slow. A newer worker owns
       // the durable outcome; never turn that harmless race into another failed attempt.
       if (!MaintenanceReconciliationStore.isStaleClaim(staleClaim)) throw staleClaim;
     }
+  }
+
+  static boolean affectsRepairDeliveryState(String operation) {
+    return !"REFRESH_WORKER_MEDIA".equals(operation);
   }
 
   private static MaintenanceDependencyGateway.MediaOwnerProof mediaProof(

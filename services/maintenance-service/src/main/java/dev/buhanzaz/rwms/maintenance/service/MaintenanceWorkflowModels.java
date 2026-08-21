@@ -248,7 +248,6 @@ record TaskPlan(
       LocalDate scheduledDate,
       int priority,
       boolean resolveDeliveredLocalDate,
-      int dailyCapacity,
       List<MaintenanceDependencyGateway.TaskStage> stages) {}
 
 /** Immutable service-local queue repair plan snapshot. */

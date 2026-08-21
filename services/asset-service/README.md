@@ -93,10 +93,17 @@ order-wide and is not released during replacement.
 `PUT /api/internal/asset/v1/inventory/outcomes/{inventoryId}/findings/{findingId}` accepts only the
 exact `inventory-service` credential and immutable completed-plan evidence. For a found,
 non-terminal cabin, the latest completed inventory is authoritative: a first or newer `FREE`,
-`REPAIR` or `CAPITAL_REPAIR` source releases active operation leases, order-unit reservations and
+`REPAIR`, `CAPITAL_REPAIR` or `RENTED` source releases active operation leases, order-unit reservations and
 presentation holds, clears transfer state and then becomes the current cabin status. Rows and
 ordinary lease/asset events are preserved; media metadata and object storage are not part of this
 command.
+
+`RENTED` is valid only with the shipment's required (possibly empty) `shipmentContents`. Every
+unique line must reference an active `FURNITURE` catalog row at the exact version. Under the cabin
+locks, asset exact-replaces all cabin equipment buckets with those quantities in `CABIN_RENTED`;
+omitted prior contents become zero. It neither reads stock availability nor changes `STOCK`.
+Flyway V40 extends the permanent outcome watermark hash so exact replay and strictly newer plan
+correction fence this furniture payload together with status and passport evidence.
 
 The same command carries the inventory finding's frozen passport observation. `ABSENT` preserves
 the current passport. `PRESENT` authoritatively replaces cabin type, compatible dimensions,
@@ -184,6 +191,11 @@ decision store, while the ledger alone owns physical balance, hold and
 movement locks. Preparation performs the existing warehouse check before its
 local transaction; application and snapshot consume the same eligibility and
 ledger leaves without calling one another or the facade.
+
+A lagging `RENTED` status is disposition-eligible only after logistics has released every active
+lease and no reservation, foreign hold or disposition fence remains. Preparation and application
+repeat those guards under lock. Releasing the logistics lease does not rewrite the rental-item
+status or version; only the final approved maintenance APPLY may advance it to `WRITTEN_OFF`.
 
 ## Security, warehouse isolation and fencing
 
@@ -273,6 +285,12 @@ bash ./gradlew :services:asset-service:bootRun --args='--spring.profiles.active=
 
 Use disabled dependency boundaries only for isolated development or tests. Live integrations use
 private URLs and client credentials; browser callers use the gateway.
+
+The module test task limits Spring's test-context cache to one context. Asset integration suites
+use many distinct Testcontainers application contexts, while the shared Gradle test worker is
+bounded to 512 MiB; immediate eviction prevents a broad test run from retaining unrelated
+contexts until `OutOfMemoryError`. Run the complete gate serially with
+`bash ./gradlew :services:asset-service:test --rerun-tasks --max-workers=1 --no-parallel`.
 
 ## Production Kafka safety
 

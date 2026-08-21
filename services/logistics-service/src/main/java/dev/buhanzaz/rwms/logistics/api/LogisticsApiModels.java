@@ -15,6 +15,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
+import tools.jackson.databind.JsonNode;
 
 /**
  * Defines transport models for logistics HTTP endpoints; these values are not persistence entities.
@@ -257,6 +258,9 @@ public final class LogisticsApiModels {
       LocalDate scheduledDate,
       UUID rentalOrderId,
       UUID rentalShipmentId,
+      UUID inventorySourceId,
+      UUID inventorySourceFindingId,
+      String inventorySourceDispositionKind,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {}
 
@@ -268,7 +272,8 @@ public final class LogisticsApiModels {
       long assetVersion,
       LogisticsLineState state,
       String tenantSnapshot,
-      UUID rentalOrderId) {}
+      UUID rentalOrderId,
+      JsonNode inventoryShipmentFurniture) {}
 
   public record LogisticsDocumentView(
       UUID id,
@@ -285,6 +290,9 @@ public final class LogisticsApiModels {
       LocalDate scheduledDate,
       UUID rentalOrderId,
       UUID rentalShipmentId,
+      UUID inventorySourceId,
+      UUID inventorySourceFindingId,
+      String inventorySourceDispositionKind,
       List<LogisticsLineView> lines,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {}

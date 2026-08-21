@@ -48,6 +48,7 @@ import tools.jackson.databind.node.ObjectNode;
 @Service
 final class InventoryReviewService extends InventoryReviewWorkflowSupport {
   private final InventoryFindingPersistenceService findingPersistence;
+  private final InventoryCabinDispositionService cabinDispositions;
 
   InventoryReviewService(
       InventorySessionRepository sessions,
@@ -58,6 +59,7 @@ final class InventoryReviewService extends InventoryReviewWorkflowSupport {
       InventoryIdempotencyPort idempotency,
       InventoryFindingValidationService validationService,
       InventoryFindingPersistenceService findingPersistence,
+      InventoryCabinDispositionService cabinDispositions,
       ObjectMapper mapper,
       InventoryCanonicalJsonPort canonicalJson,
       InventoryAuthorizer authorizer,
@@ -75,6 +77,7 @@ final class InventoryReviewService extends InventoryReviewWorkflowSupport {
         authorizer,
         transactionManager);
     this.findingPersistence = findingPersistence;
+    this.cabinDispositions = cabinDispositions;
   }
 
   public RegistryReviewView registryReview(
@@ -128,7 +131,8 @@ final class InventoryReviewService extends InventoryReviewWorkflowSupport {
     List<ValidatedFinding> validated =
         validationService.validatedFindings(session, revisions.findings(), validation);
     List<CompletionRisk> risks = validationService.risks(session, revisions.findings(), validated);
-    validateFurnitureStageTransition(risks, request.acknowledgeIncomplete());
+    cabinDispositions.requireCompleted(session, revisions.findings());
+    validateFurnitureStageTransition(risks);
     InventoryDependencyGateway.FurnitureSnapshot snapshot =
         dependencies.furnitureSnapshot(
             session.getWarehouseId(), furnitureAssetIds(session, revisions.findings()));
@@ -223,6 +227,8 @@ final class InventoryReviewService extends InventoryReviewWorkflowSupport {
                     mediaSourceRevisions.get(finding.getId()),
                     finding.getRevision());
               }
+              cabinDispositions.carryForwardFurnitureReview(
+                  inventoryId, active, mediaSourceRevisions);
               locked.confirmFurnitureReview(
                   request.assetSnapshotSha256(),
                   submission.reviewSha256(),
@@ -235,8 +241,7 @@ final class InventoryReviewService extends InventoryReviewWorkflowSupport {
 
   /** Returns the warehouse-local calendar used to derive final maintenance planning. */
 
-  void validateFurnitureStageTransition(
-      List<CompletionRisk> risks, boolean acknowledgeIncomplete) {
+  void validateFurnitureStageTransition(List<CompletionRisk> risks) {
     if (risks.stream().anyMatch(risk -> "CONFLICT".equals(risk.code()))) {
       throw InventoryException.conflict(
           "Урегулируйте конфликты реестра перед сверкой мебели");
@@ -250,12 +255,6 @@ final class InventoryReviewService extends InventoryReviewWorkflowSupport {
           "INVENTORY_VALIDATION_FAILED",
           "Сверка мебели недоступна, пока в осмотре есть незавершённые изменения");
     }
-    if (!acknowledgeIncomplete && !risks.isEmpty()) {
-      throw new InventoryException(
-          HttpStatus.UNPROCESSABLE_ENTITY,
-          "INVENTORY_VALIDATION_FAILED",
-          "Подтвердите только ненайденные и непроверенные бытовки перед сверкой мебели");
-    }
   }
 
   /**
@@ -266,7 +265,9 @@ final class InventoryReviewService extends InventoryReviewWorkflowSupport {
    */
   List<InventoryFinding> furnitureFindings(
       InventorySession session, List<InventoryFinding> values) {
+    Set<UUID> localFindingIds = cabinDispositions.localFindingIds(session, values);
     return values.stream()
+        .filter(value -> localFindingIds.contains(value.getId()))
         .filter(value -> value.getAssetId() != null)
         .filter(value -> session.getWarehouseId().equals(value.getCurrentWarehouseId()))
         .filter(value -> CAPTURE_STATUSES.contains(value.getCurrentStatus()))

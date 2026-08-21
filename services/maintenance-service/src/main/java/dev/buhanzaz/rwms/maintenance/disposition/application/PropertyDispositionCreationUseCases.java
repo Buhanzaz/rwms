@@ -5,6 +5,7 @@ import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModel
 import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreateCabinPropertyDispositionRequest;
 import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreateEquipmentPropertyDispositionRequest;
 import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreateInventoryLossDispositionRequest;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreateInventoryCabinWriteOffRequest;
 import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreatePropertyDispositionRequest;
 import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreateResult;
 import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.WriteOffRepairRequest;
@@ -13,6 +14,7 @@ import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionConte
 import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionDecision;
 import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionDecisionDraft;
 import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionKind;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionContentsMode;
 import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionSource;
 import dev.buhanzaz.rwms.maintenance.disposition.repository.PropertyDispositionDecisionRepository;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceRepair;
@@ -172,6 +174,48 @@ final class PropertyDispositionCreationUseCases {
         commands.execute(() -> createInventoryLossInTransaction(idempotencyKey, request, snapshot)));
   }
 
+  CreateResult createInventoryCabinWriteOff(
+      UUID idempotencyKey, CreateInventoryCabinWriteOffRequest request) {
+    require(idempotencyKey, "Inventory cabin write-off idempotency key is required");
+    require(request, "Inventory cabin write-off request is required");
+    String requestHash = commands.hash(request);
+    CreateResult replay =
+        commands.execute(
+            () -> {
+              PropertyDispositionDecision existing =
+                  decisions
+                      .findBySourceAndInventoryIdAndFindingId(
+                          PropertyDispositionSource.INVENTORY,
+                          request.inventorySessionId(),
+                          request.findingId())
+                      .orElse(null);
+              if (existing == null) {
+                return null;
+              }
+              if (!existing.getRequestSha256().equals(requestHash)
+                  || existing.getAssetKind() != PropertyDispositionAssetKind.CABIN
+                  || existing.getKind() != PropertyDispositionKind.WRITE_OFF) {
+                throw conflict(
+                    "Inventory finding is already bound to a different property disposition");
+              }
+              return new CreateResult(readProjection.response(existing, List.of()), true);
+            });
+    if (replay != null) {
+      return replay;
+    }
+    warehouseLifecycle.requireOutgoing(request.warehouseId());
+    MaintenanceDependencyGateway.PropertyAssetSnapshot snapshot =
+        dependencies.getPropertyAssetSnapshot(
+            MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+            request.cabinId(),
+            request.warehouseId());
+    return commands.requiredResult(
+        commands.execute(
+            () ->
+                createInventoryCabinWriteOffInTransaction(
+                    idempotencyKey, request, snapshot)));
+  }
+
   private CreateResult createManualInTransaction(
       UUID subjectId,
       UUID idempotencyKey,
@@ -311,6 +355,93 @@ final class PropertyDispositionCreationUseCases {
             null,
             List.of()));
     return created(decision);
+  }
+
+  private CreateResult createInventoryCabinWriteOffInTransaction(
+      UUID ignoredIdempotencyKey,
+      CreateInventoryCabinWriteOffRequest request,
+      MaintenanceDependencyGateway.PropertyAssetSnapshot snapshot) {
+    commands.advisoryLock(
+        "property-disposition:inventory:"
+            + request.inventorySessionId()
+            + ':'
+            + request.findingId());
+    String requestHash = commands.hash(request);
+    PropertyDispositionDecision existing =
+        decisions
+            .findBySourceAndInventoryIdAndFindingId(
+                PropertyDispositionSource.INVENTORY,
+                request.inventorySessionId(),
+                request.findingId())
+            .orElse(null);
+    if (existing != null) {
+      if (!existing.getRequestSha256().equals(requestHash)
+          || existing.getAssetKind() != PropertyDispositionAssetKind.CABIN
+          || existing.getKind() != PropertyDispositionKind.WRITE_OFF) {
+        throw conflict("Inventory finding is already bound to a different property disposition");
+      }
+      return new CreateResult(readProjection.response(existing, List.of()), true);
+    }
+    validateInventoryCabinWriteOffSnapshot(snapshot, request);
+    PropertyDispositionDecision decision =
+        PropertyDispositionDecision.initiate(
+            new PropertyDispositionDecisionDraft(
+                request.warehouseId(),
+                PropertyDispositionAssetKind.CABIN,
+                request.cabinId(),
+                snapshot.assetDisplayName(),
+                PropertyDispositionKind.WRITE_OFF,
+                PropertyDispositionSource.INVENTORY,
+                request.expectedAssetVersion(),
+                null,
+                null,
+                null,
+                null,
+                request.reason(),
+                request.evidenceLink(),
+                null,
+                null,
+                request.inventorySessionId(),
+                request.findingId(),
+                null,
+                null,
+                requestHash,
+                actors.systemActorJson(),
+                snapshot.contents().isEmpty()
+                    ? null
+                    : PropertyDispositionContentsMode.DISPOSE_WITH_CABIN,
+                inventoryCabinWriteOffLines(snapshot)));
+    return created(decision);
+  }
+
+  private void validateInventoryCabinWriteOffSnapshot(
+      MaintenanceDependencyGateway.PropertyAssetSnapshot snapshot,
+      CreateInventoryCabinWriteOffRequest request) {
+    if (snapshot.assetKind() != MaintenanceDependencyGateway.PropertyAssetKind.CABIN
+        || !request.cabinId().equals(snapshot.assetId())
+        || !request.warehouseId().equals(snapshot.warehouseId())) {
+      throw conflict("Cabin snapshot does not match the inventory disposition identity");
+    }
+    requireDispositionAllowed(snapshot, false);
+    if (snapshot.version() != request.expectedAssetVersion()) {
+      throw versionConflict("Cabin asset version changed before inventory write-off");
+    }
+  }
+
+  private List<PropertyDispositionContentSnapshotLineDraft> inventoryCabinWriteOffLines(
+      MaintenanceDependencyGateway.PropertyAssetSnapshot snapshot) {
+    return snapshot.contents().stream()
+        .sorted(Comparator.comparing(line -> line.equipmentId().toString()))
+        .map(
+            line ->
+                new PropertyDispositionContentSnapshotLineDraft(
+                    line.equipmentId(),
+                    line.equipmentName(),
+                    line.equipmentFormat(),
+                    line.quantity(),
+                    0,
+                    line.balanceVersion()))
+        .toList();
   }
 
   private CreateResult created(PropertyDispositionDecision decision) {

@@ -56,6 +56,11 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   }
 
   @Override
+  public ReturnArrival returnArrival(UUID warehouseId, UUID rentalItemId) {
+    return logistics.returnArrival(warehouseId, rentalItemId);
+  }
+
+  @Override
   public void markWarehouseOperation(
       UUID warehouseId, UUID operationId, OffsetDateTime occurredAt) {
     warehouse.markWarehouseOperation(warehouseId, operationId, occurredAt);
@@ -219,7 +224,6 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
       String unitNumber,
       LocalDate scheduledDate,
       int priority,
-      int dailyCapacity,
       List<TaskStage> stages) {
     return taskBoard.registerTask(
         key,
@@ -230,7 +234,6 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
         unitNumber,
         scheduledDate,
         priority,
-        dailyCapacity,
         stages);
   }
 

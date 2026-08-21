@@ -50,6 +50,7 @@ class LogisticsContractFoundationTest {
             "/api/logistics/v1/driver-tasks/{taskId}",
             "/api/logistics/v1/driver-tasks/{taskId}/promote",
             "/api/logistics/v1/admin/warehouse-operation-marks/{operationId}/recovery",
+            "/api/internal/logistics/v1/maintenance/return-arrivals/{rentalItemId}",
             "/api/internal/logistics/v1/maintenance/driver-tasks",
             "/api/internal/logistics/v1/maintenance/driver-tasks/repairs/{repairId}",
             "/api/internal/logistics/v1/maintenance/driver-tasks/repairs/{repairId}/cancel",
@@ -198,6 +199,25 @@ class LogisticsContractFoundationTest {
   }
 
   @Test
+  void maintenanceReturnArrivalContractExposesOnlyPhysicalArrivalIdentity() throws Exception {
+    Map<String, Object> document = openApi();
+    Map<String, Object> endpoint =
+        child(
+            child(document, "paths"),
+            "/api/internal/logistics/v1/maintenance/return-arrivals/{rentalItemId}");
+    Map<String, Object> get = child(endpoint, "get");
+    assertThat(get.get("operationId")).isEqualTo("getMaintenanceReturnArrival");
+    assertThat(child(get, "responses")).containsKeys("200", "401", "403", "404");
+
+    Map<String, Object> schema =
+        child(child(child(document, "components"), "schemas"), "MaintenanceReturnArrival");
+    assertThat(child(schema, "properties"))
+        .containsOnlyKeys("warehouseId", "rentalItemId", "returnDocumentId", "arrivedAt");
+    assertThat(schema.get("required"))
+        .isEqualTo(List.of("warehouseId", "rentalItemId", "returnDocumentId", "arrivedAt"));
+  }
+
+  @Test
   void orderUnitReplacementRouteMatchesTheCanonicalExplicitReplacePath() throws Exception {
     String path = "/api/logistics/v1/orders/{orderId}/units/{unitId}/replace";
     Map<String, Object> operation = child(child(child(openApi(), "paths"), path), "post");
@@ -261,6 +281,7 @@ class LogisticsContractFoundationTest {
             "cancelEquipmentMovementTask",
             "listDriverTasks",
             "createDriverTask",
+            "getMaintenanceReturnArrival",
             "createMaintenanceDriverTask",
             "createMaintenanceEquipmentMovementTask",
             "getMaintenanceEquipmentMovementTask",

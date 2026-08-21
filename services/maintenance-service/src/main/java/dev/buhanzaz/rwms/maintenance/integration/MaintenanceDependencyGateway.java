@@ -25,6 +25,9 @@ public interface MaintenanceDependencyGateway {
 
   WarehouseTimeZone warehouseTimeZoneAt(UUID warehouseId, OffsetDateTime at);
 
+  /** Logistics-owned timestamp when the rental item physically reached the return warehouse. */
+  ReturnArrival returnArrival(UUID warehouseId, UUID rentalItemId);
+
   void markWarehouseOperation(UUID warehouseId, UUID operationId, OffsetDateTime occurredAt);
 
   AssetSnapshot getRentalItemSnapshot(UUID rentalItemId);
@@ -140,6 +143,10 @@ public interface MaintenanceDependencyGateway {
       String ownerType,
       String ownerId);
 
+  /**
+   * Registers one maintenance-owned repair package on the aggregate task board. Repair-place
+   * capacity remains maintenance-owned and is not a task scheduling input.
+   */
   TaskSnapshot registerTask(
       UUID idempotencyKey,
       UUID externalTaskId,
@@ -149,7 +156,6 @@ public interface MaintenanceDependencyGateway {
       String unitNumber,
       LocalDate scheduledDate,
       int priority,
-      int dailyCapacity,
       List<TaskStage> stages);
 
   default TaskSnapshot registerTask(
@@ -170,7 +176,6 @@ public interface MaintenanceDependencyGateway {
         unitNumber,
         scheduledDate,
         priority,
-        6,
         stages);
   }
 
@@ -193,7 +198,6 @@ public interface MaintenanceDependencyGateway {
             .atZone(java.time.ZoneId.of(warehouseTimeZoneAt(warehouseId, at).timeZone()))
             .toLocalDate(),
         3,
-        6,
         stages);
   }
 
@@ -781,6 +785,10 @@ public interface MaintenanceDependencyGateway {
       OffsetDateTime capturedAt,
       OffsetDateTime recordedAt) {}
 
+  /**
+   * Immutable maintenance stage sent to task-board; {@code taskTitle} is one common
+   * source-owned repair-complexity label for the complete worker task package.
+   */
   record TaskStage(
       UUID stageId,
       int order,
@@ -792,7 +800,8 @@ public interface MaintenanceDependencyGateway {
       List<TaskMaterial> materials,
       List<TaskComment> comments,
       List<TaskSourceMedia> sourceMedia,
-      Integer plannedDurationMinutes) {
+      Integer plannedDurationMinutes,
+      String taskTitle) {
     public TaskStage(
         UUID stageId,
         int order,
@@ -811,7 +820,8 @@ public interface MaintenanceDependencyGateway {
           List.of(),
           List.of(),
           List.of(),
-          null);
+          null,
+          "Maintenance repair");
     }
 
     public TaskStage(
@@ -835,7 +845,35 @@ public interface MaintenanceDependencyGateway {
           materials,
           comments,
           sourceMedia,
-          null);
+          null,
+          "Maintenance repair");
+    }
+
+    public TaskStage(
+        UUID stageId,
+        int order,
+        RepairStageKind kind,
+        String title,
+        UUID queueId,
+        OffsetDateTime taskDeadline,
+        List<TaskWork> works,
+        List<TaskMaterial> materials,
+        List<TaskComment> comments,
+        List<TaskSourceMedia> sourceMedia,
+        Integer plannedDurationMinutes) {
+      this(
+          stageId,
+          order,
+          kind,
+          title,
+          queueId,
+          taskDeadline,
+          works,
+          materials,
+          comments,
+          sourceMedia,
+          plannedDurationMinutes,
+          "Maintenance repair");
     }
 
     public TaskStage {
@@ -843,6 +881,10 @@ public interface MaintenanceDependencyGateway {
         throw new IllegalArgumentException(
             "Worker task stage planned duration must be positive when present");
       }
+      if (taskTitle == null || taskTitle.isBlank()) {
+        throw new IllegalArgumentException("Worker task title is required");
+      }
+      taskTitle = taskTitle.trim();
       works = works == null ? List.of() : List.copyOf(works);
       materials = materials == null ? List.of() : List.copyOf(materials);
       comments = comments == null ? List.of() : List.copyOf(comments);
@@ -1277,6 +1319,22 @@ public interface MaintenanceDependencyGateway {
       }
       timeZone = timeZone.trim();
       java.time.ZoneId.of(timeZone);
+    }
+  }
+
+  /** Immutable logistics return-arrival evidence used only to admit creation of a new estimate. */
+  record ReturnArrival(
+      UUID warehouseId,
+      UUID rentalItemId,
+      UUID returnDocumentId,
+      OffsetDateTime arrivedAt) {
+    public ReturnArrival {
+      if (warehouseId == null
+          || rentalItemId == null
+          || returnDocumentId == null
+          || arrivedAt == null) {
+        throw new IllegalArgumentException("Return arrival truth is invalid");
+      }
     }
   }
 }

@@ -8,6 +8,7 @@ import static dev.buhanzaz.rwms.asset.api.AssetApiModels.MovementResponse;
 import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
 import dev.buhanzaz.rwms.asset.domain.BalanceLocationKind;
+import dev.buhanzaz.rwms.asset.domain.EquipmentBalance;
 import dev.buhanzaz.rwms.asset.domain.RentalItem;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import dev.buhanzaz.rwms.asset.eventing.AssetEventStore;
@@ -152,6 +153,38 @@ final class AssetEquipmentLedgerService {
 
   void lockAll(Collection<String> values) {
     values.stream().filter(java.util.Objects::nonNull).distinct().sorted().forEach(this::advisoryLock);
+  }
+
+  /** Locks existing and absent target cabin buckets in canonical advisory-key order. */
+  void lockInventoryCabinBalanceBuckets(
+      UUID rentalItemId,
+      UUID targetWarehouseId,
+      Collection<EquipmentBalance> observed,
+      Collection<UUID> equipmentIds) {
+    List<String> keys = new ArrayList<>();
+    for (EquipmentBalance balance : observed) {
+      keys.add(
+          balanceLockKey(
+              balance.getEquipmentId(),
+              balance.getWarehouseId(),
+              rentalItemId,
+              balance.getLocationKind()));
+    }
+    for (UUID equipmentId : equipmentIds) {
+      keys.add(
+          balanceLockKey(
+              equipmentId,
+              targetWarehouseId,
+              rentalItemId,
+              BalanceLocationKind.CABIN_NON_RENTED));
+      keys.add(
+          balanceLockKey(
+              equipmentId,
+              targetWarehouseId,
+              rentalItemId,
+              BalanceLocationKind.CABIN_RENTED));
+    }
+    lockAll(keys);
   }
 
   void validateLocation(UUID warehouseId, UUID rentalItemId, BalanceLocationKind kind) {

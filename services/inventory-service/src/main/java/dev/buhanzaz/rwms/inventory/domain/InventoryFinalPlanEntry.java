@@ -76,6 +76,14 @@ public class InventoryFinalPlanEntry {
   @Column(name = "reconciliation_decision", columnDefinition = "jsonb")
   private String reconciliationDecision;
 
+  @Enumerated(EnumType.STRING)
+  @Column(name = "disposition_kind", nullable = false, length = 16)
+  private InventoryCabinDispositionKind dispositionKind;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "disposition_details", nullable = false, columnDefinition = "jsonb")
+  private String dispositionDetails;
+
   protected InventoryFinalPlanEntry() {}
 
   public InventoryFinalPlanEntry(
@@ -134,13 +142,62 @@ public class InventoryFinalPlanEntry {
       LocalDate repairScheduledDate,
       String collisionCandidates,
       String reconciliationDecision) {
+    this(
+        inventoryId,
+        finalPlanVersion,
+        findingId,
+        findingRevision,
+        assetId,
+        assetVersion,
+        planFingerprintSha256,
+        hasWork,
+        targetKind,
+        order,
+        priority,
+        movementToRepair,
+        forceCapitalRepair,
+        movementScheduledDate,
+        repairScheduledDate,
+        collisionCandidates,
+        reconciliationDecision,
+        InventoryCabinDispositionKind.LOCAL,
+        "{\"formerRental\":null}");
+  }
+
+  /** Creates immutable final-plan evidence with its completed cabin disposition decision. */
+  public InventoryFinalPlanEntry(
+      UUID inventoryId,
+      long finalPlanVersion,
+      UUID findingId,
+      long findingRevision,
+      UUID assetId,
+      Long assetVersion,
+      String planFingerprintSha256,
+      boolean hasWork,
+      FinalPlanTargetKind targetKind,
+      int order,
+      Integer priority,
+      boolean movementToRepair,
+      boolean forceCapitalRepair,
+      LocalDate movementScheduledDate,
+      LocalDate repairScheduledDate,
+      String collisionCandidates,
+      String reconciliationDecision,
+      InventoryCabinDispositionKind dispositionKind,
+      String dispositionDetails) {
     if (inventoryId == null
         || finalPlanVersion < 1
         || findingId == null
         || findingRevision < 0
         || order < 0
         || collisionCandidates == null
-        || !collisionCandidates.startsWith("[")) {
+        || !collisionCandidates.startsWith("[")
+        || dispositionKind == null
+        || dispositionDetails == null
+        || !dispositionDetails.trim().startsWith("{")
+        || !dispositionDetails.trim().endsWith("}")
+        || dispositionDetails.trim().length() > 262_144
+        || (dispositionKind != InventoryCabinDispositionKind.LOCAL && hasWork)) {
       throw new IllegalArgumentException("Final-plan entry is incomplete");
     }
     if (!hasWork) {
@@ -185,6 +242,8 @@ public class InventoryFinalPlanEntry {
     this.repairScheduledDate = repairScheduledDate;
     this.collisionCandidates = collisionCandidates;
     this.reconciliationDecision = reconciliationDecision;
+    this.dispositionKind = dispositionKind;
+    this.dispositionDetails = dispositionDetails.trim();
   }
 
   public UUID getInventoryId() { return inventoryId; }
@@ -204,6 +263,8 @@ public class InventoryFinalPlanEntry {
   public LocalDate getRepairScheduledDate() { return repairScheduledDate; }
   public String getCollisionCandidates() { return collisionCandidates; }
   public String getReconciliationDecision() { return reconciliationDecision; }
+  public InventoryCabinDispositionKind getDispositionKind() { return dispositionKind; }
+  public String getDispositionDetails() { return dispositionDetails; }
 
   public static final class Key implements Serializable {
     private UUID inventoryId;

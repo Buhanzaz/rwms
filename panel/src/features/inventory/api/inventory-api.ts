@@ -8,6 +8,7 @@ import {
   toInventoryFurnitureReviewView,
   toInventoryFindingView,
   toInventoryStatisticsView,
+  toInventorySessionSummaryView,
   toInventorySessionView,
 } from "@/features/inventory/domain/inventory-view-mapper"
 import type {
@@ -20,6 +21,8 @@ import type {
 } from "@/features/inventory/model/inventory"
 import type {
   InventoryCompletionPreview,
+  ConfirmInventoryReturnsRequest,
+  ConfirmInventoryShipmentsRequest,
   InventoryFinalPlan,
   InventoryObservation,
   InventoryPlanningSettings,
@@ -43,6 +46,10 @@ export function inventoryListQueryKey(warehouseId: string) {
   return [...INVENTORY_QUERY_KEY, "list", warehouseId] as const
 }
 
+export function inventoryListPageQueryKey(warehouseId: string, page: number) {
+  return [...inventoryListQueryKey(warehouseId), page] as const
+}
+
 export function inventoryActiveQueryKey(warehouseId: string) {
   return [...INVENTORY_QUERY_KEY, "active", warehouseId] as const
 }
@@ -57,6 +64,16 @@ export function inventoryPublicationQueryKey(inventoryId: string | null) {
 
 export function inventoryFurnitureReviewQueryKey(inventoryId: string | null) {
   return [...INVENTORY_QUERY_KEY, "furniture-review", inventoryId] as const
+}
+
+export function inventoryCabinDispositionReviewQueryKey(
+  inventoryId: string | null
+) {
+  return [
+    ...INVENTORY_QUERY_KEY,
+    "cabin-disposition-review",
+    inventoryId,
+  ] as const
 }
 
 export function inventoryPlanningSettingsQueryKey(warehouseId: string | null) {
@@ -133,24 +150,17 @@ function sessionView(
   })
 }
 
-export async function listInventories(warehouseId: string) {
+export async function listInventories(warehouseId: string, page = 0) {
   const token = await accessToken()
-  const sessions: InventorySessionDto[] = []
-  for (let page = 0; ; page += 1) {
-    const response = await inventoryHttp.listInventorySessions(
-      token,
-      warehouseId,
-      page
-    )
-    const details = await Promise.all(
-      response.content.map((session) =>
-        inventoryHttp.getInventorySession(token, session.id)
-      )
-    )
-    sessions.push(...details.map((session) => sessionView(session)))
-    if (page + 1 >= response.page.totalPages) break
+  const response = await inventoryHttp.listInventorySessions(
+    token,
+    warehouseId,
+    page
+  )
+  return {
+    content: response.content.map(toInventorySessionSummaryView),
+    page: response.page,
   }
-  return sessions
 }
 
 export async function getInventory(inventoryId: string) {
@@ -509,7 +519,6 @@ export async function resolveInventoryFindingConflict(input: {
 
 export async function startInventoryFurnitureReview(input: {
   session: InventorySessionDto
-  acknowledgeIncomplete: boolean
 }) {
   const token = await accessToken()
   const review = await inventoryHttp.startFurnitureReview({
@@ -521,11 +530,41 @@ export async function startInventoryFurnitureReview(input: {
         findingId: finding.id,
         expectedFindingRevision: finding.version,
       })),
-      acknowledgeIncomplete: input.acknowledgeIncomplete,
     },
     idempotencyKey: commandKey(),
   })
   return toInventoryFurnitureReviewView(review)
+}
+
+export async function getInventoryCabinDispositionReview(inventoryId: string) {
+  return inventoryHttp.getCabinDispositionReview(
+    await accessToken(),
+    inventoryId
+  )
+}
+
+export async function confirmInventoryReturns(input: {
+  inventoryId: string
+  request: ConfirmInventoryReturnsRequest
+}) {
+  return inventoryHttp.confirmCabinDispositionReturns({
+    accessToken: await accessToken(),
+    inventoryId: input.inventoryId,
+    request: input.request,
+    idempotencyKey: commandKey(),
+  })
+}
+
+export async function confirmInventoryShipments(input: {
+  inventoryId: string
+  request: ConfirmInventoryShipmentsRequest
+}) {
+  return inventoryHttp.confirmCabinDispositionShipments({
+    accessToken: await accessToken(),
+    inventoryId: input.inventoryId,
+    request: input.request,
+    idempotencyKey: commandKey(),
+  })
 }
 
 export async function getInventoryFurnitureReview(inventoryId: string) {

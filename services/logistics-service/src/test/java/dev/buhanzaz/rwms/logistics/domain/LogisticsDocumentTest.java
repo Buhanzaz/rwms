@@ -27,6 +27,26 @@ class LogisticsDocumentTest {
     assertThat(document.getDocumentType()).isEqualTo(LogisticsDocumentType.RETURN);
     assertThat(document.getState()).isEqualTo(LogisticsDocumentState.ACCEPTED);
     assertThat(document.getScheduledDate()).isEqualTo(LocalDate.parse("2026-07-01"));
+    assertThat(document.getReturnArrivedAt()).isNotNull();
+  }
+
+  @Test
+  void inventoryHistoricalReturnDoesNotInventPhysicalIntake() {
+    LogisticsDocument document =
+        LogisticsDocument.createInventoryReturn(
+            WAREHOUSE,
+            UUID.randomUUID(),
+            "Клиент",
+            LocalDate.parse("2026-08-01"),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            OffsetDateTime.parse("2026-08-03T12:00:00Z"),
+            3,
+            "a".repeat(64),
+            SUBJECT);
+
+    assertThat(document.getState()).isEqualTo(LogisticsDocumentState.ACCEPTED);
+    assertThat(document.getReturnArrivedAt()).isNull();
   }
 
   @Test

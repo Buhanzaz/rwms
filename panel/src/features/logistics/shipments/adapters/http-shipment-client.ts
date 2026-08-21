@@ -11,6 +11,7 @@ import {
   type ShipmentFurnitureTaskResult,
   type ShipmentFurnitureTaskState,
   type ShipmentFurnitureTaskStatus,
+  type InventoryShipmentFurniture,
   type ShipmentLine,
   type ShipmentLineState,
 } from "@/features/logistics/shipments/model"
@@ -98,6 +99,31 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T {
   return candidate as T
 }
 
+function inventoryShipmentFurniture(
+  value: unknown
+): InventoryShipmentFurniture[] | null {
+  if (value === null) return null
+  const source = list(value)
+  if (source.length > 100) invalidResponse()
+
+  const furniture = source.map((item) => {
+    const candidate = object(item)
+    const quantity = integer(candidate.quantity)
+    if (quantity < 1) invalidResponse()
+    return {
+      equipmentId: uuid(candidate.equipmentId),
+      catalogVersion: integer(candidate.catalogVersion),
+      quantity,
+    }
+  })
+  if (
+    new Set(furniture.map((item) => item.equipmentId)).size !== furniture.length
+  ) {
+    invalidResponse()
+  }
+  return furniture
+}
+
 function shipmentLine(value: unknown): ShipmentLine {
   const source = object(value)
   const lineNumber = integer(source.lineNumber)
@@ -111,6 +137,9 @@ function shipmentLine(value: unknown): ShipmentLine {
     state: oneOf<ShipmentLineState>(source.state, SHIPMENT_LINE_STATES),
     tenantSnapshot: nullableText(source.tenantSnapshot),
     rentalOrderId: nullableUuid(source.rentalOrderId),
+    inventoryShipmentFurniture: inventoryShipmentFurniture(
+      source.inventoryShipmentFurniture
+    ),
   }
 }
 

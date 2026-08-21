@@ -38,7 +38,10 @@ final class LogisticsSourcePolicy {
   private static final Pattern APPROVED_ADVISORY_LOCK_QUERY =
       Pattern.compile(
           "(?s)@(?:org\\.springframework\\.data\\.jpa\\.repository\\.)?Query\\s*\\(\\s*"
-              + "value\\s*=\\s*\"select 1 from pg_advisory_xact_lock\\(hashtextextended\\(cast\\(:lockKey as text\\), 0\\)\\)\"\\s*,\\s*"
+              + "value\\s*=\\s*\"\"\"\\s*select 1\\s+from \\(\\s*"
+              + "select lock_key\\s+from unnest\\(string_to_array\\(cast\\(:lockKeys as text\\), chr\\(31\\)\\)\\) as keys\\(lock_key\\)\\s+"
+              + "order by lock_key\\s+\\) ordered\\s+cross join lateral pg_advisory_xact_lock\\(\\s*"
+              + "hashtextextended\\(cast\\(ordered\\.lock_key as text\\), 0\\)\\) ignored\\s*\"\"\"\\s*,\\s*"
               + "nativeQuery\\s*=\\s*true\\s*\\)");
   private static final String ADVISORY_LOCK_REPOSITORY =
       "dev/buhanzaz/rwms/logistics/repository/LogisticsIdempotencyRecordRepository.java";

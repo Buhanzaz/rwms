@@ -36,7 +36,7 @@ class MaintenanceJpaValidationIntegrationTest {
     assertThat(entityManagerFactory.isOpen()).isTrue();
     assertThat(
             jdbc.queryForObject(
-                "select count(*) from flyway_schema_history where version='45' and success",
+                "select count(*) from flyway_schema_history where version='46' and success",
                 Integer.class))
         .isOne();
     assertThat(
@@ -54,6 +54,19 @@ class MaintenanceJpaValidationIntegrationTest {
         """
         select count(*) from information_schema.columns
         where table_schema='public' and table_name='estimate_line' and column_name='unit'
+        """,
+        Integer.class)).isOne();
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from information_schema.tables
+        where table_schema='public' and table_name='estimate_creation_window_settings'
+        """,
+        Integer.class)).isOne();
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from information_schema.columns
+        where table_schema='public' and table_name='logistics_return_shortage'
+          and column_name='arrived_at'
         """,
         Integer.class)).isOne();
     assertThat(jdbc.queryForObject(
@@ -101,6 +114,7 @@ class MaintenanceJpaValidationIntegrationTest {
         .extracting(value -> value.getJavaType().getSimpleName())
         .contains(
             "InventoryRepairSource", "LogisticsReturnShortage", "RepairCapacitySettings",
+            "EstimateCreationWindowSettings",
             "RepairTaskEvidence", "RepairComplexitySettings", "RepairPlaceAllocation",
             "InventoryPublicationSource", "InventoryPublicationSourceOperation",
             "InventoryAuthoritativeOutcome", "InventoryAuthoritativeOutcomeReceipt",

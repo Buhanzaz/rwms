@@ -40,21 +40,57 @@ public class InventoryOutcomeReceiptAsset {
   @Column(name = "desired_status", nullable = false, length = 24)
   private String desiredStatus;
 
+  @Column(name = "disposition_kind", nullable = false, length = 24)
+  private String dispositionKind;
+
+  @Column(name = "created_document_id")
+  private UUID createdDocumentId;
+
+  @Column(name = "created_line_id")
+  private UUID createdLineId;
+
   @Column(name = "created_at", nullable = false)
   private OffsetDateTime createdAt;
 
   public static InventoryOutcomeReceiptAsset create(
-      UUID receiptId, UUID findingId, UUID assetId, String desiredStatus) {
-    if (!Set.of("FREE", "REPAIR", "CAPITAL_REPAIR").contains(desiredStatus)) {
+      UUID receiptId,
+      UUID findingId,
+      UUID assetId,
+      String dispositionKind,
+      String desiredStatus) {
+    if (!Set.of("LOCAL", "SHIPMENT", "WRITE_OFF").contains(dispositionKind)
+        || !Set.of("FREE", "REPAIR", "CAPITAL_REPAIR", "RENTED", "WRITE_OFF_PENDING")
+            .contains(desiredStatus)
+        || ("LOCAL".equals(dispositionKind)
+            && !Set.of("FREE", "REPAIR", "CAPITAL_REPAIR").contains(desiredStatus))
+        || ("SHIPMENT".equals(dispositionKind) && !"RENTED".equals(desiredStatus))
+        || ("WRITE_OFF".equals(dispositionKind)
+            && !"WRITE_OFF_PENDING".equals(desiredStatus))) {
       throw new IllegalArgumentException("Unsupported completed inventory status");
     }
     InventoryOutcomeReceiptAsset value = new InventoryOutcomeReceiptAsset();
     value.receiptId = Objects.requireNonNull(receiptId, "receiptId");
     value.findingId = Objects.requireNonNull(findingId, "findingId");
     value.assetId = Objects.requireNonNull(assetId, "assetId");
+    value.dispositionKind = dispositionKind;
     value.desiredStatus = desiredStatus;
     value.createdAt = now();
     return value;
+  }
+
+  /** Attaches the exact document and line created or reused for this disposition marker. */
+  public void attachDocument(UUID documentId, UUID lineId) {
+    if ("WRITE_OFF".equals(dispositionKind)) {
+      throw new IllegalStateException("WRITE_OFF disposition cannot create a logistics document");
+    }
+    UUID requiredDocumentId = Objects.requireNonNull(documentId, "documentId");
+    UUID requiredLineId = Objects.requireNonNull(lineId, "lineId");
+    if ((createdDocumentId != null && !createdDocumentId.equals(requiredDocumentId))
+        || (createdLineId != null && !createdLineId.equals(requiredLineId))) {
+      throw new IllegalStateException("Inventory disposition document is already frozen");
+    }
+    createdDocumentId = requiredDocumentId;
+    createdLineId = requiredLineId;
   }
 
   private static OffsetDateTime now() {

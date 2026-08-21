@@ -342,14 +342,19 @@ function validateLogisticsPlanning(
 function collectionEndpoint(
   resource: "estimates" | "repairs" | "acceptance",
   warehouseId: string,
-  filters: Record<string, string | undefined> = {}
+  filters: Record<string, string | number | readonly string[] | undefined> = {}
 ) {
   const endpoint = new URL(`${MAINTENANCE_API}/${resource}`)
   endpoint.searchParams.set("warehouseId", warehouseId)
   endpoint.searchParams.set("page", "0")
   endpoint.searchParams.set("size", "200")
   Object.entries(filters).forEach(([key, value]) => {
-    if (value !== undefined) endpoint.searchParams.set(key, value)
+    if (value !== undefined) {
+      endpoint.searchParams.set(
+        key,
+        Array.isArray(value) ? value.join(",") : String(value)
+      )
+    }
   })
   return endpoint
 }
@@ -501,6 +506,9 @@ export function listMaintenanceRepairs(
     executionState?: MaintenanceRepair["executionState"]
     acceptanceState?: MaintenanceRepair["acceptanceState"]
     rentalItemId?: string
+    repairIds?: readonly string[]
+    page?: number
+    size?: number
   } = {}
 ) {
   return bearerRequest<MaintenancePage<MaintenanceRepair>>(

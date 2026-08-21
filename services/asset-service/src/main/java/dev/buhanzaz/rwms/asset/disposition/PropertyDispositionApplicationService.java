@@ -135,7 +135,7 @@ final class PropertyDispositionApplicationService {
         "Cabin changed after property disposition preparation");
     eligibility.assertCabinStatusAllowsDisposition(cabin);
     eligibility.assertNoActiveCabinReservation(cabin.getId());
-    eligibility.assertFenceLeaseAllowsApply(cabin.getId(), eligibility.fenceLeaseProof(fence));
+    eligibility.assertFenceLeaseAllowsApply(cabin, eligibility.fenceLeaseProof(fence));
 
     BalanceLocationKind cabinKind = eligibility.cabinBalanceKind(cabin);
     BalanceLocationKind terminalKind = terminalBalanceKind(fence.getDisposition());

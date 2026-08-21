@@ -795,7 +795,8 @@ class InventoryFurnitureReconciliationIntegrationTest {
                     .createObjectNode()
                     .put("presence", "ABSENT")
                     .putNull("value"),
-                "61a7ce0bfd5097c09f79252071264127229f73b876984eae80271c474e7126a7"))
+                "61a7ce0bfd5097c09f79252071264127229f73b876984eae80271c474e7126a7",
+                null))
         .response();
   }
 

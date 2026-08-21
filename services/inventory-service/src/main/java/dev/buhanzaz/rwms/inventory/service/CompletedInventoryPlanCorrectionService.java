@@ -166,6 +166,54 @@ final class CompletedInventoryPlanCorrectionService {
     return new CorrectionResult(correctedPlan, correctedEntries, omitted.size());
   }
 
+  /**
+   * Copies an unchanged completed plan into a strictly newer immutable generation.
+   *
+   * <p>This is the recovery fence: downstream owners must never interpret a manual reapplication
+   * as another delivery of the older immutable source after that source already produced effects.
+   */
+  CorrectionResult advanceExactGeneration(
+      InventorySession session,
+      InventoryFinalPlan plan,
+      List<InventoryFinalPlanEntry> currentEntries) {
+    if (session.getLifecycle() != SessionLifecycle.COMPLETED
+        || plan.getState() != FinalPlanState.COMPLETED
+        || currentEntries.isEmpty()) {
+      throw InventoryException.conflict("Completed inventory plan advance is unavailable");
+    }
+    InventoryPlanningService.PlanningSpecification settings =
+        planning.planningSpecification(session.getWarehouseId());
+    if (settings.revision() != plan.getPlanningSettingsRevision()) {
+      throw InventoryException.conflict(
+          "Completed inventory planning settings changed before outcome recovery");
+    }
+    List<InventoryPlanningService.FinalPlanDraft> exact =
+        planning.completionFinalPlanDrafts(session, plan, currentEntries);
+    long nextVersion = Math.addExact(plan.getFinalPlanVersion(), 1);
+    String nextSha =
+        planning.finalPlanSha256(
+            session,
+            settings,
+            nextVersion,
+            plan.getMovementScheduleMode(),
+            plan.getRepairScheduleMode(),
+            exact);
+    plan.nextVersion(
+        session.getRevision(),
+        settings.revision(),
+        nextSha,
+        plan.getMovementScheduleMode(),
+        plan.getRepairScheduleMode());
+    plan.complete();
+    InventoryFinalPlan advanced = finalPlans.saveAndFlush(plan);
+    List<InventoryFinalPlanEntry> copied =
+        exact.stream()
+            .map(value -> planning.finalPlanEntry(session.getId(), nextVersion, value))
+            .toList();
+    finalPlanEntries.saveAllAndFlush(copied);
+    return new CorrectionResult(advanced, copied, 0);
+  }
+
   private List<InventoryPlanningService.FinalPlanDraft> scheduleAppended(
       InventorySession session,
       InventoryPlanningService.PlanningSpecification settings,

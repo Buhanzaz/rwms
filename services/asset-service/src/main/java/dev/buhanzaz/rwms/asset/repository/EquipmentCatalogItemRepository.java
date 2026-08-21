@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.asset.repository;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCatalogItem;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
 import jakarta.persistence.LockModeType;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -38,5 +39,18 @@ public interface EquipmentCatalogItemRepository extends JpaRepository<EquipmentC
       order by item.name, item.id
       """)
   List<EquipmentCatalogItem> findAllActiveByCategoryForUpdate(
+      @Param("category") EquipmentCategory category);
+
+  /** Locks only the requested active catalog rows in the existing canonical catalog order. */
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select item
+      from EquipmentCatalogItem item
+      where item.id in :ids and item.category = :category and item.active = true
+      order by item.name, item.id
+      """)
+  List<EquipmentCatalogItem> findAllActiveByIdInAndCategoryForUpdate(
+      @Param("ids") Collection<UUID> ids,
       @Param("category") EquipmentCategory category);
 }

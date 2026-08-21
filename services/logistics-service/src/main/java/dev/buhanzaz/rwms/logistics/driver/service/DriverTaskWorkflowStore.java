@@ -38,6 +38,13 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional(readOnly = true)
 class DriverTaskWorkflowStore {
   /**
+   * Ordinary logistics command paths request immediate processing; this poll is bounded fallback
+   * recovery for changes made directly in task-board and must not issue one HTTP request per task
+   * every relay second.
+   */
+  static final long UNCHANGED_STATUS_POLL_DELAY_SECONDS = 30;
+
+  /**
    * Retain the former retry horizon as a saturation point, not a terminal cutoff. A transient
    * outage must never strand a physical movement in reconciliation.
    */
@@ -122,6 +129,15 @@ class DriverTaskWorkflowStore {
     requireBoardTask(task, board);
     synchronizeGroupedDocumentDate(task, board);
     if (matchesCurrentStatus(task, board)) {
+      int deferred =
+          tasks.deferStatusPoll(
+              task.getId(),
+              task.getVersion(),
+              task.getState(),
+              now().plusSeconds(UNCHANGED_STATUS_POLL_DELAY_SECONDS));
+      if (deferred != 1) {
+        throw new LogisticsConflictException("Driver task status poll fence changed");
+      }
       return;
     }
     task.observeBoardTask(

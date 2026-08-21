@@ -154,6 +154,7 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
       UUID rentalItemId,
       long rentalItemVersion,
       java.time.LocalDate dispatchDate,
+      java.time.OffsetDateTime arrivedAt,
       java.util.List<MediaReference> mediaReferences) {
     throw unavailable();
   }

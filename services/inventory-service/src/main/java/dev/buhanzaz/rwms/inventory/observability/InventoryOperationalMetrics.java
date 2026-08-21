@@ -110,6 +110,31 @@ public final class InventoryOperationalMetrics {
         """);
 
     registerCountGauge(
+        "rwms.inventory.logistics.plan.unresolved.current",
+        "Completed-inventory plan logistics effects awaiting successful owner settlement.",
+        """
+        select count(*)
+          from inventory_plan_logistics_effect
+         where state in ('READY', 'PENDING', 'TRANSIENT_FAILED', 'BLOCKED')
+        """);
+    registerCountGauge(
+        "rwms.inventory.logistics.plan.failed.current",
+        "Completed-inventory plan logistics effects in retryable or blocked failure states.",
+        """
+        select count(*)
+          from inventory_plan_logistics_effect
+         where state in ('TRANSIENT_FAILED', 'BLOCKED')
+        """);
+    registerAgeGauge(
+        "rwms.inventory.logistics.plan.oldest.unresolved.age.seconds",
+        "Age of the oldest completed-inventory plan logistics effect awaiting settlement.",
+        """
+        select coalesce(extract(epoch from (clock_timestamp() - min(created_at))), 0)
+          from inventory_plan_logistics_effect
+         where state in ('READY', 'PENDING', 'TRANSIENT_FAILED', 'BLOCKED')
+        """);
+
+    registerCountGauge(
         "rwms.inventory.furniture.reconciliation.unresolved.current",
         "Furniture reconciliation intents not yet successfully reconciled.",
         """
@@ -156,6 +181,31 @@ public final class InventoryOperationalMetrics {
         """
         select coalesce(extract(epoch from (clock_timestamp() - min(created_at))), 0)
           from inventory_furniture_loss_intent
+         where state in ('PENDING', 'TRANSIENT_FAILED', 'BLOCKED')
+        """);
+
+    registerCountGauge(
+        "rwms.inventory.cabin.writeoff.unresolved.current",
+        "Missing-cabin write-off proposals awaiting maintenance settlement.",
+        """
+        select count(*)
+          from inventory_cabin_write_off_intent
+         where state in ('PENDING', 'TRANSIENT_FAILED', 'BLOCKED')
+        """);
+    registerCountGauge(
+        "rwms.inventory.cabin.writeoff.failed.current",
+        "Missing-cabin write-off proposals in retryable or blocked failure states.",
+        """
+        select count(*)
+          from inventory_cabin_write_off_intent
+         where state in ('TRANSIENT_FAILED', 'BLOCKED')
+        """);
+    registerAgeGauge(
+        "rwms.inventory.cabin.writeoff.oldest.unresolved.age.seconds",
+        "Age of the oldest missing-cabin write-off proposal awaiting settlement.",
+        """
+        select coalesce(extract(epoch from (clock_timestamp() - min(created_at))), 0)
+          from inventory_cabin_write_off_intent
          where state in ('PENDING', 'TRANSIENT_FAILED', 'BLOCKED')
         """);
 
