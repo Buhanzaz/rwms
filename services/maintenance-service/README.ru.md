@@ -179,9 +179,9 @@ task-board исправляет полностью ожидающие актив
 При старте maintenance идемпотентно ставит существующий pre-start update workflow в очередь для
 всех уже зарегистрированных ожидающих ремонтов. Этот owner-local проход не выполняет remote I/O и
 позволяет обычному reconciliation worker исправить старые presentation snapshots, включая порядок
-обложки и заголовок сложности, без прямой мутации хранилища task-board. Presentation generation v3
-использует новый stable key, поэтому eligible queued work получает канонический заголовок, а
-quarantined v2 work не возобновляется и не изменяется напрямую. Quarantined stable refresh текущего
+стадий, обложки и заголовок сложности, без прямой мутации хранилища task-board. Presentation generation v4
+использует новый stable key, поэтому eligible queued work получает каноническое представление, а
+quarantined v2/v3 work не возобновляется и не изменяется напрямую. Quarantined stable refresh текущего
 поколения остаётся в quarantine для reviewed resume, учитывается и пропускается; он не может сорвать
 application-ready event или запустить цикл рестартов. Любой другой конфликт stable identity
 по-прежнему отклоняется fail-closed. Существующая task-board pre-start command ставит fence для

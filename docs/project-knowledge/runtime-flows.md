@@ -900,11 +900,11 @@ and is covered by adopted-V4, Flyway-upgrade and eventing-runtime integration te
    maintenance-calculated worker label for light, medium, heavy or capital repair instead of the
    technical `Maintenance repair`; no transport field is added. That one-to-one identity remains the
    reconciliation boundary; task-board does not merge or replace source stage IDs. On deployment,
-   an idempotent owner-local `worker-presentation-v3` startup pass enqueues the existing pre-start
+   an idempotent owner-local `worker-presentation-v4` startup pass enqueues the existing pre-start
    update workflow for
    already registered queued repairs, so their old snapshots converge without cross-database
    writes or remote calls in the startup transaction. Earlier-generation work, including a
-   quarantined v2 refresh, keeps its state and identity; a current-generation stable refresh already
+   quarantined v2/v3 refresh, keeps its state and identity; a current-generation stable refresh already
    quarantined for reviewed resume is counted and skipped without failing application startup;
    other stable-key conflicts remain fail-closed. If a worker starts one during this bounded recovery race,
    task-board rejects the pre-start refresh and maintenance retains the repair's delivery state

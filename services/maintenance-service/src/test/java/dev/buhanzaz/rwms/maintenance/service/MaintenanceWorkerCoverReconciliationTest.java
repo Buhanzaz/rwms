@@ -85,12 +85,12 @@ class MaintenanceWorkerCoverReconciliationTest {
     assertThat(key.getValue())
         .isEqualTo(
             UUID.nameUUIDFromBytes(
-                ("worker-presentation-v3:" + repairId)
+                ("worker-presentation-v4:" + repairId)
                     .getBytes(StandardCharsets.UTF_8)));
     assertThat(key.getValue())
         .isNotEqualTo(
             UUID.nameUUIDFromBytes(
-                ("worker-presentation-v2:" + repairId)
+                ("worker-presentation-v3:" + repairId)
                     .getBytes(StandardCharsets.UTF_8)));
   }
 

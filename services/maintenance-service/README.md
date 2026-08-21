@@ -176,9 +176,9 @@ warehouse; the unfiltered endpoint retains its existing paged behavior. This rea
 At startup, maintenance idempotently enqueues the existing pre-start task update workflow for
 every already registered queued repair. This owner-local pass performs no remote I/O and lets the
 normal reconciliation worker correct old presentation snapshots, including cover order and
-complexity title, without mutating task-board storage directly. Presentation generation v3 uses a
-fresh stable key, so eligible queued work receives the canonical title while quarantined v2 work is
-neither resumed nor changed directly. A quarantined stable refresh in the current generation
+complexity title, without mutating task-board storage directly. Presentation generation v4 uses a
+fresh stable key, so eligible queued work receives the canonical stage order, cover and title while
+quarantined v2/v3 work is neither resumed nor changed directly. A quarantined stable refresh in the current generation
 remains quarantined for reviewed resume and is counted then skipped; it cannot fail the
 application-ready event or start a restart loop. Any other stable-identity conflict still fails
 closed. The existing task-board pre-start command fences a task started during that bounded
