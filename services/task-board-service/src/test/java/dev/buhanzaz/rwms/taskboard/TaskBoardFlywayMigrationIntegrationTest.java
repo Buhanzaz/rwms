@@ -70,7 +70,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
   void cumulativeVersionFourEventSourcingAndTaskSyncMigrateCleanDatabaseAndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(29);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(30);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -351,6 +351,14 @@ class TaskBoardFlywayMigrationIntegrationTest {
             "script", "V32__support_worker_evidence_webp_bundles.sql")
         .containsEntry("success", true);
     assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='33'"))
+        .containsEntry("version", "33")
+        .containsEntry(
+            "script", "V33__canonical_ordinary_repair_phase_order.sql")
+        .containsEntry("success", true);
+    assertThat(
             jdbc.queryForObject(
                 "select to_regprocedure('public.task_board_request_fingerprint_v4(jsonb)')",
                 String.class))
@@ -382,7 +390,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
     assertThat(previousDefinition).contains("image/jpeg", "15728640").doesNotContain("image/webp");
 
     Flyway upgraded = flyway(MIGRATION_LOCATION);
-    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(2);
     upgraded.validate();
 
     String upgradedDefinition =
@@ -528,6 +536,310 @@ class TaskBoardFlywayMigrationIntegrationTest {
                 holdingQueue))
         .extracting(row -> row.get("queue_position"))
         .containsExactly(0, 1);
+  }
+
+  @Test
+  void versionThirtyThreeOrdersMaintenanceRoutesAndLeavesStartedOrOtherOwnersUntouched() {
+    configuration(MIGRATION_LOCATION).target("32").load().migrate();
+    UUID warehouseId = UUID.randomUUID();
+    UUID sesDefinition = UUID.randomUUID();
+    UUID weldingDefinition = UUID.randomUUID();
+    UUID internalDefinition = UUID.randomUUID();
+    UUID electricalDefinition = UUID.randomUUID();
+    UUID legacyDefinition = UUID.randomUUID();
+    UUID driverDefinition = UUID.randomUUID();
+    UUID sesQueue = UUID.randomUUID();
+    UUID weldingQueue = UUID.randomUUID();
+    UUID internalQueue = UUID.randomUUID();
+    UUID electricalQueue = UUID.randomUUID();
+    UUID legacyQueue = UUID.randomUUID();
+    UUID driverQueue = UUID.randomUUID();
+    UUID waitingTask = UUID.randomUUID();
+    UUID canonicalWaitingTask = UUID.randomUUID();
+    UUID startedTask = UUID.randomUUID();
+    UUID otherOwnerTask = UUID.randomUUID();
+    UUID waitingExternal = UUID.randomUUID();
+    UUID canonicalWaitingExternal = UUID.randomUUID();
+    UUID startedExternal = UUID.randomUUID();
+    UUID otherOwnerExternal = UUID.randomUUID();
+    UUID waitingInternal = UUID.randomUUID();
+    UUID waitingElectrical = UUID.randomUUID();
+    UUID waitingLegacy = UUID.randomUUID();
+    UUID startedUnknown = UUID.randomUUID();
+    UUID startedWelding = UUID.randomUUID();
+    UUID startedSes = UUID.randomUUID();
+    UUID otherUnknown = UUID.randomUUID();
+    UUID otherWelding = UUID.randomUUID();
+    UUID otherSes = UUID.randomUUID();
+    UUID canonicalInternal = UUID.randomUUID();
+    UUID canonicalElectrical = UUID.randomUUID();
+    UUID canonicalLegacy = UUID.randomUUID();
+
+    jdbc.update(
+        """
+        insert into queue_definition(
+          id,version,revision_marker,name,normalized_name,queue_type,queue_purpose,
+          sort_order,active,hidden,collapsed,notify_when_threshold_reached,result_photo_min_count)
+        values
+          (?,0,?,'сэс и санитария','сэс и санитария','REPAIR','GENERAL',90,true,false,false,false,1),
+          (?,0,?,'сварка','сварка','REPAIR','GENERAL',5,true,false,false,false,1),
+          (?,0,?,'внутренние работы','внутренние работы','REPAIR','GENERAL',80,true,false,false,false,1),
+          (?,0,?,'электрика','электрика','REPAIR','GENERAL',70,true,false,false,false,1),
+          (?,0,?,'legacy-stage','legacy-stage','REPAIR','GENERAL',1,true,false,false,false,1),
+          (?,0,?,'Водители','водители','MOVEMENT','LOGISTICS_DRIVER',77,true,false,false,false,1)
+        """,
+        sesDefinition,
+        UUID.randomUUID(),
+        weldingDefinition,
+        UUID.randomUUID(),
+        internalDefinition,
+        UUID.randomUUID(),
+        electricalDefinition,
+        UUID.randomUUID(),
+        legacyDefinition,
+        UUID.randomUUID(),
+        driverDefinition,
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into work_queue(
+          id,version,revision_marker,warehouse_id,definition_id,sort_order,active,hidden,
+          collapsed,notify_when_threshold_reached,result_photo_min_count)
+        values
+          (?,0,?,?,?,90,true,false,false,false,1),
+          (?,0,?,?,?,5,true,false,false,false,1),
+          (?,0,?,?,?,80,true,false,false,false,1),
+          (?,0,?,?,?,70,true,false,false,false,1),
+          (?,0,?,?,?,1,true,false,false,false,1),
+          (?,0,?,?,?,77,true,false,false,false,1)
+        """,
+        sesQueue,
+        UUID.randomUUID(),
+        warehouseId,
+        sesDefinition,
+        weldingQueue,
+        UUID.randomUUID(),
+        warehouseId,
+        weldingDefinition,
+        internalQueue,
+        UUID.randomUUID(),
+        warehouseId,
+        internalDefinition,
+        electricalQueue,
+        UUID.randomUUID(),
+        warehouseId,
+        electricalDefinition,
+        legacyQueue,
+        UUID.randomUUID(),
+        warehouseId,
+        legacyDefinition,
+        driverQueue,
+        UUID.randomUUID(),
+        warehouseId,
+        driverDefinition);
+    jdbc.update(
+        """
+        insert into board_task(
+          id,version,warehouse_id,external_task_id,title,status,scheduled_date,task_lane,priority,pinned,
+          completion_deadline_enforced)
+        values
+          (?,0,?,?, 'waiting maintenance','ACTIVE','2026-08-21','SCHEDULED',3,false,false),
+          (?,0,?,?, 'already canonical maintenance','ACTIVE','2026-08-21','SCHEDULED',3,false,false),
+          (?,0,?,?, 'started maintenance','ACTIVE','2026-08-21','SCHEDULED',3,false,false),
+          (?,0,?,?, 'other owner','ACTIVE','2026-08-21','SCHEDULED',3,false,false)
+        """,
+        waitingTask,
+        warehouseId,
+        waitingExternal,
+        canonicalWaitingTask,
+        warehouseId,
+        canonicalWaitingExternal,
+        startedTask,
+        warehouseId,
+        startedExternal,
+        otherOwnerTask,
+        warehouseId,
+        otherOwnerExternal);
+    jdbc.update(
+        """
+        insert into task_sync_source(
+          board_task_id,external_task_id,source_client_id,source_type,source_id)
+        values
+          (?,?,'maintenance-service','MAINTENANCE_REPAIR',?),
+          (?,?,'maintenance-service','MAINTENANCE_REPAIR',?),
+          (?,?,'maintenance-service','MAINTENANCE_REPAIR',?),
+          (?,?,'manual-ui','MAINTENANCE_REPAIR',?)
+        """,
+        waitingTask,
+        waitingExternal,
+        UUID.randomUUID(),
+        canonicalWaitingTask,
+        canonicalWaitingExternal,
+        UUID.randomUUID(),
+        startedTask,
+        startedExternal,
+        UUID.randomUUID(),
+        otherOwnerTask,
+        otherOwnerExternal,
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into queue_entry(
+          id,version,revision_marker,task_id,queue_id,route_index,queue_position,entry_type,status,
+          worker_works,worker_materials,worker_comments,source_media_references,active_work_seconds)
+        values
+          (?,0,?,?,?,0,0,'REAL','WAITING','[]','[]','[]','[]',0),
+          (?,0,?,?,?,1,1,'SHADOW','WAITING','[]','[]','[]','[]',0),
+          (?,0,?,?,?,2,2,'SHADOW','WAITING','[]','[]','[]','[]',0),
+          (?,0,?,?,?,0,3,'REAL','IN_PROGRESS','[]','[]','[]','[]',0),
+          (?,0,?,?,?,1,4,'SHADOW','WAITING','[]','[]','[]','[]',0),
+          (?,0,?,?,?,2,5,'SHADOW','WAITING','[]','[]','[]','[]',0),
+          (?,0,?,?,?,0,6,'REAL','WAITING','[]','[]','[]','[]',0),
+          (?,0,?,?,?,1,7,'SHADOW','WAITING','[]','[]','[]','[]',0),
+          (?,0,?,?,?,2,8,'SHADOW','WAITING','[]','[]','[]','[]',0),
+          (?,0,?,?,?,0,9,'REAL','WAITING','[]','[]','[]','[]',0),
+          (?,0,?,?,?,1,10,'SHADOW','WAITING','[]','[]','[]','[]',0),
+          (?,0,?,?,?,2,11,'SHADOW','WAITING','[]','[]','[]','[]',0)
+        """,
+        waitingElectrical,
+        UUID.randomUUID(),
+        waitingTask,
+        electricalQueue,
+        waitingInternal,
+        UUID.randomUUID(),
+        waitingTask,
+        internalQueue,
+        waitingLegacy,
+        UUID.randomUUID(),
+        waitingTask,
+        legacyQueue,
+        startedUnknown,
+        UUID.randomUUID(),
+        startedTask,
+        legacyQueue,
+        startedWelding,
+        UUID.randomUUID(),
+        startedTask,
+        weldingQueue,
+        startedSes,
+        UUID.randomUUID(),
+        startedTask,
+        sesQueue,
+        otherUnknown,
+        UUID.randomUUID(),
+        otherOwnerTask,
+        legacyQueue,
+        otherWelding,
+        UUID.randomUUID(),
+        otherOwnerTask,
+        weldingQueue,
+        otherSes,
+        UUID.randomUUID(),
+        otherOwnerTask,
+        sesQueue,
+        canonicalInternal,
+        UUID.randomUUID(),
+        canonicalWaitingTask,
+        internalQueue,
+        canonicalElectrical,
+        UUID.randomUUID(),
+        canonicalWaitingTask,
+        electricalQueue,
+        canonicalLegacy,
+        UUID.randomUUID(),
+        canonicalWaitingTask,
+        legacyQueue);
+
+    Flyway migration = configuration(MIGRATION_LOCATION).target("33").load();
+    assertThat(migration.migrate().migrationsExecuted).isOne();
+
+    assertThat(
+            jdbc.queryForList(
+                "select id,sort_order from queue_definition where queue_purpose='GENERAL' order by sort_order"))
+        .extracting(row -> row.get("id"), row -> row.get("sort_order"))
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(sesDefinition, 1),
+            org.assertj.core.groups.Tuple.tuple(weldingDefinition, 2),
+            org.assertj.core.groups.Tuple.tuple(internalDefinition, 3),
+            org.assertj.core.groups.Tuple.tuple(electricalDefinition, 4),
+            org.assertj.core.groups.Tuple.tuple(legacyDefinition, 5));
+    assertThat(
+            jdbc.queryForList(
+                "select definition_id,sort_order from work_queue where warehouse_id=? order by sort_order",
+                warehouseId))
+        .extracting(row -> row.get("definition_id"), row -> row.get("sort_order"))
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(sesDefinition, 1),
+            org.assertj.core.groups.Tuple.tuple(weldingDefinition, 2),
+            org.assertj.core.groups.Tuple.tuple(internalDefinition, 3),
+            org.assertj.core.groups.Tuple.tuple(electricalDefinition, 4),
+            org.assertj.core.groups.Tuple.tuple(legacyDefinition, 5),
+            org.assertj.core.groups.Tuple.tuple(driverDefinition, 77));
+    assertThat(
+            jdbc.queryForList(
+                "select route_index,entry_type from queue_entry where task_id=? order by route_index",
+                waitingTask))
+        .extracting(row -> row.get("route_index"), row -> row.get("entry_type"))
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(0, "REAL"),
+            org.assertj.core.groups.Tuple.tuple(1, "SHADOW"),
+            org.assertj.core.groups.Tuple.tuple(2, "SHADOW"));
+    assertThat(
+            jdbc.queryForList(
+                "select id from queue_entry where task_id=? order by route_index", waitingTask))
+        .extracting(row -> row.get("id"))
+        .containsExactly(waitingInternal, waitingElectrical, waitingLegacy);
+    assertThat(
+            jdbc.queryForList(
+                "select id,route_index,entry_type from queue_entry where task_id=? order by route_index",
+                canonicalWaitingTask))
+        .extracting(row -> row.get("id"), row -> row.get("route_index"), row -> row.get("entry_type"))
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(canonicalInternal, 0, "REAL"),
+            org.assertj.core.groups.Tuple.tuple(canonicalElectrical, 1, "SHADOW"),
+            org.assertj.core.groups.Tuple.tuple(canonicalLegacy, 2, "SHADOW"));
+    assertThat(
+            jdbc.queryForList(
+                "select route_index,entry_type from queue_entry where task_id=? order by route_index",
+                startedTask))
+        .extracting(row -> row.get("route_index"), row -> row.get("entry_type"))
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(0, "REAL"),
+            org.assertj.core.groups.Tuple.tuple(1, "SHADOW"),
+            org.assertj.core.groups.Tuple.tuple(2, "SHADOW"));
+    assertThat(
+            jdbc.queryForList(
+                "select id from queue_entry where task_id=? order by route_index", otherOwnerTask))
+        .extracting(row -> row.get("id"))
+        .containsExactly(otherUnknown, otherWelding, otherSes);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from task_board_projection_migration where migration_version=33",
+                Integer.class))
+        .isEqualTo(8);
+    assertThat(
+            jdbc.queryForList(
+                "select aggregate_type,aggregate_id from task_board_projection_migration "
+                    + "where migration_version=33 order by aggregate_type,aggregate_id"))
+        .extracting(row -> row.get("aggregate_type"), row -> row.get("aggregate_id"))
+        .containsExactlyInAnyOrder(
+            org.assertj.core.groups.Tuple.tuple("WORK_QUEUE", sesQueue),
+            org.assertj.core.groups.Tuple.tuple("WORK_QUEUE", weldingQueue),
+            org.assertj.core.groups.Tuple.tuple("WORK_QUEUE", internalQueue),
+            org.assertj.core.groups.Tuple.tuple("WORK_QUEUE", electricalQueue),
+            org.assertj.core.groups.Tuple.tuple("WORK_QUEUE", legacyQueue),
+            org.assertj.core.groups.Tuple.tuple("QUEUE_ENTRY", waitingInternal),
+            org.assertj.core.groups.Tuple.tuple("QUEUE_ENTRY", waitingElectrical),
+            org.assertj.core.groups.Tuple.tuple("QUEUE_ENTRY", waitingLegacy));
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from task_board_projection_migration "
+                    + "where migration_version=33 and aggregate_id in (?,?,?)",
+                Integer.class,
+                canonicalInternal,
+                canonicalElectrical,
+                canonicalLegacy))
+        .isZero();
   }
 
   @Test
@@ -1516,7 +1828,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(28);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(29);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
 

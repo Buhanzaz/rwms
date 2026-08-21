@@ -24,9 +24,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.IntStream;
 import org.springframework.stereotype.Service;
 
-/** Loads, locks and maps repair aggregates while preserving repair-stream version fences. */
+/**
+ * Loads, locks and maps repair aggregates while preserving repair-stream version fences.
+ *
+ * <p>Responses present even historical source-ordered stages in the mandatory ordinary-repair
+ * phase order without mutating their append-only event history.
+ */
 @Service
 final class MaintenanceRepairModelSupport {
   private static final String AFTER_RENT_STATUS = "AFTER_RENT";
@@ -152,9 +158,14 @@ final class MaintenanceRepairModelSupport {
                     LinkedHashMap::new,
                     java.util.stream.Collectors.mapping(
                         Map.Entry::getValue, java.util.stream.Collectors.toList())));
-    List<RepairStageResponse> stages = repairStages.findAllByRepairIdOrderByStageNo(value.getId()).stream()
-        .map(stage -> new RepairStageResponse(
-            stage.getId(), stage.getStageKind(), stage.getStageNo(), stage.getState(),
+    List<RepairStage> orderedStages =
+        RepairPhaseSequence.canonicalStages(
+            repairStages.findAllByRepairIdOrderByStageNo(value.getId()));
+    List<RepairStageResponse> stages = IntStream.range(0, orderedStages.size())
+        .mapToObj(index -> {
+          RepairStage stage = orderedStages.get(index);
+          return new RepairStageResponse(
+            stage.getId(), stage.getStageKind(), index, stage.getState(),
             new RoutingSnapshot(stage.getRoutingQueueId(), stage.getRoutingQueueName(),
                 stage.getRoutingQueueType()),
             commandSupport.readList(stage.getWorkLines(), EstimateLineResponse.class),
@@ -169,7 +180,8 @@ final class MaintenanceRepairModelSupport {
                 new DeliverySnapshot(
                     DeliveryState.valueOf(stage.getDeliveryState()),
                     stage.getDeliveryAttempts(), stage.getDeliveryUpdatedAt())),
-            stage.getCompletedAt()))
+            stage.getCompletedAt());
+        })
         .toList();
     InventorySourceReference inventorySource =
         authoritativeInventorySources

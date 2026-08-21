@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -65,7 +66,11 @@ public class TaskBoardReplayVerifier {
             .findFirst()
             .orElseThrow(
                 () -> new IllegalStateException("Task-board authoritative stream does not exist"));
-    return verifyAuthoritativeStream(stream, ordinaryQueueMigrationCutover());
+    return verifyAuthoritativeStream(
+        stream,
+        ordinaryQueueMigrationCutover(),
+        phaseOrderMigrationCutover(),
+        phaseOrderMigrationAggregates());
   }
 
   @Transactional
@@ -82,9 +87,15 @@ public class TaskBoardReplayVerifier {
 
     StringBuilder parityMaterial = new StringBuilder();
     OffsetDateTime ordinaryQueueMigrationCutover = ordinaryQueueMigrationCutover();
+    OffsetDateTime phaseOrderMigrationCutover = phaseOrderMigrationCutover();
+    Set<ProjectionMigrationKey> phaseOrderMigrationAggregates = phaseOrderMigrationAggregates();
     for (StreamIdentity stream : streams) {
       ReplayResult replay =
-          verifyAuthoritativeStream(stream, ordinaryQueueMigrationCutover);
+          verifyAuthoritativeStream(
+              stream,
+              ordinaryQueueMigrationCutover,
+              phaseOrderMigrationCutover,
+              phaseOrderMigrationAggregates);
       jdbc.update(
           """
           insert into projection_checkpoint(
@@ -126,7 +137,10 @@ public class TaskBoardReplayVerifier {
   }
 
   private ReplayResult verifyAuthoritativeStream(
-      StreamIdentity stream, OffsetDateTime ordinaryQueueMigrationCutover) {
+      StreamIdentity stream,
+      OffsetDateTime ordinaryQueueMigrationCutover,
+      OffsetDateTime phaseOrderMigrationCutover,
+      Set<ProjectionMigrationKey> phaseOrderMigrationAggregates) {
     metrics.replayAttempted();
     try {
       List<StoredFact> stored =
@@ -181,10 +195,13 @@ public class TaskBoardReplayVerifier {
         JsonNode comparableLive =
             replayCompatibleProjection(
                 stream.aggregateType(),
+                stream.aggregateId(),
                 live,
                 storedProjection,
                 tail.recordedAt(),
-                ordinaryQueueMigrationCutover);
+                ordinaryQueueMigrationCutover,
+                phaseOrderMigrationCutover,
+                phaseOrderMigrationAggregates);
         String projectionJson = canonicalJson(write(comparableLive));
         String storedJson = canonicalJson(write(storedProjection));
         if (!projectionJson.equals(storedJson)) {
@@ -204,32 +221,50 @@ public class TaskBoardReplayVerifier {
 
   /**
    * Applies only the explicitly recorded projection-migration compatibility rules. Board-task
-   * audience additions remain optional for a legacy tail. V31 deliberately normalized persisted
-   * ordinary queue position and the fully-waiting SES gate without rewriting immutable historical
-   * events, so queue-entry tails recorded before that Flyway cutover compare using their stored
-   * values for exactly those two fields. Every post-cutover tail remains subject to exact parity.
+   * audience additions remain optional for a legacy tail. V31 normalized ordinary queue position
+   * and its historical gate, while V33 recorded the exact queue-entry and work-queue projections
+   * it reordered. Legacy tails compare using stored values for only those recorded aggregates;
+   * every post-cutover tail remains subject to exact parity.
    */
   private JsonNode replayCompatibleProjection(
       TaskBoardAggregateType type,
+      UUID aggregateId,
       JsonNode live,
       JsonNode stored,
       OffsetDateTime tailRecordedAt,
-      OffsetDateTime ordinaryQueueMigrationCutover) {
+      OffsetDateTime ordinaryQueueMigrationCutover,
+      OffsetDateTime phaseOrderMigrationCutover,
+      Set<ProjectionMigrationKey> phaseOrderMigrationAggregates) {
+    tools.jackson.databind.node.ObjectNode compatible = null;
     if (type == TaskBoardAggregateType.QUEUE_ENTRY
         && ordinaryQueueMigrationCutover != null
         && !tailRecordedAt.isAfter(ordinaryQueueMigrationCutover)) {
-      tools.jackson.databind.node.ObjectNode compatible =
-          (tools.jackson.databind.node.ObjectNode) live.deepCopy();
+      compatible = (tools.jackson.databind.node.ObjectNode) live.deepCopy();
       compatible.set("queuePosition", stored.get("queuePosition"));
       compatible.set("entryType", stored.get("entryType"));
-      return compatible;
     }
-    if (type != TaskBoardAggregateType.BOARD_TASK || stored.has("driverAudience")) return live;
-    tools.jackson.databind.node.ObjectNode compatible =
-        (tools.jackson.databind.node.ObjectNode) live.deepCopy();
-    compatible.remove("driverAudience");
-    compatible.remove("plannedDriverWorkerId");
-    return compatible;
+    if (phaseOrderMigrationCutover != null
+        && !tailRecordedAt.isAfter(phaseOrderMigrationCutover)
+        && phaseOrderMigrationAggregates.contains(
+            new ProjectionMigrationKey(type.name(), aggregateId))) {
+      if (compatible == null) {
+        compatible = (tools.jackson.databind.node.ObjectNode) live.deepCopy();
+      }
+      if (type == TaskBoardAggregateType.QUEUE_ENTRY) {
+        compatible.set("routeIndex", stored.get("routeIndex"));
+        compatible.set("entryType", stored.get("entryType"));
+      } else if (type == TaskBoardAggregateType.WORK_QUEUE) {
+        compatible.set("sortOrder", stored.get("sortOrder"));
+      }
+    }
+    if (type == TaskBoardAggregateType.BOARD_TASK && !stored.has("driverAudience")) {
+      if (compatible == null) {
+        compatible = (tools.jackson.databind.node.ObjectNode) live.deepCopy();
+      }
+      compatible.remove("driverAudience");
+      compatible.remove("plannedDriverWorkerId");
+    }
+    return compatible == null ? live : compatible;
   }
 
   /** Returns the successful V31 projection cutover once for the complete replay pass. */
@@ -245,6 +280,38 @@ public class TaskBoardReplayVerifier {
             """,
             (result, row) -> result.getObject(1, OffsetDateTime.class));
     return installed.isEmpty() ? null : installed.getFirst();
+  }
+
+  /** Returns the successful V33 canonical phase projection cutover, if installed. */
+  private OffsetDateTime phaseOrderMigrationCutover() {
+    List<OffsetDateTime> installed =
+        jdbc.query(
+            """
+            select installed_on at time zone current_setting('TimeZone')
+              from flyway_schema_history
+             where version='33' and success
+             order by installed_rank desc
+             limit 1
+            """,
+            (result, row) -> result.getObject(1, OffsetDateTime.class));
+    return installed.isEmpty() ? null : installed.getFirst();
+  }
+
+  /** Loads the bounded V33 aggregate ledger once for a replay pass. */
+  private Set<ProjectionMigrationKey> phaseOrderMigrationAggregates() {
+    return jdbc
+        .query(
+            """
+            select aggregate_type, aggregate_id
+              from task_board_projection_migration
+             where migration_version=33
+            """,
+            (result, row) ->
+                new ProjectionMigrationKey(
+                    result.getString("aggregate_type"),
+                    result.getObject("aggregate_id", UUID.class)))
+        .stream()
+        .collect(Collectors.toUnmodifiableSet());
   }
 
   private Optional<Object> liveProjection(TaskBoardAggregateType type, UUID id) {
@@ -459,6 +526,9 @@ public class TaskBoardReplayVerifier {
       String payloadSha256,
       boolean baseline,
       OffsetDateTime recordedAt) {}
+
+  /** Exact aggregate identity changed by the V33 projection migration ledger. */
+  private record ProjectionMigrationKey(String aggregateType, UUID aggregateId) {}
 
   private record StreamIdentity(
       TaskBoardAggregateType aggregateType, UUID aggregateId, long version, UUID eventId) {}

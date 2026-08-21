@@ -1,6 +1,6 @@
 package dev.buhanzaz.rwms.taskboard.domain;
 
-/** Classifies a queue entry as ordinary routed work or a terminal holding entry. */
+/** Distinguishes the one executable route stage from its non-actionable future stages. */
 public enum EntryType {
   REAL,
   SHADOW

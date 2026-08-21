@@ -165,11 +165,22 @@ database bounds that actionable window before JPA hydration. Future SHADOW
 stages remain visible after REAL cards without consuming the limit and cannot be
 taken. Promotion preserves their queue position, so an earlier shadow moves
 ahead of a later unpinned REAL; pinning is the explicit exception. A route
-containing an unfinished `HOLDING`/SES stage exposes only that gate: no repair
-shadow for the cabin appears in another ordinary column until treatment
-completes. Public date selection, ordinary move/date-swap commands, maintenance
-daily-capacity placement and overdue rollover are absent. Driver movement and
-external capital-repair routes remain on their owning surfaces.
+uses one mandatory phase sequence: SES, welding, exterior, interior,
+electrical, then plumbing. The first existing unfinished phase is the only
+REAL stage; absent or completed phases are skipped and all later work remains
+SHADOW. SES is the exclusive holding phase even for retained queue definitions
+whose historical type is `REPAIR`: no repair shadow for the cabin appears in
+another ordinary column until treatment completes. Public date selection,
+ordinary move/date-swap commands, maintenance daily-capacity placement and
+overdue rollover are absent. Driver movement and external capital-repair routes
+remain on their owning surfaces.
+Maintenance applies this sequence before plan persistence, repair reads and
+task publication in
+[`RepairPhaseSequence`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/RepairPhaseSequence.java).
+Task-board independently normalizes maintenance-owned registrations and
+pre-start updates in
+[`RepairRoutePhaseOrder`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/RepairRoutePhaseOrder.java),
+so a producer cannot make a later phase executable by changing array order.
 
 A workforce group command may replace membership and version-fenced current
 group assignments atomically. Current assignment still requires active

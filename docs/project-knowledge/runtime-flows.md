@@ -852,13 +852,24 @@ hydration. Priority has already chosen the persisted insertion position and is n
 the read. Active work stays first, followed by waiting `REAL` cards and then the visible future
 `SHADOW` cards at their reserved positions; a shadow never consumes the actionable limit, whose
 default is six. Thus a route whose first unfinished work is electricity exposes a takeable
-electricity card immediately despite earlier inactive shadows. When an earlier shadow is promoted,
+electricity card immediately only when SES, welding, exterior and interior work is absent or
+complete. The fixed route sequence is SES, welding, exterior, interior, electrical and plumbing;
+the first existing unfinished phase is REAL and every later phase is SHADOW. When an earlier
+shadow is promoted,
 it regains its earlier position ahead of later unpinned real work; a manager-pinned real card keeps
 its slot. The same real-card eligibility window fences `TAKE`, and both panel and WorkerApp refuse
-mutations for shadows. When a route contains an unfinished `HOLDING`/SES gate, that gate is the only
+mutations for shadows. When a route contains unfinished SES work, that gate is the only
 ordinary card for the cabin and no repair shadow is exposed until SES completes. The ordinary
 public boundary has no date/shadow selector, move/date-swap command, maintenance daily-capacity
 scheduling or rollover scan. Driver movements and external capital work stay outside this board.
+
+Maintenance first canonicalizes new plan persistence and every task snapshot. Task-board repeats
+that normalization for maintenance-owned registration and pre-start replacement, persists route
+index zero as the sole initial `REAL`, and promotes strictly by that route index. Flyway V33 fixes
+the six queue-column positions and only fully waiting active maintenance routes. It records the
+exact changed work-queue and queue-entry aggregate IDs so replay can tolerate only the migrated
+`sortOrder`, `routeIndex` and `entryType` fields on pre-cutover tails; started or paused routes and
+all post-cutover event tails remain exact.
 
 The panel renders ordinary queues as side-by-side columns with vertically stacked cards. It derives
 the distinct maintenance repair IDs from the currently rendered aggregate board and resolves

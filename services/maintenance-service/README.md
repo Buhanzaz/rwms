@@ -154,6 +154,13 @@ inventory publication as completed work, and creates no ordinary task-board task
 it queues the repair and either registers the task-board task directly or, when
 `movementToRepair=true`, creates the logistics
 `DELIVER_TO_REPAIR` driver task and registers repair work after delivery.
+Before an estimate or repair plan is persisted, and again before an ordinary task is published,
+maintenance applies the fixed phase sequence `SES -> welding -> exterior -> interior -> electrical
+-> plumbing`. Missing phases do not create route entries, completed entries no longer block
+promotion, and multiple work stages inside one phase retain their submitted order. Existing repairs
+are published in that order without rewriting their append-only maintenance history; task-board's
+projection migration corrects fully waiting active routes, while started and completed history
+remains immutable.
 Every ordinary repair-stage snapshot puts the selected repair cover first in ordered
 `sourceMedia`; the remaining aggregate photos retain their stable order, while each work line lists
 only its own photo IDs. The common task title is the maintenance-calculated complexity label

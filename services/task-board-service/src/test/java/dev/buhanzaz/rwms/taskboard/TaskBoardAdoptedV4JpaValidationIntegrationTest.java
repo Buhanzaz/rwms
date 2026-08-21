@@ -89,7 +89,7 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
 
   @Test
   @Transactional
-  void bootMigratesAdoptedVersionFourThroughVersionThirtyOneAndValidatesJpa() {
+  void bootMigratesAdoptedVersionFourThroughVersionThirtyThreeAndValidatesJpa() {
     assertThat(entityManagerFactory.isOpen()).isTrue();
     assertThat(retainedDigests(jdbc)).containsExactlyInAnyOrderEntriesOf(beforeStartup);
     assertThat(
@@ -321,13 +321,23 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
       JsonNode expectedFact = objectMapper.valueToTree(fact);
       if ("QUEUE_ENTRY".equals(aggregateType)) {
         JsonNode storedFact = objectMapper.readTree(actual);
-        // V31 owns this one-time relational ordering/gate projection cutover. Immutable baseline
-        // facts retain their pre-cutover values; post-cutover events are still checked exactly by
-        // TaskBoardReplayVerifier.
+        // V31 and V33 own one-time relational projection cutovers. Immutable baseline facts retain
+        // their pre-cutover values; post-cutover events are still checked exactly by the verifier.
         ((tools.jackson.databind.node.ObjectNode) expectedFact)
             .set("queuePosition", storedFact.get("queuePosition"));
         ((tools.jackson.databind.node.ObjectNode) expectedFact)
             .set("entryType", storedFact.get("entryType"));
+        if (projectionMigratedByV33(aggregateType, id)) {
+          ((tools.jackson.databind.node.ObjectNode) expectedFact)
+              .set("routeIndex", storedFact.get("routeIndex"));
+          ((tools.jackson.databind.node.ObjectNode) expectedFact)
+              .set("entryType", storedFact.get("entryType"));
+        }
+      } else if ("WORK_QUEUE".equals(aggregateType)
+          && projectionMigratedByV33(aggregateType, id)) {
+        JsonNode storedFact = objectMapper.readTree(actual);
+        ((tools.jackson.databind.node.ObjectNode) expectedFact)
+            .set("sortOrder", storedFact.get("sortOrder"));
       }
       serialized = objectMapper.writeValueAsString(expectedFact);
     } catch (tools.jackson.core.JacksonException exception) {
@@ -336,6 +346,20 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
     String expected =
         jdbc.queryForObject("select (?::jsonb)::text", String.class, serialized);
     assertThat(actual).isEqualTo(expected);
+  }
+
+  private boolean projectionMigratedByV33(String aggregateType, UUID id) {
+    return Boolean.TRUE.equals(
+        jdbc.queryForObject(
+            """
+            select exists(
+              select 1
+                from task_board_projection_migration
+               where aggregate_type=? and aggregate_id=? and migration_version=33)
+            """,
+            Boolean.class,
+            aggregateType,
+            id));
   }
 
   @AfterAll

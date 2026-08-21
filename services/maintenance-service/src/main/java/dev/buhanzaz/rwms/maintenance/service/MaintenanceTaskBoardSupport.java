@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.IntStream;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
 
@@ -221,10 +222,12 @@ final class MaintenanceTaskBoardSupport {
     }
   }
 
+  /** Confirms task-board entry identities against the same canonical route published by maintenance. */
   protected void confirmTaskRegistration(
       UUID repairId, MaintenanceDependencyGateway.TaskSnapshot task) {
     List<RepairStage> stages =
-        repairStages.findAllByRepairIdOrderByStageNo(repairId);
+        RepairPhaseSequence.canonicalStages(
+            repairStages.findAllByRepairIdOrderByStageNo(repairId));
     if (task.stages().size() != stages.size()) {
       throw new MaintenanceDependencyException(
           org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
@@ -238,8 +241,9 @@ final class MaintenanceTaskBoardSupport {
             "Task-board returned a duplicate routeIndex");
       }
     });
-    for (RepairStage stage : stages) {
-      MaintenanceDependencyGateway.TaskStageSnapshot external = byRoute.get(stage.getStageNo());
+    for (int routeIndex = 0; routeIndex < stages.size(); routeIndex++) {
+      RepairStage stage = stages.get(routeIndex);
+      MaintenanceDependencyGateway.TaskStageSnapshot external = byRoute.get(routeIndex);
       if (external == null) {
         throw new MaintenanceDependencyException(
             org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
@@ -306,7 +310,10 @@ final class MaintenanceTaskBoardSupport {
     return repair;
   }
 
-  /** Builds worker snapshots with the selected repair cover first and line media linked by work ID. */
+  /**
+   * Builds canonically ordered worker snapshots with the selected cover first and line media linked
+   * by work ID.
+   */
   protected List<MaintenanceDependencyGateway.TaskStage> taskStages(MaintenanceRepair repair) {
     List<MediaReferenceInput> repairMedia = new ArrayList<>(mediaSupport.repairMedia(repair));
     String taskTitle =
@@ -318,9 +325,13 @@ final class MaintenanceTaskBoardSupport {
           Comparator.comparingInt(
               reference -> coverMediaId.equals(reference.mediaId()) ? 0 : 1));
     }
-    return repairStages.findAllByRepairIdOrderByStageNo(repair.getId()).stream()
-        .map(
-            stage -> {
+    List<RepairStage> orderedStages =
+        RepairPhaseSequence.canonicalStages(
+            repairStages.findAllByRepairIdOrderByStageNo(repair.getId()));
+    return IntStream.range(0, orderedStages.size())
+        .mapToObj(
+            routeIndex -> {
+              RepairStage stage = orderedStages.get(routeIndex);
               List<EstimateLineResponse> work =
                   commandSupport.readList(stage.getWorkLines(), EstimateLineResponse.class);
               List<EstimateLineResponse> materials =
@@ -363,7 +374,7 @@ final class MaintenanceTaskBoardSupport {
                   .forEach(reference -> sourceMedia.put(reference.mediaId(), reference));
               return new MaintenanceDependencyGateway.TaskStage(
                   stage.getId(),
-                  stage.getStageNo(),
+                  routeIndex,
                   stage.getStageKind(),
                   taskStageText(stage),
                   stage.getRoutingQueueId(),

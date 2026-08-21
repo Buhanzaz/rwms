@@ -208,6 +208,7 @@ public class RegistryService {
     globalQueueProjections.synchronizeAll();
   }
 
+  /** Reorders the full GENERAL catalog while keeping canonical repair phases immutable in order. */
   @Transactional
   public List<QueueDefinitionDto> reorderQueueDefinitions(QueueDefinitionOrderRequest request) {
     lockGlobalQueueOrder();
@@ -222,25 +223,20 @@ public class RegistryService {
 
     var byId = new LinkedHashMap<UUID, QueueDefinition>();
     current.forEach(definition -> byId.put(definition.getId(), definition));
-    var regular = new java.util.ArrayList<QueueDefinition>();
+    var requested = new java.util.ArrayList<QueueDefinition>(current.size());
     for (QueueDefinitionOrderItem item : request.definitions()) {
       QueueDefinition definition = byId.remove(item.definitionId());
       if (definition == null) {
         throw new ConflictException("Порядок содержит чужую или неизвестную очередь");
       }
       checkVersion(definition.getVersion(), item.expectedVersion(), "Общая очередь");
-      if (definition.getType() != QueueType.HOLDING) {
-        regular.add(definition);
-      }
+      requested.add(definition);
     }
     if (!byId.isEmpty()) {
       throw new ConflictException("Порядок должен содержать полный каталог очередей");
     }
 
-    var ordered = new java.util.ArrayList<QueueDefinition>(regular);
-    current.stream()
-        .filter(definition -> definition.getType() == QueueType.HOLDING)
-        .forEach(ordered::add);
+    var ordered = RepairRoutePhaseOrder.orderedDefinitions(requested);
     int sortOrder = 1;
     for (QueueDefinition definition : ordered) {
       if (definition.getSortOrder() != sortOrder) {
@@ -576,25 +572,58 @@ public class RegistryService {
     }
   }
 
+  /**
+   * Rebuilds global presentation positions with the six canonical phases first and custom GENERAL
+   * definitions afterward, without assigning ordering semantics to logistics definitions.
+   */
   private void normalizeGlobalOrder() {
-    // Position is a derived ordinal, not independently editable content.  Do
-    // not advance unrelated definition versions when a newly created regular
-    // queue moves the terminal holding queue one position lower.
+    // Position is a derived ordinal, not independently editable content. Do not advance unrelated
+    // definition versions while the canonical order is materialized.
     projectionWriter.flush();
     jdbc.update(
         """
-        WITH ordered AS (
+        WITH phase_order(normalized_name, phase_rank) AS (
+          VALUES
+            ('сэс и санитария', 1),
+            ('сварка', 2),
+            ('внешние работы', 3),
+            ('внутренние работы', 4),
+            ('электрика', 5),
+            ('сантехника', 6)
+        ), canonical AS (
           SELECT definition.id,
                  row_number() OVER (
-                   ORDER BY
-                     CASE WHEN definition.queue_type = 'HOLDING' THEN 1 ELSE 0 END,
-                     definition.sort_order,
-                     definition.normalized_name,
-                     definition.queue_type,
-                     definition.id
+                   ORDER BY phase_order.phase_rank,
+                            definition.sort_order,
+                            definition.normalized_name,
+                            definition.queue_type,
+                            definition.id
                  )::integer AS normalized_order
             FROM queue_definition definition
+            JOIN phase_order
+              ON phase_order.normalized_name = definition.normalized_name
            WHERE definition.queue_purpose = 'GENERAL'
+        ), canonical_count AS (
+          SELECT count(*)::integer AS total FROM canonical
+        ), custom AS (
+          SELECT definition.id,
+                 (canonical_count.total + row_number() OVER (
+                   ORDER BY definition.sort_order,
+                            definition.normalized_name,
+                            definition.queue_type,
+                            definition.id
+                 ))::integer AS normalized_order
+            FROM queue_definition definition
+           CROSS JOIN canonical_count
+           WHERE definition.queue_purpose = 'GENERAL'
+             AND NOT EXISTS (
+               SELECT 1 FROM canonical
+                WHERE canonical.id = definition.id
+             )
+        ), ordered AS (
+          SELECT id, normalized_order FROM canonical
+          UNION ALL
+          SELECT id, normalized_order FROM custom
         )
         UPDATE queue_definition definition
            SET sort_order = ordered.normalized_order
@@ -625,7 +654,6 @@ public class RegistryService {
 
   private int nextGlobalRegularSortOrder() {
     return globalDefinitions().stream()
-            .filter(definition -> definition.getType() != QueueType.HOLDING)
             .mapToInt(QueueDefinition::getSortOrder)
             .max()
             .orElse(0)

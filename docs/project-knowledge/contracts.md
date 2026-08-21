@@ -113,9 +113,16 @@ while pinning keeps that later REAL ahead. Public ordinary entry movement, date 
 maintenance daily-capacity scheduling and overdue rollover are absent. Dated driver and shipment
 planning remains on the separate logistics surface.
 
-`HOLDING` remains the canonical SES gate rather than an extra duplicated table. While a repair
-route has an unfinished holding stage, only that entry is real and visible; all non-SES stages stay
-shadowed and are omitted from panel and WorkerApp feeds until the gate completes. `WorkerFeedEntry`
+For maintenance-owned ordinary routes
+[`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml) and
+[`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml) define the fixed phase
+order SES, welding, exterior, interior, electrical and plumbing, regardless of submitted array
+order. The first existing unfinished phase is `REAL`; every later phase is `SHADOW`, and absent or
+completed phases do not block promotion. SES remains the exclusive holding phase rather than an extra
+duplicated table even when an existing queue definition still carries the historical `REPAIR`
+type. While a repair route has unfinished SES work, only that entry is real and visible; all
+non-SES stages stay shadowed and are omitted from panel and WorkerApp feeds until the gate
+completes. `WorkerFeedEntry`
 now carries required `entryType` and `pinned`, so native clients render the same order and do not
 infer actionability. The ordinary board contract does not absorb driver movement or external
 capital-repair ownership.

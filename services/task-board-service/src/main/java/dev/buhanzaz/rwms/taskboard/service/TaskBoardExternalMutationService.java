@@ -445,7 +445,9 @@ class TaskBoardExternalMutationService {
             request.description(),
             request.plannedDurationMinutes(),
             request.deadlineAt(),
-            request.route());
+            routeSteps.stream().map(ResolvedRouteStep::request).toList(),
+            task.getScheduledDate(),
+            task.getPriority());
     task.setTitle(request.title().trim());
     task.setUnitNumber(trim(request.unitNumber()));
     task.setDescription(trim(request.description()));
@@ -462,9 +464,6 @@ class TaskBoardExternalMutationService {
             jdbc));
     task = projectionWriter.saveAndFlush(tasks, task);
 
-    int initialRouteGate =
-        OrdinaryQueueAvailabilityPolicy.initialRouteGateIndex(
-            routeSteps.stream().map(ResolvedRouteStep::queue).toList());
     int routeIndex = 0;
     for (ResolvedRouteStep resolved : routeSteps) {
       RouteStepRequest step = resolved.request();
@@ -472,7 +471,7 @@ class TaskBoardExternalMutationService {
       entry.setTask(task);
       entry.setQueue(resolved.queue());
       entry.setRouteIndex(routeIndex);
-      entry.setEntryType(routeIndex == initialRouteGate ? EntryType.REAL : EntryType.SHADOW);
+      entry.setEntryType(routeIndex == 0 ? EntryType.REAL : EntryType.SHADOW);
       entry.setStatus(EntryStatus.WAITING);
       entry.setQueuePosition(
           queuePositions.nextPosition(warehouseId, resolved.queue(), task.getScheduledDate()));
@@ -702,6 +701,7 @@ class TaskBoardExternalMutationService {
   private record RelocationPreflight(
       BoardTaskRegistrationDto completed, UUID sourceWarehouseId, UUID targetWarehouseId) {}
 
+  /** Resolves requested queues and applies the owner-scoped canonical phase order. */
   private List<ResolvedRouteStep> resolveRoute(
       UUID warehouseId,
       List<RouteStepRequest> requestedRoute,
@@ -717,7 +717,7 @@ class TaskBoardExternalMutationService {
       }
       result.add(new ResolvedRouteStep(step, queue));
     }
-    return result;
+    return RepairRoutePhaseOrder.ordered(result, ResolvedRouteStep::queue, sourceClientId);
   }
 
   private static void validateWorkSourceMedia(RouteStepRequest step) {

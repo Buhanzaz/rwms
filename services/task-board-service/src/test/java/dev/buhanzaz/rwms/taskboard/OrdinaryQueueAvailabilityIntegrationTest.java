@@ -29,7 +29,7 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
-/** Integration coverage for aggregate ordinary-board availability and SES route gating. */
+/** Integration coverage for aggregate ordinary-board availability and canonical SES gating. */
 @SpringBootTest(properties = "spring.jpa.properties.hibernate.generate_statistics=true")
 @ActiveProfiles("test")
 class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSupport {
@@ -91,10 +91,10 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
   }
 
   @Test
-  void holdingStepIsTheOnlyOrdinaryCardUntilItCompletesThenFirstRepairIsPromoted() {
+  void canonicalSesStepIsTheOnlyOrdinaryCardUntilItCompletesThenFirstRepairIsPromoted() {
     WorkerClassDto workerClass = registry.createClass(workerClass("ses-gate"));
     WorkQueueDto repair = queue("repair-after-ses", QueueType.REPAIR, 6, 1, workerClass.id());
-    WorkQueueDto holding = queue("ses", QueueType.HOLDING, 6, 0, workerClass.id());
+    WorkQueueDto ses = queue("сэс и санитария", QueueType.REPAIR, 6, 0, workerClass.id());
     WorkerDto worker = worker(workerClass.id());
     WorkerGroupDto group = group(workerClass.id(), worker.id());
 
@@ -108,8 +108,8 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
             null,
             null,
             List.of(
-                new RouteStepRequest(repair.definitionId(), "Ремонт", null),
-                new RouteStepRequest(holding.definitionId(), "Обработка СЭС", null)),
+                new RouteStepRequest(ses.definitionId(), "Обработка СЭС", null),
+                new RouteStepRequest(repair.definitionId(), "Ремонт", null)),
             LocalDate.of(2026, 8, 21),
             1));
 
@@ -118,21 +118,21 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
         .singleElement()
         .satisfies(
             card -> {
-              assertThat(card.queueId()).isEqualTo(holding.id());
+              assertThat(card.queueId()).isEqualTo(ses.id());
               assertThat(card.entryType()).isEqualTo(EntryType.REAL);
             });
     assertThat(actionable.columns().stream()
             .filter(column -> column.queueId().equals(repair.id()))
             .flatMap(column -> column.entries().stream()))
         .isEmpty();
-    BoardEntryDto holdingEntry = entry(actionable, "ses-route", holding.id());
-    assertThat(holdingEntry.entryType()).isEqualTo(EntryType.REAL);
+    BoardEntryDto sesEntry = entry(actionable, "ses-route", ses.id());
+    assertThat(sesEntry.entryType()).isEqualTo(EntryType.REAL);
 
     BoardEntryDto taken =
         board.take(
             WAREHOUSE_ID,
-            holdingEntry.id(),
-            new TakeEntryRequest(holdingEntry.version(), group.id(), worker.id()),
+            sesEntry.id(),
+            new TakeEntryRequest(sesEntry.version(), group.id(), worker.id()),
             null);
     board.complete(
         WAREHOUSE_ID, taken.id(), new VersionCommand(taken.version()), null);

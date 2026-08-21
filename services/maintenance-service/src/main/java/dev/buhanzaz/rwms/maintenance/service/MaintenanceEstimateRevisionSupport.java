@@ -33,10 +33,11 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 
 /**
- * Materializes repair aggregates and persists estimate revisions from already canonical plan content.
+ * Materializes repair aggregates and persists estimate revisions in the mandatory phase order.
  *
  * <p>It has no public command boundary and delegates line, routing and plan validation to
- * {@link MaintenanceEstimateSupport}.</p>
+ * {@link MaintenanceEstimateSupport}; source stage order is canonicalized only after that content
+ * has passed validation.</p>
  */
 @Service
 final class MaintenanceEstimateRevisionSupport {
@@ -281,11 +282,12 @@ final class MaintenanceEstimateRevisionSupport {
     estimateSupport.validateEstimateRouting(canonicalSnapshots, resolvedPlanInputs);
     estimateSupport.validatePlanContent(canonicalLines, resolvedPlanInputs);
     estimateSupport.validateCustomRoutingStructure(canonicalLines, resolvedPlanInputs);
+    resolvedPlanInputs = RepairPhaseSequence.canonicalPlan(resolvedPlanInputs);
     List<EstimatePlanStage> plan = new ArrayList<>();
     for (int index = 0; index < resolvedPlanInputs.size(); index++) {
       PlanStageInput input = resolvedPlanInputs.get(index);
       plan.add(new EstimatePlanStage(
-          input.id(), estimate.getId(), revision, input.order(), input.kind(),
+          input.id(), estimate.getId(), revision, index, input.kind(),
           input.routing().queueId(), input.routing().queueName(), input.routing().queueType(),
           commandSupport.write(input.includedLineIds()), input.primaryLineId(), input.groupComment(),
           input.taskDeadline()));
@@ -328,6 +330,7 @@ final class MaintenanceEstimateRevisionSupport {
     inputs = estimateSupport.resolvePlanContent(lines, inputs);
     estimateSupport.validatePlanContent(lines, inputs);
     estimateSupport.validateCustomRoutingStructure(lines, inputs);
+    inputs = RepairPhaseSequence.canonicalPlan(inputs);
     Map<UUID, EstimateLineResponse> lineById =
         lines.stream()
             .collect(
@@ -345,7 +348,7 @@ final class MaintenanceEstimateRevisionSupport {
       List<EstimateLineResponse> materialLines =
           stageLines.stream().filter(line -> !estimateSupport.isWorkLine(line)).toList();
       RepairStage stage = new RepairStage(
-          input.id(), repair.getId(), input.order(), input.kind(), input.routing().queueId(),
+          input.id(), repair.getId(), index, input.kind(), input.routing().queueId(),
           input.routing().queueName(), input.routing().queueType(),
           commandSupport.write(workLines), commandSupport.write(materialLines), input.primaryLineId(), input.groupComment(),
           input.taskDeadline());

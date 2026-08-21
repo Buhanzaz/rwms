@@ -102,7 +102,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void holdingIsAlwaysLastAndStaleVersionConflicts() {
+  void customQueueOrderIsRetainedAndStaleVersionConflicts() {
     var holding =
         QueueRegistryTestFixtures.create(
             registry, jdbc, W1, queue("HOLD", QueueType.HOLDING, List.of()));
@@ -117,7 +117,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             queue("REPAIR_SECOND", QueueType.REPAIR, List.of()));
     assertThat(registry.listQueues(W1))
         .extracting(WorkQueueDto::id)
-        .containsExactly(repair.id(), secondRepair.id(), holding.id());
+        .containsExactly(holding.id(), repair.id(), secondRepair.id());
     assertThat(registry.listQueues(W1))
         .extracting(WorkQueueDto::sortOrder)
         .containsExactly(1, 2, 3);
@@ -209,6 +209,46 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .filteredOn(queue -> queue.definitionId().equals(definition.id()))
         .extracting(WorkQueueDto::name)
         .containsExactly("Общие внешние работы");
+  }
+
+  @Test
+  void queueDefinitionReorderCannotUndoCanonicalRepairPhaseOrder() {
+    var ses = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("сэс и санитария", QueueType.REPAIR, List.of()));
+    var welding = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("сварка", QueueType.REPAIR, List.of()));
+    var exterior = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("внешние работы", QueueType.REPAIR, List.of()));
+    var interior = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("внутренние работы", QueueType.REPAIR, List.of()));
+    var electrical = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("электрика", QueueType.REPAIR, List.of()));
+    var plumbing = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("сантехника", QueueType.REPAIR, List.of()));
+    var custom = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("custom legacy", QueueType.REPAIR, List.of()));
+
+    registry.reorderQueueDefinitions(
+        new QueueDefinitionOrderRequest(
+            List.of(custom, plumbing, electrical, interior, exterior, welding, ses).stream()
+                .map(
+                    item ->
+                        new QueueDefinitionOrderItem(item.definitionId(), item.definitionVersion()))
+                .toList()));
+
+    assertThat(registry.listQueueDefinitions())
+        .extracting(QueueDefinitionDto::name)
+        .containsExactly(
+            "сэс и санитария",
+            "сварка",
+            "внешние работы",
+            "внутренние работы",
+            "электрика",
+            "сантехника",
+            "custom legacy");
+    assertThat(registry.listQueues(W1))
+        .extracting(WorkQueueDto::name)
+        .containsExactly(
+            "сэс и санитария",
+            "сварка",
+            "внешние работы",
+            "внутренние работы",
+            "электрика",
+            "сантехника",
+            "custom legacy");
   }
 
   @Test
@@ -1096,7 +1136,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void unfinishedHoldingHidesAllLaterShadowStagesEvenWhenRequested() {
+  void unfinishedNonSesStageDoesNotHideLaterShadowStages() {
     var holding = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("HOLD", QueueType.HOLDING, List.of()));
     var after = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("AFTER", QueueType.REPAIR, List.of()));
     var snapshot =
@@ -1114,10 +1154,10 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                     new RouteStepRequest(after.definitionId(), "after", null))));
     assertThat(snapshot.columns().stream().flatMap(column -> column.entries().stream()))
         .extracting(BoardEntryDto::taskText)
-        .containsExactly("hold");
+        .containsExactly("hold", "after");
     assertThat(board.snapshot(W1).columns().stream().flatMap(c -> c.entries().stream()))
         .extracting(BoardEntryDto::taskText)
-        .containsExactly("hold");
+        .containsExactly("hold", "after");
   }
 
   @Test
@@ -1504,7 +1544,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void concurrentQueueCreationKeepsUniqueOrderAndHoldingLast() throws Exception {
+  void concurrentQueueCreationKeepsUniqueOrderWithoutTerminalHoldingAssumption() throws Exception {
     List<Object> outcomes =
         race(
             () -> QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("REGULAR_RACE", QueueType.REPAIR, List.of())),
@@ -1514,7 +1554,6 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     var ordered = registry.listQueues(W1);
     assertThat(ordered).hasSize(2);
     assertThat(ordered).extracting(WorkQueueDto::sortOrder).doesNotHaveDuplicates();
-    assertThat(ordered.getLast().type()).isEqualTo(QueueType.HOLDING);
   }
 
   @Test
@@ -1588,7 +1627,6 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(ordered).hasSize(5);
     assertThat(ordered).extracting(WorkQueueDto::id).doesNotHaveDuplicates();
     assertThat(ordered).extracting(WorkQueueDto::sortOrder).doesNotHaveDuplicates();
-    assertThat(ordered.getLast().type()).isEqualTo(QueueType.HOLDING);
   }
 
   @Test
@@ -3670,6 +3708,161 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(updated.route())
         .extracting(RegisteredRouteStepDto::queueName)
         .containsExactly(replacementQueue.name());
+  }
+
+  @Test
+  void maintenanceRegistrationAndPreStartUpdateCanonicalizePhasesAndKeepUnknownTailOrder() {
+    var legacyBefore = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("legacy-before", QueueType.REPAIR, List.of()));
+    var ses = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("сэс и санитария", QueueType.REPAIR, List.of()));
+    var welding = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("сварка", QueueType.REPAIR, List.of()));
+    var exterior = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("внешние работы", QueueType.REPAIR, List.of()));
+    var interior = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("внутренние работы", QueueType.REPAIR, List.of()));
+    var electrical = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("электрика", QueueType.REPAIR, List.of()));
+    var plumbing = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("сантехника", QueueType.REPAIR, List.of()));
+    var legacyAfter = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("legacy-after", QueueType.REPAIR, List.of()));
+
+    List<RouteStepRequest> initialRoute =
+        List.of(
+            new RouteStepRequest(plumbing.definitionId(), "plumbing", null),
+            new RouteStepRequest(legacyBefore.definitionId(), "legacy before", null),
+            new RouteStepRequest(exterior.definitionId(), "exterior one", null),
+            new RouteStepRequest(ses.definitionId(), "ses", null),
+            new RouteStepRequest(exterior.definitionId(), "exterior two", null),
+            new RouteStepRequest(welding.definitionId(), "welding", null),
+            new RouteStepRequest(legacyAfter.definitionId(), "legacy after", null),
+            new RouteStepRequest(interior.definitionId(), "interior", null),
+            new RouteStepRequest(electrical.definitionId(), "electrical", null));
+    UUID externalTaskId = UUID.randomUUID();
+    BoardTaskRegistrationDto registered =
+        board.registerExternalTask(
+            "maintenance-service",
+            new RegisterExternalTaskRequest(
+                W1,
+                externalTaskId,
+                "canonical maintenance route",
+                null,
+                null,
+                null,
+                null,
+                initialRoute,
+                LocalDate.of(2026, 8, 21),
+                3,
+                new TaskSourceReferenceDto(
+                    TaskSourceType.MAINTENANCE_REPAIR, UUID.randomUUID()),
+                TaskLane.SCHEDULED));
+
+    assertThat(registered.route())
+        .extracting(RegisteredRouteStepDto::queueName)
+        .containsExactly(
+            "сэс и санитария",
+            "сварка",
+            "внешние работы",
+            "внешние работы",
+            "внутренние работы",
+            "электрика",
+            "сантехника",
+            "legacy-before",
+            "legacy-after");
+    assertThat(registered.route())
+        .extracting(RegisteredRouteStepDto::routeIndex)
+        .containsExactly(0, 1, 2, 3, 4, 5, 6, 7, 8);
+    assertThat(registered.route())
+        .extracting(RegisteredRouteStepDto::entryType)
+        .containsExactly(
+            EntryType.REAL,
+            EntryType.SHADOW,
+            EntryType.SHADOW,
+            EntryType.SHADOW,
+            EntryType.SHADOW,
+            EntryType.SHADOW,
+            EntryType.SHADOW,
+            EntryType.SHADOW,
+            EntryType.SHADOW);
+
+    UUID sourceId =
+        jdbc.queryForObject(
+            "select source_id from task_sync_source where board_task_id=?",
+            UUID.class,
+            registered.taskId());
+    jdbc.update(
+        "update board_task set request_fingerprint=? where id=?",
+        "a".repeat(64),
+        registered.taskId());
+    BoardTaskRegistrationDto replayedWithCanonicalRoute =
+        board.registerExternalTask(
+            "maintenance-service",
+            new RegisterExternalTaskRequest(
+                W1,
+                externalTaskId,
+                "canonical maintenance route",
+                null,
+                null,
+                null,
+                null,
+                List.of(
+                    new RouteStepRequest(ses.definitionId(), "ses", null),
+                    new RouteStepRequest(welding.definitionId(), "welding", null),
+                    new RouteStepRequest(exterior.definitionId(), "exterior one", null),
+                    new RouteStepRequest(exterior.definitionId(), "exterior two", null),
+                    new RouteStepRequest(interior.definitionId(), "interior", null),
+                    new RouteStepRequest(electrical.definitionId(), "electrical", null),
+                    new RouteStepRequest(plumbing.definitionId(), "plumbing", null),
+                    new RouteStepRequest(legacyBefore.definitionId(), "legacy before", null),
+                    new RouteStepRequest(legacyAfter.definitionId(), "legacy after", null)),
+                LocalDate.of(2026, 8, 21),
+                3,
+                new TaskSourceReferenceDto(TaskSourceType.MAINTENANCE_REPAIR, sourceId),
+                TaskLane.SCHEDULED));
+    assertThat(replayedWithCanonicalRoute.taskId()).isEqualTo(registered.taskId());
+
+    List<RouteStepRequest> updatedRoute =
+        List.of(
+            new RouteStepRequest(legacyAfter.definitionId(), "legacy after", null),
+            new RouteStepRequest(electrical.definitionId(), "electrical", null),
+            new RouteStepRequest(plumbing.definitionId(), "plumbing", null),
+            new RouteStepRequest(ses.definitionId(), "ses", null),
+            new RouteStepRequest(exterior.definitionId(), "exterior one", null),
+            new RouteStepRequest(legacyBefore.definitionId(), "legacy before", null),
+            new RouteStepRequest(welding.definitionId(), "welding", null),
+            new RouteStepRequest(exterior.definitionId(), "exterior two", null),
+            new RouteStepRequest(interior.definitionId(), "interior", null));
+    BoardTaskRegistrationDto updated =
+        board.updateExternalTaskBeforeStart(
+            "maintenance-service",
+            externalTaskId,
+            new PreStartUpdateTaskRequest(
+                registered.taskVersion(),
+                "canonical maintenance route updated",
+                null,
+                null,
+                null,
+                null,
+                updatedRoute));
+
+    assertThat(updated.route())
+        .extracting(RegisteredRouteStepDto::queueName)
+        .containsExactly(
+            "сэс и санитария",
+            "сварка",
+            "внешние работы",
+            "внешние работы",
+            "внутренние работы",
+            "электрика",
+            "сантехника",
+            "legacy-after",
+            "legacy-before");
+    assertThat(updated.route())
+        .extracting(RegisteredRouteStepDto::entryType)
+        .containsExactly(
+            EntryType.REAL,
+            EntryType.SHADOW,
+            EntryType.SHADOW,
+            EntryType.SHADOW,
+            EntryType.SHADOW,
+            EntryType.SHADOW,
+            EntryType.SHADOW,
+            EntryType.SHADOW,
+            EntryType.SHADOW);
   }
 
   @Test

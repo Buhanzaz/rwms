@@ -554,6 +554,86 @@ class MaintenanceCorePostgresIntegrationTest {
   }
 
   @Test
+  void directRepairPersistsTheGlobalPhaseOrderInsteadOfSubmittedStageOrder() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    rentalItemFacts.saveAndFlush(
+        RentalItemFactProjection.create(rentalItemId, warehouseId, "FREE", 0));
+    ensureTestCatalogWork(warehouseId);
+    UUID electricalLineId = UUID.randomUUID();
+    UUID internalLineId = UUID.randomUUID();
+    RoutingSnapshot electrical =
+        new RoutingSnapshot(UUID.randomUUID(), "Электрика", "REPAIR");
+    RoutingSnapshot internal =
+        new RoutingSnapshot(UUID.randomUUID(), "Внутренние работы", "REPAIR");
+    CreateDirectRepairRequest request =
+        new CreateDirectRepairRequest(
+            warehouseId,
+            rentalItemId,
+            LocalDate.of(2026, 8, 21),
+            null,
+            List.of(
+                new EstimateLineInput(
+                    electricalLineId,
+                    null,
+                    EstimateLineType.WORK,
+                    "Замена проводки",
+                    "шт",
+                    "1",
+                    "100.00",
+                    15,
+                    null,
+                    List.of()),
+                new EstimateLineInput(
+                    internalLineId,
+                    null,
+                    EstimateLineType.WORK,
+                    "Замена линолеума",
+                    "шт",
+                    "1",
+                    "100.00",
+                    15,
+                    null,
+                    List.of())),
+            List.of(
+                new PlanStageInput(
+                    UUID.randomUUID(),
+                    RepairStageKind.REPAIR_WORK,
+                    0,
+                    electrical,
+                    List.of(electricalLineId),
+                    electricalLineId,
+                    "",
+                    null),
+                new PlanStageInput(
+                    UUID.randomUUID(),
+                    RepairStageKind.REPAIR_WORK,
+                    1,
+                    internal,
+                    List.of(internalLineId),
+                    internalLineId,
+                    "",
+                    null)),
+            List.of());
+
+    RepairResponse created =
+        service.createDirectRepair(UUID.randomUUID(), UUID.randomUUID(), request).response();
+
+    assertThat(created.plan().stages())
+        .extracting(stage -> stage.routing().queueName())
+        .containsExactly("Внутренние работы", "Электрика");
+    assertThat(created.plan().stages())
+        .extracting(RepairStageResponse::order)
+        .containsExactly(0, 1);
+    assertThat(
+            jdbc.queryForList(
+                "select routing_queue_name from repair_stage where repair_id=? order by stage_no",
+                String.class,
+                created.id()))
+        .containsExactly("Внутренние работы", "Электрика");
+  }
+
+  @Test
   void inboundMovementKeepsRepairWorkOffTheBoardUntilDeliveryOccupiesARepairPlace() {
     UUID warehouseId = UUID.randomUUID();
     UUID rentalItemId = UUID.randomUUID();

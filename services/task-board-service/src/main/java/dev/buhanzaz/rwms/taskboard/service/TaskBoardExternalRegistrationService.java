@@ -295,11 +295,22 @@ class TaskBoardExternalRegistrationService {
     Map<TaskBoardEventStore.StreamRef, Long> existingStreamVersions =
         existingEntries.isEmpty() ? Map.of() : queuePositions.lockEntryStreams(existingEntries);
     int effectivePriority = priority(request.priority());
+    CreateBoardTaskRequest canonicalFingerprintRequest =
+        new CreateBoardTaskRequest(
+            request.externalTaskId(),
+            request.title(),
+            request.unitNumber(),
+            request.description(),
+            request.plannedDurationMinutes(),
+            request.deadlineAt(),
+            routeSteps.stream().map(ResolvedRouteStep::request).toList(),
+            request.scheduledDate(),
+            request.priority());
     String requestFingerprint =
         suppliedFingerprint == null
             ? routePayloads.fingerprint(
                 warehouseId,
-                request,
+                canonicalFingerprintRequest,
                 scheduledDate,
                 effectivePriority,
                 effectiveLane,
@@ -338,9 +349,6 @@ class TaskBoardExternalRegistrationService {
               sourceReference == null ? null : sourceReference.type(),
               sourceReference == null ? null : sourceReference.sourceId()));
     }
-    int initialRouteGate =
-        OrdinaryQueueAvailabilityPolicy.initialRouteGateIndex(
-            routeSteps.stream().map(ResolvedRouteStep::queue).toList());
     int route = 0;
     for (var resolved : routeSteps) {
       RouteStepRequest step = resolved.request();
@@ -349,7 +357,7 @@ class TaskBoardExternalRegistrationService {
       entry.setTask(task);
       entry.setQueue(queue);
       entry.setRouteIndex(route);
-      entry.setEntryType(route == initialRouteGate ? EntryType.REAL : EntryType.SHADOW);
+      entry.setEntryType(route == 0 ? EntryType.REAL : EntryType.SHADOW);
       entry.setStatus(EntryStatus.WAITING);
       entry.setQueuePosition(queuePositions.nextPosition(warehouseId, queue, task.getScheduledDate()));
       entry.setTaskText(trim(step.taskText()));
@@ -448,12 +456,71 @@ class TaskBoardExternalRegistrationService {
               jdbc);
       fingerprintMatches = task.getRequestFingerprint().equals(legacyFingerprint);
     }
+    if (!fingerprintMatches
+        && suppliedFingerprint == null
+        && maintenanceCanonicalFingerprintMatches(
+            warehouseId, task, request, sourceClientId, effectiveLane, driverAudience)) {
+      fingerprintMatches = true;
+    }
     if (warehouseId.equals(task.getWarehouseId()) && fingerprintMatches) {
       requireExactSourceReference(task, sourceClientId, sourceReference);
       return task;
     }
     throw new ConflictException("Задача с externalTaskId уже существует с другими данными");
   }
+
+  /**
+   * Accepts a maintenance retry whose request is canonically ordered while the stored fingerprint
+   * still reflects the pre-phase-order source route. The exception is fenced to an active route
+   * that is entirely WAITING, so started or paused history can never be hidden by reconciliation.
+   */
+  private boolean maintenanceCanonicalFingerprintMatches(
+      UUID warehouseId,
+      BoardTask task,
+      CreateBoardTaskRequest request,
+      String sourceClientId,
+      TaskLane effectiveLane,
+      DriverTaskAudienceDto driverAudience) {
+    if (!MAINTENANCE_SOURCE_CLIENT_ID.equals(sourceClientId)
+        || task.getStatus() != TaskStatus.ACTIVE) {
+      return false;
+    }
+    List<QueueEntry> persistedRoute = entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId());
+    if (persistedRoute.isEmpty()
+        || persistedRoute.stream().anyMatch(entry -> entry.getStatus() != EntryStatus.WAITING)) {
+      return false;
+    }
+    List<RouteStepRequest> canonicalRoute =
+        RepairRoutePhaseOrder.ordered(
+                resolveRoute(warehouseId, request.route(), true, sourceClientId),
+                ResolvedRouteStep::queue,
+                sourceClientId)
+            .stream()
+            .map(ResolvedRouteStep::request)
+            .toList();
+    CreateBoardTaskRequest canonicalRequest =
+        new CreateBoardTaskRequest(
+            request.externalTaskId(),
+            request.title(),
+            request.unitNumber(),
+            request.description(),
+            request.plannedDurationMinutes(),
+            request.deadlineAt(),
+            canonicalRoute,
+            request.scheduledDate(),
+            request.priority());
+    String incomingCanonicalFingerprint =
+        routePayloads.fingerprint(
+            warehouseId,
+            canonicalRequest,
+            request.scheduledDate() == null ? task.getScheduledDate() : request.scheduledDate(),
+            request.priority() == null ? task.getPriority() : priority(request.priority()),
+            effectiveLane,
+            driverAudience,
+            jdbc);
+    return incomingCanonicalFingerprint.equals(routePayloads.fingerprint(task, persistedRoute, jdbc));
+  }
+
   private TaskSourceReferenceDto sourceReferenceFor(
       String sourceClientId, TaskSourceReferenceDto source) {
     if (source == null) return null;
@@ -496,9 +563,7 @@ class TaskBoardExternalRegistrationService {
       throw new ConflictException("Источник задачи нельзя заменить");
     }
   }
-
-
-
+  /** Resolves requested queues and applies the maintenance-owned canonical phase order. */
   private List<ResolvedRouteStep> resolveRoute(
       UUID warehouseId,
       List<RouteStepRequest> requestedRoute,
@@ -514,7 +579,7 @@ class TaskBoardExternalRegistrationService {
       }
       result.add(new ResolvedRouteStep(step, queue));
     }
-    return result;
+    return RepairRoutePhaseOrder.ordered(result, ResolvedRouteStep::queue, sourceClientId);
   }
 
   private static void validateWorkSourceMedia(RouteStepRequest step) {

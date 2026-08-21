@@ -84,8 +84,8 @@ class TaskBoardReadProjectionService {
    * Builds the aggregate ordinary board with a bounded actionable window and persisted shadows.
    *
    * <p>The availability limit admits real cards first. Every eligible future shadow remains
-   * visible in its persisted queue position and never consumes that actionable limit. SES/HOLDING
-   * routes expose only their real gate until it completes.
+   * visible in its persisted queue position and never consumes that actionable limit. A route with
+   * the canonical SES queue exposes only its SES gate until that gate completes.
    */
   public TaskBoardSnapshot snapshot(UUID warehouseId) {
     var columns = new ArrayList<BoardColumnDto>();
@@ -403,7 +403,8 @@ class TaskBoardReadProjectionService {
 
   /**
    * Resolves the bounded actionable window and all eligible future shadows in one additional ID
-   * query. An unfinished holding route contributes only its selected SES gate and no shadows.
+   * query. An unfinished route with the canonical SES queue contributes only its SES gate and no
+   * shadows.
    */
   private List<QueueEntry> ordinaryEntries(UUID warehouseId) {
     List<UUID> actionableEntryIds = entries.findVisibleOrdinaryEntryIds(warehouseId);
@@ -416,8 +417,8 @@ class TaskBoardReadProjectionService {
 
   /**
    * Adds every waiting shadow whose task has an unfinished real ordinary stage and no unfinished
-   * SES gate. Dynamic placeholders bind UUID values only; no caller-controlled SQL fragment is
-   * accepted.
+   * canonical SES gate. Dynamic placeholders bind UUID values only; no caller-controlled SQL
+   * fragment is accepted.
    */
   private List<UUID> visibleOrdinaryEntryIds(
       UUID warehouseId, List<UUID> actionableEntryIds) {
@@ -451,13 +452,14 @@ class TaskBoardReadProjectionService {
            )
            and not exists (
              select 1
-               from queue_entry holding
-               join work_queue holding_queue on holding_queue.id = holding.queue_id
-               join queue_definition holding_definition
-                 on holding_definition.id = holding_queue.definition_id
-              where holding.task_id = shadow.task_id
-                and holding.status in ('WAITING', 'IN_PROGRESS', 'PAUSED')
-                and holding_definition.queue_type = 'HOLDING'
+               from queue_entry ses
+               join work_queue ses_queue on ses_queue.id = ses.queue_id
+               join queue_definition ses_definition
+                 on ses_definition.id = ses_queue.definition_id
+              where ses.task_id = shadow.task_id
+                and ses.status in ('WAITING', 'IN_PROGRESS', 'PAUSED')
+                and ses_definition.queue_purpose = 'GENERAL'
+                and ses_definition.normalized_name = 'сэс и санитария'
            )
         """,
             (result, rowNumber) -> UUID.fromString(result.getString("id")),

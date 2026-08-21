@@ -2411,13 +2411,20 @@ components:
         lineageRootLineId:
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
     PlanStageInput:
+      description: >-
+        One ordinary repair stage. The server normalizes all submitted stages to
+        SES, welding, exterior, interior, electrical and plumbing before
+        persistence; unknown legacy queues follow those phases.
       type: object
       additionalProperties: false
       required: [id, kind, order, routing, includedLineIds, primaryLineId, groupComment]
       properties:
         id: { type: string, format: uuid }
         kind: { $ref: '#/components/schemas/RepairStageKind' }
-        order: { type: integer, minimum: 0 }
+        order:
+          description: Source-order tie-breaker retained only among stages in the same phase.
+          type: integer
+          minimum: 0
         routing:
           description: >-
             Catalog-derived for catalog lines. For custom lines this is the explicit active
@@ -2610,13 +2617,20 @@ components:
         recordedAt: { type: string, format: date-time }
         state: { type: string, enum: [READY, REVIEW_REQUIRED] }
     RepairStage:
+      description: >-
+        Persisted repair stage presented at its canonical route position: SES,
+        welding, exterior, interior, electrical, plumbing, then unknown legacy
+        queues in stable source order.
       type: object
       additionalProperties: false
       required: [id, kind, order, state, routing, workLines, materialLines, primaryLineId, groupComment, evidence, taskSync, completedAt]
       properties:
         id: { type: string, format: uuid }
         kind: { $ref: '#/components/schemas/RepairStageKind' }
-        order: { type: integer, minimum: 0 }
+        order:
+          description: Zero-based canonical route position returned by maintenance.
+          type: integer
+          minimum: 0
         state: { $ref: '#/components/schemas/RepairStageState' }
         routing: { $ref: '#/components/schemas/RoutingSnapshot' }
         workLines: { type: array, maxItems: 2000, items: { $ref: '#/components/schemas/EstimateLine' } }

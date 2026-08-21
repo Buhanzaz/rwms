@@ -3,7 +3,6 @@ package dev.buhanzaz.rwms.taskboard.service;
 import dev.buhanzaz.rwms.taskboard.domain.EntryStatus;
 import dev.buhanzaz.rwms.taskboard.domain.EntryType;
 import dev.buhanzaz.rwms.taskboard.domain.QueueEntry;
-import dev.buhanzaz.rwms.taskboard.domain.QueueType;
 import dev.buhanzaz.rwms.taskboard.domain.WorkQueue;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -17,10 +16,9 @@ import java.util.UUID;
  *
  * <p>Active work remains at the front of its queue. Waiting work follows its aggregate queue
  * position, except that a pinned real card keeps its visible slot while an earlier shadow is
- * promoted; persisted schedule dates do not partition or order ordinary work. A task with
- * unfinished HOLDING work is gated by its first such step even when that step appears later in the
- * source route; this keeps SES work exclusive without deleting the route truth retained as
- * shadows.
+ * promoted; persisted schedule dates do not partition or order ordinary work. A route's first
+ * unfinished entry is the only executable phase; later entries remain durable shadows until that
+ * phase completes.
  */
 final class OrdinaryQueueAvailabilityPolicy {
   private static final Set<EntryStatus> UNFINISHED =
@@ -51,17 +49,6 @@ final class OrdinaryQueueAvailabilityPolicy {
             && entry.getTask().isPinned()
         ? 0
         : 1;
-  }
-
-  /** Returns the initial route gate, preferring the first HOLDING queue over source order. */
-  static int initialRouteGateIndex(List<WorkQueue> routeQueues) {
-    for (int index = 0; index < routeQueues.size(); index++) {
-      WorkQueue queue = routeQueues.get(index);
-      if (queue != null && queue.getType() == QueueType.HOLDING) {
-        return index;
-      }
-    }
-    return 0;
   }
 
   /**
@@ -103,7 +90,7 @@ final class OrdinaryQueueAvailabilityPolicy {
 
   /**
    * Chooses the next executable route step after excluding entries completed by the current
-   * atomic command. HOLDING always wins over an earlier ordinary step.
+   * atomic command. The persisted route order is the sole phase precedence.
    */
   static QueueEntry nextExecutableRouteEntry(
       Collection<QueueEntry> route, Collection<UUID> excludedEntryIds) {
@@ -112,17 +99,7 @@ final class OrdinaryQueueAvailabilityPolicy {
             .filter(entry -> !excludedEntryIds.contains(entry.getId()))
             .filter(entry -> UNFINISHED.contains(entry.getStatus()))
             .toList();
-    return unfinished.stream()
-        .filter(
-            entry ->
-                entry.getQueue() != null
-                    && entry.getQueue().getType() == QueueType.HOLDING)
-        .min(Comparator.comparingInt(QueueEntry::getRouteIndex))
-        .orElseGet(
-            () ->
-                unfinished.stream()
-                    .min(Comparator.comparingInt(QueueEntry::getRouteIndex))
-                    .orElse(null));
+    return unfinished.stream().min(Comparator.comparingInt(QueueEntry::getRouteIndex)).orElse(null);
   }
 
   private static void requireLimit(int waitingLimit) {

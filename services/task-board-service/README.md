@@ -60,13 +60,16 @@ The ordinary repair board is one aggregate warehouse view, not a calendar. Each 
 entries. Registration priority is already reflected in the persisted queue position; reads do not
 sort by priority a second time. Active work stays first, waiting real work follows in pinned/queue
 position order, and visible future `SHADOW` entries follow without consuming the actionable limit.
-Thus a directly executable electricity stage skips earlier inactive shadows, while promotion
-restores an earlier shadow's persisted place and pushes a later unpinned real card down; a pinned
-real card stays ahead. `TAKE` is rejected outside the same server-owned real window, and a shadow is
-never actionable.
+Maintenance routes are normalized to `SES -> welding -> exterior -> interior -> electrical ->
+plumbing`. The first existing unfinished phase is the only `REAL` stage; absent or completed phases
+are skipped, and every later stage is `SHADOW`. Electricity is therefore immediately actionable
+only when all four preceding phases are absent or complete. Promotion restores a shadow's persisted
+place ahead of later unpinned work; a pinned real card stays ahead. `TAKE` is rejected outside the
+same server-owned real window, and a shadow is never actionable.
 
-A holding/SES stage is the only ordinary card for its task until treatment finishes; none of that
-task's repair shadows appears on either the panel or WorkerApp during the gate. The public board has
+A canonical SES stage is the only ordinary card for its task until treatment finishes, including
+for retained definitions whose historical queue type is `REPAIR`; none of that task's repair
+shadows appears on either the panel or WorkerApp during the gate. The public board has
 no date selector, manual entry move, date swap, daily-capacity scheduling, or overdue rollover scan.
 Dated driver and shipment planning remains on the separate logistics surfaces. These invariants are defined by
 [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
@@ -81,6 +84,12 @@ cutover; every later event tail and every other field remain exact. The cutover 
 `flyway_schema_history`, so a rebuild preserves immutable facts without weakening post-migration
 drift detection. The rule lives in
 [`TaskBoardReplayVerifier`](src/main/java/dev/buhanzaz/rwms/taskboard/eventing/TaskBoardReplayVerifier.java).
+
+Flyway V33 fixes the six global column positions and reorders only active maintenance routes whose
+entries are all still `WAITING`; started, paused, completed, logistics and non-maintenance routes
+are unchanged. A durable projection-migration ledger lists the exact work queues and entries whose
+event-sourced projection changed. Replay compatibility is limited to those aggregate IDs and
+pre-V33 tails, and only to `sortOrder`, `routeIndex` and `entryType`; all later tails remain exact.
 
 Logistics driver tasks additionally carry one persisted audience:
 `UNASSIGNED`, `ASSIGNED_DRIVER`, or `WAREHOUSE_DRIVERS`. Only the exact
