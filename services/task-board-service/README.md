@@ -55,6 +55,11 @@ task instead of creating a duplicate. Mutable entry operations are fenced by
 the contract-defined version and status. Route order, eligibility, assignment,
 and terminal transitions remain server-owned.
 
+The private pre-start replacement treats only a value-identical complete snapshot as a no-op and
+returns its current registration even if the caller retained an older task version after a lost
+response. Any changed title, metadata or route still requires the exact current version and an
+entirely unstarted task; it fails with a conflict otherwise.
+
 The ordinary repair board is one aggregate warehouse view, not a calendar. Each queue exposes all
 `IN_PROGRESS` and `PAUSED` real entries plus only the first `availableTaskLimit` waiting real
 entries. Registration priority is already reflected in the persisted queue position; reads do not

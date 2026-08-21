@@ -196,7 +196,9 @@ public class TaskBoardService {
   }
 
   @Transactional
-  /** Replaces source task content only before its route has begun execution. */
+  /**
+   * Replaces source task content only before execution, while returning an exact replay unchanged.
+   */
   public BoardTaskRegistrationDto updateExternalTaskBeforeStart(
       String sourceClientId, UUID externalTaskId, PreStartUpdateTaskRequest request) {
     return externalMutations.updateExternalTaskBeforeStart(sourceClientId, externalTaskId, request);

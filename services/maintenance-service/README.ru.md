@@ -180,8 +180,13 @@ task-board исправляет полностью ожидающие актив
 всех уже зарегистрированных ожидающих ремонтов. Этот owner-local проход не выполняет remote I/O и
 позволяет обычному reconciliation worker исправить старые presentation snapshots, включая порядок
 стадий, обложки и заголовок сложности, без прямой мутации хранилища task-board. Presentation generation v4
-использует новый stable key, поэтому eligible queued work получает каноническое представление, а
-quarantined v2/v3 work не возобновляется и не изменяется напрямую. Quarantined stable refresh текущего
+использовала новый stable key, но live-запуск выявил расхождение owner-version, поэтому это поколение
+остаётся неизменяемым audit evidence, а не успешным recovery. Presentation generation v5 использует
+следующий stable key, перед replacement читает текущую source-owned регистрацию task-board и передаёт
+версию владельца. Task-board принимает полностью идентичный snapshot как replay без мутации;
+изменённые данные сохраняют version- и pre-start-fence. Поэтому eligible queued work получает
+канонический порядок стадий, обложку и заголовок, а quarantined v2/v3/v4 work не возобновляется и не
+изменяется напрямую. Quarantined stable refresh текущего
 поколения остаётся в quarantine для reviewed resume, учитывается и пропускается; он не может сорвать
 application-ready event или запустить цикл рестартов. Любой другой конфликт stable identity
 по-прежнему отклоняется fail-closed. Существующая task-board pre-start command ставит fence для

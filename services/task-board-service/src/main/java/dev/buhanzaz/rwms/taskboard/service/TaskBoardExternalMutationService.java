@@ -374,18 +374,52 @@ class TaskBoardExternalMutationService {
     return workerExecutions.preStartCancellationResult(PreStartCancellationOutcome.CANCELLED, current);
   }
 
+  /**
+   * Replaces a source-owned route before execution, or returns the current registration for an
+   * exact value-identical replay.
+   *
+   * <p>The replay check precedes the optimistic-version and execution-state fences because it
+   * performs no mutation and covers a caller that lost the successful response. Any differing
+   * payload still requires the exact current task version and an entirely unstarted route.
+   */
   public BoardTaskRegistrationDto updateExternalTaskBeforeStart(
       String sourceClientId, UUID externalTaskId, PreStartUpdateTaskRequest request) {
     lock("external-task:" + externalTaskId);
     BoardTask task = ownedExternalTask(sourceClientId, externalTaskId);
     UUID warehouseId = task.getWarehouseId();
     queuePositions.lockQueueMutation(warehouseId);
+    List<QueueEntry> oldEntries = entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId());
+    List<ResolvedRouteStep> routeSteps =
+        resolveRoute(warehouseId, request.route(), true, sourceClientId);
+    CreateBoardTaskRequest replacement =
+        new CreateBoardTaskRequest(
+            externalTaskId,
+            request.title(),
+            request.unitNumber(),
+            request.description(),
+            request.plannedDurationMinutes(),
+            request.deadlineAt(),
+            routeSteps.stream().map(ResolvedRouteStep::request).toList(),
+            task.getScheduledDate(),
+            task.getPriority());
+    String requestedFingerprint =
+        routePayloads.fingerprint(
+            warehouseId,
+            replacement,
+            task.getScheduledDate(),
+            task.getPriority(),
+            task.getLane(),
+            driverAudiences.dto(task),
+            jdbc);
+    if (requestedFingerprint.equals(routePayloads.fingerprint(task, oldEntries, jdbc))) {
+      return registrationDto(task);
+    }
+
     checkVersion(task.getVersion(), request.expectedTaskVersion(), "Задача");
     if (task.getStatus() != TaskStatus.ACTIVE) {
       throw new ConflictException("Изменить можно только активную задачу до начала работ");
     }
 
-    List<QueueEntry> oldEntries = entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId());
     boolean routeStarted =
         oldEntries.stream()
             .anyMatch(
@@ -402,8 +436,6 @@ class TaskBoardExternalMutationService {
       throw new ConflictException("Маршрут или назначение задачи уже начали выполнять");
     }
 
-    List<ResolvedRouteStep> routeSteps =
-        resolveRoute(warehouseId, request.route(), true, sourceClientId);
     Set<WorkQueue> affectedQueues =
         oldEntries.stream()
             .map(QueueEntry::getQueue)
@@ -437,31 +469,12 @@ class TaskBoardExternalMutationService {
     affectedQueues.forEach(queue -> queuePositions.normalizePositions(warehouseId, queue));
     projectionWriter.flush();
 
-    CreateBoardTaskRequest replacement =
-        new CreateBoardTaskRequest(
-            externalTaskId,
-            request.title(),
-            request.unitNumber(),
-            request.description(),
-            request.plannedDurationMinutes(),
-            request.deadlineAt(),
-            routeSteps.stream().map(ResolvedRouteStep::request).toList(),
-            task.getScheduledDate(),
-            task.getPriority());
     task.setTitle(request.title().trim());
     task.setUnitNumber(trim(request.unitNumber()));
     task.setDescription(trim(request.description()));
     task.setPlannedDurationMinutes(request.plannedDurationMinutes());
     task.setDeadlineAt(request.deadlineAt());
-    task.setRequestFingerprint(
-        routePayloads.fingerprint(
-            warehouseId,
-            replacement,
-            task.getScheduledDate(),
-            task.getPriority(),
-            task.getLane(),
-            driverAudiences.dto(task),
-            jdbc));
+    task.setRequestFingerprint(requestedFingerprint);
     task = projectionWriter.saveAndFlush(tasks, task);
 
     int routeIndex = 0;

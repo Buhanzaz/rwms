@@ -36,7 +36,7 @@ public class MaintenanceWorkerCoverReconciliation {
   private static final Logger log =
       LoggerFactory.getLogger(MaintenanceWorkerCoverReconciliation.class);
   private static final int PAGE_SIZE = 100;
-  private static final String RECONCILIATION_VERSION = "worker-presentation-v4";
+  private static final String RECONCILIATION_VERSION = "worker-presentation-v5";
   private static final String QUARANTINED_RECONCILIATION_CODE =
       "MAINTENANCE_RECONCILIATION_QUARANTINED";
 

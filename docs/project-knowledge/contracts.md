@@ -127,6 +127,14 @@ now carries required `entryType` and `pinned`, so native clients render the same
 infer actionability. The ordinary board contract does not absorb driver movement or external
 capital-repair ownership.
 
+The private source-owned pre-start replacement keeps optimistic concurrency for every changed
+snapshot. Its one retry exception is an exact canonical fingerprint match across task metadata and
+the complete route: that value-identical request returns the current registration without changing
+versions, route-entry identities or events even when the supplied task version is stale. Any
+differing snapshot still requires the current version and an entirely unstarted route. Maintenance
+uses GET to observe that owner version before a presentation-only recovery PUT; ordinary repair-plan
+commands continue using the version captured with their durable business intent.
+
 ### Native Driver And Slinger Task Surfaces
 
 [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml)

@@ -3863,6 +3863,40 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             EntryType.SHADOW,
             EntryType.SHADOW,
             EntryType.SHADOW);
+
+    List<UUID> updatedEntryIds =
+        updated.route().stream().map(RegisteredRouteStepDto::entryId).toList();
+    BoardTaskRegistrationDto exactReplayWithStaleVersion =
+        board.updateExternalTaskBeforeStart(
+            "maintenance-service",
+            externalTaskId,
+            new PreStartUpdateTaskRequest(
+                registered.taskVersion(),
+                "canonical maintenance route updated",
+                null,
+                null,
+                null,
+                null,
+                updatedRoute));
+
+    assertThat(exactReplayWithStaleVersion.taskVersion()).isEqualTo(updated.taskVersion());
+    assertThat(exactReplayWithStaleVersion.route())
+        .extracting(RegisteredRouteStepDto::entryId)
+        .containsExactlyElementsOf(updatedEntryIds);
+    assertThatThrownBy(
+            () ->
+                board.updateExternalTaskBeforeStart(
+                    "maintenance-service",
+                    externalTaskId,
+                    new PreStartUpdateTaskRequest(
+                        registered.taskVersion(),
+                        "different task content",
+                        null,
+                        null,
+                        null,
+                        null,
+                        updatedRoute)))
+        .isInstanceOf(StaleVersionException.class);
   }
 
   @Test

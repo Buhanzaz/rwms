@@ -55,6 +55,11 @@ Source-owned task использует stable external identity, поэтому 
 contract-defined version и status. Route order, eligibility, assignment и
 terminal transitions остаются server-owned.
 
+Private pre-start replacement считает no-op только полностью идентичный по значению snapshot и
+возвращает его текущую регистрацию, даже если после потерянного ответа у caller осталась старая
+версия task. Любое изменение заголовка, metadata или route по-прежнему требует точную текущую
+версию и полностью не начатое задание; иначе команда завершается конфликтом.
+
 Обычная доска ремонтов — единое агрегированное представление склада, а не календарь. Каждая
 очередь показывает все реальные entries в `IN_PROGRESS` и `PAUSED` и только первые
 `availableTaskLimit` ожидающих реальных entries. Приоритет регистрации уже отражён в сохранённой

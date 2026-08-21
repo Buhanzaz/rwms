@@ -2677,6 +2677,7 @@ class MaintenanceCorePostgresIntegrationTest {
             eq(taskBoardVersion),
             eq("БТ-42"),
             anyList());
+    verify(dependencies, never()).getTask(any());
     assertThat(repairs.findById(fixture.repairId()).orElseThrow())
         .satisfies(
             saved -> {
@@ -2684,6 +2685,79 @@ class MaintenanceCorePostgresIntegrationTest {
               assertThat(saved.getTaskBoardVersion()).isEqualTo(taskBoardVersion + 1);
               assertThat(saved.getTaskGenerationState()).isEqualTo("GENERATED");
             });
+  }
+
+  @Test
+  void workerPresentationRefreshUsesCurrentTaskBoardVersionAndConfirmsExactReplay() {
+    RegisteredRepairFixture registered = createRegisteredPrimaryRepair();
+    RepairFixture fixture = registered.repair();
+    MaintenanceRepair before = repairs.findById(fixture.repairId()).orElseThrow();
+    long currentTaskBoardVersion = 41L;
+    UUID reconciliationKey = UUID.randomUUID();
+    new TransactionTemplate(transactionManager)
+        .executeWithoutResult(
+            status ->
+                reconciliations.enqueue(
+                    fixture.repairId(),
+                    "TASK_BOARD",
+                    "REFRESH_WORKER_MEDIA",
+                    reconciliationKey,
+                    Map.of("repairId", fixture.repairId().toString())));
+    deferOtherReconciliations(fixture.repairId(), "REFRESH_WORKER_MEDIA");
+
+    clearInvocations(dependencies);
+    when(dependencies.getRentalItemSnapshot(fixture.rentalItemId()))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                fixture.rentalItemId(),
+                before.getRentalItemVersionSnapshot(),
+                fixture.warehouseId(),
+                "БТ-42",
+                "REPAIR"));
+    MaintenanceDependencyGateway.TaskSnapshot currentTask =
+        new MaintenanceDependencyGateway.TaskSnapshot(
+            fixture.externalTaskId(),
+            currentTaskBoardVersion,
+            "ACTIVE",
+            List.of(
+                new MaintenanceDependencyGateway.TaskStageSnapshot(
+                    0, registered.queueEntryId(), 0)));
+    when(dependencies.getTask(fixture.externalTaskId())).thenReturn(currentTask);
+    when(
+            dependencies.updatePreStartTask(
+                eq(reconciliationKey),
+                eq(fixture.externalTaskId()),
+                eq(currentTaskBoardVersion),
+                eq("БТ-42"),
+                anyList()))
+        .thenReturn(currentTask);
+
+    assertThat(service.reconcileOneTask()).isTrue();
+
+    var ordered = inOrder(dependencies);
+    ordered.verify(dependencies).getRentalItemSnapshot(fixture.rentalItemId());
+    ordered.verify(dependencies).getTask(fixture.externalTaskId());
+    ordered
+        .verify(dependencies)
+        .updatePreStartTask(
+            eq(reconciliationKey),
+            eq(fixture.externalTaskId()),
+            eq(currentTaskBoardVersion),
+            eq("БТ-42"),
+            anyList());
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select state from integration_reconciliation
+                 where repair_id=? and dependency_type='TASK_BOARD'
+                   and operation_type='REFRESH_WORKER_MEDIA' and idempotency_key=?
+                """,
+                String.class,
+                fixture.repairId(),
+                reconciliationKey))
+        .isEqualTo("CONFIRMED");
+    assertThat(repairs.findById(fixture.repairId()).orElseThrow().getTaskBoardVersion())
+        .isEqualTo(currentTaskBoardVersion);
   }
 
   @Test

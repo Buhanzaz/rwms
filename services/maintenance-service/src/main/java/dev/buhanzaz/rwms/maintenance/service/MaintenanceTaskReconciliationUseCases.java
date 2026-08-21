@@ -305,6 +305,13 @@ final class MaintenanceTaskReconciliationUseCases {
         && !task.scheduledDate().isAfter(currentWarehouseDate);
   }
 
+  /**
+   * Reconciles one durable task-board intent without holding a maintenance transaction remotely.
+   *
+   * <p>A worker-presentation refresh first observes the task-board owner's current version and
+   * uses it as the update fence. Ordinary plan mutations retain the version captured by the
+   * maintenance command, so a concurrent business change cannot be mistaken for recovery.
+   */
   void reconcileTaskClaim(MaintenanceReconciliationStore.WorkItem work, boolean update) {
     Optional<TaskPlan> prepared = transactions.execute(status -> prepareTaskPlan(work, update));
     if (prepared == null || prepared.isEmpty()) return;
@@ -322,11 +329,18 @@ final class MaintenanceTaskReconciliationUseCases {
     int priority = plan.resolveDeliveredLocalDate()
         ? DELIVERED_REPAIR_TASK_BOARD_PRIORITY
         : plan.priority();
+    long expectedTaskVersion = plan.expectedTaskVersion();
+    if (update && "REFRESH_WORKER_MEDIA".equals(work.operation())) {
+      MaintenanceDependencyGateway.TaskSnapshot currentTask =
+          dependencies.getTask(plan.externalTaskId());
+      validateTaskPlanTruth(plan, currentTask);
+      expectedTaskVersion = currentTask.version();
+    }
     MaintenanceDependencyGateway.TaskSnapshot task = update
         ? dependencies.updatePreStartTask(
             work.idempotencyKey(),
             plan.externalTaskId(),
-            plan.expectedTaskVersion(),
+            expectedTaskVersion,
             asset.number(),
             plan.stages())
         : dependencies.registerTask(

@@ -623,11 +623,14 @@ paths:
     put:
       operationId: updateExternalBoardTaskBeforeStart
       description: >-
-        Replaces metadata and the complete route using task-version CAS. The
-        command is rejected after any route entry or assignment has started
-        and is available only to the authenticated registration source. After
-        an ambiguous timeout the caller reconciles with GET; retrying the old
-        expectedTaskVersion returns 409 and never applies a second replacement.
+        Replaces metadata and the complete route using task-version CAS. A
+        differing replacement is rejected after any route entry or assignment
+        has started and is available only to the authenticated registration
+        source. After an ambiguous timeout the caller reconciles with GET. A
+        value-identical retry returns the current registration without mutating
+        it even when expectedTaskVersion is stale; any differing payload with
+        a stale expectedTaskVersion returns 409 and never applies a second
+        replacement.
       requestBody:
         required: true
         content:
