@@ -3663,7 +3663,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void waitingWindowKeepsPriorityGroupsStableAndBounded() {
+  void managerSnapshotKeepsPriorityGroupsAndTheCompleteQueue() {
     var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("STABLE_PRIORITY", QueueType.REPAIR, List.of()));
     LocalDate date = LocalDate.of(2026, 7, 24);
     board.createTask(W1, scheduledTask(queue.id(), "priority 4 first", date, 4));
@@ -3682,7 +3682,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             "priority 2",
             "priority 3",
             "priority 4 first",
-            "priority 4 second");
+            "priority 4 second",
+            "priority 5");
   }
 
   @Test
