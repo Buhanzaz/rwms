@@ -183,10 +183,12 @@ const board: TaskBoardSnapshotDto = {
   queues: [
     {
       key: "queue-repair",
+      version: 0,
       label: "Ремонт",
       kind: "REPAIR",
       settingsQueueId: queueId,
       settingsCollapsed: false,
+      workerFeedEnabled: true,
       availableTaskLimit: 6,
       entries: [
         {
