@@ -166,8 +166,18 @@ is invented. Worker-facing work data does not expose price/cost fields.
   deleted only after task-board authoritatively reports evidence `READY`.
   These records are client recovery state, not backend persistence.
 - A 24-hour offline lease is anchored to server time and 'elapsedRealtime'.
+  It strictly bounds a new offline TAKE/JOIN/PAUSE/RESUME and new capture. For
+  an already assigned task, its original result photo and COMPLETE retain their
+  stable IDs and actual timestamps even after that window; task-board rechecks
+  the current assignment, state, version, evidence gate and future-time bound.
+  A passed task `deadlineAt` does not block this completion; once task-board
+  accepts it, the canonical completion fact advances the mapped repair to
+  acceptance.
   Unique connected WorkManager work sends actions, reserves/uploads/finalizes
-  evidence, waits for 'READY', then refreshes the feed.
+  evidence, waits for 'READY', then refreshes the feed. A historical
+  `Действие создано вне срока offline lease` result-photo failure is rebuilt
+  once from its retained encrypted record after the next authenticated context,
+  without fabricating a new photo.
 - FCM and SSE carry invalidation/revision signals only. They trigger a focused
   refresh; they never replace the authoritative feed. FCM device registration
   uses `targetKind=FID` with the Firebase Installation ID, never a messaging
@@ -176,9 +186,11 @@ is invented. Worker-facing work data does not expose price/cost fields.
 ## Errors, concurrency, and retries
 
 Gateway Problem Details are mapped to explicit safe failures. A missing token,
-invalid session, expired lease, unreachable gateway, or unsupported operation is
-not represented as mock success. Conflicts are persisted so that the task UI can
-show the server state and require an intentional refresh/retry.
+invalid session, unreachable gateway, or unsupported operation is not
+represented as mock success. An expired lease remains a conflict for a new
+offline transition, but not for the current worker's delayed result photo or
+COMPLETE. Conflicts are persisted so that the task UI can show the server state
+and require an intentional refresh/retry.
 
 After the authenticator's one refresh opportunity, `401` stops sync for login;
 `403` stops it for a grant refresh or worker action. A `409` persists the

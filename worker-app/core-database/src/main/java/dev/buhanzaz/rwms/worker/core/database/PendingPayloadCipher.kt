@@ -14,9 +14,25 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/** Encrypts unsent command/conflict bodies independently from Room's metadata. */
+/**
+ * Encrypts unsent command/conflict bodies independently from Room's metadata.
+ *
+ * Production instances resolve their AES key from AndroidKeyStore. JVM tests can supply an
+ * in-memory key through the internal constructor without replacing the platform provider.
+ */
 @Singleton
-class PendingPayloadCipher @Inject constructor(@ApplicationContext private val context: Context) {
+class PendingPayloadCipher private constructor(
+    private val secretKeyProvider: () -> SecretKey,
+) {
+    @Inject
+    constructor(
+        @Suppress("UNUSED_PARAMETER")
+        @ApplicationContext context: Context,
+    ) : this(::loadOrCreateAndroidKeyStoreKey)
+
+    /** Creates a cipher backed by a caller-scoped AES key for deterministic JVM tests. */
+    internal constructor(secretKey: SecretKey) : this({ secretKey })
+
     fun encrypt(plainText: String): String {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, secretKey()) }
         return Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" +
@@ -32,21 +48,26 @@ class PendingPayloadCipher @Inject constructor(@ApplicationContext private val c
         return String(cipher.doFinal(Base64.decode(parts[1], Base64.NO_WRAP)), StandardCharsets.UTF_8)
     }
 
-    private fun secretKey(): SecretKey {
-        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (store.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
-        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
-            init(
-                KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                    .setKeySize(256)
-                    .build(),
-            )
-        }.generateKey()
-    }
+    private fun secretKey(): SecretKey = secretKeyProvider()
 
     private companion object {
         const val KEY_ALIAS = "rwms-worker-pending-v1"
+
+        fun loadOrCreateAndroidKeyStoreKey(): SecretKey {
+            val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            (store.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
+            return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
+                init(
+                    KeyGenParameterSpec.Builder(
+                        KEY_ALIAS,
+                        KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+                    )
+                        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                        .setKeySize(256)
+                        .build(),
+                )
+            }.generateKey()
+        }
     }
 }

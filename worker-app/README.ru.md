@@ -167,9 +167,18 @@ retry. Экран задачи записывает результат рабо�
   локальный оригинал и три upload-части шифруются в app-private files. Они
   удаляются только после авторитетного состояния evidence `READY` от task-board.
   Эти записи — client recovery state, но не backend persistence.
-- 24-часовой offline lease привязан к server time и 'elapsedRealtime'. Unique
-  connected WorkManager work отправляет actions, делает reservation/upload/finalize
-  evidence, ждёт 'READY', затем обновляет feed.
+- 24-часовой offline lease привязан к server time и 'elapsedRealtime'. Он
+  строго ограничивает новое офлайн-действие TAKE/JOIN/PAUSE/RESUME и новую
+  съёмку. У уже назначенного задания исходные фото результата и COMPLETE
+  сохраняют stable IDs и фактические timestamps и после этого окна; task-board
+  повторно проверяет current assignment, state, version, evidence gate и время
+  не из будущего. Прошедший `deadlineAt` не блокирует это завершение; после
+  принятия task-board канонический факт завершения продвигает связанную стадию
+  ремонта в приёмку. Unique connected WorkManager work отправляет actions, делает
+  reservation/upload/finalize evidence, ждёт 'READY', затем обновляет feed.
+  Историческая ошибка фото `Действие создано вне срока offline lease` один раз
+  восстанавливается из сохранённой зашифрованной записи после следующего
+  авторизованного context без создания фиктивного нового фото.
 - FCM и SSE несут только invalidation/revision signals. Они запускают focused
   refresh, но не заменяют авторитетный feed. Регистрация FCM-устройства
   использует `targetKind=FID` и Firebase Installation ID, а не messaging
@@ -178,9 +187,11 @@ retry. Экран задачи записывает результат рабо�
 ## Ошибки, конкурентность и повторы
 
 Gateway Problem Details преобразуются в явные безопасные failures. Отсутствующий
-token, недействительная сессия, истёкший lease, недоступный gateway или
-неподдерживаемая операция не выдаются за mock success. Conflict сохраняется,
-чтобы UI задачи показал server state и потребовал осознанный refresh/retry.
+token, недействительная сессия, недоступный gateway или неподдерживаемая операция
+не выдаются за mock success. Истёкший lease остаётся conflict для нового
+офлайн-перехода, но не для отложенных фото результата и COMPLETE текущего
+исполнителя. Conflict сохраняется, чтобы UI задачи показал server state и
+потребовал осознанный refresh/retry.
 
 После единственной возможности authenticator обновить token `401`
 останавливает sync для повторного входа; `403` останавливает его для обновления

@@ -215,6 +215,61 @@ class WorkerLocalStore @Inject constructor(
         }
     }
 
+    /**
+     * Restores only result-photo reservations rejected by the former strict offline-lease limit.
+     *
+     * <p>The caller has just obtained a new authenticated server context. This keeps the original
+     * evidence ID, capture time and bytes, but re-encrypts the deterministic reservation with that
+     * fresh lease so an already-assigned worker can finish an overdue task. Other review-required
+     * evidence is deliberately left for an explicit recovery decision.
+     */
+    suspend fun requeueExpiredLeaseEvidenceReservations(userId: String, freshLeaseId: String): Int {
+        val now = System.currentTimeMillis()
+        return database.withTransaction {
+            val pendingOperationIds = database.outboxDao().pending(userId).mapTo(mutableSetOf()) { it.operationId }
+            var restored = 0
+            for (evidence in database.evidenceDao().reviewRequiredByReason(userId, EXPIRED_OFFLINE_LEASE_ERROR)) {
+                if (!pendingOperationIds.add(evidence.reservationOperationId)) continue
+                val payload = PendingEvidenceReservation(
+                    operationId = evidence.reservationOperationId,
+                    evidenceId = evidence.evidenceId,
+                    routeIndex = evidence.routeIndex,
+                    capturedAt = evidence.capturedAt,
+                    offlineLeaseId = freshLeaseId,
+                    contentType = evidence.contentType,
+                    sizeBytes = evidence.sizeBytes,
+                    sha256 = evidence.sha256,
+                )
+                database.evidenceDao().upsert(
+                    evidence.copy(
+                        state = EVIDENCE_CAPTURED,
+                        reviewReason = null,
+                        uploadPercent = 0,
+                        lastError = null,
+                        updatedAtEpochMillis = now,
+                    ),
+                )
+                database.outboxDao().insert(
+                    WorkerOutboxEntity(
+                        operationId = evidence.reservationOperationId,
+                        userId = userId,
+                        entryId = evidence.entryId,
+                        kind = OUTBOX_EVIDENCE_RESERVATION,
+                        encryptedPayload = pendingPayloadCipher.encrypt(json.encodeToString(payload)),
+                        expectedVersion = null,
+                        state = OUTBOX_PENDING,
+                        retryCount = 0,
+                        createdAtEpochMillis = now,
+                        updatedAtEpochMillis = now,
+                        lastError = null,
+                    ),
+                )
+                restored += 1
+            }
+            restored
+        }
+    }
+
     suspend fun pendingOutbox(userId: String): List<WorkerOutboxEntity> = database.outboxDao().pending(userId)
 
     fun decryptOutboxPayload(operation: WorkerOutboxEntity): String =
@@ -308,6 +363,7 @@ class WorkerLocalStore @Inject constructor(
         const val OUTBOX_PENDING = "PENDING"
         const val OUTBOX_RETRY = "RETRY"
         const val EVIDENCE_CAPTURED = "CAPTURED"
+        const val EXPIRED_OFFLINE_LEASE_ERROR = "Действие создано вне срока offline lease"
     }
 }
 

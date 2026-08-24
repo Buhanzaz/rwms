@@ -137,6 +137,11 @@ class WorkerSyncCoordinator @Inject constructor(
             // Do not activate this new lease yet. A dropped upload or failed
             // feed must not grant another 24 offline hours.
             projections.stageContextIdentity(context)
+            // Older WorkerApp versions terminally retained a result photo when
+            // its original offline lease elapsed. The current authenticated
+            // context can safely reconstruct only that exact durable request;
+            // all other review-required photos remain manual recovery cases.
+            localStore.requeueExpiredLeaseEvidenceReservations(userId, context.offlineLease.id)
 
             val outbox = localStore.pendingOutbox(userId)
             val actions = outbox.filter { it.kind == WorkerLocalStore.OUTBOX_ACTION }

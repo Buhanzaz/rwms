@@ -176,6 +176,19 @@ interface TaskEvidenceDao {
     @Query("SELECT * FROM task_evidence WHERE evidenceId = :evidenceId AND userId = :userId LIMIT 1")
     suspend fun evidence(userId: String, evidenceId: String): TaskEvidenceEntity?
 
+    /** Returns only the deterministic pre-fix offline-lease failure eligible for safe recovery. */
+    @Query(
+        """
+        SELECT * FROM task_evidence
+        WHERE userId = :userId
+          AND state = 'REVIEW_REQUIRED'
+          AND mediaId IS NULL
+          AND reviewReason = :reviewReason
+        ORDER BY createdAtEpochMillis ASC
+        """,
+    )
+    suspend fun reviewRequiredByReason(userId: String, reviewReason: String): List<TaskEvidenceEntity>
+
     @Query("SELECT COUNT(*) FROM task_evidence WHERE userId = :userId AND entryId = :entryId AND state = 'READY'")
     suspend fun readyCount(userId: String, entryId: String): Int
 
