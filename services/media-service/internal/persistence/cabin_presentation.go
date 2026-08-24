@@ -30,10 +30,11 @@ type CabinPresentationPhotoRecord struct {
 
 // ReadCabinPresentationSnapshots returns a stable, bounded read projection for
 // an exact set of cabin IDs. Only active, current CABIN owner bindings and
-// READY image assets at their current generation participate. The owner
-// bindings are share-locked through consume so a concurrent revocation cannot
-// race a presentation snapshot. Each photo list puts the canonical cover
-// first and then preserves the remaining association order.
+// READY image assets at their current generation across every retained gallery
+// folder participate. The owner bindings are share-locked through consume so a
+// concurrent revocation cannot race a presentation snapshot. Each photo list
+// puts the canonical cover first and then preserves the remaining association
+// order; selecting a cover never hides older folders.
 func (repository *Repository) ReadCabinPresentationSnapshots(
 	ctx context.Context,
 	warehouseID uuid.UUID,
@@ -127,7 +128,6 @@ func (repository *Repository) ReadCabinPresentationSnapshots(
 				bool_or(variant.variant='LARGE') as has_large
 			from media_cabin_photo photo
 			join media_cabin_photo_library library on library.cabin_id=photo.cabin_id
-				 and library.active_gallery_folder_id=photo.gallery_folder_id
 			join media_asset asset on asset.media_id=photo.media_id
 			join media_variant variant on variant.media_id=asset.media_id
 				 and variant.generation=asset.current_generation

@@ -496,6 +496,11 @@ export function useRentalItemMedia({
     currentFolderId,
   ])
 
+  const archivePhotos = useMemo(
+    () => orderPhotosWithCoverFirst(allPhotos, currentCoverMediaId),
+    [allPhotos, currentCoverMediaId]
+  )
+
   const photoFolders = useMemo<RentalItemPhotoFolder[]>(() => {
     const folders = new Map<string, RentalItemPhotoFolder>()
     const photosByAsset = new Map(
@@ -627,6 +632,7 @@ export function useRentalItemMedia({
     isLoading: query.isLoading || !initialVariantsLoaded,
     isUploading: uploadMutation.isPending,
     photos,
+    archivePhotos,
     photoFolders,
     requestFolderPreview,
     requestFullscreen,

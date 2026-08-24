@@ -410,6 +410,22 @@ public final class AssetApiModels {
       List<LogisticsEquipmentContentSnapshot> contents) {}
   public record LogisticsEquipmentContentSnapshot(UUID equipmentId, long quantity) {}
 
+  /**
+   * Least-privilege cabin identity and display metadata used only when logistics freezes a public
+   * photo presentation. Mutable status, rental type, passport JSON, comments and equipment never
+   * cross this boundary.
+   */
+  public record LogisticsCabinPhotoPresentationSnapshot(
+      UUID assetId,
+      long version,
+      UUID warehouseId,
+      String number,
+      String dimensions,
+      String finishing,
+      String category,
+      List<String> characteristics,
+      Boolean linoleum) {}
+
   public record AcquireLogisticsOperationLeaseRequest(
       @NotNull UUID rentalItemId,
       @NotNull LogisticsLeaseOwnerType ownerType,

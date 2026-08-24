@@ -22,6 +22,11 @@ export type CabinPhotoPresentationPhoto = {
 export type PublicCabinPhotoPresentation = {
   id: string
   cabinNumber: string
+  dimensions: string | null
+  finishing: string | null
+  category: string | null
+  characteristics: string[]
+  linoleum: boolean | null
   createdAt: string
   photos: CabinPhotoPresentationPhoto[]
 }

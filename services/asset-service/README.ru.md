@@ -51,6 +51,10 @@ type-to-dimension relations. `/cabin-catalog` — отдельный bounded rea
 facts lookup по warehouse и обязательному query. Он ищет number, type, finish,
 dimension, category, characteristics и linoleum среди всех current statuses;
 он не проверяет availability и не создаёт, не продлевает и не освобождает hold.
+`/rental-items/{id}/photo-presentation-snapshot` — отдельное least-privilege чтение для одного
+logistics-owned публичного photo snapshot. Оно возвращает identity/version/warehouse fencing,
+номер, габариты, отделку, категорию, упорядоченные названия характеристик и nullable-линолеум;
+status, rental type, passport JSON, комментарии, tags и equipment исключены.
 
 ## Мебель заказа и замена бытовок
 
@@ -163,7 +167,7 @@ collaborators. Он сохраняет публичные transaction boundaries
 | Семейство collaborators | Владеющая ответственность |
 | --- | --- |
 | `AssetRentalItemService` и `AssetRentalProjectionService` | Команды rental item, канонические status mutations, notes и read/event projection |
-| `AssetLogisticsService` | Logistics leases, rental effects, reservations, shipment holds и task-bound equipment moves |
+| `AssetLogisticsService` | Узкие rental/photo-presentation reads, logistics leases, rental effects, reservations, shipment holds и task-bound equipment moves |
 | `AssetEquipmentService` | Equipment availability, stock commands, general holds и physical transfers |
 | `AssetMaintenanceService` | Maintenance leases, fenced rental effects, characteristics и вход в furniture custody |
 | `AssetClassifierService` | Команды classifier aggregate и event facts |

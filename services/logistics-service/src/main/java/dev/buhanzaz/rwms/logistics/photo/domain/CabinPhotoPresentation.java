@@ -67,6 +67,10 @@ public class CabinPhotoPresentation {
   @Column(name = "photo_snapshot_json", nullable = false, columnDefinition = "jsonb")
   private String photoSnapshotJson;
 
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "metadata_snapshot_json", nullable = false, columnDefinition = "jsonb")
+  private String metadataSnapshotJson;
+
   @Column(name = "created_at", nullable = false)
   private OffsetDateTime createdAt;
 
@@ -80,6 +84,7 @@ public class CabinPhotoPresentation {
       UUID idempotencyKey,
       String requestSha256,
       String photoSnapshotJson,
+      String metadataSnapshotJson,
       OffsetDateTime createdAt) {
     if (rentalItemVersion < 0) {
       throw new IllegalArgumentException("rentalItemVersion is invalid");
@@ -94,6 +99,7 @@ public class CabinPhotoPresentation {
     presentation.idempotencyKey = Objects.requireNonNull(idempotencyKey, "idempotencyKey");
     presentation.requestSha256 = requireHash(requestSha256);
     presentation.photoSnapshotJson = requireSnapshot(photoSnapshotJson);
+    presentation.metadataSnapshotJson = requireMetadataSnapshot(metadataSnapshotJson);
     presentation.createdAt = Objects.requireNonNull(createdAt, "createdAt");
     return presentation;
   }
@@ -122,6 +128,16 @@ public class CabinPhotoPresentation {
     String normalized = value == null ? "" : value.trim();
     if (!normalized.startsWith("[") || !normalized.endsWith("]") || normalized.length() > 128_000) {
       throw new IllegalArgumentException("photoSnapshotJson is invalid");
+    }
+    return normalized;
+  }
+
+  private static String requireMetadataSnapshot(String value) {
+    String normalized = value == null ? "" : value.trim();
+    if (!normalized.startsWith("{")
+        || !normalized.endsWith("}")
+        || normalized.length() > 32_000) {
+      throw new IllegalArgumentException("metadataSnapshotJson is invalid");
     }
     return normalized;
   }

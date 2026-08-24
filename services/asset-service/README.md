@@ -51,6 +51,10 @@ type-to-dimension relations. `/cabin-catalog` is a separate bounded, read-only
 facts lookup by warehouse and required query. It searches number, type, finish,
 dimension, category, characteristics and linoleum across all current statuses;
 it does not check availability or create, renew or release a hold.
+`/rental-items/{id}/photo-presentation-snapshot` is a separate least-privilege read for one
+logistics-owned public photo snapshot. It returns identity/version/warehouse fencing, number,
+dimensions, finishing, category, ordered characteristic names and nullable linoleum; status,
+rental type, passport JSON, comments, tags and equipment are excluded.
 
 ## Order furniture and cabin replacement
 
@@ -162,7 +166,7 @@ independently changing workflow separate:
 | Collaborator family | Owned responsibility |
 | --- | --- |
 | `AssetRentalItemService` and `AssetRentalProjectionService` | Rental-item commands, canonical status mutations, notes and read/event projection |
-| `AssetLogisticsService` | Logistics leases, rental effects, reservations, shipment holds and task-bound equipment moves |
+| `AssetLogisticsService` | Narrow rental/photo-presentation reads, logistics leases, rental effects, reservations, shipment holds and task-bound equipment moves |
 | `AssetEquipmentService` | Equipment availability, stock commands, general holds and physical transfers |
 | `AssetMaintenanceService` | Maintenance leases, fenced rental effects, characteristics and furniture custody entry |
 | `AssetClassifierService` | Classifier aggregate commands and event facts |

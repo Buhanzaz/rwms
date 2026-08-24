@@ -992,6 +992,23 @@ paths:
         '200': { description: Narrow canonical asset snapshot., content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsRentalItemSnapshot' } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /api/internal/asset/v1/logistics/rental-items/{id}/photo-presentation-snapshot:
+    parameters: [ { $ref: '#/components/parameters/RentalItemId' } ]
+    get:
+      operationId: readLogisticsCabinPhotoPresentationSnapshot
+      description: >-
+        Requires SERVICE logistics-service with exactly asset.logistics. Returns only the cabin
+        identity/version/warehouse fence, canonical number, dimensions, finishing, category,
+        ordered characteristic names and nullable linoleum needed to freeze one public photo
+        presentation. Status, rental type, passport JSON, comments and equipment are excluded.
+      responses:
+        '200':
+          description: Least-privilege immutable photo-presentation input.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LogisticsCabinPhotoPresentationSnapshot' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/internal/asset/v1/logistics/operation-leases:
     post:
       operationId: acquireLogisticsOperationLease
@@ -3591,6 +3608,24 @@ components:
         contents:
           type: array
           items: { $ref: '#/components/schemas/LogisticsEquipmentContentSnapshot' }
+    LogisticsCabinPhotoPresentationSnapshot:
+      type: object
+      additionalProperties: false
+      required:
+        [assetId, version, warehouseId, number, dimensions, finishing, category, characteristics, linoleum]
+      properties:
+        assetId: { type: string, format: uuid }
+        version: { $ref: '#/components/schemas/ExpectedVersion' }
+        warehouseId: { type: string, format: uuid }
+        number: { type: string, minLength: 1, maxLength: 128 }
+        dimensions: { type: [string, 'null'], minLength: 1, maxLength: 255 }
+        finishing: { type: [string, 'null'], minLength: 1, maxLength: 255 }
+        category: { type: [string, 'null'], minLength: 1, maxLength: 255 }
+        characteristics:
+          type: array
+          maxItems: 100
+          items: { type: string, minLength: 1, maxLength: 255 }
+        linoleum: { type: [boolean, 'null'] }
     AcquireLogisticsOperationLeaseRequest:
       type: object
       additionalProperties: false

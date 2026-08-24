@@ -1,5 +1,11 @@
 package dev.buhanzaz.rwms.asset;
 
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.CATEGORY_ORDINARY;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.CHARACTERISTIC_ELECTRICS_KK;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.CHARACTERISTIC_PLASTIC_WINDOW;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.DIMENSION_24_X_6;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.FINISHING_DVP;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.TYPE_BK_1;
 import static dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsLeaseOwnerType.LOGISTICS_RETURN;
 import static dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsLeaseOwnerType.LOGISTICS_SHIPMENT;
 import static dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsLeaseOwnerType.LOGISTICS_TRANSFER;
@@ -10,9 +16,6 @@ import static dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsRentalItemActi
 import static dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsRentalItemAction.TRANSFER_DEPART;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.DIMENSION_24_X_6;
-import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.FINISHING_DVP;
-import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.TYPE_BK_1;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireLogisticsEquipmentHoldRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireLogisticsEquipmentMovementReservationRequest;
@@ -110,6 +113,43 @@ class LogisticsAssetBoundaryIntegrationTest {
   @AfterAll
   static void stopDatabase() {
     POSTGRES.stop();
+  }
+
+  @Test
+  @Transactional
+  void photoPresentationSnapshotContainsOnlyTheApprovedOrderedCabinMetadata() {
+    UUID subject = UUID.randomUUID();
+    UUID warehouse = UUID.randomUUID();
+    RentalItemResponse rental =
+        service
+            .createRentalItem(
+                subject,
+                UUID.randomUUID(),
+                new CreateRentalItemRequest(
+                    warehouse,
+                    "PHOTO-CABIN-" + UUID.randomUUID(),
+                    TYPE_BK_1,
+                    DIMENSION_24_X_6,
+                    FINISHING_DVP,
+                    CATEGORY_ORDINARY,
+                    List.of(CHARACTERISTIC_ELECTRICS_KK, CHARACTERISTIC_PLASTIC_WINDOW),
+                    true,
+                    Map.of("privatePassportFact", "must not cross"),
+                    List.of("private-tag")))
+            .response();
+
+    var snapshot = service.logisticsPhotoPresentationSnapshot(rental.id());
+
+    assertThat(snapshot.assetId()).isEqualTo(rental.id());
+    assertThat(snapshot.version()).isEqualTo(rental.version());
+    assertThat(snapshot.warehouseId()).isEqualTo(warehouse);
+    assertThat(snapshot.number()).isEqualTo(rental.number());
+    assertThat(snapshot.dimensions()).isEqualTo("2.4x6");
+    assertThat(snapshot.finishing()).isEqualTo("ДВП");
+    assertThat(snapshot.category()).isEqualTo(CATEGORY_ORDINARY);
+    assertThat(snapshot.characteristics())
+        .containsExactly("Электрика КК", "Пластиковое окно");
+    assertThat(snapshot.linoleum()).isTrue();
   }
 
   @Test

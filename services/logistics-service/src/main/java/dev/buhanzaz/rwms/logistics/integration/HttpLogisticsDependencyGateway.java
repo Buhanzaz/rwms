@@ -97,6 +97,11 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   }
 
   @Override
+  public CabinPhotoPresentationAssetSnapshot readCabinPhotoPresentationSnapshot(UUID assetId) {
+    return assetOperations.readCabinPhotoPresentationSnapshot(assetId);
+  }
+
+  @Override
   public OperationLease acquireReturnLease(
       UUID idempotencyKey, UUID assetId, long expectedAssetVersion, UUID documentId, UUID lineId) {
     return assetOperations.acquireReturnLease(

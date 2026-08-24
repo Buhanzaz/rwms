@@ -47,9 +47,9 @@ public class CabinPhotoPresentationService {
   private final ObjectMapper json;
 
   /**
-   * Creates one immutable snapshot or returns the exact creator-scoped idempotent replay. External
-   * reads run without a local transaction; a concurrent unique conflict is resolved only after the
-   * failed independent insert transaction has rolled back.
+   * Creates one immutable photo/display-metadata snapshot or returns the exact creator-scoped
+   * idempotent replay. External reads run without a local transaction; a concurrent unique conflict
+   * is resolved only after the failed independent insert transaction has rolled back.
    */
   public CreationResult create(
       Jwt jwt,
@@ -68,8 +68,9 @@ public class CabinPhotoPresentationService {
       return replay(replay, requestSha256);
     }
 
-    LogisticsDependencyGateway.RentalItemSnapshot cabin = readCabin(cabinId);
+    LogisticsDependencyGateway.CabinPhotoPresentationAssetSnapshot cabin = readCabin(cabinId);
     validateCabin(cabinId, request, cabin);
+    CabinPhotoPresentationMetadataSnapshot metadata = metadata(cabin);
     List<CabinPhotoPresentationPhotoSnapshot> photos =
         readPhotos(request.warehouseId(), cabinId);
     CabinPhotoPresentation candidate =
@@ -82,6 +83,7 @@ public class CabinPhotoPresentationService {
             idempotencyKey,
             requestSha256,
             writePhotos(photos),
+            writeMetadata(metadata),
             now());
     try {
       return new CreationResult(response(store.insert(candidate)), false);
@@ -98,9 +100,15 @@ public class CabinPhotoPresentationService {
     List<CabinPhotoPresentationPhotoSnapshot> snapshots = readPhotos(presentation);
     List<CabinPhotoPresentationPhotoResponse> photos =
         snapshots.stream().map(photo -> publicPhoto(token, photo)).toList();
+    CabinPhotoPresentationMetadataSnapshot metadata = readMetadata(presentation);
     return new PublicCabinPhotoPresentationResponse(
         presentation.getId(),
         presentation.getCabinNumber(),
+        metadata.dimensions(),
+        metadata.finishing(),
+        metadata.category(),
+        metadata.characteristics(),
+        metadata.linoleum(),
         presentation.getCreatedAt(),
         photos);
   }
@@ -153,9 +161,9 @@ public class CabinPhotoPresentationService {
     return new CreationResult(response(presentation), true);
   }
 
-  private LogisticsDependencyGateway.RentalItemSnapshot readCabin(UUID cabinId) {
+  private LogisticsDependencyGateway.CabinPhotoPresentationAssetSnapshot readCabin(UUID cabinId) {
     try {
-      return dependencies.readRentalItemSnapshot(cabinId);
+      return dependencies.readCabinPhotoPresentationSnapshot(cabinId);
     } catch (LogisticsDependencyException exception) {
       if (exception.kind() == LogisticsDependencyException.FailureKind.PERMANENT_REJECTION) {
         throw new OrderProblemException(
@@ -168,7 +176,7 @@ public class CabinPhotoPresentationService {
   private static void validateCabin(
       UUID cabinId,
       CreateCabinPhotoPresentationRequest request,
-      LogisticsDependencyGateway.RentalItemSnapshot cabin) {
+      LogisticsDependencyGateway.CabinPhotoPresentationAssetSnapshot cabin) {
     if (cabin == null || !cabinId.equals(cabin.assetId())) {
       throw dependencyMismatch("Asset-service returned a mismatched cabin identity");
     }
@@ -182,6 +190,23 @@ public class CabinPhotoPresentationService {
     }
     if (cabin.number() == null || cabin.number().isBlank() || cabin.number().trim().length() > 128) {
       throw conflict("CABIN_NUMBER_MISSING", "У бытовки отсутствует корректный номер");
+    }
+    if (cabin.characteristics() == null) {
+      throw dependencyMismatch("Asset-service returned missing photo-presentation metadata");
+    }
+  }
+
+  private static CabinPhotoPresentationMetadataSnapshot metadata(
+      LogisticsDependencyGateway.CabinPhotoPresentationAssetSnapshot cabin) {
+    try {
+      return new CabinPhotoPresentationMetadataSnapshot(
+          cabin.dimensions(),
+          cabin.finishing(),
+          cabin.category(),
+          cabin.characteristics(),
+          cabin.linoleum());
+    } catch (IllegalArgumentException exception) {
+      throw dependencyMismatch("Asset-service returned invalid photo-presentation metadata");
     }
   }
 
@@ -294,6 +319,15 @@ public class CabinPhotoPresentationService {
     }
   }
 
+  private String writeMetadata(CabinPhotoPresentationMetadataSnapshot metadata) {
+    try {
+      return json.writeValueAsString(metadata);
+    } catch (JacksonException exception) {
+      throw new IllegalArgumentException(
+          "Photo presentation metadata cannot be serialized", exception);
+    }
+  }
+
   private List<CabinPhotoPresentationPhotoSnapshot> readPhotos(
       CabinPhotoPresentation presentation) {
     try {
@@ -302,6 +336,17 @@ public class CabinPhotoPresentationService {
           new TypeReference<List<CabinPhotoPresentationPhotoSnapshot>>() {});
     } catch (JacksonException exception) {
       throw new IllegalStateException("Stored photo presentation snapshot is corrupt", exception);
+    }
+  }
+
+  private CabinPhotoPresentationMetadataSnapshot readMetadata(
+      CabinPhotoPresentation presentation) {
+    try {
+      return json.readValue(
+          presentation.getMetadataSnapshotJson(),
+          CabinPhotoPresentationMetadataSnapshot.class);
+    } catch (JacksonException | IllegalArgumentException exception) {
+      throw new IllegalStateException("Stored photo presentation metadata is corrupt", exception);
     }
   }
 

@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import {
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -26,6 +27,11 @@ import { PublicCabinPhotoPresentationPage } from "@/features/rental-items/public
 const presentation: PublicCabinPhotoPresentation = {
   id: "11111111-1111-4111-8111-111111111111",
   cabinNumber: "БЫТ-001",
+  dimensions: "6 × 2,4 м",
+  finishing: "ПВХ",
+  category: "Обычная",
+  characteristics: ["Пластиковое окно", "Электрика + УЗО"],
+  linoleum: true,
   createdAt: "2026-08-24T12:00:00Z",
   photos: [
     {
@@ -73,7 +79,7 @@ afterEach(() => {
 })
 
 describe("public cabin photo presentation", () => {
-  it("shows only the cabin number and immutable photo snapshot", async () => {
+  it("shows the allowed immutable cabin details without RWMS or private fields", async () => {
     renderPage()
 
     expect(
@@ -90,12 +96,20 @@ describe("public cabin photo presentation", () => {
     expect(images[1]?.getAttribute("src")).toBe(
       "/api/logistics/public/photo-2-small"
     )
+    expect(screen.getByText("6 × 2,4 м")).toBeTruthy()
+    expect(screen.getByText("ПВХ")).toBeTruthy()
+    expect(screen.getByText("Обычная")).toBeTruthy()
+    expect(screen.getByText("Пластиковое окно")).toBeTruthy()
+    expect(screen.getByText("Электрика + УЗО")).toBeTruthy()
+    expect(screen.getByText("Да")).toBeTruthy()
+    expect(screen.queryByText("RWMS")).toBeNull()
     expect(screen.queryByText(/склад/i)).toBeNull()
+    expect(screen.queryByText(/статус/i)).toBeNull()
     expect(screen.queryByText(/арендатор/i)).toBeNull()
     expect(screen.queryByText(/паспорт/i)).toBeNull()
   })
 
-  it("opens the large photo and supports next navigation", async () => {
+  it("opens a true fullscreen large photo with zoom and next navigation", async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -103,13 +117,52 @@ describe("public cabin photo presentation", () => {
       await screen.findByRole("button", { name: "Открыть фото 1 из 2" })
     )
     const viewer = screen.getByRole("dialog")
+    expect(viewer.className).toContain("!inset-0")
+    expect(
+      within(viewer).getByLabelText("Область масштабирования фотографии")
+        .className
+    ).toContain("h-svh")
     expect(
       within(viewer)
         .getByRole("img", { name: "Бытовка БЫТ-001, фото 1 из 2" })
         .getAttribute("src")
     ).toBe("/api/logistics/public/photo-1-large")
 
-    await user.click(screen.getByRole("button", { name: "Следующее фото" }))
+    await user.click(screen.getByRole("button", { name: "Увеличить фото" }))
+    expect(
+      screen.getByRole("button", { name: "Сбросить масштаб" }).textContent
+    ).toBe("150%")
+    const stage = within(viewer).getByLabelText(
+      "Область масштабирования фотографии"
+    )
+    Object.defineProperty(stage, "clientWidth", { value: 1000 })
+    Object.defineProperty(stage, "clientHeight", { value: 800 })
+    fireEvent.pointerDown(stage, {
+      pointerId: 1,
+      pointerType: "mouse",
+      button: 0,
+      clientX: 100,
+      clientY: 100,
+    })
+    fireEvent.pointerMove(stage, {
+      pointerId: 1,
+      pointerType: "mouse",
+      clientX: 180,
+      clientY: 150,
+    })
+    expect(
+      within(viewer).getByRole("img", {
+        name: "Бытовка БЫТ-001, фото 1 из 2",
+      }).style.transform
+    ).toContain("translate3d(80px, 50px, 0)")
+    fireEvent.pointerUp(stage, {
+      pointerId: 1,
+      pointerType: "mouse",
+      clientX: 180,
+      clientY: 150,
+    })
+
+    fireEvent.keyDown(viewer, { key: "ArrowRight" })
 
     await waitFor(() =>
       expect(
@@ -117,6 +170,18 @@ describe("public cabin photo presentation", () => {
           .getByRole("img", { name: "Бытовка БЫТ-001, фото 2 из 2" })
           .getAttribute("src")
       ).toBe("/api/logistics/public/photo-2-large")
+    )
+    expect(
+      screen.getByRole("button", { name: "Сбросить масштаб" }).textContent
+    ).toBe("100%")
+
+    fireEvent.keyDown(viewer, { key: "ArrowLeft" })
+    await waitFor(() =>
+      expect(
+        within(viewer)
+          .getByRole("img", { name: "Бытовка БЫТ-001, фото 1 из 2" })
+          .getAttribute("src")
+      ).toBe("/api/logistics/public/photo-1-large")
     )
     expect(
       screen.getByRole("button", { name: "Закрыть просмотр" })

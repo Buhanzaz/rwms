@@ -62,6 +62,11 @@ describe("cabin photo presentation API", () => {
         JSON.stringify({
           id: "44444444-4444-4444-8444-444444444444",
           cabinNumber: "БЫТ-001",
+          dimensions: "6 × 2,4 м",
+          finishing: "ПВХ",
+          category: "Обычная",
+          characteristics: ["Пластиковое окно"],
+          linoleum: true,
           createdAt: "2026-08-24T12:00:00Z",
           photos: [],
         }),
@@ -70,7 +75,8 @@ describe("cabin photo presentation API", () => {
     )
     vi.stubGlobal("fetch", fetchMock)
 
-    await getPublicCabinPhotoPresentation("token/with spaces")
+    const presentation =
+      await getPublicCabinPhotoPresentation("token/with spaces")
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(new URL(url).pathname).toBe(
@@ -78,5 +84,14 @@ describe("cabin photo presentation API", () => {
     )
     expect(new Headers(init.headers).has("Authorization")).toBe(false)
     expect(new Headers(init.headers).get("Accept")).toBe("application/json")
+    expect(presentation).toEqual(
+      expect.objectContaining({
+        dimensions: "6 × 2,4 м",
+        finishing: "ПВХ",
+        category: "Обычная",
+        characteristics: ["Пластиковое окно"],
+        linoleum: true,
+      })
+    )
   })
 })

@@ -93,6 +93,15 @@ final class AssetLogisticsService {
     return mapper.toLogisticsSnapshot(projections.response(rentals.require(id)));
   }
 
+  /**
+   * Reads the exact cabin version and only the display metadata that logistics may freeze into a
+   * public photo presentation.
+   */
+  LogisticsCabinPhotoPresentationSnapshot photoPresentationSnapshot(UUID id) {
+    RentalItem item = rentals.require(id);
+    return mapper.toPhotoPresentationSnapshot(item, projections.composition(item));
+  }
+
   AssetService.CreateResult<LogisticsOperationLeaseResponse> acquireLease(
       UUID subjectId, UUID key, AcquireLogisticsOperationLeaseRequest request) {
     String hash = json.hash(request);

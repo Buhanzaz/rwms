@@ -94,3 +94,8 @@ var V15 []byte
 //
 //go:embed V16__client_image_variants.sql
 var V16 []byte
+
+// V17 contains the immutable legacy CABIN-photo folder consolidation bytes.
+//
+//go:embed V17__consolidate_legacy_cabin_photo_folders.sql
+var V17 []byte

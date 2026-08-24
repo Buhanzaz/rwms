@@ -70,6 +70,27 @@ Evidence:
 and
 [`asset OpenAPI`](../../contracts/openapi/asset-service.yaml).
 
+### Cabin photo presentations
+
+[`asset-service.yaml`](../../contracts/openapi/asset-service.yaml) owns the
+least-privilege private photo-presentation snapshot used by logistics. It carries the exact cabin
+identity/version/warehouse fence, number, dimensions, finishing, category, ordered characteristic
+names and nullable linoleum; status, rental type, passport JSON, comments, tags and equipment do
+not cross that boundary.
+
+[`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml) owns creation and public
+resolution of the immutable non-expiring presentation. Logistics freezes the allowlisted asset
+snapshot together with the ordered media references. Its anonymous response exposes only those
+five display fields, cabin number, creation time and presentation-scoped image URLs; old rows use
+null catalog values, an empty characteristic list and null linoleum. Warehouse, status, rental
+type, actor, client, passport, versions and object-storage locators remain private.
+
+Evidence:
+[`asset private controller`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/api/LogisticsAssetController.java),
+[`logistics presentation owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/photo/CabinPhotoPresentationService.java),
+and
+[`V56 metadata snapshot`](../../services/logistics-service/src/main/resources/db/migration/V56__cabin_photo_presentation_metadata.sql).
+
 ### Driver Task Audience And Document Tasks
 
 The logistics HTTP contract carries an optional opaque `driverWorkerId` only

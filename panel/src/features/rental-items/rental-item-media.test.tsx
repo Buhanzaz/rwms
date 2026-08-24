@@ -396,6 +396,9 @@ function CurrentInventoryFolderHarness() {
       <span data-testid="current-photo-ids">
         {rentalItemMedia.photos.map((photo) => photo.id).join(",")}
       </span>
+      <span data-testid="archive-photo-ids">
+        {rentalItemMedia.archivePhotos.map((photo) => photo.id).join(",")}
+      </span>
       <span data-testid="current-photo-count">
         {rentalItemMedia.logicalPhotoCount}
       </span>
@@ -703,6 +706,9 @@ describe("rental item media", () => {
     )
     expect(screen.getByTestId("inventory-folder-photo-ids").textContent).toBe(
       `${NEW_ASSET_ID},${FIRST_ACTIVE_ASSET_ID},${LAST_ACTIVE_ASSET_ID}`
+    )
+    expect(screen.getByTestId("archive-photo-ids").textContent).toBe(
+      `${NEW_ASSET_ID},${ASSET_ID},${FIRST_ACTIVE_ASSET_ID},${LAST_ACTIVE_ASSET_ID}`
     )
     expect(screen.getByTestId("current-photo-count").textContent).toBe("3")
     expect(screen.getByTestId("archive-folder-count").textContent).toBe("2")

@@ -90,10 +90,12 @@ func TestBoundedProcessingRecoveryMigrationTreatsAmbiguousDLTAsLegacyIntegration
 		"V15__inventory_finding_membership_markers.sql", mediamigration.V15)
 	applyResidualMigration(t, ctx, pool, 18, "16", "client image variants",
 		"V16__client_image_variants.sql", mediamigration.V16)
+	applyResidualMigration(t, ctx, pool, 19, "17", "consolidate legacy cabin photo folders",
+		"V17__consolidate_legacy_cabin_photo_folders.sql", mediamigration.V17)
 	pool.Close()
 	database, err := Open(ctx, databaseURL)
 	if err != nil {
-		t.Fatalf("open upgraded V16 ambiguous database: %v", err)
+		t.Fatalf("open upgraded V17 ambiguous database: %v", err)
 	}
 	database.Close()
 }

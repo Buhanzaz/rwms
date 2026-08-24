@@ -116,13 +116,14 @@ Flyway выполняется вне процесса. До запуска пр�
 `db/migration/V13__authoritative_inventory_cabin_photos.sql`, затем
 `db/migration/V14__task_board_reader_audience.sql`, затем
 `db/migration/V15__inventory_finding_membership_markers.sql`, затем
-`db/migration/V16__client_image_variants.sql`.
+`db/migration/V16__client_image_variants.sql`, затем
+`db/migration/V17__consolidate_legacy_cabin_photo_folders.sql`.
 
 Go-приложение не выполняет миграции, baseline, repair и не принимает молча
 чужую непустую базу.
 
-- Новая local/test база мигрируется от V1 до V16.
-- База на V15 применяет V16. V14 добавляет и backfill-ит
+- Новая local/test база мигрируется от V1 до V17.
+- База на V16 применяет V17. V14 добавляет и backfill-ит
   task-entry read audience без удаления owner proofs, media rows или объектов.
   V15 заменяет только `media_inventory_finding_inbox_check2`: канонические
   departed, refreshed и restored membership markers принимаются с null
@@ -130,7 +131,11 @@ Go-приложение не выполняет миграции, baseline, repa
   меняются. V16 добавляет metadata image-bundle session/part, помечает все
   существующие sessions как `SOURCE` и разрешает `ORIGINAL` и `LARGE`
   ссылаться на один immutable object; существующие media не переписываются и
-  не удаляются.
+  не удаляются. V17 объединяет только однофотографийные `BACKFILL` associations
+  каждой бытовки в одну legacy archive folder и обновляет cover-folder pointer.
+  Она не удаляет media, association или object, сохраняет исходные
+  `media_asset.folder_id` и не меняет inventory, direct-upload и task-evidence
+  folders.
 - `baselineOnMigrate` должен оставаться `false`; непустая база без истории
   миграций отклоняется.
 - На старте и readiness проверяются успешные строки Flyway, их версии,
@@ -234,8 +239,9 @@ return/shipment/transfer. Все они авторизуются по local owne
 каноническая обложка, затем остальные изображения в стабильном association
 order; на каждое логическое изображение приходится ровно один `SMALL` variant.
 Границы папок остаются в CABIN archive read. Приватный logistics snapshot
-по-прежнему ограничен активной gallery folder, использует тот же cover-first
-presentation order и возвращает позиции с нуля. MEDIUM, LARGE, ORIGINAL и
+включает все сохранённые READY изображения из этих folders, использует тот же
+cover-first presentation order и возвращает позиции с нуля. Выбор обложки
+меняет порядок, но не состав. MEDIUM, LARGE, ORIGINAL и
 координаты object storage публичная projection не выдаёт. CABIN owner read через
 `GET /api/media/v1/assets` остаётся полным архивом: его projected `folderId`
 берётся из CABIN association, поэтому фотографии инвентаризации образуют одну
@@ -308,9 +314,12 @@ backfill-ит association folders из `media_asset.folder_id`, активную
 state. Миграция не обновляет и не удаляет `media_asset`, `media_variant` или
 данные object store. В полном CABIN archive inventory associations используют
 derived folder; текущие cover/previews и logistics current presentation
-используют только активную folder и ставят её явную обложку первой.
+включают все сохранённые READY folders и ставят явную обложку первой.
 Существующие direct и task-evidence associations остаются в истории, а выбор
 task evidence также выбирает его собственную association folder.
+[`V17__consolidate_legacy_cabin_photo_folders.sql`](db/migration/V17__consolidate_legacy_cabin_photo_folders.sql)
+объединяет только дорефакторинговые `BACKFILL` associations в одну legacy folder
+на бытовку; границы inventory и runtime folders не меняются.
 
 ## Приватный импорт assets из Yandex.Disk
 
@@ -452,9 +461,10 @@ event/outbox/Kafka consumer и не вызывает object storage.
 `POST /api/internal/media/v1/logistics/cabin-presentations/snapshots` использует
 ту же точную SERVICE identity/scope. Он принимает от одного до ста уникальных
 CABIN ID одного warehouse и возвращает только current canonical bindings и
-READY/current image references
-`{mediaId,generation,sortOrder,availableVariants}`. Нет browser path,
-object-store coordinates, signed URL, filename, MIME type или processing data.
+все сохранённые READY/current images из всех folders как references
+`{mediaId,generation,sortOrder,availableVariants}`, начиная с обложки. Нет
+browser path, object-store coordinates, signed URL, filename, MIME type или
+processing data.
 
 `GET /api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content`
 — парный private byte stream. `variant` ровно `SMALL` или `LARGE`; в запросе

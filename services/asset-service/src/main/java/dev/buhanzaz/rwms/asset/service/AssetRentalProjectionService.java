@@ -124,6 +124,12 @@ final class AssetRentalProjectionService {
     return response(item, cabinComposition.compositionsFor(List.of(item)).get(item.getId()));
   }
 
+  /** Returns the catalog-name composition used by a narrow service-to-service read projection. */
+  CabinCompositionService.CabinComposition composition(RentalItem item) {
+    if (item == null) throw new IllegalArgumentException("Rental item is required");
+    return cabinComposition.compositionsFor(List.of(item)).get(item.getId());
+  }
+
   RentalItemResponse response(
       RentalItem item, CabinCompositionService.CabinComposition composition) {
     ActiveOrderReservationResponse activeOrderReservation =

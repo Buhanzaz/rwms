@@ -14,7 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestAuthoritativeInventoryCabinPhotosCleanV1ThroughV16Integration(t *testing.T) {
+func TestAuthoritativeInventoryCabinPhotosCleanV1ThroughV17Integration(t *testing.T) {
 	databaseURL := os.Getenv("MEDIA_TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("MEDIA_TEST_DATABASE_URL is not configured")
@@ -269,6 +269,19 @@ func TestAuthoritativeInventoryCabinPhotosV12ToV13BackfillIntegration(t *testing
 		pool.Close()
 		t.Fatalf("record V16 history: %v", err)
 	}
+	started = time.Now()
+	if _, err := pool.Exec(ctx, string(mediamigration.V17)); err != nil {
+		pool.Close()
+		t.Fatalf("apply V17 upgrade: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
+		installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
+	values (19,'17','consolidate legacy cabin photo folders','SQL',
+		'V17__consolidate_legacy_cabin_photo_folders.sql',$1,current_user,$2,true)`,
+		flywayChecksum(mediamigration.V17), int(time.Since(started)/time.Millisecond)); err != nil {
+		pool.Close()
+		t.Fatalf("record V17 history: %v", err)
+	}
 	pool.Close()
 	if galleryFolderID != folderID || activeFolderID != folderID {
 		t.Fatalf("V13 folder backfill = gallery:%s active:%s, want %s",
@@ -276,7 +289,7 @@ func TestAuthoritativeInventoryCabinPhotosV12ToV13BackfillIntegration(t *testing
 	}
 	verified, err := Open(ctx, databaseURL)
 	if err != nil {
-		t.Fatalf("Open(V16-complete upgrade) error = %v", err)
+		t.Fatalf("Open(V17-complete upgrade) error = %v", err)
 	}
 	verified.Close()
 }
@@ -343,12 +356,14 @@ func assertCurrentInventoryFolderAndArchive(
 		}); err != nil || len(presentation) != 1 ||
 		presentation[0].CoverMediaID == nil ||
 		*presentation[0].CoverMediaID != secondAsset.ID ||
-		len(presentation[0].Photos) != 2 ||
+		len(presentation[0].Photos) != 3 ||
 		presentation[0].Photos[0].MediaID != secondAsset.ID ||
 		presentation[0].Photos[0].SortOrder != 0 ||
-		presentation[0].Photos[1].MediaID != firstAsset.ID ||
-		presentation[0].Photos[1].SortOrder != 1 {
-		t.Fatalf("current inventory presentation = %#v error=%v", presentation, err)
+		presentation[0].Photos[1].MediaID != directAsset.ID ||
+		presentation[0].Photos[1].SortOrder != 1 ||
+		presentation[0].Photos[2].MediaID != firstAsset.ID ||
+		presentation[0].Photos[2].SortOrder != 2 {
+		t.Fatalf("full archive presentation = %#v error=%v", presentation, err)
 	}
 	var archive []AssetWithVariants
 	if err := repository.ReadOwnerAssets(ctx, OwnerTypeCabin, cabinID.String(),

@@ -2666,6 +2666,44 @@ class LogisticsFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void v56AddsEmptyMetadataToExistingPhotoPresentationsAndValidatesJpa() {
+    Flyway beforeV56 = configuration(MIGRATIONS).target("55").load();
+    assertThat(beforeV56.migrate().migrationsExecuted).isEqualTo(55);
+    UUID presentationId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into cabin_photo_presentation(
+          id,version,cabin_id,cabin_number,warehouse_id,rental_item_version,
+          created_by_subject_id,idempotency_key,request_sha256,photo_snapshot_json,created_at)
+        values (?,0,?,'БК-055',?,7,?,?,?,'[{}]'::jsonb,clock_timestamp())
+        """,
+        presentationId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "a".repeat(64));
+
+    Flyway upgraded = configuration(MIGRATIONS).target("56").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select metadata_snapshot_json::text from cabin_photo_presentation where id=?",
+                String.class,
+                presentationId))
+        .isEqualTo("{}");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update cabin_photo_presentation set metadata_snapshot_json='[]'::jsonb where id=?",
+                    presentationId))
+        .hasMessageContaining("ck_cabin_photo_presentation_metadata_snapshot");
+    assertJpaValidationStarts();
+  }
+
+  @Test
   void modifiedAppliedMigrationIsRejectedByChecksumValidation(@TempDir Path directory)
       throws IOException {
     Path migration = directory.resolve("V1__logistics_schema.sql");

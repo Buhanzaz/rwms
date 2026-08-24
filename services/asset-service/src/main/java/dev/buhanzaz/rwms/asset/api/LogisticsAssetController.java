@@ -42,6 +42,14 @@ public class LogisticsAssetController {
     return service.logisticsSnapshot(id);
   }
 
+  /** Returns only the cabin metadata approved for an immutable public photo presentation. */
+  @GetMapping("/rental-items/{id}/photo-presentation-snapshot")
+  public LogisticsCabinPhotoPresentationSnapshot photoPresentationSnapshot(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID id) {
+    access.requireLogisticsAssetAccess(jwt);
+    return service.logisticsPhotoPresentationSnapshot(id);
+  }
+
   @GetMapping("/equipment-availability")
   public List<EquipmentWarehouseResponse> equipmentAvailability(
       @AuthenticationPrincipal Jwt jwt, @RequestParam UUID warehouseId) {

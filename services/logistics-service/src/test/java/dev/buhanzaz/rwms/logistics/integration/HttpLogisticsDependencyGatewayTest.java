@@ -91,6 +91,52 @@ class HttpLogisticsDependencyGatewayTest {
   }
 
   @Test
+  void readsOnlyTheDedicatedCabinPhotoPresentationSnapshot() {
+    UUID assetId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    server
+        .expect(
+            requestTo(
+                "http://asset.test/api/internal/asset/v1/logistics/rental-items/"
+                    + assetId
+                    + "/photo-presentation-snapshot"))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "assetId":"%s",
+                  "version":4,
+                  "warehouseId":"%s",
+                  "number":"БК-004",
+                  "dimensions":"2.4x6",
+                  "finishing":"ДВП",
+                  "category":"Обычная",
+                  "characteristics":["Пластиковое окно","Электрика КК"],
+                  "linoleum":true
+                }
+                """
+                    .formatted(assetId, warehouseId),
+                MediaType.APPLICATION_JSON));
+
+    LogisticsDependencyGateway.CabinPhotoPresentationAssetSnapshot snapshot =
+        gateway.readCabinPhotoPresentationSnapshot(assetId);
+
+    assertThat(snapshot.assetId()).isEqualTo(assetId);
+    assertThat(snapshot.version()).isEqualTo(4);
+    assertThat(snapshot.warehouseId()).isEqualTo(warehouseId);
+    assertThat(snapshot.number()).isEqualTo("БК-004");
+    assertThat(snapshot.dimensions()).isEqualTo("2.4x6");
+    assertThat(snapshot.finishing()).isEqualTo("ДВП");
+    assertThat(snapshot.category()).isEqualTo("Обычная");
+    assertThat(snapshot.characteristics())
+        .containsExactly("Пластиковое окно", "Электрика КК");
+    assertThat(snapshot.linoleum()).isTrue();
+    server.verify();
+  }
+
+  @Test
   void usesTheExactAssetScopeAndTypedReturnLeasePayload() {
     UUID key = UUID.randomUUID();
     UUID assetId = UUID.randomUUID();

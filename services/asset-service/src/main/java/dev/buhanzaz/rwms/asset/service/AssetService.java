@@ -74,6 +74,14 @@ public class AssetService {
     return logistics.snapshot(id);
   }
 
+  /**
+   * Returns the least-privilege immutable input for a logistics-owned public photo presentation.
+   */
+  @Transactional(readOnly = true)
+  public LogisticsCabinPhotoPresentationSnapshot logisticsPhotoPresentationSnapshot(UUID id) {
+    return logistics.photoPresentationSnapshot(id);
+  }
+
   @Transactional
   public CreateResult<LogisticsOperationLeaseResponse> acquireLogisticsLease(
       UUID subjectId, UUID key, AcquireLogisticsOperationLeaseRequest request) {

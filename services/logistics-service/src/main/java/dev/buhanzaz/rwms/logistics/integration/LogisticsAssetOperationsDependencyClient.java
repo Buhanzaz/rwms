@@ -9,10 +9,11 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Private asset-service client for logistics effects, leases, holds, and equipment movements.
+ * Private asset-service client for logistics effects, leases, holds, equipment movements and
+ * least-privilege rental-item snapshots.
  *
  * <p>This client owns the validation that fences logistics writes against the asset-service
- * responses. It has no order-reservation or presentation workflow knowledge.
+ * responses. It has no order-reservation or presentation command orchestration.
  */
 final class LogisticsAssetOperationsDependencyClient {
   private static final String ASSET_CLIENT = "logistics-asset";
@@ -37,6 +38,39 @@ final class LogisticsAssetOperationsDependencyClient {
             "Dependency returned an empty response",
             DEFAULT);
     return snapshot(response);
+  }
+
+  /** Reads the dedicated asset-owned input for one immutable public photo presentation. */
+  CabinPhotoPresentationAssetSnapshot readCabinPhotoPresentationSnapshot(UUID assetId) {
+    CabinPhotoPresentationSnapshotResponse response =
+        transport.get(
+            assetBase + "/rental-items/" + assetId + "/photo-presentation-snapshot",
+            CabinPhotoPresentationSnapshotResponse.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE,
+            "Dependency returned an empty response",
+            DEFAULT);
+    if (response == null
+        || response.assetId() == null
+        || response.version() < 0
+        || response.warehouseId() == null
+        || response.number() == null
+        || response.number().isBlank()
+        || response.characteristics() == null
+        || response.characteristics().stream()
+            .anyMatch(value -> value == null || value.isBlank())) {
+      throw malformed("Asset-service returned an invalid photo-presentation snapshot");
+    }
+    return new CabinPhotoPresentationAssetSnapshot(
+        response.assetId(),
+        response.version(),
+        response.warehouseId(),
+        response.number(),
+        response.dimensions(),
+        response.finishing(),
+        response.category(),
+        List.copyOf(response.characteristics()),
+        response.linoleum());
   }
 
   OperationLease acquireReturnLease(
@@ -677,6 +711,18 @@ final class LogisticsAssetOperationsDependencyClient {
       String number,
       String status,
       List<EquipmentContentResponse> contents) {}
+
+  /** Wire-only response for the dedicated asset photo-presentation snapshot endpoint. */
+  private record CabinPhotoPresentationSnapshotResponse(
+      UUID assetId,
+      long version,
+      UUID warehouseId,
+      String number,
+      String dimensions,
+      String finishing,
+      String category,
+      List<String> characteristics,
+      Boolean linoleum) {}
 
   /**
    * Lease-acquisition command that binds one logistics document line to an expected rental-item

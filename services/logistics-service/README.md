@@ -234,13 +234,18 @@ the requested item/generation/variant belongs to that presentation; this is not 
 
 An EDIT-authorized manager creates a cabin photo presentation through
 `POST /api/logistics/v1/cabins/{cabinId}/photo-presentations` with the current asset version and a
-stable idempotency key. Logistics rechecks warehouse access and the asset-owned cabin fence, freezes
-one to 100 READY image IDs/generations in order, and returns a non-expiring signed public path.
+stable idempotency key. Logistics rechecks warehouse access and the asset-owned cabin fence through
+the dedicated asset photo-presentation snapshot, then freezes dimensions, finishing, category,
+ordered characteristic names, nullable linoleum and one to 100 READY image IDs/generations in order
+before returning a non-expiring signed public path.
 Anonymous metadata and SMALL/LARGE media reads are limited to
 `/api/logistics/public/v1/cabin-photo-presentations/{token}/**`; the response contains only the cabin
-number, creation time and immutable photo references. Media bytes remain private and are proxied only
-after token, snapshot membership, generation and variant validation. Exact command replay returns the
-same presentation, while reusing its idempotency key for different input is a conflict.
+number, those five allowlisted display fields, creation time and immutable photo references. It never
+contains warehouse, status, rental type or unrestricted passport data. Pre-V56 presentations remain
+readable with null catalog fields, an empty characteristics list and null linoleum. Media bytes remain
+private and are proxied only after token, snapshot membership, generation and variant validation.
+Exact command replay returns the same presentation, while reusing its idempotency key for different
+input is a conflict.
 
 ## Internal application structure
 
@@ -251,7 +256,7 @@ facade delegates every interface operation:
 | Owner client | Private boundary |
 | --- | --- |
 | `LogisticsWarehouseDependencyClient` | Warehouse identity, admission, timezone and lifecycle |
-| `LogisticsAssetOperationsDependencyClient` | Rental snapshots, leases, fenced effects, equipment holds and movements |
+| `LogisticsAssetOperationsDependencyClient` | Rental and photo-presentation snapshots, leases, fenced effects, equipment holds and movements |
 | `LogisticsAssetOrderPresentationDependencyClient` | Order units, reservations, cabin availability/search and presentation holds |
 | `LogisticsMaintenanceDependencyClient` | Transfer repair, estimate source, capital repair and repair-place calls |
 | `LogisticsMediaDependencyClient` | Media validation, owner proof, evidence, snapshots and binary presentation media |
@@ -445,6 +450,12 @@ Migration
 adds the logistics-owned immutable photo snapshot, subject-scoped idempotency uniqueness and bounded
 JSON/photo-count checks. It contains no expiry column and neither copies media bytes nor changes
 existing cabin, client, order or document rows.
+
+Migration
+[`V56__cabin_photo_presentation_metadata.sql`](src/main/resources/db/migration/V56__cabin_photo_presentation_metadata.sql)
+adds one required immutable metadata JSON snapshot. Existing presentation rows receive the empty
+object and therefore remain readable with null/empty public metadata; the migration does not query
+asset-service, rewrite photo membership or introduce a live mutable projection.
 
 Logistics commits facts, projection checkpoints and a transactional outbox together. Kafka delivery
 is at-least-once: aggregate IDs are record keys, event IDs are dedupe identities, and consumers retain

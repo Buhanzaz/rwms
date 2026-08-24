@@ -115,12 +115,13 @@ Flyway is external to this process. Apply
 `db/migration/V13__authoritative_inventory_cabin_photos.sql`, then
 `db/migration/V14__task_board_reader_audience.sql`, then
 `db/migration/V15__inventory_finding_membership_markers.sql`, then
-`db/migration/V16__client_image_variants.sql` before starting
+`db/migration/V16__client_image_variants.sql`, then
+`db/migration/V17__consolidate_legacy_cabin_photo_folders.sql` before starting
 the service. The Go application never migrates, baselines, repairs or silently
 adopts a database.
 
-- New local/test databases migrate through V1 to V16.
-- A database already at V15 applies V16. V14 adds
+- New local/test databases migrate through V1 to V17.
+- A database already at V16 applies V17. V14 adds
   and backfills the task-entry read audience without deleting owner proofs,
   media rows or objects. V15 replaces only
   `media_inventory_finding_inbox_check2`: canonical departed, refreshed and
@@ -128,7 +129,11 @@ adopts a database.
   existing inbox rows, owner proofs and media data remain unchanged. V16 adds
   image-bundle session/part metadata, defaults every existing session to
   `SOURCE`, and permits `ORIGINAL` and `LARGE` rows to reference the same
-  immutable object; it does not rewrite or delete existing media.
+  immutable object; it does not rewrite or delete existing media. V17 groups
+  only the one-photo `BACKFILL` associations of each cabin into one legacy
+  archive folder and refreshes the cover-folder pointer. It deletes no media,
+  association or object, preserves source `media_asset.folder_id` values, and
+  leaves inventory, direct-upload and task-evidence folders unchanged.
 - `baselineOnMigrate` must remain `false`; a non-empty unversioned database is
   rejected.
 - Startup verifies both successful Flyway history rows, their versions,
@@ -234,8 +239,9 @@ is determined by the binding checkpoint and quarantine state.
 at most 100 READY archive images, with the explicit canonical cover first and
 the remaining images in stable association order, and exactly one `SMALL`
 variant per logical image. Folder boundaries stay in the CABIN archive read.
-The private logistics snapshot remains limited to the active gallery folder,
-uses the same cover-first presentation order and returns zero-based presentation positions.
+The private logistics snapshot includes every retained READY image across those
+folders, uses the same cover-first presentation order and returns zero-based
+presentation positions. Selecting a cover changes ordering, not membership.
 MEDIUM, LARGE, ORIGINAL and object-store locations are never returned by the
 public projection. A CABIN owner read through `GET /api/media/v1/assets`
 remains the full archive: its projected `folderId` comes from the CABIN
@@ -308,10 +314,13 @@ backfills association folders from `media_asset.folder_id`, backfills the
 active folder from the existing cover, and adds inventory receipt, watermark
 and source-audit state. It does not update or delete `media_asset`,
 `media_variant` or object-store data. Inventory associations use the derived
-folder in the full CABIN archive; current cover/previews and logistics current
-presentation use only the active folder and put that folder's explicit cover
-first. Existing direct and task-evidence associations stay in history, and
-selecting task evidence also selects its own association folder.
+folder in the full CABIN archive. Current cover/previews and the private
+logistics presentation include every retained READY folder and put the explicit
+cover first. Existing direct and task-evidence associations stay in history,
+and selecting task evidence also selects its own association folder.
+[`V17__consolidate_legacy_cabin_photo_folders.sql`](db/migration/V17__consolidate_legacy_cabin_photo_folders.sql)
+consolidates only pre-library `BACKFILL` associations into one legacy folder per
+cabin; inventory and runtime folder boundaries remain unchanged.
 
 ## Private Yandex.Disk asset imports
 
@@ -450,9 +459,10 @@ storage call is made.
 `POST /api/internal/media/v1/logistics/cabin-presentations/snapshots` uses the
 same exact SERVICE identity and scope. It accepts one to one hundred unique
 CABIN IDs for one warehouse and returns only current canonical bindings plus
-READY/current image `{mediaId,generation,sortOrder,availableVariants}`
-references. No browser path, object-store coordinate, signed URL, filename,
-MIME type or processing data is returned.
+every retained READY/current image across all folders as
+`{mediaId,generation,sortOrder,availableVariants}` references, with the cover
+first. No browser path, object-store coordinate, signed URL, filename, MIME
+type or processing data is returned.
 
 `GET /api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content`
 is the paired private byte stream. `variant` is exactly `SMALL` or `LARGE`; the

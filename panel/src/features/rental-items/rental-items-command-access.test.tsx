@@ -9,7 +9,16 @@ import {
 import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest"
 
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 
@@ -141,6 +150,39 @@ vi.mock("@/features/write-offs/property-disposition-create-dialog", () => ({
 
 import { RentalItemDetailPage } from "@/features/rental-items/rental-item-detail-page"
 import { RentalItemsPage } from "@/features/rental-items/rental-items-page"
+
+beforeAll(() => {
+  class ResizeObserverMock {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  class IntersectionObserverMock {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+
+  vi.stubGlobal("ResizeObserver", ResizeObserverMock)
+  vi.stubGlobal("IntersectionObserver", IntersectionObserverMock)
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener() {},
+      removeListener() {},
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent: () => false,
+    }))
+  )
+})
+
+afterAll(() => {
+  vi.unstubAllGlobals()
+})
 
 function rentalItem(overrides: Partial<RentalItemDto> = {}): RentalItemDto {
   return {
@@ -827,6 +869,85 @@ describe("rental item command access", () => {
         }
       )
     )
+  })
+
+  it("keeps every retained photo visible in the cabin passport across folders", async () => {
+    const coverMediaId = "66666666-6666-4666-8666-666666666666"
+    const archivedMediaId = "77777777-7777-4777-8777-777777777777"
+    mediaApi.listOwnerMedia.mockResolvedValue({
+      items: [
+        {
+          id: archivedMediaId,
+          folderId: "88888888-8888-4888-8888-888888888888",
+          fileName: "archive.jpg",
+          contentType: "image/jpeg",
+          kind: "IMAGE",
+          status: "READY",
+          version: 1,
+          generation: 1,
+          rotationDegrees: 0,
+          sortOrder: 0,
+          sizeBytes: 1024,
+          createdAt: "2026-08-23T11:00:00Z",
+          variants: [
+            {
+              kind: "MEDIUM",
+              contentType: "image/jpeg",
+              contentPath: "/private/archive-medium.jpg",
+              width: 1200,
+              height: 900,
+            },
+          ],
+        },
+        {
+          id: coverMediaId,
+          folderId: "99999999-9999-4999-8999-999999999999",
+          fileName: "cover.jpg",
+          contentType: "image/jpeg",
+          kind: "IMAGE",
+          status: "READY",
+          version: 2,
+          generation: 1,
+          rotationDegrees: 0,
+          sortOrder: 1,
+          sizeBytes: 1024,
+          createdAt: "2026-08-24T11:00:00Z",
+          variants: [
+            {
+              kind: "MEDIUM",
+              contentType: "image/jpeg",
+              contentPath: "/private/cover-medium.jpg",
+              width: 1200,
+              height: 900,
+            },
+          ],
+        },
+      ],
+      next: null,
+    })
+    mediaApi.listCabinCovers.mockResolvedValue({
+      items: [
+        {
+          cabinId: RENTAL_ITEM_ID,
+          photoCount: 2,
+          cover: {
+            mediaId: coverMediaId,
+            generation: 1,
+            kind: "SMALL",
+            contentType: "image/webp",
+            contentPath: "/private/cover-small.webp",
+            width: 360,
+            height: 240,
+          },
+          previews: [],
+        },
+      ],
+    })
+
+    renderDetail(`/warehouse/${RENTAL_ITEM_ID}`)
+
+    expect(await screen.findByAltText("Фото 1 из 2")).toBeTruthy()
+    expect(screen.getByAltText("Фото 2 из 2")).toBeTruthy()
   })
 
   it("creates, copies and immediately opens an immutable photo presentation", async () => {

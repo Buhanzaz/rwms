@@ -1920,7 +1920,9 @@ paths:
     post:
       operationId: createCabinPhotoPresentation
       description: >-
-        Creates an immutable, non-expiring public snapshot of the cabin's current READY images.
+        Creates an immutable, non-expiring public snapshot of the cabin's current READY images and
+        allowlisted asset-owned display metadata: dimensions, finishing, category, ordered
+        characteristic names and nullable linoleum.
         The caller must have rwms.write and EDIT access to the supplied warehouse. Logistics
         verifies the current asset identity, warehouse and expected version before asking
         media-service for presentation-safe opaque references. The response never exposes an
@@ -1980,8 +1982,11 @@ paths:
       operationId: getPublicCabinPhotoPresentation
       description: >-
         Resolves one non-expiring immutable photo snapshot. It exposes only the cabin number,
-        creation time and presentation-scoped image URLs; warehouse, actor, asset version and
-        object-store details remain private.
+        dimensions, finishing, category, ordered characteristic names, nullable linoleum, creation
+        time and presentation-scoped image URLs. Warehouse, status, rental type, actor, asset
+        version, unrestricted passport and object-store details remain private. Presentations
+        created before metadata snapshots return null catalog fields, an empty characteristics
+        list and null linoleum.
       responses:
         "200":
           description: Public no-store cabin photo presentation.
@@ -4758,10 +4763,19 @@ components:
     PublicCabinPhotoPresentation:
       type: object
       additionalProperties: false
-      required: [id, cabinNumber, createdAt, photos]
+      required:
+        [id, cabinNumber, dimensions, finishing, category, characteristics, linoleum, createdAt, photos]
       properties:
         id: { type: string, format: uuid }
         cabinNumber: { type: string, minLength: 1, maxLength: 128 }
+        dimensions: { type: [string, "null"], minLength: 1, maxLength: 255 }
+        finishing: { type: [string, "null"], minLength: 1, maxLength: 255 }
+        category: { type: [string, "null"], minLength: 1, maxLength: 255 }
+        characteristics:
+          type: array
+          maxItems: 100
+          items: { type: string, minLength: 1, maxLength: 255 }
+        linoleum: { type: [boolean, "null"] }
         createdAt: { type: string, format: date-time }
         photos:
           type: array

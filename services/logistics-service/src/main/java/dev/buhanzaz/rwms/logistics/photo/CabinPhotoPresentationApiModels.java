@@ -32,10 +32,18 @@ public final class CabinPhotoPresentationApiModels {
       String thumbnailUrl,
       String contentUrl) {}
 
-  /** Anonymous metadata view that deliberately excludes warehouse, actor and asset version. */
+  /**
+   * Anonymous allowlisted view that excludes warehouse, actor, asset version, status, rental type
+   * and the unrestricted cabin passport.
+   */
   public record PublicCabinPhotoPresentationResponse(
       UUID id,
       String cabinNumber,
+      String dimensions,
+      String finishing,
+      String category,
+      List<String> characteristics,
+      Boolean linoleum,
       OffsetDateTime createdAt,
       List<CabinPhotoPresentationPhotoResponse> photos) {}
 }

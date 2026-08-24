@@ -147,7 +147,10 @@ contexts and screens are usable.
   every `INVENTORY`/`MEDIA` dossier page independently from History-tab filters;
   unavailable provenance stays explicitly unknown instead of being guessed.
   The archive also follows every media cursor instead of stopping after the
-  first 100 associations.
+  first 100 associations. The folder ID comes from the media-owned CABIN
+  association, so consolidated legacy photos open together while inventory and
+  later upload batches remain separate; selecting a cover changes ordering but
+  never removes another folder from the passport carousel or archive.
   Repair task details keep the task's aggregate media, each work line's source
   media, and task-board result evidence in separate exact-reference galleries.
   Only each work-line gallery uses a compact carousel with an in-image photo count and
@@ -187,11 +190,16 @@ contexts and screens are usable.
   idempotent logistics command freezes the current READY photo set; after a
   successful response the panel starts copying the absolute public link and
   immediately opens its `/photos/{token}` route. That route is outside the
-  authenticated React subtree and renders only the cabin number, creation time,
-  photo count and immutable image grid with an accessible large-image dialog.
-  It never exposes warehouse, client, passport or storage-locator fields. See
+  authenticated React subtree and renders the cabin number, dimensions,
+  finishing, category, characteristics, nullable linoleum, creation time, photo
+  count and immutable image grid. It has no RWMS brand. A photo opens at full
+  viewport size with 1x-5x button/wheel/pinch zoom, drag panning and
+  previous/next controls. Left/Right always changes the photo, including while
+  zoomed; Up/Down can pan a zoomed photo. It never exposes warehouse, status, rental type,
+  client, passport, actor, version or storage-locator fields. See
   the [photo-presentation client](src/features/rental-items/cabin-photo-presentations-api.ts)
-  and [public page](src/features/rental-items/public-cabin-photo-presentation-page.tsx).
+  [public page](src/features/rental-items/public-cabin-photo-presentation-page.tsx),
+  and [fullscreen viewer](src/components/media/fullscreen-photo-viewer.tsx).
 - The panel may combine independent public reads for a screen, but it must not
   orchestrate cross-service business workflows in the browser.
 

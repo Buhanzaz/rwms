@@ -245,13 +245,17 @@ signed presentation token, его revision и current viewability. Media access 
 
 Менеджер с правом EDIT создаёт фото-представление бытовки через
 `POST /api/logistics/v1/cabins/{cabinId}/photo-presentations` с текущей asset version и стабильным
-idempotency key. Logistics повторно проверяет доступ к складу и asset-owned fence бытовки,
-замораживает по порядку от одного до 100 READY image ID/generation и возвращает бессрочный signed
-public path. Anonymous metadata и SMALL/LARGE media reads ограничены маршрутами
-`/api/logistics/public/v1/cabin-photo-presentations/{token}/**`; ответ содержит только номер бытовки,
-время создания и неизменяемые ссылки на фото. Media bytes остаются приватными и проксируются лишь
-после проверки token, membership в snapshot, generation и variant. Exact replay команды возвращает
-то же представление, а повтор idempotency key с другими входными данными завершается conflict.
+idempotency key. Logistics повторно проверяет доступ к складу и asset-owned fence бытовки через
+отдельный asset photo-presentation snapshot, затем замораживает габариты, отделку, категорию,
+упорядоченные названия характеристик, nullable-линолеум и по порядку от одного до 100 READY image
+ID/generation, после чего возвращает бессрочный signed public path. Anonymous metadata и SMALL/LARGE
+media reads ограничены маршрутами `/api/logistics/public/v1/cabin-photo-presentations/{token}/**`;
+ответ содержит только номер бытовки, эти пять allowlisted display fields, время создания и
+неизменяемые ссылки на фото. В нём никогда нет warehouse, status, rental type или unrestricted
+passport data. Pre-V56 представления остаются читаемыми с null catalog fields, пустым списком
+characteristics и null linoleum. Media bytes остаются приватными и проксируются лишь после проверки
+token, membership в snapshot, generation и variant. Exact replay команды возвращает то же
+представление, а повтор idempotency key с другими входными данными завершается conflict.
 
 ## Внутренняя структура приложения
 
@@ -262,7 +266,7 @@ port. Его неизменённый constructor собирает шесть ow
 | Owner client | Private boundary |
 | --- | --- |
 | `LogisticsWarehouseDependencyClient` | Warehouse identity, admission, timezone и lifecycle |
-| `LogisticsAssetOperationsDependencyClient` | Rental snapshots, leases, fenced effects, equipment holds и movements |
+| `LogisticsAssetOperationsDependencyClient` | Rental и photo-presentation snapshots, leases, fenced effects, equipment holds и movements |
 | `LogisticsAssetOrderPresentationDependencyClient` | Order units, reservations, cabin availability/search и presentation holds |
 | `LogisticsMaintenanceDependencyClient` | Transfer repair, estimate source, capital repair и repair-place calls |
 | `LogisticsMediaDependencyClient` | Media validation, owner proof, evidence, snapshots и binary presentation media |
@@ -457,6 +461,12 @@ Migration
 добавляет logistics-owned неизменяемый photo snapshot, subject-scoped уникальность idempotency и
 ограничения JSON/числа фото. В ней нет expiry column; media bytes не копируются, а существующие строки
 бытовок, клиентов, заказов и документов не изменяются.
+
+Миграция
+[`V56__cabin_photo_presentation_metadata.sql`](src/main/resources/db/migration/V56__cabin_photo_presentation_metadata.sql)
+добавляет один обязательный неизменяемый metadata JSON snapshot. Существующие строки представлений
+получают пустой объект и поэтому остаются читаемыми с null/empty public metadata; миграция не
+обращается к asset-service, не переписывает membership фотографий и не создаёт live mutable projection.
 
 Logistics вместе фиксирует facts, projection checkpoints и transactional outbox. Kafka delivery —
 at-least-once: aggregate IDs являются record keys, event IDs — dedupe identities, а consumers хранят

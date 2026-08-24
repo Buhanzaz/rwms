@@ -1,25 +1,11 @@
 import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import {
-  ArrowLeft01Icon,
-  ArrowRight01Icon,
-  Camera01Icon,
-  Cancel01Icon,
-  Image01Icon,
-} from "@hugeicons/core-free-icons"
+import { Camera01Icon, Image01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { useParams } from "react-router-dom"
 
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+import { FullscreenPhotoViewer } from "@/components/media/fullscreen-photo-viewer"
 import { Skeleton } from "@/components/ui/skeleton"
 import { getPublicCabinPhotoPresentation } from "@/features/rental-items/cabin-photo-presentations-api"
 import { ApiError } from "@/lib/api-client"
@@ -51,6 +37,15 @@ export function PublicCabinPhotoPresentationPage() {
       ),
     [presentationQuery.data?.photos]
   )
+  const viewerPhotos = useMemo(
+    () =>
+      photos.map((photo, index) => ({
+        id: `${photo.mediaId}:${photo.generation}`,
+        src: photo.contentUrl,
+        alt: `Бытовка ${presentationQuery.data?.cabinNumber ?? ""}, фото ${index + 1} из ${photos.length}`,
+      })),
+    [photos, presentationQuery.data?.cabinNumber]
+  )
 
   if (presentationQuery.isPending) return <PhotoPresentationSkeleton />
   if (presentationQuery.isError || !presentationQuery.data) {
@@ -72,29 +67,25 @@ export function PublicCabinPhotoPresentationPage() {
     )
   }
   const createdAt = formatCreatedAt(presentation.createdAt)
-  const selectedPhoto =
-    viewerIndex === null ? null : (photos[viewerIndex] ?? null)
-
-  function showPrevious() {
-    setViewerIndex((current) =>
-      current === null ? null : (current - 1 + photos.length) % photos.length
-    )
-  }
-
-  function showNext() {
-    setViewerIndex((current) =>
-      current === null ? null : (current + 1) % photos.length
-    )
-  }
+  const details = [
+    ["Габариты", presentation.dimensions],
+    ["Отделка", presentation.finishing],
+    ["Категория", presentation.category],
+    [
+      "Линолеум",
+      presentation.linoleum === null
+        ? null
+        : presentation.linoleum
+          ? "Да"
+          : "Нет",
+    ],
+  ].filter((detail): detail is [string, string] => detail[1] !== null)
 
   return (
     <main className="min-h-svh bg-muted/30 text-foreground">
       <header className="border-b bg-background/95 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-5 sm:px-6 lg:px-8">
           <div className="min-w-0">
-            <p className="text-xs font-semibold tracking-[0.16em] text-primary uppercase">
-              RWMS
-            </p>
             <h1 className="truncate text-xl font-semibold sm:text-2xl">
               Фотографии бытовки {presentation.cabinNumber}
             </h1>
@@ -110,6 +101,40 @@ export function PublicCabinPhotoPresentationPage() {
           </Badge>
         </div>
       </header>
+
+      {details.length > 0 || presentation.characteristics.length > 0 ? (
+        <section
+          aria-label="Характеристики бытовки"
+          className="mx-auto max-w-7xl px-4 pt-6 sm:px-6 lg:px-8"
+        >
+          <div className="rounded-xl border bg-card p-4 shadow-sm sm:p-5">
+            <dl className="grid gap-x-8 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
+              {details.map(([label, value]) => (
+                <div key={label} className="min-w-0">
+                  <dt className="text-xs text-muted-foreground">{label}</dt>
+                  <dd className="mt-0.5 text-sm font-medium break-words">
+                    {value}
+                  </dd>
+                </div>
+              ))}
+              {presentation.characteristics.length > 0 ? (
+                <div className="min-w-0 sm:col-span-2 lg:col-span-4">
+                  <dt className="text-xs text-muted-foreground">
+                    Характеристики
+                  </dt>
+                  <dd className="mt-2 flex flex-wrap gap-2">
+                    {presentation.characteristics.map((characteristic) => (
+                      <Badge key={characteristic} variant="outline">
+                        {characteristic}
+                      </Badge>
+                    ))}
+                  </dd>
+                </div>
+              ) : null}
+            </dl>
+          </div>
+        </section>
+      ) : null}
 
       <section
         aria-label={`Фотографии бытовки ${presentation.cabinNumber}`}
@@ -138,89 +163,16 @@ export function PublicCabinPhotoPresentationPage() {
         ))}
       </section>
 
-      <Dialog
-        open={selectedPhoto !== null}
+      <FullscreenPhotoViewer
+        photos={viewerPhotos}
+        open={viewerIndex !== null}
+        activeIndex={viewerIndex ?? 0}
+        title={`Фотографии бытовки ${presentation.cabinNumber}`}
+        onActiveIndexChange={setViewerIndex}
         onOpenChange={(open) => {
           if (!open) setViewerIndex(null)
         }}
-      >
-        <DialogContent
-          className="max-h-[94svh] max-w-[min(96vw,90rem)] overflow-hidden bg-black p-0 text-white"
-          showCloseButton={false}
-          onKeyDown={(event) => {
-            if (photos.length < 2) return
-            if (event.key === "ArrowLeft") {
-              event.preventDefault()
-              showPrevious()
-            }
-            if (event.key === "ArrowRight") {
-              event.preventDefault()
-              showNext()
-            }
-          }}
-        >
-          <DialogHeader className="sr-only">
-            <DialogTitle>
-              Фотографии бытовки {presentation.cabinNumber}
-            </DialogTitle>
-            <DialogDescription>
-              Полноэкранный просмотр. Используйте стрелки для перелистывания.
-            </DialogDescription>
-          </DialogHeader>
-          {selectedPhoto ? (
-            <div className="relative flex h-[86svh] items-center justify-center p-4 sm:p-10">
-              <DialogClose asChild>
-                <Button
-                  type="button"
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label="Закрыть просмотр"
-                  className="absolute top-3 right-3 z-10 rounded-full bg-black/55 text-white hover:bg-black/75 hover:text-white"
-                >
-                  <HugeiconsIcon icon={Cancel01Icon} aria-hidden="true" />
-                </Button>
-              </DialogClose>
-              <img
-                src={selectedPhoto.contentUrl}
-                alt={`Бытовка ${presentation.cabinNumber}, фото ${(viewerIndex ?? 0) + 1} из ${photos.length}`}
-                width={1920}
-                height={1440}
-                className="max-h-full max-w-full object-contain"
-              />
-              {photos.length > 1 ? (
-                <>
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    aria-label="Предыдущее фото"
-                    className="absolute left-3 rounded-full bg-black/55 text-white hover:bg-black/75 hover:text-white"
-                    onClick={showPrevious}
-                  >
-                    <HugeiconsIcon icon={ArrowLeft01Icon} aria-hidden="true" />
-                  </Button>
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    aria-label="Следующее фото"
-                    className="absolute right-3 rounded-full bg-black/55 text-white hover:bg-black/75 hover:text-white"
-                    onClick={showNext}
-                  >
-                    <HugeiconsIcon icon={ArrowRight01Icon} aria-hidden="true" />
-                  </Button>
-                </>
-              ) : null}
-              <span
-                aria-live="polite"
-                className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-black/65 px-3 py-1 text-xs font-medium backdrop-blur"
-              >
-                {(viewerIndex ?? 0) + 1} / {photos.length}
-              </span>
-            </div>
-          ) : null}
-        </DialogContent>
-      </Dialog>
+      />
     </main>
   )
 }
@@ -230,7 +182,6 @@ function PhotoPresentationSkeleton() {
     <main className="min-h-svh bg-muted/30">
       <header className="border-b bg-background">
         <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-5 sm:px-6 lg:px-8">
-          <Skeleton className="h-3 w-16" />
           <Skeleton className="h-7 w-72 max-w-full" />
           <Skeleton className="h-4 w-56 max-w-full" />
         </div>

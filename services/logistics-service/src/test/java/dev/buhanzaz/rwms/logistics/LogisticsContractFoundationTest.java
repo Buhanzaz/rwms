@@ -163,6 +163,27 @@ class LogisticsContractFoundationTest {
             "LogisticsLine",
             "ReconcileRequest");
     Map<String, Object> schemas = child(child(document, "components"), "schemas");
+    Map<String, Object> publicPhotoPresentation =
+        child(schemas, "PublicCabinPhotoPresentation");
+    assertThat((List<String>) publicPhotoPresentation.get("required"))
+        .containsExactly(
+            "id",
+            "cabinNumber",
+            "dimensions",
+            "finishing",
+            "category",
+            "characteristics",
+            "linoleum",
+            "createdAt",
+            "photos");
+    assertThat(child(publicPhotoPresentation, "properties"))
+        .doesNotContainKeys(
+            "warehouseId",
+            "status",
+            "rentalType",
+            "passport",
+            "createdBySubjectId",
+            "rentalItemVersion");
     Map<String, Object> logisticsDocument = child(schemas, "LogisticsDocument");
     assertThat((List<String>) logisticsDocument.get("required"))
         .contains("scheduledDate")

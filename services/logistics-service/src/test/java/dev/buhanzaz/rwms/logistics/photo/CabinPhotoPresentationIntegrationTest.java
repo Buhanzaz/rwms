@@ -92,7 +92,8 @@ class CabinPhotoPresentationIntegrationTest {
   void resetState() {
     jdbc.execute("truncate table cabin_photo_presentation");
     reset(dependencies);
-    when(dependencies.readRentalItemSnapshot(CABIN)).thenReturn(cabin(WAREHOUSE, CABIN_VERSION));
+    when(dependencies.readCabinPhotoPresentationSnapshot(CABIN))
+        .thenReturn(cabin(WAREHOUSE, CABIN_VERSION));
     when(dependencies.readCabinMediaSnapshots(WAREHOUSE, List.of(CABIN)))
         .thenReturn(List.of(media(List.of("SMALL", "LARGE"))));
     when(dependencies.readCabinPresentationMedia(WAREHOUSE, CABIN, PHOTO, 3, "SMALL"))
@@ -130,7 +131,7 @@ class CabinPhotoPresentationIntegrationTest {
         .andExpect(content().json(firstBody));
 
     assertThat(rowCount()).isOne();
-    verify(dependencies, times(1)).readRentalItemSnapshot(CABIN);
+    verify(dependencies, times(1)).readCabinPhotoPresentationSnapshot(CABIN);
     verify(dependencies, times(1)).readCabinMediaSnapshots(WAREHOUSE, List.of(CABIN));
   }
 
@@ -146,7 +147,7 @@ class CabinPhotoPresentationIntegrationTest {
         .andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
 
     assertThat(rowCount()).isOne();
-    verify(dependencies, never()).readRentalItemSnapshot(any());
+    verify(dependencies, never()).readCabinPhotoPresentationSnapshot(any());
     verify(dependencies, never()).readCabinMediaSnapshots(any(), any());
   }
 
@@ -165,14 +166,14 @@ class CabinPhotoPresentationIntegrationTest {
         .andExpect(status().isCreated());
 
     assertThat(rowCount()).isEqualTo(2);
-    verify(dependencies, times(2)).readRentalItemSnapshot(CABIN);
+    verify(dependencies, times(2)).readCabinPhotoPresentationSnapshot(CABIN);
   }
 
   @Test
   void concurrentExactCreatesConvergeToOneSnapshotAndOneReplay() throws Exception {
     UUID key = UUID.randomUUID();
     CountDownLatch bothRequestsReachedAsset = new CountDownLatch(2);
-    when(dependencies.readRentalItemSnapshot(CABIN))
+    when(dependencies.readCabinPhotoPresentationSnapshot(CABIN))
         .thenAnswer(
             ignored -> {
               bothRequestsReachedAsset.countDown();
@@ -208,7 +209,7 @@ class CabinPhotoPresentationIntegrationTest {
 
   @Test
   void staleVersionAndWrongWarehouseAreRejectedWithoutPersistingSnapshots() throws Exception {
-    when(dependencies.readRentalItemSnapshot(CABIN))
+    when(dependencies.readCabinPhotoPresentationSnapshot(CABIN))
         .thenReturn(cabin(WAREHOUSE, CABIN_VERSION + 1));
     mockMvc
         .perform(create(UUID.randomUUID(), WAREHOUSE, CABIN_VERSION))
@@ -217,7 +218,7 @@ class CabinPhotoPresentationIntegrationTest {
     verify(dependencies, never()).readCabinMediaSnapshots(any(), any());
 
     reset(dependencies);
-    when(dependencies.readRentalItemSnapshot(CABIN))
+    when(dependencies.readCabinPhotoPresentationSnapshot(CABIN))
         .thenReturn(cabin(OTHER_WAREHOUSE, CABIN_VERSION));
     mockMvc
         .perform(create(UUID.randomUUID(), WAREHOUSE, CABIN_VERSION))
@@ -272,9 +273,18 @@ class CabinPhotoPresentationIntegrationTest {
         .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")))
         .andExpect(jsonPath("$.id").value(created.get("id").stringValue()))
         .andExpect(jsonPath("$.cabinNumber").value("БК-007"))
+        .andExpect(jsonPath("$.dimensions").value("2.4x6"))
+        .andExpect(jsonPath("$.finishing").value("ДВП"))
+        .andExpect(jsonPath("$.category").value("Обычная"))
+        .andExpect(jsonPath("$.characteristics[0]").value("Пластиковое окно"))
+        .andExpect(jsonPath("$.characteristics[1]").value("Электрика КК"))
+        .andExpect(jsonPath("$.linoleum").value(true))
         .andExpect(jsonPath("$.warehouseId").doesNotExist())
         .andExpect(jsonPath("$.rentalItemVersion").doesNotExist())
         .andExpect(jsonPath("$.createdBySubjectId").doesNotExist())
+        .andExpect(jsonPath("$.status").doesNotExist())
+        .andExpect(jsonPath("$.rentalType").doesNotExist())
+        .andExpect(jsonPath("$.passport").doesNotExist())
         .andExpect(jsonPath("$.photos[0].mediaId").value(PHOTO.toString()))
         .andExpect(jsonPath("$.photos[0].generation").value(3))
         .andExpect(jsonPath("$.photos[0].sortOrder").value(2))
@@ -330,6 +340,42 @@ class CabinPhotoPresentationIntegrationTest {
         .andExpect(status().isNotFound());
     verify(dependencies, times(1))
         .readCabinPresentationMedia(WAREHOUSE, CABIN, PHOTO, 3, "LARGE");
+    verify(dependencies, times(1)).readCabinPhotoPresentationSnapshot(CABIN);
+
+    JsonNode storedMetadata =
+        json.readTree(
+            jdbc.queryForObject(
+                "select metadata_snapshot_json::text from cabin_photo_presentation where id=?",
+                String.class,
+                UUID.fromString(created.get("id").stringValue())));
+    assertThat(storedMetadata.propertyNames())
+        .containsExactlyInAnyOrder(
+            "dimensions", "finishing", "category", "characteristics", "linoleum");
+  }
+
+  @Test
+  void presentationsCreatedBeforeMetadataSnapshotsRemainReadableWithEmptyMetadata()
+      throws Exception {
+    MvcResult result =
+        mockMvc
+            .perform(create(UUID.randomUUID(), WAREHOUSE, CABIN_VERSION))
+            .andExpect(status().isCreated())
+            .andReturn();
+    JsonNode created = json.readTree(result.getResponse().getContentAsByteArray());
+    UUID presentationId = UUID.fromString(created.get("id").stringValue());
+    String token = created.get("publicPath").stringValue().substring("/photos/".length());
+    jdbc.update(
+        "update cabin_photo_presentation set metadata_snapshot_json='{}'::jsonb where id=?",
+        presentationId);
+
+    mockMvc
+        .perform(get("/api/logistics/public/v1/cabin-photo-presentations/{token}", token))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.dimensions").value(org.hamcrest.Matchers.nullValue()))
+        .andExpect(jsonPath("$.finishing").value(org.hamcrest.Matchers.nullValue()))
+        .andExpect(jsonPath("$.category").value(org.hamcrest.Matchers.nullValue()))
+        .andExpect(jsonPath("$.characteristics").isEmpty())
+        .andExpect(jsonPath("$.linoleum").value(org.hamcrest.Matchers.nullValue()));
   }
 
   @Test
@@ -383,7 +429,7 @@ class CabinPhotoPresentationIntegrationTest {
         .andExpect(status().isForbidden());
 
     assertThat(rowCount()).isZero();
-    verify(dependencies, never()).readRentalItemSnapshot(any());
+    verify(dependencies, never()).readCabinPhotoPresentationSnapshot(any());
   }
 
   private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder create(
@@ -425,10 +471,18 @@ class CabinPhotoPresentationIntegrationTest {
         .formatted(warehouseId, expectedVersion);
   }
 
-  private static LogisticsDependencyGateway.RentalItemSnapshot cabin(
+  private static LogisticsDependencyGateway.CabinPhotoPresentationAssetSnapshot cabin(
       UUID warehouseId, long version) {
-    return new LogisticsDependencyGateway.RentalItemSnapshot(
-        CABIN, version, warehouseId, "БК-007", "FREE", List.of());
+    return new LogisticsDependencyGateway.CabinPhotoPresentationAssetSnapshot(
+        CABIN,
+        version,
+        warehouseId,
+        "БК-007",
+        "2.4x6",
+        "ДВП",
+        "Обычная",
+        List.of("Пластиковое окно", "Электрика КК"),
+        true);
   }
 
   private static LogisticsDependencyGateway.CabinMediaSnapshot media(List<String> variants) {

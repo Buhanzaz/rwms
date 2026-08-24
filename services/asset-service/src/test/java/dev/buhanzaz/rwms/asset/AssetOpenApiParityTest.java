@@ -66,6 +66,7 @@ class AssetOpenApiParityTest {
         "/api/internal/asset/v1/maintenance/rental-items/{rentalItemId}/characteristics/{characteristicId}",
         "/api/internal/asset/v1/maintenance/rental-items/{id}/fenced-status",
         "/api/internal/asset/v1/logistics/rental-items/{id}/snapshot",
+        "/api/internal/asset/v1/logistics/rental-items/{id}/photo-presentation-snapshot",
         "/api/internal/asset/v1/logistics/equipment-availability",
         "/api/internal/asset/v1/logistics/operation-leases",
         "/api/internal/asset/v1/logistics/return-equipment-receipts",
@@ -497,6 +498,28 @@ class AssetOpenApiParityTest {
             "identityMatchKey",
             "equipmentCode",
             "locationKind");
+    Map<String, Object> photoPresentationSnapshot =
+        child(schemas, "LogisticsCabinPhotoPresentationSnapshot");
+    assertThat(list(photoPresentationSnapshot.get("required")))
+        .containsExactly(
+            "assetId",
+            "version",
+            "warehouseId",
+            "number",
+            "dimensions",
+            "finishing",
+            "category",
+            "characteristics",
+            "linoleum");
+    assertThat(photoPresentationSnapshot.toString())
+        .doesNotContain(
+            "status",
+            "rentalType",
+            "passport",
+            "comment",
+            "contents",
+            "tags",
+            "client");
     assertThat(child(schemas, "LogisticsFencedEffectRequest").toString())
         .doesNotContain("RentalItemStatus", "status=");
     assertThat(list(child(schemas, "TransferAssetStatus").get("enum")))

@@ -896,7 +896,7 @@ export function RentalItemDetailPage() {
       <section className="shrink-0 overflow-hidden rounded-lg border bg-card">
         <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(22rem,26rem)] xl:grid-cols-[minmax(0,1fr)_minmax(26rem,30rem)]">
           <PhotoCarousel
-            photos={media.photos}
+            photos={media.archivePhotos}
             item={rentalItem}
             loading={media.isLoading}
             photoCount={media.logicalPhotoCount}

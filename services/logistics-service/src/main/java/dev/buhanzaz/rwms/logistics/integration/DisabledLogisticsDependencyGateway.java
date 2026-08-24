@@ -55,6 +55,11 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
   }
 
   @Override
+  public CabinPhotoPresentationAssetSnapshot readCabinPhotoPresentationSnapshot(UUID assetId) {
+    throw unavailable();
+  }
+
+  @Override
   public OperationLease acquireReturnLease(
       UUID idempotencyKey, UUID assetId, long expectedAssetVersion, UUID documentId, UUID lineId) {
     throw unavailable();

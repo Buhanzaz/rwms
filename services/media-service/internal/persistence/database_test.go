@@ -30,6 +30,7 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 	v14 := flywayChecksum(mediamigration.V14)
 	v15 := flywayChecksum(mediamigration.V15)
 	v16 := flywayChecksum(mediamigration.V16)
+	v17 := flywayChecksum(mediamigration.V17)
 	const (
 		flyway124V1      int32 = -1307356325
 		flyway124V2      int32 = -573926044
@@ -49,6 +50,7 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 		flyway124V14     int32 = -2079734905
 		flyway124V15     int32 = 1136570652
 		flyway124V16     int32 = 153703059
+		flyway124V17     int32 = -621987001
 	)
 	if v1 != flyway124V1 || v2 != flyway124V2 || v3 != flyway124V3 || v4 != flyway124V4 ||
 		v4Guard != flyway124V4Guard || v5 != flyway124V5 || v5Guard != flyway124V5Guard ||
@@ -95,6 +97,9 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 			flyway124V16,
 		)
 	}
+	if v17 != flyway124V17 {
+		t.Fatalf("Flyway 12.4 checksum drift: V17=%d (want %d)", v17, flyway124V17)
+	}
 }
 
 func TestVerifyMigrationHistoryAcceptsCanonicalAndOutOfOrderFlywayRanks(t *testing.T) {
@@ -110,7 +115,7 @@ func TestVerifyMigrationHistoryAcceptsCanonicalAndOutOfOrderFlywayRanks(t *testi
 		canonical[0], canonical[1], canonical[2], canonical[3], canonical[5],
 		canonical[4], canonical[6], canonical[7], canonical[8], canonical[9], canonical[10],
 		canonical[11], canonical[12],
-		canonical[13], canonical[14], canonical[15], canonical[16], canonical[17],
+		canonical[13], canonical[14], canonical[15], canonical[16], canonical[17], canonical[18],
 	}
 	if err := verifyMigrationHistory(outOfOrder); err != nil {
 		t.Fatalf("real out-of-order Flyway upgrade history rejected: %v", err)
@@ -231,6 +236,7 @@ func approvedMigrationHistory() []migrationHistoryRow {
 		{"14", "task board reader audience", "V14__task_board_reader_audience.sql", mediamigration.V14},
 		{"15", "inventory finding membership markers", "V15__inventory_finding_membership_markers.sql", mediamigration.V15},
 		{"16", "client image variants", "V16__client_image_variants.sql", mediamigration.V16},
+		{"17", "consolidate legacy cabin photo folders", "V17__consolidate_legacy_cabin_photo_folders.sql", mediamigration.V17},
 	}
 	history := make([]migrationHistoryRow, 0, len(migrations))
 	for _, migration := range migrations {
@@ -462,6 +468,28 @@ func TestClientImageVariantMigrationIsAdditiveAndRetainsSourceUploads(t *testing
 	for _, forbidden := range []string{"drop table", "truncate table", "delete from", "update media_"} {
 		if strings.Contains(sql, forbidden) {
 			t.Errorf("V16 contains destructive or data-rewriting statement %q", forbidden)
+		}
+	}
+}
+
+func TestLegacyCabinPhotoFolderMigrationRetainsEveryPhotoAndInventoryFolder(t *testing.T) {
+	sql := strings.ToLower(string(mediamigration.V17))
+	for _, required := range []string{
+		"association_source='backfill'",
+		"min(gallery_folder_id::text)::uuid",
+		"update media_cabin_photo photo",
+		"update media_cabin_photo_library library",
+		"media_cabin_photo_library_active_cover_folder_fk",
+	} {
+		if !strings.Contains(sql, required) {
+			t.Errorf("V17 does not contain %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"drop table", "truncate table", "delete from", "association_source='inventory'",
+	} {
+		if strings.Contains(sql, forbidden) {
+			t.Errorf("V17 contains destructive or inventory-folder mutation %q", forbidden)
 		}
 	}
 }

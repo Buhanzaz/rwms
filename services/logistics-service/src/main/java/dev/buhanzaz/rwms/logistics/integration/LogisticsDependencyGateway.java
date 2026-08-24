@@ -39,6 +39,9 @@ public interface LogisticsDependencyGateway {
 
   RentalItemSnapshot readRentalItemSnapshot(UUID assetId);
 
+  /** Reads only the current asset fence and display fields allowed in a public photo snapshot. */
+  CabinPhotoPresentationAssetSnapshot readCabinPhotoPresentationSnapshot(UUID assetId);
+
   OperationLease acquireReturnLease(
       UUID idempotencyKey, UUID assetId, long expectedAssetVersion, UUID documentId, UUID lineId);
 
@@ -788,6 +791,21 @@ public interface LogisticsDependencyGateway {
       this(assetId, version, warehouseId, null, status, contents);
     }
   }
+
+  /**
+   * Least-privilege asset-owned input for one immutable public cabin photo presentation. Warehouse
+   * and version are private creation fences and are never mapped to the anonymous response.
+   */
+  record CabinPhotoPresentationAssetSnapshot(
+      UUID assetId,
+      long version,
+      UUID warehouseId,
+      String number,
+      String dimensions,
+      String finishing,
+      String category,
+      List<String> characteristics,
+      Boolean linoleum) {}
 
   record OperationLease(
       UUID leaseId,
