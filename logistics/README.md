@@ -174,6 +174,22 @@ On the current VPS, Nginx publishes the workspace at
 uses `VITE_APP_BASE_PATH=/logistics/` and
 `VITE_API_BASE_URL=/logistics/api`; the backend remains loopback-only.
 
+### VPS-only RWMS bridge
+
+The ordinary Compose file stays self-contained for local use. On the VPS, the
+separate `docker-compose.vps.yml` overlay attaches only `backend` to the
+persistent external `rwms-logistics-private` bridge. Create that bridge once
+with fixed gateway `172.21.0.1`, deploy
+`deploy/nginx-rwms-private-bridge.conf` as an Nginx configuration, and start
+with both Compose files. The Nginx listeners are bound only to that Docker
+gateway and proxy only `/oauth2/token` and
+`/api/internal/logistics/v1/planning/` to loopback-bound RWMS services.
+
+The host firewall must permit TCP from `172.21.0.0/16` only to those two gateway
+listeners. Do not bind the RWMS service ports or this bridge to the public VPS
+address. `deploy/nginx.service.d/rwms-logistics-private-bridge.conf` makes
+Nginx start after Docker so the persistent bridge address exists after reboot.
+
 Useful commands:
 
 ```bash

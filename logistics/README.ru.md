@@ -174,6 +174,22 @@ OpenStreetMap, поэтому занимает несколько минут; с
 использует `VITE_APP_BASE_PATH=/logistics/` и
 `VITE_API_BASE_URL=/logistics/api`; backend остаётся loopback-only.
 
+### Приватный мост RWMS только для VPS
+
+Обычный Compose-файл остаётся самодостаточным для локального запуска. На VPS
+отдельный overlay `docker-compose.vps.yml` подключает только `backend` к
+постоянной внешней Docker-сети `rwms-logistics-private`. Один раз создайте
+сеть с фиксированным gateway `172.21.0.1`, разверните
+`deploy/nginx-rwms-private-bridge.conf` как конфигурацию Nginx и запускайте
+Compose с обоими файлами. Nginx слушает только этот Docker gateway и проксирует
+лишь `/oauth2/token` и `/api/internal/logistics/v1/planning/` к RWMS-сервисам,
+привязанным к loopback.
+
+Firewall хоста должен разрешать TCP только из `172.21.0.0/16` к этим двум
+gateway-listener. Не привязывайте порты RWMS или этот мост к публичному адресу
+VPS. `deploy/nginx.service.d/rwms-logistics-private-bridge.conf` запускает
+Nginx после Docker, поэтому адрес постоянной сети существует и после reboot.
+
 Полезные команды:
 
 ```bash

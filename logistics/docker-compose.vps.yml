@@ -1,0 +1,12 @@
+# VPS-only overlay. It keeps local `docker compose up --build` self-contained
+# while connecting only the simulator backend to a persistent private bridge.
+services:
+  backend:
+    networks:
+      default: {}
+      rwms_private_bridge: {}
+
+networks:
+  rwms_private_bridge:
+    name: rwms-logistics-private
+    external: true
