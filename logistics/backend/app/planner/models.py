@@ -444,6 +444,7 @@ class PlanMetrics:
     unassigned_tasks: int
     assignment_percent: float
     cycle_count: int
+    active_shift_count: int
     total_distance_meters: int
     empty_distance_meters: int
     empty_distance_percent: float
@@ -454,6 +455,7 @@ class PlanMetrics:
     paired_delivery_count: int
     paired_pickup_count: int
     average_vehicle_load: float
+    shift_utilization_percent: float
     overtime_seconds: int
     minimum_buffer_seconds: int
     score: float
@@ -468,7 +470,7 @@ class PlanningSettings:
     max_pickup_stops: int = 2
     deliveries_before_pickups: bool = True
     max_detour_minutes: float = 35.0
-    max_detour_ratio: float = 0.25
+    max_detour_ratio: float = 1.5
     max_candidate_neighbors: int = 8
     default_load_minutes: int = 30
     default_unload_minutes: int = 20
@@ -490,7 +492,9 @@ class PlanningSettings:
     soft_window_violation_penalty: float = 500.0
     overtime_penalty_per_minute: float = 25.0
     waiting_weight: float = 0.25
-    driver_imbalance_weight: float = 0.1
+    additional_resource_activation_penalty: float = 180.0
+    preferred_shift_utilization_percent: float = 80.0
+    driver_workload_weight: float = 3.0
     allow_soft_overtime: bool = False
     soft_overtime_limit_minutes: int = 0
     low_buffer_warning_minutes: int = 20
@@ -525,11 +529,14 @@ class PlanningSettings:
             self.max_detour_minutes,
             self.max_detour_ratio,
             self.max_optimization_seconds,
+            self.preferred_shift_utilization_percent,
         )
         if any(not isfinite(value) for value in finite_limits):
             raise ValueError("planner limits must be finite")
         if self.max_candidate_neighbors < 1:
             raise ValueError("max_candidate_neighbors must be positive")
+        if not 0 < self.preferred_shift_utilization_percent <= 100:
+            raise ValueError("preferred_shift_utilization_percent must be in (0, 100]")
         if self.max_trace_events < 0 or self.trace_sample_rate < 1:
             raise ValueError("trace bounds must be non-negative")
         weights = (
@@ -543,6 +550,8 @@ class PlanningSettings:
             self.unassigned_task_penalty,
             self.last_available_date_penalty,
             self.waiting_weight,
+            self.additional_resource_activation_penalty,
+            self.driver_workload_weight,
         )
         if any(not isfinite(value) or value < 0 for value in weights):
             raise ValueError("planner weights must be finite and non-negative")

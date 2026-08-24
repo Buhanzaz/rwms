@@ -7,6 +7,7 @@ from app.geo.classification import (
     classify_point_in_memory,
     geometry_from_geojson,
     geometry_to_geojson,
+    subtract_polygonal_cutout,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "classify_point_in_memory",
     "geometry_from_geojson",
     "geometry_to_geojson",
+    "subtract_polygonal_cutout",
 ]

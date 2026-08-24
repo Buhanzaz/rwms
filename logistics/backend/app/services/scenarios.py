@@ -293,6 +293,7 @@ async def export_scenario(
                         for option in request.date_options
                     ],
                 ),
+                scheduled_date=request.scheduled_date,
                 zone_id=request.zone_id,
                 zone_version=request.zone_version,
                 zone_classification_status=request.zone_classification_status,
@@ -442,6 +443,7 @@ async def import_scenario(
         shift_ids[shift_item.id] = shift.id
     for request_item in document.requests:
         logistics_request = await create_request(session, scenario.id, request_item.data)
+        logistics_request.scheduled_date = request_item.scheduled_date
         if request_item.zone_id is None:
             logistics_request.zone_id = None
             logistics_request.zone_version = request_item.zone_version
@@ -678,7 +680,7 @@ async def reset_demo_scenario(session: AsyncSession, scenario_id: UUID) -> Scena
                 delivery_pair_allowed=True,
                 pickup_allowed=True,
                 max_detour_minutes=35,
-                max_detour_ratio=0.25,
+                max_detour_ratio=1.5,
                 penalty=0,
                 is_bidirectional=True,
             )

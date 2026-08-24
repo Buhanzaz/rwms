@@ -14,7 +14,7 @@ export type LeftSection =
   | 'ROUTES'
   | 'UNASSIGNED'
   | 'SETTINGS';
-export type MapTool = 'SELECT' | 'PLACE_WAREHOUSE' | 'ADD_DELIVERY' | 'ADD_PICKUP' | 'DRAW_ZONE' | 'EDIT_ZONE' | 'RELATE_ZONES';
+export type MapTool = 'SELECT' | 'PLACE_WAREHOUSE' | 'ADD_DELIVERY' | 'ADD_PICKUP' | 'DRAW_ZONE' | 'CUT_ZONE' | 'EDIT_ZONE' | 'RELATE_ZONES';
 
 export interface LayerVisibility {
   base: boolean;

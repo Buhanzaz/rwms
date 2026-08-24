@@ -4,7 +4,7 @@ import type { ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ShiftInput, ZoneInput } from '../src/api/client';
 import { Inspector } from '../src/app/Inspector';
-import { ShiftDialog, ZoneDialog } from '../src/components/EntityDialogs';
+import { RelationDialog, ShiftDialog, ZoneDialog } from '../src/components/EntityDialogs';
 import { DEFAULT_PLANNING_SETTINGS } from '../src/domain/defaults';
 import type {
   Driver,
@@ -39,6 +39,14 @@ const zone: Zone = {
   stale_request_count: 1,
   created_at: '2026-08-20T08:00:00Z',
   updated_at: '2026-08-22T08:00:00Z',
+};
+
+const eastZone: Zone = {
+  ...zone,
+  id: 'zone-z2',
+  name: 'Восточная зона',
+  code: 'Z2',
+  route_group: 'EAST',
 };
 
 const drivers: Driver[] = [
@@ -91,6 +99,7 @@ function requestFixture(overrides: Partial<LogisticsRequest>): LogisticsRequest 
     notes: '',
     created_at: '2026-08-20T08:00:00Z',
     updated_at: '2026-08-22T08:00:00Z',
+    scheduled_date: null,
     date_options: [{ date: '2026-08-25', priority: 1, window_start: '09:00', window_end: '11:00', is_hard: true }],
     zone_status: 'CURRENT',
     ...overrides,
@@ -147,7 +156,8 @@ function inspectorProps(workspace: ScenarioWorkspace): ComponentProps<typeof Ins
     onSimulationOverride: () => undefined,
     planningDate: '2026-08-25',
     onPlanningDateChange: () => undefined,
-    onAgreeRequestDate: () => undefined,
+    onScheduleRequestDate: () => undefined,
+    onUnscheduleRequest: () => undefined,
   };
 }
 
@@ -156,6 +166,17 @@ afterEach(() => {
 });
 
 describe('zone editor', () => {
+  it('offers a dedicated inner-cutout map tool', async () => {
+    const user = userEvent.setup();
+    const onSetMapTool = vi.fn<ComponentProps<typeof Inspector>['onSetMapTool']>();
+    useUiStore.setState({ section: 'ZONES' });
+
+    render(<Inspector {...inspectorProps(workspaceFixture())} onSetMapTool={onSetMapTool} />);
+
+    await user.click(screen.getByRole('button', { name: 'Сделать вырез' }));
+    expect(onSetMapTool).toHaveBeenCalledWith('CUT_ZONE');
+  });
+
   it('submits a newly drawn bare GeoJSON geometry and explicit lock state', async () => {
     const user = userEvent.setup();
     const submit = vi.fn<(input: ZoneInput) => Promise<void>>(() => Promise.resolve());
@@ -182,6 +203,38 @@ describe('zone editor', () => {
     expect(submit.mock.calls[0]?.[0].geometry).not.toHaveProperty('geometry');
   });
 
+  it('prefills and submits the separate zone created inside a cutout', async () => {
+    const user = userEvent.setup();
+    const submit = vi.fn<(input: ZoneInput) => Promise<void>>(() => Promise.resolve());
+    render(
+      <ZoneDialog
+        geometry={polygon}
+        initialValues={{ name: 'Западная зона · внутренняя 1', code: 'Z1-IN1', route_group: 'WEST', priority: 11, locked: false }}
+        title="Новая зона внутри Z1"
+        description="Отмена не изменит геометрию."
+        submitLabel="Вырезать и создать зону"
+        busy={false}
+        onClose={() => undefined}
+        onSubmit={submit}
+      />,
+    );
+
+    expect(screen.getByRole('dialog', { name: 'Новая зона внутри Z1' })).toBeVisible();
+    expect(screen.getByLabelText('Название')).toHaveValue('Западная зона · внутренняя 1');
+    expect(screen.getByLabelText('Код')).toHaveValue('Z1-IN1');
+    expect(screen.getByLabelText('Приоритет')).toHaveValue(11);
+    await user.click(screen.getByRole('button', { name: 'Вырезать и создать зону' }));
+
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({
+      name: 'Западная зона · внутренняя 1',
+      code: 'Z1-IN1',
+      route_group: 'WEST',
+      priority: 11,
+      locked: false,
+      geometry: polygon,
+    }));
+  });
+
   it('shows the persisted version and requires an explicit unlock before editing', async () => {
     const user = userEvent.setup();
     const submit = vi.fn<(input: ZoneInput) => Promise<void>>(() => Promise.resolve());
@@ -199,6 +252,35 @@ describe('zone editor', () => {
 
     await waitFor(() => expect(submit).toHaveBeenCalledOnce());
     expect(submit.mock.calls[0]?.[0]).toMatchObject({ name: 'Западная зона — новая', locked: false, geometry: polygon });
+  });
+});
+
+describe('zone relations', () => {
+  it('uses the same full-cycle detour warning thresholds as scenario planning', async () => {
+    const user = userEvent.setup();
+    const submit = vi.fn<ComponentProps<typeof RelationDialog>['onSubmit']>(() => Promise.resolve());
+
+    render(
+      <RelationDialog
+        fromZone={zone}
+        toZone={eastZone}
+        busy={false}
+        onClose={() => undefined}
+        onSubmit={submit}
+      />,
+    );
+
+    expect(screen.getByLabelText('Порог крюка, мин')).toHaveValue(35);
+    expect(screen.getByLabelText('Порог доли крюка')).toHaveValue(1.5);
+    await user.click(screen.getByRole('button', { name: 'Сохранить связь' }));
+
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      from_zone_id: zone.id,
+      to_zone_id: eastZone.id,
+      max_detour_minutes: 35,
+      max_detour_ratio: 1.5,
+    }));
   });
 });
 
@@ -220,10 +302,10 @@ describe('server-owned zone classification', () => {
 
     render(<Inspector {...inspectorProps(workspace)} />);
 
-    expect(screen.getByText('D · Доставка 142')).toBeVisible();
+    expect(screen.getByText('Д · Доставка 142')).toBeVisible();
     expect(screen.getByText(/зона Z1 v1/)).toBeVisible();
     expect(screen.getByText('STALE')).toHaveClass('badge--warning');
-    expect(screen.getByText('P · Вывоз 181')).toBeVisible();
+    expect(screen.getByText('В · Вывоз 181')).toBeVisible();
     expect(screen.getByText(/зона OUTSIDE_ZONES v—/)).toBeVisible();
     expect(screen.getByText('OUTSIDE_ZONES')).toHaveClass('badge--danger');
   });
@@ -238,17 +320,38 @@ describe('request date board', () => {
       requestFixture({ id: 'tomorrow-request', name: 'Завтра', date_options: [{ date: '2026-08-26', priority: 20, window_start: null, window_end: null, is_hard: false }] }),
     ];
     const onPlanningDateChange = vi.fn<ComponentProps<typeof Inspector>['onPlanningDateChange']>();
-    const onAgreeRequestDate = vi.fn<ComponentProps<typeof Inspector>['onAgreeRequestDate']>();
+    const onScheduleRequestDate = vi.fn<ComponentProps<typeof Inspector>['onScheduleRequestDate']>();
     useUiStore.setState({ section: 'REQUESTS' });
 
-    render(<Inspector {...inspectorProps(workspace)} onPlanningDateChange={onPlanningDateChange} onAgreeRequestDate={onAgreeRequestDate} />);
+    render(<Inspector {...inspectorProps(workspace)} onPlanningDateChange={onPlanningDateChange} onScheduleRequestDate={onScheduleRequestDate} />);
 
-    expect(screen.getByText('D · Сегодня')).toBeVisible();
-    expect(screen.queryByText('D · Завтра')).not.toBeInTheDocument();
+    expect(screen.getByText('Д · Сегодня')).toBeVisible();
+    expect(screen.queryByText('Д · Завтра')).not.toBeInTheDocument();
     await user.click(within(screen.getByLabelText('Заявки по допустимым датам')).getByRole('button', { name: /26 августа/i }));
     expect(onPlanningDateChange).toHaveBeenCalledWith('2026-08-26');
-    await user.click(screen.getByRole('button', { name: /Согласовать 25 августа/i }));
-    expect(onAgreeRequestDate).toHaveBeenCalledWith('today-request', '2026-08-25');
+    await user.click(screen.getByRole('button', { name: /Выставить 25 августа/i }));
+    expect(onScheduleRequestDate).toHaveBeenCalledWith('today-request', '2026-08-25', false);
+  });
+
+  it('shows an explicitly scheduled request only on its logistics date', () => {
+    const workspace = workspaceFixture();
+    workspace.requests = [requestFixture({
+      id: 'scheduled-request',
+      name: 'Выбранная дата',
+      scheduled_date: '2026-08-26',
+      date_options: [
+        { date: '2026-08-25', priority: 20, window_start: null, window_end: null, is_hard: false },
+        { date: '2026-08-26', priority: 10, window_start: null, window_end: null, is_hard: false },
+      ],
+    })];
+    useUiStore.setState({ section: 'REQUESTS' });
+
+    const { rerender } = render(<Inspector {...inspectorProps(workspace)} />);
+    expect(screen.queryByText('Д · Выбранная дата')).not.toBeInTheDocument();
+
+    rerender(<Inspector {...inspectorProps(workspace)} planningDate="2026-08-26" />);
+    expect(screen.getByText('Д · Выбранная дата')).toBeVisible();
+    expect(screen.getByText(/Выставлено на 26 августа 2026/)).toBeVisible();
   });
 });
 

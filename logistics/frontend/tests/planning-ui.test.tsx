@@ -15,7 +15,7 @@ function planFixture(): RoutePlan {
       reason_codes: ['TIME_WINDOW_CONFLICT'], reasons: ['временное окно 09:00–11:00 не помещается ни в одну смену'], closest_option: '12:15', recommendations: ['увеличить временное окно'],
     }],
     driver_routes: [{
-      driver_shift_id: 'shift', driver_id: 'driver', driver_name: 'Водитель 1', vehicle_id: 'vehicle', vehicle_name: 'МАЗ', registration_number: 'А123БВ', preferred_route_group: 'WEST', metrics: { ...EMPTY_METRICS },
+      driver_shift_id: 'shift', driver_id: 'driver', driver_name: 'Водитель 1', vehicle_id: 'vehicle', vehicle_name: 'МАЗ', registration_number: 'А123БВ', preferred_route_group: 'WEST', metrics: { ...EMPTY_METRICS, shift_utilization_percent: 67 },
       cycles: [{
         id: 'cycle', route_plan_id: 'plan', driver_shift_id: 'shift', sequence: 1, planned_start: '2026-08-25T05:00:00Z', planned_finish: '2026-08-25T10:00:00Z', total_distance_meters: 146000,
         total_travel_seconds: 12300, total_service_seconds: 6000, empty_distance_meters: 25000, detour_seconds: 1320, score: 12.5, locked: false,
@@ -40,6 +40,7 @@ describe('built plan UI', () => {
     const onSelectDriverRoute = vi.fn<(driverShiftId: string) => void>();
     const { rerender } = render(<PlanPanel plan={plan} timeZone="Europe/Moscow" onSelectCycle={() => undefined} onSelectDriverRoute={onSelectDriverRoute} onMove={() => undefined} onToggleLock={() => undefined} />);
     expect(screen.getByText('Водитель 1')).toBeVisible();
+    expect(screen.getByText(/Нагрузка смены: 67%/)).toBeVisible();
     await user.click(screen.getByRole('button', { name: /Водитель 1/i }));
     expect(onSelectDriverRoute).toHaveBeenCalledWith('shift');
     expect(screen.getByLabelText('Цепочка загрузки цикла 1')).toHaveTextContent('2 → 1 → 0 → 1 → 2 → 0');

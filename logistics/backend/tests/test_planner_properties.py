@@ -136,6 +136,17 @@ def test_generated_plans_preserve_all_hard_route_invariants(
         assert cycle.stops[-1].stop_type is StopType.DEPOT_RETURN
         assert cycle.stops[0].point.coordinates == warehouse.point.coordinates
         assert cycle.stops[-1].point.coordinates == warehouse.point.coordinates
+        delivery_stops = [
+            stop for stop in cycle.stops if stop.stop_type is StopType.DELIVERY
+        ]
+        pickup_stops = [
+            stop for stop in cycle.stops if stop.stop_type is StopType.PICKUP
+        ]
+        assert cycle.stops[0].load_after == sum(
+            -stop.quantity_delta for stop in delivery_stops
+        )
+        assert all(stop.quantity_delta < 0 for stop in delivery_stops)
+        assert all(stop.quantity_delta > 0 for stop in pickup_stops)
         assert all(0 <= stop.load_before <= 2 for stop in cycle.stops)
         assert all(0 <= stop.load_after <= 2 for stop in cycle.stops)
         customer_types = [
@@ -154,4 +165,27 @@ def test_generated_plans_preserve_all_hard_route_invariants(
         if pickup_indexes and delivery_indexes:
             assert max(delivery_indexes) < min(pickup_indexes)
         assigned_ids.extend(cycle.task_ids)
+    driver_customer_cycles: dict[str, list[list[StopType]]] = {}
+    for cycle in result.cycles:
+        driver_customer_cycles.setdefault(cycle.driver_shift_id, []).append(
+            [
+                stop.stop_type
+                for stop in cycle.stops
+                if stop.stop_type in {StopType.DELIVERY, StopType.PICKUP}
+            ]
+        )
+    for customer_cycles in driver_customer_cycles.values():
+        for customer_types in customer_cycles:
+            pickup_indexes = [
+                index
+                for index, stop_type in enumerate(customer_types)
+                if stop_type is StopType.PICKUP
+            ]
+            delivery_indexes = [
+                index
+                for index, stop_type in enumerate(customer_types)
+                if stop_type is StopType.DELIVERY
+            ]
+            if pickup_indexes and delivery_indexes:
+                assert max(delivery_indexes) < min(pickup_indexes)
     assert len(assigned_ids) == len(set(assigned_ids))

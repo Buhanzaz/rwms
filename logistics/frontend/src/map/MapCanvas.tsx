@@ -15,6 +15,7 @@ import {
   MapPin,
   MousePointer2,
   Pencil,
+  Scissors,
   Truck,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -36,8 +37,9 @@ import type {
   Zone,
 } from '../domain/types';
 import { CheckboxField } from '../components/ui';
+import { isRequestVisibleOnDate } from '../domain/request-dates';
 import { useUiStore, type LayerVisibility, type MapTool } from '../stores/ui-store';
-import { formatDate, nextDate } from '../utils/format';
+import { RequestMapPopup } from './RequestMapCard';
 
 const BLANK_STYLE: maplibregl.StyleSpecification = {
   version: 8,
@@ -76,13 +78,16 @@ interface MapCanvasProps {
   onSelect: (selection: MapSelection) => void;
   onPlacePoint: (kind: 'warehouse' | 'request', longitude: number, latitude: number) => void;
   onZoneDrawn: (geometry: Polygon) => void;
+  onZoneCutout: (zoneId: UUID, geometry: Polygon) => void;
   onZoneGeometryChanged: (zoneId: UUID, geometry: Polygon | MultiPolygon) => void;
   onMapError: (message: string) => void;
   optimizationRun: OptimizationRun | null;
   onRequestMoveDraft: (requestId: UUID, longitude: number, latitude: number) => void;
   onZoneRelation: (fromId: UUID, toId: UUID) => void;
   planningDate: string;
-  onAgreeRequestDate: (requestId: UUID, date: string) => void;
+  busy: boolean;
+  onScheduleRequestDate: (requestId: UUID, date: string, addIfMissing: boolean) => void;
+  onUnscheduleRequest: (requestId: UUID) => void;
 }
 
 function featureCollection(features: Feature[]): FeatureCollection {
@@ -232,13 +237,16 @@ export function MapCanvas({
   onSelect,
   onPlacePoint,
   onZoneDrawn,
+  onZoneCutout,
   onZoneGeometryChanged,
   onMapError,
   optimizationRun,
   onRequestMoveDraft,
   onZoneRelation,
   planningDate,
-  onAgreeRequestDate,
+  busy,
+  onScheduleRequestDate,
+  onUnscheduleRequest,
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -257,12 +265,21 @@ export function MapCanvas({
   const layers = useUiStore((state) => state.layers);
   const toggleLayer = useUiStore((state) => state.toggleLayer);
   const styleUrl = import.meta.env.VITE_MAP_STYLE_URL;
+  const cutoutZone = mapTool === 'CUT_ZONE' && selected?.kind === 'zone'
+    ? workspace.zones.find((zone) => zone.id === selected.id) ?? null
+    : null;
   zonesRef.current = workspace.zones;
 
   const onZoneDrawnRef = useRef(onZoneDrawn);
+  const onZoneCutoutRef = useRef(onZoneCutout);
   const onZoneGeometryChangedRef = useRef(onZoneGeometryChanged);
+  const mapToolRef = useRef(mapTool);
+  const cutoutZoneRef = useRef(cutoutZone);
   onZoneDrawnRef.current = onZoneDrawn;
+  onZoneCutoutRef.current = onZoneCutout;
   onZoneGeometryChangedRef.current = onZoneGeometryChanged;
+  mapToolRef.current = mapTool;
+  cutoutZoneRef.current = cutoutZone;
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -338,7 +355,11 @@ export function MapCanvas({
       const feature = draw.getSnapshotFeature(id);
       if (!feature || feature.geometry.type !== 'Polygon') return;
       if (context.action === 'draw') {
-        onZoneDrawnRef.current(feature.geometry);
+        if (mapToolRef.current === 'CUT_ZONE' && cutoutZoneRef.current) {
+          onZoneCutoutRef.current(cutoutZoneRef.current.id, feature.geometry);
+        } else if (mapToolRef.current === 'DRAW_ZONE') {
+          onZoneDrawnRef.current(feature.geometry);
+        }
         draw.removeFeatures([id]);
         draw.setMode('polygon');
         return;
@@ -369,11 +390,13 @@ export function MapCanvas({
       draw.setMode('select');
     } else if (mapTool === 'DRAW_ZONE') {
       draw.setMode('polygon');
+    } else if (mapTool === 'CUT_ZONE' && cutoutZone && !cutoutZone.locked) {
+      draw.setMode('polygon');
     } else {
       draw.setMode('select');
     }
     queueMicrotask(() => { hydratedRef.current = false; });
-  }, [mapTool, workspace.zones]);
+  }, [cutoutZone, mapTool, workspace.zones]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -420,7 +443,7 @@ export function MapCanvas({
   const selectedCycleId = selected?.kind === 'cycle' ? selected.id : null;
   const selectedDriverShiftId = selected?.kind === 'driver' ? selected.id : null;
   const requestsForPlanningDate = useMemo(
-    () => workspace.requests.filter((request) => request.date_options.some((option) => option.date === planningDate)),
+    () => workspace.requests.filter((request) => isRequestVisibleOnDate(request, planningDate)),
     [planningDate, workspace.requests],
   );
   const selectedRequest = useMemo(
@@ -557,14 +580,15 @@ export function MapCanvas({
     <main className="map-stage" data-testid="map-stage">
       <div className="map-container" ref={containerRef} aria-label="Интерактивная логистическая карта" />
       <div className="map-overlay map-toolbar" role="toolbar" aria-label="Инструменты карты">
-        {toolButton('SELECT', 'Выбрать объект', <MousePointer2 size={17} />)}
-        {toolButton('PLACE_WAREHOUSE', 'Поставить склад', <Box size={17} />)}
-        {toolButton('ADD_DELIVERY', 'Добавить доставку', <MapPin size={17} />)}
-        {toolButton('ADD_PICKUP', 'Добавить вывоз', <Truck size={17} />)}
-        {toolButton('DRAW_ZONE', 'Нарисовать зону', <Crosshair size={17} />)}
-        {toolButton('EDIT_ZONE', 'Редактировать вершины зон', <Pencil size={17} />)}
-        {toolButton('RELATE_ZONES', 'Связать две зоны', <GitFork size={17} />)}
-        <button type="button" aria-label="Слои карты" title="Слои карты" aria-pressed={layersOpen} onClick={() => setLayersOpen((open) => !open)}><Layers3 size={17} /></button>
+        {toolButton('SELECT', 'Выбрать объект', <MousePointer2 size={17} aria-hidden="true" />)}
+        {toolButton('PLACE_WAREHOUSE', 'Поставить склад', <Box size={17} aria-hidden="true" />)}
+        {toolButton('ADD_DELIVERY', 'Добавить доставку', <MapPin size={17} aria-hidden="true" />)}
+        {toolButton('ADD_PICKUP', 'Добавить вывоз', <Truck size={17} aria-hidden="true" />)}
+        {toolButton('DRAW_ZONE', 'Нарисовать зону', <Crosshair size={17} aria-hidden="true" />)}
+        {toolButton('CUT_ZONE', 'Вырезать область внутри зоны', <Scissors size={17} aria-hidden="true" />)}
+        {toolButton('EDIT_ZONE', 'Редактировать вершины зон', <Pencil size={17} aria-hidden="true" />)}
+        {toolButton('RELATE_ZONES', 'Связать две зоны', <GitFork size={17} aria-hidden="true" />)}
+        <button type="button" aria-label="Слои карты" title="Слои карты" aria-pressed={layersOpen} onClick={() => setLayersOpen((open) => !open)}><Layers3 size={17} aria-hidden="true" /></button>
       </div>
       {layersOpen ? (
         <div className="map-overlay layer-menu" aria-label="Видимость слоёв">
@@ -584,33 +608,26 @@ export function MapCanvas({
           </button>)}
         </div>
       ) : null}
-      {selectedRequest ? (
-        <section className="map-overlay request-map-menu" aria-label="Заявка на карте" data-testid="request-map-menu">
-          <div className="request-map-menu__head">
-            <strong>{selectedRequest.type === 'DELIVERY' ? 'Д · доставка' : 'В · возврат'}</strong>
-            <button type="button" aria-label="Закрыть карточку заявки" onClick={() => onSelect(null)}>×</button>
-          </div>
-          <p>{selectedRequest.name}</p>
-          <small>{selectedRequest.quantity} бытов. · {selectedRequest.address_label}</small>
-          <div className="request-map-menu__dates" aria-label="Допустимые даты заявки">
-            {selectedRequest.date_options.map((option) => (
-              <span key={option.date} className={option.date === planningDate ? 'request-map-menu__date--active' : undefined}>
-                {formatDate(option.date)}{option.window_start && option.window_end ? ` · ${option.window_start.slice(0, 5)}–${option.window_end.slice(0, 5)}` : ''}
-              </span>
-            ))}
-          </div>
-          <div className="request-map-menu__actions">
-            <button type="button" onClick={() => onAgreeRequestDate(selectedRequest.id, planningDate)}>
-              Согласовать {formatDate(planningDate)}
-            </button>
-            <button type="button" onClick={() => onAgreeRequestDate(selectedRequest.id, nextDate(planningDate, 1))}>
-              {selectedRequest.date_options.some((option) => option.date === nextDate(planningDate, 1)) ? 'Согласовать' : 'Перенести на'} {formatDate(nextDate(planningDate, 1))}
-            </button>
-          </div>
-        </section>
+      {selectedRequest && mapReady && mapRef.current ? (
+        <RequestMapPopup
+          map={mapRef.current}
+          request={selectedRequest}
+          zone={workspace.zones.find((zone) => zone.id === selectedRequest.zone_id) ?? null}
+          planningDate={planningDate}
+          busy={busy}
+          onSchedule={onScheduleRequestDate}
+          onUnschedule={onUnscheduleRequest}
+          onClose={() => onSelect(null)}
+        />
       ) : null}
       <div className={`map-overlay map-status ${offlineMode ? 'map-status--error' : ''}`}>
-        <i />{mapTool === 'RELATE_ZONES'
+        <i />{mapTool === 'CUT_ZONE'
+          ? !cutoutZone
+            ? 'Вырез зоны · выберите исходную зону'
+            : cutoutZone.locked
+              ? `Вырез зоны · ${cutoutZone.code} заблокирована`
+              : `Вырез зоны · обведите внутреннюю область в ${cutoutZone.code}`
+          : mapTool === 'RELATE_ZONES'
           ? relationSourceZoneId ? 'Связи зон · выберите вторую зону' : 'Связи зон · выберите первую зону'
           : offlineMode ? 'Grid mode · без внешней карты' : 'Map mode · MapLibre'}
       </div>

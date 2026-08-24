@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings
 from app.errors import ApiError
 from app.models import Scenario
-from app.schemas.domain import ScenarioCreate
-from app.services import scenarios
+from app.schemas.domain import RequestScheduleInput, ScenarioCreate
+from app.services import catalog, scenarios
 
 pytestmark = pytest.mark.integration
 
@@ -26,6 +26,14 @@ async def test_demo_export_import_preserves_seed_versions_and_counts(
         db_session, ScenarioCreate(name="Demo", seed=77), settings
     )
     await scenarios.reset_demo_scenario(db_session, source.id)
+    source_requests = await catalog.list_requests(db_session, source.id)
+    selected_date = source.default_planning_date
+    assert selected_date is not None
+    await catalog.schedule_request(
+        db_session,
+        source_requests[0].id,
+        RequestScheduleInput(date=selected_date),
+    )
     document = await scenarios.export_scenario(db_session, source.id, include_plans=True)
     imported = await scenarios.import_scenario(db_session, document, settings, name="Imported demo")
     imported_document = await scenarios.export_scenario(db_session, imported.id, include_plans=True)
@@ -41,6 +49,7 @@ async def test_demo_export_import_preserves_seed_versions_and_counts(
     assert len(imported_document.vehicles) == 3
     assert len(imported_document.shifts) == 3
     assert len(imported_document.requests) == 6
+    assert [item.scheduled_date for item in imported_document.requests].count(selected_date) == 1
 
 
 @pytest.mark.asyncio

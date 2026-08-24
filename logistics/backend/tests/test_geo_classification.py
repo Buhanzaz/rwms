@@ -5,13 +5,14 @@ from uuid import uuid4
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-from shapely.geometry import Polygon
+from shapely.geometry import Point, Polygon
 from sqlalchemy.dialects import postgresql
 
 from app.geo.classification import (
     InMemoryZone,
     build_classification_statement,
     classify_point_in_memory,
+    subtract_polygonal_cutout,
 )
 from app.schemas.domain import GeoJsonGeometry
 
@@ -70,6 +71,36 @@ def test_self_intersecting_zone_is_rejected() -> None:
             type="Polygon",
             coordinates=[[(0, 0), (2, 2), (0, 2), (2, 0), (0, 0)]],
         )
+
+
+def test_cutout_creates_hole_excluded_from_point_classification() -> None:
+    """A strictly internal subtraction persists as a hole, not an overlapping zone."""
+
+    outer = Polygon([(0, 0), (4, 0), (4, 4), (0, 4), (0, 0)])
+    cutout = Polygon([(1, 1), (2, 1), (2, 2), (1, 2), (1, 1)])
+
+    result = subtract_polygonal_cutout(outer, cutout)
+
+    assert len(result.geoms) == 1
+    assert len(result.geoms[0].interiors) == 1
+    assert result.covers(Point(0.5, 0.5))
+    assert not result.covers(Point(1.5, 1.5))
+
+
+@pytest.mark.parametrize(
+    "cutout",
+    [
+        Polygon([(3, 3), (5, 3), (5, 5), (3, 5), (3, 3)]),
+        Polygon([(0, 1), (1, 1), (1, 2), (0, 2), (0, 1)]),
+    ],
+)
+def test_cutout_outside_or_touching_boundary_is_rejected(cutout: Polygon) -> None:
+    """A cutout cannot extend or touch the selected zone's outer boundary."""
+
+    outer = Polygon([(0, 0), (4, 0), (4, 4), (0, 4), (0, 0)])
+
+    with pytest.raises(ValueError, match="strictly inside"):
+        subtract_polygonal_cutout(outer, cutout)
 
 
 @given(

@@ -27,6 +27,7 @@ from app.schemas.domain import (
     RequestDateOptionInput,
     RequestDateOptionRead,
     RequestDateOptionUpdate,
+    RequestScheduleInput,
     ShiftCreate,
     ShiftRead,
     ShiftUpdate,
@@ -37,6 +38,8 @@ from app.schemas.domain import (
     WarehouseRead,
     WarehouseUpdate,
     ZoneCreate,
+    ZoneCutoutRead,
+    ZoneCutoutRequest,
     ZoneLockRequest,
     ZoneRead,
     ZoneRelationCreate,
@@ -120,6 +123,21 @@ async def update_zone(zone_id: UUID, payload: ZoneUpdate, session: SessionDep) -
     """Update an unlocked zone and version geometry changes."""
 
     return await zone_read(session, await service.update_zone(session, zone_id, payload))
+
+
+@router.post("/zones/{zone_id}/cutouts", response_model=ZoneCutoutRead)
+async def cut_zone(
+    zone_id: UUID,
+    payload: ZoneCutoutRequest,
+    session: SessionDep,
+) -> ZoneCutoutRead:
+    """Atomically cut an unlocked source zone and create its inner operational zone."""
+
+    source_zone, inner_zone = await service.cut_zone(session, zone_id, payload)
+    return ZoneCutoutRead(
+        source_zone=await zone_read(session, source_zone),
+        inner_zone=await zone_read(session, inner_zone),
+    )
 
 
 @router.delete("/zones/{zone_id}", status_code=204)
@@ -325,6 +343,20 @@ async def split_request(request_id: UUID, session: SessionDep) -> LogisticsReque
     return await request_read(session, await service.split_request(session, request_id))
 
 
+@router.post("/requests/{request_id}/schedule", response_model=LogisticsRequestRead)
+async def schedule_request(
+    request_id: UUID,
+    payload: RequestScheduleInput,
+    session: SessionDep,
+) -> LogisticsRequestRead:
+    """Assign the request to one accepted or explicitly agreed date."""
+
+    return await request_read(
+        session,
+        await service.schedule_request(session, request_id, payload),
+    )
+
+
 @router.post(
     "/requests/{request_id}/date-options",
     response_model=RequestDateOptionRead,
@@ -351,7 +383,5 @@ async def update_date_option(
 async def delete_date_option(option_id: UUID, session: SessionDep) -> Response:
     """Delete one acceptable request date."""
 
-    await service.delete_catalog_entity(
-        session, RequestDateOption, option_id, "request_date_option"
-    )
+    await service.delete_date_option(session, option_id)
     return Response(status_code=204)

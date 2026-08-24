@@ -440,6 +440,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/requests/{request_id}/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Schedule Request
+         * @description Assign the request to one accepted or explicitly agreed date.
+         */
+        post: operations["schedule_request_api_requests__request_id__schedule_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/requests/{request_id}/split": {
         parameters: {
             query?: never;
@@ -968,6 +988,26 @@ export interface paths {
         patch: operations["update_zone_api_zones__zone_id__patch"];
         trace?: never;
     };
+    "/api/zones/{zone_id}/cutouts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cut Zone
+         * @description Atomically cut an unlocked source zone and create its inner operational zone.
+         */
+        post: operations["cut_zone_api_zones__zone_id__cutouts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/zones/{zone_id}/lock": {
         parameters: {
             query?: never;
@@ -1162,6 +1202,8 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /** Scheduled Date */
+            scheduled_date?: string | null;
             zone_classification_status: components["schemas"]["ZoneClassificationStatus"];
             /** Zone Id */
             zone_id: string | null;
@@ -1558,6 +1600,8 @@ export interface components {
              * Format: uuid
              */
             scenario_id: string;
+            /** Scheduled Date */
+            scheduled_date: string | null;
             /** Service Minutes */
             service_minutes: number;
             /** Split Allowed */
@@ -1812,6 +1856,19 @@ export interface components {
             window_end?: string | null;
             /** Window Start */
             window_start?: string | null;
+        };
+        /**
+         * RequestScheduleInput
+         * @description Explicitly assign a request to one accepted date or clear that choice.
+         */
+        RequestScheduleInput: {
+            /**
+             * Add If Missing
+             * @default false
+             */
+            add_if_missing: boolean;
+            /** Date */
+            date: string | null;
         };
         /**
          * RequestStatus
@@ -2285,6 +2342,11 @@ export interface components {
          */
         ScenarioSettings: {
             /**
+             * Additional Resource Activation Penalty
+             * @default 180
+             */
+            additional_resource_activation_penalty: number;
+            /**
              * Allow Soft Overtime
              * @default false
              */
@@ -2337,8 +2399,9 @@ export interface components {
             /**
              * Deliveries Before Pickups
              * @default true
+             * @constant
              */
-            deliveries_before_pickups: boolean;
+            deliveries_before_pickups: true;
             /**
              * Detour Weight
              * @default 1.2
@@ -2349,6 +2412,11 @@ export interface components {
              * @default 10
              */
             driver_preference_bonus: number;
+            /**
+             * Driver Workload Weight
+             * @default 3
+             */
+            driver_workload_weight: number;
             /**
              * Empty Travel Weight
              * @default 1.5
@@ -2381,7 +2449,7 @@ export interface components {
             max_detour_minutes: number;
             /**
              * Max Detour Ratio
-             * @default 0.25
+             * @default 1.5
              */
             max_detour_ratio: number;
             /**
@@ -2419,6 +2487,11 @@ export interface components {
              * @default 15
              */
             paired_pickup_bonus: number;
+            /**
+             * Preferred Shift Utilization Percent
+             * @default 80
+             */
+            preferred_shift_utilization_percent: number;
             /**
              * Region Speed Kmh
              * @default 65
@@ -2927,6 +3000,35 @@ export interface components {
             route_group: components["schemas"]["NonBlank"];
         };
         /**
+         * ZoneCutoutInnerZone
+         * @description Required metadata for the operational zone occupying a new cutout.
+         */
+        ZoneCutoutInnerZone: {
+            code: components["schemas"]["NonBlank"];
+            /** Locked */
+            locked: boolean;
+            name: components["schemas"]["NonBlank"];
+            /** Priority */
+            priority: number;
+            route_group: components["schemas"]["NonBlank"];
+        };
+        /**
+         * ZoneCutoutRead
+         * @description Both atomic outcomes of cutting a source zone and creating its inner zone.
+         */
+        ZoneCutoutRead: {
+            inner_zone: components["schemas"]["ZoneRead"];
+            source_zone: components["schemas"]["ZoneRead"];
+        };
+        /**
+         * ZoneCutoutRequest
+         * @description Strictly internal geometry plus metadata for its new operational zone.
+         */
+        ZoneCutoutRequest: {
+            geometry: components["schemas"]["GeoJsonGeometry"];
+            inner_zone: components["schemas"]["ZoneCutoutInnerZone"];
+        };
+        /**
          * ZoneLockRequest
          * @description Explicit desired editing-lock state.
          */
@@ -3008,7 +3110,7 @@ export interface components {
             max_detour_minutes: number;
             /**
              * Max Detour Ratio
-             * @default 0.25
+             * @default 1.5
              */
             max_detour_ratio: number;
             /**
@@ -3061,7 +3163,7 @@ export interface components {
             max_detour_minutes: number;
             /**
              * Max Detour Ratio
-             * @default 0.25
+             * @default 1.5
              */
             max_detour_ratio: number;
             /**
@@ -3936,6 +4038,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RequestDateOptionRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    schedule_request_api_requests__request_id__schedule_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestScheduleInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogisticsRequestRead"];
                 };
             };
             /** @description Validation Error */
@@ -5212,6 +5349,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ZoneRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cut_zone_api_zones__zone_id__cutouts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                zone_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ZoneCutoutRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ZoneCutoutRead"];
                 };
             };
             /** @description Validation Error */

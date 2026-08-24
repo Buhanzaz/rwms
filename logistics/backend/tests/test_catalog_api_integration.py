@@ -29,6 +29,29 @@ def _geometry(west: float, south: float, east: float, north: float) -> dict[str,
     }
 
 
+def _cutout_payload(
+    geometry: dict[str, object],
+    *,
+    code: str,
+    name: str = "Внутренняя зона",
+    route_group: str = "CITY",
+    priority: int = 50,
+    locked: bool = False,
+) -> dict[str, object]:
+    """Build the atomic source-cutout and inner-zone command body."""
+
+    return {
+        "geometry": geometry,
+        "inner_zone": {
+            "name": name,
+            "code": code,
+            "route_group": route_group,
+            "priority": priority,
+            "locked": locked,
+        },
+    }
+
+
 @pytest.mark.asyncio
 async def test_http_relation_uuid_bind_and_backend_request_classification() -> None:
     """HTTP creates real UUID relations and ignores no client-selected zone escape hatch."""
@@ -106,6 +129,237 @@ async def test_http_relation_uuid_bind_and_backend_request_classification() -> N
                 },
             )
             assert override.status_code == 422
+        finally:
+            deleted = await client.delete(f"/api/scenarios/{scenario_id}")
+            assert deleted.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_http_zone_cutout_versions_geometry_and_preserves_request_snapshot() -> None:
+    """A PostGIS cutout atomically creates an inner zone and preserves old snapshots."""
+
+    transport = ASGITransport(app=create_app())
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        scenario_response = await client.post("/api/scenarios", json={"name": "Cutout API"})
+        assert scenario_response.status_code == 201
+        scenario_id = scenario_response.json()["id"]
+        try:
+            zone_response = await client.post(
+                f"/api/scenarios/{scenario_id}/zones",
+                json={
+                    "name": "Большая зона",
+                    "code": "BIG",
+                    "route_group": "CUSTOM",
+                    "geometry": _geometry(37.0, 55.0, 38.0, 56.0),
+                },
+            )
+            assert zone_response.status_code == 201
+            zone_id = zone_response.json()["id"]
+            request_response = await client.post(
+                f"/api/scenarios/{scenario_id}/requests",
+                json={
+                    "type": "DELIVERY",
+                    "name": "Точка будущего выреза",
+                    "latitude": 55.5,
+                    "longitude": 37.5,
+                    "quantity": 1,
+                    "date_options": [{"date": "2026-08-25"}],
+                },
+            )
+            assert request_response.status_code == 201
+            request_id = request_response.json()["id"]
+            assert request_response.json()["zone_version"] == 1
+
+            duplicate_code = await client.post(
+                f"/api/zones/{zone_id}/cutouts",
+                json=_cutout_payload(
+                    _geometry(37.4, 55.4, 37.6, 55.6),
+                    code="BIG",
+                ),
+            )
+            assert duplicate_code.status_code == 409
+            assert duplicate_code.json()["code"] == "ZONE_CODE_CONFLICT"
+            unchanged_after_conflict = await client.get(f"/api/zones/{zone_id}")
+            assert unchanged_after_conflict.json()["version"] == 1
+            assert len(unchanged_after_conflict.json()["geometry"]["coordinates"][0]) == 1
+
+            outside = await client.post(
+                f"/api/zones/{zone_id}/cutouts",
+                json=_cutout_payload(
+                    _geometry(37.9, 55.9, 38.1, 56.1),
+                    code="OUTSIDE",
+                ),
+            )
+            assert outside.status_code == 422
+            assert outside.json()["code"] == "ZONE_CUTOUT_OUTSIDE"
+            unchanged_after_invalid = await client.get(f"/api/zones/{zone_id}")
+            assert unchanged_after_invalid.json()["version"] == 1
+            assert len(unchanged_after_invalid.json()["geometry"]["coordinates"][0]) == 1
+            zones_after_failures = await client.get(f"/api/scenarios/{scenario_id}/zones")
+            assert [zone["code"] for zone in zones_after_failures.json()] == ["BIG"]
+
+            cutout = await client.post(
+                f"/api/zones/{zone_id}/cutouts",
+                json=_cutout_payload(
+                    _geometry(37.4, 55.4, 37.6, 55.6),
+                    code="INNER",
+                    name="Центральная внутренняя зона",
+                    route_group="CENTER",
+                    priority=75,
+                    locked=False,
+                ),
+            )
+            assert cutout.status_code == 200, cutout.text
+            body = cutout.json()
+            source_zone = body["source_zone"]
+            inner_zone = body["inner_zone"]
+            assert source_zone["id"] == zone_id
+            assert source_zone["version"] == 2
+            assert source_zone["stale_request_count"] == 1
+            assert source_zone["geometry"]["type"] == "MultiPolygon"
+            assert len(source_zone["geometry"]["coordinates"][0]) == 2
+            assert inner_zone["scenario_id"] == scenario_id
+            assert inner_zone["code"] == "INNER"
+            assert inner_zone["name"] == "Центральная внутренняя зона"
+            assert inner_zone["route_group"] == "CENTER"
+            assert inner_zone["priority"] == 75
+            assert inner_zone["version"] == 1
+            assert inner_zone["locked"] is False
+            assert len(inner_zone["geometry"]["coordinates"][0]) == 1
+
+            preserved = await client.get(f"/api/requests/{request_id}")
+            assert preserved.status_code == 200
+            assert preserved.json()["zone_id"] == zone_id
+            assert preserved.json()["zone_version"] == 1
+            assert preserved.json()["zone_is_stale"] is True
+
+            reclassified = await client.post(
+                f"/api/scenarios/{scenario_id}/reclassify-requests"
+            )
+            assert reclassified.status_code == 200
+            assert reclassified.json() == {"updated": 1, "outside_zones": 0, "unchanged": 0}
+            moved = await client.get(f"/api/requests/{request_id}")
+            assert moved.json()["zone_id"] == inner_zone["id"]
+            assert moved.json()["zone_version"] == 1
+            assert moved.json()["zone_is_stale"] is False
+            refreshed_parent = await client.get(f"/api/zones/{zone_id}")
+            assert refreshed_parent.json()["stale_request_count"] == 0
+
+            locked = await client.post(
+                f"/api/zones/{zone_id}/lock",
+                json={"locked": True},
+            )
+            assert locked.status_code == 200
+            locked_cutout = await client.post(
+                f"/api/zones/{zone_id}/cutouts",
+                json=_cutout_payload(
+                    _geometry(37.1, 55.1, 37.2, 55.2),
+                    code="LOCKED_INNER",
+                ),
+            )
+            assert locked_cutout.status_code == 409
+            assert locked_cutout.json()["code"] == "ZONE_LOCKED"
+            parent_after_locked = await client.get(f"/api/zones/{zone_id}")
+            assert parent_after_locked.json()["version"] == 2
+            all_zones = await client.get(f"/api/scenarios/{scenario_id}/zones")
+            assert {zone["code"] for zone in all_zones.json()} == {"BIG", "INNER"}
+        finally:
+            deleted = await client.delete(f"/api/scenarios/{scenario_id}")
+            assert deleted.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_http_request_schedule_supports_options_agreement_and_unscheduling() -> None:
+    """Scheduling is explicit, validated, reversible, and cleared by authoritative options."""
+
+    transport = ASGITransport(app=create_app())
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        scenario_response = await client.post("/api/scenarios", json={"name": "Schedule API"})
+        assert scenario_response.status_code == 201
+        scenario_id = scenario_response.json()["id"]
+        try:
+            created = await client.post(
+                f"/api/scenarios/{scenario_id}/requests",
+                json={
+                    "type": "DELIVERY",
+                    "name": "Клиент: две даты",
+                    "latitude": 55.75,
+                    "longitude": 37.61,
+                    "quantity": 1,
+                    "date_options": [
+                        {"date": "2026-08-25"},
+                        {"date": "2026-08-26"},
+                    ],
+                },
+            )
+            assert created.status_code == 201
+            request_id = created.json()["id"]
+            assert created.json()["scheduled_date"] is None
+
+            allowed = await client.post(
+                f"/api/requests/{request_id}/schedule",
+                json={"date": "2026-08-25"},
+            )
+            assert allowed.status_code == 200
+            assert allowed.json()["scheduled_date"] == "2026-08-25"
+
+            forbidden = await client.post(
+                f"/api/requests/{request_id}/schedule",
+                json={"date": "2026-08-27"},
+            )
+            assert forbidden.status_code == 422
+            assert forbidden.json()["code"] == "REQUEST_DATE_NOT_ALLOWED"
+
+            agreed = await client.post(
+                f"/api/requests/{request_id}/schedule",
+                json={"date": "2026-08-27", "add_if_missing": True},
+            )
+            assert agreed.status_code == 200
+            assert agreed.json()["scheduled_date"] == "2026-08-27"
+            custom_option = next(
+                option
+                for option in agreed.json()["date_options"]
+                if option["date"] == "2026-08-27"
+            )
+            assert custom_option == {
+                "id": custom_option["id"],
+                "request_id": request_id,
+                "date": "2026-08-27",
+                "priority": 1000,
+                "window_start": None,
+                "window_end": None,
+                "is_hard": False,
+            }
+
+            replayed_agreement = await client.post(
+                f"/api/requests/{request_id}/schedule",
+                json={"date": "2026-08-27", "add_if_missing": True},
+            )
+            assert replayed_agreement.status_code == 200
+            assert replayed_agreement.json()["scheduled_date"] == "2026-08-27"
+            assert sum(
+                option["date"] == "2026-08-27"
+                for option in replayed_agreement.json()["date_options"]
+            ) == 1
+
+            options_replaced = await client.patch(
+                f"/api/requests/{request_id}",
+                json={"date_options": [{"date": "2026-08-25"}]},
+            )
+            assert options_replaced.status_code == 200, options_replaced.text
+            assert options_replaced.json()["scheduled_date"] is None
+
+            rescheduled = await client.post(
+                f"/api/requests/{request_id}/schedule",
+                json={"date": "2026-08-25"},
+            )
+            assert rescheduled.status_code == 200
+            unscheduled = await client.post(
+                f"/api/requests/{request_id}/schedule",
+                json={"date": None},
+            )
+            assert unscheduled.status_code == 200
+            assert unscheduled.json()["scheduled_date"] is None
         finally:
             deleted = await client.delete(f"/api/scenarios/{scenario_id}")
             assert deleted.status_code == 204

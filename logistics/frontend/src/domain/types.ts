@@ -30,7 +30,7 @@ export interface PlanningSettings {
   vehicle_capacity: number;
   max_delivery_stops: number;
   max_pickup_stops: number;
-  deliveries_before_pickups: boolean;
+  deliveries_before_pickups: true;
   max_detour_minutes: number;
   max_detour_ratio: number;
   max_candidate_neighbors: number;
@@ -52,6 +52,9 @@ export interface PlanningSettings {
   detour_weight: number;
   cross_group_penalty: number;
   driver_preference_bonus: number;
+  additional_resource_activation_penalty: number;
+  preferred_shift_utilization_percent: number;
+  driver_workload_weight: number;
   paired_delivery_bonus: number;
   paired_pickup_bonus: number;
   unassigned_hard_task_penalty: number;
@@ -182,6 +185,7 @@ export interface LogisticsRequest {
   notes: string;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
+  scheduled_date: IsoDate | null;
   date_options: RequestDateOption[];
   tasks?: PlanningTask[];
   zone_status?: 'CURRENT' | 'STALE' | 'OUTSIDE_ZONES';

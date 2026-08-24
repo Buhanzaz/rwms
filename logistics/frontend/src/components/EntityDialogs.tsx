@@ -21,6 +21,7 @@ import type {
   WarehouseInput,
   ZoneInput,
 } from '../api/client';
+import { DEFAULT_PLANNING_SETTINGS } from '../domain/defaults';
 import { Button, CheckboxField, Field, Modal, SelectField } from './ui';
 import { dateInTimeZone, localDateTimeToIso } from '../utils/format';
 
@@ -141,21 +142,31 @@ const zoneSchema = z.object({
 });
 type ZoneValues = z.infer<typeof zoneSchema>;
 
-export function ZoneDialog({ zone, geometry, busy, onClose, onSubmit }: {
+export function ZoneDialog({ zone, geometry, initialValues, title, description, submitLabel, busy, onClose, onSubmit }: {
   zone?: Zone | undefined;
   geometry: Zone['geometry'];
+  initialValues?: Partial<Omit<ZoneInput, 'geometry'>> | undefined;
+  title?: string | undefined;
+  description?: string | undefined;
+  submitLabel?: string | undefined;
   busy: boolean;
   onClose: () => void;
   onSubmit: (input: ZoneInput) => Promise<void>;
 }) {
   const { register, handleSubmit, watch, setValue, formState: { errors } } = useForm<ZoneValues>({
     resolver: zodResolver(zoneSchema),
-    defaultValues: { name: zone?.name ?? '', code: zone?.code ?? '', route_group: zone?.route_group ?? 'CUSTOM', priority: zone?.priority ?? 0, locked: zone?.locked ?? false },
+    defaultValues: {
+      name: zone?.name ?? initialValues?.name ?? '',
+      code: zone?.code ?? initialValues?.code ?? '',
+      route_group: zone?.route_group ?? initialValues?.route_group ?? 'CUSTOM',
+      priority: zone?.priority ?? initialValues?.priority ?? 0,
+      locked: zone?.locked ?? initialValues?.locked ?? false,
+    },
   });
   const locked = watch('locked');
   const editingLockedZone = Boolean(zone?.locked && locked);
   return (
-    <Modal title={zone ? `Зона ${zone.code} · версия ${zone.version}` : 'Новая логистическая зона'} description="Polygon/MultiPolygon хранится на backend; изменение геометрии увеличивает версию" onClose={onClose}>
+    <Modal title={title ?? (zone ? `Зона ${zone.code} · версия ${zone.version}` : 'Новая логистическая зона')} description={description ?? 'Polygon/MultiPolygon хранится на backend; изменение геометрии увеличивает версию'} onClose={onClose}>
       <form className="form-grid" onSubmit={handleSubmit((values) => onSubmit({ ...values, geometry }))}>
         {editingLockedZone ? <p className="span-2 field__hint">Зона заблокирована. Снимите блокировку, чтобы изменить метаданные или геометрию.</p> : null}
         <Field label="Название" readOnly={editingLockedZone} {...register('name')} error={errors.name?.message} />
@@ -163,7 +174,7 @@ export function ZoneDialog({ zone, geometry, busy, onClose, onSubmit }: {
         <Field label="Группа маршрута" readOnly={editingLockedZone} {...register('route_group')} error={errors.route_group?.message} hint="Можно ввести свою группу" />
         <Field label="Приоритет" type="number" readOnly={editingLockedZone} {...register('priority', { valueAsNumber: true })} />
         <div className="span-2"><CheckboxField label="Заблокировать редактирование геометрии" checked={locked} onChange={(value) => setValue('locked', value)} /></div>
-        <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}><Button type="button" onClick={onClose}>Отмена</Button><Button type="submit" variant="primary" disabled={busy}>Сохранить зону</Button></div>
+        <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}><Button type="button" onClick={onClose}>Отмена</Button><Button type="submit" variant="primary" disabled={busy}>{submitLabel ?? 'Сохранить зону'}</Button></div>
       </form>
     </Modal>
   );
@@ -347,16 +358,18 @@ export function RelationDialog({ fromZone, toZone, relation, busy, onClose, onSu
     resolver: zodResolver(relationSchema),
     defaultValues: {
       relation_type: relation?.relation_type ?? 'ADJACENT', delivery_pair_allowed: relation?.delivery_pair_allowed ?? true,
-      pickup_allowed: relation?.pickup_allowed ?? true, max_detour_minutes: relation?.max_detour_minutes ?? 35,
-      max_detour_ratio: relation?.max_detour_ratio ?? .25, penalty: relation?.penalty ?? 0, is_bidirectional: relation?.is_bidirectional ?? false,
+      pickup_allowed: relation?.pickup_allowed ?? true,
+      max_detour_minutes: relation?.max_detour_minutes ?? DEFAULT_PLANNING_SETTINGS.max_detour_minutes,
+      max_detour_ratio: relation?.max_detour_ratio ?? DEFAULT_PLANNING_SETTINGS.max_detour_ratio,
+      penalty: relation?.penalty ?? 0, is_bidirectional: relation?.is_bidirectional ?? false,
     },
   });
   return (
-    <Modal title={`${fromZone.code} → ${toZone.code}`} description="Направленная связь используется как предварительный фильтр; фактический крюк проверяется отдельно" onClose={onClose}>
+    <Modal title={`${fromZone.code} → ${toZone.code}`} description="Запрет связи является жёстким; пороги крюка дают предупреждение и влияют на score" onClose={onClose}>
       <form className="form-grid" onSubmit={handleSubmit((values) => onSubmit({ ...values, from_zone_id: fromZone.id, to_zone_id: toZone.id }))}>
         <SelectField className="span-2" label="Тип связи" {...register('relation_type')}><option value="ADJACENT">Соседняя</option><option value="PREFERRED">Предпочтительная</option><option value="ALLOWED">Разрешённая</option><option value="DISCOURAGED">Нежелательная</option><option value="BLOCKED">Заблокированная</option></SelectField>
-        <Field label="Макс. крюк, мин" type="number" {...register('max_detour_minutes', { valueAsNumber: true })} />
-        <Field label="Макс. доля крюка" type="number" step="0.01" {...register('max_detour_ratio', { valueAsNumber: true })} />
+        <Field label="Порог крюка, мин" type="number" {...register('max_detour_minutes', { valueAsNumber: true })} />
+        <Field label="Порог доли крюка" type="number" step="0.01" {...register('max_detour_ratio', { valueAsNumber: true })} />
         <Field label="Штраф" type="number" step="0.1" {...register('penalty', { valueAsNumber: true })} />
         <span />
         <CheckboxField label="Можно объединять доставки" checked={watch('delivery_pair_allowed')} onChange={(checked) => setValue('delivery_pair_allowed', checked)} />

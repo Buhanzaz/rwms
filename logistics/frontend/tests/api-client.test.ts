@@ -118,6 +118,31 @@ describe('actual backend transport contract', () => {
     expect(requestBody(mock, 1)).toEqual({ locked: true });
   });
 
+  it('sends an atomic polygon cutout with inner-zone metadata and an explicit request scheduling command', async () => {
+    const cutout = { type: 'Polygon' as const, coordinates: [[[37.2, 55.2], [37.4, 55.2], [37.4, 55.4], [37.2, 55.2]]] };
+    const innerZone = { ...zone, id: 'inner-zone-id', name: 'Внутренняя', code: 'Z1-IN1', geometry: cutout };
+    const mock = fetchMock({ source_zone: { ...zone, version: 2 }, inner_zone: innerZone }, { id: 'request-id', scheduled_date: '2026-08-26' });
+
+    const result = await api.cutZone('zone-id', {
+      name: 'Внутренняя',
+      code: 'Z1-IN1',
+      route_group: 'WEST',
+      geometry: cutout,
+      priority: 2,
+      locked: false,
+    });
+    await api.scheduleRequest('request-id', { date: '2026-08-26', add_if_missing: true });
+
+    expect(mock.mock.calls[0]?.[0]).toBe('/api/zones/zone-id/cutouts');
+    expect(requestBody(mock, 0)).toEqual({
+      geometry: cutout,
+      inner_zone: { name: 'Внутренняя', code: 'Z1-IN1', route_group: 'WEST', priority: 2, locked: false },
+    });
+    expect(result.inner_zone.id).toBe('inner-zone-id');
+    expect(mock.mock.calls[1]?.[0]).toBe('/api/requests/request-id/schedule');
+    expect(requestBody(mock, 1)).toEqual({ date: '2026-08-26', add_if_missing: true });
+  });
+
   it('nests manual-change payload but leaves dedicated simulation bodies raw', async () => {
     const workspace = workspaceFixture();
     const currentPlan = normalizeRoutePlan(rawPlan, workspace);

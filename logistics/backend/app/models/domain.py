@@ -243,7 +243,7 @@ class ZoneRelation(UuidPrimaryKeyMixin, Base):
     delivery_pair_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     pickup_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     max_detour_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=35)
-    max_detour_ratio: Mapped[float] = mapped_column(Float, nullable=False, default=0.25)
+    max_detour_ratio: Mapped[float] = mapped_column(Float, nullable=False, default=1.5)
     penalty: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     is_bidirectional: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
@@ -363,6 +363,11 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
             name="nonnegative_external_version",
         ),
         Index("ix_logistics_requests_scenario_status", "scenario_id", "status"),
+        Index(
+            "ix_logistics_requests_scenario_scheduled_date",
+            "scenario_id",
+            "scheduled_date",
+        ),
         Index("ix_logistics_requests_zone_version", "zone_id", "zone_version"),
     )
 
@@ -382,6 +387,7 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
     service_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=RequestStatus.READY)
+    scheduled_date: Mapped[date | None] = mapped_column(Date)
     zone_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("zones.id", ondelete="SET NULL")
     )

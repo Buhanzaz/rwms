@@ -369,6 +369,18 @@
             "title": "Id",
             "type": "string"
           },
+          "scheduled_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled Date"
+          },
           "zone_classification_status": {
             "$ref": "#/components/schemas/ZoneClassificationStatus"
           },
@@ -1190,6 +1202,18 @@
             "title": "Scenario Id",
             "type": "string"
           },
+          "scheduled_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled Date"
+          },
           "service_minutes": {
             "title": "Service Minutes",
             "type": "integer"
@@ -1260,6 +1284,7 @@
           "service_minutes",
           "priority",
           "status",
+          "scheduled_date",
           "zone_id",
           "zone_version",
           "zone_classification_status",
@@ -1930,6 +1955,34 @@
           }
         },
         "title": "RequestDateOptionUpdate",
+        "type": "object"
+      },
+      "RequestScheduleInput": {
+        "additionalProperties": false,
+        "description": "Explicitly assign a request to one accepted date or clear that choice.",
+        "properties": {
+          "add_if_missing": {
+            "default": false,
+            "title": "Add If Missing",
+            "type": "boolean"
+          },
+          "date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date"
+          }
+        },
+        "required": [
+          "date"
+        ],
+        "title": "RequestScheduleInput",
         "type": "object"
       },
       "RequestStatus": {
@@ -2850,6 +2903,12 @@
         "additionalProperties": true,
         "description": "Tunable deterministic planner and mock-routing settings.",
         "properties": {
+          "additional_resource_activation_penalty": {
+            "default": 180,
+            "minimum": 0.0,
+            "title": "Additional Resource Activation Penalty",
+            "type": "number"
+          },
           "allow_soft_overtime": {
             "default": false,
             "title": "Allow Soft Overtime",
@@ -2910,6 +2969,7 @@
             "type": "integer"
           },
           "deliveries_before_pickups": {
+            "const": true,
             "default": true,
             "title": "Deliveries Before Pickups",
             "type": "boolean"
@@ -2924,6 +2984,12 @@
             "default": 10,
             "minimum": 0.0,
             "title": "Driver Preference Bonus",
+            "type": "number"
+          },
+          "driver_workload_weight": {
+            "default": 3,
+            "minimum": 0.0,
+            "title": "Driver Workload Weight",
             "type": "number"
           },
           "empty_travel_weight": {
@@ -2952,7 +3018,8 @@
           },
           "max_delivery_stops": {
             "default": 2,
-            "minimum": 0.0,
+            "maximum": 2.0,
+            "minimum": 1.0,
             "title": "Max Delivery Stops",
             "type": "integer"
           },
@@ -2963,7 +3030,7 @@
             "type": "integer"
           },
           "max_detour_ratio": {
-            "default": 0.25,
+            "default": 1.5,
             "minimum": 0.0,
             "title": "Max Detour Ratio",
             "type": "number"
@@ -2982,7 +3049,8 @@
           },
           "max_pickup_stops": {
             "default": 2,
-            "minimum": 0.0,
+            "maximum": 2.0,
+            "minimum": 1.0,
             "title": "Max Pickup Stops",
             "type": "integer"
           },
@@ -3008,6 +3076,13 @@
             "default": 15,
             "minimum": 0.0,
             "title": "Paired Pickup Bonus",
+            "type": "number"
+          },
+          "preferred_shift_utilization_percent": {
+            "default": 80,
+            "exclusiveMinimum": 0.0,
+            "maximum": 100.0,
+            "title": "Preferred Shift Utilization Percent",
             "type": "number"
           },
           "region_speed_kmh": {
@@ -4083,6 +4158,74 @@
         "title": "ZoneCreate",
         "type": "object"
       },
+      "ZoneCutoutInnerZone": {
+        "additionalProperties": false,
+        "description": "Required metadata for the operational zone occupying a new cutout.",
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/NonBlank"
+          },
+          "locked": {
+            "title": "Locked",
+            "type": "boolean"
+          },
+          "name": {
+            "$ref": "#/components/schemas/NonBlank"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "route_group": {
+            "$ref": "#/components/schemas/NonBlank"
+          }
+        },
+        "required": [
+          "name",
+          "code",
+          "route_group",
+          "priority",
+          "locked"
+        ],
+        "title": "ZoneCutoutInnerZone",
+        "type": "object"
+      },
+      "ZoneCutoutRead": {
+        "additionalProperties": false,
+        "description": "Both atomic outcomes of cutting a source zone and creating its inner zone.",
+        "properties": {
+          "inner_zone": {
+            "$ref": "#/components/schemas/ZoneRead"
+          },
+          "source_zone": {
+            "$ref": "#/components/schemas/ZoneRead"
+          }
+        },
+        "required": [
+          "source_zone",
+          "inner_zone"
+        ],
+        "title": "ZoneCutoutRead",
+        "type": "object"
+      },
+      "ZoneCutoutRequest": {
+        "additionalProperties": false,
+        "description": "Strictly internal geometry plus metadata for its new operational zone.",
+        "properties": {
+          "geometry": {
+            "$ref": "#/components/schemas/GeoJsonGeometry"
+          },
+          "inner_zone": {
+            "$ref": "#/components/schemas/ZoneCutoutInnerZone"
+          }
+        },
+        "required": [
+          "geometry",
+          "inner_zone"
+        ],
+        "title": "ZoneCutoutRequest",
+        "type": "object"
+      },
       "ZoneLockRequest": {
         "additionalProperties": false,
         "description": "Explicit desired editing-lock state.",
@@ -4195,7 +4338,7 @@
             "type": "integer"
           },
           "max_detour_ratio": {
-            "default": 0.25,
+            "default": 1.5,
             "minimum": 0.0,
             "title": "Max Detour Ratio",
             "type": "number"
@@ -4259,7 +4402,7 @@
             "type": "integer"
           },
           "max_detour_ratio": {
-            "default": 0.25,
+            "default": 1.5,
             "minimum": 0.0,
             "title": "Max Detour Ratio",
             "type": "number"
@@ -5699,6 +5842,60 @@
           }
         },
         "summary": "Create Date Option",
+        "tags": [
+          "catalog"
+        ]
+      }
+    },
+    "/api/requests/{request_id}/schedule": {
+      "post": {
+        "description": "Assign the request to one accepted or explicitly agreed date.",
+        "operationId": "schedule_request_api_requests__request_id__schedule_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestScheduleInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogisticsRequestRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Schedule Request",
         "tags": [
           "catalog"
         ]
@@ -7537,6 +7734,60 @@
           }
         },
         "summary": "Update Zone",
+        "tags": [
+          "catalog"
+        ]
+      }
+    },
+    "/api/zones/{zone_id}/cutouts": {
+      "post": {
+        "description": "Atomically cut an unlocked source zone and create its inner operational zone.",
+        "operationId": "cut_zone_api_zones__zone_id__cutouts_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "zone_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Zone Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ZoneCutoutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZoneCutoutRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cut Zone",
         "tags": [
           "catalog"
         ]

@@ -47,9 +47,13 @@ The **Test for 3 days** action creates a separate, non-destructive workload:
 six zones, exactly three simultaneously available vehicles/drivers, and three
 shift dates. Each date exposes exactly ten requests: some first-day clients are
 also available on day two, and two day-two requests are available on day three.
-The shared planning date filters both the request list and map markers. Clicking
-a marker opens its windows plus an action to agree or move it to the next day;
-previously accepted dates remain available as alternatives. To make return
+The shared planning date filters both the request list and map markers. Until
+the dispatcher selects one date, a request appears on every customer-approved
+date; afterwards it appears only on the selected logistics date. Clicking a
+marker opens a MapLibre popup anchored above that point with address, quantity,
+zone, windows and date selection.
+A new date requires an explicit agreement action, an assignment can be cleared,
+and the original accepted dates remain intact. To make return
 pairing observable, this fixture uses a wider detour limit of 60 minutes and a
 3.0 ratio; the scenario settings remain editable.
 
@@ -98,8 +102,9 @@ the browser and token form body do not receive the service secret.
 ## Domain model
 
 The persisted model contains scenarios and settings, warehouses, versioned
-Polygon/MultiPolygon zones and directed relations, drivers, vehicles and dated
-shifts, logistics requests and date options, split planning tasks, versioned
+Polygon/MultiPolygon zones with interior rings and directed relations, drivers,
+vehicles and dated shifts, logistics requests, date options and a separate
+dispatcher-selected logistics date, split planning tasks, versioned
 route plans/cycles/stops/legs, optimization runs/trace events and manual-change
 audit. All timestamps are timezone-aware; the default scenario timezone is
 `Europe/Moscow`.
@@ -108,7 +113,14 @@ Request coordinates are classified server-side with PostGIS. The highest
 priority covering zone wins; an equal-priority overlap selects the smallest
 geometry. A point outside all zones is retained as `OUTSIDE_ZONES`. Editing a
 zone increments its version but does not silently rewrite old request
-membership. Reclassification is an explicit scenario action.
+membership. The **Make cutout** tool selects an unlocked source zone and then
+draws a strictly internal ring. It opens the new inner-zone form; saving one
+atomic backend command subtracts the ring from the source and creates a
+version-one operational zone with exactly that geometry. Cancelling the form
+changes neither zone. Request reclassification remains explicit after geometry
+changes: **Build routes** detects visible ready requests with missing/stale zone
+snapshots and asks the dispatcher to confirm reclassification before starting
+the optimizer.
 
 ## Logistics rules
 
@@ -116,18 +128,38 @@ membership. Reclassification is an explicit scenario action.
   `0 <= load <= capacity`.
 - A request larger than capacity is deterministically split, for example
   `5 -> [2, 2, 1]`.
-- Every cycle starts and returns to the warehouse. All deliveries occur before
-  every pickup; `delivery -> pickup -> delivery` is infeasible.
+- Every cycle starts and returns to the warehouse. Inside that cycle, all
+  warehouse-loaded deliveries precede all pickups. Returning to the depot
+  closes the cycle, so the same driver may load deliveries again in a later
+  independent cycle.
 - A cycle may carry one quantity-two delivery or pair two quantity-one
   deliveries, then attach one quantity-two pickup or pair two quantity-one
   pickups. Pickup-only cycles remain possible with an empty-run cost.
-- Zone relations are a candidate filter, not a geographic hard-code. Both stop
-  orders, actual time windows, travel length, detour minutes/ratio, shift end
-  and capacity are validated.
+- Zone relations are a candidate filter, not a geographic hard-code. A
+  `BLOCKED` relation or disabled pickup transition is hard; both stop orders,
+  actual time windows, travel length, shift end and capacity are validated.
+- Within the same mandatory-date priority, the planner prefers a full outbound
+  and return load: `2 -> 1 -> 0 -> 1 -> 2 -> 0`. Fewer depot cycles and returns
+  rank ahead of weighted distance. The default 35-minute and 1.5 detour
+  thresholds add `HIGH_DETOUR` and score cost rather than forcing a separate
+  pickup cycle; a zone relation may set tighter warning thresholds. Capacity,
+  hard windows, shift end and blocked transitions remain infeasible.
 - Driver route groups are soft preferences. Hard dates/windows, task
   uniqueness, driver/vehicle overlap and hard shift limits remain infeasible
   constraints.
-- One driver can receive several warehouse-return cycles in one shift.
+- Candidate ranking first packs compatible delivery and pickup stops, then
+  reuses an already activated driver/vehicle shift while it remains feasible.
+  Another shift pays `additional_resource_activation_penalty` (180 equivalent
+  travel minutes by default) and is activated only when windows, shift limits,
+  denser packing or a sufficiently better route justify it.
+- Driver workload uses the elapsed duty span against the shift duration after
+  its configured break. Work up to `preferred_shift_utilization_percent` (80%
+  by default) stays consolidated; minutes above that soft target receive the
+  increasing `driver_workload_weight` cost (3 by default). The optimizer
+  compares that cost with activating another resource, while the actual shift
+  end remains a hard constraint.
+- One driver can receive several warehouse-return cycles in one shift without
+  the former artificial per-cycle imbalance penalty.
 - Manual drag-and-drop submits the expected plan version and is revalidated on
   the backend. The current editor moves tasks between cycles, reorders tasks
   within a cycle and locks whole cycles. A stale mutation returns
@@ -136,8 +168,12 @@ membership. Reclassification is an explicit scenario action.
 Unassigned tasks carry stable reason codes and Russian explanations rather
 than a generic “route not found”. Plan cards expose the load sequence, distance,
 travel/service/wait/detour time, score, warnings and persisted assignment
-explanation. Their parallel-start summary reports how many first cycles truly
-begin at the same time; the planner does not serialize independent drivers.
+explanation. Each driver card also shows break-adjusted shift utilization. The
+parallel-start summary reports how many activated resources truly need to begin
+together; unused drivers and vehicles receive no route.
+If no feasible cycle exists, the UI opens the unassigned reasons instead of
+claiming routes were built, and simulation remains unavailable until the plan
+contains at least one cycle.
 
 Every saved OSRM segment is shown on the map. Cycles receive separate colors,
 the map fits the complete plan when it is opened, and the route legend selects
@@ -355,11 +391,14 @@ pattern instead of pretending to be a universal VRP solver. It:
 3. prioritizes hard/last-date, manual priority, scarce dates, narrow windows,
    distance and creation time;
 4. considers bounded delivery pairs and both orders;
-5. adds feasible return pickups using real detour and time-window checks;
-6. creates penalized pickup-only cycles;
+5. packs return pickups into every compatible delivery cycle before comparing
+   travel/detour cost, minimizing warehouse returns for equal hard priority;
+6. allows a later depot-loaded cycle for the same driver and creates penalized
+   pickup-only cycles only after no delivery candidate remains;
 7. globally assigns the best next feasible cycle to an available driver;
-8. performs bounded, fully revalidated local improvements;
-9. persists metrics, explanations, reasons and bounded trace events.
+8. compares resource activation against break-adjusted driver workload;
+9. performs bounded, fully revalidated local improvements;
+10. persists metrics, explanations, reasons and bounded trace events.
 
 The engine stops predictably at the configured time/iteration limit and
 returns the best valid plan found. The optimization seed is stored with the
@@ -378,9 +417,12 @@ sequence `2 -> 1 -> 0 -> 1 -> 2 -> 0`.
 For date and capacity experiments, use **Test for 3 days** instead. It never
 resets the scenario currently open. The header date, **Requests** date chips,
 and map show the same date-filtered requests. Click a **Д** (delivery) or **В**
-(return) marker to inspect its windows and agree a date directly on the map.
-This is a non-destructive test representation of a client agreement, not a
-dispatch confirmation.
+(return) marker to inspect its details in a popup above the point and assign one
+concrete logistics date directly on the map. To test nested geography, choose
+**Make cutout**, click the source zone and draw the inner area. Complete the
+form to name the new zone; the source cutout and inner-zone creation are saved
+together. Both actions record a dispatcher decision in the simulator; neither
+confirms a production dispatch.
 
 Use **Export JSON** in the scenario actions. The single file can include
 settings, geography, resources, requests/date options, seed and selected saved

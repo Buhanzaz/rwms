@@ -253,6 +253,15 @@ export function normalizeRoutePlan(raw: RawRoutePlan, workspace: ScenarioWorkspa
     const shift = workspace.shifts.find((candidate) => candidate.id === shiftId);
     const driver = workspace.drivers.find((candidate) => candidate.id === shift?.driver_id);
     const vehicle = workspace.vehicles.find((candidate) => candidate.id === shift?.vehicle_id);
+    const orderedCycles = [...routeCycles].sort((a, b) => a.planned_start.localeCompare(b.planned_start));
+    const firstCycle = orderedCycles[0];
+    const lastCycle = orderedCycles.at(-1);
+    const dutySeconds = firstCycle && lastCycle
+      ? Math.max(0, (Date.parse(lastCycle.planned_finish) - Date.parse(firstCycle.planned_start)) / 1000)
+      : 0;
+    const usableShiftSeconds = shift
+      ? Math.max(1, (Date.parse(shift.end_at) - Date.parse(shift.start_at)) / 1000 - shift.break_minutes * 60)
+      : 0;
     const cycleMetrics = normalizeMetrics({
       total_tasks: routeCycles.flatMap((cycle) => cycle.stops).filter((stop) => stop.task_id).length,
       assigned_tasks: routeCycles.flatMap((cycle) => cycle.stops).filter((stop) => stop.task_id).length,
@@ -262,6 +271,7 @@ export function normalizeRoutePlan(raw: RawRoutePlan, workspace: ScenarioWorkspa
       total_travel_seconds: routeCycles.reduce((sum, cycle) => sum + cycle.total_travel_seconds, 0),
       total_service_seconds: routeCycles.reduce((sum, cycle) => sum + cycle.total_service_seconds, 0),
       total_detour_seconds: routeCycles.reduce((sum, cycle) => sum + cycle.detour_seconds, 0),
+      shift_utilization_percent: usableShiftSeconds ? dutySeconds / usableShiftSeconds * 100 : 0,
       score: routeCycles.reduce((sum, cycle) => sum + cycle.score, 0),
     });
     return {
@@ -352,6 +362,7 @@ export function normalizeWorkspace(workspace: ScenarioWorkspace): ScenarioWorksp
     shifts: workspace.shifts.map((shift) => ({ ...shift, preferred_route_group: shift.preferred_route_group ?? '' })),
     requests: workspace.requests.map((request) => ({
       ...request,
+      scheduled_date: request.scheduled_date ?? null,
       date_options: request.date_options ?? [],
       tasks: request.tasks ?? [],
       zone_status: request.zone_status ??

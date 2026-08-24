@@ -39,6 +39,11 @@ from .models import (
     ZoneSnapshot,
 )
 from .validation import calculate_plan_metrics, validate_route_plan
+from .workload import (
+    calculate_driver_workload_cost,
+    incremental_shift_workload_cost,
+    shift_utilization_percent,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +54,9 @@ class _Candidate:
     deliveries: tuple[PlanningTask, ...]
     pickups: tuple[PlanningTask, ...]
     selection_key: tuple[object, ...]
+    resource_activation_penalty: float
+    driver_workload_penalty: float
+    projected_shift_utilization_percent: float
 
     @property
     def task_ids(self) -> frozenset[str]:
@@ -226,14 +234,28 @@ class HeuristicPlanner:
         evaluation_budget = max(0, round(settings.max_optimization_seconds * 50_000))
         timed_out = evaluation_budget == 0
         evaluation_count = 0
+        delivery_phase_complete = False
         while remaining and active_shifts and not timed_out:
-            candidate_specs = _candidate_specs(
+            all_candidate_specs = _candidate_specs(
                 tuple(remaining.values()),
                 matrix,
                 matrix_index,
                 relation_index,
                 settings,
             )
+            delivery_phase = (
+                any(task.task_type is TaskType.DELIVERY for task in remaining.values())
+                and not delivery_phase_complete
+            )
+            if delivery_phase:
+                candidate_specs = tuple(
+                    spec for spec in all_candidate_specs if spec.deliveries
+                )
+            else:
+                candidate_specs = tuple(
+                    spec for spec in all_candidate_specs if not spec.deliveries
+                )
+            activated_shift_ids = frozenset(cycle.driver_shift_id for cycle in cycles)
             best_per_shift: list[_Candidate] = []
             for shift in active_shifts:
                 candidates, evaluated, exhausted = self._candidates_for_shift(
@@ -250,6 +272,7 @@ class HeuristicPlanner:
                     settings=settings,
                     existing_cycles=tuple(cycles),
                     cycle_count=cycle_counts[shift.id],
+                    activated_shift_ids=activated_shift_ids,
                     max_evaluations=evaluation_budget - evaluation_count,
                 )
                 evaluation_count += evaluated
@@ -262,6 +285,18 @@ class HeuristicPlanner:
                                 "driver_shift_id": shift.id,
                                 "task_ids": sorted(candidate.task_ids),
                                 "score": round(candidate.cycle.score, 6),
+                                "resource_activation_penalty": round(
+                                    candidate.resource_activation_penalty,
+                                    6,
+                                ),
+                                "driver_workload_penalty": round(
+                                    candidate.driver_workload_penalty,
+                                    6,
+                                ),
+                                "shift_utilization_percent": round(
+                                    candidate.projected_shift_utilization_percent,
+                                    2,
+                                ),
                             },
                         )
                     best = min(candidates, key=lambda candidate: candidate.selection_key)
@@ -285,12 +320,22 @@ class HeuristicPlanner:
                     timed_out = True
                     break
             if not best_per_shift:
+                if delivery_phase:
+                    delivery_phase_complete = True
+                    continue
                 break
             chosen = min(best_per_shift, key=lambda candidate: candidate.selection_key)
             cycles.append(chosen.cycle)
             for task_id in chosen.task_ids:
                 remaining.pop(task_id, None)
             shift_id = chosen.cycle.driver_shift_id
+            resource_decision = (
+                "REUSED"
+                if shift_id in activated_shift_ids
+                else "ADDITIONAL"
+                if activated_shift_ids
+                else "FIRST"
+            )
             turnaround = timedelta(
                 minutes=input_data.warehouse.turnaround_minutes
                 + settings.default_route_buffer_minutes
@@ -305,6 +350,20 @@ class HeuristicPlanner:
                     "cycle_id": chosen.cycle.id,
                     "driver_shift_id": shift_id,
                     "task_ids": sorted(chosen.task_ids),
+                    "resource_decision": resource_decision,
+                    "additional_resource_penalty": (
+                        settings.additional_resource_activation_penalty
+                        if resource_decision == "ADDITIONAL"
+                        else 0.0
+                    ),
+                    "driver_workload_penalty": round(
+                        chosen.driver_workload_penalty,
+                        6,
+                    ),
+                    "shift_utilization_percent": round(
+                        chosen.projected_shift_utilization_percent,
+                        2,
+                    ),
                 },
             )
             if timed_out:
@@ -348,7 +407,14 @@ class HeuristicPlanner:
             await trace.emit(
                 TracePhase.LOCAL_SEARCH,
                 TraceEventType.BEST_SCORE_UPDATED,
-                {"cycle_score": round(sum(cycle.score for cycle in cycles), 6)},
+                {
+                    "cycle_score": _plan_score(
+                        cycles,
+                        (),
+                        settings,
+                        active_shifts,
+                    )
+                },
             )
         await trace.complete(
             TracePhase.LOCAL_SEARCH,
@@ -387,7 +453,7 @@ class HeuristicPlanner:
                 cycle.id,
             ),
         )
-        score = _plan_score(cycles, final_unassigned, settings)
+        score = _plan_score(cycles, final_unassigned, settings, active_shifts)
         validation = validate_route_plan(
             cycles,
             warehouse=input_data.warehouse,
@@ -456,6 +522,7 @@ class HeuristicPlanner:
         settings: PlanningSettings,
         existing_cycles: tuple[RouteCycle, ...],
         cycle_count: int,
+        activated_shift_ids: frozenset[str],
         max_evaluations: int,
     ) -> tuple[list[_Candidate], int, bool]:
         """Evaluate complete rank buckets until the first feasible bucket is found."""
@@ -473,6 +540,11 @@ class HeuristicPlanner:
             if evaluated >= max_evaluations:
                 return candidates, evaluated, True
             evaluated += 1
+            reuses_resource = shift.id in activated_shift_ids
+            activates_additional_resource = bool(activated_shift_ids) and not reuses_resource
+            existing_shift_cycles = tuple(
+                cycle for cycle in existing_cycles if cycle.driver_shift_id == shift.id
+            )
             candidate = self._schedule_candidate(
                 shift=shift,
                 start_at=start_at,
@@ -487,6 +559,14 @@ class HeuristicPlanner:
                 relations=relations,
                 settings=settings,
                 cycle_count=cycle_count,
+                resource_activation_penalty=(
+                    settings.additional_resource_activation_penalty
+                    if activates_additional_resource
+                    else 0.0
+                ),
+                prefer_shift_reserve=not activated_shift_ids,
+                activates_additional_resource=activates_additional_resource,
+                existing_shift_cycles=existing_shift_cycles,
             )
             if candidate is not None and not _resource_overlap(candidate.cycle, existing_cycles):
                 candidates.append(candidate)
@@ -508,6 +588,10 @@ class HeuristicPlanner:
         relations: Mapping[tuple[str, str], ZoneRelation],
         settings: PlanningSettings,
         cycle_count: int,
+        resource_activation_penalty: float = 0.0,
+        prefer_shift_reserve: bool = False,
+        activates_additional_resource: bool = False,
+        existing_shift_cycles: tuple[RouteCycle, ...] = (),
     ) -> _Candidate | None:
         """Schedule one ordered task sequence and reject every hard violation."""
 
@@ -697,15 +781,22 @@ class HeuristicPlanner:
             matrix,
             matrix_index,
         )
-        if not _pickup_detour_allowed(
+        if not _pickup_transition_allowed(
+            deliveries,
+            pickups,
+            relations,
+        ):
+            return None
+        high_detour = _pickup_detour_exceeds_recommended_limit(
             deliveries,
             pickups,
             detour_seconds,
             detour_ratio,
             relations,
             settings,
-        ):
-            return None
+        )
+        if high_detour:
+            warnings.add(ValidationWarningCode.HIGH_DETOUR)
         route_groups = tuple(
             zone.route_group
             for task in task_sequence
@@ -730,7 +821,6 @@ class HeuristicPlanner:
             + overtime_seconds / 60.0 * settings.overtime_penalty_per_minute
             + cross_group_count * settings.cross_group_penalty
             + relation_penalty
-            + cycle_count * settings.driver_imbalance_weight
             - (settings.paired_delivery_bonus if len(deliveries) == 2 else 0.0)
             - (settings.paired_pickup_bonus if len(pickups) == 2 else 0.0)
             - (settings.driver_preference_bonus if preferred_match else 0.0)
@@ -744,6 +834,9 @@ class HeuristicPlanner:
             shift,
             detour_seconds,
             preferred_match,
+            high_detour=high_detour,
+            resource_reused=cycle_count > 0,
+            activates_additional_resource=activates_additional_resource,
         )
         cycle = RouteCycle(
             id=cycle_id,
@@ -766,6 +859,26 @@ class HeuristicPlanner:
             explanation=explanation,
             warnings=tuple(sorted(warnings, key=lambda warning: warning.value)),
         )
+        workload_penalty = incremental_shift_workload_cost(
+            existing_shift_cycles,
+            cycle,
+            shift,
+            settings,
+        )
+        projected_utilization = shift_utilization_percent(
+            (*existing_shift_cycles, cycle),
+            shift,
+        )
+        cycle = replace(
+            cycle,
+            explanation=(
+                *cycle.explanation,
+                f"Расчётная загрузка смены после рейса — "
+                f"{round(projected_utilization)}%; перерыв {shift.break_minutes} мин "
+                f"учтён, мягкая цель — "
+                f"{round(settings.preferred_shift_utilization_percent)}%.",
+            ),
+        )
         priority_key = _candidate_priority_key(
             deliveries,
             pickups,
@@ -773,18 +886,32 @@ class HeuristicPlanner:
             matrix_index,
         )
         stable_rank = _stable_rank(settings.seed, shift.id, *task_ids)
+        warning_rank = (
+            int(ValidationWarningCode.SOFT_WINDOW_RISK in warnings),
+            int(ValidationWarningCode.OVERTIME_WARNING in warnings),
+        )
+        remaining_shift_seconds = max(
+            0,
+            round((shift.end_at - cycle.planned_finish).total_seconds()),
+        )
         return _Candidate(
             cycle=cycle,
             deliveries=deliveries,
             pickups=pickups,
             selection_key=(
                 *priority_key,
-                cycle.score,
+                *warning_rank,
+                -remaining_shift_seconds if prefer_shift_reserve else 0,
+                cycle.score + resource_activation_penalty + workload_penalty,
                 cycle.planned_finish,
+                cycle_count,
                 stable_rank,
                 shift.id,
                 task_ids,
             ),
+            resource_activation_penalty=resource_activation_penalty,
+            driver_workload_penalty=workload_penalty,
+            projected_shift_utilization_percent=projected_utilization,
         )
 
     def _diagnose_task(
@@ -835,10 +962,7 @@ class HeuristicPlanner:
         attachment_reasons = _pickup_attachment_failures(
             task,
             cycles,
-            matrix,
-            matrix_index,
             relations,
-            settings,
         )
         option = task.selected_option
         if option.window_end is not None and nearest is not None:
@@ -911,11 +1035,28 @@ class HeuristicPlanner:
                     relations=relations,
                     settings=settings,
                     cycle_count=max(0, cycle.sequence - 1),
+                    existing_shift_cycles=tuple(
+                        item
+                        for item in result
+                        if item.id != cycle.id
+                        and item.driver_shift_id == cycle.driver_shift_id
+                    ),
                 )
                 other_cycles = tuple(item for item in result if item.id != cycle.id)
+                candidate_cycles = [
+                    candidate.cycle if item.id == cycle.id else item
+                    for item in result
+                ] if candidate is not None else []
                 if (
                     candidate is not None
-                    and candidate.cycle.score + 1e-9 < result[index].score
+                    and _plan_score(
+                        candidate_cycles,
+                        (),
+                        settings,
+                        shifts.values(),
+                    )
+                    + 1e-9
+                    < _plan_score(result, (), settings, shifts.values())
                     and not _resource_overlap(candidate.cycle, other_cycles)
                 ):
                     result[index] = candidate.cycle
@@ -1057,13 +1198,10 @@ def _candidate_specs(
         combinations.extend(
             (delivery_group, pickup_group)
             for pickup_group in pickup_groups
-            if _candidate_pickup_detour_allowed(
+            if _pickup_transition_allowed(
                 delivery_group,
                 pickup_group,
-                matrix,
-                matrix_index,
                 relations,
-                settings,
             )
         )
 
@@ -1110,10 +1248,11 @@ def _candidate_priority_key(
 ) -> tuple[object, ...]:
     """Return the shift-independent prefix of a candidate's final selection key.
 
-    A cycle that can bring a cabin back after its deliveries is preferred over a
-    pickup-only cycle when both candidates contain at least one last-date task.
-    This keeps the delivery-before-pickup invariant while avoiding an avoidable
-    empty return to the depot; the hard-task count still remains the first rule.
+    A cycle that can bring cabins back after its deliveries is preferred over a
+    separate pickup-only cycle. Within the same urgency bucket, full outbound
+    and return loads rank ahead of a partially loaded mixed cycle. That
+    lexicographic packing rule minimizes depot returns before weighted travel
+    and detour cost, while hard-task urgency still remains the first rule.
     """
 
     all_tasks = deliveries + pickups
@@ -1121,6 +1260,8 @@ def _candidate_priority_key(
         -sum(task.is_hard for task in all_tasks),
         -int(any(task.is_last_available_date for task in all_tasks)),
         -int(bool(deliveries and pickups)),
+        -sum(task.quantity for task in deliveries),
+        -sum(task.quantity for task in pickups),
         -len(all_tasks),
         -sum(task.priority for task in all_tasks),
         sum(task.remaining_date_count for task in all_tasks),
@@ -1231,33 +1372,28 @@ def _pickup_detour(
     return detour, detour / max(1, direct)
 
 
-def _candidate_pickup_detour_allowed(
+def _pickup_transition_allowed(
     deliveries: tuple[PlanningTask, ...],
     pickups: tuple[PlanningTask, ...],
-    matrix: TravelMatrix,
-    matrix_index: Mapping[str, int],
     relations: Mapping[tuple[str, str], ZoneRelation],
-    settings: PlanningSettings,
 ) -> bool:
-    """Reject a task combination before allocating its timed route objects."""
+    """Apply only hard directed-zone policy to a delivery-to-pickup transition."""
 
-    detour_seconds, detour_ratio = _pickup_detour(
-        deliveries,
-        pickups,
-        matrix,
-        matrix_index,
+    if not deliveries or not pickups:
+        return True
+    transition_relation = relations.get(
+        (deliveries[-1].zone_id or "", pickups[0].zone_id or "")
     )
-    return _pickup_detour_allowed(
-        deliveries,
-        pickups,
-        detour_seconds,
-        detour_ratio,
-        relations,
-        settings,
+    return not (
+        transition_relation is not None
+        and (
+            transition_relation.relation_type is RelationType.BLOCKED
+            or not transition_relation.pickup_allowed
+        )
     )
 
 
-def _pickup_detour_allowed(
+def _pickup_detour_exceeds_recommended_limit(
     deliveries: tuple[PlanningTask, ...],
     pickups: tuple[PlanningTask, ...],
     detour_seconds: int,
@@ -1265,26 +1401,21 @@ def _pickup_detour_allowed(
     relations: Mapping[tuple[str, str], ZoneRelation],
     settings: PlanningSettings,
 ) -> bool:
-    """Apply the same hard pickup-transition and detour rules at both search stages."""
+    """Return whether a cycle-saving backhaul exceeds its warning thresholds."""
 
     if not deliveries or not pickups:
-        return True
+        return False
     minute_limit = settings.max_detour_minutes
     ratio_limit = settings.max_detour_ratio
     transition_relation = relations.get(
         (deliveries[-1].zone_id or "", pickups[0].zone_id or "")
     )
     if transition_relation is not None:
-        if (
-            transition_relation.relation_type is RelationType.BLOCKED
-            or not transition_relation.pickup_allowed
-        ):
-            return False
         if transition_relation.max_detour_minutes is not None:
             minute_limit = min(minute_limit, transition_relation.max_detour_minutes)
         if transition_relation.max_detour_ratio is not None:
             ratio_limit = min(ratio_limit, transition_relation.max_detour_ratio)
-    return detour_seconds <= minute_limit * 60 and detour_ratio <= ratio_limit
+    return detour_seconds > minute_limit * 60 or detour_ratio > ratio_limit
 
 
 def _task_priority_key(task: PlanningTask) -> tuple[object, ...]:
@@ -1323,10 +1454,7 @@ def _task_priority_with_distance(
 def _pickup_attachment_failures(
     task: PlanningTask,
     cycles: Iterable[RouteCycle],
-    matrix: TravelMatrix,
-    matrix_index: Mapping[str, int],
     relations: Mapping[tuple[str, str], ZoneRelation],
-    settings: PlanningSettings,
 ) -> tuple[UnassignedReasonCode, ...]:
     """Explain why a leftover pickup could not join a completed delivery return."""
 
@@ -1334,17 +1462,12 @@ def _pickup_attachment_failures(
         return ()
     considered = 0
     blocked = 0
-    excessive_detour = 0
-    feasible = False
     for cycle in cycles:
         deliveries = [stop for stop in cycle.stops if stop.stop_type is StopType.DELIVERY]
         pickups = [stop for stop in cycle.stops if stop.stop_type is StopType.PICKUP]
         if not deliveries or pickups:
             continue
         last_delivery = deliveries[-1]
-        last_task_id = last_delivery.task_id
-        if last_task_id is None or last_task_id not in matrix_index:
-            continue
         considered += 1
         relation = relations.get((last_delivery.zone_id or "", task.zone_id or ""))
         if relation is not None and (
@@ -1352,35 +1475,10 @@ def _pickup_attachment_failures(
         ):
             blocked += 1
             continue
-        delivery_index = matrix_index[last_task_id]
-        pickup_index = matrix_index[task.id]
-        direct = matrix.at(delivery_index, 0).travel_seconds
-        with_pickup = (
-            matrix.at(delivery_index, pickup_index).travel_seconds
-            + task.service_minutes * 60
-            + matrix.at(pickup_index, 0).travel_seconds
-        )
-        detour = max(0, with_pickup - direct)
-        ratio = detour / max(1, direct)
-        minute_limit = settings.max_detour_minutes
-        ratio_limit = settings.max_detour_ratio
-        if relation is not None:
-            if relation.max_detour_minutes is not None:
-                minute_limit = min(minute_limit, relation.max_detour_minutes)
-            if relation.max_detour_ratio is not None:
-                ratio_limit = min(ratio_limit, relation.max_detour_ratio)
-        if detour > minute_limit * 60 or ratio > ratio_limit:
-            excessive_detour += 1
-        else:
-            feasible = True
-    if not considered or feasible:
         return ()
-    reasons: list[UnassignedReasonCode] = []
-    if blocked:
-        reasons.append(UnassignedReasonCode.ZONE_RELATION_BLOCKED)
-    if excessive_detour:
-        reasons.append(UnassignedReasonCode.DETOUR_TOO_LARGE)
-    return tuple(reasons)
+    if considered and blocked == considered:
+        return (UnassignedReasonCode.ZONE_RELATION_BLOCKED,)
+    return ()
 
 
 def _initial_shift_state(
@@ -1425,6 +1523,10 @@ def _cycle_explanation(
     shift: DriverShift,
     detour_seconds: int,
     preferred_match: bool,
+    *,
+    high_detour: bool,
+    resource_reused: bool,
+    activates_additional_resource: bool,
 ) -> tuple[str, ...]:
     """Build persisted Russian reasoning from decisions made by the heuristic."""
 
@@ -1443,8 +1545,27 @@ def _cycle_explanation(
             f"Вывозы {', '.join(task.request_id for task in pickups)} добавлены после "
             f"всех доставок; расчётный крюк {round(detour_seconds / 60)} мин."
         )
+        reasons.append(
+            "Смешанный цикл убирает отдельный рейс за вывозом и дополнительный "
+            "возврат на склад."
+        )
+        if high_detour:
+            reasons.append(
+                "Крюк выше рекомендуемого порога, но сохранён ради меньшего "
+                "числа циклов; вместимость, окна и смена не нарушены."
+            )
     elif pickups:
         reasons.append("Создан отдельный pickup-only цикл с учётом пустого пробега.")
+    if resource_reused:
+        reasons.append(
+            f"Водитель {shift.driver_name} продолжает свою смену: рейс помещается в "
+            "оставшееся время, поэтому дополнительная машина не подключается."
+        )
+    elif activates_additional_resource:
+        reasons.append(
+            f"Дополнительная смена водителя {shift.driver_name} подключена только после "
+            "учёта временных окон, вместимости, совместных точек и стоимости активации."
+        )
     if preferred_match:
         reasons.append(
             f"Водитель {shift.driver_name} выбран с учётом предпочтительной группы "
@@ -1539,14 +1660,28 @@ def _unassigned_task(
     )
 
 
+def calculate_resource_activation_cost(
+    cycles: Iterable[RouteCycle],
+    settings: PlanningSettings,
+) -> float:
+    """Return the fixed objective cost for resources beyond the first used shift."""
+
+    active_shift_count = len({cycle.driver_shift_id for cycle in cycles})
+    return max(0, active_shift_count - 1) * settings.additional_resource_activation_penalty
+
+
 def _plan_score(
     cycles: Iterable[RouteCycle],
     unassigned: Iterable[UnassignedTask],
     settings: PlanningSettings,
+    shifts: Iterable[DriverShift],
 ) -> float:
     """Calculate the documented weighted objective without hiding hard failures."""
 
-    score = sum(cycle.score for cycle in cycles)
+    cycle_list = tuple(cycles)
+    score = sum(cycle.score for cycle in cycle_list)
+    score += calculate_resource_activation_cost(cycle_list, settings)
+    score += calculate_driver_workload_cost(cycle_list, shifts, settings)
     for item in unassigned:
         task = item.task
         is_hard = isinstance(task, PlanningTask) and task.is_hard

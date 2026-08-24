@@ -7,6 +7,21 @@
   `YYYY-MM-DD`.
 - Request create and coordinate update payloads never accept `zone_id` as an
   authority. The backend stores the classified zone and its current version.
+- Scenario settings cannot disable the route-shape invariant: vehicle capacity
+  remains two, delivery/pickup stop limits stay within one or two, and
+  `deliveries_before_pickups` is always `true`. Invalid settings fail at the
+  transport boundary instead of being persisted for a later planner failure.
+- `POST /api/zones/{zone_id}/cutouts` accepts strictly contained `geometry` and
+  required `inner_zone` metadata. One transaction subtracts the geometry from
+  the unlocked source, increments its version once, creates the independent
+  version-one inner zone with exactly that geometry and returns both as
+  `{source_zone, inner_zone}`. Existing request snapshots remain unchanged until
+  explicit reclassification; a duplicate inner-zone code returns
+  `409 ZONE_CODE_CONFLICT` before either geometry changes.
+- `POST /api/requests/{request_id}/schedule` sets or clears the authoritative
+  logistics date. A date outside the accepted options fails unless
+  `add_if_missing=true`, which records an explicit soft whole-day agreement in
+  the same transaction.
 - Mutable plan operations carry `expected_version`; stale writes return HTTP
   409 with code `PLAN_VERSION_CONFLICT`.
 - Validation and manual edits return the complete updated plan with structured
@@ -55,14 +70,15 @@ independent three-day test scenario. Unlike
 `POST /api/scenarios/{scenario_id}/generate-demo`, it does not reset an
 existing scenario. It creates three drivers, three vehicles, three shift dates
 and ten date-eligible requests for each date; requests can be eligible on more
-than one date. Request date negotiation uses the existing
-`PATCH /api/requests/{request_id}` `date_options` collection: the UI promotes
-the agreed date to priority `1000` or adds it while retaining all prior date
-options.
+than one date. Request date negotiation uses the dedicated scheduling command:
+`scheduled_date=null` leaves every accepted option eligible, while a selected
+date makes that request eligible only for the selected day. Explicitly adding
+a negotiated date retains all prior options.
 
-`POST /api/scenarios/{scenario_id}/plans/generate` plans only requests whose
-`date_options` contain the requested `date`. Requests accepted solely on other
-dates are not emitted as `NO_ALLOWED_DATE` unassigned tasks for that plan.
+`POST /api/scenarios/{scenario_id}/plans/generate` plans unscheduled requests
+whose `date_options` contain the requested date, plus scheduled requests whose
+`scheduled_date` equals it. Requests belonging only to other dates are not
+emitted as `NO_ALLOWED_DATE` unassigned tasks for that plan.
 
 Simulation overrides use dedicated request shapes:
 

@@ -128,6 +128,11 @@ export interface ZoneInput {
   locked: boolean;
 }
 
+export interface ZoneCutoutResult {
+  source_zone: Zone;
+  inner_zone: Zone;
+}
+
 export interface DriverInput {
   external_worker_id?: UUID | null;
   name: string;
@@ -170,6 +175,11 @@ export interface LogisticsRequestInput {
   split_allowed: boolean;
   notes: string;
   date_options: RequestDateOption[];
+}
+
+export interface RequestScheduleInput {
+  date: string | null;
+  add_if_missing?: boolean;
 }
 
 export interface ManualChangeInput {
@@ -304,6 +314,13 @@ export const api = {
     request<Zone>(`/scenarios/${scenarioId}/zones`, { method: 'POST', body: jsonBody(input) }),
   updateZone: (id: UUID, input: Partial<Omit<ZoneInput, 'locked'>>) =>
     request<Zone>(`/zones/${id}`, { method: 'PATCH', body: jsonBody(input) }),
+  cutZone: (id: UUID, input: ZoneInput) => {
+    const { geometry, ...innerZone } = input;
+    return request<ZoneCutoutResult>(`/zones/${id}/cutouts`, {
+      method: 'POST',
+      body: jsonBody({ geometry, inner_zone: innerZone }),
+    });
+  },
   deleteZone: (id: UUID) => request<void>(`/zones/${id}`, { method: 'DELETE' }),
   setZoneLocked: (id: UUID, locked: boolean) =>
     request<Zone>(`/zones/${id}/lock`, { method: 'POST', body: jsonBody({ locked }) }),
@@ -344,6 +361,8 @@ export const api = {
     request<LogisticsRequest>(`/scenarios/${scenarioId}/requests`, { method: 'POST', body: jsonBody(input) }),
   updateRequest: (id: UUID, input: Partial<LogisticsRequestInput>) =>
     request<LogisticsRequest>(`/requests/${id}`, { method: 'PATCH', body: jsonBody(input) }),
+  scheduleRequest: (id: UUID, input: RequestScheduleInput) =>
+    request<LogisticsRequest>(`/requests/${id}/schedule`, { method: 'POST', body: jsonBody(input) }),
   deleteRequest: (id: UUID) => request<void>(`/requests/${id}`, { method: 'DELETE' }),
   splitRequest: (id: UUID) => request<LogisticsRequest>(`/requests/${id}/split`, { method: 'POST' }),
 

@@ -1,9 +1,13 @@
 """Regression tests for zero-based route-stop references in JSON exports."""
 
 from datetime import UTC, datetime
+from uuid import uuid4
+
+import pytest
+from pydantic import ValidationError
 
 from app.models.domain import StopType
-from app.schemas.domain import ExportRouteSegment, ExportRouteStop
+from app.schemas.domain import ExportRequest, ExportRouteSegment, ExportRouteStop
 
 
 def test_export_accepts_zero_based_depot_stop_and_segment_reference() -> None:
@@ -36,3 +40,47 @@ def test_export_accepts_zero_based_depot_stop_and_segment_reference() -> None:
 
     assert stop.sequence == 0
     assert segment.from_stop_sequence == 0
+
+
+def test_old_request_export_without_scheduled_date_remains_valid() -> None:
+    """Schema-version-one files created before explicit scheduling still import."""
+
+    payload = {
+        "id": str(uuid4()),
+        "data": {
+            "type": "DELIVERY",
+            "name": "Старая заявка",
+            "latitude": 55.75,
+            "longitude": 37.61,
+            "quantity": 1,
+            "date_options": [{"date": "2026-08-25"}],
+        },
+        "zone_id": None,
+        "zone_version": None,
+        "zone_classification_status": "OUTSIDE_ZONES",
+    }
+
+    assert ExportRequest.model_validate(payload).scheduled_date is None
+
+
+def test_export_rejects_scheduled_date_outside_accepted_options() -> None:
+    """A malformed import cannot create an assignment outside customer options."""
+
+    with pytest.raises(ValidationError, match="scheduled_date"):
+        ExportRequest.model_validate(
+            {
+                "id": str(uuid4()),
+                "data": {
+                    "type": "PICKUP",
+                    "name": "Некорректная заявка",
+                    "latitude": 55.75,
+                    "longitude": 37.61,
+                    "quantity": 1,
+                    "date_options": [{"date": "2026-08-25"}],
+                },
+                "scheduled_date": "2026-08-26",
+                "zone_id": None,
+                "zone_version": None,
+                "zone_classification_status": "OUTSIDE_ZONES",
+            }
+        )

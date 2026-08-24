@@ -22,6 +22,7 @@ from .models import (
     Vehicle,
     Warehouse,
 )
+from .workload import shift_duty_seconds, shift_usable_seconds
 
 
 def calculate_plan_metrics(
@@ -35,7 +36,8 @@ def calculate_plan_metrics(
     """Calculate stable aggregate metrics from final cycle snapshots."""
 
     cycle_list = tuple(cycles)
-    shift_by_id = {shift.id: shift for shift in shifts}
+    shift_list = tuple(shifts)
+    shift_by_id = {shift.id: shift for shift in shift_list}
     assigned = max(0, total_tasks - unassigned_tasks)
     distance = sum(cycle.total_distance_meters for cycle in cycle_list)
     empty_distance = sum(cycle.empty_distance_meters for cycle in cycle_list)
@@ -55,12 +57,22 @@ def calculate_plan_metrics(
             buffer_seconds = round((shift.end_at - cycle.planned_finish).total_seconds())
             buffers.append(buffer_seconds)
             overtime_seconds += max(0, -buffer_seconds)
+    used_shifts = tuple(
+        shift
+        for shift in shift_list
+        if any(cycle.driver_shift_id == shift.id for cycle in cycle_list)
+    )
+    total_usable_seconds = sum(shift_usable_seconds(shift) for shift in used_shifts)
+    total_duty_seconds = sum(
+        shift_duty_seconds(cycle_list, shift) for shift in used_shifts
+    )
     return PlanMetrics(
         total_tasks=total_tasks,
         assigned_tasks=assigned,
         unassigned_tasks=unassigned_tasks,
         assignment_percent=(assigned / total_tasks * 100.0 if total_tasks else 100.0),
         cycle_count=len(cycle_list),
+        active_shift_count=len(used_shifts),
         total_distance_meters=distance,
         empty_distance_meters=empty_distance,
         empty_distance_percent=(empty_distance / distance * 100.0 if distance else 0.0),
@@ -71,6 +83,11 @@ def calculate_plan_metrics(
         paired_delivery_count=delivery_pairs,
         paired_pickup_count=pickup_pairs,
         average_vehicle_load=(sum(loads) / len(loads) if loads else 0.0),
+        shift_utilization_percent=(
+            total_duty_seconds / total_usable_seconds * 100.0
+            if total_usable_seconds
+            else 0.0
+        ),
         overtime_seconds=overtime_seconds,
         minimum_buffer_seconds=min(buffers, default=0),
         score=score,
@@ -214,6 +231,27 @@ def validate_route_plan(
                         stop.task_id,
                     )
                 )
+            if (
+                (
+                    stop.stop_type is StopType.DELIVERY
+                    and stop.quantity_delta >= 0
+                )
+                or (
+                    stop.stop_type is StopType.PICKUP
+                    and stop.quantity_delta <= 0
+                )
+            ):
+                errors.append(
+                    ValidationIssue(
+                        ValidationErrorCode.LOAD_DISCONTINUITY,
+                        (
+                            "Доставка должна уменьшать загрузку машины, а вывоз — "
+                            "увеличивать её. Бытовки для доставки загружаются только на складе."
+                        ),
+                        cycle.id,
+                        stop.task_id,
+                    )
+                )
             if stop.task_id is not None:
                 assigned_tasks.append((stop.task_id, cycle.id))
                 if abs(stop.quantity_delta) not in (1, 2):
@@ -257,6 +295,23 @@ def validate_route_plan(
                     cycle.id,
                 )
             )
+        if cycle.stops:
+            delivery_quantity = sum(
+                abs(stop.quantity_delta)
+                for stop in cycle.stops
+                if stop.stop_type is StopType.DELIVERY
+            )
+            if cycle.stops[0].load_after != delivery_quantity:
+                errors.append(
+                    ValidationIssue(
+                        ValidationErrorCode.LOAD_DISCONTINUITY,
+                        (
+                            "Исходящая загрузка со склада должна точно соответствовать "
+                            "количеству бытовок во всех доставках этого рейса."
+                        ),
+                        cycle.id,
+                    )
+                )
 
         shift = shift_by_id.get(cycle.driver_shift_id)
         if shift is None:

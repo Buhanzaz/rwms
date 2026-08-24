@@ -1,6 +1,6 @@
 """FastAPI and Pydantic contract tests that do not require a database."""
 
-from datetime import datetime
+from datetime import date, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,6 +17,7 @@ from app.schemas.domain import (
     VehicleCreate,
 )
 from app.services.catalog import split_quantities
+from app.services.planner_runtime import request_is_available_on_date
 
 
 def test_openapi_is_served_under_api_and_contains_core_operations() -> None:
@@ -27,6 +28,8 @@ def test_openapi_is_served_under_api_and_contains_core_operations() -> None:
     assert "/api/health" in paths
     assert "/api/scenarios" in paths
     assert "/api/scenarios/{scenario_id}/requests" in paths
+    assert "/api/requests/{request_id}/schedule" in paths
+    assert "/api/zones/{zone_id}/cutouts" in paths
     assert "/api/scenarios/{scenario_id}/plans/generate" in paths
     assert "/api/optimization-runs/{run_id}/stream" in paths
     assert "/api/plans/{plan_id}/simulation/delay" in paths
@@ -108,6 +111,19 @@ def test_request_quantity_split(quantity: int, expected: list[int]) -> None:
     assert split_quantities(quantity) == expected
 
 
+def test_explicit_request_date_overrides_other_accepted_options() -> None:
+    """An assigned request belongs to one day; an unassigned one remains negotiable."""
+
+    first = date(2026, 8, 25)
+    second = date(2026, 8, 26)
+    options = [first, second]
+
+    assert request_is_available_on_date(None, options, first)
+    assert request_is_available_on_date(None, options, second)
+    assert request_is_available_on_date(first, options, first)
+    assert not request_is_available_on_date(first, options, second)
+
+
 @pytest.mark.parametrize("capacity", [0, 3, 10])
 def test_capacity_above_mvp_limit_is_rejected(capacity: int) -> None:
     """Settings are fixed at two and an individual test vehicle may only use one or two."""
@@ -120,6 +136,55 @@ def test_capacity_above_mvp_limit_is_rejected(capacity: int) -> None:
             registration_number="TEST",
             capacity=capacity,
         )
+
+
+def test_additional_resource_penalty_has_a_safe_non_negative_default() -> None:
+    """Existing scenarios inherit fleet consolidation without a data migration."""
+
+    assert ScenarioSettings().additional_resource_activation_penalty == 180
+    with pytest.raises(ValidationError):
+        ScenarioSettings(additional_resource_activation_penalty=-1)
+
+
+def test_driver_workload_settings_have_safe_bounded_defaults() -> None:
+    """Workload balancing remains tunable without weakening the hard shift end."""
+
+    settings = ScenarioSettings()
+    assert settings.preferred_shift_utilization_percent == 80
+    assert settings.driver_workload_weight == 3
+    with pytest.raises(ValidationError):
+        ScenarioSettings(preferred_shift_utilization_percent=0)
+    with pytest.raises(ValidationError):
+        ScenarioSettings(preferred_shift_utilization_percent=101)
+    with pytest.raises(ValidationError):
+        ScenarioSettings(driver_workload_weight=-1)
+
+
+def test_default_detour_policy_allows_full_backhaul_but_keeps_a_minute_cap() -> None:
+    """Short direct returns may exceed 25%, while absolute diversion stays bounded."""
+
+    settings = ScenarioSettings()
+    assert settings.max_detour_ratio == 1.5
+    assert settings.max_detour_minutes == 35
+
+
+@pytest.mark.parametrize(
+    "invalid_settings",
+    [
+        {"deliveries_before_pickups": False},
+        {"max_delivery_stops": 0},
+        {"max_delivery_stops": 3},
+        {"max_pickup_stops": 0},
+        {"max_pickup_stops": 3},
+    ],
+)
+def test_route_shape_invariants_cannot_be_disabled(
+    invalid_settings: dict[str, object],
+) -> None:
+    """Persisted API settings must remain constructible by the core planner."""
+
+    with pytest.raises(ValidationError):
+        ScenarioSettings.model_validate(invalid_settings)
 
 
 def test_simulation_override_contracts_require_aware_time_and_positive_delay() -> None:

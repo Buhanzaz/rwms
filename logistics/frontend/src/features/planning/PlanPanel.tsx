@@ -15,6 +15,8 @@ import type { RouteCycle, RoutePlan, RouteStop, UnassignedTask, UUID } from '../
 import { Badge, Button, EmptyState } from '../../components/ui';
 import { formatDistance, formatDuration, formatTime, shortId } from '../../utils/format';
 
+const integerFormatter = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
+
 interface DragData {
   taskId: UUID;
   sourceCycleId: UUID | null;
@@ -196,7 +198,9 @@ export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, onSelect
             <section className="route-driver" key={route.driver_shift_id} data-testid="driver-route">
               <header className="route-driver__head">
                 <button type="button" className="route-driver__select" onClick={() => onSelectDriverRoute(route.driver_shift_id)}>
-                  <strong>{route.driver_name}</strong><p>{route.vehicle_name} · {route.registration_number}</p>
+                  <strong>{route.driver_name}</strong>
+                  <p>{route.vehicle_name} · {route.registration_number}</p>
+                  <p className="route-driver__workload">Нагрузка смены: {integerFormatter.format(route.metrics.shift_utilization_percent)}% · циклов: {integerFormatter.format(route.cycles.length)}</p>
                 </button>
                 <Badge tone="accent">{route.preferred_route_group}</Badge>
               </header>

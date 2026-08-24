@@ -52,6 +52,7 @@ async def request_read(session: AsyncSession, request: LogisticsRequest) -> Logi
         service_minutes=request.service_minutes,
         priority=request.priority,
         status=request.status,
+        scheduled_date=request.scheduled_date,
         zone_id=request.zone_id,
         zone_version=request.zone_version,
         zone_classification_status=request.zone_classification_status,

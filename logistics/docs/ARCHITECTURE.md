@@ -41,16 +41,26 @@ disabled by default and never exposes its client secret to the browser.
   access. Alembic is the only schema mutation mechanism.
 - `backend/app/geo` classifies request coordinates with PostGIS. Higher zone
   priority wins; equal priority selects the smallest covering geometry.
+- `backend/app/services/catalog.py` owns the atomic cutout command: it versions
+  the source geometry and creates the independent inner zone in one transaction.
 - `backend/app/routing` contains the provider protocol, the private OSRM HTTP
   adapter and deterministic Haversine implementation.
-- `backend/app/planner` creates and validates delivery-before-pickup cycles.
+- `backend/app/planner` creates and validates delivery-before-pickup schedules
+  per depot cycle: a loaded cycle may append pickups only after its deliveries,
+  then a depot return allows the same shift to load a new independent cycle.
+  Its deterministic candidate objective minimizes compatible depot cycles and
+  charges a fixed activation cost for every driver/vehicle shift beyond the
+  first.
 - `backend/app/simulation` derives delay-adjusted schedules without mutating a
   confirmed plan.
 - `backend/app/integrations` owns the opt-in OAuth token cache, strict RWMS
   transport models, idempotent synchronization and versioned plan application.
 - `frontend/src/api` is the only HTTP boundary in the browser.
 - `frontend/src/features` contains cohesive operator workflows.
-- `frontend/src/map` owns MapLibre/Terra Draw rendering and offline grid style.
+- `frontend/src/app/App.tsx` performs the operator preflight that explicitly
+  reclassifies missing/stale zone snapshots before optimization.
+- `frontend/src/map` owns MapLibre/Terra Draw rendering, request popups anchored
+  to coordinates and the offline grid style.
 - `frontend/src/stores` owns non-authoritative UI and simulation controls.
 
 The normal API dependency has function scope: a successful handler transaction
@@ -70,18 +80,24 @@ cannot delete or overwrite the scenario which an operator is currently testing.
   scenario.
 - Existing requests retain `zone_id` and `zone_version` after zone geometry
   changes. Reclassification is a separate explicit operation.
+- A zone cutout is a server-validated geometry subtraction. It must be strictly
+  contained by an unlocked source zone, becomes an interior ring, increments
+  the zone version once and follows the same explicit reclassification rule.
+  The command locks the source row, so concurrent cutouts or geometry edits
+  serialize instead of losing one operator's hole.
 - Planner and simulation functions use stable ordering and explicit seeds so a
   saved JSON scenario can reproduce a result.
 - Temporary simulation delay and driver-unavailability overrides remain in the
   browser and are derived as pure timestamp functions. `persist=true` is the
   explicit audited mutation boundary.
-- A request's accepted dates are backend-owned request facts. The date-board
-  UI can promote one date or add a negotiated alternative by replacing the
-  validated date-option collection; it never removes an existing alternative.
+- A request's accepted dates and nullable `scheduled_date` are backend-owned
+  facts. Until scheduling, every accepted option remains eligible. The
+  dedicated scheduling command selects one authoritative logistics date,
+  clears it, or explicitly adds a newly negotiated option atomically.
 - The header planning date is a shared view filter: the request inspector and
-  MapLibre markers both render only requests accepted for that date. The map
-  request card can promote the selected date or add/promote the next date by
-  using the same backend-owned collection.
+  MapLibre markers both render unscheduled requests accepted for that date and
+  scheduled requests assigned to it. The map request card displays the source
+  options but mutates date assignment only through the backend command.
 - The planner runtime applies the same date filter before splitting tasks, so
   a request that is only available on another date cannot inflate the selected
   plan's unassigned count or metrics.
@@ -113,6 +129,24 @@ request process. The optimization run, trace and resulting plan are persisted
 separately; confirmed plans are never overwritten. This is suitable for the
 local MVP, while interruptible live cancellation and concurrent heavy runs
 need a future worker/queue boundary.
+
+Candidate selection is lexicographic for domain priority and weighted for
+operating cost. Hard dates/windows, capacity, per-cycle delivery-before-pickup
+ordering, blocked zone transitions, resource overlap and shift limits first
+remove infeasible variants. The next rank prefers mixed cycles, full
+outbound/return quantities and then more compatible stops, so depot returns
+are minimized before weighted route length. The scenario defaults of 35
+minutes and a 1.5 detour ratio are warning/score thresholds, including tighter
+zone-relation thresholds, rather than hard reasons to create another cycle.
+Within that rank, a first resource is chosen with enough remaining shift
+reserve and subsequent cycles reuse it unless a new shift improves the route
+by more than `additional_resource_activation_penalty` or is required for
+feasibility. The saved plan score includes this cost once per additional used
+shift. It also measures each driver's elapsed duty against break-adjusted shift
+capacity: minutes above `preferred_shift_utilization_percent` receive
+`driver_workload_weight`, so a heavily loaded shift can justify a second
+resource before the hard shift end. Manual changes recalculate both objective
+components from the complete resulting plan.
 
 Manual editing currently supports validated task move/reorder, task lock at the
 API boundary and cycle lock. Reoptimization carries locked cycles into a new

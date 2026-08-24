@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, fields, replace
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -68,7 +68,9 @@ from app.planner import (
     Warehouse,
     ZoneRelation,
     ZoneSnapshot,
+    calculate_driver_workload_cost,
     calculate_plan_metrics,
+    calculate_resource_activation_cost,
     validate_route_plan,
 )
 from app.planner.engine import NullProgressPublisher
@@ -101,6 +103,18 @@ class _RuntimeSnapshot:
     core_task_by_uuid: Mapping[UUID, PlanningTask]
     request_task_uuids: Mapping[str, tuple[UUID, ...]]
     scenario_fingerprint: str
+
+
+def request_is_available_on_date(
+    scheduled_date: date | None,
+    option_dates: Iterable[date],
+    planning_date: date,
+) -> bool:
+    """Resolve date eligibility from an explicit assignment or accepted alternatives."""
+
+    if scheduled_date is not None:
+        return scheduled_date == planning_date
+    return planning_date in option_dates
 
 
 class _CachedRoutingProvider:
@@ -489,14 +503,18 @@ class RuntimePlannerFacade:
             )
             for zone in sorted(scenario.zones, key=lambda item: str(item.id))
         )
-        all_requests = tuple(
-            self._core_request(request, zone_entities, zone_info)
-            for request in sorted(scenario.requests, key=lambda item: (item.created_at, item.id))
+        request_entities = sorted(
+            scenario.requests,
+            key=lambda item: (item.created_at, item.id),
         )
         requests = tuple(
-            request
-            for request in all_requests
-            if any(option.date == planning_date for option in request.date_options)
+            self._core_request(request, zone_entities, zone_info)
+            for request in request_entities
+            if request_is_available_on_date(
+                request.scheduled_date,
+                (option.date for option in request.date_options),
+                planning_date,
+            )
         )
         vehicles = tuple(
             Vehicle(
@@ -1261,6 +1279,12 @@ class RuntimePlannerFacade:
         was_unassigned = any(item.task_id == task_id for item in plan.unassigned_tasks)
         remaining_unassigned = len(plan.unassigned_tasks) - int(was_unassigned)
         score = sum(cycle.score for cycle in candidate_cycles)
+        score += calculate_resource_activation_cost(candidate_cycles, snapshot.settings)
+        score += calculate_driver_workload_cost(
+            candidate_cycles,
+            snapshot.input_data.shifts,
+            snapshot.settings,
+        )
         validation = validate_route_plan(
             candidate_cycles,
             warehouse=snapshot.input_data.warehouse,
@@ -1320,7 +1344,12 @@ class RuntimePlannerFacade:
         cycle: DbRouteCycle,
         tasks: list[PlanningTask],
     ) -> RouteCycle:
-        """Rebuild one operator-edited cycle through the same production scheduler."""
+        """Rebuild one operator-edited cycle through the same production scheduler.
+
+        The generated plan uses one matrix snapshot at the earliest active shift start.
+        Reusing that departure instant here keeps a no-op manual edit deterministic;
+        the cycle's actual start still drives time-window and shift validation.
+        """
 
         pickup_seen = False
         for task in tasks:
@@ -1339,7 +1368,21 @@ class RuntimePlannerFacade:
         all_tasks = sorted(snapshot.core_task_by_uuid.values(), key=lambda item: item.id)
         points = [snapshot.input_data.warehouse.point, *(task.point for task in all_tasks)]
         provider = self._provider(snapshot)
-        departure_at = cycle.planned_start.astimezone(ZoneInfo(snapshot.scenario.timezone))
+        active_vehicle_ids = {
+            vehicle.id for vehicle in snapshot.input_data.vehicles if vehicle.active
+        }
+        departure_at = min(
+            (
+                item.start_at
+                for item in snapshot.input_data.shifts
+                if item.active
+                and item.start_at.date() == snapshot.input_data.planning_date
+                and item.vehicle_id in active_vehicle_ids
+            ),
+            default=cycle.planned_start.astimezone(
+                ZoneInfo(snapshot.scenario.timezone)
+            ),
+        )
         matrix = await provider.get_matrix(points, departure_at)
         matrix_index = {task.id: index + 1 for index, task in enumerate(all_tasks)}
         shift = next(
@@ -1375,6 +1418,12 @@ class RuntimePlannerFacade:
             relations=_build_relation_index(snapshot.input_data.zone_relations),
             settings=snapshot.settings,
             cycle_count=max(0, cycle.sequence - 1),
+            existing_shift_cycles=tuple(
+                self._core_cycle(item, snapshot)
+                for item in cycle.route_plan.cycles
+                if item.id != cycle.id
+                and item.driver_shift_id == cycle.driver_shift_id
+            ),
         )
         if candidate is None:
             raise ApiError(

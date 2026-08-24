@@ -150,6 +150,133 @@ def test_validator_detects_delivery_after_pickup() -> None:
     assert ValidationErrorCode.PICKUP_BEFORE_DELIVERY in error_codes(validation)
 
 
+def test_validator_rejects_pickup_load_disguised_as_delivery() -> None:
+    """A delivery cannot increase load and consume a cabin collected later."""
+
+    cycle, data, _ = generated_cycle((TaskType.DELIVERY, TaskType.PICKUP))
+    depot_load, delivery, pickup, depot_return = cycle.stops
+    forged_cycle = replace(
+        cycle,
+        stops=(
+            replace(depot_load, quantity_delta=0, load_after=0),
+            replace(delivery, quantity_delta=1, load_before=0, load_after=1),
+            replace(pickup, quantity_delta=-1, load_before=1, load_after=0),
+            replace(depot_return, quantity_delta=0, load_before=0, load_after=0),
+        ),
+    )
+
+    validation = validate_route_plan(
+        (forged_cycle,),
+        warehouse=data.warehouse,
+        shifts=data.shifts,
+        vehicles=data.vehicles,
+        settings=PlanningSettings(max_detour_ratio=10),
+    )
+
+    assert ValidationErrorCode.PICKUP_BEFORE_DELIVERY not in error_codes(validation)
+    assert ValidationErrorCode.LOAD_DISCONTINUITY in error_codes(validation)
+
+
+def test_validator_requires_every_delivery_cabin_to_be_loaded_at_depot() -> None:
+    cycle, data, _ = generated_cycle((TaskType.DELIVERY,))
+    depot_load, delivery, depot_return = cycle.stops
+    bad_cycle = replace(
+        cycle,
+        stops=(
+            replace(depot_load, quantity_delta=2, load_after=2),
+            replace(delivery, load_before=2, load_after=1),
+            replace(depot_return, quantity_delta=-1, load_before=1),
+        ),
+    )
+
+    validation = validate_route_plan(
+        (bad_cycle,),
+        warehouse=data.warehouse,
+        shifts=data.shifts,
+        vehicles=data.vehicles,
+        settings=PlanningSettings(),
+    )
+
+    assert ValidationErrorCode.LOAD_DISCONTINUITY in error_codes(validation)
+
+
+def test_validator_allows_delivery_in_later_depot_cycle_after_pickup() -> None:
+    pickup_cycle, data, _ = generated_cycle((TaskType.PICKUP,))
+    delivery_cycle, _, _ = generated_cycle((TaskType.DELIVERY,))
+    delay = timedelta(hours=4)
+    later_delivery = replace(
+        delivery_cycle,
+        id="later-delivery",
+        sequence=pickup_cycle.sequence + 1,
+        planned_start=delivery_cycle.planned_start + delay,
+        planned_finish=delivery_cycle.planned_finish + delay,
+        stops=tuple(
+            replace(
+                stop,
+                task_id="delivery-task" if stop.task_id is not None else None,
+                planned_arrival=stop.planned_arrival + delay,
+                planned_departure=stop.planned_departure + delay,
+            )
+            for stop in delivery_cycle.stops
+        ),
+        legs=tuple(
+            replace(
+                leg,
+                departure_at=leg.departure_at + delay,
+                arrival_at=leg.arrival_at + delay,
+            )
+            for leg in delivery_cycle.legs
+        ),
+    )
+
+    validation = validate_route_plan(
+        (pickup_cycle, later_delivery),
+        warehouse=data.warehouse,
+        shifts=data.shifts,
+        vehicles=data.vehicles,
+        settings=PlanningSettings(),
+    )
+
+    assert ValidationErrorCode.PICKUP_BEFORE_DELIVERY not in error_codes(validation)
+
+
+def test_validator_keeps_different_driver_shifts_independent() -> None:
+    pickup_cycle, data, _ = generated_cycle((TaskType.PICKUP,))
+    delivery_cycle, _, _ = generated_cycle((TaskType.DELIVERY,))
+    second_vehicle = replace(data.vehicles[0], id="second-vehicle", name="Вторая машина")
+    second_shift = replace(
+        data.shifts[0],
+        id="second-shift",
+        driver_id="second-driver",
+        driver_name="Второй водитель",
+        vehicle_id=second_vehicle.id,
+    )
+    other_driver_delivery = replace(
+        delivery_cycle,
+        id="other-driver-delivery",
+        driver_shift_id=second_shift.id,
+        driver_id=second_shift.driver_id,
+        vehicle_id=second_vehicle.id,
+        stops=tuple(
+            replace(
+                stop,
+                task_id="other-driver-delivery-task" if stop.task_id is not None else None,
+            )
+            for stop in delivery_cycle.stops
+        ),
+    )
+
+    validation = validate_route_plan(
+        (pickup_cycle, other_driver_delivery),
+        warehouse=data.warehouse,
+        shifts=(*data.shifts, second_shift),
+        vehicles=(*data.vehicles, second_vehicle),
+        settings=PlanningSettings(),
+    )
+
+    assert ValidationErrorCode.PICKUP_BEFORE_DELIVERY not in error_codes(validation)
+
+
 def test_validator_detects_duplicate_assignment_driver_and_vehicle_overlap() -> None:
     cycle, data, _ = generated_cycle((TaskType.DELIVERY,))
     duplicate = replace(cycle, id="duplicate-cycle")

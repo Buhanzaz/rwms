@@ -11,6 +11,7 @@ import {
   MapPinPlus,
   Plus,
   RefreshCw,
+  Scissors,
   Trash2,
   Upload,
 } from 'lucide-react';
@@ -31,7 +32,8 @@ import type {
   Zone,
 } from '../domain/types';
 import { Badge, Button, EmptyState, ErrorPanel } from '../components/ui';
-import { useUiStore } from '../stores/ui-store';
+import { isRequestVisibleOnDate, requestPlanningDates } from '../domain/request-dates';
+import { useUiStore, type MapTool } from '../stores/ui-store';
 import { formatDate, formatDistance, formatDuration, formatTime, nextDate } from '../utils/format';
 import { PlanPanel, type PlanMove } from '../features/planning/PlanPanel';
 import { SettingsEditor } from '../features/settings/SettingsEditor';
@@ -56,7 +58,7 @@ interface InspectorProps {
   onImport: () => void;
   onReclassify: () => void;
   onZoneRelation: (fromId: UUID, toId: UUID) => void;
-  onSetMapTool: (tool: 'PLACE_WAREHOUSE' | 'DRAW_ZONE' | 'EDIT_ZONE' | 'ADD_DELIVERY' | 'ADD_PICKUP' | 'RELATE_ZONES') => void;
+  onSetMapTool: (tool: MapTool) => void;
   onSelect: (kind: 'warehouse' | 'zone' | 'request' | 'driver' | 'vehicle' | 'shift' | 'cycle', id: UUID) => void;
   onMoveTask: (move: PlanMove) => void;
   onToggleCycleLock: (cycle: RouteCycle) => void;
@@ -65,7 +67,8 @@ interface InspectorProps {
   onSimulationOverride: (kind: 'delay' | 'unavailable', driverShiftId: UUID) => void;
   planningDate: string;
   onPlanningDateChange: (date: string) => void;
-  onAgreeRequestDate: (requestId: UUID, date: string) => void;
+  onScheduleRequestDate: (requestId: UUID, date: string, addIfMissing: boolean) => void;
+  onUnscheduleRequest: (requestId: UUID) => void;
 }
 
 function EntityCard({ title, subtitle, badges, onClick, onEdit, onDelete }: {
@@ -141,7 +144,7 @@ function WarehouseSection({ props }: { props: InspectorProps }) {
 function ZonesSection({ props }: { props: InspectorProps }) {
   return <>
     <h2 className="section-title">Логистические зоны</h2><p className="section-subtitle">Принадлежность заявки определяет только backend. Изменение полигона не переклассифицирует старые заявки молча.</p>
-    <div className="toolbar-row"><Button variant="primary" onClick={() => props.onSetMapTool('DRAW_ZONE')}><Plus size={14} />Нарисовать</Button><Button onClick={() => props.onSetMapTool('EDIT_ZONE')}><Edit3 size={14} />Вершины</Button><Button onClick={props.onReclassify}><RefreshCw size={14} />Пересчитать заявки</Button></div>
+    <div className="toolbar-row"><Button variant="primary" onClick={() => props.onSetMapTool('DRAW_ZONE')}><Plus size={14} />Нарисовать</Button><Button onClick={() => props.onSetMapTool('CUT_ZONE')}><Scissors size={14} aria-hidden="true" />Сделать вырез</Button><Button onClick={() => props.onSetMapTool('EDIT_ZONE')}><Edit3 size={14} />Вершины</Button><Button onClick={props.onReclassify}><RefreshCw size={14} />Пересчитать заявки</Button></div>
     <div className="entity-list">{props.workspace.zones.map((zone) => <EntityCard key={zone.id} title={`${zone.code} · ${zone.name}`} subtitle={`${zone.route_group} · приоритет ${zone.priority} · версия ${zone.version}${zone.stale_request_count ? ` · устарело ${zone.stale_request_count}` : ''}`} badges={<>{zone.locked ? <Badge tone="warning"><Lock size={10} />locked</Badge> : <Badge tone="neutral"><LockOpen size={10} />editable</Badge>}</>} onClick={() => props.onSelect('zone', zone.id)} onEdit={() => props.onEdit('zone', zone)} onDelete={() => props.onDelete('zone', zone.id, zone.name)} />)}</div>
   </>;
 }
@@ -189,8 +192,8 @@ function ShiftsSection({ props }: { props: InspectorProps }) {
 }
 
 function RequestsSection({ props }: { props: InspectorProps }) {
-  const requestDates = [...new Set(props.workspace.requests.flatMap((request) => request.date_options.map((option) => option.date)))].sort();
-  const availableRequests = props.workspace.requests.filter((request) => request.date_options.some((option) => option.date === props.planningDate));
+  const requestDates = [...new Set(props.workspace.requests.flatMap(requestPlanningDates))].sort();
+  const availableRequests = props.workspace.requests.filter((request) => isRequestVisibleOnDate(request, props.planningDate));
   const nextPlanningDate = nextDate(props.planningDate, 1);
   return <>
     <h2 className="section-title">Заявки</h2><p className="section-subtitle">Количество больше двух backend разбивает на транспортные части 2 + 2 + 1.</p>
@@ -198,7 +201,7 @@ function RequestsSection({ props }: { props: InspectorProps }) {
     <div className="date-board" aria-label="Заявки по допустимым датам">
       <strong>Показать дату</strong>
       <div>{requestDates.map((date) => {
-        const count = props.workspace.requests.filter((request) => request.date_options.some((option) => option.date === date)).length;
+        const count = props.workspace.requests.filter((request) => isRequestVisibleOnDate(request, date)).length;
         return <button type="button" key={date} aria-pressed={date === props.planningDate} onClick={() => props.onPlanningDateChange(date)}>{formatDate(date)} <small>{count}</small></button>;
       })}</div>
       <p>{formatDate(props.planningDate)}: доступно {availableRequests.length} из {props.workspace.requests.length}. Список ниже отфильтрован по этой дате.</p>
@@ -209,16 +212,18 @@ function RequestsSection({ props }: { props: InspectorProps }) {
       const selectedOption = request.date_options.find((option) => option.date === props.planningDate);
       const hasTomorrow = request.date_options.some((option) => option.date === nextPlanningDate);
       return <article className="entity-card" key={request.id} onClick={() => props.onSelect('request', request.id)}>
-        <div className="entity-card__row"><strong>{request.type === 'DELIVERY' ? 'D' : 'P'} · {request.name}</strong><span><Badge tone={request.type === 'DELIVERY' ? 'accent' : 'warning'}>{request.type}</Badge><Badge tone={tone}>{request.zone_status ?? 'CURRENT'}</Badge></span></div>
+        <div className="entity-card__row"><strong>{request.type === 'DELIVERY' ? 'Д' : 'В'} · {request.name}</strong><span><Badge tone={request.type === 'DELIVERY' ? 'accent' : 'warning'}>{request.type}</Badge><Badge tone={tone}>{request.zone_status ?? 'CURRENT'}</Badge></span></div>
         <p>{request.quantity} бытов. · зона {zone?.code ?? 'OUTSIDE_ZONES'} v{request.zone_version ?? '—'}</p>
+        <p>{request.scheduled_date ? `Выставлено на ${formatDate(request.scheduled_date)}` : 'Дата логистики не выбрана'}</p>
         <div className="request-date-options">{request.date_options.map((option) => <span key={option.date} className={option.date === props.planningDate ? 'request-date-options__active' : undefined}>{formatDate(option.date)}{option.is_hard ? ' · жёстко' : ''}</span>)}</div>
         <div className="toolbar-row" style={{ margin: '8px 0 0' }}>
-          <Button size="sm" variant={selectedOption?.priority === 1000 ? 'primary' : 'ghost'} onClick={(event) => { event.stopPropagation(); props.onAgreeRequestDate(request.id, props.planningDate); }}>
-            {selectedOption ? `Согласовать ${formatDate(props.planningDate)}` : `Добавить ${formatDate(props.planningDate)}`}
+          <Button size="sm" variant={request.scheduled_date === props.planningDate ? 'primary' : 'ghost'} onClick={(event) => { event.stopPropagation(); props.onScheduleRequestDate(request.id, props.planningDate, !selectedOption); }}>
+            {request.scheduled_date === props.planningDate ? `Назначено ${formatDate(props.planningDate)}` : selectedOption ? `Выставить ${formatDate(props.planningDate)}` : `Добавить ${formatDate(props.planningDate)}`}
           </Button>
-          <Button size="sm" variant="ghost" onClick={(event) => { event.stopPropagation(); props.onAgreeRequestDate(request.id, nextPlanningDate); }}>
-            {hasTomorrow ? `Согласовать ${formatDate(nextPlanningDate)}` : `Предложить ${formatDate(nextPlanningDate)}`}
+          <Button size="sm" variant="ghost" onClick={(event) => { event.stopPropagation(); props.onScheduleRequestDate(request.id, nextPlanningDate, !hasTomorrow); }}>
+            {hasTomorrow ? `Выставить ${formatDate(nextPlanningDate)}` : `Согласовать ${formatDate(nextPlanningDate)}`}
           </Button>
+          {request.scheduled_date ? <Button size="sm" variant="ghost" onClick={(event) => { event.stopPropagation(); props.onUnscheduleRequest(request.id); }}>Снять дату</Button> : null}
           <Button size="sm" variant="ghost" onClick={(event) => { event.stopPropagation(); props.onEdit('request', request); }}><Edit3 size={13} />Изменить</Button>
           <Button size="sm" variant="ghost" onClick={(event) => { event.stopPropagation(); props.onDelete('request', request.id, request.name); }}><Trash2 size={13} />Удалить</Button>
         </div>

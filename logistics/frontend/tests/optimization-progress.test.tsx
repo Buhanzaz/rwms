@@ -71,7 +71,8 @@ function jsonResponse(value: unknown): Response {
   return new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }
 
-function installFetchRouter() {
+function installFetchRouter(options: { requestOutside?: boolean } = {}) {
+  let reclassified = false;
   const routeFetch = (input: RequestInfo | URL, init?: RequestInit): Response => {
     const url = typeof input === 'string'
       ? input
@@ -87,7 +88,14 @@ function installFetchRouter() {
         loading_minutes: 30, unloading_minutes: 20, turnaround_minutes: 20, working_day_start: '08:00:00', working_day_end: '20:00:00',
       }]);
     }
-    if (url === '/api/scenarios/scenario-id/zones') return jsonResponse([]);
+    if (url === '/api/scenarios/scenario-id/zones') {
+      return jsonResponse([{
+        id: 'zone-id', scenario_id: 'scenario-id', name: 'Центр', code: 'CITY', route_group: 'CITY',
+        geometry: { type: 'Polygon', coordinates: [[[37, 55], [38, 55], [38, 56], [37, 56], [37, 55]]] },
+        version: 1, priority: 1, locked: false, stale_request_count: options.requestOutside && !reclassified ? 1 : 0,
+        created_at: '2026-08-20T08:00:00Z', updated_at: '2026-08-22T08:00:00Z',
+      }]);
+    }
     if (url === '/api/scenarios/scenario-id/zone-relations') return jsonResponse([]);
     if (url === '/api/scenarios/scenario-id/drivers') {
       return jsonResponse([{ id: 'driver-id', scenario_id: 'scenario-id', name: 'Водитель 1', preferred_route_group: 'WEST', active: true, notes: '' }]);
@@ -109,11 +117,17 @@ function installFetchRouter() {
       return jsonResponse([{
         id: 'request-id', scenario_id: 'scenario-id', type: 'DELIVERY', name: 'Доставка 1', address_label: 'Адрес',
         latitude: 55.8, longitude: 37.7, quantity: 1, service_minutes: 30, priority: 1, status: 'READY',
-        zone_id: null, zone_version: null, split_allowed: true, notes: '', created_at: '2026-08-20T08:00:00Z',
-        updated_at: '2026-08-22T08:00:00Z', zone_classification_status: 'OUTSIDE_ZONES', zone_is_stale: false,
+        zone_id: options.requestOutside && !reclassified ? null : 'zone-id', zone_version: options.requestOutside && !reclassified ? null : 1,
+        split_allowed: true, notes: '', created_at: '2026-08-20T08:00:00Z', updated_at: '2026-08-22T08:00:00Z',
+        zone_classification_status: options.requestOutside && !reclassified ? 'OUTSIDE_ZONES' : 'CLASSIFIED', zone_is_stale: false,
+        scheduled_date: null,
         date_options: [{ id: 'date-id', request_id: 'request-id', date: '2026-08-25', priority: 1, window_start: null, window_end: null, is_hard: false }],
         tasks: [],
       }]);
+    }
+    if (url === '/api/scenarios/scenario-id/reclassify-requests' && method === 'POST') {
+      reclassified = true;
+      return jsonResponse({ updated: 1, outside_zones: 0, unchanged: 0 });
     }
     if (url === '/api/scenarios/scenario-id/plans/generate' && method === 'POST') {
       return jsonResponse({ run_id: 'run-id', plan_id: null, status: 'PENDING' });
@@ -173,5 +187,33 @@ describe('optimization progress', () => {
       '/api/scenarios/scenario-id/plans/generate',
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+
+  it('explicitly reclassifies visible requests before starting a plan', async () => {
+    const fetchMock = installFetchRouter({ requestOutside: true });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const user = userEvent.setup();
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+
+    await user.click(await screen.findByRole('button', { name: /Построить маршруты/ }));
+
+    expect(await screen.findByText('Пересчитать зоны заявок перед построением?')).toBeVisible();
+    expect(screen.getAllByText(/без зоны — 1/)[0]).toBeVisible();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/scenarios/scenario-id/plans/generate',
+      expect.objectContaining({ method: 'POST' }),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Пересчитать и построить' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scenarios/scenario-id/reclassify-requests',
+      expect.objectContaining({ method: 'POST' }),
+    ));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scenarios/scenario-id/plans/generate',
+      expect.objectContaining({ method: 'POST' }),
+    ));
+    expect(await screen.findByTestId('optimization-progress')).toBeVisible();
   });
 });

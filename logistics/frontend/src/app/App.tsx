@@ -42,8 +42,9 @@ import {
   ZoneDialog,
 } from '../components/EntityDialogs';
 import { MapCanvas } from '../map/MapCanvas';
+import { isRequestVisibleOnDate } from '../domain/request-dates';
 import { useUiStore } from '../stores/ui-store';
-import { dateInTimeZone, nextDate } from '../utils/format';
+import { dateInTimeZone, formatDate, nextDate } from '../utils/format';
 import { deriveSimulationState, planTimeBounds } from '../simulation/deriveSimulationState';
 import { Sidebar } from './Sidebar';
 import { Inspector, type EditableEntity, type EntityKind } from './Inspector';
@@ -55,6 +56,7 @@ type DialogState =
   | { kind: 'scenario'; value?: Scenario }
   | { kind: 'warehouse'; value?: Warehouse; point?: { latitude: number; longitude: number } }
   | { kind: 'zone'; value?: Zone; geometry: Polygon | MultiPolygon }
+  | { kind: 'zone-cutout'; sourceZone: Zone; geometry: Polygon; initialValues: Partial<Omit<ZoneInput, 'geometry'>> }
   | { kind: 'driver'; value?: Driver }
   | { kind: 'vehicle'; value?: Vehicle }
   | { kind: 'shift'; value?: DriverShift }
@@ -63,6 +65,7 @@ type DialogState =
   | { kind: 'delete-entity'; entityKind: 'zone' | 'driver' | 'vehicle' | 'shift' | 'request'; id: UUID; label: string }
   | { kind: 'delete-scenario' }
   | { kind: 'reset-demo' }
+  | { kind: 'reclassify-and-generate'; outsideCount: number; staleCount: number }
   | { kind: 'confirm-plan'; warnings: number }
   | { kind: 'rwms' }
   | { kind: 'simulation'; overrideKind: 'delay' | 'unavailable'; driverShiftId: UUID }
@@ -124,6 +127,7 @@ export function App() {
   const [dialog, setDialog] = useState<DialogState>(null);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
+  const surfacedPlanIdRef = useRef<UUID | null>(null);
   const mode = useUiStore((state) => state.mode);
   const sidebarsCollapsed = useUiStore((state) => state.sidebarsCollapsed);
   const setMode = useUiStore((state) => state.setMode);
@@ -187,7 +191,28 @@ export function App() {
     queryFn: () => api.getPlan(planId as UUID, workspace!),
     enabled: Boolean(planId && workspace),
   });
-  useEffect(() => { if (planQuery.data) setPlan(planQuery.data); }, [planQuery.data]);
+  useEffect(() => {
+    const loadedPlan = planQuery.data;
+    if (!loadedPlan) return;
+    setPlan(loadedPlan);
+    if (surfacedPlanIdRef.current === loadedPlan.id) return;
+    surfacedPlanIdRef.current = loadedPlan.id;
+    const cycleCount = loadedPlan.driver_routes.reduce((total, route) => total + route.cycles.length, 0);
+    if (cycleCount === 0 && loadedPlan.unassigned.length > 0) {
+      setSection('UNASSIGNED');
+      toast({
+        tone: 'warning',
+        title: 'Допустимые маршруты не найдены',
+        detail: `${loadedPlan.unassigned.length} задач не распределено. Открыты конкретные причины и рекомендации.`,
+      });
+    } else {
+      toast({
+        tone: 'success',
+        title: `План готов: ${cycleCount} ${cycleCount === 1 ? 'рейс' : cycleCount < 5 ? 'рейса' : 'рейсов'}`,
+        detail: loadedPlan.unassigned.length > 0 ? `Не распределено задач: ${loadedPlan.unassigned.length}.` : 'Все доступные задачи распределены.',
+      });
+    }
+  }, [planQuery.data, setSection, toast]);
 
   const runQuery = useQuery({
     queryKey: ['optimization-run', runId],
@@ -202,8 +227,10 @@ export function App() {
       setPlanId(run.plan_id);
       setMode('PLAN');
       setSection(run.status === 'FAILED' ? 'UNASSIGNED' : 'ROUTES');
-      const detail = run.status === 'TIMED_OUT' ? 'Показан лучший найденный план.' : run.error_message;
-      toast({ tone: run.status === 'TIMED_OUT' ? 'warning' : run.status === 'COMPLETED' ? 'success' : 'error', title: run.status === 'TIMED_OUT' ? 'Лимит времени достигнут' : run.status === 'COMPLETED' ? 'Маршруты построены' : `Оптимизация: ${run.status}`, ...(detail ? { detail } : {}) });
+      if (run.status !== 'COMPLETED') {
+        const detail = run.status === 'TIMED_OUT' ? 'Показан лучший найденный план.' : run.error_message;
+        toast({ tone: run.status === 'TIMED_OUT' ? 'warning' : 'error', title: run.status === 'TIMED_OUT' ? 'Лимит времени достигнут' : `Оптимизация: ${run.status}`, ...(detail ? { detail } : {}) });
+      }
     } else if (run.status === 'FAILED') {
       toast({ tone: 'error', title: 'Оптимизация завершилась с ошибкой', detail: run.error_message ?? 'План не создан' });
     } else if (run.status === 'CANCELLED') {
@@ -326,6 +353,50 @@ export function App() {
     }, 'Геометрия зоны сохранена; версия увеличена').catch(() => undefined);
   }, [execute, refresh, workspace]);
 
+  const handleZoneCutout = useCallback((zoneId: UUID, geometry: Polygon) => {
+    if (!workspace) return;
+    const sourceZone = workspace.zones.find((zone) => zone.id === zoneId);
+    if (!sourceZone) return;
+    const prefix = `${sourceZone.code}-IN`;
+    const innerNumber = workspace.zones.filter((zone) => zone.code.startsWith(prefix)).length + 1;
+    setMapTool('SELECT');
+    setDialog({
+      kind: 'zone-cutout',
+      sourceZone,
+      geometry,
+      initialValues: {
+        name: `${sourceZone.name} · внутренняя ${innerNumber}`,
+        code: `${prefix}${innerNumber}`,
+        route_group: sourceZone.route_group,
+        priority: sourceZone.priority + 1,
+        locked: false,
+      },
+    });
+  }, [setMapTool, workspace]);
+
+  const startPlanGeneration = async (reclassify: boolean) => {
+    if (!workspace) return;
+    await execute(async () => {
+      if (reclassify) {
+        const result = await api.reclassifyRequests(workspace.scenario.id);
+        await refresh();
+        if (result.outside_zones > 0) {
+          toast({
+            tone: 'warning',
+            title: `После пересчёта вне зон: ${result.outside_zones}`,
+            detail: 'Эти точки останутся нераспределёнными, остальные заявки будут переданы планировщику.',
+          });
+        }
+      }
+      clearTrace();
+      setValidation(null);
+      surfacedPlanIdRef.current = null;
+      const accepted = await api.generatePlan(workspace.scenario.id, planningDate, workspace.scenario.seed ?? 42, workspace.scenario.settings);
+      setRunId(accepted.run_id);
+      if (accepted.plan_id) setPlanId(accepted.plan_id);
+    }, reclassify ? 'Зоны пересчитаны, оптимизация запущена' : 'Оптимизация запущена').catch(() => undefined);
+  };
+
   const generatePlan = async () => {
     if (!workspace) return;
     const missing: string[] = [];
@@ -333,18 +404,27 @@ export function App() {
     if (!workspace.drivers.some((driver) => driver.active)) missing.push('нет активных водителей');
     if (!workspace.vehicles.some((vehicle) => vehicle.active)) missing.push('нет активных машин');
     if (!workspace.shifts.some((shift) => shift.active && shift.date === planningDate)) missing.push('нет активных смен на дату');
-    if (!workspace.requests.some((request) => request.status === 'READY' && request.date_options.some((option) => option.date === planningDate))) missing.push('нет готовых заявок на дату');
+    const readyRequests = workspace.requests.filter((request) => request.status === 'READY' && isRequestVisibleOnDate(request, planningDate));
+    if (!readyRequests.length) missing.push('нет готовых заявок на дату');
     if (missing.length) {
       toast({ tone: 'warning', title: 'План пока построить нельзя', detail: missing.join('; ') });
       return;
     }
-    await execute(async () => {
-      clearTrace();
-      setValidation(null);
-      const accepted = await api.generatePlan(workspace.scenario.id, planningDate, workspace.scenario.seed ?? 42, workspace.scenario.settings);
-      setRunId(accepted.run_id);
-      if (accepted.plan_id) setPlanId(accepted.plan_id);
-    }, 'Оптимизация запущена').catch(() => undefined);
+    const outsideCount = readyRequests.filter((request) => request.zone_status === 'OUTSIDE_ZONES').length;
+    const staleCount = readyRequests.filter((request) => request.zone_status === 'STALE').length;
+    if (outsideCount + staleCount > 0) {
+      if (!workspace.zones.length) {
+        toast({
+          tone: 'warning',
+          title: 'Заявки не привязаны к логистическим зонам',
+          detail: 'Сначала нарисуйте хотя бы одну зону, затем снова нажмите «Построить маршруты».',
+        });
+        return;
+      }
+      setDialog({ kind: 'reclassify-and-generate', outsideCount, staleCount });
+      return;
+    }
+    await startPlanGeneration(false);
   };
 
   const cancelOptimization = async () => {
@@ -424,6 +504,11 @@ export function App() {
       toast({ tone: 'info', title: 'Сначала постройте план' });
       return;
     }
+    if (nextMode === 'SIMULATION' && plan && !plan.driver_routes.some((route) => route.cycles.length > 0)) {
+      setSection('UNASSIGNED');
+      toast({ tone: 'warning', title: 'Симуляцию пока запустить нельзя', detail: 'В плане нет ни одного рейса. Открыты причины нераспределения.' });
+      return;
+    }
     setMode(nextMode);
     if (nextMode === 'SIMULATION') setSection('ROUTES');
   };
@@ -450,35 +535,19 @@ export function App() {
     }, 'Создан отдельный тестовый стенд на три дня').catch(() => undefined);
   };
 
-  const agreeRequestDate = async (requestId: UUID, date: string) => {
-    if (!workspace) return;
-    const request = workspace.requests.find((candidate) => candidate.id === requestId);
-    if (!request) return;
-    const template = request.date_options[0];
-    const existing = request.date_options.find((option) => option.date === date);
-    const dateOptions = [
-      ...request.date_options
-        .filter((option) => option.date !== date)
-        .map((option) => ({
-          date: option.date,
-          priority: Math.min(option.priority, 999),
-          window_start: option.window_start,
-          window_end: option.window_end,
-          is_hard: option.is_hard,
-        })),
-      {
-        date,
-        priority: 1000,
-        window_start: existing?.window_start ?? template?.window_start ?? null,
-        window_end: existing?.window_end ?? template?.window_end ?? null,
-        is_hard: existing?.is_hard ?? template?.is_hard ?? false,
-      },
-    ].sort((left, right) => left.date.localeCompare(right.date));
+  const scheduleRequestDate = async (requestId: UUID, date: string, addIfMissing: boolean) => {
     await execute(async () => {
-      await api.updateRequest(requestId, { date_options: dateOptions });
+      await api.scheduleRequest(requestId, { date, add_if_missing: addIfMissing });
       await refresh();
       selectPlanningDate(date);
-    }, existing ? 'Дата согласована с клиентом' : 'Допустимая дата добавлена после согласования').catch(() => undefined);
+    }, addIfMissing ? 'Новая дата согласована и назначена' : 'Заявка выставлена на выбранную дату').catch(() => undefined);
+  };
+
+  const unscheduleRequest = async (requestId: UUID) => {
+    await execute(async () => {
+      await api.scheduleRequest(requestId, { date: null });
+      await refresh();
+    }, 'Назначение снято; заявка снова доступна во все согласованные даты').catch(() => undefined);
   };
 
   const importScenario = async (file: File) => {
@@ -537,11 +606,14 @@ export function App() {
           onZoneRelation={openRelation}
           onPlacePoint={handleMapPoint}
           onZoneDrawn={handleZoneDraw}
+          onZoneCutout={handleZoneCutout}
           onZoneGeometryChanged={handleZoneGeometryChanged}
           onRequestMoveDraft={handleRequestMoveDraft}
           onMapError={handleMapError}
           planningDate={planningDate}
-          onAgreeRequestDate={(requestId, date) => void agreeRequestDate(requestId, date)}
+          busy={busy}
+          onScheduleRequestDate={(requestId, date, addIfMissing) => void scheduleRequestDate(requestId, date, addIfMissing)}
+          onUnscheduleRequest={(requestId) => void unscheduleRequest(requestId)}
         />
         <Inspector
           workspace={workspace} plan={plan} simulation={simulationState} validation={validation} busy={busy}
@@ -557,7 +629,9 @@ export function App() {
           onSaveSettings={async (settings) => { await execute(async () => { await api.updateScenario(workspace.scenario.id, { settings }); await refresh(); }, 'Настройки сохранены'); }}
           onClonePlan={() => plan && void execute(async () => { const clone = await api.clonePlan(plan.id, `Копия плана ${plan.date}`, workspace); setPlanId(clone.id); setPlan(clone); }, 'Версия плана клонирована')}
           onSimulationOverride={(overrideKind, driverShiftId) => setDialog({ kind: 'simulation', overrideKind, driverShiftId })}
-          planningDate={planningDate} onPlanningDateChange={selectPlanningDate} onAgreeRequestDate={(requestId, date) => void agreeRequestDate(requestId, date)}
+          planningDate={planningDate} onPlanningDateChange={selectPlanningDate}
+          onScheduleRequestDate={(requestId, date, addIfMissing) => void scheduleRequestDate(requestId, date, addIfMissing)}
+          onUnscheduleRequest={(requestId) => void unscheduleRequest(requestId)}
         />
       </div>
       {mode === 'SIMULATION' && plan && simulationState && simulationTimestamp !== null ? <SimulationBar plan={plan} state={simulationState} timestamp={simulationTimestamp} timeZone={workspace.scenario.timezone} playing={simulationPlaying} speed={simulationSpeed} overrides={simulationOverrides} onTimestamp={setSimulationTimestamp} onPlaying={setSimulationPlaying} onSpeed={setSimulationSpeed} /> : null}
@@ -581,6 +655,22 @@ export function App() {
         } else await api.createZone(workspace.scenario.id, input);
         await refresh(); setDialog(null); setMapTool('SELECT');
       }, 'Зона сохранена'); }} /> : null}
+      {dialog?.kind === 'zone-cutout' ? <ZoneDialog
+        geometry={dialog.geometry}
+        initialValues={dialog.initialValues}
+        title={`Новая зона внутри ${dialog.sourceZone.code}`}
+        description="Сохранение одной транзакцией вырежет этот контур из большой зоны и создаст здесь отдельную логистическую зону. Отмена не изменит геометрию."
+        submitLabel="Вырезать и создать зону"
+        busy={busy}
+        onClose={() => { setDialog(null); setMapTool('SELECT'); }}
+        onSubmit={async (input) => { await execute(async () => {
+          const result = await api.cutZone(dialog.sourceZone.id, input);
+          await refresh();
+          setSelected({ kind: 'zone', id: result.inner_zone.id });
+          setDialog(null);
+          setMapTool('SELECT');
+        }, 'Вырез сохранён, внутренняя зона создана'); }}
+      /> : null}
       {dialog?.kind === 'driver' || dialog?.kind === 'vehicle' ? <CatalogDialog kind={dialog.kind} value={dialog.value} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => { if (dialog.kind === 'driver') { const value = input as Parameters<typeof api.createDriver>[1]; if (dialog.value) await api.updateDriver(dialog.value.id, value); else await api.createDriver(workspace.scenario.id, value); } else { const value = input as Parameters<typeof api.createVehicle>[1]; if (dialog.value) await api.updateVehicle(dialog.value.id, value); else await api.createVehicle(workspace.scenario.id, value); } await refresh(); setDialog(null); }, dialog.kind === 'driver' ? 'Водитель сохранён' : 'Машина сохранена'); }} /> : null}
       {dialog?.kind === 'shift' ? <ShiftDialog shift={dialog.value} scenario={workspace.scenario} drivers={workspace.drivers} vehicles={workspace.vehicles} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => { if (dialog.value) await api.updateShift(dialog.value.id, input); else await api.createShift(workspace.scenario.id, input); await refresh(); setDialog(null); }, 'Смена сохранена'); }} /> : null}
       {dialog?.kind === 'request' ? <RequestDialog request={dialog.value} point={dialog.point} type={dialog.requestType} defaultDate={planningDate} busy={busy} onClose={() => { setDialog(null); setMapTool('SELECT'); }} onSubmit={async (input) => { await execute(async () => { if (dialog.value) await api.updateRequest(dialog.value.id, input); else await api.createRequest(workspace.scenario.id, input); await refresh(); setDialog(null); setMapTool('SELECT'); }, 'Заявка сохранена; зона определена backend'); }} /> : null}
@@ -588,6 +678,7 @@ export function App() {
       {dialog?.kind === 'delete-entity' ? <ConfirmDialog title={`Удалить «${dialog.label}»?`} description="Действие изменит только текущий тестовый сценарий. Backend проверит ссылки и вернёт ошибку, если объект используется." confirmLabel="Удалить" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => { if (dialog.entityKind === 'zone') await api.deleteZone(dialog.id); else if (dialog.entityKind === 'driver') await api.deleteDriver(dialog.id); else if (dialog.entityKind === 'vehicle') await api.deleteVehicle(dialog.id); else if (dialog.entityKind === 'shift') await api.deleteShift(dialog.id); else await api.deleteRequest(dialog.id); await refresh(); setDialog(null); }, 'Объект удалён'); }} /> : null}
       {dialog?.kind === 'delete-scenario' ? <ConfirmDialog title={`Удалить сценарий «${workspace.scenario.name}»?`} description="Сценарий и его тестовые данные будут удалены. Это не затрагивает другие сценарии." confirmLabel="Удалить сценарий" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => { await api.deleteScenario(workspace.scenario.id); setDialog(null); setScenarioId(null); await refresh(); }, 'Сценарий удалён'); }} /> : null}
       {dialog?.kind === 'reset-demo' ? <ConfirmDialog title={`Заменить данные сценария «${workspace.scenario.name}» демонстрационными?`} description="Склады, зоны, ресурсы, заявки и сохранённые планы только этого сценария будут удалены и созданы заново. Другие сценарии не изменятся." confirmLabel="Создать demo" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => { await api.generateDemo(workspace.scenario.id); await refresh(); setDialog(null); }, 'Demo scenario готов'); }} /> : null}
+      {dialog?.kind === 'reclassify-and-generate' ? <ConfirmDialog title="Пересчитать зоны заявок перед построением?" description={`На ${formatDate(planningDate)}: без зоны — ${dialog.outsideCount}, с устаревшей версией — ${dialog.staleCount}. Это явное действие обновит принадлежность по текущим полигонам, затем сразу запустит построение маршрутов.`} confirmLabel="Пересчитать и построить" busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { setDialog(null); await startPlanGeneration(true); }} /> : null}
       {dialog?.kind === 'confirm-plan' ? <ConfirmDialog title="Подтвердить план с предупреждениями?" description={`Проверка не нашла жёстких ошибок, но осталось предупреждений: ${dialog.warnings}. Подтверждение будет явным.`} confirmLabel="Подтвердить с предупреждениями" busy={busy} onClose={() => setDialog(null)} onConfirm={() => confirmPlan(true)} /> : null}
       {dialog?.kind === 'rwms' ? <RwmsIntegrationDialog
         scenarioId={workspace.scenario.id}

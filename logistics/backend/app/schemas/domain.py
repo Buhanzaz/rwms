@@ -50,11 +50,11 @@ class ScenarioSettings(ApiModel):
     model_config = ConfigDict(extra="allow")
 
     vehicle_capacity: Literal[2] = 2
-    max_delivery_stops: int = Field(default=2, ge=0)
-    max_pickup_stops: int = Field(default=2, ge=0)
-    deliveries_before_pickups: bool = True
+    max_delivery_stops: int = Field(default=2, ge=1, le=2)
+    max_pickup_stops: int = Field(default=2, ge=1, le=2)
+    deliveries_before_pickups: Literal[True] = True
     max_detour_minutes: int = Field(default=35, ge=0)
-    max_detour_ratio: float = Field(default=0.25, ge=0)
+    max_detour_ratio: float = Field(default=1.5, ge=0)
     max_candidate_neighbors: int = Field(default=8, ge=1)
     default_load_minutes: int = Field(default=30, ge=0)
     default_unload_minutes: int = Field(default=30, ge=0)
@@ -74,6 +74,9 @@ class ScenarioSettings(ApiModel):
     detour_weight: float = Field(default=1.2, ge=0)
     cross_group_penalty: float = Field(default=15, ge=0)
     driver_preference_bonus: float = Field(default=10, ge=0)
+    additional_resource_activation_penalty: float = Field(default=180, ge=0)
+    preferred_shift_utilization_percent: float = Field(default=80, gt=0, le=100)
+    driver_workload_weight: float = Field(default=3, ge=0)
     paired_delivery_bonus: float = Field(default=20, ge=0)
     paired_pickup_bonus: float = Field(default=15, ge=0)
     unassigned_hard_task_penalty: float = Field(default=100_000, ge=0)
@@ -271,6 +274,30 @@ class ZoneLockRequest(ApiModel):
     locked: bool = True
 
 
+class ZoneCutoutInnerZone(ApiModel):
+    """Required metadata for the operational zone occupying a new cutout."""
+
+    name: NonBlank
+    code: NonBlank
+    route_group: NonBlank
+    priority: int
+    locked: bool
+
+
+class ZoneCutoutRequest(ApiModel):
+    """Strictly internal geometry plus metadata for its new operational zone."""
+
+    geometry: GeoJsonGeometry
+    inner_zone: ZoneCutoutInnerZone
+
+
+class ZoneCutoutRead(ApiModel):
+    """Both atomic outcomes of cutting a source zone and creating its inner zone."""
+
+    source_zone: ZoneRead
+    inner_zone: ZoneRead
+
+
 class ZoneRelationCreate(ApiModel):
     """Input for a directed zone transition policy."""
 
@@ -280,7 +307,7 @@ class ZoneRelationCreate(ApiModel):
     delivery_pair_allowed: bool = True
     pickup_allowed: bool = True
     max_detour_minutes: int = Field(default=35, ge=0)
-    max_detour_ratio: float = Field(default=0.25, ge=0)
+    max_detour_ratio: float = Field(default=1.5, ge=0)
     penalty: float = Field(default=0, ge=0)
     is_bidirectional: bool = False
 
@@ -452,6 +479,13 @@ class RequestDateOptionUpdate(ApiModel):
     is_hard: bool | None = None
 
 
+class RequestScheduleInput(ApiModel):
+    """Explicitly assign a request to one accepted date or clear that choice."""
+
+    date: DateValue | None
+    add_if_missing: bool = False
+
+
 class LogisticsRequestCreate(ApiModel):
     """Source request input intentionally excluding any client-supplied zone."""
 
@@ -530,6 +564,7 @@ class LogisticsRequestRead(ApiModel):
     service_minutes: int
     priority: int
     status: RequestStatus
+    scheduled_date: date | None
     zone_id: UUID | None
     zone_version: int | None
     zone_classification_status: ZoneClassificationStatus
@@ -1020,9 +1055,20 @@ class ExportRequest(ApiModel):
 
     id: UUID
     data: LogisticsRequestCreate
+    scheduled_date: date | None = None
     zone_id: UUID | None
     zone_version: int | None
     zone_classification_status: ZoneClassificationStatus
+
+    @model_validator(mode="after")
+    def validate_scheduled_date(self) -> ExportRequest:
+        """Keep an imported assignment within the request's accepted date set."""
+
+        if self.scheduled_date is not None and self.scheduled_date not in {
+            option.date for option in self.data.date_options
+        }:
+            raise ValueError("scheduled_date must be present in data.date_options")
+        return self
 
 
 class ExportTaskReference(ApiModel):

@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
+from geoalchemy2.shape import from_shape, to_shape
 from pydantic import BaseModel
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.db import Base
 from app.errors import ApiError, not_found
-from app.geo import classify_point, geometry_from_geojson
+from app.geo import classify_point, geometry_from_geojson, subtract_polygonal_cutout
 from app.models import (
     Driver,
     DriverShift,
@@ -36,6 +37,7 @@ from app.schemas.domain import (
     LogisticsRequestUpdate,
     RequestDateOptionInput,
     RequestDateOptionUpdate,
+    RequestScheduleInput,
     RwmsPlanningRequest,
     ShiftCreate,
     ShiftUpdate,
@@ -44,6 +46,7 @@ from app.schemas.domain import (
     WarehouseCreate,
     WarehouseUpdate,
     ZoneCreate,
+    ZoneCutoutRequest,
     ZoneRelationCreate,
     ZoneRelationUpdate,
     ZoneUpdate,
@@ -128,7 +131,11 @@ async def create_zone(session: AsyncSession, scenario_id: UUID, payload: ZoneCre
 async def update_zone(session: AsyncSession, zone_id: UUID, payload: ZoneUpdate) -> Zone:
     """Update an unlocked zone and increment version only for geometry changes."""
 
-    entity = await get_required(session, Zone, zone_id, "zone")
+    entity = await session.scalar(
+        select(Zone).where(Zone.id == zone_id).with_for_update()
+    )
+    if entity is None:
+        raise not_found("zone", zone_id)
     if entity.locked:
         raise ApiError(409, "ZONE_LOCKED", "Unlock the zone before editing it")
     values = payload.model_dump(exclude_unset=True, exclude={"geometry"})
@@ -140,6 +147,65 @@ async def update_zone(session: AsyncSession, zone_id: UUID, payload: ZoneUpdate)
     await session.flush()
     await session.refresh(entity)
     return entity
+
+
+async def cut_zone(
+    session: AsyncSession,
+    zone_id: UUID,
+    payload: ZoneCutoutRequest,
+) -> tuple[Zone, Zone]:
+    """Atomically cut a source zone and create the operational zone occupying the hole."""
+
+    entity = await session.scalar(
+        select(Zone).where(Zone.id == zone_id).with_for_update()
+    )
+    if entity is None:
+        raise not_found("zone", zone_id)
+    if entity.locked:
+        raise ApiError(
+            409,
+            "ZONE_LOCKED",
+            "Сначала разблокируйте зону, чтобы создать в ней вырез.",
+        )
+    conflicting_zone_id = await session.scalar(
+        select(Zone.id).where(
+            Zone.scenario_id == entity.scenario_id,
+            Zone.code == payload.inner_zone.code,
+        )
+    )
+    if conflicting_zone_id is not None:
+        raise ApiError(
+            409,
+            "ZONE_CODE_CONFLICT",
+            "Указанный код уже используется другой зоной этого сценария.",
+        )
+    try:
+        geometry = subtract_polygonal_cutout(
+            to_shape(entity.geometry),
+            payload.geometry.to_shapely(),
+        )
+    except ValueError as exc:
+        raise ApiError(
+            422,
+            "ZONE_CUTOUT_OUTSIDE",
+            (
+                "Вырез должен целиком находиться внутри выбранной зоны и не касаться "
+                "её внешней границы или существующих вырезов."
+            ),
+        ) from exc
+    entity.geometry = from_shape(geometry, srid=4326, extended=True)
+    entity.version += 1
+    inner_zone = Zone(
+        scenario_id=entity.scenario_id,
+        geometry=geometry_from_geojson(payload.geometry),
+        version=1,
+        **payload.inner_zone.model_dump(),
+    )
+    session.add(inner_zone)
+    await session.flush()
+    await session.refresh(entity)
+    await session.refresh(inner_zone)
+    return entity, inner_zone
 
 
 async def set_zone_lock(session: AsyncSession, zone_id: UUID, locked: bool) -> Zone:
@@ -545,8 +611,13 @@ async def upsert_rwms_request(
     return "updated"
 
 
-async def get_request(session: AsyncSession, request_id: UUID) -> LogisticsRequest:
-    """Load a request with the collections required by its API representation."""
+async def get_request(
+    session: AsyncSession,
+    request_id: UUID,
+    *,
+    for_update: bool = False,
+) -> LogisticsRequest:
+    """Load a request graph, optionally locking its command-serialization row."""
 
     statement = (
         select(LogisticsRequest)
@@ -556,6 +627,8 @@ async def get_request(session: AsyncSession, request_id: UUID) -> LogisticsReque
             selectinload(LogisticsRequest.tasks),
         )
     )
+    if for_update:
+        statement = statement.with_for_update()
     entity = await session.scalar(statement)
     if entity is None:
         raise not_found("request", request_id)
@@ -582,7 +655,7 @@ async def update_request(
 ) -> LogisticsRequest:
     """Update a request, reclassifying moves and regenerating affected tasks."""
 
-    entity = await get_request(session, request_id)
+    entity = await get_request(session, request_id, for_update=True)
     changed = payload.model_dump(exclude_unset=True, exclude={"date_options"})
     task_fields = {"type", "latitude", "longitude", "quantity", "service_minutes", "priority"}
     regenerate_tasks = bool(task_fields.intersection(changed))
@@ -592,12 +665,53 @@ async def update_request(
     if moved:
         await _set_request_classification(session, entity)
     if payload.date_options is not None:
+        accepted_dates = {option.date for option in payload.date_options}
+        if entity.scheduled_date is not None and entity.scheduled_date not in accepted_dates:
+            entity.scheduled_date = None
         entity.date_options.clear()
         await session.flush()
         for option in payload.date_options:
             entity.date_options.append(RequestDateOption(**option.model_dump()))
     if regenerate_tasks:
         await _replace_request_tasks(session, entity)
+    await session.flush()
+    return await get_request(session, entity.id)
+
+
+async def schedule_request(
+    session: AsyncSession,
+    request_id: UUID,
+    payload: RequestScheduleInput,
+) -> LogisticsRequest:
+    """Assign one accepted date, optionally recording an explicitly agreed new date."""
+
+    entity = await get_request(session, request_id, for_update=True)
+    if payload.date is None:
+        entity.scheduled_date = None
+        await session.flush()
+        return await get_request(session, entity.id)
+
+    option = next(
+        (item for item in entity.date_options if item.date == payload.date),
+        None,
+    )
+    if option is None:
+        if not payload.add_if_missing:
+            raise ApiError(
+                422,
+                "REQUEST_DATE_NOT_ALLOWED",
+                "Выбранная дата отсутствует среди дат, согласованных клиентом.",
+            )
+        entity.date_options.append(
+            RequestDateOption(
+                date=payload.date,
+                priority=1000,
+                window_start=None,
+                window_end=None,
+                is_hard=False,
+            )
+        )
+    entity.scheduled_date = payload.date
     await session.flush()
     return await get_request(session, entity.id)
 
@@ -636,6 +750,8 @@ async def update_date_option(
     """Patch a date option while validating its effective time window."""
 
     entity = await get_required(session, RequestDateOption, option_id, "request_date_option")
+    request = await get_required(session, LogisticsRequest, entity.request_id, "request")
+    previous_date = entity.date
     values = payload.model_dump(exclude_unset=True)
     start = values.get("window_start", entity.window_start)
     end = values.get("window_end", entity.window_end)
@@ -648,8 +764,21 @@ async def update_date_option(
     if start is not None and end is not None and end <= start:
         raise ApiError(422, "INVALID_TIME_WINDOW", "window_end must be after window_start")
     apply_update(entity, payload)
+    if request.scheduled_date == previous_date:
+        request.scheduled_date = entity.date
     await session.flush()
     return entity
+
+
+async def delete_date_option(session: AsyncSession, option_id: UUID) -> None:
+    """Delete one acceptable date and clear an assignment that referenced it."""
+
+    entity = await get_required(session, RequestDateOption, option_id, "request_date_option")
+    request = await get_required(session, LogisticsRequest, entity.request_id, "request")
+    if request.scheduled_date == entity.date:
+        request.scheduled_date = None
+    await session.delete(entity)
+    await session.flush()
 
 
 async def delete_request(session: AsyncSession, request_id: UUID) -> None:

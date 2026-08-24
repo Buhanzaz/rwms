@@ -6,7 +6,12 @@ from .engine import (
     ProgressPublisher,
     RecordingProgressPublisher,
 )
-from .heuristic import HeuristicPlanner, split_request, split_requests_for_date
+from .heuristic import (
+    HeuristicPlanner,
+    calculate_resource_activation_cost,
+    split_request,
+    split_requests_for_date,
+)
 from .models import (
     DriverShift,
     LogisticsRequest,
@@ -38,6 +43,12 @@ from .models import (
     ZoneSnapshot,
 )
 from .validation import calculate_plan_metrics, validate_route_plan
+from .workload import (
+    calculate_driver_workload_cost,
+    shift_duty_seconds,
+    shift_usable_seconds,
+    shift_utilization_percent,
+)
 
 __all__ = [
     "DriverShift",
@@ -73,7 +84,12 @@ __all__ = [
     "Warehouse",
     "ZoneRelation",
     "ZoneSnapshot",
+    "calculate_driver_workload_cost",
     "calculate_plan_metrics",
+    "calculate_resource_activation_cost",
+    "shift_duty_seconds",
+    "shift_usable_seconds",
+    "shift_utilization_percent",
     "split_request",
     "split_requests_for_date",
     "validate_route_plan",

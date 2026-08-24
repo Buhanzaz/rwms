@@ -112,3 +112,30 @@ def ensure_polygonal(value: BaseGeometry) -> MultiPolygon:
     if isinstance(value, MultiPolygon):
         return value
     raise ValueError("expected Polygon or MultiPolygon")
+
+
+def subtract_polygonal_cutout(
+    zone_geometry: BaseGeometry,
+    cutout_geometry: BaseGeometry,
+) -> MultiPolygon:
+    """Subtract a strictly contained cutout while preserving valid polygonal output.
+
+    Contact with either the outer boundary or an existing interior ring is
+    rejected. This keeps every edit an unambiguous new hole instead of silently
+    splitting, extending, or repairing the selected zone.
+    """
+
+    zone = ensure_polygonal(zone_geometry)
+    cutout = ensure_polygonal(cutout_geometry)
+    if (
+        cutout.is_empty
+        or not cutout.is_valid
+        or not cutout.within(zone)
+        or not zone.boundary.disjoint(cutout)
+    ):
+        raise ValueError("cutout must be strictly inside the existing zone")
+    result = zone.difference(cutout)
+    normalized = ensure_polygonal(result)
+    if normalized.is_empty or not normalized.is_valid:
+        raise ValueError("cutout produced invalid zone geometry")
+    return normalized
