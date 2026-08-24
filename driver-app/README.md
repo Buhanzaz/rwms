@@ -11,11 +11,22 @@ The main menu has exactly three destinations:
 - **Warehouse work** (`Работа на складе`) shows the server-filtered driver
   board for repair/KPP, internal movement and shared `WAREHOUSE_DRIVERS`
   movement work. Personally assigned logistics is not duplicated here.
-- **Logistics** (`Логистика`) shows only the driver's `ASSIGNED_DRIVER`
-  shipments and returns for the selected date. It opens on the device-local
-  current date; a fixed Russian month heading follows the centered date in the
-  horizontal neighboring-date carousel. A card opens the existing rich trip,
-  media and action detail.
+- **Logistics** (`Логистика`) shows the driver's `ASSIGNED_DRIVER` shipments and
+  returns for the selected date. For dates strictly after the device-local
+  current date, eligible `WAREHOUSE_DRIVERS` trips appear in a separate
+  **Additional tasks** section. These can be identity-free movements or future
+  deliveries explicitly published by a logistics operator; ordinary hidden
+  `UNASSIGNED` shipments are not exposed. The driver may preview a rich trip and reserve
+  it with **Take additional task**. This online claim assigns future work but
+  does not start task-board execution; the service repeats the date, warehouse
+  and qualification checks. Today's shared work cannot be previewed or claimed
+  through this flow. The screen opens on the current date; a fixed Russian
+  month heading follows the centered date in the horizontal neighboring-date
+  carousel. A card opens the existing rich trip, media and action detail. The
+  rich trip detail offers **Open in Yandex Maps**:
+  it hands the driver-selected destination to the installed Maps app, or to its
+  HTTPS web fallback. Confirmed coordinates take priority over the address;
+  RWMS does not call a Yandex routing API or transmit device location.
 - **Uploads** (`Загрузки`) shows durable pending actions and photo uploads and
   allows a failed operation to be retried.
 
@@ -45,9 +56,11 @@ The public PKCE client is `rwms-driver-android` with scopes
 consumes it in memory, and the APK exposes no OAuth deep-link receiver.
 
 Task-board calls use only `/api/task-board/driver/v1/**`. Rich logistics detail
-uses `/api/logistics/v1/driver-tasks/{taskId}` only for exact
-`ASSIGNED_DRIVER` work; shared `WAREHOUSE_DRIVERS` work remains on the
-task-board detail authorized for the warehouse driver pool. Media uses
+uses `/api/logistics/v1/driver-tasks/{taskId}` for exact `ASSIGNED_DRIVER` work
+and for a same-warehouse future shared preview. Reserving that shared trip uses
+`POST /api/logistics/v1/driver-tasks/{taskId}/claim`; it is intentionally a
+connected server command rather than an offline task-board `TAKE`, and a
+successful claim schedules an authoritative projection refresh. Media uses
 `/api/media/v1/**`. All traffic goes through the configured HTTPS public
 gateway. See
 [`DriverAuthConfiguration.kt`](core-auth/src/main/java/dev/buhanzaz/rwms/driver/core/auth/DriverAuthConfiguration.kt)

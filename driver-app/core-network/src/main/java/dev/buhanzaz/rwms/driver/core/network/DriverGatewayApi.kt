@@ -37,6 +37,12 @@ interface DriverGatewayApi {
         @Path("taskId") taskId: String,
     ): Response<DriverTaskTripDetailsResponseDto>
 
+    /** Assigns an eligible future shared trip without starting its task-board execution. */
+    @POST("/api/logistics/v1/driver-tasks/{taskId}/claim")
+    suspend fun claimFutureLogisticsTask(
+        @Path("taskId") taskId: String,
+    ): Response<DriverTaskTripDetailsResponseDto>
+
     @POST("/api/task-board/driver/v1/entries/{entryId}/actions")
     suspend fun applyAction(
         @Path("entryId") entryId: String,

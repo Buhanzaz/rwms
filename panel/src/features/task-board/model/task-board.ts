@@ -34,12 +34,21 @@ export type TaskBoardAssignmentDto = {
 
 export type TaskBoardQueueDto = {
   key: string
+  version: number
   label: string
   kind: TaskBoardQueueKind
   settingsQueueId: string
   settingsCollapsed: boolean
+  workerFeedEnabled: boolean
   availableTaskLimit: number
   entries: TaskBoardEntryDto[]
+}
+
+export type TaskBoardWorkerPlanDto = {
+  id: string
+  version: number
+  workerFeedEnabled: boolean
+  availableTaskLimit: number
 }
 
 export type TaskBoardSourceDto = {

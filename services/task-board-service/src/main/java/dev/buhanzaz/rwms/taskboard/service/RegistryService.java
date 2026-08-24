@@ -30,9 +30,10 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Owns the queue registry boundary.
  *
- * <p>{@link QueueDefinition} owns the shared GENERAL task-board standard: order, visibility,
- * runtime limits and worker classes. {@link WorkQueue} is a derived per-warehouse projection whose
- * stable UUID preserves task history and routing references.
+ * <p>{@link QueueDefinition} owns the shared GENERAL task-board standard: order, routing
+ * visibility, initial plan defaults and worker classes. {@link WorkQueue} is a derived
+ * per-warehouse projection whose stable UUID preserves task history and whose WorkerApp plan is
+ * warehouse-local.
  */
 @Service
 public class RegistryService {

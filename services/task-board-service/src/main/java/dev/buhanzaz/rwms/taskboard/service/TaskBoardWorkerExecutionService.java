@@ -53,6 +53,7 @@ class TaskBoardWorkerExecutionService {
   private final TaskBoardQueuePositionCoordinator queuePositions;
   private final DriverTaskAudienceService driverAudiences;
   private final MaintenanceTaskExecutionPackageService executionPackages;
+  private final WorkerQueuePlanPolicy workerQueuePlans;
 
   TaskBoardWorkerExecutionService(
       BoardTaskRepository tasks,
@@ -71,7 +72,8 @@ class TaskBoardWorkerExecutionService {
       GroupKpiEvidenceService kpiEvidence,
       TaskBoardQueuePositionCoordinator queuePositions,
       DriverTaskAudienceService driverAudiences,
-      MaintenanceTaskExecutionPackageService executionPackages) {
+      MaintenanceTaskExecutionPackageService executionPackages,
+      WorkerQueuePlanPolicy workerQueuePlans) {
     this.tasks = tasks;
     this.entries = entries;
     this.bindings = bindings;
@@ -89,6 +91,7 @@ class TaskBoardWorkerExecutionService {
     this.queuePositions = queuePositions;
     this.driverAudiences = driverAudiences;
     this.executionPackages = executionPackages;
+    this.workerQueuePlans = workerQueuePlans;
   }
 
   CancelledTaskDto cancelTask(
@@ -272,9 +275,17 @@ class TaskBoardWorkerExecutionService {
     return affected.stream().map(QueueEntry::getId).toList();
   }
 
-  /** Takes an entry with the observed entry version and actor identity. */
+  /**
+   * Takes or joins an entry with the observed version and optionally enforces WorkerApp's current
+   * queue publication window before any assignment transition.
+   */
   QueueEntry take(
-      UUID warehouseId, UUID entryId, TakeEntryRequest request, UUID authenticatedWorkerId) {
+      UUID warehouseId,
+      UUID entryId,
+      TakeEntryRequest request,
+      UUID authenticatedWorkerId,
+      boolean enforceWorkerPlan) {
+    queuePositions.lockQueueMutation(warehouseId);
     // The row lock pairs with cancelExternalTaskIfPreStart.  Whichever transition wins is visible
     // to the loser before it validates WAITING, so a started entry cannot be cancelled by a
     // concurrent source compensation command and a cancelled entry cannot be resurrected.
@@ -285,6 +296,9 @@ class TaskBoardWorkerExecutionService {
         || (!joiningSecondary && entry.getStatus() != EntryStatus.WAITING)) {
       throw new ConflictException(
           "Взять можно ожидающий этап или присоединиться к этапу в работе");
+    }
+    if (enforceWorkerPlan) {
+      workerQueuePlans.requireTakeAllowed(entry);
     }
     if (entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER
         && entry.getTask().getLane() != TaskLane.CURRENT) {

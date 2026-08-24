@@ -261,6 +261,15 @@ public class RentalOrderService {
     return shipments.rentalShipmentAdmissionWarehouse(actor, orderId, scheduledDate);
   }
 
+  /** Returns the exact prior shipment result without re-running mutable planning checks. */
+  public LogisticsDocumentService.CreateResult replayRentalShipment(
+      OrderActor actor,
+      UUID orderId,
+      UUID idempotencyKey,
+      CreateOrderRentalShipmentRequest request) {
+    return shipments.replayRentalShipment(actor, orderId, idempotencyKey, request);
+  }
+
   @Transactional
   public LogisticsDocumentService.CreateResult createRentalShipment(
       OrderActor actor,

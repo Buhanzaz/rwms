@@ -383,6 +383,9 @@ public class DocumentDriverTaskPlanner {
   }
 
   private static DriverTaskAudience audience(LogisticsDocument document) {
+    if (document.isWarehouseDriverPool()) {
+      return new DriverTaskAudience(DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null);
+    }
     UUID workerId = document.getDriverWorkerId();
     String workerName = document.getDriverSnapshot();
     if (document.getDocumentType() == LogisticsDocumentType.TRANSFER) {

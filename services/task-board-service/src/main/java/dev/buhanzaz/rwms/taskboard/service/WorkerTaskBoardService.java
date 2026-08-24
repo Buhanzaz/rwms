@@ -779,7 +779,8 @@ public class WorkerTaskBoardService {
     try {
       switch (request.action()) {
         case TAKE, JOIN ->
-            taskBoard.take(
+            taskBoard.takeFromMobile(
+                surface,
                 warehouseId,
                 entryId,
                 new TakeEntryRequest(

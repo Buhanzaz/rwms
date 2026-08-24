@@ -23,6 +23,7 @@ public class TaskBoardService {
   private final TaskBoardLogisticsTaskService logisticsTasks;
   private final TaskBoardWorkerExecutionService workerExecutions;
   private final TaskBoardPinningService pinning;
+  private final TaskBoardEntryOrderingService ordering;
 
   public TaskBoardService(
       TaskBoardReadProjectionService readProjections,
@@ -30,13 +31,15 @@ public class TaskBoardService {
       TaskBoardExternalMutationService externalMutations,
       TaskBoardLogisticsTaskService logisticsTasks,
       TaskBoardWorkerExecutionService workerExecutions,
-      TaskBoardPinningService pinning) {
+      TaskBoardPinningService pinning,
+      TaskBoardEntryOrderingService ordering) {
     this.readProjections = readProjections;
     this.externalTasks = externalTasks;
     this.externalMutations = externalMutations;
     this.logisticsTasks = logisticsTasks;
     this.workerExecutions = workerExecutions;
     this.pinning = pinning;
+    this.ordering = ordering;
   }
 
   /** Returns every unfinished manager-visible entry in the stable aggregate ordinary board. */
@@ -236,10 +239,36 @@ public class TaskBoardService {
   }
 
   @Transactional
-  /** Takes an entry with the observed entry version and actor identity. */
+  /**
+   * Takes work through the public board boundary; an authenticated worker identity also receives
+   * the current WorkerApp plan fence, while a manager command remains complete-board scoped.
+   */
   public BoardEntryDto take(
       UUID warehouseId, UUID entryId, TakeEntryRequest request, UUID authenticatedWorkerId) {
-    return readProjections.dto(workerExecutions.take(warehouseId, entryId, request, authenticatedWorkerId));
+    return readProjections.dto(
+        workerExecutions.take(
+            warehouseId,
+            entryId,
+            request,
+            authenticatedWorkerId,
+            authenticatedWorkerId != null));
+  }
+
+  /** Takes work from a native surface while applying WorkerApp-only plan admission. */
+  @Transactional
+  public BoardEntryDto takeFromMobile(
+      MobileTaskSurface surface,
+      UUID warehouseId,
+      UUID entryId,
+      TakeEntryRequest request,
+      UUID authenticatedWorkerId) {
+    return readProjections.dto(
+        workerExecutions.take(
+            warehouseId,
+            entryId,
+            request,
+            authenticatedWorkerId,
+            surface == MobileTaskSurface.WORKER));
   }
 
   @Transactional
@@ -267,6 +296,14 @@ public class TaskBoardService {
   /** Pins or unpins all route entries for a task without changing their positions. */
   public TaskBoardSnapshot pin(UUID warehouseId, UUID taskId, PinTaskRequest request) {
     pinning.pin(warehouseId, taskId, request);
+    return readProjections.snapshot(warehouseId);
+  }
+
+  /** Reorders one eligible waiting real card and returns the resulting complete manager board. */
+  @Transactional
+  public TaskBoardSnapshot reorder(
+      UUID warehouseId, UUID entryId, ReorderBoardEntryRequest request) {
+    ordering.reorder(warehouseId, entryId, request);
     return readProjections.snapshot(warehouseId);
   }
 }

@@ -4,6 +4,7 @@ import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 
 import dev.buhanzaz.rwms.taskboard.security.*;
 import dev.buhanzaz.rwms.taskboard.service.RegistryService;
+import dev.buhanzaz.rwms.taskboard.service.WorkerQueuePlanService;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
@@ -18,8 +19,8 @@ import org.springframework.web.bind.annotation.*;
  * Public warehouse-scoped view of derived work queues and driver-queue configuration.
  *
  * <p>The endpoint exposes local queue identities used by assignments and task history. It does not
- * let a warehouse mutate the shared {@code GENERAL} catalog; only the dedicated logistics-driver
- * queue is locally configurable.
+ * let a warehouse mutate the shared {@code GENERAL} catalog; local commands are limited to the
+ * dedicated logistics-driver queue and each ordinary queue's WorkerApp publication plan.
  */
 @RestController
 @RequiredArgsConstructor
@@ -27,6 +28,7 @@ import org.springframework.web.bind.annotation.*;
 @Validated
 public class WorkQueueController {
   private final RegistryService service;
+  private final WorkerQueuePlanService workerPlans;
   private final WarehouseAccessAuthorizer access;
 
   /** Lists the selected warehouse's stable physical queue projections. */
@@ -52,6 +54,17 @@ public class WorkQueueController {
       @Valid @RequestBody DriverQueueRequest request) {
     write(jwt, warehouseId);
     return service.updateDriverQueue(warehouseId, request);
+  }
+
+  /** Changes this warehouse's WorkerApp visibility and waiting-real plan for an ordinary queue. */
+  @PutMapping("/work-queues/{queueId}/worker-plan")
+  public WorkQueueDto updateWorkerPlan(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID warehouseId,
+      @PathVariable UUID queueId,
+      @Valid @RequestBody WorkerQueuePlanRequest request) {
+    write(jwt, warehouseId);
+    return workerPlans.update(warehouseId, queueId, request);
   }
 
   private void read(Jwt jwt, UUID id) {

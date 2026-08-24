@@ -266,9 +266,11 @@ describe("QueueDefinitionEditorDialog", () => {
       screen.getByRole("spinbutton", { name: "Минимум фото результата" })
     ).toBeTruthy()
     expect(
-      screen.getByRole("spinbutton", { name: "Заданий в плане на день" })
+      screen.getByRole("spinbutton", { name: "План для новых складов" })
     ).toBeTruthy()
-    expect(screen.getByText(/Остальные REAL остаются видимыми/)).toBeTruthy()
+    expect(
+      screen.getByText(/Текущий план каждого склада меняется прямо на доске/)
+    ).toBeTruthy()
     expect(screen.getByText("Классы исполнителей")).toBeTruthy()
   })
 

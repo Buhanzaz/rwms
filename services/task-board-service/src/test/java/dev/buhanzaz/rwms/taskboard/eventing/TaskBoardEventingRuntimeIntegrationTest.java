@@ -484,6 +484,68 @@ class TaskBoardEventingRuntimeIntegrationTest {
         replayVerifier.verify(TaskBoardAggregateType.BOARD_TASK, legacyTask.getId());
     assertThat(legacyReplay.version()).isEqualTo(legacyTask.getVersion());
     assertThat(legacyReplay.factCount()).isOne();
+
+    UUID warehouseId = UUID.randomUUID();
+    UUID definitionId = UUID.randomUUID();
+    UUID queueId = UUID.randomUUID();
+    UUID revisionMarker = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into queue_definition(
+          id,version,revision_marker,name,normalized_name,queue_type,queue_purpose,
+          sort_order,active,hidden,collapsed,notify_when_threshold_reached,
+          result_photo_min_count,available_task_limit)
+        values (?,0,?,'Legacy replay queue','legacy replay queue','REPAIR','GENERAL',
+          1,true,false,false,false,1,7)
+        """,
+        definitionId,
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into work_queue(
+          id,version,revision_marker,warehouse_id,definition_id,sort_order,active,hidden,
+          collapsed,notify_when_threshold_reached,result_photo_min_count,available_task_limit,
+          worker_feed_enabled)
+        values (?,0,?,?,?,1,true,false,false,false,1,7,true)
+        """,
+        queueId,
+        revisionMarker,
+        warehouseId,
+        definitionId);
+    UUID legacyQueueEventId = UUID.randomUUID();
+    String legacyQueuePayload =
+        """
+        {"workQueueId":"%s","revisionMarker":"%s","warehouseId":"%s","queueDefinitionId":"%s","queueType":"REPAIR","queuePurpose":"GENERAL","sortOrder":1,"active":true,"hidden":false,"collapsed":false,"holdingPeriodMinutes":null,"notificationThreshold":null,"notifyWhenThresholdReached":false,"resultPhotoMinCount":1,"classBindings":[],"deleted":false}
+        """
+            .formatted(queueId, revisionMarker, warehouseId, definitionId);
+    jdbc.update(
+        """
+        insert into event_stream_head(
+          aggregate_type,aggregate_id,current_version,last_event_id,updated_at)
+        values ('WORK_QUEUE',?,0,?,clock_timestamp())
+        """,
+        queueId.toString(),
+        legacyQueueEventId);
+    jdbc.update(
+        """
+        insert into domain_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,event_version,
+          occurred_at,recorded_at,correlation_id,causation_id,actor_ref,payload,
+          payload_sha256,baseline)
+        values (?,'WORK_QUEUE',?,0,'task-board.work-queue.baseline.v1',1,
+          null,clock_timestamp(),?,null,null,?::jsonb,
+          encode(sha256(convert_to((?::jsonb)::text,'UTF8')),'hex'),true)
+        """,
+        legacyQueueEventId,
+        queueId.toString(),
+        UUID.randomUUID(),
+        legacyQueuePayload,
+        legacyQueuePayload);
+
+    var legacyQueueReplay =
+        replayVerifier.verify(TaskBoardAggregateType.WORK_QUEUE, queueId);
+    assertThat(legacyQueueReplay.version()).isZero();
+    assertThat(legacyQueueReplay.factCount()).isOne();
   }
 
   private WorkerClassFact workerClassFact(UUID id) {

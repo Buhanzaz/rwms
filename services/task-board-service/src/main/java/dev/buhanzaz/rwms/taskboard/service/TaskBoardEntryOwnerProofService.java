@@ -99,7 +99,7 @@ public class TaskBoardEntryOwnerProofService {
    */
   public ReconciliationAudience captureReconciliationAudience(UUID warehouseId) {
     return new ReconciliationAudience(
-        warehouseId, taskAccess.readerAudienceSnapshot(warehouseId));
+        warehouseId, taskAccess.readerAudienceSnapshot(warehouseId, true));
   }
 
   /** Rebuilds one proof while reusing the immutable audience captured for its bounded pass. */

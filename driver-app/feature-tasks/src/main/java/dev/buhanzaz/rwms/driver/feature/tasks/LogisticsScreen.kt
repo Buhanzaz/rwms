@@ -39,7 +39,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dev.buhanzaz.rwms.driver.core.database.DriverTaskEntity
 import dev.buhanzaz.rwms.driver.core.network.DriverKpiPaletteDto
 import dev.buhanzaz.rwms.driver.core.ui.DriverScreenScaffold
 import dev.buhanzaz.rwms.driver.core.ui.SyncStatusBanner
@@ -69,6 +68,7 @@ fun LogisticsScreen(
         categories = state.categories,
         tasks = state.tasks,
         scheduledDate = selectedDate.toString(),
+        today = today,
     )
 
     DriverScreenScaffold(
@@ -233,12 +233,12 @@ private fun LogisticsDateChip(
 @Composable
 internal fun LogisticsTaskList(
     selectedDate: LocalDate,
-    tasks: List<DriverTaskEntity>,
+    tasks: LogisticsTasksForDate,
     kpiPalette: DriverKpiPaletteDto?,
     onTask: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    if (tasks.isEmpty()) {
+    if (tasks.totalCount == 0) {
         Box(modifier = modifier.padding(24.dp), contentAlignment = Alignment.Center) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -262,12 +262,20 @@ internal fun LogisticsTaskList(
     ) {
         item(key = "logistics-date-heading") {
             Text(
-                "${logisticsFullDateLabel(selectedDate)} · заданий: ${tasks.size}",
+                "${logisticsFullDateLabel(selectedDate)} · заданий: ${tasks.totalCount}",
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                 style = MaterialTheme.typography.titleMedium,
             )
         }
-        items(tasks, key = { task -> task.entryId }) { task ->
+        item(key = "assigned-logistics-heading") {
+            Text(
+                "Мои задания · ${tasks.assigned.size}",
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        items(tasks.assigned, key = { task -> task.entryId }) { task ->
             TaskRow(
                 task = task,
                 kpiPalette = kpiPalette,
@@ -276,6 +284,36 @@ internal fun LogisticsTaskList(
                 initiallyExpanded = true,
                 showScheduledDate = false,
             )
+        }
+        if (tasks.additional.isNotEmpty()) {
+            item(key = "additional-logistics-heading") {
+                Column(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        "Дополнительные задания · ${tasks.additional.size}",
+                        modifier = Modifier.testTag("additional-logistics-heading"),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        "Можно открыть маршрут и заранее взять ходку.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            items(tasks.additional, key = { task -> task.entryId }) { task ->
+                TaskRow(
+                    task = task,
+                    kpiPalette = kpiPalette,
+                    onOpen = { onTask(task.entryId) },
+                    presentationKey = "additional-logistics-${task.entryId}",
+                    initiallyExpanded = true,
+                    showScheduledDate = false,
+                )
+            }
         }
     }
 }

@@ -346,7 +346,7 @@ export function QueueDefinitionEditorDialog({
         </Field>
         <Field data-invalid={availableTaskLimitInvalid || undefined}>
           <FieldLabel htmlFor="queue-available-task-limit">
-            Заданий в плане на день
+            План для новых складов
           </FieldLabel>
           <Input
             id="queue-available-task-limit"
@@ -360,8 +360,8 @@ export function QueueDefinitionEditorDialog({
             required
           />
           <FieldDescription>
-            Столько первых ожидающих REAL-заданий отмечается как план на день.
-            Остальные REAL остаются видимыми и доступными для взятия.
+            Начальное количество задач WorkerApp при создании очереди на складе.
+            Текущий план каждого склада меняется прямо на доске задач.
           </FieldDescription>
         </Field>
         <BooleanField

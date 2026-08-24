@@ -18,6 +18,17 @@ public interface LogisticsDocumentLineRepository
     extends JpaRepository<LogisticsDocumentLine, UUID> {
   List<LogisticsDocumentLine> findAllByDocument_IdOrderByLineNumber(UUID documentId);
 
+  /** Reads ordered cabin membership for a bounded planner-created document set. */
+  @Query(
+      """
+      select line
+      from LogisticsDocumentLine line
+      where line.document.id in :documentIds
+      order by line.document.id, line.lineNumber, line.id
+      """)
+  List<LogisticsDocumentLine> findAllByDocumentIdIn(
+      @Param("documentIds") Collection<UUID> documentIds);
+
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query(
       """

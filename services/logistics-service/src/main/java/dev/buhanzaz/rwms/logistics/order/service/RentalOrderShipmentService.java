@@ -74,19 +74,13 @@ class RentalOrderShipmentService {
         || request == null) {
       throw new IllegalArgumentException("Rental shipment command is invalid");
     }
-    String checksum = rentalShipmentChecksum(orderId, request);
     LogisticsDocumentService.CreateResult replay =
-        documents.replayRentalOrderShipment(actor.subjectId(), idempotencyKey, checksum);
+        replayRentalShipment(actor, orderId, idempotencyKey, request);
     if (replay != null) {
-      if (!orderId.equals(replay.response().rentalOrderId())) {
-        throw RentalOrderProblems.conflict(
-            "IDEMPOTENCY_KEY_REUSED", "Idempotency-Key уже использован для другого заказа");
-      }
-      RentalOrder replayedOrder = store.requiredOrder(replay.response().rentalOrderId());
-      access.requireVisible(actor, replayedOrder);
       return replay;
     }
 
+    String checksum = rentalShipmentChecksum(orderId, request);
     RentalOrder order = store.lockedOrder(orderId);
     access.requireRentalShipmentCreation(actor, order);
     try {
@@ -113,6 +107,31 @@ class RentalOrderShipmentService {
             admission);
   }
 
+  /**
+   * Reads the exact idempotent shipment result before mutable order and planning checks run.
+   * Visibility is re-authorized against the order, and a key reused across orders fails closed.
+   */
+  LogisticsDocumentService.CreateResult replayRentalShipment(
+      OrderActor actor,
+      UUID orderId,
+      UUID idempotencyKey,
+      CreateOrderRentalShipmentRequest request) {
+    if (actor == null || orderId == null || idempotencyKey == null || request == null) {
+      throw new IllegalArgumentException("Rental shipment replay identity is invalid");
+    }
+    String checksum = rentalShipmentChecksum(orderId, request);
+    LogisticsDocumentService.CreateResult replay =
+        documents.replayRentalOrderShipment(actor.subjectId(), idempotencyKey, checksum);
+    if (replay == null) return null;
+    if (!orderId.equals(replay.response().rentalOrderId())) {
+      throw RentalOrderProblems.conflict(
+          "IDEMPOTENCY_KEY_REUSED", "Idempotency-Key уже использован для другого заказа");
+    }
+    RentalOrder replayedOrder = store.requiredOrder(replay.response().rentalOrderId());
+    access.requireVisible(actor, replayedOrder);
+    return replay;
+  }
+
   private static String rentalShipmentChecksum(
       UUID orderId, CreateOrderRentalShipmentRequest request) {
     List<String> values = new ArrayList<>();
@@ -122,6 +141,7 @@ class RentalOrderShipmentService {
     if (request.driverWorkerId() != null) {
       values.add(request.driverWorkerId().toString());
     }
+    values.add(Boolean.toString(request.warehouseDriverPool()));
     values.add(request.scheduledDate().toString());
     request.unitIds().stream().sorted().map(UUID::toString).forEach(values::add);
     return OrderCommandChecksum.sha256("CREATE_RENTAL_ORDER_SHIPMENT", values);

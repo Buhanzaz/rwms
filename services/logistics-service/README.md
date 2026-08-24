@@ -37,8 +37,11 @@ primary plus client/order additional contacts, comment, advisory delivery dates,
 date, cabins and per-cabin desired/actual furniture with movement-task and readiness facts. After
 the ordinary manager `rwms.read` warehouse check, only a `WORKER` with `driver.tasks` whose
 `worker_id` equals the frozen `plannedDriverWorkerId` may read an `ASSIGNED_DRIVER` task detail;
-the session `sub` is not worker identity, and `worker.tasks`, `UNASSIGNED`, and
-`WAREHOUSE_DRIVERS` grant no such access. A board
+the session `sub` is not worker identity, and `worker.tasks` and `UNASSIGNED` grant no such access.
+A same-warehouse DriverApp worker may preview a shared `WAREHOUSE_DRIVERS` task only when its date
+is later than the warehouse-local current date, then reserve it through the dedicated claim
+command. Task-board verifies the active driver qualification and fences concurrent claims; the
+claim does not start execution and is never available for today's task. A board
 move acts on the grouped task, never one member. It intentionally retains the locked local task and
 document rows across task-board's version-fenced call so a locally started trip cannot race a stale
 remote `WAITING` entry; the dependency boundary is limited by the configured connect/read timeouts
@@ -96,8 +99,10 @@ expected version. Create and ordinary update commands accept only the client, pr
 comment; delivery address, coordinate pair and order-owned additional contacts are deliberately
 collected by the client in a normal presentation confirmation. Desired-delivery windows remain an
 order-owned read projection: migrated legacy rows remain truthfully readable, while a current normal
-confirmation replaces them with one to five distinct client-selected calendar days
-(`startDate=endDate`) in chronological order. A draft may be saved without delivery facts, but
+confirmation replaces them with distinct client-selected calendar days (`startDate=endDate`) in
+chronological order. New normal confirmations expose the four warehouse-local requestable dates
+from day +2 through day +5 and accept one to four dates only from that list. These are client
+preferences, not pre-reserved route capacity. A draft may be saved without delivery facts, but
 shipment creation requires an address, primary phone and at least one desired delivery day. The
 actual document schedule is its `scheduledDate`; public commands
 and projections carry no clock-time value. Human phone formatting is normalized to canonical E.164.
@@ -110,7 +115,7 @@ its fixed warehouse. Presentation reads combine live shared asset availability, 
 cabins' atomically captured contents and unassigned physical surplus already inside that order; zero
 shared availability rows remain visible with their per-cabin maximum. Confirmation carries furniture
 per cabin and atomically converts holds plus the authoritative all-order furniture composition.
-Every `NORMAL` public presentation therefore requires one to five independently selected client
+Every `NORMAL` public presentation therefore requires one to four server-requestable client
 delivery days, a required delivery address, an optional complete latitude/longitude pair, nullable
 additional contacts normalized to an empty list, and a positive initial `rentalMonths`; none is
 prefilled from the linked order. The durable booking receipt chronologically normalizes those facts,
@@ -125,6 +130,20 @@ The public order boundary has no direct warehouse-selection or cabin-add command
 fixing the first warehouse occur only through the existing inquiry/presentation flow.
 `GET /api/logistics/v1/orders/{orderId}/available-units` remains replacement discovery; cabin
 removal, replacement and desired-furniture editing keep their dedicated commands.
+
+The standalone route simulator integrates only through the private
+`/api/internal/logistics/v1/planning/**` boundary and an exact `logistics-planner` service token
+whose sole scope is `logistics.planning`. The bounded request feed exports saved order identity,
+version, address/coordinates, still-unplanned cabin IDs and every client-approved date; it excludes
+phone numbers and furniture details. Applying a plan reuses the existing idempotent rental-shipment
+command with exact order version, concrete cabin IDs and an opaque task-board worker ID. Automatic
+application rejects today and tomorrow, while the existing manager command remains the deliberate
+manual override. An operator may separately select an unassigned future delivery part for explicit
+`WAREHOUSE_DRIVERS` publication: tomorrow is allowed, the warehouse-local current day is not, and
+no concrete worker identity is stored. Hidden `UNASSIGNED` shipments remain hidden. The simulator
+can read back only planner-created assignment status for one warehouse/date, so a shared part is
+shown with the authoritative driver after claim; ordinary manually created documents and customer
+contacts are excluded. It never reads or writes the RWMS database directly.
 
 Replacement reuses the same presentation/booking or direct order command. A warehouse manager can
 replace only the requested pre-start cabins, with exact client-selection cardinality; direct replace
@@ -225,6 +244,9 @@ facade delegates every interface operation:
 | Document admission, idempotency, attempts, reads and binding policies | Narrow warehouse, replay, external-attempt, projection and active-order leaves |
 | `RentalOrderService` | Stable order facade over reads, creation, lifecycle, reservations, terms and shipment hand-off |
 | `RentalOrderUnitReplacementService` | Direct and presentation replacement over ordered batch checkpoints, pre-start driver-task cancellation and same-order document/member convergence |
+| `RentalOrderPlanningIntegrationService` | Minimal versioned planner feed plus idempotent application through the existing rental-shipment owner; no cross-database state |
+| `FutureDriverTaskClaimService` | Future-only shared-task preview/claim with task-board qualification and version fencing; it never starts work |
+| `ClientDeliveryDatePolicy` | Warehouse-local day +2 through day +5 request horizon for ordinary public confirmations |
 | `ShipmentFurnitureTaskService` | All-active-order furniture composition, existing movement-task readiness and replacement recovery checkpoints |
 | Rental-order command store, editability and problem/outcome leaves | Row/receipt replay, saved-draft synchronization and canonical local problem mapping; `LogisticsTransactionLock` owns the narrow transaction advisory-lock access |
 | `InventoryOutcomeService` | Non-transactional completed-inventory orchestration and frozen successful replay |
@@ -375,6 +397,13 @@ adds nullable supersession markers to retained document, line, guard, rental-ord
 driver-task rows; active-read indexes for unsuperseded lines/terms; permanent command receipts;
 per-asset completed-source watermarks; and recoverable task/asset-lease action checkpoints. It is
 additive and contains no historical-row backfill, rewrite or deletion.
+
+Migration
+[`V53__future_shipment_driver_pool.sql`](src/main/resources/db/migration/V53__future_shipment_driver_pool.sql)
+adds the false-by-default `warehouse_driver_pool` shipment intent. Its database constraint permits
+the flag only for a shipment without a concrete worker, so existing hidden unassigned and assigned
+documents retain their meaning and are not reclassified. The task-audience constraint is widened
+only for shipment `WAREHOUSE_DRIVERS`; returns keep their former assigned-or-hidden modes.
 
 Logistics commits facts, projection checkpoints and a transactional outbox together. Kafka delivery
 is at-least-once: aggregate IDs are record keys, event IDs are dedupe identities, and consumers retain

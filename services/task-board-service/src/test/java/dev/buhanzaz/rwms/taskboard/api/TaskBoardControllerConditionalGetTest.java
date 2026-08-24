@@ -211,11 +211,13 @@ class TaskBoardControllerConditionalGetTest {
         List.of(
             new BoardColumnDto(
                 QUEUE,
+                0L,
                 "Ремонт",
                 QueueType.REPAIR,
                 QueuePurpose.GENERAL,
                 0,
                 6,
+                true,
                 List.of(entry))));
   }
 }

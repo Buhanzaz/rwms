@@ -12,6 +12,7 @@ import type {
   TaskBoardTaskStatus,
   TaskBoardTimerSnapshotDto,
   TaskBoardTimerState,
+  TaskBoardWorkerPlanDto,
 } from "@/features/task-board/model/task-board"
 import { bearerRequest } from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
@@ -207,10 +208,12 @@ function parseBoard(value: unknown): TaskBoardSnapshotDto {
     ])
     return {
       key: queueId,
+      version: integer(column.queueVersion),
       label: text(column.queueName),
       kind,
       settingsQueueId: queueId,
       settingsCollapsed: false,
+      workerFeedEnabled: boolean(column.workerFeedEnabled),
       availableTaskLimit: (() => {
         const limit = integer(column.availableTaskLimit)
         if (limit < 1 || limit > 50) invalid()
@@ -238,6 +241,23 @@ function parseBoard(value: unknown): TaskBoardSnapshotDto {
     totalEntries: entries.length,
     realEntries: entries.filter((item) => item.entryType === "REAL").length,
     shadowEntries: entries.filter((item) => item.entryType === "SHADOW").length,
+  }
+}
+
+function workerPlan(
+  value: unknown,
+  expectedQueueId: string
+): TaskBoardWorkerPlanDto {
+  const source = object(value)
+  const id = text(source.id)
+  if (id !== expectedQueueId) invalid()
+  const availableTaskLimit = integer(source.availableTaskLimit)
+  if (availableTaskLimit < 1 || availableTaskLimit > 50) invalid()
+  return {
+    id,
+    version: integer(source.version),
+    workerFeedEnabled: boolean(source.workerFeedEnabled),
+    availableTaskLimit,
   }
 }
 
@@ -288,6 +308,50 @@ export function pinHttpTaskBoardEntry(
       body: JSON.stringify({
         expectedTaskVersion: entry.taskVersion,
         pinned,
+      }),
+    }
+  ).then(parseBoard)
+}
+
+export function updateHttpTaskBoardWorkerPlan(params: {
+  accessToken: string
+  warehouseId: string
+  queueId: string
+  expectedVersion: number
+  workerFeedEnabled: boolean
+  availableTaskLimit: number
+}) {
+  return bearerRequest<unknown>(
+    params.accessToken,
+    `${TASK_BOARD_API}/warehouses/${encodeURIComponent(params.warehouseId)}/work-queues/${encodeURIComponent(params.queueId)}/worker-plan`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        expectedVersion: params.expectedVersion,
+        workerFeedEnabled: params.workerFeedEnabled,
+        availableTaskLimit: params.availableTaskLimit,
+      }),
+    }
+  ).then((value) => workerPlan(value, params.queueId))
+}
+
+export function reorderHttpTaskBoardEntry(params: {
+  accessToken: string
+  entry: TaskBoardEntryDto
+  expectedQueueVersion: number
+  targetEntryId: string
+  targetIndex: number
+}) {
+  return bearerRequest<unknown>(
+    params.accessToken,
+    entryPath(params.entry, "reorder"),
+    {
+      method: "POST",
+      body: JSON.stringify({
+        expectedEntryVersion: params.entry.version,
+        expectedQueueVersion: params.expectedQueueVersion,
+        targetEntryId: params.targetEntryId,
+        targetIndex: params.targetIndex,
       }),
     }
   ).then(parseBoard)

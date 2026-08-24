@@ -120,6 +120,11 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(boardTaskFact.required("properties").toString())
         .contains("driverAudience", "plannedDriverWorkerId")
         .doesNotContain("plannedDriverName", "workerName");
+    var workQueueFact = schema.required("$defs").required("workQueueFact");
+    assertThat(workQueueFact.required("properties").toString())
+        .contains("availableTaskLimit", "workerFeedEnabled");
+    assertThat(workQueueFact.required("required").toString())
+        .doesNotContain("availableTaskLimit", "workerFeedEnabled");
   }
 
   @Test
@@ -604,16 +609,26 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
     Map<String, Object> contract = yaml("openapi/task-board-service.yaml");
     Map<String, Object> paths = child(contract, "paths");
     assertThat(paths)
+        .containsKeys(
+            "/warehouses/{warehouseId}/work-queues/{queueId}/worker-plan",
+            "/warehouses/{warehouseId}/task-board/entries/{entryId}/reorder")
         .doesNotContainKeys(
             "/warehouses/{warehouseId}/task-board/dates/swap",
             "/warehouses/{warehouseId}/task-board/entries/{entryId}/move");
 
     Map<String, Object> schemas = child(child(contract, "components"), "schemas");
     assertThat(schemas)
+        .containsKeys("WorkerQueuePlanRequest", "ReorderBoardEntryRequest")
         .doesNotContainKeys(
             "MoveEntryRequest", "SwapTaskBoardDatesRequest", "TaskBoardDateEntryExpectation");
     assertThat(child(schemas, "TaskBoardSnapshot").get("required"))
         .isEqualTo(List.of("warehouseId", "columns"));
+    assertThat(child(schemas, "BoardColumn").get("required"))
+        .asList()
+        .contains("queueVersion", "availableTaskLimit", "workerFeedEnabled");
+    assertThat(child(schemas, "ReorderBoardEntryRequest").get("required"))
+        .asList()
+        .contains("expectedEntryVersion", "expectedQueueVersion", "targetEntryId", "targetIndex");
     assertAllLocalReferencesResolve(contract, contract);
   }
 

@@ -180,10 +180,16 @@ public class TaskBoardEventSourcing {
         proof);
   }
 
+  /**
+   * Publishes the first externally visible fact for a finalized worker result photo.
+   *
+   * <p>The reservation row has its own internal projection version, but no reservation fact is
+   * exported. Consequently every task-evidence event stream starts at version {@code 0}; using the
+   * projection version here would create an unpublishable stream with a missing predecessor.
+   */
   @Transactional(propagation = Propagation.MANDATORY)
   public void evidenceRecorded(
       TaskBoardEventPayloads.TaskEvidenceFact evidence,
-      long projectionVersion,
       UUID correlationId,
       UUID causationId) {
     String eventType =
@@ -193,7 +199,7 @@ public class TaskBoardEventSourcing {
     store.initialize(
         TaskBoardAggregateType.TASK_EVIDENCE,
         evidence.evidenceId(),
-        projectionVersion,
+        0,
         eventType,
         evidence,
         new OpaqueActorReference(evidence.workerId().toString(), "WORKER", null),

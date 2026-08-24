@@ -1,6 +1,10 @@
 import { memo, type CSSProperties } from "react"
+import { useSortable } from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
+  ArrowDown01Icon,
+  ArrowUp01Icon,
   DragDropVerticalIcon,
   PauseIcon,
   PencilEdit01Icon,
@@ -367,6 +371,11 @@ export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
             <Button type="button" size="icon-sm" variant="ghost" disabled>
               <HugeiconsIcon icon={DragDropVerticalIcon} />
             </Button>
+            <Button type="button" size="icon-sm" variant="ghost" disabled>
+              <HugeiconsIcon
+                icon={collapsed ? ArrowDown01Icon : ArrowUp01Icon}
+              />
+            </Button>
           </div>
         </div>
         {!collapsed && description ? (
@@ -459,6 +468,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   inDailyPlan,
   routeHighlighted,
   fullRouteSelected,
+  reorderEnabled = false,
   onDetails,
   onEdit,
   onTake,
@@ -479,6 +489,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   inDailyPlan: boolean
   routeHighlighted: boolean
   fullRouteSelected: boolean
+  reorderEnabled?: boolean
   onDetails: (entry: TaskBoardEntryDto) => void
   onEdit: (entry: TaskBoardEntryDto) => void
   onTake: (entry: TaskBoardEntryDto) => void
@@ -490,6 +501,21 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   palette?: KpiPalette | null
   repairComplexity?: TaskBoardRepairComplexity | null
 }) {
+  const sortableEnabled =
+    reorderEnabled &&
+    canEdit &&
+    !actionPending &&
+    entry.entryType === "REAL" &&
+    entry.status === "WAITING" &&
+    !entry.pinned
+  const {
+    attributes,
+    isDragging,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+  } = useSortable({ id: entry.id, disabled: !sortableEnabled })
   const description = taskDescription(entry)
   const {
     showTake,
@@ -502,10 +528,17 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   } = cardActionVisibility(entry, mobile, canEdit)
   const appearance = kpiCardAppearance(entry, now, palette)
   const unitLabel = entry.unitNumber ?? "Задание без номера"
+  const sortableStyle = {
+    ...appearance.style,
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 10 : undefined,
+  } satisfies CSSProperties
 
   return (
     <Card
-      style={appearance.style}
+      ref={setNodeRef}
+      style={sortableStyle}
       size="sm"
       className={cn(
         entry.entryType === "SHADOW" && shadowEntryCardClassName,
@@ -521,6 +554,9 @@ export const TaskBoardCard = memo(function TaskBoardCard({
       data-kpi-color={appearance.color ?? undefined}
       data-timer-state={entry.timerSnapshot?.timerState}
       data-route-highlighted={routeHighlighted || undefined}
+      data-task-id={entry.taskId}
+      data-entry-id={entry.id}
+      data-dragging={isDragging || undefined}
       aria-label={description ? `${unitLabel}: ${description}` : unitLabel}
     >
       <CardHeader className="flex flex-col gap-2">
@@ -554,11 +590,24 @@ export const TaskBoardCard = memo(function TaskBoardCard({
               size="icon-sm"
               variant="ghost"
               className="touch-none"
+              disabled={!sortableEnabled}
+              aria-label={`Переместить этап ${unitLabel}`}
+              {...attributes}
+              {...listeners}
+            >
+              <HugeiconsIcon icon={DragDropVerticalIcon} />
+            </Button>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
               aria-label={`${collapsed ? "Развернуть" : "Свернуть"} этап ${unitLabel}`}
               aria-expanded={!collapsed}
               onClick={() => onToggleCollapsed(entry.id)}
             >
-              <HugeiconsIcon icon={DragDropVerticalIcon} />
+              <HugeiconsIcon
+                icon={collapsed ? ArrowDown01Icon : ArrowUp01Icon}
+              />
             </Button>
           </div>
         </div>

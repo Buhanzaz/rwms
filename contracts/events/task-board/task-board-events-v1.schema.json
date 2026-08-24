@@ -352,6 +352,14 @@
         "notificationThreshold": {"$ref": "#/$defs/nullableInteger"},
         "notifyWhenThresholdReached": {"type": "boolean"},
         "resultPhotoMinCount": {"type": "integer", "minimum": 0, "maximum": 20},
+        "availableTaskLimit": {
+          "description": "Warehouse-local WorkerApp waiting REAL window; absent on historical facts.",
+          "type": "integer", "minimum": 1, "maximum": 50
+        },
+        "workerFeedEnabled": {
+          "description": "Warehouse-local WorkerApp publication switch; absent on historical facts.",
+          "type": "boolean"
+        },
         "classBindings": {"type": "array", "items": {"$ref": "#/$defs/queueBindingFact"}},
         "groupBindings": {
           "description": "Legacy stored event compatibility only; new work-queue facts omit this field.",

@@ -172,6 +172,17 @@ public class TaskBoardController {
     return service.pin(warehouseId, taskId, request);
   }
 
+  /** Reorders one unpinned waiting real card inside its existing ordinary queue. */
+  @PostMapping("/entries/{entryId}/reorder")
+  public TaskBoardSnapshot reorder(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID warehouseId,
+      @PathVariable UUID entryId,
+      @Valid @RequestBody ReorderBoardEntryRequest request) {
+    userWrite(jwt, warehouseId);
+    return service.reorder(warehouseId, entryId, request);
+  }
+
   private void taskAccess(Jwt jwt, UUID id, boolean write) {
     access.requireTaskScope(jwt, write);
     access.requireWarehouse(jwt, id, write ? AccessLevel.EDIT : AccessLevel.VIEW, true);

@@ -260,12 +260,34 @@ internal fun scheduledTripLabel(date: String): String = displayDate(date)
 internal fun isLogisticsDriverTaskSource(type: String?): Boolean =
     type == "LOGISTICS_DRIVER_TASK"
 
-/** Mirrors the rich logistics read contract, which authorizes only exact assigned drivers. */
+/** Mirrors the rich logistics read contract for assigned work and future shared previews. */
 internal fun canReadRichLogisticsDetails(
     sourceType: String?,
     driverAudienceMode: String?,
+    scheduledDate: String?,
+    today: LocalDate,
 ): Boolean = isLogisticsDriverTaskSource(sourceType) &&
-    driverAudienceMode == ASSIGNED_DRIVER_AUDIENCE_MODE
+    (
+        driverAudienceMode == ASSIGNED_DRIVER_AUDIENCE_MODE ||
+            isFutureSharedLogisticsTask(driverAudienceMode, scheduledDate, today)
+        )
+
+/** Allows the claim control only for a shared logistics task scheduled strictly after today. */
+internal fun canClaimFutureLogisticsTask(
+    sourceType: String?,
+    driverAudienceMode: String?,
+    scheduledDate: String?,
+    today: LocalDate,
+): Boolean = isLogisticsDriverTaskSource(sourceType) &&
+    isFutureSharedLogisticsTask(driverAudienceMode, scheduledDate, today)
+
+private fun isFutureSharedLogisticsTask(
+    driverAudienceMode: String?,
+    scheduledDate: String?,
+    today: LocalDate,
+): Boolean = driverAudienceMode == WAREHOUSE_DRIVERS_AUDIENCE_MODE &&
+    scheduledDate?.let { raw -> runCatching { LocalDate.parse(raw) }.getOrNull() }
+        ?.isAfter(today) == true
 
 private fun displayDate(raw: String): String = runCatching {
     LocalDate.parse(raw).format(DRIVER_DATE_FORMATTER)

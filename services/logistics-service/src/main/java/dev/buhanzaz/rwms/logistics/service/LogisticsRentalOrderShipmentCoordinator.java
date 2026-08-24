@@ -123,6 +123,15 @@ class LogisticsRentalOrderShipmentCoordinator {
     if (request.scheduledDate().isBefore(admission.localDate(order.getWarehouseId()))) {
       throw new LogisticsConflictException("Дата отгрузки не может быть в прошлом");
     }
+    if (request.warehouseDriverPool()
+        && !request.scheduledDate().isAfter(admission.localDate(order.getWarehouseId()))) {
+      throw new LogisticsConflictException(
+          "Общую доставку для свободного водителя можно опубликовать только на будущую дату");
+    }
+    if (request.warehouseDriverPool() && request.driverWorkerId() != null) {
+      throw new LogisticsConflictException(
+          "Общая доставка не может одновременно иметь назначенного водителя");
+    }
 
     List<LogisticsDependencyGateway.OrderUnitReservation> validReservations =
         validRentalOrderReservations(order, reservations);
@@ -170,7 +179,8 @@ class LogisticsRentalOrderShipmentCoordinator {
     document.scheduleShipment(
         request.driverSnapshot(),
         request.driverWorkerId(),
-        request.scheduledDate());
+        request.scheduledDate(),
+        request.warehouseDriverPool());
     document = documentRepository.saveAndFlush(document);
     List<LogisticsDocumentLine> lines =
         lineRepository.saveAllAndFlush(

@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -70,7 +71,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
   void cumulativeVersionFourEventSourcingAndTaskSyncMigrateCleanDatabaseAndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(30);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(32);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -136,7 +137,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
                 Map.entry("warehouse_kpi_settings", 10),
                 Map.entry("queue_definition", 17),
                 Map.entry("queue_definition_class_binding", 8),
-                Map.entry("work_queue", 14),
+                Map.entry("work_queue", 15),
                 Map.entry("work_queue_class_binding", 8),
                 Map.entry("worker", 17),
                 Map.entry("worker_class", 8),
@@ -359,6 +360,30 @@ class TaskBoardFlywayMigrationIntegrationTest {
             "script", "V33__canonical_ordinary_repair_phase_order.sql")
         .containsEntry("success", true);
     assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='34'"))
+        .containsEntry("version", "34")
+        .containsEntry(
+            "script", "V34__warehouse_worker_queue_plans.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='35'"))
+        .containsEntry("version", "35")
+        .containsEntry("description", "repair task evidence stream origins")
+        .containsEntry(
+            "script", "V35__repair_task_evidence_stream_origins.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select is_nullable,column_default from information_schema.columns "
+                    + "where table_schema='public' and table_name='work_queue' "
+                    + "and column_name='worker_feed_enabled'"))
+        .containsEntry("is_nullable", "NO")
+        .containsEntry("column_default", "true");
+    assertThat(
             jdbc.queryForObject(
                 "select to_regprocedure('public.task_board_request_fingerprint_v4(jsonb)')",
                 String.class))
@@ -389,8 +414,8 @@ class TaskBoardFlywayMigrationIntegrationTest {
             String.class);
     assertThat(previousDefinition).contains("image/jpeg", "15728640").doesNotContain("image/webp");
 
-    Flyway upgraded = flyway(MIGRATION_LOCATION);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(2);
+    Flyway upgraded = configuration(MIGRATION_LOCATION).target("32").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
     upgraded.validate();
 
     String upgradedDefinition =
@@ -404,6 +429,108 @@ class TaskBoardFlywayMigrationIntegrationTest {
             String.class);
     assertThat(upgradedDefinition)
         .contains("image/jpeg", "15728640", "image/webp", "1048576", "sha256");
+  }
+
+  @Test
+  void versionThirtyFourPublishesExistingWarehouseQueuesWithoutResettingTheirPlan() {
+    configuration(MIGRATION_LOCATION).target("33").load().migrate();
+    UUID warehouseId = UUID.randomUUID();
+    UUID definitionId = UUID.randomUUID();
+    UUID queueId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into queue_definition(
+          id,version,revision_marker,name,normalized_name,queue_type,queue_purpose,
+          sort_order,active,hidden,collapsed,notify_when_threshold_reached,
+          result_photo_min_count,available_task_limit)
+        values (?,0,?,'Existing plan','existing plan','REPAIR','GENERAL',
+          1,true,false,false,false,1,9)
+        """,
+        definitionId,
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into work_queue(
+          id,version,revision_marker,warehouse_id,definition_id,sort_order,active,hidden,
+          collapsed,notify_when_threshold_reached,result_photo_min_count,available_task_limit)
+        values (?,0,?,?,?,1,true,false,false,false,1,9)
+        """,
+        queueId,
+        UUID.randomUUID(),
+        warehouseId,
+        definitionId);
+
+    Flyway migration = configuration(MIGRATION_LOCATION).target("34").load();
+    assertThat(migration.migrate().migrationsExecuted).isOne();
+    migration.validate();
+
+    assertThat(
+            jdbc.queryForMap(
+                "select available_task_limit,worker_feed_enabled from work_queue where id=?",
+                queueId))
+        .containsEntry("available_task_limit", 9)
+        .containsEntry("worker_feed_enabled", true);
+  }
+
+  @Test
+  void versionThirtyFiveRepairsOnlyEntirelyUnpublishedTaskEvidenceStreams() {
+    configuration(MIGRATION_LOCATION).target("34").load().migrate();
+    UUID repairableEvidenceId = seedTaskEvidenceStreamAtVersionOne("QUARANTINED");
+    UUID alreadyPublishedEvidenceId = seedTaskEvidenceStreamAtVersionOne("PUBLISHED");
+
+    Flyway migration = flyway(MIGRATION_LOCATION);
+    assertThat(migration.migrate().migrationsExecuted).isOne();
+    migration.validate();
+
+    assertThat(
+            jdbc.queryForList(
+                """
+                select aggregate_version,status,last_error_code
+                  from outbox_event
+                 where aggregate_type='TASK_EVIDENCE' and aggregate_id=?
+                 order by aggregate_version
+                """,
+                repairableEvidenceId.toString()))
+        .extracting(
+            row -> row.get("aggregate_version"),
+            row -> row.get("status"),
+            row -> row.get("last_error_code"))
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(0L, "PENDING", null),
+            org.assertj.core.groups.Tuple.tuple(
+                1L, "PENDING", "STREAM_ORIGIN_REPAIRED"));
+    assertThat(
+            jdbc.queryForList(
+                """
+                select aggregate_version,status
+                  from outbox_event
+                 where aggregate_type='TASK_EVIDENCE' and aggregate_id=?
+                 order by aggregate_version
+                """,
+                alreadyPublishedEvidenceId.toString()))
+        .extracting(row -> row.get("aggregate_version"), row -> row.get("status"))
+        .containsExactly(org.assertj.core.groups.Tuple.tuple(1L, "PUBLISHED"));
+    assertThat(
+            jdbc.queryForList(
+                """
+                select aggregate_version
+                  from domain_event
+                 where aggregate_type='TASK_EVIDENCE' and aggregate_id=?
+                 order by aggregate_version
+                """,
+                Long.class,
+                repairableEvidenceId.toString()))
+        .containsExactly(0L, 1L);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select current_version
+                  from event_stream_head
+                 where aggregate_type='TASK_EVIDENCE' and aggregate_id=?
+                """,
+                Long.class,
+                repairableEvidenceId.toString()))
+        .isOne();
   }
 
   @Test
@@ -1626,6 +1753,115 @@ class TaskBoardFlywayMigrationIntegrationTest {
         definitionId.toString());
   }
 
+  private UUID seedTaskEvidenceStreamAtVersionOne(String outboxStatus) {
+    UUID evidenceId = UUID.randomUUID();
+    UUID eventId = UUID.randomUUID();
+    UUID correlationId = UUID.randomUUID();
+    OffsetDateTime recordedAt = OffsetDateTime.now(java.time.ZoneOffset.UTC);
+    String payload =
+        """
+        {
+          "evidenceId":"%s",
+          "entryId":"%s",
+          "taskId":"%s",
+          "routeIndex":0,
+          "warehouseId":"%s",
+          "workerId":"%s",
+          "workerGroupId":null,
+          "mediaId":"%s",
+          "mediaGeneration":1,
+          "capturedAt":"%s",
+          "recordedAt":"%s",
+          "state":"READY",
+          "sourceType":"MAINTENANCE_REPAIR",
+          "sourceId":"%s"
+        }
+        """
+            .formatted(
+                evidenceId,
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                recordedAt.minusSeconds(1),
+                recordedAt,
+                UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into event_stream_head(
+          aggregate_type,aggregate_id,current_version,last_event_id,updated_at)
+        values ('TASK_EVIDENCE',?,1,?,?)
+        """,
+        evidenceId.toString(),
+        eventId,
+        recordedAt);
+    jdbc.update(
+        """
+        insert into domain_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,event_version,
+          occurred_at,recorded_at,correlation_id,causation_id,actor_ref,payload,payload_sha256,
+          baseline)
+        values (
+          ?,'TASK_EVIDENCE',?,1,'task-board.task-evidence.ready.v1',1,
+          ?,?,?,null,null,?::jsonb,
+          encode(sha256(convert_to((?::jsonb)::text,'UTF8')),'hex'),false)
+        """,
+        eventId,
+        evidenceId.toString(),
+        recordedAt,
+        recordedAt,
+        correlationId,
+        payload,
+        payload);
+    String envelope =
+        jdbc.queryForObject(
+            """
+            select jsonb_build_object(
+              'envelopeVersion', 2,
+              'eventId', event.event_id,
+              'eventType', event.event_type,
+              'eventVersion', event.event_version,
+              'occurredAt', event.occurred_at,
+              'recordedAt', event.recorded_at,
+              'producer', 'task-board-service',
+              'aggregateType', event.aggregate_type,
+              'aggregateId', event.aggregate_id,
+              'aggregateVersion', event.aggregate_version,
+              'correlation', jsonb_build_object(
+                'correlationId', event.correlation_id,
+                'causationId', event.causation_id),
+              'actorRef', event.actor_ref,
+              'payload', event.payload)::text
+            from domain_event event
+            where event.event_id=?
+            """,
+            String.class,
+            eventId);
+    jdbc.update(
+        """
+        insert into outbox_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,topic,
+          envelope_body,envelope_sha256,status,attempt_count,next_attempt_at,created_at,
+          published_at,last_error_code)
+        values (
+          ?,'TASK_EVIDENCE',?,1,'task-board.task-evidence.ready.v1',
+          'rwms.task-board.task-evidence.v1',?::jsonb,
+          encode(sha256(convert_to((?::jsonb)::text,'UTF8')),'hex'),
+          ?,0,?,?,?,?)
+        """,
+        eventId,
+        evidenceId.toString(),
+        envelope,
+        envelope,
+        outboxStatus,
+        recordedAt,
+        recordedAt,
+        "PUBLISHED".equals(outboxStatus) ? recordedAt : null,
+        "QUARANTINED".equals(outboxStatus) ? "AGGREGATE_VERSION_GAP" : null);
+    return evidenceId;
+  }
+
   private void seedQueueBaseline(UUID queueId) {
     UUID eventId = UUID.randomUUID();
     String aggregateId = queueId.toString();
@@ -1828,7 +2064,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(29);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(31);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
 
@@ -1992,7 +2228,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
                         + "'sort_order','active','hidden','collapsed',"
                         + "'holding_period_minutes','notification_threshold',"
                         + "'notify_when_threshold_reached','revision_marker',"
-                        + "'available_task_limit']"
+                        + "'available_task_limit','worker_feed_enabled']"
                     : "queue_usage_reference".equals(table)
                         ? "to_jsonb(row_value) - array['queue_id','queue_definition_id']"
                     : "worker_class".equals(table)

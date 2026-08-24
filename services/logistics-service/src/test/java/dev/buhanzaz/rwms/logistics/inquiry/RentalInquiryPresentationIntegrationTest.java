@@ -1932,6 +1932,9 @@ class RentalInquiryPresentationIntegrationTest {
     PublicClientPresentationResponse publicView = presentations.publicPresentation(token);
     assertThat(publicView.viewOnly()).isFalse();
     assertThat(publicView.requiresDesiredDeliveryWindows()).isTrue();
+    assertThat(publicView.requestableDeliveryDates())
+        .containsExactly(
+            requestableDate(2), requestableDate(3), requestableDate(4), requestableDate(5));
     assertThat(publicView.desiredDeliveryWindows()).isEmpty();
     assertThat(publicView.groups())
         .singleElement()
@@ -1953,11 +1956,10 @@ class RentalInquiryPresentationIntegrationTest {
 
     List<LocalDate> selectedDays =
         List.of(
-            LocalDate.of(2026, 8, 19),
-            LocalDate.of(2026, 8, 11),
-            LocalDate.of(2026, 8, 15),
-            LocalDate.of(2026, 8, 13),
-            LocalDate.of(2026, 8, 17));
+            requestableDate(5),
+            requestableDate(2),
+            requestableDate(4),
+            requestableDate(3));
     UUID bookingKey = UUID.randomUUID();
     PresentationBookingResponse booking =
         bookings.confirm(token, bookingKey, confirmation(CABIN_1, selectedDays, 2L));
@@ -1979,15 +1981,13 @@ class RentalInquiryPresentationIntegrationTest {
     assertThat(rentalOrders.get(actor, booking.orderId()).desiredDeliveryWindows())
         .containsExactly(
             new dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindowResponse(
-                LocalDate.of(2026, 8, 11), LocalDate.of(2026, 8, 11)),
+                requestableDate(2), requestableDate(2)),
             new dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindowResponse(
-                LocalDate.of(2026, 8, 13), LocalDate.of(2026, 8, 13)),
+                requestableDate(3), requestableDate(3)),
             new dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindowResponse(
-                LocalDate.of(2026, 8, 15), LocalDate.of(2026, 8, 15)),
+                requestableDate(4), requestableDate(4)),
             new dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindowResponse(
-                LocalDate.of(2026, 8, 17), LocalDate.of(2026, 8, 17)),
-            new dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindowResponse(
-                LocalDate.of(2026, 8, 19), LocalDate.of(2026, 8, 19)));
+                requestableDate(5), requestableDate(5)));
     assertThat(
             jdbc.queryForObject(
                 "select rental_months from rental_order_unit_term where order_id=? and rental_item_id=?",
@@ -2023,11 +2023,10 @@ class RentalInquiryPresentationIntegrationTest {
             confirmation(
                 CABIN_1,
                 List.of(
-                    LocalDate.of(2026, 8, 15),
-                    LocalDate.of(2026, 8, 19),
-                    LocalDate.of(2026, 8, 13),
-                    LocalDate.of(2026, 8, 17),
-                    LocalDate.of(2026, 8, 11)),
+                    requestableDate(4),
+                    requestableDate(5),
+                    requestableDate(3),
+                    requestableDate(2)),
                 2L));
     assertThat(replay.bookingId()).isEqualTo(booking.bookingId());
     assertThat(replay.orderId()).isEqualTo(booking.orderId());
@@ -2066,12 +2065,24 @@ class RentalInquiryPresentationIntegrationTest {
   }
 
   @Test
-  void normalPresentationRequiresOneToFiveDistinctClientDatesAddressAndPositiveRentalMonths() {
+  void normalPresentationRequiresOneToFourRequestableDatesAddressAndPositiveRentalMonths() {
     RentalInquiryResponse inquiry = createInquiry();
     ClientPresentationResponse published = publish(inquiry.id(), List.of(CABIN_1));
     String token = token(published);
     List<PresentationCabinSelectionInput> selections =
         List.of(new PresentationCabinSelectionInput(CABIN_1, List.of()));
+
+    assertThatThrownBy(
+            () ->
+                bookings.confirm(
+                    token,
+                    UUID.randomUUID(),
+                    confirmation(CABIN_1, requestableDate(1), 2L)))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            failure ->
+                assertThat(failure.code())
+                    .isEqualTo("CLIENT_PRESENTATION_DELIVERY_DATE_NOT_REQUESTABLE"));
 
     assertThatThrownBy(
             () ->
@@ -2219,7 +2230,7 @@ class RentalInquiryPresentationIntegrationTest {
     ClientPresentationResponse published = publish(inquiry.id(), List.of(CABIN_1));
     String token = token(published);
     UUID bookingKey = UUID.randomUUID();
-    LocalDate date = LocalDate.of(2026, 8, 11);
+    LocalDate date = requestableDate(2);
     ConfirmClientPresentationRequest request =
         confirmation(
             CABIN_1,
@@ -2328,7 +2339,8 @@ class RentalInquiryPresentationIntegrationTest {
             additional_contacts_json=null
         where id=?
         """,
-        "[{\"startDate\":\"2026-08-11\",\"endDate\":\"2026-08-11\",\"timeFrom\":\"10:00\",\"timeTo\":\"13:00\"}]",
+        "[{\"startDate\":\"%s\",\"endDate\":\"%s\",\"timeFrom\":\"10:00\",\"timeTo\":\"13:00\"}]"
+            .formatted(date, date),
         booking.bookingId());
 
     PresentationBookingResponse legacyReplay = bookings.confirm(token, bookingKey, request);
@@ -2556,12 +2568,13 @@ class RentalInquiryPresentationIntegrationTest {
     PublicClientPresentationResponse replacementPublic =
         presentations.publicPresentation(token(pending));
     assertThat(replacementPublic.requiresDesiredDeliveryWindows()).isFalse();
+    assertThat(replacementPublic.requestableDeliveryDates()).isEmpty();
     assertThat(replacementPublic.desiredDeliveryWindows())
         .singleElement()
         .satisfies(
             window -> {
-              assertThat(window.startDate()).isEqualTo(LocalDate.of(2026, 8, 11));
-              assertThat(window.endDate()).isEqualTo(LocalDate.of(2026, 8, 11));
+              assertThat(window.startDate()).isEqualTo(requestableDate(2));
+              assertThat(window.endDate()).isEqualTo(requestableDate(2));
             });
     assertThatThrownBy(
             () -> bookings.confirm(token(pending), UUID.randomUUID(), confirmation(CABIN_3)))
@@ -2965,11 +2978,15 @@ class RentalInquiryPresentationIntegrationTest {
   }
 
   private ConfirmClientPresentationRequest confirmation(UUID cabinId) {
-    return confirmation(cabinId, LocalDate.of(2026, 8, 11), 2L);
+    return confirmation(cabinId, requestableDate(2), 2L);
   }
 
   private ConfirmClientPresentationRequest confirmation(UUID cabinId, long rentalMonths) {
-    return confirmation(cabinId, LocalDate.of(2026, 8, 11), rentalMonths);
+    return confirmation(cabinId, requestableDate(2), rentalMonths);
+  }
+
+  private static LocalDate requestableDate(long dayOffset) {
+    return LocalDate.now(ZoneOffset.UTC).plusDays(dayOffset);
   }
 
   private ConfirmClientPresentationRequest confirmation(

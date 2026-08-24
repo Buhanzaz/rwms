@@ -4,6 +4,7 @@ import dev.buhanzaz.rwms.driver.core.database.DriverAssignmentEntity
 import dev.buhanzaz.rwms.driver.core.database.DriverCategoryEntity
 import dev.buhanzaz.rwms.driver.core.database.DriverGroupEntity
 import dev.buhanzaz.rwms.driver.core.database.DriverTaskEntity
+import java.time.LocalDate
 
 /**
  * Defines driver UI/presentation state; it does not decide a server task transition.
@@ -36,6 +37,16 @@ internal data class QueueTaskTimerPresentation(
     val percent: String?,
     val state: String,
 )
+
+/** Separates a driver's own dated logistics from future shared work that can be claimed. */
+internal data class LogisticsTasksForDate(
+    val assigned: List<DriverTaskEntity>,
+    val additional: List<DriverTaskEntity>,
+) {
+    /** All cards shown for this date, without losing their section ownership. */
+    val totalCount: Int
+        get() = assigned.size + additional.size
+}
 
 /**
  * Formats the server-counted execution time and optional budget timer without
@@ -221,21 +232,24 @@ internal fun buildWarehouseWorkColumns(
 }
 
 /**
- * Selects the driver's personal logistics queue for one calendar date. Once
- * the independent category projection is present, tasks outside an authorized
- * logistics-driver queue fail closed. A legacy cache without categories may
- * still show explicitly classified personal tasks until the next full sync.
+ * Selects the driver's personal logistics and separately exposes claimable shared work for one
+ * calendar date. Shared work is visible on this surface only for a date strictly after [today];
+ * the logistics service repeats that authorization check against warehouse-local time. Once the
+ * independent category projection is present, tasks outside an authorized logistics-driver queue
+ * fail closed. A legacy cache without categories may still show explicitly classified tasks until
+ * the next full sync.
  */
 internal fun buildLogisticsTasksForDate(
     categories: List<DriverCategoryEntity>,
     tasks: List<DriverTaskEntity>,
     scheduledDate: String,
-): List<DriverTaskEntity> {
+    today: LocalDate,
+): LogisticsTasksForDate {
     val logisticsQueueIds = categories.asSequence()
         .filter { it.queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE }
         .mapTo(mutableSetOf(), DriverCategoryEntity::queueId)
-    return tasks.asSequence()
-        .filter { it.driverAudienceMode == ASSIGNED_DRIVER_AUDIENCE }
+    val selectedDate = runCatching { LocalDate.parse(scheduledDate) }.getOrNull()
+    val ordered = tasks.asSequence()
         .filter { it.scheduledDate == scheduledDate }
         .filter { categories.isEmpty() || it.categoryId in logisticsQueueIds }
         .sortedWith(
@@ -245,6 +259,13 @@ internal fun buildLogisticsTasksForDate(
                 .thenBy(DriverTaskEntity::localId),
         )
         .toList()
+    return LogisticsTasksForDate(
+        assigned = ordered.filter { it.driverAudienceMode == ASSIGNED_DRIVER_AUDIENCE },
+        additional = ordered.filter {
+            selectedDate?.isAfter(today) == true &&
+                it.driverAudienceMode == WAREHOUSE_DRIVERS_AUDIENCE
+        },
+    )
 }
 
 internal fun DriverCategoryEntity.groupIds(): Set<String> =

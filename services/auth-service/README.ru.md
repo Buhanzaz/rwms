@@ -173,6 +173,12 @@ scope на токен. Revision 5 добавила `media.inventory` для пе
 `inventory-service`, audience — `rwms-services`. Asset, maintenance, media,
 logistics и warehouse scopes по-прежнему запрашиваются отдельными токенами.
 
+Выключенный по умолчанию machine client `logistics-planner` предназначен только для отдельного
+симулятора маршрутов. При явном включении он использует только `client_credentials`, audience
+`rwms-services`, `client_secret_basic` и единственный scope `logistics.planning`. Runtime-секрет читается из
+`LOGISTICS_PLANNER_CLIENT_SECRET`; включение или изменение security shape требует revision managed
+client. Он не получает user, warehouse-administration или общие read/write scopes.
+
 ## Проверка warehouse grants
 
 Идентичностью склада владеет `warehouse-service`, поэтому auth-service не

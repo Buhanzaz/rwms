@@ -24,6 +24,7 @@ import dev.buhanzaz.rwms.logistics.order.security.OrderAuthorizer;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import dev.buhanzaz.rwms.logistics.order.service.RentalOrderService;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
@@ -68,6 +69,7 @@ public class ClientPresentationService {
   private final LogisticsDependencyGateway dependencies;
   private final OrderAuthorizer access;
   private final RentalOrderService rentalOrders;
+  private final ClientDeliveryDatePolicy deliveryDatePolicy;
   private final ObjectMapper json;
 
   @Transactional
@@ -280,6 +282,10 @@ public class ClientPresentationService {
   public PublicClientPresentationResponse publicPresentation(String token) {
     ClientPresentation presentation = resolve(token);
     ClientPresentationResponse internal = response(presentation, token);
+    List<LocalDate> requestableDeliveryDates =
+        internal.mode() == ClientPresentationMode.NORMAL
+            ? deliveryDatePolicy.requestableDates(presentation.getWarehouseId(), now())
+            : List.of();
     return new PublicClientPresentationResponse(
         internal.id(),
         internal.revision(),
@@ -290,6 +296,7 @@ public class ClientPresentationService {
         internal.mode(),
         internal.requiredSelectionCount(),
         internal.requiresDesiredDeliveryWindows(),
+        requestableDeliveryDates,
         internal.desiredDeliveryWindows(),
         internal.equipmentAvailability(),
         internal.groups(),

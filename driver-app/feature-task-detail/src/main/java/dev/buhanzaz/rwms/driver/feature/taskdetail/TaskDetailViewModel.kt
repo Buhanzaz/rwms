@@ -17,9 +17,12 @@ import dev.buhanzaz.rwms.driver.core.network.DriverTripDetailsDto
 import dev.buhanzaz.rwms.driver.core.network.DriverGatewayClient
 import dev.buhanzaz.rwms.driver.core.network.DriverKpiPaletteDto
 import dev.buhanzaz.rwms.driver.core.network.DriverTaskDetailDto
+import dev.buhanzaz.rwms.driver.core.network.GatewayFailureDisposition
+import dev.buhanzaz.rwms.driver.core.network.GatewayProblemException
 import dev.buhanzaz.rwms.driver.core.sync.DriverProjectionWriter
 import dev.buhanzaz.rwms.driver.core.sync.DriverSyncScheduler
 import java.time.Instant
+import java.time.LocalDate
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
@@ -49,6 +52,9 @@ private data class TripUiSnapshot(
     val complete: Boolean = false,
     val details: DriverTripDetailsDto? = null,
     val error: String? = null,
+    val claimInProgress: Boolean = false,
+    val claimComplete: Boolean = false,
+    val claimError: String? = null,
 )
 
 /** Result of one fenced task-board detail and optional logistics detail refresh. */
@@ -62,12 +68,13 @@ internal data class TaskDetailRefreshOutcome(
 
 /**
  * Refreshes task-board first, persists that authoritative detail, and only then follows a
- * logistics source reference when the task targets one exact assigned driver. The
- * caller-provided fence prevents a response for an obsolete screen key or refresh generation
- * from entering UI state.
+ * logistics source reference when the task targets one exact assigned driver or an eligible
+ * future shared preview. The caller-provided fence prevents a response for an obsolete screen key
+ * or refresh generation from entering UI state.
  */
 internal suspend fun loadTaskDetail(
     driverAudienceMode: String?,
+    today: LocalDate,
     fetchDetail: suspend () -> DriverTaskDetailDto,
     persistDetail: suspend (DriverTaskDetailDto) -> Unit,
     fetchLogisticsTrip: suspend (String) -> DriverTripDetailsDto?,
@@ -97,7 +104,14 @@ internal suspend fun loadTaskDetail(
     if (!isCurrent()) return TaskDetailRefreshOutcome(accepted = false)
 
     val source = detail.source
-    if (!canReadRichLogisticsDetails(source?.type, driverAudienceMode)) {
+    if (
+        !canReadRichLogisticsDetails(
+            sourceType = source?.type,
+            driverAudienceMode = driverAudienceMode,
+            scheduledDate = detail.scheduledDate,
+            today = today,
+        )
+    ) {
         return TaskDetailRefreshOutcome(accepted = true)
     }
     val logisticsSourceId = requireNotNull(source).sourceId
@@ -139,6 +153,9 @@ data class TaskDetailUiState(
     val tripRefreshInProgress: Boolean = false,
     val tripRefreshComplete: Boolean = false,
     val tripRefreshError: String? = null,
+    val extraTaskClaimInProgress: Boolean = false,
+    val extraTaskClaimed: Boolean = false,
+    val extraTaskClaimError: String? = null,
     val error: String? = null,
 )
 
@@ -258,6 +275,9 @@ class TaskDetailViewModel @Inject constructor(
                     tripRefreshInProgress = currentTrip?.loading == true,
                     tripRefreshComplete = currentTrip?.complete == true,
                     tripRefreshError = currentTrip?.error,
+                    extraTaskClaimInProgress = currentTrip?.claimInProgress == true,
+                    extraTaskClaimed = currentTrip?.claimComplete == true,
+                    extraTaskClaimError = currentTrip?.claimError,
                     error = error,
                 )
             }
@@ -285,7 +305,13 @@ class TaskDetailViewModel @Inject constructor(
         val current = key.value ?: return
         val generation = refreshGeneration.incrementAndGet()
         errors.value = null
-        tripSnapshot.value = TripUiSnapshot(key = current)
+        val previousSnapshot = tripSnapshot.value.takeIf { it.key == current }
+        tripSnapshot.value = TripUiSnapshot(
+            key = current,
+            claimInProgress = previousSnapshot?.claimInProgress == true,
+            claimComplete = previousSnapshot?.claimComplete == true,
+            claimError = previousSnapshot?.claimError,
+        )
         viewModelScope.launch {
             val isCurrent = {
                 key.value == current && refreshGeneration.get() == generation
@@ -294,16 +320,14 @@ class TaskDetailViewModel @Inject constructor(
             if (!isCurrent()) return@launch
             val outcome = loadTaskDetail(
                 driverAudienceMode = driverAudienceMode,
+                today = LocalDate.now(),
                 fetchDetail = { gateway.detail(current.entryId) },
                 persistDetail = { projections.applyDetail(current.userId, it) },
                 fetchLogisticsTrip = gateway::logisticsTripDetails,
                 isCurrent = isCurrent,
                 onLogisticsFetchStarted = {
                     if (isCurrent()) {
-                        tripSnapshot.value = TripUiSnapshot(
-                            key = current,
-                            loading = true,
-                        )
+                        tripSnapshot.value = tripSnapshot.value.copy(key = current, loading = true)
                     }
                 },
             )
@@ -314,7 +338,64 @@ class TaskDetailViewModel @Inject constructor(
                 complete = outcome.logisticsRequested,
                 details = outcome.tripDetails,
                 error = outcome.tripError,
+                claimInProgress = tripSnapshot.value.claimInProgress,
+                claimComplete = tripSnapshot.value.claimComplete,
+                claimError = tripSnapshot.value.claimError,
             )
+        }
+    }
+
+    /** Claims one future shared logistics trip online without issuing task-board TAKE. */
+    fun claimExtraTask() {
+        val current = key.value ?: return
+        val state = uiState.value
+        val detail = state.detail ?: return
+        val source = detail.source
+        val claimState = tripSnapshot.value.takeIf { it.key == current }
+        if (
+            claimState?.claimInProgress == true || claimState?.claimComplete == true ||
+            !canClaimFutureLogisticsTask(
+                sourceType = source?.type,
+                driverAudienceMode = state.task?.driverAudienceMode,
+                scheduledDate = detail.scheduledDate,
+                today = LocalDate.now(),
+            )
+        ) {
+            errors.value = "Дополнительную ходку можно взять только на будущую дату"
+            return
+        }
+        val sourceId = requireNotNull(source).sourceId
+        tripSnapshot.value = tripSnapshot.value.copy(
+            key = current,
+            claimInProgress = true,
+            claimError = null,
+        )
+        errors.value = null
+        viewModelScope.launch {
+            val claimedTrip = try {
+                gateway.claimFutureLogisticsTask(sourceId)
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: Exception) {
+                if (key.value != current) return@launch
+                tripSnapshot.value = tripSnapshot.value.copy(
+                    key = current,
+                    claimInProgress = false,
+                    claimError = extraTaskClaimErrorMessage(exception),
+                )
+                return@launch
+            }
+            if (key.value != current) return@launch
+            val currentSnapshot = tripSnapshot.value
+            tripSnapshot.value = currentSnapshot.copy(
+                key = current,
+                claimInProgress = false,
+                claimComplete = true,
+                claimError = null,
+                details = claimedTrip ?: currentSnapshot.details,
+            )
+            runCatching { scheduler.request(current.userId) }
+            refresh()
         }
     }
 
@@ -405,6 +486,21 @@ class TaskDetailViewModel @Inject constructor(
             }.onFailure { errors.value = it.message ?: "Не удалось поставить действие в очередь" }
         }
     }
+}
+
+/** Converts typed gateway outcomes into a recovery-oriented driver message. */
+internal fun extraTaskClaimErrorMessage(failure: Throwable): String = when (
+    (failure as? GatewayProblemException)?.disposition
+) {
+    GatewayFailureDisposition.CONFLICT ->
+        "Эту ходку уже взял другой водитель. Обновите логистику."
+    GatewayFailureDisposition.AUTHENTICATION_REQUIRED ->
+        "Сеанс истёк. Войдите снова, чтобы взять ходку."
+    GatewayFailureDisposition.USER_ACTION_REQUIRED ->
+        "Эта ходка больше недоступна вам. Обновите логистику."
+    GatewayFailureDisposition.RETRYABLE ->
+        "Сервис временно недоступен. Повторите позже."
+    else -> "Не удалось взять дополнительное задание."
 }
 
 private fun String.statusAfterAction(): String = when (this) {

@@ -566,7 +566,7 @@ export function TaskBoardSettingsPage() {
               },
               {
                 id: "availableTaskLimit",
-                label: "План на день",
+                label: "План новых складов",
                 getSortValue: (item) => item.availableTaskLimit,
                 render: (item) => item.availableTaskLimit,
               },

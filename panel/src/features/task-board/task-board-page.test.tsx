@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import type { CurrentUser } from "@/features/auth/auth-model"
 import type {
   TaskBoardEntryDto,
+  TaskBoardQueueDto,
   TaskBoardSnapshotDto,
 } from "@/features/task-board/model/task-board"
 import type { TaskBoardRepairComplexity } from "@/features/task-board/task-board-card"
@@ -18,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   getTaskBoard: vi.fn(),
   getKpiSettings: vi.fn(),
   listMaintenanceRepairs: vi.fn(),
+  updateTaskBoardWorkerPlan: vi.fn(),
+  reorderTaskBoardEntry: vi.fn(),
 }))
 
 vi.mock("@/features/auth/use-auth", () => ({ useAuth: mocks.useAuth }))
@@ -30,7 +33,12 @@ vi.mock("@/features/task-board/api/task-board-api", async () => {
     typeof import("@/features/task-board/api/task-board-api")
   >("@/features/task-board/api/task-board-api")
 
-  return { ...actual, getTaskBoard: mocks.getTaskBoard }
+  return {
+    ...actual,
+    getTaskBoard: mocks.getTaskBoard,
+    updateTaskBoardWorkerPlan: mocks.updateTaskBoardWorkerPlan,
+    reorderTaskBoardEntry: mocks.reorderTaskBoardEntry,
+  }
 })
 vi.mock("@/features/settings/kpi/api/kpi-settings-api", async () => {
   const actual = await vi.importActual<
@@ -54,6 +62,12 @@ vi.mock("@/features/task-board/task-board-column", () => ({
     highlightedTaskId,
     palette,
     repairComplexitiesByRepairId,
+    queue,
+    canManage,
+    reorderDisabled,
+    onUpdateWorkerPlan,
+    onReorder,
+    collapsed,
   }: {
     actionPending: boolean
     queueActionsDisabled: boolean
@@ -67,10 +81,26 @@ vi.mock("@/features/task-board/task-board-column", () => ({
       string,
       { name: string; type: string; color: string }
     >
+    queue: TaskBoardQueueDto
+    canManage: boolean
+    reorderDisabled: boolean
+    onUpdateWorkerPlan: (
+      queue: TaskBoardQueueDto,
+      workerFeedEnabled: boolean,
+      availableTaskLimit: number
+    ) => void
+    onReorder: (entry: TaskBoardEntryDto, targetIndex: number) => void
+    collapsed: boolean
   }) => (
     <div
       data-testid="task-board-command-state"
+      data-command-state={
+        actionPending && queueActionsDisabled ? "read-only" : "editable"
+      }
       data-palette-color={palette?.ranges[0]?.color}
+      data-can-manage={canManage}
+      data-reorder-disabled={reorderDisabled}
+      data-collapsed={collapsed}
     >
       {actionPending && queueActionsDisabled ? "read-only" : "editable"}
       <span data-testid="visible-task-external-ids">
@@ -116,6 +146,14 @@ vi.mock("@/features/task-board/task-board-column", () => ({
           Редактировать тестовый ремонт
         </button>
       ) : null}
+      <button type="button" onClick={() => onUpdateWorkerPlan(queue, false, 3)}>
+        Настроить WorkerApp {queue.key}
+      </button>
+      {visibleEntries[0] ? (
+        <button type="button" onClick={() => onReorder(visibleEntries[0]!, 1)}>
+          Переместить тестовое задание
+        </button>
+      ) : null}
     </div>
   ),
 }))
@@ -126,10 +164,12 @@ const board: TaskBoardSnapshotDto = {
   queues: [
     {
       key: "repair",
+      version: 4,
       label: "Ремонт",
       kind: "REPAIR",
       settingsQueueId: "00000000-0000-4000-8000-000000000002",
       settingsCollapsed: false,
+      workerFeedEnabled: true,
       availableTaskLimit: 6,
       entries: [],
     },
@@ -139,7 +179,7 @@ const board: TaskBoardSnapshotDto = {
   shadowEntries: 0,
 }
 
-function user(level: "VIEW" | "EDIT"): CurrentUser {
+function user(level: "VIEW" | "EDIT" | "MANAGE"): CurrentUser {
   return {
     id: "user-1",
     username: "operator",
@@ -194,7 +234,7 @@ type RepairComplexityFixture = {
 }
 
 function renderPage(
-  level: "VIEW" | "EDIT",
+  level: "VIEW" | "EDIT" | "MANAGE",
   {
     currentBoard = board,
     initialEntry = "/",
@@ -234,6 +274,13 @@ function renderPage(
     },
   })
   mocks.getTaskBoard.mockResolvedValue(currentBoard)
+  mocks.updateTaskBoardWorkerPlan.mockResolvedValue({
+    id: currentBoard.queues[0]?.settingsQueueId ?? "queue-1",
+    version: (currentBoard.queues[0]?.version ?? 0) + 1,
+    workerFeedEnabled: false,
+    availableTaskLimit: 3,
+  })
+  mocks.reorderTaskBoardEntry.mockResolvedValue(currentBoard)
   mocks.getKpiSettings.mockResolvedValue({
     warehouseId: WAREHOUSE_ID,
     timeZone: "Europe/Moscow",
@@ -312,7 +359,8 @@ describe("task board warehouse access", () => {
     }) as HTMLButtonElement
     expect(createButton.disabled).toBe(true)
     expect(
-      (await screen.findByTestId("task-board-command-state")).textContent
+      (await screen.findByTestId("task-board-command-state")).dataset
+        .commandState
     ).toBe("read-only")
     expect(
       screen.getByTestId("task-board-command-state").dataset.paletteColor
@@ -324,10 +372,76 @@ describe("task board warehouse access", () => {
 
     expect(screen.getByRole("link", { name: "Создать задание" })).toBeTruthy()
     await waitFor(() => {
-      expect(screen.getByTestId("task-board-command-state").textContent).toBe(
-        "editable"
-      )
+      expect(
+        screen.getByTestId("task-board-command-state").dataset.commandState
+      ).toBe("editable")
     })
+    expect(
+      screen.getByTestId("task-board-command-state").dataset.canManage
+    ).toBe("false")
+  })
+
+  it("saves WorkerApp queue settings only for MANAGE users", async () => {
+    renderPage("MANAGE")
+
+    const commandState = await screen.findByTestId("task-board-command-state")
+    expect(commandState.dataset.canManage).toBe("true")
+    await userEvent.setup().click(
+      screen.getByRole("button", {
+        name: "Настроить WorkerApp repair",
+      })
+    )
+
+    await waitFor(() => {
+      expect(mocks.updateTaskBoardWorkerPlan).toHaveBeenCalledWith({
+        accessToken: "task-board-token",
+        warehouseId: WAREHOUSE_ID,
+        queue: expect.objectContaining({ key: "repair", version: 4 }),
+        workerFeedEnabled: false,
+        availableTaskLimit: 3,
+      })
+    })
+    expect(
+      await screen.findByText("Настройки очереди для WorkerApp сохранены.")
+    ).toBeTruthy()
+  })
+
+  it("reorders a complete unfiltered queue and disables sorting during search", async () => {
+    const first = taskEntry("first", "Первая задача")
+    const second = taskEntry("second", "Вторая задача")
+    const currentBoard: TaskBoardSnapshotDto = {
+      ...board,
+      totalEntries: 2,
+      realEntries: 2,
+      queues: [{ ...board.queues[0]!, entries: [first, second] }],
+    }
+    mocks.reorderTaskBoardEntry.mockResolvedValue({
+      ...currentBoard,
+      queues: [{ ...currentBoard.queues[0]!, entries: [second, first] }],
+    })
+    renderPage("EDIT", { currentBoard })
+
+    const commandState = await screen.findByTestId("task-board-command-state")
+    expect(commandState.dataset.reorderDisabled).toBe("false")
+    await userEvent
+      .setup()
+      .click(
+        screen.getByRole("button", { name: "Переместить тестовое задание" })
+      )
+    await waitFor(() => {
+      expect(mocks.reorderTaskBoardEntry).toHaveBeenCalledWith({
+        accessToken: "task-board-token",
+        queue: expect.objectContaining({ key: "repair", version: 4 }),
+        entry: first,
+        targetEntryId: "entry-second",
+        targetIndex: 1,
+      })
+    })
+
+    await userEvent
+      .setup()
+      .type(screen.getByLabelText("Поиск по доске задач"), "вторая")
+    expect(commandState.dataset.reorderDisabled).toBe("true")
   })
 
   it("loads service-issued complexities in bounded active-repair requests", async () => {
@@ -530,6 +644,7 @@ describe("task board warehouse access", () => {
           key: "electricity",
           label: "Электрика",
           settingsQueueId: "00000000-0000-4000-8000-000000000003",
+          settingsCollapsed: true,
           availableTaskLimit: 1,
           entries: [routeShadow, unrelatedShadow],
         },
@@ -543,6 +658,13 @@ describe("task board warehouse access", () => {
 
     renderPage("EDIT", { currentBoard })
     await screen.findAllByTestId("visible-task-external-ids")
+
+    const electricityColumn = screen.getAllByTestId(
+      "task-board-command-state"
+    )[1]!
+    await waitFor(() => {
+      expect(electricityColumn.dataset.collapsed).toBe("true")
+    })
 
     expect(renderedIds("visible-task-external-ids")).toEqual([
       "route-real",
@@ -579,6 +701,21 @@ describe("task board warehouse access", () => {
       "entry-route-shadow",
     ])
     expect(screen.getByText("Полный путь: БЫТ-001.")).toBeTruthy()
+    expect(electricityColumn.dataset.collapsed).toBe("false")
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Полный путь entry-route-real",
+      })
+    )
+
+    expect(renderedIds("visible-task-external-ids")).toEqual([
+      "route-real",
+      "second-real",
+    ])
+    expect(renderedIds("highlighted-route-entry-ids")).toEqual([])
+    expect(screen.queryByText("Полный путь: БЫТ-001.")).toBeNull()
+    expect(electricityColumn.dataset.collapsed).toBe("true")
   })
 
   it("opens a waiting maintenance repair in edit mode", async () => {

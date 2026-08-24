@@ -64,8 +64,10 @@ Private pre-start replacement считает no-op только полность
 manager-очередь возвращает все незавершённые `REAL` и `SHADOW` entries. Приоритет регистрации уже
 отражён в сохранённой позиции очереди; чтение не сортирует по приоритету второй раз. Сначала идёт
 активная работа, затем ожидающие REAL в порядке pin/позиции, а после них — будущие `SHADOW`.
-Настроенный `availableTaskLimit` (по умолчанию шесть) отмечает первые ожидающие REAL в визуальном
-плане на день; он не обрезает ответ и не ограничивает `TAKE`. Maintenance-маршруты нормализуются в порядок `СЭС -> сварка -> внешние ->
+`availableTaskLimit` физической очереди (начально шесть) отмечает первые ожидающие REAL в плане
+manager-а, не обрезая полный manager-ответ. Global queue definition задаёт только начальное
+значение для новой проекции склада. Затем складская очередь сама владеет этим числом и
+`workerFeedEnabled`. Maintenance-маршруты нормализуются в порядок `СЭС -> сварка -> внешние ->
 внутренние -> электрика -> сантехника`. Первая существующая незавершённая фаза является
 единственным `REAL`; отсутствующие или завершённые фазы пропускаются, а все последующие остаются
 `SHADOW`. Поэтому электрика доступна сразу только когда все четыре предыдущие фазы отсутствуют или
@@ -76,9 +78,12 @@ manager-очередь возвращает все незавершённые `R
 Каноническая стадия СЭС остаётся единственной исполнимой карточкой задачи до конца обработки, в том
 числе для сохранённых definitions с историческим типом очереди `REPAIR`. Manager snapshot содержит
 её последующие read-only shadows, чтобы панель могла явно показать полный маршрут; WorkerApp во
-время обработки по-прежнему получает только gate СЭС. В публичной доске нет выбора даты, ручного
-перемещения entry, обмена дат, планирования по daily capacity и фонового rollover просрочки. Число
-плана на день используется только для отображения и не создаёт расписание. Датированное планирование водителей и отгрузок остаётся в отдельных logistics
+время обработки по-прежнему получает только gate СЭС. В публичной доске нет выбора даты,
+перемещения entry между очередями, обмена дат, планирования по daily capacity и фонового rollover
+просрочки. Manager может переставлять незакреплённые `WAITING REAL` внутри их текущей очереди под
+version fence entry и queue плюс проверку identity наблюдавшейся целевой карточки; active work,
+pinned-карточки, shadows и queue identity не двигаются. План на день не создаёт датированное
+расписание. Датированное планирование водителей и отгрузок остаётся в отдельных logistics
 surfaces. Инварианты подтверждаются
 [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
 [`TaskBoardReadProjectionService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardReadProjectionService.java) и
@@ -100,6 +105,14 @@ maintenance-маршруты, все entries которых ещё находя�
 ограничена этими aggregate ID и tail до V33 и только полями `sortOrder`, `routeIndex` и `entryType`;
 все последующие tail по-прежнему сравниваются точно.
 
+Flyway V34 добавляет `worker_feed_enabled=true` каждой существующей физической очереди, не меняя её
+сохранённое число плана. Пользователь с `MANAGE` может менять switch и число одной складской
+очереди. WorkerApp не получает ни одной карточки выключенной обычной очереди, включая активную
+работу; во включённой очереди он никогда не получает `SHADOW`, сохраняет активную `REAL`-работу и
+получает только первое настроенное число ожидающих `REAL`. Native detail, media-reader proof и
+`TAKE`/`JOIN` повторяют тот же серверный fence. Work-queue facts совместимо добавляют оба поля, а
+replay удаляет их только при сравнении immutable historical facts, записанных до этого добавления.
+
 Logistics driver task дополнительно несёт одну сохранённую аудиторию:
 `UNASSIGNED`, `ASSIGNED_DRIVER` или `WAREHOUSE_DRIVERS`. Задавать её может
 только точный driver-task source logistics-service. Только назначенная работа содержит worker
@@ -108,8 +121,10 @@ identity; этот worker должен быть активен на том же 
 авторитетный worker snapshot. Неназначенная задача остаётся работой диспетчера. Назначенную видит
 только этот водитель. Ожидающую identity-free общую задачу видят все квалифицированные водители
 склада до take, после чего доступ остаётся только у фактического исполнителя. DriverApp получает
-только primary bindings через `/api/driver/v1/**`; WorkerApp получает обычную работу и только
-активную secondary logistics work через `/api/worker/v1/**`. Take водителя транзакционно сохраняет
+видимую primary work из lane `SCHEDULED` и `CURRENT` через `/api/driver/v1/**`, поэтому датированный
+экран показывает назначенную будущую работу и общие будущие варианты. WorkerApp получает обычную
+работу и только активную `CURRENT` secondary logistics work через `/api/worker/v1/**`; scheduled
+работа водителей не попадает на поверхность стропальщика. Take водителя транзакционно сохраняет
 push `TASK_JOIN_AVAILABLE` для подходящих стропальщиков. Ожидающая logistics task анонсируется
 только в DriverApp SSE: WorkerApp не получает ни pre-take `NEW_TASK`, ни entry ID из другой surface.
 Стропальщик присоединяется из current group; если он выполнял другое групповое задание, task-board
@@ -120,12 +135,13 @@ push `TASK_JOIN_AVAILABLE` для подходящих стропальщико�
 участник при хотя бы одном READY result photo от любого участника. Primary assignment без группы
 никогда не становится secondary assignment, даже если у водителя также есть квалификация
 стропальщика. Только private source replan boundary может заменить
-audience под общим task/entry version fence; публичная обычная доска не предоставляет команду
-перемещения entry.
+audience под общим task/entry version fence; публичная обычная доска предоставляет только
+перестановку ожидающих карточек внутри одной очереди, но не logistics replanning и не cross-queue
+move.
 
 ## Внутренняя структура приложения
 
-`TaskBoardService` — стабильный transactional facade над шестью collaborators.
+`TaskBoardService` — стабильный transactional facade над связными collaborators.
 Он сохраняет прежнюю поверхность методов controllers/private boundaries, а
 решениями владеют следующие компоненты:
 
@@ -137,6 +153,9 @@ audience под общим task/entry version fence; публичная обыч
 | `TaskBoardLogisticsTaskService` | Граница logistics equipment/driver task |
 | `TaskBoardWorkerExecutionService` | Assignment, timing, interruption, cancellation и worker execution |
 | `TaskBoardPinningService` | Version-fenced manager-команда pin/unpin |
+| `TaskBoardEntryOrderingService` | Перестановка незакреплённых ожидающих REAL внутри очереди под entry/queue/target-identity fences |
+| `WorkerQueuePlanService` | Warehouse-local switch публикации WorkerApp и команда waiting-real плана |
+| `WorkerQueuePlanPolicy` | Общий fence публикации WorkerApp для feed, detail, TAKE и media readers |
 | `TaskBoardQueuePositionCoordinator` | Только advisory locks, stream fences и persisted queue/pin ordering |
 | `TaskBoardRoutePayloadCodec` | Единственный canonical route JSON и fingerprint codec |
 | `DriverTaskAudienceService` | Shape аудитории logistics-driver, qualification, visibility и execution authorization |
@@ -238,10 +257,11 @@ audit для каждого, выдаёт существующий queue-entry c
 собственными references в этом массиве; task-board не выравнивает и не угадывает эту связь.
 
 Каждый `WorkerFeedEntry` возвращает zero-based `routeIndex`, положительный `routeStepCount`,
-обязательный `entryType` (`REAL` или `SHADOW`) и обязательный `pinned`. Поэтому WorkerApp получает
-тот же server order, что и панель, показывает будущие этапы без команд и не угадывает pin/action
-state локально. Route cardinality и число READY evidence загружаются для выбранной страницы feed
-одной database projection, а не отдельным запросом для каждой карточки.
+обязательный `entryType` и обязательный `pinned`. WorkerApp получает только выбранные сервером
+`REAL` из включённых очередей: активную работу плюс ограниченный план ожидающих карточек. Будущие
+`SHADOW` остаются в manager snapshot и никогда не публикуются в WorkerApp. Route cardinality и
+число READY evidence загружаются для выбранной страницы feed одной database projection, а не
+отдельным запросом для каждой карточки.
 
 Worker action проверяет identity работника, current assignment, entry version,
 action/status transition и offline lease, где он нужен. Evidence сначала
@@ -253,6 +273,15 @@ bundle `image/webp` — не более 1 MiB, а его `sha256` являетс
 с исходными entry, operation, route step, capture time, MIME type, size и checksum. Те же ограничения
 формата и числа байт enforced миграцией
 [`V32__support_worker_evidence_webp_bundles.sql`](src/main/resources/db/migration/V32__support_worker_evidence_webp_bundles.sql).
+
+Завершённая фотография рабочего является первым внешне видимым фактом своего потока
+task-evidence, поэтому этот поток всегда начинается с aggregate version `0` независимо от версии
+внутренней reservation row. Миграция
+[`V35__repair_task_evidence_stream_origins.sql`](src/main/resources/db/migration/V35__repair_task_evidence_stream_origins.sql)
+добавляет детерминированные отсутствующие начала только полностью неопубликованным потокам
+`TASK_EVIDENCE` и по порядку повторно ставит в очередь их исходные факты из quarantine с разрывом
+версии. Она не переписывает исходные факты и не затрагивает уже опубликованный поток; контракт
+payload события не меняется.
 
 Текущий OpenAPI упоминает `Last-Event-ID`, но controller и client не реализуют
 durable replay. Reconnect сейчас безопасен благодаря fresh invalidation и

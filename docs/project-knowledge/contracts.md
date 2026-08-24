@@ -32,11 +32,15 @@ creation requires an `Idempotency-Key`; type, name and phone are mandatory,
 while a legal entity additionally requires a contact person. Client and order
 commands carry separate additional-contact lists. Order create/update carries
 only the client, primary phone and optional comment. `NORMAL` public
-presentation confirmation carries one to five distinct same-day
+presentation confirmation carries one to four distinct same-day
 `desiredDeliveryWindows[{startDate,endDate}]`, positive `rentalMonths`, required
 `deliveryAddress`, an optional complete latitude/longitude pair and nullable
-`additionalContacts` normalized to an empty list. `REPLACEMENT` rejects all of
-those normal-only fields and preserves existing order facts. Document scheduling
+`additionalContacts` normalized to an empty list. The corresponding public
+presentation contains required `requestableDeliveryDates`: `NORMAL` advertises
+the four warehouse-local dates `today+2` through `today+5`, and confirmation
+accepts at most four dates only from that current set. The list is requestable
+preference policy, not capacity availability. `REPLACEMENT` exposes an empty
+list, rejects all normal-only fields and preserves existing order facts. Document scheduling
 uses only `scheduledDate`; public requests and projections have no scheduled
 time. Historical database time columns remain physical compatibility data and
 are not transport fields. Detail exposes current date facts plus logistics
@@ -99,19 +103,66 @@ Evidence:
 and
 [`task-board-events-v1.schema.json`](../../contracts/events/task-board/task-board-events-v1.schema.json).
 
+### Standalone Logistics Planning Boundary
+
+[`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml)
+defines three private operations that are not gateway routes:
+`GET /api/internal/logistics/v1/planning/requests` returns a
+warehouse/date-bounded minimal feed of saved order remainders, and
+`POST /api/internal/logistics/v1/planning/assignments` applies one exact
+external plan/version with a required `Idempotency-Key`.
+`GET /api/internal/logistics/v1/planning/assignments` returns current audience,
+driver and task state only for planner-created shipment parts on one
+warehouse/date; manual documents and customer contacts are excluded. All three require a
+service token whose subject/client is exactly `logistics-planner`, audience is
+`rwms-services`, and sole scope is `logistics.planning`; an interactive user or
+a broader/mixed token is rejected.
+
+The feed carries order/version, minimal client/address/coordinate facts,
+unshipped cabin IDs and allowed dates. Coordinates, when present, are
+authoritative over address. Applying assignments rechecks warehouse, order
+version, selected date, cabin membership and uniqueness, driver identity and
+the automatic-date fence. Automatic today/tomorrow assignment is rejected;
+valid parts may succeed while every invalid part is returned with its reason.
+`PlanningAssignment.driverAudienceMode=WAREHOUSE_DRIVERS` is an explicit
+future-delivery publication: `driverWorkerId` is null, today is rejected and
+tomorrow is allowed. Omitted simulator leftovers and ordinary `UNASSIGNED`
+shipments are never made visible to DriverApp implicitly.
+The simulator-side public operations remain its own API:
+`POST /api/scenarios/{scenarioId}/rwms/sync` and
+`POST /api/plans/{planId}/rwms/apply`, plus the read-only exact-plan status
+refresh. They never grant database access to an RWMS owner.
+
+Evidence:
+[`planning API models`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/planning/api/PlanningIntegrationApiModels.java),
+[`planning controller`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/planning/api/PlanningIntegrationController.java),
+[`planning owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderPlanningIntegrationService.java),
+and
+[`simulator adapter`](../../logistics/backend/app/integrations/rwms.py).
+
 ### Aggregate Ordinary Task Board
 
 [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml) defines one
 warehouse-wide aggregate ordinary board with no date or shadow query dimensions. Each queue
-definition/request, work queue and board column carries required `availableTaskLimit` (`1..50`,
-default `6`). An ordinary manager column contains every unfinished `REAL` and `SHADOW` entry in
-canonical order. Registration priority is already represented by the persisted queue position and
-is not reapplied during reads. `availableTaskLimit` is a daily-plan presentation count only: it
-does not truncate the response or fence `TAKE`. Every current `REAL` route gate is actionable;
-every `SHADOW` remains read-only. Promotion restores the persisted shadow position ahead of later
-unpinned work, while pinning keeps a later real card ahead. Public ordinary entry movement, date
-swapping, maintenance daily-capacity scheduling and overdue rollover are absent. Dated driver and
-shipment planning remains on the separate logistics surface.
+definition/request carries the initial `availableTaskLimit` (`1..50`, default `6`) copied when a
+warehouse projection is created. Each work queue and board column carries its own required
+`availableTaskLimit`, `workerFeedEnabled` and version. An ordinary manager column contains every
+unfinished `REAL` and `SHADOW` entry in canonical order; the local WorkerApp controls do not
+truncate this response. Registration priority is already represented by the persisted queue
+position and is not reapplied during reads. `PUT
+/warehouses/{warehouseId}/work-queues/{queueId}/worker-plan` requires `MANAGE`, changes the local
+switch/count under the queue version. WorkerApp omits every card from disabled queues, including
+active work; in enabled queues it omits all shadows, retains active real work, publishes only the
+first configured waiting real cards and repeats that fence for detail and `TAKE`/`JOIN`.
+
+Every current `REAL` route gate remains actionable on manager boundaries; every `SHADOW` is
+read-only. Promotion restores the persisted shadow position ahead of later unpinned work, while
+pinning keeps a later real card ahead. `POST
+/warehouses/{warehouseId}/task-board/entries/{entryId}/reorder` moves only an unpinned waiting real
+card within its existing ordinary queue under entry and queue versions plus the observed target
+entry identity. Active, pinned and shadow entries cannot move. Cross-queue movement, date swapping,
+maintenance daily-capacity scheduling and overdue rollover are absent. Dated driver and shipment
+planning remains on the logistics surface.
 
 For maintenance-owned ordinary routes
 [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml) and
@@ -122,10 +173,12 @@ completed phases do not block promotion. SES remains the exclusive holding phase
 duplicated table even when an existing queue definition still carries the historical `REPAIR`
 type. While a repair route has unfinished SES work, only that entry is real and executable. The
 manager snapshot retains its non-SES shadows for explicit complete-route inspection; WorkerApp
-omits them until the gate completes. `WorkerFeedEntry`
-now carries required `entryType` and `pinned`, so native clients render the same order and do not
-infer actionability. The ordinary board contract does not absorb driver movement or external
-capital-repair ownership.
+omits them entirely and receives the promoted real stage only after the gate completes and the
+target queue's publication window admits it. `WorkerFeedEntry` still carries required `entryType`
+and `pinned`, but WorkerApp receives only server-selected real entries. The ordinary board contract
+does not absorb driver movement or external capital-repair ownership. Work-queue event facts add
+optional historical-compatible `availableTaskLimit` and `workerFeedEnabled`; new facts always emit
+both fields, while immutable earlier facts remain valid.
 
 The private source-owned pre-start replacement keeps optimistic concurrency for every changed
 snapshot. Its one retry exception is an exact canonical fingerprint match across task metadata and
@@ -150,9 +203,11 @@ and `COMPLETE`. Worker actions retain `JOIN`, but a logistics `TAKE` is rejected
 on the worker surface and a logistics `JOIN` is rejected until the primary
 driver has activated the task.
 
-The driver feed contains primary bindings only. The worker feed contains
-ordinary worker assignments plus only active/paused logistics entries for an
-eligible secondary slinger; it never exposes waiting driver work. A slinger
+The driver feed contains visible primary bindings from both `SCHEDULED` and
+`CURRENT`, allowing a dated DriverApp screen to show assigned future work and
+shared future candidates. The worker feed contains ordinary worker assignments
+plus only active/paused `CURRENT` logistics entries for an eligible secondary
+slinger; it never exposes scheduled or waiting driver work. A slinger
 `JOIN` supplies the current `workerGroupId`, allowing task-board to pause the
 whole previous group entry and resume it after the shared task closes. Every
 configured logistics secondary is optional: a driver may complete before a
@@ -185,9 +240,16 @@ attempting at-least-once WorkerApp delivery. The event is an invalidation, not
 an authorization grant or a complete projection.
 
 The public logistics rich-detail operation
-`/api/logistics/v1/driver-tasks/{taskId}` accepts a driver only when the token
-has `driver.tasks`, the WORKER identity equals the planned assigned worker and
-the task audience is `ASSIGNED_DRIVER`. Media accepts a WORKER upload/read
+`/api/logistics/v1/driver-tasks/{taskId}` requires `driver.tasks`. It accepts
+the planned driver for `ASSIGNED_DRIVER`, or a same-warehouse DriverApp worker
+for an unstarted `WAREHOUSE_DRIVERS` task whose scheduled date is strictly in
+the future. Task-board's driver feed discovers that shared candidate only for
+a currently qualified driver. `POST /api/logistics/v1/driver-tasks/{taskId}/claim`
+is available only for that future shared case; task-board revalidates the active
+qualification, version-fences the existing entry, changes its audience to this
+driver and logistics confirms the local projection without performing `TAKE`.
+Same-driver replay is idempotent, while today's shared work and another driver's
+concurrent claim fail explicitly. Media accepts a WORKER upload/read
 token with exactly one of `worker.tasks` and `driver.tasks`; all existing
 worker, warehouse and owner proofs still apply. The additive optional
 `readerWorkerIds` property in
@@ -208,6 +270,7 @@ Evidence:
 [`media V14`](../../services/media-service/db/migration/V14__task_board_reader_audience.sql),
 [`MobileTaskSurfacePolicy.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/MobileTaskSurfacePolicy.java),
 [`LogisticsAuthorizer.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/security/LogisticsAuthorizer.java),
+[`FutureDriverTaskClaimService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/FutureDriverTaskClaimService.java),
 and
 [`media validator`](../../services/media-service/internal/auth/validator.go).
 
@@ -610,7 +673,7 @@ methods, eagerly validate their converters and exercise representative
 encode/decode fixtures for every consumed JSON root family. Manager has 62
 methods (60 fixed public gateway paths and two media-only guarded `@Url`
 methods); worker has 11 (nine fixed and two guarded media methods); driver has
-12 (ten fixed and two guarded media methods). The worker and driver action
+13 (eleven fixed and two guarded media methods). The worker and driver action
 serializers emit all seven required contract properties, including explicit
 `null` for required nullable `workerGroupId` and `evidenceId`, without enabling
 global explicit-null serialization.

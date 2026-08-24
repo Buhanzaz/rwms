@@ -5,6 +5,7 @@ import dev.buhanzaz.rwms.driver.core.database.DriverCategoryEntity
 import dev.buhanzaz.rwms.driver.core.database.DriverAssignmentEntity
 import dev.buhanzaz.rwms.driver.core.database.DriverGroupEntity
 import dev.buhanzaz.rwms.driver.core.database.DriverTaskEntity
+import java.time.LocalDate
 import org.junit.Test
 
 class TaskQueueSectionsTest {
@@ -139,6 +140,7 @@ class TaskQueueSectionsTest {
             categories = listOf(driverCategory),
             tasks = listOf(shared, legacyUnclassified, assigned),
             scheduledDate = "2026-07-26",
+            today = LocalDate.of(2026, 7, 26),
         )
 
         assertThat(columns.map { it.name })
@@ -146,7 +148,8 @@ class TaskQueueSectionsTest {
         assertThat(columns.single().description).isEqualTo("Общие задания водителей склада")
         assertThat(columns.single().sections.single().tasks.map { it.entryId })
             .containsExactly("movement")
-        assertThat(logistics.map { it.entryId }).containsExactly("shipment")
+        assertThat(logistics.assigned.map { it.entryId }).containsExactly("shipment")
+        assertThat(logistics.additional).isEmpty()
     }
 
     @Test
@@ -168,9 +171,42 @@ class TaskQueueSectionsTest {
             categories = listOf(driverCategory),
             tasks = listOf(revoked, tomorrow, today),
             scheduledDate = "2026-08-12",
+            today = LocalDate.of(2026, 8, 12),
         )
 
-        assertThat(tasks.map { it.entryId }).containsExactly("today")
+        assertThat(tasks.assigned.map { it.entryId }).containsExactly("today")
+        assertThat(tasks.additional).isEmpty()
+    }
+
+    @Test
+    fun `future shared logistics is separate while today shared logistics stays hidden`() {
+        val driverCategory = category(
+            queueId = "drivers",
+            name = "Водители",
+            sortOrder = 5,
+            queuePurpose = "LOGISTICS_DRIVER",
+        )
+        val assigned = task("assigned", "drivers", "Водители", 5, 0)
+            .copy(driverAudienceMode = "ASSIGNED_DRIVER", scheduledDate = "2026-08-13")
+        val shared = task("shared", "drivers", "Водители", 5, 1)
+            .copy(driverAudienceMode = "WAREHOUSE_DRIVERS", scheduledDate = "2026-08-13")
+
+        val future = buildLogisticsTasksForDate(
+            categories = listOf(driverCategory),
+            tasks = listOf(shared, assigned),
+            scheduledDate = "2026-08-13",
+            today = LocalDate.of(2026, 8, 12),
+        )
+        val today = buildLogisticsTasksForDate(
+            categories = listOf(driverCategory),
+            tasks = listOf(shared.copy(scheduledDate = "2026-08-12")),
+            scheduledDate = "2026-08-12",
+            today = LocalDate.of(2026, 8, 12),
+        )
+
+        assertThat(future.assigned.map { it.entryId }).containsExactly("assigned")
+        assertThat(future.additional.map { it.entryId }).containsExactly("shared")
+        assertThat(today.totalCount).isEqualTo(0)
     }
 
     @Test

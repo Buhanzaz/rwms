@@ -89,7 +89,7 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
 
   @Test
   @Transactional
-  void bootMigratesAdoptedVersionFourThroughVersionThirtyThreeAndValidatesJpa() {
+  void bootMigratesAdoptedVersionFourThroughVersionThirtyFourAndValidatesJpa() {
     assertThat(entityManagerFactory.isOpen()).isTrue();
     assertThat(retainedDigests(jdbc)).containsExactlyInAnyOrderEntriesOf(beforeStartup);
     assertThat(
@@ -168,6 +168,12 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
             jdbc.queryForObject(
                 "select count(*) from flyway_schema_history "
                     + "where version='31' and type='SQL' and success",
+                Integer.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from flyway_schema_history "
+                    + "where version='34' and type='SQL' and success",
                 Integer.class))
         .isOne();
     assertThat(
@@ -333,11 +339,19 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
           ((tools.jackson.databind.node.ObjectNode) expectedFact)
               .set("entryType", storedFact.get("entryType"));
         }
-      } else if ("WORK_QUEUE".equals(aggregateType)
-          && projectionMigratedByV33(aggregateType, id)) {
+      } else if ("WORK_QUEUE".equals(aggregateType)) {
         JsonNode storedFact = objectMapper.readTree(actual);
-        ((tools.jackson.databind.node.ObjectNode) expectedFact)
-            .set("sortOrder", storedFact.get("sortOrder"));
+        // V34 adds warehouse-local WorkerApp controls to new facts without rewriting immutable
+        // baseline events adopted before those fields existed.
+        for (String field : List.of("availableTaskLimit", "workerFeedEnabled")) {
+          if (!storedFact.has(field)) {
+            ((tools.jackson.databind.node.ObjectNode) expectedFact).remove(field);
+          }
+        }
+        if (projectionMigratedByV33(aggregateType, id)) {
+          ((tools.jackson.databind.node.ObjectNode) expectedFact)
+              .set("sortOrder", storedFact.get("sortOrder"));
+        }
       }
       serialized = objectMapper.writeValueAsString(expectedFact);
     } catch (tools.jackson.core.JacksonException exception) {
@@ -523,7 +537,7 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
                         + "'sort_order','active','hidden','collapsed',"
                         + "'holding_period_minutes','notification_threshold',"
                         + "'notify_when_threshold_reached','revision_marker',"
-                        + "'available_task_limit']"
+                        + "'available_task_limit','worker_feed_enabled']"
                     : "queue_usage_reference".equals(table)
                         ? "to_jsonb(row_value) - array['queue_id','queue_definition_id']"
                     : "worker_class".equals(table)

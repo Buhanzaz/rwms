@@ -260,7 +260,6 @@ public class WorkerMediaEventProcessor {
             evidenceState,
             evidence.sourceType(),
             evidence.sourceId()),
-        projectionVersion,
         event.correlationId(),
         event.eventId());
     finishInbox(event.eventId(), "APPLIED", null);

@@ -48,6 +48,7 @@ class TaskBoardReadProjectionService {
   private final ObjectMapper objectMapper;
   private final WarehouseKpiClock kpiClock;
   private final DriverTaskAudienceService driverAudiences;
+  private final WorkerQueuePlanPolicy workerQueuePlans;
 
   TaskBoardReadProjectionService(
       BoardTaskRepository tasks,
@@ -63,7 +64,8 @@ class TaskBoardReadProjectionService {
       JdbcTemplate jdbc,
       ObjectMapper objectMapper,
       WarehouseKpiClock kpiClock,
-      DriverTaskAudienceService driverAudiences) {
+      DriverTaskAudienceService driverAudiences,
+      WorkerQueuePlanPolicy workerQueuePlans) {
     this.tasks = tasks;
     this.entries = entries;
     this.queues = queues;
@@ -78,21 +80,23 @@ class TaskBoardReadProjectionService {
     this.objectMapper = objectMapper;
     this.kpiClock = kpiClock;
     this.driverAudiences = driverAudiences;
+    this.workerQueuePlans = workerQueuePlans;
   }
 
   /**
    * Builds the complete aggregate ordinary board for manager surfaces.
    *
    * <p>Every unfinished real and shadow entry is returned in its persisted queue. The configured
-   * count is carried only as a daily-plan presentation hint; phase type and route order retain
-   * command authority. Manager clients can therefore reveal the complete future route, including
-   * the read-only path behind an active SES gate.
+   * warehouse-local publication controls are carried as metadata but do not truncate this manager
+   * view. Phase type and route order retain command authority. Manager clients can therefore
+   * reveal the complete future route, including the read-only path behind an active SES gate.
    */
   public TaskBoardSnapshot snapshot(UUID warehouseId) {
-    return ordinarySnapshot(warehouseId, true);
+    return ordinarySnapshot(warehouseId, true, false);
   }
 
-  private TaskBoardSnapshot ordinarySnapshot(UUID warehouseId, boolean includeSesBlockedShadows) {
+  private TaskBoardSnapshot ordinarySnapshot(
+      UUID warehouseId, boolean includeSesBlockedShadows, boolean applyWorkerPlan) {
     var columns = new ArrayList<BoardColumnDto>();
     var allEntries = ordinaryEntries(warehouseId);
     if (!includeSesBlockedShadows) {
@@ -102,12 +106,17 @@ class TaskBoardReadProjectionService {
     Map<UUID, List<AssignmentDto>> assignmentsByEntry = assignmentDtos(allEntries);
     for (var queue : queues.findAllActiveOrderedByWarehouseId(warehouseId)) {
       if (queue.isHidden() || queue.getPurpose() == QueuePurpose.LOGISTICS_DRIVER) continue;
+      if (applyWorkerPlan && !workerQueuePlans.isPublished(queue)) continue;
       List<QueueEntry> queueEntries =
           allEntries.stream()
               .filter(e -> e.getQueue() != null && e.getQueue().getId().equals(queue.getId()))
               .toList();
+      List<QueueEntry> selectedEntries =
+          applyWorkerPlan
+              ? workerQueuePlans.visibleEntries(queue, queueEntries)
+              : OrdinaryQueueAvailabilityPolicy.orderedEntries(queueEntries);
       var cards =
-          OrdinaryQueueAvailabilityPolicy.orderedEntries(queueEntries)
+          selectedEntries
               .stream()
               .map(
                   entry ->
@@ -119,11 +128,13 @@ class TaskBoardReadProjectionService {
       columns.add(
           new BoardColumnDto(
               queue.getId(),
+              queue.getVersion(),
               queue.getName(),
               queue.getType(),
               queue.getPurpose(),
               queue.getSortOrder(),
               queue.getAvailableTaskLimit(),
+              queue.isWorkerFeedEnabled(),
               cards));
     }
     return new TaskBoardSnapshot(warehouseId, columns);
@@ -189,14 +200,15 @@ class TaskBoardReadProjectionService {
   /** Builds the task projection with the exact audience rules of one native surface. */
   TaskBoardSnapshot workerSnapshot(
       MobileTaskSurface surface, UUID warehouseId, UUID workerId) {
-    TaskBoardSnapshot ordinary = ordinarySnapshot(warehouseId, false);
+    TaskBoardSnapshot ordinary =
+        ordinarySnapshot(warehouseId, false, surface == MobileTaskSurface.WORKER);
     List<BoardColumnDto> columns = new ArrayList<>(ordinary.columns());
     for (WorkQueue queue : queues.findAllActiveOrderedByWarehouseId(warehouseId)) {
       if (queue.isHidden() || queue.getPurpose() != QueuePurpose.LOGISTICS_DRIVER) continue;
       List<QueueEntry> logisticsEntries =
           activeEntries(queue).stream()
               .filter(entry -> entry.getEntryType() == EntryType.REAL)
-              .filter(entry -> entry.getTask().getLane() == TaskLane.CURRENT)
+              .filter(entry -> includesDriverLane(surface, entry.getTask().getLane()))
               .filter(entry -> isVisibleToSurface(surface, entry, workerId))
               .sorted(Comparator.comparingInt(QueueEntry::getQueuePosition))
               .toList();
@@ -205,11 +217,13 @@ class TaskBoardReadProjectionService {
       columns.add(
           new BoardColumnDto(
               queue.getId(),
+              queue.getVersion(),
               queue.getName(),
               queue.getType(),
               queue.getPurpose(),
               queue.getSortOrder(),
               queue.getAvailableTaskLimit(),
+              queue.isWorkerFeedEnabled(),
               logisticsEntries.stream()
                   .map(
                       entry ->
@@ -220,6 +234,15 @@ class TaskBoardReadProjectionService {
                   .toList()));
     }
     return new TaskBoardSnapshot(warehouseId, columns);
+  }
+
+  /**
+   * Publishes dated scheduled work to DriverApp while keeping WorkerApp's secondary-driver surface
+   * restricted to already active Current work.
+   */
+  private static boolean includesDriverLane(MobileTaskSurface surface, TaskLane lane) {
+    return lane == TaskLane.CURRENT
+        || (surface == MobileTaskSurface.DRIVER && lane == TaskLane.SCHEDULED);
   }
 
   BoardEntryDto entry(UUID warehouseId, UUID entryId) {
@@ -235,6 +258,12 @@ class TaskBoardReadProjectionService {
   BoardEntryDto workerEntry(
       MobileTaskSurface surface, UUID warehouseId, UUID entryId, UUID workerId) {
     QueueEntry entry = requireEntry(warehouseId, entryId);
+    if (surface == MobileTaskSurface.WORKER
+        && entry.getQueue().getPurpose() == QueuePurpose.GENERAL
+        && UNFINISHED.contains(entry.getStatus())
+        && !workerQueuePlans.isVisible(entry)) {
+      throw new NotFoundException("Задание не найдено");
+    }
     if (entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER
         && !isVisibleToSurface(surface, entry, workerId)) {
       throw new NotFoundException("Задание не найдено");

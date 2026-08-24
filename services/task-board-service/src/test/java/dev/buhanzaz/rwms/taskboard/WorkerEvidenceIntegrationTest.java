@@ -160,7 +160,7 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
             .toList();
     assertThat(routeFeed)
         .extracting(candidate -> candidate.entryType())
-        .containsExactly("REAL", "SHADOW", "SHADOW");
+        .containsExactly("REAL");
     assertThat(routeFeed)
         .allSatisfy(candidate -> assertThat(candidate.pinned()).isFalse());
     var feedEntry =
@@ -684,6 +684,16 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
                 Integer.class,
                 TaskBoardEventTypes.TASK_EVIDENCE_READY))
         .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select aggregate_version
+                  from domain_event
+                 where aggregate_type='TASK_EVIDENCE' and aggregate_id=?
+                """,
+                Long.class,
+                evidenceId.toString()))
+        .isZero();
     assertThat(
             jdbc.queryForObject(
                 """

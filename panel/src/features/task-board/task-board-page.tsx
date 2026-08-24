@@ -34,17 +34,24 @@ import {
   getTaskBoard,
   pauseTaskBoardEntry,
   pinTaskBoardEntry,
+  reorderTaskBoardEntry,
   resumeTaskBoardEntry,
   takeTaskBoardEntry,
   TASK_BOARD_QUERY_KEY,
   taskBoardQueryKey,
+  updateTaskBoardWorkerPlan,
 } from "@/features/task-board/api/task-board-api"
 import { mergeQueueCollapsedSettings } from "@/features/task-board/domain/task-board-domain"
 import {
   nextTaskTimerTransitionAt,
   paletteForTaskBoard,
 } from "@/features/task-board/domain/task-board-kpi-presentation"
-import type { TaskBoardEntryDto } from "@/features/task-board/model/task-board"
+import type {
+  TaskBoardEntryDto,
+  TaskBoardQueueDto,
+  TaskBoardSnapshotDto,
+  TaskBoardWorkerPlanDto,
+} from "@/features/task-board/model/task-board"
 import type { TaskBoardRepairComplexity } from "@/features/task-board/task-board-card"
 import { TaskBoardColumn } from "@/features/task-board/task-board-column"
 import { TaskBoardCompletionDialog } from "@/features/task-board/task-board-completion-dialog"
@@ -71,6 +78,72 @@ function errorMessage(error: unknown, fallback: string) {
 
 const ACTIVE_REPAIR_PAGE_SIZE = 200
 const EMPTY_ENTRY_IDS: ReadonlySet<string> = new Set()
+
+function withWorkerPlan(
+  board: TaskBoardSnapshotDto,
+  queueKey: string,
+  plan: Pick<
+    TaskBoardWorkerPlanDto,
+    "version" | "workerFeedEnabled" | "availableTaskLimit"
+  >
+) {
+  return {
+    ...board,
+    queues: board.queues.map((queue) =>
+      queue.key === queueKey
+        ? {
+            ...queue,
+            version: plan.version,
+            workerFeedEnabled: plan.workerFeedEnabled,
+            availableTaskLimit: plan.availableTaskLimit,
+          }
+        : queue
+    ),
+  }
+}
+
+function withReorderedEntry(
+  board: TaskBoardSnapshotDto,
+  queueKey: string,
+  entryId: string,
+  targetIndex: number
+) {
+  return {
+    ...board,
+    queues: board.queues.map((queue) => {
+      if (queue.key !== queueKey) return queue
+      const reorderablePositions = queue.entries.flatMap((entry, index) =>
+        entry.entryType === "REAL" &&
+        entry.status === "WAITING" &&
+        !entry.pinned
+          ? [index]
+          : []
+      )
+      const reorderableEntries = reorderablePositions.map(
+        (index) => queue.entries[index]!
+      )
+      const sourceIndex = reorderableEntries.findIndex(
+        (entry) => entry.id === entryId
+      )
+      if (
+        sourceIndex < 0 ||
+        targetIndex < 0 ||
+        targetIndex >= reorderableEntries.length ||
+        sourceIndex === targetIndex
+      ) {
+        return queue
+      }
+      const reorderedEntries = [...reorderableEntries]
+      const [movedEntry] = reorderedEntries.splice(sourceIndex, 1)
+      reorderedEntries.splice(targetIndex, 0, movedEntry!)
+      const entries = [...queue.entries]
+      reorderablePositions.forEach((position, index) => {
+        entries[position] = reorderedEntries[index]!
+      })
+      return { ...queue, entries }
+    }),
+  }
+}
 
 /** Resolves visible repair complexity in bounded ID batches without scanning warehouse repairs. */
 async function loadActiveRepairComplexities(
@@ -117,6 +190,9 @@ export function TaskBoardPage() {
   const canEdit = Boolean(
     warehouseId && hasWarehouseAccess(currentUser, warehouseId, "EDIT")
   )
+  const canManage = Boolean(
+    warehouseId && hasWarehouseAccess(currentUser, warehouseId, "MANAGE")
+  )
   const [search, setSearch] = useState("")
   const [showFutureSubtasks, setShowFutureSubtasks] = useState(false)
   const [selectedRouteTaskId, setSelectedRouteTaskId] = useState<string | null>(
@@ -141,6 +217,7 @@ export function TaskBoardPage() {
     warehouseId: string
     values: Map<string, boolean>
   } | null>(null)
+  const fullRouteCollapsedQueuesRef = useRef<Set<string> | null>(null)
 
   const boardQuery = useQuery({
     queryKey: taskBoardQueryKey(warehouseId ?? "none"),
@@ -307,16 +384,29 @@ export function TaskBoardPage() {
     [isMobile]
   )
 
+  const clearFullRoute = useCallback(() => {
+    const collapsedBeforeRoute = fullRouteCollapsedQueuesRef.current
+    fullRouteCollapsedQueuesRef.current = null
+    setSelectedRouteTaskId(null)
+    if (collapsedBeforeRoute) {
+      setCollapsedQueues(new Set(collapsedBeforeRoute))
+    }
+  }, [])
+
   const toggleFullRoute = useCallback(
     (entry: TaskBoardEntryDto) => {
-      const nextTaskId =
-        highlightedTaskId === entry.taskId ? null : entry.taskId
-      setSelectedRouteTaskId(nextTaskId)
-      if (!nextTaskId) return
+      if (selectedRouteTaskId === entry.taskId) {
+        clearFullRoute()
+        return
+      }
+      if (!selectedRouteTaskId) {
+        fullRouteCollapsedQueuesRef.current = new Set(collapsedQueues)
+      }
+      setSelectedRouteTaskId(entry.taskId)
       const routeQueueKeys = new Set(
         (boardQuery.data?.queues ?? [])
           .filter((queue) =>
-            queue.entries.some((candidate) => candidate.taskId === nextTaskId)
+            queue.entries.some((candidate) => candidate.taskId === entry.taskId)
           )
           .map((queue) => queue.key)
       )
@@ -326,7 +416,7 @@ export function TaskBoardPage() {
         return next
       })
     },
-    [boardQuery.data, highlightedTaskId]
+    [boardQuery.data, clearFullRoute, collapsedQueues, selectedRouteTaskId]
   )
 
   useEffect(() => {
@@ -431,8 +521,130 @@ export function TaskBoardPage() {
       await invalidateTaskBoard()
     },
   })
+  const workerPlanMutation = useMutation({
+    mutationFn: (params: {
+      warehouseId: string
+      queue: TaskBoardQueueDto
+      workerFeedEnabled: boolean
+      availableTaskLimit: number
+    }) => {
+      if (!accessToken) {
+        throw new Error("Не получен токен доступа к доске заданий.")
+      }
+      return updateTaskBoardWorkerPlan({ accessToken, ...params })
+    },
+    onMutate: async (params) => {
+      setNotice(null)
+      setError(null)
+      const queryKey = taskBoardQueryKey(params.warehouseId)
+      await queryClient.cancelQueries({ queryKey, exact: true })
+      const previous = queryClient.getQueryData<TaskBoardSnapshotDto>(queryKey)
+      if (previous) {
+        queryClient.setQueryData(
+          queryKey,
+          withWorkerPlan(previous, params.queue.key, {
+            version: params.queue.version,
+            workerFeedEnabled: params.workerFeedEnabled,
+            availableTaskLimit: params.availableTaskLimit,
+          })
+        )
+      }
+      return { previous, queryKey }
+    },
+    onSuccess: (plan, params) => {
+      setError(null)
+      setNotice("Настройки очереди для WorkerApp сохранены.")
+      queryClient.setQueryData<TaskBoardSnapshotDto>(
+        taskBoardQueryKey(params.warehouseId),
+        (current) =>
+          current ? withWorkerPlan(current, params.queue.key, plan) : current
+      )
+    },
+    onError: async (unknownError, _params, context) => {
+      setNotice(null)
+      setError(
+        errorMessage(
+          unknownError,
+          "Не удалось сохранить настройки очереди для WorkerApp"
+        )
+      )
+      if (context?.previous) {
+        queryClient.setQueryData(context.queryKey, context.previous)
+      }
+      await queryClient.invalidateQueries({
+        queryKey: context?.queryKey ?? TASK_BOARD_QUERY_KEY,
+      })
+    },
+  })
+  const reorderMutation = useMutation({
+    mutationFn: (params: {
+      queue: TaskBoardQueueDto
+      entry: TaskBoardEntryDto
+      targetEntryId: string
+      targetIndex: number
+    }) => {
+      if (!accessToken) {
+        throw new Error("Не получен токен доступа к доске заданий.")
+      }
+      return reorderTaskBoardEntry({ accessToken, ...params })
+    },
+    onMutate: async (params) => {
+      setNotice(null)
+      setError(null)
+      const queryKey = taskBoardQueryKey(params.entry.warehouseId)
+      await queryClient.cancelQueries({ queryKey, exact: true })
+      const previous = queryClient.getQueryData<TaskBoardSnapshotDto>(queryKey)
+      if (previous) {
+        queryClient.setQueryData(
+          queryKey,
+          withReorderedEntry(
+            previous,
+            params.queue.key,
+            params.entry.id,
+            params.targetIndex
+          )
+        )
+      }
+      return { previous, queryKey }
+    },
+    onSuccess: (snapshot, params) => {
+      setError(null)
+      setNotice("Очередность заданий сохранена.")
+      queryClient.setQueryData(
+        taskBoardQueryKey(params.entry.warehouseId),
+        snapshot
+      )
+    },
+    onError: async (unknownError, _params, context) => {
+      setNotice(null)
+      setError(
+        errorMessage(unknownError, "Не удалось изменить очередь заданий")
+      )
+      if (context?.previous) {
+        queryClient.setQueryData(context.queryKey, context.previous)
+      }
+      await queryClient.invalidateQueries({
+        queryKey: context?.queryKey ?? TASK_BOARD_QUERY_KEY,
+      })
+    },
+  })
 
-  const busy = actionMutation.isPending || pinMutation.isPending
+  const busy =
+    actionMutation.isPending ||
+    pinMutation.isPending ||
+    workerPlanMutation.isPending ||
+    reorderMutation.isPending
+  const reorderDisabled =
+    isMobile ||
+    busy ||
+    !canEdit ||
+    Boolean(
+      normalizedSearch ||
+      focusedExternalTaskId ||
+      focusedTaskId ||
+      showFutureSubtasks ||
+      highlightedTaskId
+    )
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
@@ -521,7 +733,7 @@ export function TaskBoardPage() {
             type="button"
             size="sm"
             variant="ghost"
-            onClick={() => setSelectedRouteTaskId(null)}
+            onClick={clearFullRoute}
           >
             Сбросить выделение
           </Button>
@@ -586,9 +798,12 @@ export function TaskBoardPage() {
                 now={now}
                 mobile={isMobile}
                 canEdit={canEdit}
+                canManage={canManage}
                 collapsed={collapsedQueues.has(queue.key)}
                 actionPending={busy || !canEdit}
+                configPending={busy}
                 queueActionsDisabled={!canEdit || Boolean(normalizedSearch)}
+                reorderDisabled={reorderDisabled}
                 dailyPlanEntryIds={
                   dailyPlanEntryIdsByQueue.get(queue.key) ?? EMPTY_ENTRY_IDS
                 }
@@ -603,6 +818,37 @@ export function TaskBoardPage() {
                     return next
                   })
                 }
+                onUpdateWorkerPlan={(
+                  currentQueue,
+                  workerFeedEnabled,
+                  availableTaskLimit
+                ) => {
+                  if (!canManage || !warehouseId) return
+                  workerPlanMutation.mutate({
+                    warehouseId,
+                    queue: currentQueue,
+                    workerFeedEnabled,
+                    availableTaskLimit,
+                  })
+                }}
+                onReorder={(entry, targetIndex) => {
+                  if (reorderDisabled) return
+                  const targetEntryId = queue.entries
+                    .filter(
+                      (candidate) =>
+                        candidate.entryType === "REAL" &&
+                        candidate.status === "WAITING" &&
+                        !candidate.pinned
+                    )
+                    .at(targetIndex)?.id
+                  if (!targetEntryId) return
+                  reorderMutation.mutate({
+                    queue,
+                    entry,
+                    targetEntryId,
+                    targetIndex,
+                  })
+                }}
                 onDetails={(entry) => {
                   if (entry.source?.type !== "MAINTENANCE_REPAIR") return
                   navigate(

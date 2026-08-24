@@ -252,3 +252,13 @@ rwms:
           secret-environment: LOGISTICS_CLIENT_SECRET
           audiences: [rwms-services]
           access-token-ttl: 5m
+        - client-id: logistics-planner
+          client-name: Logistics Planner Integration Client
+          enabled: ${LOGISTICS_PLANNER_CLIENT_ENABLED:false}
+          revision: ${LOGISTICS_PLANNER_CLIENT_REVISION:1}
+          authentication-methods: [client_secret_basic]
+          grant-types: [client_credentials]
+          scopes: [logistics.planning]
+          secret-environment: LOGISTICS_PLANNER_CLIENT_SECRET
+          audiences: [rwms-services]
+          access-token-ttl: 5m

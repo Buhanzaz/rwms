@@ -16,6 +16,9 @@ import org.springframework.stereotype.Component;
 @Component
 public class LogisticsTransactionLock {
   private static final String KEY_SEPARATOR = "\u001f";
+  private static final String ESCAPE = "\\";
+  private static final String ESCAPED_ESCAPE = "\\\\";
+  private static final String ESCAPED_SEPARATOR = "\\x1f";
   private final LogisticsIdempotencyRecordRepository idempotencyRecords;
 
   public LogisticsTransactionLock(LogisticsIdempotencyRecordRepository idempotencyRecords) {
@@ -29,25 +32,21 @@ public class LogisticsTransactionLock {
    * transition.
    */
   public void acquire(String lockKey) {
-    acquireAll(List.of(lockKey));
+    acquireAll(List.of(Objects.requireNonNull(lockKey, "Lock key is required")));
   }
 
   /**
    * Acquires a deterministic set of transaction locks with one bounded database round trip.
    *
-   * <p>Sorting prevents deadlocks between overlapping batches. The control-character separator is
-   * deliberately rejected in keys so PostgreSQL can expand the one bound value losslessly.
+   * <p>Sorting prevents deadlocks between overlapping batches. Backslashes and the transport-only
+   * control-character separator are escaped injectively before joining, so opaque legacy keys are
+   * accepted without creating a second native SQL query.
    */
   public void acquireAll(Collection<String> lockKeys) {
     List<String> ordered =
         Objects.requireNonNull(lockKeys, "Lock keys are required").stream()
             .map(value -> Objects.requireNonNull(value, "Lock key is required"))
-            .peek(
-                value -> {
-                  if (value.contains(KEY_SEPARATOR)) {
-                    throw new IllegalArgumentException("Lock key contains the reserved separator");
-                  }
-                })
+            .map(LogisticsTransactionLock::encodeLockKey)
             .distinct()
             .sorted()
             .toList();
@@ -57,5 +56,10 @@ public class LogisticsTransactionLock {
     if (acquired.size() != ordered.size()) {
       throw new IllegalStateException("Not every requested transaction lock was acquired");
     }
+  }
+
+  /** Encodes one opaque key into the delimiter-free repository transport representation. */
+  private static String encodeLockKey(String value) {
+    return value.replace(ESCAPE, ESCAPED_ESCAPE).replace(KEY_SEPARATOR, ESCAPED_SEPARATOR);
   }
 }

@@ -12,6 +12,7 @@ import dev.buhanzaz.rwms.driver.core.network.DriverMediaReferenceDto
 import dev.buhanzaz.rwms.driver.core.network.DriverWorkDto
 import dev.buhanzaz.rwms.driver.core.ui.cabinNumberForDisplay
 import java.time.Instant
+import java.time.LocalDate
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
@@ -192,6 +193,56 @@ class TaskDetailPresentationTest {
         assertThat(logisticsTaskAudienceLabel(WAREHOUSE_DRIVERS_AUDIENCE_MODE))
             .isEqualTo("Логистическое задание · общее для водителей склада")
         assertThat(logisticsTaskAudienceLabel(null)).isEqualTo("Логистическое задание")
+    }
+
+    @Test
+    fun `future shared logistics supports preview and claim but today does not`() {
+        val today = LocalDate.of(2026, 8, 23)
+
+        assertThat(
+            canReadRichLogisticsDetails(
+                sourceType = "LOGISTICS_DRIVER_TASK",
+                driverAudienceMode = WAREHOUSE_DRIVERS_AUDIENCE_MODE,
+                scheduledDate = "2026-08-24",
+                today = today,
+            ),
+        ).isTrue()
+        assertThat(
+            canClaimFutureLogisticsTask(
+                sourceType = "LOGISTICS_DRIVER_TASK",
+                driverAudienceMode = WAREHOUSE_DRIVERS_AUDIENCE_MODE,
+                scheduledDate = "2026-08-24",
+                today = today,
+            ),
+        ).isTrue()
+        assertThat(
+            canReadRichLogisticsDetails(
+                sourceType = "LOGISTICS_DRIVER_TASK",
+                driverAudienceMode = WAREHOUSE_DRIVERS_AUDIENCE_MODE,
+                scheduledDate = "2026-08-23",
+                today = today,
+            ),
+        ).isFalse()
+        assertThat(
+            canClaimFutureLogisticsTask(
+                sourceType = "LOGISTICS_DRIVER_TASK",
+                driverAudienceMode = WAREHOUSE_DRIVERS_AUDIENCE_MODE,
+                scheduledDate = "2026-08-23",
+                today = today,
+            ),
+        ).isFalse()
+    }
+
+    @Test
+    fun `assigned logistics keeps rich details independent of its scheduled date`() {
+        assertThat(
+            canReadRichLogisticsDetails(
+                sourceType = "LOGISTICS_DRIVER_TASK",
+                driverAudienceMode = ASSIGNED_DRIVER_AUDIENCE_MODE,
+                scheduledDate = "2026-08-22",
+                today = LocalDate.of(2026, 8, 23),
+            ),
+        ).isTrue()
     }
 
     @Test

@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.logistics.repository;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import jakarta.persistence.LockModeType;
+import java.time.LocalDate;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
@@ -52,6 +53,14 @@ public interface LogisticsDocumentRepository extends JpaRepository<LogisticsDocu
 
   List<LogisticsDocument> findAllByDocumentTypeAndWarehouseIdOrderByCreatedAtDescIdDesc(
       LogisticsDocumentType documentType, UUID warehouseId);
+
+  /** Reads only planner-created documents for one warehouse-local planning date. */
+  List<LogisticsDocument>
+      findAllByDocumentTypeAndWarehouseIdAndScheduledDateAndRequestedBySubjectIdOrderByCreatedAtAscIdAsc(
+          LogisticsDocumentType documentType,
+          UUID warehouseId,
+          LocalDate scheduledDate,
+          UUID requestedBySubjectId);
 
   /** Finds already-created historical facts for an exact plan reassertion without N+1 reads. */
   @Lock(LockModeType.PESSIMISTIC_WRITE)

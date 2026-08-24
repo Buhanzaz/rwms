@@ -804,7 +804,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void sharedDriverAudienceHasNoPlannedIdentityAndNarrowsOnlyAfterTake() {
+  void scheduledSharedDriverAudienceIsVisibleAndNarrowsOnlyAfterTake() {
     var driverClass = registry.createClass(workerClass("DRIVER_SHARED_BOARD"));
     var movement =
         QueueRegistryTestFixtures.create(
@@ -845,6 +845,24 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null));
     BoardTaskRegistrationDto registered =
         board.registerExternalTask("logistics-service", initialRequest);
+    assertThat(
+            workerBoard
+                .feed(MobileTaskSurface.DRIVER, firstDriver.id(), W1, null, 50)
+                .feed()
+                .categories()
+                .stream()
+                .flatMap(category -> category.entries().stream())
+                .map(entry -> entry.taskId()))
+        .contains(registered.taskId());
+    assertThat(
+            workerBoard
+                .feed(MobileTaskSurface.DRIVER, secondDriver.id(), W1, null, 50)
+                .feed()
+                .categories()
+                .stream()
+                .flatMap(category -> category.entries().stream())
+                .map(entry -> entry.taskId()))
+        .contains(registered.taskId());
     registered =
         board.setExternalTaskLane(
             "logistics-service",
@@ -975,6 +993,15 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .isEqualTo(DriverTaskAudienceMode.ASSIGNED_DRIVER);
     assertThat(assigned.driverAudience().workerId()).isEqualTo(driver.id());
     assertThat(assigned.driverAudience().workerName()).isEqualTo(driver.displayName());
+    assertThat(
+            workerBoard
+                .feed(MobileTaskSurface.DRIVER, driver.id(), W1, null, 50)
+                .feed()
+                .categories()
+                .stream()
+                .flatMap(category -> category.entries().stream())
+                .map(entry -> entry.taskId()))
+        .contains(assigned.taskId());
   }
 
   @Test

@@ -345,6 +345,7 @@ describe("TaskBoardSettingsPage navigation", () => {
     expect(screen.queryByText("Водители")).toBeNull()
     expect(screen.queryByRole("radio", { name: "Очереди склада" })).toBeNull()
     expect(screen.getByText("Классы исполнителей")).toBeTruthy()
+    expect(screen.getByText("План новых складов")).toBeTruthy()
     expect(mocks.listQueueDefinitions).toHaveBeenCalledWith("task-board-token")
 
     for (const [section, action] of [

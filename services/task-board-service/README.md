@@ -64,8 +64,10 @@ The ordinary repair board is one aggregate warehouse view, not a calendar. Each 
 returns every unfinished `REAL` and `SHADOW` entry. Registration priority is already reflected in
 the persisted queue position; reads do not sort by priority a second time. Active work stays first,
 waiting real work follows in pinned/queue-position order, and future `SHADOW` entries follow. The
-configured `availableTaskLimit` (six by default) marks the first waiting real cards in the visual
-daily plan; it does not truncate the response or fence `TAKE`.
+physical queue's `availableTaskLimit` (six initially) marks the first waiting real cards in the
+manager's daily plan without truncating that complete manager response. The global queue definition
+supplies only the initial value for a new warehouse projection. Afterwards the warehouse queue owns
+both this count and `workerFeedEnabled`.
 Maintenance routes are normalized to `SES -> welding -> exterior -> interior -> electrical ->
 plumbing`. The first existing unfinished phase is the only `REAL` stage; absent or completed phases
 are skipped, and every later stage is `SHADOW`. Electricity is therefore immediately actionable
@@ -77,8 +79,10 @@ A canonical SES stage remains the only executable card for its task until treatm
 including for retained definitions whose historical queue type is `REPAIR`. The manager snapshot
 contains its later read-only shadows so the panel can reveal the complete route explicitly;
 WorkerApp still receives only the SES gate during treatment. The public board has no date selector,
-manual entry move, date swap, daily-capacity scheduling, or overdue rollover scan. Its daily-plan
-count is presentation only and creates no dated schedule.
+cross-queue entry move, date swap, daily-capacity scheduling, or overdue rollover scan. A manager
+may reorder unpinned `WAITING REAL` cards within their existing queue under entry and queue version
+fences plus the observed target-card identity; active work, pinned cards, shadows and queue identity
+do not move. The daily plan creates no dated schedule.
 Dated driver and shipment planning remains on the separate logistics surfaces. These invariants are defined by
 [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
 [`TaskBoardReadProjectionService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardReadProjectionService.java),
@@ -99,6 +103,14 @@ are unchanged. A durable projection-migration ledger lists the exact work queues
 event-sourced projection changed. Replay compatibility is limited to those aggregate IDs and
 pre-V33 tails, and only to `sortOrder`, `routeIndex` and `entryType`; all later tails remain exact.
 
+Flyway V34 adds `worker_feed_enabled=true` to every existing physical queue without changing its
+stored plan count. A `MANAGE` user can change the switch and count for one warehouse queue. WorkerApp
+receives no card from a disabled ordinary queue, including active work; in an enabled queue it never
+receives a `SHADOW`, retains active `REAL` work, and receives only the first configured number of
+waiting `REAL` cards. Native detail, media-reader proof and `TAKE`/`JOIN` repeat the same server-side
+fence. Work-queue facts add the two controls compatibly, while replay removes them only when
+comparing immutable historical facts that predate the addition.
+
 Logistics driver tasks additionally carry one persisted audience:
 `UNASSIGNED`, `ASSIGNED_DRIVER`, or `WAREHOUSE_DRIVERS`. Only the exact
 logistics-service driver-task source may set it. Only assigned work carries a worker identity; that
@@ -106,9 +118,11 @@ worker must be active in the same warehouse and have the primary qualification o
 Task-board ignores a caller-supplied display name and stores its authoritative worker snapshot.
 Unassigned tasks remain dispatcher work. An assigned task is visible only to that driver. A waiting
 identity-free shared task is visible to every qualified warehouse driver until one takes it, after
-which only the actual assignee retains access. DriverApp receives only primary bindings through
-`/api/driver/v1/**`; WorkerApp receives ordinary work and only active secondary logistics work
-through `/api/worker/v1/**`. A driver take persists a `TASK_JOIN_AVAILABLE` push for eligible
+which only the actual assignee retains access. DriverApp receives visible primary work from both
+`SCHEDULED` and `CURRENT` lanes through `/api/driver/v1/**`, so its dated screen can show assigned
+future work and shared future candidates. WorkerApp receives ordinary work and only active
+`CURRENT` secondary logistics work through `/api/worker/v1/**`; scheduled driver work never leaks
+to the slinger surface. A driver take persists a `TASK_JOIN_AVAILABLE` push for eligible
 slingers. The waiting logistics task is announced only on the DriverApp SSE surface; WorkerApp
 receives neither a pre-take `NEW_TASK` nor a cross-surface entry ID. A slinger joins from the
 current group; if that worker was executing another group task, task-board pauses the whole
@@ -119,11 +133,12 @@ participant may close with at least one READY result photo from either participa
 primary assignment never becomes a secondary assignment, even when that driver also has the
 slinger qualification. Only the
 private source replan boundary may replace audience under the shared task/entry version fence; the
-public ordinary board exposes no entry-movement command.
+public ordinary board exposes only same-queue waiting-card reorder, never logistics replanning or a
+cross-queue move.
 
 ## Internal application structure
 
-`TaskBoardService` is a stable six-collaborator transactional facade. It keeps
+`TaskBoardService` is a stable transactional facade over cohesive collaborators. It keeps
 the existing controller/private-boundary method surface while the following
 components own the decisions:
 
@@ -135,6 +150,9 @@ components own the decisions:
 | `TaskBoardLogisticsTaskService` | Logistics equipment/driver task boundary |
 | `TaskBoardWorkerExecutionService` | Assignment, timing, interruption, cancellation and worker execution |
 | `TaskBoardPinningService` | Version-fenced manager pin/unpin command |
+| `TaskBoardEntryOrderingService` | Same-queue reorder of unpinned waiting real cards under entry/queue/target-identity fences |
+| `WorkerQueuePlanService` | Warehouse-local WorkerApp publication switch and waiting-real plan command |
+| `WorkerQueuePlanPolicy` | Shared WorkerApp feed, detail, TAKE and media-reader publication fence |
 | `TaskBoardQueuePositionCoordinator` | Advisory locks, stream fences and persisted queue/pin ordering only |
 | `TaskBoardRoutePayloadCodec` | The single canonical route JSON and fingerprint codec |
 | `DriverTaskAudienceService` | Logistics-driver audience shape, qualification, visibility and execution authorization |
@@ -236,10 +254,11 @@ first position. Each `WorkerWork.sourceMediaIds` is the exact link from a work l
 references in that array; task-board does not flatten or infer that association.
 
 Every `WorkerFeedEntry` exposes zero-based `routeIndex`, positive `routeStepCount`, required
-`entryType` (`REAL` or `SHADOW`) and required `pinned`. WorkerApp therefore receives the same
-server order as the panel, can render future stages without enabling commands, and does not infer
-pin or action state locally. Route cardinality and READY evidence counts are loaded for the selected
-feed page in one database projection rather than one query per card.
+`entryType` and required `pinned`. WorkerApp receives only server-selected `REAL` entries from
+enabled queues: active work plus the queue's bounded waiting plan. Future `SHADOW` stages stay in
+the manager snapshot and are never published to WorkerApp. Route cardinality and READY evidence
+counts are loaded for the selected feed page in one database projection rather than one query per
+card.
 
 The worker action path validates the worker identity, current assignment,
 entry version, action/status transition, and offline lease where applicable.
@@ -251,6 +270,14 @@ bundle-manifest checksum. Both formats retain one logical evidence row, and rese
 must match the original entry, operation, route step, capture time, MIME type, size, and checksum.
 The same format and byte limits are enforced by
 [`V32__support_worker_evidence_webp_bundles.sql`](src/main/resources/db/migration/V32__support_worker_evidence_webp_bundles.sql).
+
+A finalized worker photo is the first externally visible fact of its task-evidence stream, so that
+stream always starts at aggregate version `0` independently of the internal reservation-row
+version. Migration
+[`V35__repair_task_evidence_stream_origins.sql`](src/main/resources/db/migration/V35__repair_task_evidence_stream_origins.sql)
+adds deterministic missing origins only to entirely unpublished `TASK_EVIDENCE` streams and
+requeues their original aggregate-gap-quarantined facts in order. It does not rewrite the original
+facts or touch an already published stream; the event payload contract is unchanged.
 
 The current OpenAPI text mentions `Last-Event-ID`, but controller and client do
 not implement durable replay. Current reconnect is safe because it triggers a

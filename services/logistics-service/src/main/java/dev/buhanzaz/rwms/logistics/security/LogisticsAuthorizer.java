@@ -85,6 +85,20 @@ public class LogisticsAuthorizer {
     }
   }
 
+  /** Requires the exact standalone planner machine identity and its sole integration scope. */
+  public void requirePlanningIntegration(Jwt jwt) {
+    if (developmentBypass) return;
+    if (jwt == null
+        || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
+        || !"logistics-planner".equals(jwt.getSubject())
+        || !"logistics-planner".equals(jwt.getClaimAsString("client_id"))
+        || !List.of("rwms-services").equals(audiences(jwt))
+        || !List.of("logistics.planning").equals(scopes(jwt))) {
+      throw new AccessDeniedException(
+          "Exact logistics-planner logistics.planning token is required");
+    }
+  }
+
   private void requireMaintenanceServiceIntake(Jwt jwt) {
     if (developmentBypass) return;
     if (jwt == null
@@ -130,6 +144,41 @@ public class LogisticsAuthorizer {
     try {
       return plannedDriverWorkerId.equals(UUID.fromString(workerId));
     } catch (IllegalArgumentException exception) {
+      return false;
+    }
+  }
+
+  /**
+   * Requires a DriverApp WORKER bound to the exact warehouse and returns its opaque worker ID.
+   * The mutually exclusive worker.tasks scope cannot be used to claim customer logistics.
+   */
+  public UUID requireWarehouseDriver(Jwt jwt, UUID warehouseId) {
+    if (developmentBypass) return DEVELOPMENT_SUBJECT;
+    if (jwt == null
+        || warehouseId == null
+        || !"WORKER".equals(jwt.getClaimAsString("principal_type"))
+        || !scopes(jwt).contains("driver.tasks")
+        || scopes(jwt).contains("worker.tasks")
+        || !warehouseId.toString().equals(jwt.getClaimAsString("warehouse_id"))) {
+      throw new AccessDeniedException("Exact warehouse DriverApp identity is required");
+    }
+    Object workerClaim = jwt.getClaims().get("worker_id");
+    if (!(workerClaim instanceof String workerId)) {
+      throw new AccessDeniedException("worker_id claim is required");
+    }
+    try {
+      return UUID.fromString(workerId);
+    } catch (IllegalArgumentException exception) {
+      throw new AccessDeniedException("worker_id claim must be a UUID");
+    }
+  }
+
+  /** Returns whether the token is the exact DriverApp identity for one warehouse. */
+  public boolean isWarehouseDriver(Jwt jwt, UUID warehouseId) {
+    try {
+      requireWarehouseDriver(jwt, warehouseId);
+      return true;
+    } catch (AccessDeniedException exception) {
       return false;
     }
   }

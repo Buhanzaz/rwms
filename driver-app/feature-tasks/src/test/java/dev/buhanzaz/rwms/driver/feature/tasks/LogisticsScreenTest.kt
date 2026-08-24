@@ -112,7 +112,10 @@ class LogisticsScreenTest {
                 Box(Modifier.size(width = 360.dp, height = 500.dp)) {
                     LogisticsTaskList(
                         selectedDate = LocalDate.of(2026, 8, 12),
-                        tasks = listOf(task),
+                        tasks = LogisticsTasksForDate(
+                            assigned = listOf(task),
+                            additional = emptyList(),
+                        ),
                         kpiPalette = null,
                         onTask = { openedEntryId = it },
                     )
@@ -125,6 +128,31 @@ class LogisticsScreenTest {
         compose.onAllNodesWithText("Дата: 2026-08-12").assertCountEquals(0)
         compose.onNodeWithText("Фото и детали").assertIsDisplayed().performClick()
         assertThat(openedEntryId).isEqualTo("shipment")
+    }
+
+    @Test
+    fun `future shared work is visibly separated from assigned logistics`() {
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.size(width = 360.dp, height = 640.dp)) {
+                    LogisticsTaskList(
+                        selectedDate = LocalDate.of(2026, 8, 13),
+                        tasks = LogisticsTasksForDate(
+                            assigned = listOf(task("assigned")),
+                            additional = listOf(
+                                task("shared").copy(driverAudienceMode = "WAREHOUSE_DRIVERS"),
+                            ),
+                        ),
+                        kpiPalette = null,
+                        onTask = {},
+                    )
+                }
+            }
+        }
+
+        compose.onNodeWithText("Мои задания · 1").assertIsDisplayed()
+        compose.onNodeWithTag("additional-logistics-heading").assertIsDisplayed()
+        compose.onNodeWithText("Дополнительные задания · 1").assertIsDisplayed()
     }
 
     private fun task(entryId: String) = DriverTaskEntity(

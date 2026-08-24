@@ -82,6 +82,7 @@ export type WorkQueueDto = {
   notifyWhenThresholdReached: boolean
   resultPhotoMinCount: number
   availableTaskLimit: number
+  workerFeedEnabled: boolean
   bindings: QueueBindingDto[]
 }
 

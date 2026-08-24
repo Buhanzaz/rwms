@@ -107,7 +107,7 @@ public final class ApiModels {
    * @param notificationThreshold optional queue notification threshold
    * @param notifyWhenThresholdReached whether threshold notification is enabled
    * @param resultPhotoMinCount minimum result-photo count for completion
-   * @param availableTaskLimit waiting real cards highlighted in the ordinary queue's daily plan
+   * @param availableTaskLimit initial waiting-real WorkerApp plan for new warehouse projections
    * @param bindings qualified worker-class process bindings
    */
   public record QueueDefinitionRequest(
@@ -144,7 +144,7 @@ public final class ApiModels {
    * @param notificationThreshold optional queue notification threshold
    * @param notifyWhenThresholdReached whether threshold notification is enabled
    * @param resultPhotoMinCount minimum result-photo count for completion
-   * @param availableTaskLimit waiting real cards highlighted in the ordinary queue's daily plan
+   * @param availableTaskLimit initial waiting-real WorkerApp plan for new warehouse projections
    * @param bindings qualified worker-class process bindings
    */
   public record QueueDefinitionDto(
@@ -230,7 +230,8 @@ public final class ApiModels {
    * @param notificationThreshold optional queue notification threshold
    * @param notifyWhenThresholdReached whether threshold notification is enabled
    * @param resultPhotoMinCount minimum result-photo count for completion
-   * @param availableTaskLimit mirrored waiting-real daily-plan count for ordinary presentation
+   * @param availableTaskLimit warehouse-local waiting-real WorkerApp plan count
+   * @param workerFeedEnabled whether the warehouse queue is exposed to WorkerApp
    * @param bindings qualified worker-class process bindings
    */
   public record WorkQueueDto(
@@ -252,6 +253,7 @@ public final class ApiModels {
       boolean notifyWhenThresholdReached,
       int resultPhotoMinCount,
       int availableTaskLimit,
+      boolean workerFeedEnabled,
       List<QueueBindingDto> bindings) {}
 
   public record QualificationRequest(
@@ -908,6 +910,32 @@ public final class ApiModels {
   public record VersionCommand(@NotNull @Min(0) Long expectedVersion) {}
 
   /**
+   * Warehouse-local WorkerApp publication settings for one ordinary physical queue.
+   *
+   * @param expectedVersion observed physical-queue version
+   * @param workerFeedEnabled whether workers may discover this queue
+   * @param availableTaskLimit number of waiting real cards published in the daily plan
+   */
+  public record WorkerQueuePlanRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      boolean workerFeedEnabled,
+      @NotNull @Min(1) @Max(50) Integer availableTaskLimit) {}
+
+  /**
+   * Version-fenced reorder command for an unpinned waiting real card.
+   *
+   * @param expectedEntryVersion observed source-entry version
+   * @param expectedQueueVersion observed physical-queue version
+   * @param targetEntryId observed card occupying the requested target slot
+   * @param targetIndex zero-based target index among reorderable cards in the same queue
+   */
+  public record ReorderBoardEntryRequest(
+      @NotNull @Min(0) Long expectedEntryVersion,
+      @NotNull @Min(0) Long expectedQueueVersion,
+      @NotNull UUID targetEntryId,
+      @NotNull @Min(0) Integer targetIndex) {}
+
+  /**
    * Version-fenced source request to place a driver task into an explicit lane.
    *
    * @param expectedTaskVersion observed task version
@@ -1155,13 +1183,16 @@ public final class ApiModels {
       TaskSourceReferenceDto source,
       @JsonInclude(JsonInclude.Include.ALWAYS) DriverTaskAudienceDto driverAudience) {}
 
+  /** Complete manager column or a server-selected native-surface subset of one physical queue. */
   public record BoardColumnDto(
       UUID queueId,
+      long queueVersion,
       String queueName,
       QueueType queueType,
       QueuePurpose queuePurpose,
       int sortOrder,
       int availableTaskLimit,
+      boolean workerFeedEnabled,
       List<BoardEntryDto> entries) {}
 
   /**

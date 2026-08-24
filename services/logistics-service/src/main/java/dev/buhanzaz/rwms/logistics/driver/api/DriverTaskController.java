@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.logistics.driver.api;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.CreateDriverTaskRequest;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.DriverTaskResponse;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverQueueScheduler;
+import dev.buhanzaz.rwms.logistics.driver.service.FutureDriverTaskClaimService;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskProcessor;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskService;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
@@ -42,6 +43,7 @@ public class DriverTaskController {
   private final DriverQueueScheduler scheduler;
   private final LogisticsAuthorizer access;
   private final LogisticsWarehouseLifecycle warehouseLifecycle;
+  private final FutureDriverTaskClaimService futureClaims;
 
   @PostMapping
   public ResponseEntity<DriverTaskResponse> create(
@@ -75,12 +77,28 @@ public class DriverTaskController {
     try {
       access.requireRead(jwt, task.getWarehouseId());
     } catch (AccessDeniedException exception) {
-      if (!access.isExactAssignedDriver(
-          jwt, task.getDriverAudienceMode().name(), task.getPlannedDriverWorkerId())) {
+      boolean assignedDriver =
+          access.isExactAssignedDriver(
+              jwt, task.getDriverAudienceMode().name(), task.getPlannedDriverWorkerId());
+      boolean sharedFuturePreview =
+          access.isWarehouseDriver(jwt, task.getWarehouseId()) && futureClaims.isPreviewable(task);
+      if (!assignedDriver && !sharedFuturePreview) {
         throw new LogisticsNotFoundException();
       }
     }
     return service.get(taskId);
+  }
+
+  /** Reserves a shared future task for the authenticated DriverApp worker without starting it. */
+  @PostMapping("/{taskId}/claim")
+  public ResponseEntity<DriverTaskResponse> claim(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID taskId) {
+    var task = service.required(taskId);
+    UUID workerId = access.requireWarehouseDriver(jwt, task.getWarehouseId());
+    DriverTaskResponse response = futureClaims.claim(taskId, workerId);
+    return ResponseEntity.ok()
+        .eTag('"' + Long.toString(response.version()) + '"')
+        .body(response);
   }
 
   @PostMapping("/{taskId}/promote")

@@ -19,6 +19,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
@@ -272,7 +273,7 @@ public final class RentalInquiryApiModels {
   public record ConfirmClientPresentationRequest(
       @NotNull @Size(min = 1, max = 100)
           List<@NotNull @Valid PresentationCabinSelectionInput> selections,
-      @Size(max = 5) List<@NotNull @Valid DesiredDeliveryWindowInput> desiredDeliveryWindows,
+      @Size(max = 4) List<@NotNull @Valid DesiredDeliveryWindowInput> desiredDeliveryWindows,
       @Min(1) Long rentalMonths,
       @Size(min = 1, max = 1_000) String deliveryAddress,
       @DecimalMin("-90") @DecimalMax("90") @Digits(integer = 2, fraction = 6) BigDecimal latitude,
@@ -306,6 +307,7 @@ public final class RentalInquiryApiModels {
       ClientPresentationMode mode,
       Integer requiredSelectionCount,
       boolean requiresDesiredDeliveryWindows,
+      List<LocalDate> requestableDeliveryDates,
       List<DesiredDeliveryWindowResponse> desiredDeliveryWindows,
       List<PresentationEquipmentAvailability> equipmentAvailability,
       List<PresentationGroup> groups,

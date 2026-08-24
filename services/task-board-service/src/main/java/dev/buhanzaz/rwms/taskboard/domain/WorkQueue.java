@@ -17,8 +17,9 @@ import java.util.UUID;
 /**
  * Warehouse-specific physical queue derived from a global definition or logistics driver lane.
  *
- * <p>General queues mirror their definition's waiting-task daily-plan count for stable warehouse
- * presentation. The count does not truncate reads or authorize task transitions.
+ * <p>General queues inherit their initial waiting-task daily-plan count from the global definition,
+ * then own the warehouse-local WorkerApp visibility and plan window. Global reconciliation keeps
+ * those runtime controls intact while continuing to synchronize shared routing configuration.
  */
 @Entity
 @Table(
@@ -75,6 +76,9 @@ public class WorkQueue extends AbstractVersionedEntity {
   @Max(50)
   @Column(name = "available_task_limit", nullable = false)
   private int availableTaskLimit = 6;
+
+  @Column(name = "worker_feed_enabled", nullable = false)
+  private boolean workerFeedEnabled = true;
 
   public QueueDefinition getDefinition() {
     return definition;
@@ -181,6 +185,14 @@ public class WorkQueue extends AbstractVersionedEntity {
       throw new IllegalArgumentException("Размер плана на день должен быть от 1 до 50");
     }
     availableTaskLimit = value;
+  }
+
+  public boolean isWorkerFeedEnabled() {
+    return workerFeedEnabled;
+  }
+
+  public void setWorkerFeedEnabled(boolean value) {
+    workerFeedEnabled = value;
   }
 
   public void touch() {

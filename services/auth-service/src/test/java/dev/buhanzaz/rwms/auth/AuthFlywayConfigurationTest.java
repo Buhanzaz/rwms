@@ -136,6 +136,13 @@ class AuthFlywayConfigurationTest {
         assertLogisticsClient(load("application-logistics-client.yaml"), 6);
     }
 
+    @Test
+    void logisticsPlannerClientIsDisabledAndExactInEveryConfiguredProfile() throws IOException {
+        assertLogisticsPlannerClient(load("application.yaml"), "${LOGISTICS_PLANNER_CLIENT_REVISION:1}");
+        assertLogisticsPlannerClient(load("application-dev.yaml"), "${LOGISTICS_PLANNER_CLIENT_REVISION:1}");
+        assertLogisticsPlannerClient(load("application-planner-client.yaml"), 1);
+    }
+
     private void assertAssetClient(
             PropertySource<?> source, Object expectedEnabled, Object expectedRevision) {
         int index = clientIndex(source, "asset-service");
@@ -237,6 +244,31 @@ class AuthFlywayConfigurationTest {
         assertThat(source.getProperty(prefix + ".audiences[0]")).isEqualTo("rwms-services");
         assertThat(source.getProperty(prefix + ".audiences[1]")).isNull();
         assertThat(source.getProperty(prefix + ".secret-environment")).isEqualTo("LOGISTICS_CLIENT_SECRET");
+        assertThat(source.getProperty(prefix + ".development-secret")).isNull();
+        assertThat(source.getProperty(prefix + ".redirect-uris[0]")).isNull();
+        assertThat(source.getProperty(prefix + ".post-logout-redirect-uris[0]")).isNull();
+        assertThat(source.getProperty(prefix + ".allowed-principal-types[0]")).isNull();
+        assertThat(source.getProperty(prefix + ".allowed-origins[0]")).isNull();
+    }
+
+    private void assertLogisticsPlannerClient(PropertySource<?> source, Object expectedRevision) {
+        int index = clientIndex(source, "logistics-planner");
+        String prefix = "rwms.auth.oauth.clients[" + index + "]";
+        assertThat(source.getProperty(prefix + ".client-id")).isEqualTo("logistics-planner");
+        assertThat(source.getProperty(prefix + ".enabled"))
+                .isEqualTo("${LOGISTICS_PLANNER_CLIENT_ENABLED:false}");
+        assertThat(source.getProperty(prefix + ".revision")).isEqualTo(expectedRevision);
+        assertThat(source.getProperty(prefix + ".authentication-methods[0]"))
+                .isEqualTo("client_secret_basic");
+        assertThat(source.getProperty(prefix + ".authentication-methods[1]")).isNull();
+        assertThat(source.getProperty(prefix + ".grant-types[0]")).isEqualTo("client_credentials");
+        assertThat(source.getProperty(prefix + ".grant-types[1]")).isNull();
+        assertThat(source.getProperty(prefix + ".scopes[0]")).isEqualTo("logistics.planning");
+        assertThat(source.getProperty(prefix + ".scopes[1]")).isNull();
+        assertThat(source.getProperty(prefix + ".audiences[0]")).isEqualTo("rwms-services");
+        assertThat(source.getProperty(prefix + ".audiences[1]")).isNull();
+        assertThat(source.getProperty(prefix + ".secret-environment"))
+                .isEqualTo("LOGISTICS_PLANNER_CLIENT_SECRET");
         assertThat(source.getProperty(prefix + ".development-secret")).isNull();
         assertThat(source.getProperty(prefix + ".redirect-uris[0]")).isNull();
         assertThat(source.getProperty(prefix + ".post-logout-redirect-uris[0]")).isNull();

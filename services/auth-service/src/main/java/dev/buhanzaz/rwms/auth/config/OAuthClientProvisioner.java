@@ -298,6 +298,9 @@ public class OAuthClientProvisioner implements ApplicationRunner {
         if (client.logisticsServiceClient()) {
             validateLogisticsClientContract(client, authenticationMethods, grantTypes);
         }
+        if (client.logisticsPlannerClient()) {
+            validateLogisticsPlannerClientContract(client, authenticationMethods, grantTypes);
+        }
         if (client.managerAndroidClient()) {
             validateManagerAndroidClientContract(
                     client, authenticationMethods, grantTypes);
@@ -386,6 +389,26 @@ public class OAuthClientProvisioner implements ApplicationRunner {
                 OAuthClientProperties.LOGISTICS_SCOPES,
                 OAuthClientProperties.LOGISTICS_AUDIENCE,
                 OAuthClientProperties.LOGISTICS_SECRET_ENVIRONMENT);
+    }
+
+    /**
+     * Rejects any planner declaration that broadens its one-scope machine-client boundary.
+     *
+     * @param client configured planner declaration
+     * @param authenticationMethods normalized client authentication methods
+     * @param grantTypes normalized authorization grants
+     */
+    private void validateLogisticsPlannerClientContract(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes) {
+        validateExactServiceClientContract(
+                client,
+                authenticationMethods,
+                grantTypes,
+                OAuthClientProperties.LOGISTICS_PLANNER_SCOPES,
+                OAuthClientProperties.LOGISTICS_PLANNER_AUDIENCE,
+                OAuthClientProperties.LOGISTICS_PLANNER_SECRET_ENVIRONMENT);
     }
 
     private void validateManagerAndroidClientContract(

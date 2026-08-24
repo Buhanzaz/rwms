@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.logistics.order.repository;
 
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import jakarta.persistence.LockModeType;
 import java.util.Collection;
 import java.util.List;
@@ -33,6 +34,24 @@ public interface RentalOrderRepository
   @EntityGraph(attributePaths = "client")
   @Query("select orders from RentalOrder orders where orders.id in :ids")
   List<RentalOrder> findAllWithClientByIdIn(@Param("ids") java.util.Collection<UUID> ids);
+
+  /** Loads saved orders eligible for external route planning in deterministic creation order. */
+  @EntityGraph(attributePaths = {"client", "desiredDeliveryWindows"})
+  @Query(
+      """
+      select distinct orders
+      from RentalOrder orders
+      where orders.warehouseId = :warehouseId
+        and orders.status = :status
+      order by orders.createdAt, orders.id
+      """)
+  List<RentalOrder> findAllPlanningCandidates(
+      @Param("warehouseId") UUID warehouseId, @Param("status") RentalOrderStatus status);
+
+  /** Loads one order and every fact required to fence a planner assignment. */
+  @EntityGraph(attributePaths = {"client", "desiredDeliveryWindows"})
+  @Query("select orders from RentalOrder orders where orders.id = :id")
+  Optional<RentalOrder> findPlanningCandidateById(@Param("id") UUID id);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @EntityGraph(attributePaths = "client")

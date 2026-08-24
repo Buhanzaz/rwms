@@ -57,7 +57,9 @@ public class TaskBoardEventPayloadPolicy {
   private static final Map<Class<?>, Set<String>> OPTIONAL_COMPATIBILITY_FIELDS =
       Map.of(
           BoardTaskFact.class,
-          Set.of("driverAudience", "plannedDriverWorkerId"));
+          Set.of("driverAudience", "plannedDriverWorkerId"),
+          WorkQueueFact.class,
+          Set.of("availableTaskLimit", "workerFeedEnabled"));
 
   private final ObjectMapper objectMapper;
   private final ObjectMapper strictObjectMapper;
@@ -107,8 +109,8 @@ public class TaskBoardEventPayloadPolicy {
   }
 
   /**
-   * Requires the exact current fact shape except for audience fields omitted by board-task events
-   * stored before that compatible contract addition.
+   * Requires the exact current fact shape except for fields explicitly omitted by immutable events
+   * stored before a compatible additive contract change.
    */
   private static void requireCanonicalRecordShape(Class<?> recordType, JsonNode payload) {
     if (!recordType.isRecord() || !payload.isObject()) {
@@ -119,6 +121,17 @@ public class TaskBoardEventPayloadPolicy {
         && !payload.has("driverAudience")) {
       throw new IllegalArgumentException(
           "Task-board planned driver event identity requires an audience mode");
+    }
+    if (recordType == WorkQueueFact.class) {
+      boolean hasLimit = payload.has("availableTaskLimit");
+      boolean hasSwitch = payload.has("workerFeedEnabled");
+      if (hasLimit != hasSwitch
+          || (hasLimit
+              && (payload.get("availableTaskLimit").isNull()
+                  || payload.get("workerFeedEnabled").isNull()))) {
+        throw new IllegalArgumentException(
+            "Task-board work-queue plan fields must both be present or both be absent");
+      }
     }
     Set<String> compatibilityFields =
         OPTIONAL_COMPATIBILITY_FIELDS.getOrDefault(recordType, Set.of());

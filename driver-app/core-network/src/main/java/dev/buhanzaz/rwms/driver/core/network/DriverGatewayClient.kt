@@ -43,6 +43,10 @@ class DriverGatewayClient @Inject constructor(
     suspend fun logisticsTripDetails(taskId: String): DriverTripDetailsDto? =
         api.logisticsDriverTask(taskId).bodyOrProblem(json).tripDetails
 
+    /** Reserves a shared future trip online without starting its task-board execution. */
+    suspend fun claimFutureLogisticsTask(taskId: String): DriverTripDetailsDto? =
+        api.claimFutureLogisticsTask(taskId).bodyOrProblem(json).tripDetails
+
     suspend fun action(entryId: String, request: DriverActionRequestDto): DriverActionResultDto =
         api.applyAction(entryId, request.operationId, request).bodyOrProblem(json)
 

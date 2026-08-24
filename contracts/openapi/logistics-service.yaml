@@ -3,7 +3,8 @@ info:
   title: RWMS Logistics Service API
   version: 1.0.0
   description: >-
-    Canonical Stage 8 API for return, shipment, and transfer documents.
+    Canonical API for rental orders, return, shipment, transfer, driver-task,
+    and private route-planning integration flows.
     Public operations require a locally validated USER Bearer JWT, the
     matching rwms scope, and warehouse access. Every retriable mutation uses
     a subject-bound Idempotency-Key; mutable transitions also require the
@@ -541,6 +542,88 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/internal/logistics/v1/planning/requests:
+    get:
+      operationId: getRoutePlanningRequests
+      description: >-
+        Exports the still-unplanned cabin remainder of SAVED rental orders for one warehouse and
+        bounded inclusive date range. Requires the exact SERVICE identity logistics-planner,
+        audience rwms-services, and sole scope logistics.planning. Coordinates, when present, are
+        authoritative over the address. The response omits phone numbers, furniture, prices, and
+        all unrelated client facts.
+      parameters:
+        - $ref: "#/components/parameters/WarehouseIdQuery"
+        - name: dateFrom
+          in: query
+          required: true
+          schema: { type: string, format: date }
+        - name: dateTo
+          in: query
+          required: true
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: Warehouse-local route-planning demand snapshot.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanningRequestFeed" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/internal/logistics/v1/planning/assignments:
+    get:
+      operationId: getRoutePlanningAssignmentStatuses
+      description: >-
+        Returns current logistics-owned driver audience and task state for planner-created
+        shipment parts on one warehouse-local date. The read excludes every manually created
+        document and exposes no customer contact data. A shared part changes to ASSIGNED_DRIVER
+        after a qualified DriverApp worker claims it, allowing the standalone planner to show the
+        authoritative assignee without reading task-board or an RWMS database.
+      parameters:
+        - $ref: "#/components/parameters/WarehouseIdQuery"
+        - name: date
+          in: query
+          required: true
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: Current status of every planner-created assignment for the requested date.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanningAssignmentStatusResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    post:
+      operationId: applyRoutePlanningAssignments
+      description: >-
+        Applies a planner result as existing logistics-owned rental shipments for exact cabins,
+        dates, and DriverApp worker identities. Requires the same exact logistics-planner token.
+        The batch may contain several non-overlapping cabin parts of one order; every part has a
+        stable idempotent shipment command. Automatic application rejects today and tomorrow,
+        dates not approved by the client, stale order versions, and cabins already planned.
+        Valid parts are retained even when another part is rejected, and every rejection is
+        returned with a stable code.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApplyPlanningAssignmentsRequest" }
+      responses:
+        "200":
+          description: Complete applied/rejected result for the batch.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplyPlanningAssignmentsResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/internal/logistics/v1/maintenance/return-arrivals/{rentalItemId}:
     parameters:
       - name: rentalItemId
@@ -748,14 +831,35 @@ paths:
       description: >-
         Returns the logistics-owned task to a warehouse-authorized manager, or to the exact
         assigned DriverApp WORKER for an ASSIGNED_DRIVER task when the token has driver.tasks and
-        its worker_id equals plannedDriverWorkerId. The session sub is not a worker identity;
-        worker.tasks does not authorize this rich detail. UNASSIGNED and WAREHOUSE_DRIVERS tasks
-        remain manager-only until a concrete driver is assigned.
+        its worker_id equals plannedDriverWorkerId. A DriverApp worker in the exact warehouse may
+        also preview a WAREHOUSE_DRIVERS task only when its scheduled date is later than the
+        warehouse-local current date, so the driver can inspect the route before claiming it. The
+        session sub is not a worker identity; worker.tasks never authorizes this rich detail, and
+        UNASSIGNED tasks remain hidden from DriverApp workers.
       responses:
         "200": { $ref: "#/components/responses/DriverTask" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/logistics/v1/driver-tasks/{taskId}/claim:
+    parameters:
+      - $ref: "#/components/parameters/DriverTaskId"
+    post:
+      operationId: claimFutureDriverTask
+      description: >-
+        Assigns one shared WAREHOUSE_DRIVERS task scheduled after the warehouse-local current date
+        to the authenticated DriverApp worker without starting execution. Task-board validates the
+        worker's active driver qualification and fences concurrent claims with current task and
+        entry versions. Repeating a claim by the same worker succeeds; a different worker receives
+        409. Today is never claimable through this operation.
+      responses:
+        "200": { $ref: "#/components/responses/DriverTask" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/driver-tasks/{taskId}/promote:
     parameters:
       - $ref: "#/components/parameters/DriverTaskId"
@@ -2019,6 +2123,149 @@ components:
       required: true
       schema: { type: string, minLength: 1, maxLength: 64 }
   schemas:
+    PlanningDateOption:
+      type: object
+      additionalProperties: false
+      required: [date, priority, isHard]
+      properties:
+        date: { type: string, format: date }
+        priority: { type: integer, minimum: 0 }
+        isHard: { type: boolean }
+    PlanningRequest:
+      type: object
+      additionalProperties: false
+      required:
+        [orderId, orderVersion, orderNumber, clientName, address, latitude, longitude, quantity, unitIds, dateOptions, createdAt]
+      properties:
+        orderId: { type: string, format: uuid }
+        orderVersion: { type: integer, format: int64, minimum: 0 }
+        orderNumber: { type: string, minLength: 1 }
+        clientName: { type: string, minLength: 1 }
+        address: { type: string, minLength: 1 }
+        latitude:
+          type: [number, "null"]
+          format: double
+        longitude:
+          type: [number, "null"]
+          format: double
+        quantity: { type: integer, minimum: 1 }
+        unitIds:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        dateOptions:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/PlanningDateOption" }
+        createdAt: { type: string, format: date-time }
+    PlanningRequestFeed:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, timeZone, generatedAt, requests]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        timeZone: { type: string, minLength: 1 }
+        generatedAt: { type: string, format: date-time }
+        requests:
+          type: array
+          items: { $ref: "#/components/schemas/PlanningRequest" }
+    PlanningAssignment:
+      type: object
+      additionalProperties: false
+      required: [orderId, expectedOrderVersion, scheduledDate, driverName, unitIds]
+      properties:
+        orderId: { type: string, format: uuid }
+        expectedOrderVersion: { type: integer, format: int64, minimum: 0 }
+        scheduledDate: { type: string, format: date }
+        driverAudienceMode:
+          type: string
+          enum: [ASSIGNED_DRIVER, WAREHOUSE_DRIVERS]
+          default: ASSIGNED_DRIVER
+          description: WAREHOUSE_DRIVERS explicitly publishes a future delivery for qualified drivers to claim.
+        driverWorkerId:
+          type: [string, "null"]
+          format: uuid
+          description: Required for ASSIGNED_DRIVER and null for WAREHOUSE_DRIVERS.
+        driverName: { type: string, minLength: 1, maxLength: 512 }
+        unitIds:
+          type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items: { type: string, format: uuid }
+    ApplyPlanningAssignmentsRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, planId, planVersion, assignments]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        planId: { type: string, format: uuid }
+        planVersion: { type: integer, format: int64, minimum: 1 }
+        assignments:
+          type: array
+          maxItems: 500
+          items: { $ref: "#/components/schemas/PlanningAssignment" }
+    AppliedPlanningAssignment:
+      type: object
+      additionalProperties: false
+      required: [orderId, documentId, replayed]
+      properties:
+        orderId: { type: string, format: uuid }
+        documentId: { type: string, format: uuid }
+        replayed: { type: boolean }
+    PlanningAssignmentStatus:
+      type: object
+      additionalProperties: false
+      required:
+        [orderId, documentId, scheduledDate, unitIds, driverAudienceMode, driverWorkerId, driverName, taskState]
+      properties:
+        orderId: { type: string, format: uuid }
+        documentId: { type: string, format: uuid }
+        scheduledDate: { type: string, format: date }
+        unitIds:
+          type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        driverAudienceMode:
+          type: string
+          enum: [ASSIGNED_DRIVER, WAREHOUSE_DRIVERS]
+        driverWorkerId: { type: [string, "null"], format: uuid }
+        driverName: { type: [string, "null"], maxLength: 512 }
+        taskState:
+          type: string
+          enum: [REGISTERING, SCHEDULED, CURRENT, FINALIZING, COMPLETED, CANCELLED, RECONCILIATION_REQUIRED]
+    PlanningAssignmentStatusResponse:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, date, assignments]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        date: { type: string, format: date }
+        assignments:
+          type: array
+          items: { $ref: "#/components/schemas/PlanningAssignmentStatus" }
+    RejectedPlanningAssignment:
+      type: object
+      additionalProperties: false
+      required: [orderId, code, message]
+      properties:
+        orderId: { type: string, format: uuid }
+        code: { type: string, minLength: 1 }
+        message: { type: string, minLength: 1 }
+    ApplyPlanningAssignmentsResponse:
+      type: object
+      additionalProperties: false
+      required: [applied, rejected]
+      properties:
+        applied:
+          type: array
+          items: { $ref: "#/components/schemas/AppliedPlanningAssignment" }
+        rejected:
+          type: array
+          items: { $ref: "#/components/schemas/RejectedPlanningAssignment" }
     MaintenanceReturnArrival:
       type: object
       additionalProperties: false
@@ -3532,6 +3779,10 @@ components:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         driverSnapshot: { type: string, minLength: 1, maxLength: 512 }
         driverWorkerId: { type: [string, "null"], format: uuid }
+        warehouseDriverPool:
+          type: boolean
+          default: false
+          description: Explicitly publishes a future shipment for qualified warehouse drivers; driverWorkerId must be null.
         scheduledDate: { type: string, format: date }
         unitIds:
           type: array
@@ -4376,10 +4627,10 @@ components:
           description: Exact selection cardinality for REPLACEMENT; null for NORMAL.
         requiresDesiredDeliveryWindows:
           type: boolean
-          description: True for NORMAL presentations, which collect one to five independent desired client receiving dates before confirmation; false for REPLACEMENT.
+          description: True for NORMAL presentations, which collect one to four requestable client receiving dates before confirmation; false for REPLACEMENT.
         desiredDeliveryWindows:
           type: array
-          description: Empty for NORMAL because the client supplies one to five independent dates at confirmation; REPLACEMENT exposes existing date-only order preferences read-only.
+          description: Empty for NORMAL because the client supplies one to four requestable dates at confirmation; REPLACEMENT exposes existing date-only order preferences read-only.
           items: { $ref: "#/components/schemas/DesiredDeliveryWindow" }
         equipmentAvailability:
           type: array
@@ -4473,9 +4724,9 @@ components:
           items: { $ref: "#/components/schemas/PresentationCabinSelectionInput" }
         desiredDeliveryWindows:
           type: [array, "null"]
-          description: Required only for NORMAL. It contains one to five distinct date-only calendar days, each selected independently; it must be absent for REPLACEMENT.
+          description: Required only for NORMAL. It contains one to four distinct dates selected from requestableDeliveryDates; it must be absent for REPLACEMENT.
           minItems: 1
-          maxItems: 5
+          maxItems: 4
           uniqueItems: true
           items: { $ref: "#/components/schemas/DesiredDeliveryWindowInput" }
         rentalMonths:
@@ -4544,6 +4795,7 @@ components:
           mode,
           requiredSelectionCount,
           requiresDesiredDeliveryWindows,
+          requestableDeliveryDates,
           desiredDeliveryWindows,
           equipmentAvailability,
           groups,
@@ -4562,7 +4814,12 @@ components:
           minimum: 1
         requiresDesiredDeliveryWindows:
           type: boolean
-          description: True for NORMAL presentations, which collect one to five independent desired client receiving dates; false for REPLACEMENT.
+          description: True for NORMAL presentations, which collect one to four requestable client receiving dates; false for REPLACEMENT.
+        requestableDeliveryDates:
+          type: array
+          uniqueItems: true
+          description: For NORMAL, the four warehouse-local dates from day +2 through day +5; empty for REPLACEMENT. These dates are requestable preferences, not a promise that capacity has already been reserved.
+          items: { type: string, format: date }
         desiredDeliveryWindows:
           type: array
           description: Empty for NORMAL; existing date-only order preferences are read-only for REPLACEMENT.

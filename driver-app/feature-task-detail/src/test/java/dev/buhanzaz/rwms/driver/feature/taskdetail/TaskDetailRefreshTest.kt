@@ -1,14 +1,31 @@
 package dev.buhanzaz.rwms.driver.feature.taskdetail
 
 import com.google.common.truth.Truth.assertThat
+import dev.buhanzaz.rwms.driver.core.network.ApiProblemDto
 import dev.buhanzaz.rwms.driver.core.network.DriverTripDetailsDto
+import dev.buhanzaz.rwms.driver.core.network.GatewayProblemException
 import dev.buhanzaz.rwms.driver.core.network.TaskSourceReferenceDto
 import dev.buhanzaz.rwms.driver.core.network.DriverTaskDetailDto
+import java.time.LocalDate
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
 /** Verifies the fenced task-board-to-logistics read orchestration used by the detail ViewModel. */
 class TaskDetailRefreshTest {
+    @Test
+    fun `claim conflict explains that another driver reserved the trip`() {
+        val failure = GatewayProblemException(
+            ApiProblemDto(
+                type = "about:blank",
+                title = "Conflict",
+                status = 409,
+                code = "DRIVER_TASK_ALREADY_ASSIGNED",
+            ),
+        )
+
+        assertThat(extraTaskClaimErrorMessage(failure)).contains("другой водитель")
+    }
+
     @Test
     fun `logistics source persists task board detail then reads exact source task`() = runTest {
         val detail = detailWithSource("LOGISTICS_DRIVER_TASK", "driver-task-1")
@@ -18,6 +35,7 @@ class TaskDetailRefreshTest {
 
         val outcome = loadTaskDetail(
             driverAudienceMode = ASSIGNED_DRIVER_AUDIENCE_MODE,
+            today = LocalDate.of(2026, 8, 11),
             fetchDetail = { detail },
             persistDetail = { persisted = it },
             fetchLogisticsTrip = { sourceId ->
@@ -42,6 +60,7 @@ class TaskDetailRefreshTest {
 
         val outcome = loadTaskDetail(
             driverAudienceMode = ASSIGNED_DRIVER_AUDIENCE_MODE,
+            today = LocalDate.of(2026, 8, 11),
             fetchDetail = { detailWithSource("MAINTENANCE_REPAIR", "repair-1") },
             persistDetail = {},
             fetchLogisticsTrip = {
@@ -64,6 +83,7 @@ class TaskDetailRefreshTest {
 
         val outcome = loadTaskDetail(
             driverAudienceMode = ASSIGNED_DRIVER_AUDIENCE_MODE,
+            today = LocalDate.of(2026, 8, 11),
             fetchDetail = { detail },
             persistDetail = { persisted = it },
             fetchLogisticsTrip = { error("logistics unavailable") },
@@ -83,6 +103,7 @@ class TaskDetailRefreshTest {
 
         val outcome = loadTaskDetail(
             driverAudienceMode = ASSIGNED_DRIVER_AUDIENCE_MODE,
+            today = LocalDate.of(2026, 8, 11),
             fetchDetail = { detailWithSource("LOGISTICS_DRIVER_TASK", "driver-task-1") },
             persistDetail = {},
             fetchLogisticsTrip = {
@@ -98,11 +119,12 @@ class TaskDetailRefreshTest {
     }
 
     @Test
-    fun `shared warehouse logistics task never requests assigned driver rich details`() = runTest {
+    fun `today shared warehouse logistics task never requests future preview details`() = runTest {
         var logisticsCalls = 0
 
         val outcome = loadTaskDetail(
             driverAudienceMode = WAREHOUSE_DRIVERS_AUDIENCE_MODE,
+            today = LocalDate.of(2026, 8, 11),
             fetchDetail = { detailWithSource("LOGISTICS_DRIVER_TASK", "driver-task-shared") },
             persistDetail = {},
             fetchLogisticsTrip = {
@@ -120,11 +142,33 @@ class TaskDetailRefreshTest {
     }
 
     @Test
+    fun `future shared warehouse logistics task requests route preview details`() = runTest {
+        var requestedSourceId: String? = null
+
+        val outcome = loadTaskDetail(
+            driverAudienceMode = WAREHOUSE_DRIVERS_AUDIENCE_MODE,
+            today = LocalDate.of(2026, 8, 10),
+            fetchDetail = { detailWithSource("LOGISTICS_DRIVER_TASK", "driver-task-future") },
+            persistDetail = {},
+            fetchLogisticsTrip = { sourceId ->
+                requestedSourceId = sourceId
+                tripDetails()
+            },
+            isCurrent = { true },
+        )
+
+        assertThat(requestedSourceId).isEqualTo("driver-task-future")
+        assertThat(outcome.logisticsRequested).isTrue()
+        assertThat(outcome.tripDetails).isEqualTo(tripDetails())
+    }
+
+    @Test
     fun `unknown driver audience fails closed without requesting rich details`() = runTest {
         var logisticsCalls = 0
 
         val outcome = loadTaskDetail(
             driverAudienceMode = null,
+            today = LocalDate.of(2026, 8, 11),
             fetchDetail = { detailWithSource("LOGISTICS_DRIVER_TASK", "driver-task-unknown") },
             persistDetail = {},
             fetchLogisticsTrip = {

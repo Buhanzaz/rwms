@@ -161,13 +161,23 @@ does not partition or order ordinary queue positions. Registration priority is
 materialized into the persisted position once. The manager snapshot returns
 every unfinished `REAL` and `SHADOW` entry in canonical active, pin and persisted
 position order. `availableTaskLimit` (default `6`, range `1..50`) marks only the
-first waiting `REAL` cards in each queue as the visual daily plan; it neither
-truncates the projection nor fences `TAKE`. Every current `REAL` route gate can
-be taken, while every `SHADOW` remains read-only. Promotion preserves the
+first waiting `REAL` cards in each physical queue as the warehouse plan. The
+global definition supplies only the initial value for a new warehouse; later
+reconciliation preserves the local count and `workerFeedEnabled`. These controls
+do not truncate the manager projection. WorkerApp omits a disabled queue and
+all of its cards, including active work. In an enabled queue it omits every
+`SHADOW`, keeps active `REAL` work visible, and publishes only the first configured
+waiting `REAL` cards. Native detail, media reader authorization and `TAKE`/`JOIN`
+recheck the same window. Every current `REAL` route gate remains manager-actionable,
+while every `SHADOW` remains read-only. Promotion preserves the
 persisted position, so an earlier shadow moves ahead of later unpinned work;
 pinning is the explicit exception. The panel hides shadows by default, can show
 all future subtasks with one checkbox, and can reveal and highlight one task's
-complete route across queues from its `REAL` card.
+complete route across queues from its `REAL` card. That action expands every
+route queue and vertically scrolls each column to the matching card without
+changing order. Managers may reorder only unpinned waiting real cards within
+one queue; entry and queue versions plus the observed target entry identity
+fence the command, while active, pinned and shadow entries keep their positions.
 
 A route uses one mandatory phase sequence: SES, welding, exterior, interior,
 electrical, then plumbing. The first existing unfinished phase is the only
@@ -175,9 +185,10 @@ electrical, then plumbing. The first existing unfinished phase is the only
 `SHADOW`. SES is the exclusive executable holding phase even for retained queue
 definitions whose historical type is `REPAIR`. Manager reads retain the later
 shadows for explicit route inspection, while WorkerApp receives only the SES
-entry until treatment completes. Public date selection, ordinary
-move/date-swap commands, maintenance daily-capacity placement and overdue
-rollover are absent. The visual daily plan creates no dated schedule. Driver
+entry until treatment completes and then only the promoted real stage admitted
+by its queue plan. Public date selection, cross-queue move/date-swap commands,
+maintenance daily-capacity placement and overdue rollover are absent. The
+daily plan creates no dated schedule. Driver
 movement and external capital-repair routes remain on their owning surfaces.
 Maintenance applies this sequence before plan persistence, repair reads and
 task publication in
@@ -198,14 +209,17 @@ workers, while `allowedWorkerIds` remains the assigned/evidence upload
 audience. Task creation publishes that initial proof transactionally. A bounded
 idempotent reconciliation pass runs at startup and only after a warehouse audience-revision
 change; it repairs legacy proofs and converges later workforce or queue-policy changes without
-idle full-table polling or a browser-owned authorization fallback. A failed pass does not advance
-its revision watermark.
+idle full-table polling or a browser-owned authorization fallback. The reconciler materializes the
+complete WorkerApp plan once per warehouse batch; normal proof updates evaluate only their current
+entry and do not load the whole board. A failed pass does not advance its revision watermark.
 
 Evidence: [`services/task-board-service/`](../../services/task-board-service/),
 [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
 [`DriverTaskAudienceService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/DriverTaskAudienceService.java),
 [`MobileTaskSurfacePolicy.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/MobileTaskSurfacePolicy.java),
 [`WorkerTaskAccessService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/WorkerTaskAccessService.java),
+[`WorkerQueuePlanPolicy.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/WorkerQueuePlanPolicy.java),
+[`TaskBoardEntryOrderingService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardEntryOrderingService.java),
 [`TaskBoardExternalRegistrationService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardExternalRegistrationService.java),
 [`TaskBoardEntryOwnerProofReconciler.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardEntryOwnerProofReconciler.java),
 [`TaskBoardWorkerExecutionService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardWorkerExecutionService.java),
@@ -632,10 +646,15 @@ generic conflict without disclosing its identity. Client-owned and order-owned
 additional name/phone contacts remain separate from the primary contact and
 are combined only in a deterministic driver/task snapshot. Rental-order create
 and ordinary manager edit commands carry only the client, primary phone and
-comment. A normal public presentation confirmation owns the delivery address,
-optional complete coordinate pair, order-owned additional contacts, one to five
-distinct date-only client delivery preferences and positive rental duration; nullable
-contacts normalize to an empty list. Desired-delivery windows remain order-owned
+comment. Order state may retain one to five distinct date-only preferences from
+supported historical facts. A normal public presentation confirmation owns the
+delivery address, optional complete coordinate pair, order-owned additional
+contacts and positive rental duration; nullable contacts normalize to an empty
+list. For a current `NORMAL` public presentation,
+the server advertises exactly the warehouse-local dates `today+2` through
+`today+5`, and confirmation accepts one to four dates only from that advertised
+set. These are requestable preferences, not a capacity reservation or promise.
+`REPLACEMENT` advertises no dates and accepts none. Desired-delivery windows remain order-owned
 read state: legacy physical time columns can retain old values but no public
 command or projection exposes them. A draft can save without client delivery
 facts, but rental shipment creation requires the confirmed address, primary
@@ -674,6 +693,24 @@ the retained extension command is available only for selected shipped cabins.
 Order read permissions expose the server-derived extension affordance separately
 from ordinary editability so `FULFILLED` orders can still show the supported
 extension action.
+
+The optional standalone simulator boundary does not move order ownership.
+With exact machine scope `logistics.planning`, it may read only a
+warehouse/date-bounded feed of saved, not-yet-shipped cabin units plus minimal
+client/address/coordinate/date facts. Applying a reviewed exact plan version
+reuses the logistics shipment transition, checks current order versions and
+non-overlapping unit identities, and returns all applied/rejected parts under a
+stable idempotency key. Automatic assignments on the warehouse-local current
+day or next day are rejected; urgent additions on those dates remain a manual
+logistics action. The simulator has no RWMS database access.
+
+A distinct explicit operator choice may publish one selected unassigned
+delivery as future `WAREHOUSE_DRIVERS` work. It carries no concrete driver, may
+target tomorrow, cannot target the warehouse-local current day, and does not
+expose other hidden `UNASSIGNED` shipments. The planner status read is derived
+only from logistics-owned planner-created shipment documents and their local
+driver-task projections. After a claim it returns the authoritative
+`ASSIGNED_DRIVER` worker snapshot, but no ordinary document or customer contact.
 
 Cabin replacement is not an ordinary edit. An authorized warehouse manager
 may replace an exact pre-start unit directly with a nonblank reason, or publish
@@ -714,8 +751,10 @@ Evidence: [`services/logistics-service/`](../../services/logistics-service/),
 [`V40__bounded_logistics_external_attempt_claims.sql`](../../services/logistics-service/src/main/resources/db/migration/V40__bounded_logistics_external_attempt_claims.sql),
 [`OrderClientService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/OrderClientService.java),
 [`PresentationBookingService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/PresentationBookingService.java),
+[`ClientDeliveryDatePolicy.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/ClientDeliveryDatePolicy.java),
 [`RentalInquiryCabinSelectionStore.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/RentalInquiryCabinSelectionStore.java),
 [`RentalOrderUnitReplacementService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderUnitReplacementService.java),
+[`RentalOrderPlanningIntegrationService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderPlanningIntegrationService.java),
 and
 [`V47__order_contacts_windows_and_inquiry_target.sql`](../../services/logistics-service/src/main/resources/db/migration/V47__order_contacts_windows_and_inquiry_target.sql).
 
@@ -763,6 +802,18 @@ then synchronizes the document date and rental terms while retaining the desired
 delivery date; a later status poll converges a lost local
 confirmation. Audience and member order never change through board movement.
 
+A task-board driver feed exposes an unstarted future `WAREHOUSE_DRIVERS` trip
+only to a currently qualified driver. A same-warehouse DriverApp worker may
+then preview its logistics-owned rich detail. The public claim command rereads
+task-board owner versions; task-board revalidates qualification, moves the
+existing entry to `ASSIGNED_DRIVER` for that driver, and logistics confirms its
+projection. It does not perform task-board `TAKE` or start work. Same-driver
+replay is idempotent; another driver's concurrent win, today's shared work, a
+warehouse mismatch or missing qualification fails explicitly. DriverApp keeps
+these candidates in a separate “Дополнительные
+задания” section and can open the address/coordinates as a prefilled Yandex
+Maps route before claim.
+
 Evidence:
 [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml),
 [`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml),
@@ -770,6 +821,7 @@ Evidence:
 [`MaintenanceApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceApplicationService.java),
 [`DriverQueueScheduler.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverQueueScheduler.java),
 [`DriverTaskRelay.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverTaskRelay.java),
+[`FutureDriverTaskClaimService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/FutureDriverTaskClaimService.java),
 [`DriverBoardService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverBoardService.java),
 [`DriverTripProjectionService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverTripProjectionService.java),
 [`DocumentDriverTaskPlanner.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DocumentDriverTaskPlanner.java),

@@ -48,8 +48,11 @@ class LogisticsContractFoundationTest {
             "/api/logistics/v1/equipment-movement-tasks/{taskId}",
             "/api/logistics/v1/driver-tasks",
             "/api/logistics/v1/driver-tasks/{taskId}",
+            "/api/logistics/v1/driver-tasks/{taskId}/claim",
             "/api/logistics/v1/driver-tasks/{taskId}/promote",
             "/api/logistics/v1/admin/warehouse-operation-marks/{operationId}/recovery",
+            "/api/internal/logistics/v1/planning/requests",
+            "/api/internal/logistics/v1/planning/assignments",
             "/api/internal/logistics/v1/maintenance/return-arrivals/{rentalItemId}",
             "/api/internal/logistics/v1/maintenance/driver-tasks",
             "/api/internal/logistics/v1/maintenance/driver-tasks/repairs/{repairId}",
@@ -289,8 +292,12 @@ class LogisticsContractFoundationTest {
             "getMaintenanceDriverTaskCompensation",
             "cancelMaintenanceDriverTaskCompensation",
             "getDriverTask",
+            "claimFutureDriverTask",
             "promoteDriverTask",
             "recoverLogisticsWarehouseOperationMark",
+            "getRoutePlanningRequests",
+            "getRoutePlanningAssignmentStatuses",
+            "applyRoutePlanningAssignments",
             "getDriverBoard",
             "moveDriverBoardTask",
             "returnDriverTaskToCapitalRepairs",
@@ -553,6 +560,31 @@ class LogisticsContractFoundationTest {
   }
 
   @Test
+  void plannerAssignmentStatusContractExposesOnlyRouteOwnershipFacts() throws Exception {
+    Map<String, Object> document = openApi();
+    Map<String, Object> endpoint =
+        child(child(document, "paths"), "/api/internal/logistics/v1/planning/assignments");
+    assertThat(child(endpoint, "get").get("operationId"))
+        .isEqualTo("getRoutePlanningAssignmentStatuses");
+
+    Map<String, Object> schemas = child(child(document, "components"), "schemas");
+    Map<String, Object> status = child(schemas, "PlanningAssignmentStatus");
+    assertThat(child(status, "properties"))
+        .containsOnlyKeys(
+            "orderId",
+            "documentId",
+            "scheduledDate",
+            "unitIds",
+            "driverAudienceMode",
+            "driverWorkerId",
+            "driverName",
+            "taskState")
+        .doesNotContainKeys("address", "clientName", "contactPhone");
+    assertThat(child(child(status, "properties"), "driverAudienceMode").get("enum"))
+        .isEqualTo(List.of("ASSIGNED_DRIVER", "WAREHOUSE_DRIVERS"));
+  }
+
+  @Test
   void schedulingUsesDatesForReturnsShipmentsAndTransfers() throws Exception {
     Map<String, Object> schemas = child(child(openApi(), "components"), "schemas");
     Map<String, Object> returnPickup = child(schemas, "ReturnPickupRequest");
@@ -586,6 +618,7 @@ class LogisticsContractFoundationTest {
         .isEqualTo("date");
     assertThat(child(document, "properties")).doesNotContainKeys("scheduledTime", "scheduledAt");
     assertThat(child(child(schemas, "CreateOrderRentalShipmentRequest"), "properties"))
+        .containsKey("warehouseDriverPool")
         .doesNotContainKey("scheduledTime");
     assertThat(child(child(schemas, "DriverTripDetails"), "properties"))
         .doesNotContainKey("scheduledTime");
@@ -625,7 +658,7 @@ class LogisticsContractFoundationTest {
     Map<String, Object> desiredWindows =
         child(child(confirmation, "properties"), "desiredDeliveryWindows");
     assertThat(desiredWindows.get("minItems")).isEqualTo(1);
-    assertThat(desiredWindows.get("maxItems")).isEqualTo(5);
+    assertThat(desiredWindows.get("maxItems")).isEqualTo(4);
     assertThat(desiredWindows.get("uniqueItems")).isEqualTo(true);
     Map<String, Object> desiredWindowInput = child(schemas, "DesiredDeliveryWindowInput");
     Map<String, Object> desiredWindow = child(schemas, "DesiredDeliveryWindow");

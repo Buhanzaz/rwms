@@ -37,8 +37,12 @@ Public board и detail задания показывают всю ходку: о
 бытовки и желаемую/фактическую мебель каждой бытовки со статусами movement task и readiness. После
 обычной manager-проверки warehouse access с `rwms.read` detail задания `ASSIGNED_DRIVER` может
 читать только `WORKER` со scope `driver.tasks`, у которого `worker_id` равен сохранённому
-`plannedDriverWorkerId`; session `sub` не является identity рабочего, а `worker.tasks`,
-`UNASSIGNED` и `WAREHOUSE_DRIVERS` такого доступа не дают. Board move действует на
+`plannedDriverWorkerId`; session `sub` не является identity рабочего, а `worker.tasks` и
+`UNASSIGNED` такого доступа не дают. DriverApp-водитель того же склада может предварительно читать
+общее задание `WAREHOUSE_DRIVERS` только на дату позже текущего warehouse-local дня, а затем
+зарезервировать его отдельной claim-командой. Task-board проверяет активную квалификацию водителя и
+версионно ограждает конкурирующие попытки; claim не начинает выполнение и недоступен для задания
+на сегодня. Board move действует на
 сгруппированное задание, но не на отдельного участника.
 Во время version-fenced вызова task-board намеренно удерживаются блокировки локального задания и
 документа, чтобы локально начатая ходка не пересеклась с устаревшим remote-состоянием `WAITING`;
@@ -99,8 +103,11 @@ Draft заказа аренды можно создать с заранее вы
 expected version. Команды create и обычного update принимают только клиента, основной телефон и
 комментарий; delivery address, пару координат и order-owned дополнительные контакты клиент указывает
 в normal presentation confirmation. Желаемые окна остаются order-owned read projection: перенесённые
-legacy строки правдиво читаются, а актуальное normal confirmation заменяет их одной–пятью разными
-выбранными клиентом календарными датами (`startDate=endDate`) в хронологическом порядке. Draft можно
+legacy строки правдиво читаются, а актуальное normal confirmation заменяет их разными выбранными
+клиентом календарными датами (`startDate=endDate`) в хронологическом порядке. Новое normal
+confirmation отдаёт четыре warehouse-local даты со второго по пятый день и принимает от одной до
+четырёх дат только из этого списка. Это пожелания клиента, а не заранее зарезервированная ёмкость
+маршрута. Draft можно
 сохранить без delivery facts, но создание отгрузки требует адрес, основной телефон и хотя бы одну
 желаемую дату. Фактическое расписание документа —
 его `scheduledDate`; публичные команды и проекции не содержат времени суток. Человекочитаемый телефон
@@ -114,7 +121,7 @@ legacy строки правдиво читаются, а актуальное n
 атомарно снятое содержимое выбранных held cabins и неназначенный физический излишек уже внутри этого
 заказа; строки с нулевой общей доступностью сохраняют максимум на бытовку. Confirmation передаёт
 мебель по бытовкам и атомарно конвертирует holds вместе с авторитетным полным составом мебели заказа.
-Поэтому каждое публичное `NORMAL` presentation требует одну–пять независимо выбранных дат клиента,
+Поэтому каждое публичное `NORMAL` presentation требует одну–четыре разрешённые сервером даты клиента,
 обязательный delivery address, необязательную полную пару latitude/longitude, nullable дополнительные
 контакты с нормализацией в пустой список и положительный начальный `rentalMonths`; значения не
 предзаполняются из связанного заказа. Durable booking receipt хронологически нормализует эти факты,
@@ -130,6 +137,20 @@ legacy строки правдиво читаются, а актуальное n
 добавляются, а первый склад фиксируется только через существующий inquiry/presentation flow.
 `GET /api/logistics/v1/orders/{orderId}/available-units` остаётся поиском для замены; удаление,
 замена бытовки и редактирование желаемой мебели сохраняют отдельные команды.
+
+Отдельный симулятор маршрутов интегрируется только через private-границу
+`/api/internal/logistics/v1/planning/**` и exact service token `logistics-planner` с единственным
+scope `logistics.planning`. Ограниченный feed передаёт identity/version сохранённого заказа,
+адрес/координаты, ещё не включённые в отгрузки ID бытовок и все подтверждённые клиентом даты; номера
+телефонов и мебель не передаются. Применение плана повторно использует существующую idempotent
+команду rental shipment с exact version заказа, конкретными бытовками и opaque worker ID task-board.
+Автоматическое применение отклоняет сегодня и завтра, а существующая manager-команда остаётся
+осознанным ручным override. Отдельно логист может выбрать нераспределённую будущую доставку и явно
+опубликовать её как `WAREHOUSE_DRIVERS`: завтра разрешено, warehouse-local сегодня запрещено,
+конкретный worker ID не сохраняется. Скрытые `UNASSIGNED` отгрузки остаются скрытыми. Симулятор
+может перечитать только статусы созданных планировщиком назначений за один склад/день, поэтому после
+claim общая доставка показывается с авторитетным водителем; обычные ручные документы и контакты
+клиента исключены. Симулятор никогда не читает и не пишет базу RWMS напрямую.
 
 Replacement повторно использует те же presentation/booking или прямую команду заказа. Warehouse
 manager может заменить только запрошенные бытовки до старта с точным количеством client selection;
@@ -233,6 +254,9 @@ port. Его неизменённый constructor собирает шесть ow
 | Политики document admission, idempotency, attempts, reads и binding | Узкие leaves warehouse, replay, external-attempt, projection и active-order |
 | `RentalOrderService` | Стабильный order facade над reads, creation, lifecycle, reservations, terms и shipment hand-off |
 | `RentalOrderUnitReplacementService` | Direct и presentation replacement через ordered batch checkpoints, pre-start отмену driver task и сходимость order/document members |
+| `RentalOrderPlanningIntegrationService` | Минимальный versioned feed планировщика и idempotent применение через существующего владельца rental shipment без общего состояния БД |
+| `FutureDriverTaskClaimService` | Future-only preview/claim общего задания с проверкой квалификации и versions в task-board; выполнение не запускается |
+| `ClientDeliveryDatePolicy` | Warehouse-local окно обычного public confirmation со второго по пятый день |
 | `ShipmentFurnitureTaskService` | Полный состав мебели всех active units заказа, readiness существующих movement tasks и replacement recovery checkpoints |
 | Rental-order command store, editability и problem/outcome leaves | Row/receipt replay, saved-draft synchronization и canonical local problem mapping; `LogisticsTransactionLock` владеет узким transaction advisory-lock access |
 | `InventoryOutcomeService` | Non-transactional orchestration завершённой инвентаризации и frozen successful replay |
@@ -383,6 +407,14 @@ Migration
 rental-term и driver-task; active-read indexes для несуперседированных lines/terms; постоянные command
 receipts; per-asset completed-source watermarks и recoverable task/asset-lease action checkpoints.
 Это additive migration без backfill, rewrite или удаления исторических строк.
+
+Migration
+[`V53__future_shipment_driver_pool.sql`](src/main/resources/db/migration/V53__future_shipment_driver_pool.sql)
+добавляет false-by-default intent отгрузки `warehouse_driver_pool`. Database constraint разрешает
+флаг только для shipment без конкретного worker, поэтому существующие скрытые unassigned и
+назначенные документы сохраняют прежний смысл и не переклассифицируются. Task-audience constraint
+расширяется только для shipment `WAREHOUSE_DRIVERS`; у returns остаются прежние assigned-or-hidden
+режимы.
 
 Logistics вместе фиксирует facts, projection checkpoints и transactional outbox. Kafka delivery —
 at-least-once: aggregate IDs являются record keys, event IDs — dedupe identities, а consumers хранят

@@ -334,6 +334,39 @@ class DocumentDriverTaskPlannerTest {
   }
 
   @Test
+  void explicitlyPublishedShipmentCreatesWarehouseSharedTaskWithoutDriverIdentity() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    LogisticsDocument document =
+        LogisticsDocument.createShipment(
+            warehouseId,
+            UUID.randomUUID(),
+            "Клиент",
+            "Свободное задание",
+            null,
+            UUID.randomUUID(),
+            UUID.randomUUID());
+    document.scheduleShipment(
+        "Свободное задание", null, LocalDate.of(2026, 8, 25), true);
+    LogisticsDocumentLine line = persistedLine(document, assetId);
+    persist(document);
+    stubDependencies(warehouseId, UUID.randomUUID(), assetId, "БТ-POOL");
+    when(tasks.findActiveForUpdateBySourceTypeAndSourceIdAndKind(
+            DriverTaskSourceType.LOGISTICS_DOCUMENT, document.getId(), DriverTaskKind.SHIPMENT))
+        .thenReturn(Optional.empty());
+
+    planner.plan(document, List.of(line));
+
+    ArgumentCaptor<DriverLogisticsTask> taskCaptor =
+        ArgumentCaptor.forClass(DriverLogisticsTask.class);
+    verify(tasks).saveAndFlush(taskCaptor.capture());
+    DriverLogisticsTask created = taskCaptor.getValue();
+    assertThat(created.getDriverAudienceMode()).isEqualTo(DriverTaskAudienceMode.WAREHOUSE_DRIVERS);
+    assertThat(created.getPlannedDriverWorkerId()).isNull();
+    assertThat(created.getPlannedDriverNameSnapshot()).isNull();
+  }
+
+  @Test
   void cancellationStopsUnregisteredIntentBeforeRelayCanPublishIt() {
     UUID warehouseId = UUID.randomUUID();
     UUID assetId = UUID.randomUUID();

@@ -29,6 +29,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.buhanzaz.rwms.driver.core.database.TaskEvidenceEntity
@@ -41,6 +43,7 @@ import dev.buhanzaz.rwms.driver.core.ui.DriverKpiColorRange
 import dev.buhanzaz.rwms.driver.core.ui.DriverScreenScaffold
 import dev.buhanzaz.rwms.driver.core.ui.cabinNumberForDisplay
 import dev.buhanzaz.rwms.driver.core.ui.driverKpiTimeColor
+import java.time.LocalDate
 import kotlinx.coroutines.delay
 
 /** Renders one task, its evidence and the actions allowed by the synchronized server state. */
@@ -118,7 +121,16 @@ fun TaskDetailScreen(
     val showsRichLogisticsDetails = canReadRichLogisticsDetails(
         sourceType = detail?.source?.type,
         driverAudienceMode = task?.driverAudienceMode,
+        scheduledDate = detail?.scheduledDate ?: task?.scheduledDate,
+        today = LocalDate.now(),
     )
+    val canClaimExtraTask = canClaimFutureLogisticsTask(
+        sourceType = detail?.source?.type,
+        driverAudienceMode = task?.driverAudienceMode,
+        scheduledDate = detail?.scheduledDate ?: task?.scheduledDate,
+        today = LocalDate.now(),
+    )
+    val context = LocalContext.current
     LaunchedEffect(timerSnapshot?.nextTransitionAt, timerSnapshot?.serverTime) {
         val snapshot = timerSnapshot ?: return@LaunchedEffect
         val nextTransitionAt = snapshot.nextTransitionAt ?: return@LaunchedEffect
@@ -131,7 +143,7 @@ fun TaskDetailScreen(
         if (transitionDelay > 0) delay(transitionDelay)
         viewModel.refresh()
     }
-    val actionPresentation = taskActionPresentation(
+    val ordinaryActionPresentation = taskActionPresentation(
         currentDriverId = userId,
         taskStatus = displayedStatus,
         availabilityMode = detail?.availabilityMode,
@@ -141,6 +153,20 @@ fun TaskDetailScreen(
         hasCurrentGroup = session?.currentGroupId != null,
         operationalAvailability = session?.operationalAvailability ?: "DISABLED",
     )
+    val actionPresentation = when {
+        canClaimExtraTask && !state.extraTaskClaimed -> ordinaryActionPresentation.copy(
+            actions = emptyList(),
+            actionsEnabled = false,
+            message = "Сначала возьмите будущую ходку кнопкой ниже",
+        )
+        state.extraTaskClaimed && task?.driverAudienceMode == WAREHOUSE_DRIVERS_AUDIENCE_MODE ->
+            ordinaryActionPresentation.copy(
+                actions = emptyList(),
+                actionsEnabled = false,
+                message = "Ждём обновлённое назначение с сервера",
+            )
+        else -> ordinaryActionPresentation
+    }
     LaunchedEffect(readyEvidenceCount) { viewModel.refresh() }
     DriverScreenScaffold(title = detail?.title ?: state.task?.title ?: "Задание", onBack = onBack) { padding ->
         LazyColumn(
@@ -238,7 +264,12 @@ fun TaskDetailScreen(
                     }
                 }
                 state.tripDetails?.let { trip ->
-                    item { DriverTripDetailsBlock(trip) }
+                    item {
+                        DriverTripDetailsBlock(
+                            trip = trip,
+                            onOpenInYandexMaps = { openYandexMapsRoute(context, it) },
+                        )
+                    }
                 }
                 if (
                     state.tripRefreshComplete &&
@@ -251,6 +282,54 @@ fun TaskDetailScreen(
                             modifier = Modifier.padding(horizontal = 16.dp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                }
+            }
+            if (canClaimExtraTask || state.extraTaskClaimed) {
+                item {
+                    Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
+                        Column(
+                            Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            if (state.extraTaskClaimed) {
+                                Text(
+                                    "Дополнительная ходка назначена вам",
+                                    modifier = Modifier.testTag("extra-task-claimed"),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                                Text(
+                                    "Очередь обновляется с сервера.",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            } else {
+                                Text(
+                                    "Дополнительное задание",
+                                    style = MaterialTheme.typography.titleSmall,
+                                )
+                                Text(
+                                    "Проверьте адрес и маршрут, затем закрепите ходку за собой.",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Button(
+                                    onClick = viewModel::claimExtraTask,
+                                    enabled = !state.extraTaskClaimInProgress,
+                                    modifier = Modifier.fillMaxWidth().testTag("claim-extra-task"),
+                                ) {
+                                    Text(
+                                        if (state.extraTaskClaimInProgress) {
+                                            "Закрепляем…"
+                                        } else {
+                                            "Взять доп. задание"
+                                        },
+                                    )
+                                }
+                            }
+                            state.extraTaskClaimError?.let { claimError ->
+                                Text(claimError, color = MaterialTheme.colorScheme.error)
+                            }
+                        }
                     }
                 }
             }
@@ -425,7 +504,10 @@ fun TaskDetailScreen(
 }
 
 @Composable
-private fun DriverTripDetailsBlock(trip: DriverTripDetailsDto) {
+private fun DriverTripDetailsBlock(
+    trip: DriverTripDetailsDto,
+    onOpenInYandexMaps: (DriverTripDetailsDto) -> Unit,
+) {
     val primaryContact = listOfNotNull(
         trip.primaryContactName?.takeIf(String::isNotBlank),
         trip.primaryContactPhone?.takeIf(String::isNotBlank),
@@ -445,6 +527,13 @@ private fun DriverTripDetailsBlock(trip: DriverTripDetailsDto) {
         Text("Клиент: ${trip.clientName}")
         Text("Адрес: ${trip.address?.takeIf(String::isNotBlank) ?: "не указан"}")
         Text("Координаты: $coordinates")
+        Button(
+            onClick = { onOpenInYandexMaps(trip) },
+            enabled = yandexMapsRouteUrl(trip) != null,
+            modifier = Modifier.testTag("open-yandex-maps-route"),
+        ) {
+            Text("Открыть в Яндекс Картах")
+        }
         Text("Основной контакт: $primaryContact")
         if (trip.additionalContacts.isNotEmpty()) {
             Text("Дополнительные контакты", style = MaterialTheme.typography.titleSmall)

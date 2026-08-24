@@ -157,6 +157,7 @@ function driverQueue(id = DRIVER_QUEUE_ID): WorkQueueDto {
     notifyWhenThresholdReached: false,
     resultPhotoMinCount: 1,
     availableTaskLimit: 6,
+    workerFeedEnabled: true,
     bindings: [
       {
         id: "00000000-0000-4000-8000-000000000006",

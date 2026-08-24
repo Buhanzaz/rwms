@@ -82,6 +82,7 @@ function renderCard(
     inDailyPlan = false,
     routeHighlighted = false,
     fullRouteSelected = false,
+    reorderEnabled = false,
     palette = null,
     repairComplexity = null,
   }: {
@@ -98,6 +99,7 @@ function renderCard(
     inDailyPlan?: boolean
     routeHighlighted?: boolean
     fullRouteSelected?: boolean
+    reorderEnabled?: boolean
     palette?: KpiPalette | null
     repairComplexity?: TaskBoardRepairComplexity | null
   } = {}
@@ -114,6 +116,7 @@ function renderCard(
       inDailyPlan={inDailyPlan}
       routeHighlighted={routeHighlighted}
       fullRouteSelected={fullRouteSelected}
+      reorderEnabled={reorderEnabled}
       onDetails={onDetails}
       onEdit={onEdit}
       onTake={onTake}
@@ -248,7 +251,7 @@ describe("TaskBoardCard source details", () => {
     expect(details.getAttribute("class")).toContain("w-full")
   })
 
-  it("toggles the complete card with a short click on the drag handle", async () => {
+  it("toggles the complete card with its separate collapse button", async () => {
     render(<CollapsibleCard />)
 
     const user = userEvent.setup()
@@ -314,13 +317,14 @@ describe("TaskBoardCard source details", () => {
     expect(screen.queryByText("Капитальный ремонт")).toBeNull()
   })
 
-  it("keeps the pin next to the drag handle and shows the full repair text", () => {
+  it("keeps separate pin, drag and collapse controls and shows the full repair text", () => {
     const entry = renderCard(
       {
         type: "MAINTENANCE_REPAIR",
         sourceId: "repair-1",
       },
       {
+        reorderEnabled: true,
         entryPatch: {
           taskText:
             "Замена панели, обработка стыков, окраска и проверка герметичности.",
@@ -332,6 +336,9 @@ describe("TaskBoardCard source details", () => {
       name: `Закрепить этап ${entry.unitNumber}`,
     })
     const dragHandle = screen.getByRole("button", {
+      name: `Переместить этап ${entry.unitNumber}`,
+    })
+    const collapse = screen.getByRole("button", {
       name: `Свернуть этап ${entry.unitNumber}`,
     })
     const description = screen.getByText(
@@ -341,7 +348,24 @@ describe("TaskBoardCard source details", () => {
     expect(pin.closest('[data-slot="task-board-card-actions"]')).toBe(
       dragHandle.closest('[data-slot="task-board-card-actions"]')
     )
+    expect(collapse.closest('[data-slot="task-board-card-actions"]')).toBe(
+      dragHandle.closest('[data-slot="task-board-card-actions"]')
+    )
+    expect((dragHandle as HTMLButtonElement).disabled).toBe(false)
     expect(description.className).not.toContain("line-clamp")
+  })
+
+  it.each([
+    ["закреплённую", { pinned: true }],
+    ["будущую", { entryType: "SHADOW" as const }],
+    ["активную", { status: "IN_PROGRESS" as const }],
+  ])("does not allow dragging %s card", (_label, entryPatch) => {
+    renderCard(null, { reorderEnabled: true, entryPatch })
+
+    const dragHandle = screen.getByRole("button", {
+      name: "Переместить этап БЫТ-001",
+    }) as HTMLButtonElement
+    expect(dragHandle.disabled).toBe(true)
   })
 
   it("uses the same collapsed or expanded contents for the drag preview", () => {

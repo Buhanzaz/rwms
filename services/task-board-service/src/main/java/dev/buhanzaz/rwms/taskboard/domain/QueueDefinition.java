@@ -18,8 +18,9 @@ import java.util.UUID;
 /**
  * Owns the global queue identity and policy mirrored by warehouse-specific work queues.
  *
- * <p>The policy includes the number of canonically ordered waiting tasks highlighted in the
- * ordinary board's daily plan; physical queues copy that count and do not override it locally.
+ * <p>The policy includes the initial WorkerApp daily-plan count copied when a warehouse projection
+ * is created. Each physical queue then owns its warehouse-local publication switch and plan, so
+ * later global reconciliation does not overwrite the manager's operational choice.
  */
 @Entity
 @Table(

@@ -110,7 +110,8 @@ public final class TaskBoardEventPayloads {
       UUID queueDefinitionId,
       QueueType queueType, QueuePurpose queuePurpose, int sortOrder, boolean active, boolean hidden,
       boolean collapsed, Integer holdingPeriodMinutes, Integer notificationThreshold,
-      boolean notifyWhenThresholdReached, int resultPhotoMinCount,
+      boolean notifyWhenThresholdReached, int resultPhotoMinCount, Integer availableTaskLimit,
+      Boolean workerFeedEnabled,
       List<QueueBindingFact> classBindings, boolean deleted) {
     public WorkQueueFact {
       classBindings = List.copyOf(classBindings);

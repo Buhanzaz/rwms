@@ -72,6 +72,19 @@ public interface DriverLogisticsTaskRepository extends JpaRepository<DriverLogis
       @Param("sourceType") DriverTaskSourceType sourceType,
       @Param("sourceIds") Collection<UUID> sourceIds);
 
+  /** Reads current and terminal projections for a bounded set of planner-created documents. */
+  @Query(
+      """
+      select task
+      from DriverLogisticsTask task
+      where task.sourceType = :sourceType
+        and task.sourceId in :sourceIds
+      order by task.sourceId, task.createdAt, task.id
+      """)
+  List<DriverLogisticsTask> findAllBySourceTypeAndSourceIdIn(
+      @Param("sourceType") DriverTaskSourceType sourceType,
+      @Param("sourceIds") Collection<UUID> sourceIds);
+
   /** Detects legacy line-derived tasks so an existing shipment is never regrouped in place. */
   @Query(
       """

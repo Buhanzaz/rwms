@@ -44,7 +44,7 @@ class DriverGatewayApiContractBoundaryTest {
             .filterNot(Method::isSynthetic)
             .associateBy(Method::getName)
 
-        assertThat(expected).hasSize(12)
+        assertThat(expected).hasSize(13)
         assertWithMessage(
             "DriverGatewayApi method inventory must stay synchronized with canonical public OpenAPI",
         ).that(methods.keys)
@@ -399,6 +399,7 @@ private fun expectedDriverRoutes(): Map<String, DriverContractRoute> {
         "driverFeed" to route("GET", "/api/task-board/driver/v1/feed", "$taskBoard /driver/v1/feed"),
         "driverTaskDetail" to route("GET", "/api/task-board/driver/v1/entries/{entryId}", "$taskBoard /driver/v1/entries/{entryId}"),
         "logisticsDriverTask" to route("GET", "/api/logistics/v1/driver-tasks/{taskId}", "$logistics getDriverTask"),
+        "claimFutureLogisticsTask" to route("POST", "/api/logistics/v1/driver-tasks/{taskId}/claim", "$logistics claimFutureDriverTask"),
         "applyAction" to route("POST", "/api/task-board/driver/v1/entries/{entryId}/actions", "$taskBoard /driver/v1/entries/{entryId}/actions"),
         "reserveEvidence" to route("POST", "/api/task-board/driver/v1/entries/{entryId}/evidence-reservations", "$taskBoard /driver/v1/entries/{entryId}/evidence-reservations"),
         "registerDevice" to route("PUT", "/api/task-board/driver/v1/devices/{installationId}", "$taskBoard /driver/v1/devices/{installationId}"),

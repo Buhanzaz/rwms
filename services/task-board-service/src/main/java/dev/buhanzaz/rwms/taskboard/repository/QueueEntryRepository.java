@@ -49,9 +49,10 @@ public interface QueueEntryRepository extends JpaRepository<QueueEntry, UUID> {
   /**
    * Loads every unfinished entry on the active ordinary board with its to-one ordering state.
    *
-   * <p>The query deliberately does not apply the configured daily-plan count: that value is a
-   * presentation marker, while route type and route order remain the command admission fence.
-   * Fetching task, queue and definition here prevents per-card lazy-loading queries.
+   * <p>The query deliberately does not apply the warehouse's WorkerApp publication controls:
+   * manager projections need the complete board and the WorkerApp policy applies the switch and
+   * waiting-real window after canonical SES gating. Fetching task, queue and definition here
+   * prevents per-card lazy-loading queries.
    */
   @Query(
       """

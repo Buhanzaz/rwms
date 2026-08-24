@@ -153,10 +153,24 @@ public final class OrderApiModels {
       @NotBlank @Size(max = 512) String driverSnapshot,
       UUID driverWorkerId,
       @NotNull LocalDate scheduledDate,
-      @NotNull @Size(min = 1, max = 100) List<@NotNull UUID> unitIds) {
+      @NotNull @Size(min = 1, max = 100) List<@NotNull UUID> unitIds,
+      Boolean warehouseDriverPool) {
+    public CreateOrderRentalShipmentRequest {
+      warehouseDriverPool = Boolean.TRUE.equals(warehouseDriverPool);
+    }
+
+    public CreateOrderRentalShipmentRequest(
+        Long expectedVersion,
+        String driverSnapshot,
+        UUID driverWorkerId,
+        LocalDate scheduledDate,
+        List<UUID> unitIds) {
+      this(expectedVersion, driverSnapshot, driverWorkerId, scheduledDate, unitIds, false);
+    }
+
     public CreateOrderRentalShipmentRequest(
         Long expectedVersion, String driverSnapshot, LocalDate scheduledDate, List<UUID> unitIds) {
-      this(expectedVersion, driverSnapshot, null, scheduledDate, unitIds);
+      this(expectedVersion, driverSnapshot, null, scheduledDate, unitIds, false);
     }
   }
 

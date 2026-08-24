@@ -145,14 +145,18 @@ class TaskBoardOpenApiParityTest {
             "availableTaskLimit",
             "bindings")
         .doesNotContainKey("groupBindings");
-    assertThat(schemas).containsKey("DriverQueueRequest");
+    assertThat(schemas).containsKeys("DriverQueueRequest", "WorkerQueuePlanRequest");
     assertThat(schemas)
         .containsKey("QueueDefinitionOrderRequest")
         .doesNotContainKeys("WorkQueueRequest", "QueueOrderRequest", "QueueOrderItem");
     assertThat(child(paths, "/warehouses/{warehouseId}/work-queues"))
         .containsOnlyKeys("get", "parameters");
     assertThat(paths)
-        .containsKeys("/queue-definitions/order", "/warehouses/{warehouseId}/driver-queue")
+        .containsKeys(
+            "/queue-definitions/order",
+            "/warehouses/{warehouseId}/driver-queue",
+            "/warehouses/{warehouseId}/work-queues/{queueId}/worker-plan",
+            "/warehouses/{warehouseId}/task-board/entries/{entryId}/reorder")
         .doesNotContainKeys(
             "/warehouses/{warehouseId}/work-queues/{id}",
             "/warehouses/{warehouseId}/work-queue-order");
@@ -170,9 +174,11 @@ class TaskBoardOpenApiParityTest {
     assertThat(list(child(schemas, "QueueDefinition").get("required")))
         .contains("availableTaskLimit");
     assertThat(list(child(schemas, "WorkQueue").get("required")))
-        .contains("availableTaskLimit");
+        .contains("availableTaskLimit", "workerFeedEnabled");
     assertThat(list(child(schemas, "BoardColumn").get("required")))
-        .contains("availableTaskLimit");
+        .contains("queueVersion", "availableTaskLimit", "workerFeedEnabled");
+    assertThat(list(child(schemas, "ReorderBoardEntryRequest").get("required")))
+        .contains("expectedEntryVersion", "expectedQueueVersion", "targetEntryId", "targetIndex");
 
     assertThat(child(child(schemas, "GroupMember"), "properties"))
         .doesNotContainKey("roleInGroup");

@@ -71,17 +71,17 @@ categories keep their own panels; queues and task cards can also collapse.
 Panels stack on a narrow screen and use a two-column horizontal board from
 720 dp.
 
-Each queue persists the task-board `entryType` and `pinned` fields. Active REAL
-work is shown first, followed by every pinned and then ordinary waiting REAL entry
-in the authoritative server queue position; SHADOW entries remain visible afterwards in
-their stored queue position. A newly promoted earlier shadow therefore moves
-ahead of an unpinned waiting entry but never ahead of a pinned one. SHADOW cards
-are subdued, explicitly labelled as waiting for a previous stage, and fail
-closed without TAKE or any other worker action. A route whose first required
-stage is electricity arrives as REAL in the electricity queue and can be taken
-immediately; SES blocking and route promotion remain server-owned.
-The manager daily-plan count never truncates WorkerApp's REAL backlog or TAKE;
-while SES is unfinished, the worker feed still omits that task's later shadows.
+Task-board publishes only warehouse queues whose manager checkbox is enabled.
+Within each published ordinary queue, active `REAL` work remains available and
+is followed by the first configured number of waiting `REAL` entries in the
+authoritative server order. `SHADOW` route stages are never sent to WorkerApp.
+The native detail and `TAKE`/`JOIN` boundaries recheck the same publication
+window, so a stale local card cannot bypass a changed plan. A newly promoted
+earlier stage resumes its persisted position and enters the worker plan when
+that position is inside the configured window; a pinned waiting REAL stays
+ahead. A route whose first required stage is electricity can therefore arrive
+directly in the electrician queue, while SES blocking and route promotion
+remain server-owned.
 
 The centered board header is `Доска задач`; it does not repeat a group-role
 caption or routine sync-progress text. Its refresh icon rotates while a current

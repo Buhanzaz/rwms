@@ -373,6 +373,8 @@ class TaskBoardEventPayloadPolicyTest {
             null,
             false,
             1,
+            6,
+            true,
             List.of(
                 new QueueBindingFact(
                     bindingId,
@@ -392,6 +394,8 @@ class TaskBoardEventPayloadPolicyTest {
             fact);
 
     assertThat(payload.has("groupBindings")).isFalse();
+    assertThat(payload.required("availableTaskLimit").intValue()).isEqualTo(6);
+    assertThat(payload.required("workerFeedEnabled").booleanValue()).isTrue();
     assertThat(payload.required("classBindings").get(0).required("bindingOrder").intValue())
         .isOne();
     assertThat(
@@ -413,6 +417,18 @@ class TaskBoardEventPayloadPolicyTest {
                     missingQueueDefinition))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("typed semantic validation");
+
+    var legacyPlan = payload.deepCopy();
+    ((tools.jackson.databind.node.ObjectNode) legacyPlan).remove("availableTaskLimit");
+    ((tools.jackson.databind.node.ObjectNode) legacyPlan).remove("workerFeedEnabled");
+    assertThatCode(
+            () ->
+                policy.validateNode(
+                    TaskBoardEventTypes.WORK_QUEUE_CHANGED,
+                    TaskBoardAggregateType.WORK_QUEUE,
+                    queueId,
+                    legacyPlan))
+        .doesNotThrowAnyException();
 
     var missingBindingOrder = payload.deepCopy();
     ((tools.jackson.databind.node.ObjectNode)

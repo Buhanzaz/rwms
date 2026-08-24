@@ -74,6 +74,10 @@ public record OAuthClientProperties(List<Client> clients) {
             "task-board.logistics",
             "maintenance.logistics",
             "media.logistics");
+    static final String LOGISTICS_PLANNER_CLIENT_ID = "logistics-planner";
+    static final String LOGISTICS_PLANNER_AUDIENCE = "rwms-services";
+    static final String LOGISTICS_PLANNER_SECRET_ENVIRONMENT = "LOGISTICS_PLANNER_CLIENT_SECRET";
+    static final Set<String> LOGISTICS_PLANNER_SCOPES = Set.of("logistics.planning");
 
     /** Copies the bound declarations so later configuration mutation cannot alter a security decision. */
     public OAuthClientProperties {
@@ -204,6 +208,16 @@ public record OAuthClientProperties(List<Client> clients) {
          */
         boolean logisticsServiceClient() {
             return LOGISTICS_CLIENT_ID.equals(clientId);
+        }
+
+        /**
+         * Identifies the standalone logistics planner so its single-purpose machine contract can be
+         * enforced during provisioning.
+         *
+         * @return whether this is the reserved logistics-planner client
+         */
+        boolean logisticsPlannerClient() {
+            return LOGISTICS_PLANNER_CLIENT_ID.equals(clientId);
         }
 
         /**

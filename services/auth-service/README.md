@@ -175,6 +175,12 @@ plan-wide supersession of logistics work. Every token keeps subject and `client_
 equal to `inventory-service` and the `rwms-services` audience. Asset, maintenance,
 media, logistics and warehouse scopes remain separate token requests.
 
+The disabled-by-default `logistics-planner` machine client is reserved for the standalone route
+simulator. When explicitly enabled, it uses only `client_credentials`, the `rwms-services`
+audience, `client_secret_basic`, and the sole `logistics.planning` scope. Its runtime secret is read from
+`LOGISTICS_PLANNER_CLIENT_SECRET`; enabling or changing the security shape requires the managed
+client revision. It grants no user, warehouse-administration, or general read/write scope.
+
 ## Warehouse-grant validation
 
 Warehouse identity belongs to `warehouse-service`. Auth-service therefore does

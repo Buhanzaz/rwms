@@ -17,7 +17,8 @@ import java.util.UUID;
  * position, except that a pinned real card keeps its visible slot while an earlier shadow is
  * promoted; persisted schedule dates do not partition or order ordinary work. This policy never
  * truncates the backlog: a route's first unfinished entry is the only executable phase, and later
- * entries remain durable shadows until that phase completes.
+ * entries remain durable shadows until that phase completes. WorkerApp publication is a separate
+ * warehouse-local policy layered over this complete canonical order.
  */
 final class OrdinaryQueueAvailabilityPolicy {
   private static final Set<EntryStatus> UNFINISHED =
@@ -54,8 +55,8 @@ final class OrdinaryQueueAvailabilityPolicy {
    * Returns every unfinished real and shadow entry in stable queue presentation order.
    *
    * <p>A promoted real card resumes its persisted queue position, except that an explicitly pinned
-   * waiting real remains ahead. Daily-plan membership is derived by clients from the first
-   * configured number of waiting real cards and never removes a card or changes TAKE eligibility.
+   * waiting real remains ahead. Manager surfaces receive this complete list; the server applies
+   * the warehouse-local WorkerApp plan to the native worker feed and TAKE admission separately.
    */
   static List<QueueEntry> orderedEntries(Collection<QueueEntry> queueEntries) {
     return queueEntries.stream()

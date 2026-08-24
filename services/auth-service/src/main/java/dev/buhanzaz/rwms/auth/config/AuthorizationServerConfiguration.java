@@ -325,6 +325,7 @@ public class AuthorizationServerConfiguration {
                                 .andThen(AuthorizationServerConfiguration::validateAssetDownstreamRequest)
                                 .andThen(AuthorizationServerConfiguration::validateInventoryDownstreamRequest)
                                 .andThen(AuthorizationServerConfiguration::validateLogisticsDownstreamRequest)
+                                .andThen(AuthorizationServerConfiguration::validateLogisticsPlannerRequest)
                                 .andThen(AuthorizationServerConfiguration::validateTaskBoardDownstreamRequest));
             }
         });
@@ -398,6 +399,22 @@ public class AuthorizationServerConfiguration {
                 OAuthClientProperties.LOGISTICS_CLIENT_ID,
                 OAuthClientProperties.LOGISTICS_SCOPES,
                 OAuthClientProperties.LOGISTICS_AUDIENCE);
+    }
+
+    /**
+     * Enforces the exact single-purpose token request contract for the standalone logistics planner.
+     *
+     * @param context client-credentials validation context
+     * @throws OAuth2AuthenticationException when a request attempts to override planner identity,
+     *     audience, or the sole planning scope
+     */
+    static void validateLogisticsPlannerRequest(
+            OAuth2ClientCredentialsAuthenticationContext context) {
+        validateExactDownstreamRequest(
+                context,
+                OAuthClientProperties.LOGISTICS_PLANNER_CLIENT_ID,
+                OAuthClientProperties.LOGISTICS_PLANNER_SCOPES,
+                OAuthClientProperties.LOGISTICS_PLANNER_AUDIENCE);
     }
 
     /**

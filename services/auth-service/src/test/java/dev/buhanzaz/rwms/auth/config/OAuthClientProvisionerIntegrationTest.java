@@ -387,6 +387,42 @@ class OAuthClientProvisionerIntegrationTest {
     }
 
     @Test
+    void logisticsPlannerRejectsEveryPrivilegeOrSecretDriftBeforeMutation() {
+        List<OAuthClientProperties.Client> invalidConfigurations = List.of(
+                logisticsPlannerClient(
+                        Set.of("logistics.planning", "warehouse.read"),
+                        Set.of(OAuthClientProperties.LOGISTICS_PLANNER_AUDIENCE),
+                        OAuthClientProperties.LOGISTICS_PLANNER_SECRET_ENVIRONMENT,
+                        null),
+                logisticsPlannerClient(
+                        OAuthClientProperties.LOGISTICS_PLANNER_SCOPES,
+                        Set.of("other-audience"),
+                        OAuthClientProperties.LOGISTICS_PLANNER_SECRET_ENVIRONMENT,
+                        null),
+                logisticsPlannerClient(
+                        OAuthClientProperties.LOGISTICS_PLANNER_SCOPES,
+                        Set.of(OAuthClientProperties.LOGISTICS_PLANNER_AUDIENCE),
+                        "OTHER_CLIENT_SECRET",
+                        null),
+                logisticsPlannerClient(
+                        OAuthClientProperties.LOGISTICS_PLANNER_SCOPES,
+                        Set.of(OAuthClientProperties.LOGISTICS_PLANNER_AUDIENCE),
+                        OAuthClientProperties.LOGISTICS_PLANNER_SECRET_ENVIRONMENT,
+                        "repository-secret"));
+
+        invalidConfigurations.forEach(configuration -> assertThatThrownBy(() -> provisioner(configuration).run(null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("logistics-planner OAuth client"));
+        assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isZero();
+
+        provisioner(logisticsPlannerClient(false)).run(null);
+        var disabled = repository.findByClientId(OAuthClientProperties.LOGISTICS_PLANNER_CLIENT_ID);
+        assertThat(disabled).isNotNull();
+        assertThat(disabled.getClientSecret()).isNull();
+        assertThat(disabled.getScopes()).containsExactly("logistics.planning");
+    }
+
+    @Test
     void sameRevisionRejectsConfigurationAndSecretDrift() throws Exception {
         provisioner(serviceClient(true, 1, "secret-one", false)).run(null);
 
@@ -675,6 +711,51 @@ class OAuthClientProvisionerIntegrationTest {
         return new OAuthClientProperties.Client(
                 OAuthClientProperties.LOGISTICS_CLIENT_ID,
                 "Logistics Service Downstream Client",
+                enabled,
+                1,
+                Set.of("client_secret_basic"),
+                Set.of("client_credentials"),
+                Set.of(),
+                Set.of(),
+                scopes,
+                false,
+                Set.of(),
+                audiences,
+                Set.of(),
+                Duration.ofMinutes(5),
+                Duration.ofHours(1),
+                true,
+                secretEnvironment,
+                developmentSecret,
+                false);
+    }
+
+    private OAuthClientProperties.Client logisticsPlannerClient(boolean enabled) {
+        return logisticsPlannerClient(
+                enabled,
+                OAuthClientProperties.LOGISTICS_PLANNER_SCOPES,
+                Set.of(OAuthClientProperties.LOGISTICS_PLANNER_AUDIENCE),
+                OAuthClientProperties.LOGISTICS_PLANNER_SECRET_ENVIRONMENT,
+                null);
+    }
+
+    private OAuthClientProperties.Client logisticsPlannerClient(
+            Set<String> scopes,
+            Set<String> audiences,
+            String secretEnvironment,
+            String developmentSecret) {
+        return logisticsPlannerClient(true, scopes, audiences, secretEnvironment, developmentSecret);
+    }
+
+    private OAuthClientProperties.Client logisticsPlannerClient(
+            boolean enabled,
+            Set<String> scopes,
+            Set<String> audiences,
+            String secretEnvironment,
+            String developmentSecret) {
+        return new OAuthClientProperties.Client(
+                OAuthClientProperties.LOGISTICS_PLANNER_CLIENT_ID,
+                "Logistics Planner Integration Client",
                 enabled,
                 1,
                 Set.of("client_secret_basic"),

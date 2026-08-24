@@ -10,8 +10,12 @@ import dev.buhanzaz.rwms.taskboard.domain.ParticipationPolicy;
 import dev.buhanzaz.rwms.taskboard.domain.QueuePurpose;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
 import dev.buhanzaz.rwms.taskboard.service.ConflictException;
+import dev.buhanzaz.rwms.taskboard.service.MobileTaskSurface;
 import dev.buhanzaz.rwms.taskboard.service.RegistryService;
 import dev.buhanzaz.rwms.taskboard.service.TaskBoardService;
+import dev.buhanzaz.rwms.taskboard.service.GlobalQueueProjectionService;
+import dev.buhanzaz.rwms.taskboard.service.NotFoundException;
+import dev.buhanzaz.rwms.taskboard.service.WorkerQueuePlanService;
 import dev.buhanzaz.rwms.taskboard.service.WorkerCredentialGateway;
 import dev.buhanzaz.rwms.taskboard.service.WorkforceService;
 import jakarta.persistence.EntityManagerFactory;
@@ -39,6 +43,9 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
   @org.springframework.beans.factory.annotation.Autowired RegistryService registry;
   @org.springframework.beans.factory.annotation.Autowired TaskBoardService board;
   @org.springframework.beans.factory.annotation.Autowired WorkforceService workforce;
+  @org.springframework.beans.factory.annotation.Autowired WorkerQueuePlanService workerPlans;
+  @org.springframework.beans.factory.annotation.Autowired
+  GlobalQueueProjectionService globalQueueProjections;
   @org.springframework.beans.factory.annotation.Autowired JdbcTemplate jdbc;
   @org.springframework.beans.factory.annotation.Autowired EntityManagerFactory entityManagerFactory;
 
@@ -76,6 +83,202 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
                     null)
                 .status())
         .isEqualTo(EntryStatus.IN_PROGRESS);
+  }
+
+  @Test
+  void workerPlanBoundsFeedAndWorkerTakeWhileManagerBoardRemainsComplete() {
+    WorkerClassDto workerClass = registry.createClass(workerClass("worker-plan-window"));
+    WorkQueueDto queue = queue("worker-plan-window", QueueType.REPAIR, 2, 1, workerClass.id());
+    WorkerDto worker = worker(workerClass.id());
+    WorkerGroupDto group = group(workerClass.id(), worker.id());
+    workforce.setCurrentGroup(
+        WAREHOUSE_ID,
+        worker.id(),
+        new SetCurrentGroupRequest(worker.version(), group.id()));
+
+    create(queue.definitionId(), "plan-first", LocalDate.of(2026, 8, 21), 3);
+    create(queue.definitionId(), "plan-second", LocalDate.of(2026, 8, 21), 3);
+    BoardEntryDto third =
+        entry(
+            create(queue.definitionId(), "plan-third", LocalDate.of(2026, 8, 21), 3),
+            "plan-third");
+
+    assertThat(column(board.snapshot(WAREHOUSE_ID), queue.id()).entries())
+        .extracting(BoardEntryDto::title)
+        .containsExactly("plan-first", "plan-second", "plan-third");
+    assertThat(column(board.workerSnapshot(WAREHOUSE_ID, worker.id()), queue.id()).entries())
+        .extracting(BoardEntryDto::title)
+        .containsExactly("plan-first", "plan-second");
+    assertThatThrownBy(
+            () ->
+                board.takeFromMobile(
+                    MobileTaskSurface.WORKER,
+                    WAREHOUSE_ID,
+                    third.id(),
+                    new TakeEntryRequest(third.version(), group.id(), worker.id()),
+                    worker.id()))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("план WorkerApp");
+
+    WorkQueueDto expanded =
+        workerPlans.update(
+            WAREHOUSE_ID,
+            queue.id(),
+            new WorkerQueuePlanRequest(queue.version(), true, 3));
+    assertThat(expanded.availableTaskLimit()).isEqualTo(3);
+    assertThat(column(board.workerSnapshot(WAREHOUSE_ID, worker.id()), queue.id()).entries())
+        .extracting(BoardEntryDto::title)
+        .containsExactly("plan-first", "plan-second", "plan-third");
+    assertThat(
+            board.takeFromMobile(
+                    MobileTaskSurface.WORKER,
+                    WAREHOUSE_ID,
+                    third.id(),
+                    new TakeEntryRequest(third.version(), group.id(), worker.id()),
+                    worker.id())
+                .status())
+        .isEqualTo(EntryStatus.IN_PROGRESS);
+  }
+
+  @Test
+  void warehouseSwitchHidesTheWholeQueueIncludingActiveWork() {
+    WorkerClassDto workerClass = registry.createClass(workerClass("worker-plan-switch"));
+    WorkQueueDto queue = queue("worker-plan-switch", QueueType.REPAIR, 1, 1, workerClass.id());
+    WorkerDto worker = worker(workerClass.id());
+    WorkerGroupDto group = group(workerClass.id(), worker.id());
+    workforce.setCurrentGroup(
+        WAREHOUSE_ID,
+        worker.id(),
+        new SetCurrentGroupRequest(worker.version(), group.id()));
+    BoardEntryDto entry =
+        entry(
+            create(queue.definitionId(), "switch-task", LocalDate.of(2026, 8, 21), 3),
+            "switch-task");
+
+    WorkQueueDto disabled =
+        workerPlans.update(
+            WAREHOUSE_ID,
+            queue.id(),
+            new WorkerQueuePlanRequest(queue.version(), false, 1));
+    assertThat(disabled.workerFeedEnabled()).isFalse();
+    assertThat(board.snapshot(WAREHOUSE_ID).columns())
+        .extracting(BoardColumnDto::queueId)
+        .contains(queue.id());
+    assertThat(board.workerSnapshot(WAREHOUSE_ID, worker.id()).columns())
+        .extracting(BoardColumnDto::queueId)
+        .doesNotContain(queue.id());
+    assertThatThrownBy(() -> board.workerEntry(WAREHOUSE_ID, entry.id(), worker.id()))
+        .isInstanceOf(NotFoundException.class);
+
+    WorkQueueDto enabled =
+        workerPlans.update(
+            WAREHOUSE_ID,
+            queue.id(),
+            new WorkerQueuePlanRequest(disabled.version(), true, 1));
+    BoardEntryDto taken =
+        board.take(
+            WAREHOUSE_ID,
+            entry.id(),
+            new TakeEntryRequest(entry.version(), group.id(), worker.id()),
+            worker.id());
+    WorkQueueDto disabledActive =
+        workerPlans.update(
+            WAREHOUSE_ID,
+            queue.id(),
+            new WorkerQueuePlanRequest(enabled.version(), false, 1));
+    assertThat(disabledActive.workerFeedEnabled()).isFalse();
+    assertThat(board.workerSnapshot(WAREHOUSE_ID, worker.id()).columns())
+        .extracting(BoardColumnDto::queueId)
+        .doesNotContain(queue.id());
+    assertThatThrownBy(() -> board.workerEntry(WAREHOUSE_ID, taken.id(), worker.id()))
+        .isInstanceOf(NotFoundException.class);
+    assertThat(column(board.snapshot(WAREHOUSE_ID), queue.id()).entries())
+        .extracting(BoardEntryDto::id, BoardEntryDto::status)
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(taken.id(), EntryStatus.IN_PROGRESS));
+  }
+
+  @Test
+  void globalSynchronizationPreservesWarehouseLocalWorkerPlan() {
+    WorkerClassDto workerClass = registry.createClass(workerClass("local-plan-sync"));
+    WorkQueueDto queue = queue("local-plan-sync", QueueType.REPAIR, 6, 1, workerClass.id());
+
+    WorkQueueDto local =
+        workerPlans.update(
+            WAREHOUSE_ID,
+            queue.id(),
+            new WorkerQueuePlanRequest(queue.version(), false, 3));
+    globalQueueProjections.synchronizeWarehouse(WAREHOUSE_ID);
+
+    WorkQueueDto afterSync = registry.dto(registry.requireQueue(WAREHOUSE_ID, queue.id()));
+    assertThat(afterSync.version()).isEqualTo(local.version());
+    assertThat(afterSync.workerFeedEnabled()).isFalse();
+    assertThat(afterSync.availableTaskLimit()).isEqualTo(3);
+  }
+
+  @Test
+  void managerReordersOnlyUnpinnedWaitingRealCardsInsideTheirQueue() {
+    WorkerClassDto workerClass = registry.createClass(workerClass("manual-order"));
+    WorkQueueDto queue = queue("manual-order", QueueType.REPAIR, 2, 1, workerClass.id());
+    create(queue.definitionId(), "order-a", LocalDate.of(2026, 8, 21), 3);
+    create(queue.definitionId(), "order-b", LocalDate.of(2026, 8, 21), 3);
+    create(queue.definitionId(), "order-c", LocalDate.of(2026, 8, 21), 3);
+
+    BoardColumnDto before = column(board.snapshot(WAREHOUSE_ID), queue.id());
+    BoardEntryDto moved = entry(board.snapshot(WAREHOUSE_ID), "order-c");
+    TaskBoardSnapshot reordered =
+        board.reorder(
+            WAREHOUSE_ID,
+            moved.id(),
+            new ReorderBoardEntryRequest(
+                moved.version(), before.queueVersion(), before.entries().getFirst().id(), 0));
+    BoardColumnDto after = column(reordered, queue.id());
+    assertThat(after.entries())
+        .extracting(BoardEntryDto::title)
+        .containsExactly("order-c", "order-a", "order-b");
+    assertThat(after.queueVersion()).isGreaterThan(before.queueVersion());
+
+    BoardEntryDto orderB = entry(after.entries(), "order-b");
+    assertThatThrownBy(
+            () ->
+                board.reorder(
+                    WAREHOUSE_ID,
+                    orderB.id(),
+                    new ReorderBoardEntryRequest(
+                        orderB.version(), after.queueVersion(), UUID.randomUUID(), 0)))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("Очередь изменилась");
+    assertThatThrownBy(
+            () ->
+                board.reorder(
+                    WAREHOUSE_ID,
+                    orderB.id(),
+                    new ReorderBoardEntryRequest(
+                        orderB.version(),
+                        before.queueVersion(),
+                        after.entries().getFirst().id(),
+                        0)))
+        .isInstanceOf(ConflictException.class);
+
+    BoardEntryDto orderA = entry(reordered, "order-a");
+    TaskBoardSnapshot pinned =
+        board.pin(
+            WAREHOUSE_ID,
+            orderA.taskId(),
+            new PinTaskRequest(orderA.taskVersion(), true));
+    BoardEntryDto pinnedA = entry(pinned, "order-a");
+    assertThatThrownBy(
+            () ->
+                board.reorder(
+                    WAREHOUSE_ID,
+                    pinnedA.id(),
+                    new ReorderBoardEntryRequest(
+                        pinnedA.version(),
+                        column(pinned, queue.id()).queueVersion(),
+                        pinnedA.id(),
+                        0)))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("незакреплённый");
   }
 
   @Test
@@ -514,6 +717,13 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
   private BoardEntryDto entry(TaskBoardSnapshot snapshot, String title) {
     return snapshot.columns().stream()
         .flatMap(column -> column.entries().stream())
+        .filter(candidate -> candidate.title().equals(title))
+        .findFirst()
+        .orElseThrow();
+  }
+
+  private BoardEntryDto entry(List<BoardEntryDto> entries, String title) {
+    return entries.stream()
         .filter(candidate -> candidate.title().equals(title))
         .findFirst()
         .orElseThrow();

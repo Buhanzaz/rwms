@@ -48,6 +48,7 @@ public class PresentationBookingStore {
   private final ClientPresentationRepository presentations;
   private final RentalInquiryRepository inquiries;
   private final ClientPresentationService presentationService;
+  private final ClientDeliveryDatePolicy deliveryDatePolicy;
   private final RentalInquiryBookedOutboxStore outbox;
   private final ObjectMapper json;
 
@@ -151,6 +152,18 @@ public class PresentationBookingStore {
           HttpStatus.CONFLICT,
           "CLIENT_PRESENTATION_VIEW_ONLY",
           "Временный резерв истёк, представление доступно только для просмотра");
+    }
+    if (presentation.getMode() == ClientPresentationMode.NORMAL
+        && !deliveryDatePolicy.containsAll(
+            presentation.getWarehouseId(),
+            timestamp,
+            desiredDeliveryWindows.stream()
+                .map(DesiredDeliveryWindowInput::startDate)
+                .toList())) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "CLIENT_PRESENTATION_DELIVERY_DATE_NOT_REQUESTABLE",
+          "Выберите даты со второго по пятый день после оформления; доставка на завтра уже закрыта");
     }
     return bookings.saveAndFlush(
         PresentationBooking.create(
@@ -421,11 +434,11 @@ public class PresentationBookingStore {
           "CLIENT_PRESENTATION_DELIVERY_WINDOW_REQUIRED",
           "Выберите хотя бы одну желаемую дату получения бытовок");
     }
-    if (values.size() > 5) {
+    if (values.size() > 4) {
       throw new OrderProblemException(
           HttpStatus.CONFLICT,
           "CLIENT_PRESENTATION_DELIVERY_WINDOW_INVALID",
-          "В представлении можно выбрать не более пяти желаемых дат получения бытовок");
+          "В представлении можно выбрать не более четырёх желаемых дат получения бытовок");
     }
     LinkedHashSet<LocalDate> days = new LinkedHashSet<>();
     for (DesiredDeliveryWindowInput window : values) {

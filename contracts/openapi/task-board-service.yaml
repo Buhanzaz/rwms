@@ -94,6 +94,28 @@ paths:
         '200': { $ref: '#/components/responses/WorkQueueListOk' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /warehouses/{warehouseId}/work-queues/{queueId}/worker-plan:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/QueueId'
+    put:
+      operationId: updateWorkerQueuePlan
+      description: >-
+        Requires USER, rwms.write and MANAGE. Changes only this warehouse's
+        WorkerApp publication switch and waiting REAL plan window. Turning the
+        switch off removes the whole queue from WorkerApp, including active work.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkerQueuePlanRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/WorkQueueOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /warehouses/{warehouseId}/driver-queue:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -258,10 +280,10 @@ paths:
       description: >-
         Returns one aggregate ordinary operational-board representation. Each
         ordinary queue contains every unfinished REAL and SHADOW route entry in
-        canonical active/pinned/position order. availableTaskLimit marks how many
-        waiting REAL cards belong to the visual daily plan; it neither truncates
-        the response nor fences TAKE. SHADOW remains read-only, and route order
-        remains the execution gate.
+        canonical active/pinned/position order. availableTaskLimit and
+        workerFeedEnabled are warehouse-local WorkerApp publication controls;
+        they do not truncate this manager response or fence manager TAKE.
+        SHADOW remains read-only, and route order remains the execution gate.
         If-None-Match is evaluated with a weak semantic ETag over stable snapshot
         state. Rolling timer counters and serverTime do not invalidate the ETag;
         timer state and the next transition do.
@@ -793,6 +815,30 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/task-board/entries/{entryId}/reorder:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/EntryId'
+    post:
+      operationId: reorderTaskEntry
+      description: >-
+        Requires USER, rwms.write and EDIT. Reorders one unpinned WAITING REAL
+        card among the other reorderable cards in its existing ordinary queue.
+        The observed target-entry identity prevents a stale index from moving a
+        card against a queue that changed after it was rendered. Active entries,
+        pinned cards, SHADOW route steps and queue identity are unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReorderBoardEntryRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/TaskBoardSnapshotOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /warehouses/{warehouseId}/task-board/entries/{entryId}/pause:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -884,8 +930,11 @@ paths:
       operationId: getWorkerFeed
       description: >-
         Returns only entries matched by at least one current audience selector,
-        including group assignments visible to the authenticated worker.
-        Cursors are opaque. If-None-Match applies to the requested page.
+        including group assignments visible to the authenticated worker. An
+        ordinary queue must also be enabled for WorkerApp; active REAL work is
+        retained and WAITING REAL work is bounded by that warehouse queue's
+        daily-plan count. SHADOW entries are never published. Cursors are
+        opaque. If-None-Match applies to the requested page.
       parameters:
         - name: cursor
           in: query
@@ -927,8 +976,9 @@ paths:
       operationId: getWorkerTaskDetail
       description: >-
         Returns a sanitized worker-visible task snapshot. An entry without a
-        matching current audience selector is indistinguishable from a missing
-        entry and is never disclosed. For a MAINTENANCE_REPAIR source,
+        matching current audience selector or outside its ordinary queue's
+        current WorkerApp publication window is indistinguishable from a
+        missing entry and is never disclosed. For a MAINTENANCE_REPAIR source,
         consecutive route entries in the same physical work queue form one
         worker execution package: works, materials, comments and source media
         cover the complete segment, while planned duration and timer cover its
@@ -976,6 +1026,8 @@ paths:
         Applies or replays a worker transition. Idempotency-Key must equal the
         request operationId. The worker identity is derived from the JWT;
         occurredAt is accepted only when it falls inside the referenced lease.
+        TAKE and JOIN recheck the current WorkerApp publication window so a
+        stale or crafted request cannot bypass the warehouse plan.
         COMPLETE on a MAINTENANCE_REPAIR representative atomically completes
         every later unfinished entry in its consecutive same-queue package and
         publishes the ordinary completion fact for each source-mapped entry.
@@ -1743,7 +1795,7 @@ components:
           type: integer
           minimum: 1
           maximum: 50
-          description: Number of canonical WAITING REAL cards highlighted in the daily plan; all unfinished cards remain visible and every REAL route gate remains takeable.
+          description: Default WorkerApp waiting REAL plan copied only when a warehouse projection is first created.
         bindings:
           type: array
           items: { $ref: '#/components/schemas/QueueBinding' }
@@ -1776,7 +1828,7 @@ components:
           minimum: 1
           maximum: 50
           default: 6
-          description: Number of canonical WAITING REAL cards highlighted in the daily plan; not a visibility or TAKE limit.
+          description: Default WorkerApp waiting REAL plan for newly created warehouse projections; existing warehouse plans are preserved.
         bindings:
           type: array
           items: { $ref: '#/components/schemas/QueueBindingRequest' }
@@ -1862,7 +1914,7 @@ components:
       additionalProperties: false
     WorkQueue:
       type: object
-      required: [id, version, warehouseId, definitionId, definitionVersion, name, description, type, purpose, sortOrder, active, hidden, collapsed, holdingPeriodMinutes, notificationThreshold, notifyWhenThresholdReached, resultPhotoMinCount, availableTaskLimit, bindings]
+      required: [id, version, warehouseId, definitionId, definitionVersion, name, description, type, purpose, sortOrder, active, hidden, collapsed, holdingPeriodMinutes, notificationThreshold, notifyWhenThresholdReached, resultPhotoMinCount, availableTaskLimit, workerFeedEnabled, bindings]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64 }
@@ -1885,7 +1937,10 @@ components:
           type: integer
           minimum: 1
           maximum: 50
-          description: Mirrored daily-plan count for canonical WAITING REAL cards; not a visibility or TAKE limit.
+          description: Warehouse-local count of canonical WAITING REAL cards published in WorkerApp.
+        workerFeedEnabled:
+          type: boolean
+          description: Whether this warehouse queue is discoverable in WorkerApp.
         bindings:
           type: array
           items: { $ref: '#/components/schemas/QueueBinding' }
@@ -2178,9 +2233,10 @@ components:
       additionalProperties: false
     BoardColumn:
       type: object
-      required: [queueId, queueName, queueType, queuePurpose, sortOrder, availableTaskLimit, entries]
+      required: [queueId, queueVersion, queueName, queueType, queuePurpose, sortOrder, availableTaskLimit, workerFeedEnabled, entries]
       properties:
         queueId: { type: string, format: uuid }
+        queueVersion: { type: integer, format: int64, minimum: 0 }
         queueName: { type: string }
         queueType: { type: string, enum: [MOVEMENT, REPAIR, HOLDING, FURNITURE_MOVEMENT] }
         queuePurpose: { $ref: '#/components/schemas/QueuePurpose' }
@@ -2189,7 +2245,10 @@ components:
           type: integer
           minimum: 1
           maximum: 50
-          description: Configured number of canonical WAITING REAL cards in this queue's visual daily plan; entries are never truncated by this value.
+          description: Warehouse-local number of canonical WAITING REAL cards published in WorkerApp; manager entries are never truncated by this value.
+        workerFeedEnabled:
+          type: boolean
+          description: Whether this warehouse queue is currently published in WorkerApp.
         entries:
           type: array
           items: { $ref: '#/components/schemas/BoardEntry' }
@@ -2295,6 +2354,14 @@ components:
         bindings:
           type: array
           items: { $ref: '#/components/schemas/QueueBindingRequest' }
+      additionalProperties: false
+    WorkerQueuePlanRequest:
+      type: object
+      required: [expectedVersion, workerFeedEnabled, availableTaskLimit]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        workerFeedEnabled: { type: boolean }
+        availableTaskLimit: { type: integer, minimum: 1, maximum: 50 }
       additionalProperties: false
     QueueReferenceRequest:
       type: object
@@ -2639,6 +2706,15 @@ components:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         workerGroupId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
         workerId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+      additionalProperties: false
+    ReorderBoardEntryRequest:
+      type: object
+      required: [expectedEntryVersion, expectedQueueVersion, targetEntryId, targetIndex]
+      properties:
+        expectedEntryVersion: { type: integer, format: int64, minimum: 0 }
+        expectedQueueVersion: { type: integer, format: int64, minimum: 0 }
+        targetEntryId: { type: string, format: uuid }
+        targetIndex: { type: integer, minimum: 0 }
       additionalProperties: false
     VersionCommand:
       type: object

@@ -30,16 +30,19 @@ class WorkerTaskAccessService {
   private final RegistryService registry;
   private final MobileTaskSurfacePolicy surfacePolicy;
   private final DriverTaskAudienceService driverAudiences;
+  private final WorkerQueuePlanPolicy workerQueuePlans;
 
   WorkerTaskAccessService(
       WorkforceService workforce,
       RegistryService registry,
       MobileTaskSurfacePolicy surfacePolicy,
-      DriverTaskAudienceService driverAudiences) {
+      DriverTaskAudienceService driverAudiences,
+      WorkerQueuePlanPolicy workerQueuePlans) {
     this.workforce = workforce;
     this.registry = registry;
     this.surfacePolicy = surfacePolicy;
     this.driverAudiences = driverAudiences;
+    this.workerQueuePlans = workerQueuePlans;
   }
 
   /** Returns the active worker's exact categories and class-bearing groups for one native app. */
@@ -72,14 +75,22 @@ class WorkerTaskAccessService {
   }
 
   /**
-   * Captures the immutable queue and workforce inputs shared by one bounded proof-reconciliation
-   * pass.
-   *
-   * <p>Qualifications and active group memberships are reduced to worker-class identifiers once.
-   * A repair pass can therefore evaluate hundreds of entries without rebuilding the same full
-   * workforce DTO graph and issuing its per-worker/per-group repository reads for every entry.
+   * Captures immutable queue and workforce inputs for one entry without materializing the whole
+   * WorkerApp plan.
    */
   ReaderAudienceSnapshot readerAudienceSnapshot(UUID warehouseId) {
+    return readerAudienceSnapshot(warehouseId, false);
+  }
+
+  /**
+   * Captures the immutable queue and workforce inputs shared by a proof operation.
+   *
+   * <p>Qualifications and active group memberships are reduced to worker-class identifiers once.
+   * A bounded reconciliation pass also materializes the complete WorkerApp plan once; ordinary
+   * command paths resolve only their current entry and avoid loading the whole board.
+   */
+  ReaderAudienceSnapshot readerAudienceSnapshot(
+      UUID warehouseId, boolean captureCompleteWorkerPlan) {
     Map<UUID, WorkQueueDto> queuesById = new LinkedHashMap<>();
     registry.listQueues(warehouseId).forEach(queue -> queuesById.put(queue.id(), queue));
 
@@ -113,7 +124,11 @@ class WorkerTaskAccessService {
     classIdsByWorkerId.forEach(
         (workerId, classIds) -> immutableClassIds.put(workerId, Set.copyOf(classIds)));
     return new ReaderAudienceSnapshot(
-        warehouseId, Map.copyOf(queuesById), Map.copyOf(immutableClassIds));
+        warehouseId,
+        Map.copyOf(queuesById),
+        Map.copyOf(immutableClassIds),
+        captureCompleteWorkerPlan ? workerQueuePlans.visibleEntryIds(warehouseId) : Set.of(),
+        captureCompleteWorkerPlan);
   }
 
   /** Resolves an entry against a previously captured same-warehouse reconciliation snapshot. */
@@ -126,13 +141,19 @@ class WorkerTaskAccessService {
     WorkQueueDto queue = snapshot.queuesById().get(entry.getQueue().getId());
     if (queue != null && (!queue.active() || queue.hidden())) queue = null;
     if (queue == null) return List.of();
+    boolean workerPlanAllowsEntry =
+        queue.purpose() != QueuePurpose.GENERAL
+            || (snapshot.completeWorkerPlan()
+                ? snapshot.workerPublishedEntryIds().contains(entry.getId())
+                : workerQueuePlans.isVisible(entry));
 
     List<UUID> result = new ArrayList<>();
     for (Map.Entry<UUID, Set<UUID>> workerAccess : snapshot.classIdsByWorkerId().entrySet()) {
       UUID workerId = workerAccess.getKey();
       Set<UUID> classIds = workerAccess.getValue();
       boolean workerSurface =
-          surfacePolicy.includesQueue(MobileTaskSurface.WORKER, queue, classIds);
+          workerPlanAllowsEntry
+              && surfacePolicy.includesQueue(MobileTaskSurface.WORKER, queue, classIds);
       boolean driverSurface =
           surfacePolicy.includesQueue(MobileTaskSurface.DRIVER, queue, classIds);
       if (queue.purpose() == QueuePurpose.LOGISTICS_DRIVER) {
@@ -166,6 +187,11 @@ class WorkerTaskAccessService {
     Set<UUID> classIds = classIds(groups, qualifications);
     return registry.listQueues(warehouseId).stream()
         .filter(queue -> queue.active() && !queue.hidden())
+        .filter(
+            queue ->
+                surface != MobileTaskSurface.WORKER
+                    || queue.purpose() != QueuePurpose.GENERAL
+                    || queue.workerFeedEnabled())
         .filter(queue -> surfacePolicy.includesQueue(surface, queue, classIds))
         .sorted(Comparator.comparingInt(WorkQueueDto::sortOrder))
         .toList();
@@ -187,8 +213,14 @@ class WorkerTaskAccessService {
       List<WorkQueueDto> categories) {}
 
   /** Immutable same-warehouse inputs reused only for one bounded proof-reconciliation pass. */
+  /**
+   * Immutable same-warehouse workforce/queue inputs, optionally including one complete WorkerApp
+   * publication snapshot for a bounded batch reconciliation.
+   */
   record ReaderAudienceSnapshot(
       UUID warehouseId,
       Map<UUID, WorkQueueDto> queuesById,
-      Map<UUID, Set<UUID>> classIdsByWorkerId) {}
+      Map<UUID, Set<UUID>> classIdsByWorkerId,
+      Set<UUID> workerPublishedEntryIds,
+      boolean completeWorkerPlan) {}
 }

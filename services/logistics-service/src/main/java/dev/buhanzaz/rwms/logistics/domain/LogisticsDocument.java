@@ -68,6 +68,13 @@ public class LogisticsDocument {
   private UUID driverWorkerId;
 
   /**
+   * Explicit operator publication of a future shipment to the qualified warehouse-driver pool.
+   * A normal shipment with no selected driver stays hidden UNASSIGNED work.
+   */
+  @Column(name = "warehouse_driver_pool", nullable = false)
+  private boolean warehouseDriverPool;
+
+  /**
    * Opaque reference to the selected existing order client. Logistics keeps the immutable display
    * snapshot above; the client aggregate remains owned by the order module.
    */
@@ -567,6 +574,15 @@ public class LogisticsDocument {
 
   /** Plans a shipment for the selected task-board worker. */
   public void scheduleShipment(String driver, UUID workerId, LocalDate date) {
+    scheduleShipment(driver, workerId, date, false);
+  }
+
+  /**
+   * Plans a shipment either for one selected worker or for explicit future pickup from the
+   * warehouse-driver pool. Pool publication never retains a concrete worker identity.
+   */
+  public void scheduleShipment(
+      String driver, UUID workerId, LocalDate date, boolean publishToWarehouseDriverPool) {
     boolean allowed =
         documentType == LogisticsDocumentType.SHIPMENT
             && (state == LogisticsDocumentState.DRAFT
@@ -574,8 +590,12 @@ public class LogisticsDocument {
     if (!allowed) {
       throw new IllegalStateException("Shipment cannot be scheduled in its current state");
     }
+    if (publishToWarehouseDriverPool && workerId != null) {
+      throw new IllegalArgumentException("A shared shipment cannot retain a selected driver");
+    }
     driverSnapshot = requiredSnapshot(driver, "driverSnapshot");
     driverWorkerId = workerId;
+    warehouseDriverPool = publishToWarehouseDriverPool;
     scheduledDate = Objects.requireNonNull(date, "scheduledDate");
     touch();
   }

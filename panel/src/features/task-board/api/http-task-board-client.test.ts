@@ -5,6 +5,8 @@ import {
   getHttpTaskBoard,
   listHttpEligibleWorkerGroups,
   pinHttpTaskBoardEntry,
+  reorderHttpTaskBoardEntry,
+  updateHttpTaskBoardWorkerPlan,
 } from "@/features/task-board/api/http-task-board-client"
 import { ApiError } from "@/lib/api-client"
 
@@ -23,6 +25,8 @@ const boardResponse = {
       queueId,
       queueName: "Ремонт",
       queueType: "REPAIR",
+      queueVersion: 4,
+      workerFeedEnabled: true,
       sortOrder: 10,
       availableTaskLimit: 6,
       entries: [
@@ -91,6 +95,8 @@ const boardResponse = {
       queueId: furnitureQueueId,
       queueName: "Перемещение мебели",
       queueType: "FURNITURE_MOVEMENT",
+      queueVersion: 2,
+      workerFeedEnabled: false,
       sortOrder: 20,
       availableTaskLimit: 6,
       entries: [],
@@ -140,9 +146,11 @@ describe("public task-board HTTP client", () => {
     })
     expect(board.queues[1]).toMatchObject({
       key: furnitureQueueId,
+      version: 2,
       kind: "FURNITURE_MOVEMENT",
       label: "Перемещение мебели",
       settingsQueueId: furnitureQueueId,
+      workerFeedEnabled: false,
     })
 
     await completeHttpTaskBoardEntry("task-board-token", entry)
@@ -224,6 +232,76 @@ describe("public task-board HTTP client", () => {
     })
   })
 
+  it("updates the WorkerApp plan with queue-version CAS", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      json({
+        id: queueId,
+        version: 5,
+        workerFeedEnabled: false,
+        availableTaskLimit: 3,
+      })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    const result = await updateHttpTaskBoardWorkerPlan({
+      accessToken: "task-board-token",
+      warehouseId,
+      queueId,
+      expectedVersion: 4,
+      workerFeedEnabled: false,
+      availableTaskLimit: 3,
+    })
+
+    expect(result).toEqual({
+      id: queueId,
+      version: 5,
+      workerFeedEnabled: false,
+      availableTaskLimit: 3,
+    })
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain(
+      `/api/task-board/warehouses/${warehouseId}/work-queues/${queueId}/worker-plan`
+    )
+    expect(init.method).toBe("PUT")
+    expect(JSON.parse(String(init.body))).toEqual({
+      expectedVersion: 4,
+      workerFeedEnabled: false,
+      availableTaskLimit: 3,
+    })
+  })
+
+  it("reorders a real waiting entry with entry and queue CAS", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(boardResponse))
+      .mockResolvedValueOnce(json(boardResponse))
+    vi.stubGlobal("fetch", fetchMock)
+    const board = await getHttpTaskBoard("task-board-token", warehouseId)
+    const queue = board.queues[0]!
+    const entry = queue.entries[0]!
+
+    const reordered = await reorderHttpTaskBoardEntry({
+      accessToken: "task-board-token",
+      entry,
+      expectedQueueVersion: queue.version,
+      targetEntryId: queue.entries[1]!.id,
+      targetIndex: 1,
+    })
+
+    expect(reordered.warehouseId).toBe(warehouseId)
+    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(url).toContain(
+      `/api/task-board/warehouses/${warehouseId}/task-board/entries/${entryId}/reorder`
+    )
+    expect(init.method).toBe("POST")
+    expect(JSON.parse(String(init.body))).toEqual({
+      expectedEntryVersion: 7,
+      expectedQueueVersion: 4,
+      targetEntryId: "00000000-0000-4000-8000-000000000006",
+      targetIndex: 1,
+    })
+  })
+
   it.each([
     [409, "Версия записи устарела"],
     [403, "Недостаточно прав"],
@@ -256,6 +334,8 @@ describe("public task-board HTTP client", () => {
   it.each([
     ["a column without a real queue", { queueId: null }],
     ["an unsupported queue type", { queueType: "UNKNOWN_QUEUE" }],
+    ["a column without a queue version", { queueVersion: null }],
+    ["a column without WorkerApp visibility", { workerFeedEnabled: null }],
   ])("rejects %s instead of creating a fallback queue", async (_, patch) => {
     const response = {
       ...boardResponse,

@@ -103,6 +103,7 @@ public class TaskBoardEventFactFactory {
         value.getSortOrder(), value.isActive(), value.isHidden(),
         value.isCollapsed(), value.getHoldingPeriodMinutes(), value.getNotificationThreshold(),
         value.isNotifyWhenThresholdReached(), value.getResultPhotoMinCount(),
+        value.getAvailableTaskLimit(), value.isWorkerFeedEnabled(),
         bindingFacts, deleted);
   }
 

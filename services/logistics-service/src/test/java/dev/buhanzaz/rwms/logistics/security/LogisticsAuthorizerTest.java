@@ -135,6 +135,45 @@ class LogisticsAuthorizerTest {
   }
 
   @Test
+  void grantsOnlyTheExactStandalonePlannerIdentityAudienceAndScope() {
+    Jwt exact =
+        serviceJwt(
+            "logistics-planner",
+            "logistics-planner",
+            List.of("logistics.planning"),
+            List.of("rwms-services"));
+
+    assertThatCode(() -> authorizer.requirePlanningIntegration(exact)).doesNotThrowAnyException();
+    assertThatThrownBy(
+            () ->
+                authorizer.requirePlanningIntegration(
+                    serviceJwt(
+                        "logistics-planner",
+                        "logistics-planner",
+                        List.of("logistics.planning", "rwms.read"),
+                        List.of("rwms-services"))))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(
+            () ->
+                authorizer.requirePlanningIntegration(
+                    serviceJwt(
+                        "logistics-planner",
+                        "other-client",
+                        List.of("logistics.planning"),
+                        List.of("rwms-services"))))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(
+            () ->
+                authorizer.requirePlanningIntegration(
+                    serviceJwt(
+                        "logistics-planner",
+                        "logistics-planner",
+                        List.of("logistics.planning"),
+                        List.of("rwms-services", "other-audience"))))
+        .isInstanceOf(AccessDeniedException.class);
+  }
+
+  @Test
   void warehouseOperationRecoveryRequiresWriteScopedGlobalAdministrator() {
     Jwt administrator =
         userJwt(
@@ -163,6 +202,31 @@ class LogisticsAuthorizerTest {
     assertThat(authorizer.isExactAssignedDriver(driver, "WAREHOUSE_DRIVERS", SUBJECT)).isFalse();
     assertThat(authorizer.isExactAssignedDriver(driver, "UNASSIGNED", SUBJECT)).isFalse();
     assertThat(authorizer.isExactAssignedDriver(driver, "ASSIGNED_DRIVER", DESTINATION)).isFalse();
+  }
+
+  @Test
+  void warehouseDriverClaimRequiresExactDriverAppScopeWorkerAndWarehouse() {
+    Jwt driver = workerJwt(UUID.randomUUID(), SUBJECT, "driver.tasks");
+
+    assertThat(authorizer.requireWarehouseDriver(driver, WAREHOUSE)).isEqualTo(SUBJECT);
+    assertThat(authorizer.isWarehouseDriver(driver, WAREHOUSE)).isTrue();
+    assertThat(authorizer.isWarehouseDriver(driver, DESTINATION)).isFalse();
+    assertThatThrownBy(
+            () ->
+                authorizer.requireWarehouseDriver(
+                    workerJwt(UUID.randomUUID(), SUBJECT, "worker.tasks"), WAREHOUSE))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(
+            () ->
+                authorizer.requireWarehouseDriver(
+                    workerJwt(UUID.randomUUID(), SUBJECT, "driver.tasks worker.tasks"), WAREHOUSE))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(
+            () ->
+                authorizer.requireWarehouseDriver(
+                    workerJwt(UUID.randomUUID(), "not-a-uuid", "driver.tasks"), WAREHOUSE))
+        .isInstanceOf(AccessDeniedException.class)
+        .hasMessageContaining("worker_id");
   }
 
   @Test

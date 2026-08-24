@@ -791,9 +791,11 @@ and
    same order, and the order-filtered inquiry collection makes manual and
    assistant presentations rediscoverable after reload. The first selected
    cabin fixes the order warehouse for every later search and confirmation.
-5. A normal presentation publishes atomically held cabin snapshots and live
-   equipment metadata. Its public confirmation requires one to five distinct,
-   independently selected date-only client dates, a positive initial rental
+5. A normal presentation publishes atomically held cabin snapshots, live
+   equipment metadata and the server-owned requestable date list. For the
+   current warehouse-local day that list is exactly `today+2` through
+   `today+5`; it is a preference horizon, not a capacity promise. Public
+   confirmation requires one to four distinct dates from that exact list, a positive initial rental
    duration, delivery address, optional complete latitude/longitude pair and
    nullable additional contacts normalized
    to an empty list, without prefill from a linked order. Confirmation stores
@@ -833,6 +835,7 @@ Evidence:
 [`OrderClientService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/OrderClientService.java),
 [`RentalOrderService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderService.java),
 [`ClientPresentationService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/ClientPresentationService.java),
+[`ClientDeliveryDatePolicy.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/ClientDeliveryDatePolicy.java),
 [`PresentationBookingService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/PresentationBookingService.java),
 [`RentalOrderUnitReplacementService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderUnitReplacementService.java),
 [`client detail page`](../../panel/src/features/clients/pages/client-detail-page.tsx),
@@ -842,6 +845,49 @@ Evidence:
 and
 [`order dossier evidence`](../../panel/src/features/orders/components/order-unit-dossier-evidence.tsx).
 
+### Standalone logistics planning sync and apply
+
+1. An operator links one simulator warehouse to the RWMS warehouse UUID and
+   simulator drivers to RWMS worker UUIDs. The integration remains disabled
+   until its backend has private service URLs plus the dedicated runtime
+   secret.
+2. FastAPI obtains a short-lived client-credentials token whose exact subject
+   is `logistics-planner`, audience is `rwms-services` and sole scope is
+   `logistics.planning`. It never sends that secret or token to the browser.
+3. An explicit scenario/date synchronization calls the logistics-owned private
+   feed. The owner returns saved, unshipped order remainders with exact order
+   versions, cabin IDs and allowed dates. The simulator upserts them by stable
+   external identity; supplied coordinates win over address and are classified
+   against simulator-owned versioned zones. Address-only input is retained as
+   an explicit `COORDINATES_REQUIRED` failure because no geocoder is configured.
+4. The simulator plans and validates routes within its own PostGIS schema. It
+   neither mutates an RWMS order nor reads an RWMS database during planning.
+5. Applying a reviewed plan locks its exact simulator version, maps every split
+   delivery part to a deterministic non-overlapping cabin-ID slice and sends a
+   stable idempotency key plus expected RWMS order versions. Logistics rechecks
+   warehouse, units, dates and drivers and uses its existing shipment owner
+   transition. Automatic today/tomorrow assignment is rejected; valid and
+   rejected parts are both returned for operator action.
+6. Unassigned delivery parts are not exported automatically. The operator may
+   explicitly select exact leftovers for future shared publication. RWMS stores
+   that intent on the shipment, creates `WAREHOUSE_DRIVERS` work without a
+   concrete worker, rejects the warehouse-local current day, and leaves the
+   DriverApp claim as a separate version-fenced action. Tomorrow is allowed for
+   this manual publication; unselected and non-delivery tasks remain hidden.
+7. The simulator refreshes the exact plan version through a read-only
+   warehouse/date status call after releasing its local transaction. Logistics
+   returns only planner-created document/unit identity plus current driver-task
+   audience, assignee and state. The simulator maps that unit slice back to the
+   exact planning task, so the operator sees “published” or the authoritative
+   driver who claimed it; no task-board or RWMS database read crosses the boundary.
+
+Evidence:
+[`PlanningIntegrationController.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/planning/api/PlanningIntegrationController.java),
+[`RentalOrderPlanningIntegrationService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderPlanningIntegrationService.java),
+[`rwms.py`](../../logistics/backend/app/integrations/rwms.py),
+and
+[`rwms_sync.py`](../../logistics/backend/app/integrations/rwms_sync.py).
+
 ### Maintenance repair package to worker completion
 
 The ordinary panel board is one aggregate warehouse projection with a single persisted ordering
@@ -850,8 +896,10 @@ warehouse-fenced JPA fetch loads every unfinished entry with its task, queue and
 which source references and assignments are loaded in bounded batches. Active work stays first,
 followed by waiting `REAL` cards and future `SHADOW` cards in canonical pin, persisted-position and
 identity order. Priority has already chosen the persisted insertion position and is not applied
-again by the read. `availableTaskLimit` defaults to six and marks the first waiting `REAL` cards in
-each queue as the visual daily plan; it neither removes later cards nor fences `TAKE`.
+again by the read. A queue definition supplies the initial `availableTaskLimit` (six by default)
+only when a warehouse projection is created. The physical queue then owns that count and
+`workerFeedEnabled`; global reconciliation preserves both. Neither control removes a card from the
+complete manager read.
 
 The fixed route sequence is SES, welding, exterior, interior, electrical and plumbing. The first
 existing unfinished phase is `REAL` and every later phase is `SHADOW`, so a route whose first work
@@ -859,17 +907,27 @@ is electricity exposes a takeable electricity card immediately only when every p
 absent or complete. Every current `REAL` route gate is executable; shadows are never executable.
 When an earlier shadow is promoted, it regains its persisted position ahead of later unpinned work;
 a manager-pinned real card keeps its slot. The manager snapshot retains the whole unfinished route,
-including future shadows after SES. WorkerApp applies the narrower safety audience and receives only
-the SES entry until treatment completes.
+including future shadows after SES. WorkerApp first removes disabled ordinary queues and every
+card they contain, including active work. In each enabled queue it removes every shadow, retains
+active real work and then selects only the first configured waiting real cards. Until SES completes
+this leaves only the SES gate; after promotion the next real stage appears only when its target queue
+plan admits it. Native detail, media-reader proof and `TAKE`/`JOIN` apply the same policy.
 
 The panel initially renders all current `REAL` cards and hides shadows. “Show future subtasks”
 renders every shadow. “Full route” on a real card renders and highlights every entry with that task
-identity across all queues even when the global shadow checkbox is off, and expands route queues.
+identity across all queues even when the global shadow checkbox is off, expands route queues and
+scrolls every column vertically until its matching card is visible without changing position. A
+second press on that real card clears the temporary route selection and restores the prior queue
+collapse state and each column's scroll position.
 The panel derives daily-plan badges from the first configured number of waiting real entries in the
-server order. It resolves repair complexity only for entries currently rendered. The ordinary
-public boundary has no date/shadow query dimension, move/date-swap command, maintenance
-daily-capacity scheduling or rollover scan. Driver movements and external capital work stay outside
-this board.
+server order. A `MANAGE` user changes that warehouse-local count and the adjacent WorkerApp switch
+in each column header. With filters and full-route mode clear, an `EDIT` user may drag only unpinned
+waiting real cards inside the same queue; entry and queue versions plus the observed target-card
+identity fence the reorder, while active, pinned and shadow cards remain fixed. It resolves repair
+complexity only for entries currently rendered. The ordinary public boundary has no date/shadow
+query dimension, cross-queue
+move/date-swap command, maintenance daily-capacity scheduling or rollover scan. Driver movements
+and external capital work stay outside this board.
 
 Maintenance first canonicalizes new plan persistence and every task snapshot. Task-board repeats
 that normalization for maintenance-owned registration and pre-start replacement, persists route
@@ -878,6 +936,12 @@ the six queue-column positions and only fully waiting active maintenance routes.
 exact changed work-queue and queue-entry aggregate IDs so replay can tolerate only the migrated
 `sortOrder`, `routeIndex` and `entryType` fields on pre-cutover tails; started or paused routes and
 all post-cutover event tails remain exact.
+
+Flyway V34 adds the enabled WorkerApp switch to existing physical queues with a `true` default and
+does not rewrite their plan counts. New work-queue facts carry the local switch and count. Replay
+comparison drops either field only for immutable historical facts that did not contain it; every
+new fact remains exact. A queue-plan change emits the normal work-queue revision, so the bounded
+owner-proof reconciler refreshes open media-reader audiences without an idle whole-table scan.
 
 The panel renders ordinary queues as side-by-side columns with vertically stacked cards. It derives
 the distinct maintenance repair IDs from the currently rendered aggregate board and resolves
@@ -1043,14 +1107,19 @@ and
    assigned-worker list/original/variant reads; upload creation and finalization still require
    the active proof, so WorkerApp can reopen completed-task photos without
    extending write authority.
-10. DriverApp exposes warehouse work, dated personal logistics and durable
-    uploads as three main destinations. The logistics surface defaults to the
-    device-local current date and filters only task-board-issued
-    `ASSIGNED_DRIVER` work; shared `WAREHOUSE_DRIVERS` movement stays on the
-    warehouse board. Grouped-trip detail remains logistics-owned and is
-    requested only for the planned `ASSIGNED_DRIVER` with `driver.tasks`;
-    shared movement uses its task-board detail and never turns the expected
-    logistics authorization boundary into a false refresh error.
+10. DriverApp exposes warehouse work, dated logistics and durable uploads as
+    three main destinations. The logistics surface defaults to the
+    device-local current date. `ASSIGNED_DRIVER` work remains in “Мои задания”;
+    future unstarted `WAREHOUSE_DRIVERS` work is shown separately as
+    “Дополнительные задания”, while today's shared work is neither previewable
+    nor claimable through this flow. Task-board publishes that candidate only
+    to a qualified driver; the same-warehouse DriverApp worker may open the
+    logistics-owned rich detail and a prefilled Yandex Maps route, then claim
+    the trip. Logistics rereads task-board versions, moves the existing
+    entry to that driver's `ASSIGNED_DRIVER` audience and confirms its local
+    projection; claim does not send task-board `TAKE` or start the work.
+    Same-driver replay succeeds idempotently and a concurrent different-driver
+    winner is explicit. The client refreshes server state after success.
 11. DriverApp enables result capture only for effective `IN_PROGRESS` work by
     the participating driver. A server-READY photo and a merely retained local
     JPEG are displayed as different states. If a pre-activation reservation
@@ -1066,6 +1135,7 @@ Evidence:
 [`DocumentDriverTaskPlanner.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DocumentDriverTaskPlanner.java),
 [`DriverBoardService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverBoardService.java),
 [`DriverTripProjectionService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverTripProjectionService.java),
+[`FutureDriverTaskClaimService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/FutureDriverTaskClaimService.java),
 [`DriverTaskAudienceService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/DriverTaskAudienceService.java),
 [`MobileTaskSurfacePolicy.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/MobileTaskSurfacePolicy.java),
 [`WorkerPushDispatcher.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/push/WorkerPushDispatcher.java),

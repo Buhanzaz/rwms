@@ -4,11 +4,14 @@ import {
   listHttpEligibleWorkerGroups,
   pauseHttpTaskBoardEntry,
   pinHttpTaskBoardEntry,
+  reorderHttpTaskBoardEntry,
   resumeHttpTaskBoardEntry,
   takeHttpTaskBoardEntry,
+  updateHttpTaskBoardWorkerPlan,
 } from "@/features/task-board/api/http-task-board-client"
 import type {
   TaskBoardEntryDto,
+  TaskBoardQueueDto,
 } from "@/features/task-board/model/task-board"
 
 export const TASK_BOARD_QUERY_KEY = ["task-board"] as const
@@ -38,6 +41,39 @@ export function pinTaskBoardEntry(params: {
   pinned: boolean
 }) {
   return pinHttpTaskBoardEntry(params.accessToken, params.entry, params.pinned)
+}
+
+export function updateTaskBoardWorkerPlan(params: {
+  accessToken: string
+  warehouseId: string
+  queue: TaskBoardQueueDto
+  workerFeedEnabled: boolean
+  availableTaskLimit: number
+}) {
+  return updateHttpTaskBoardWorkerPlan({
+    accessToken: params.accessToken,
+    warehouseId: params.warehouseId,
+    queueId: params.queue.settingsQueueId,
+    expectedVersion: params.queue.version,
+    workerFeedEnabled: params.workerFeedEnabled,
+    availableTaskLimit: params.availableTaskLimit,
+  })
+}
+
+export function reorderTaskBoardEntry(params: {
+  accessToken: string
+  queue: TaskBoardQueueDto
+  entry: TaskBoardEntryDto
+  targetEntryId: string
+  targetIndex: number
+}) {
+  return reorderHttpTaskBoardEntry({
+    accessToken: params.accessToken,
+    entry: params.entry,
+    expectedQueueVersion: params.queue.version,
+    targetEntryId: params.targetEntryId,
+    targetIndex: params.targetIndex,
+  })
 }
 
 export function takeTaskBoardEntry(params: {

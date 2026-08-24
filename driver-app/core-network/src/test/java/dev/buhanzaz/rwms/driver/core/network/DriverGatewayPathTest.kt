@@ -57,6 +57,8 @@ class DriverGatewayPathTest {
         assertThat(route<GET>("driverTaskDetail")).isEqualTo("$DRIVER_PREFIX/entries/{entryId}")
         assertThat(route<GET>("logisticsDriverTask"))
             .isEqualTo("/api/logistics/v1/driver-tasks/{taskId}")
+        assertThat(route<POST>("claimFutureLogisticsTask"))
+            .isEqualTo("/api/logistics/v1/driver-tasks/{taskId}/claim")
         assertThat(route<POST>("applyAction")).isEqualTo("$DRIVER_PREFIX/entries/{entryId}/actions")
         assertThat(route<POST>("reserveEvidence"))
             .isEqualTo("$DRIVER_PREFIX/entries/{entryId}/evidence-reservations")

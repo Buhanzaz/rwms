@@ -2610,6 +2610,62 @@ class LogisticsFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void v53AddsExplicitFutureShipmentPoolWithoutReclassifyingExistingDocuments() {
+    Flyway beforeV53 = configuration(MIGRATIONS).target("52").load();
+    assertThat(beforeV53.migrate().migrationsExecuted).isEqualTo(52);
+    UUID warehouseId = UUID.randomUUID();
+    UUID subjectId = UUID.randomUUID();
+    UUID shipmentId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into logistics_document(
+          id,version,document_type,state,warehouse_id,party_snapshot,driver_snapshot,
+          scheduled_date,requested_by_subject_id,correlation_id,created_at,updated_at)
+        values (?,0,'SHIPMENT','DRAFT',?,'Клиент','Водитель',date '2026-08-25',?,?,
+          clock_timestamp(),clock_timestamp())
+        """,
+        shipmentId,
+        warehouseId,
+        subjectId,
+        UUID.randomUUID());
+
+    Flyway upgraded = configuration(MIGRATIONS).target("53").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select warehouse_driver_pool from logistics_document where id=?",
+                Boolean.class,
+                shipmentId))
+        .isFalse();
+    jdbc.update(
+        "update logistics_document set warehouse_driver_pool=true where id=?", shipmentId);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update logistics_document set driver_worker_id=? where id=?",
+                    UUID.randomUUID(),
+                    shipmentId))
+        .hasMessageContaining("ck_logistics_document_warehouse_driver_pool");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update logistics_document set document_type='RETURN' where id=?", shipmentId))
+        .hasMessageContaining("ck_logistics_document_warehouse_driver_pool");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select pg_get_constraintdef(oid)
+                from pg_constraint
+                where conname='ck_driver_logistics_task_kind_audience'
+                """,
+                String.class))
+        .contains("'SHIPMENT'", "'RETURN'", "'WAREHOUSE_DRIVERS'");
+    assertJpaValidationStarts();
+  }
+
+  @Test
   void modifiedAppliedMigrationIsRejectedByChecksumValidation(@TempDir Path directory)
       throws IOException {
     Path migration = directory.resolve("V1__logistics_schema.sql");
