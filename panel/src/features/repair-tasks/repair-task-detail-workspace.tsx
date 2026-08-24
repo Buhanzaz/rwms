@@ -8,7 +8,7 @@ import { RepairWorkDetailWorkspaceLayout } from "@/features/repair-estimates/rep
 import { RepairWorkInformationSnapshot } from "@/features/repair-estimates/repair-work-information-snapshot"
 import { ForceCapitalRepairField } from "@/features/repair-estimates/force-capital-repair-field"
 import type { RepairTaskDto } from "@/features/repair-tasks/model/repair-task"
-import { repairTaskSourceMediaOwner } from "@/features/repair-tasks/repair-task-media-owner"
+import { repairTaskGeneralMediaOwner } from "@/features/repair-tasks/repair-task-media-owner"
 import { RepairSubtasksEditor } from "@/features/repair-tasks/repair-subtasks-editor"
 import { RepairTaskStatusBadge } from "@/features/repair-tasks/repair-task-status-badge"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
@@ -55,7 +55,7 @@ export function RepairTaskDetailWorkspace({
       photos={
         <ServiceOwnerPhotos
           accessToken={accessToken}
-          owner={repairTaskSourceMediaOwner(task)}
+          owner={repairTaskGeneralMediaOwner(task)}
           readOnly
           maxItems={100}
           title="Общие медиа задания"

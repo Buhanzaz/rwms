@@ -461,6 +461,27 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /api/internal/maintenance/v1/logistics/historical-shipments/{shipmentId}/close:
+    parameters:
+      - { name: shipmentId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Logistics Integration]
+      operationId: closeHistoricalShipmentMaintenance
+      description: >-
+        Private exact logistics-service maintenance.logistics SERVICE boundary. Before an imported
+        rental shipment may acquire its own asset lease, maintenance durably records the automatic
+        closure reason, completes ordinary repairs without fabricating worker evidence, and
+        cancels only pre-start capital-repair or movement work. Started work is rejected for
+        operator reconciliation rather than erased.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/HistoricalShipmentRepairClosureRequest' } } } }
+      responses:
+        '200': { description: Historical shipment repair closure and the exact released cabin fence., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/HistoricalShipmentRepairClosureResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
   /api/internal/maintenance/v1/logistics/transfers/{transferId}/lines/{lineId}/prepare-departure:
     parameters:
       - { name: transferId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -2412,9 +2433,18 @@ components:
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
     PlanStageInput:
       description: >-
-        One ordinary repair stage. The server normalizes all submitted stages to
-        SES, welding, exterior, interior, electrical and plumbing before
-        persistence; unknown legacy queues follow those phases.
+        One submitted ordinary-repair group. For one repair, one routing.queueId produces exactly
+        one executable maintenance stage and one task-board subtask. Before persistence the server
+        coalesces every repeated routing.queueId, retaining the first stage identity and routing
+        snapshot while appending all included line IDs and nonblank group comments in source order.
+        The worker subtask therefore contains every work and material assigned to that physical
+        queue, and the same cabin cannot appear twice in one queue. A combined comment longer than
+        2000 characters is rejected rather than truncated. Queue identity is the UUID, so equal
+        display names with different queue IDs remain separate. The resulting stages are ordered
+        as SES, welding, exterior, interior, electrical and plumbing; unknown legacy queues follow
+        those phases. An already registered duplicate route may converge through the same combined
+        shape only while its complete route and assignments remain unstarted; started history is
+        immutable.
       type: object
       additionalProperties: false
       required: [id, kind, order, routing, includedLineIds, primaryLineId, groupComment]
@@ -2422,7 +2452,9 @@ components:
         id: { type: string, format: uuid }
         kind: { $ref: '#/components/schemas/RepairStageKind' }
         order:
-          description: Source-order tie-breaker retained only among stages in the same phase.
+          description: >-
+            Source order used while merging repeated groups for one physical queue; persisted
+            executable stages are reindexed after canonical phase ordering.
           type: integer
           minimum: 0
         routing:
@@ -2433,6 +2465,9 @@ components:
             A REPAIR_WORK stage may contain work lines, material lines, or both.
           $ref: '#/components/schemas/RoutingSnapshot'
         includedLineIds:
+          description: >-
+            Stable source-ordered line membership. The combined same-queue stage is rejected when
+            it would exceed 2000 references; references are never truncated or silently dropped.
           type: array
           maxItems: 2000
           uniqueItems: true
@@ -2442,7 +2477,12 @@ components:
             Included WORK line used as the stage primary, or null when the REPAIR_WORK stage
             contains materials only.
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
-        groupComment: { type: string, maxLength: 2000 }
+        groupComment:
+          description: >-
+            Queue-group comment. Nonblank comments from compatible repeated same-queue groups are
+            preserved in source order and must fit the combined 2000-character limit.
+          type: string
+          maxLength: 2000
         taskDeadline:
           description: Explicit offset date-time; never inferred from dispatchDate.
           oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
@@ -2795,6 +2835,11 @@ components:
             - { $ref: '#/components/schemas/CabinCharacteristicReference' }
             - { type: 'null' }
     InventoryPlanStageSnapshot:
+      description: >-
+        Frozen catalog-stage selection. Freeze output contains one snapshot per routing.queueId;
+        when an older duplicate-stage snapshot is materialized, all entries with the same queue ID
+        allocate into one executable repair stage and the first snapshot identity/catalog metadata
+        survive. Equal display names with different queue IDs remain separate.
       type: object
       additionalProperties: false
       required: [id, catalogNodeId, catalogNodeName, kind, order, routing, normativeDurationMinutes]
@@ -3278,6 +3323,28 @@ components:
         estimateId: { type: string, format: uuid }
         snapshotSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
         receivedAt: { type: string, format: date-time }
+    HistoricalShipmentRepairClosureRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, rentalItemId]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+    HistoricalShipmentRepairClosureResponse:
+      type: object
+      additionalProperties: false
+      required: [shipmentId, warehouseId, rentalItemId, rentalItemVersion, rentalItemStatus, closedRepairIds, outcome]
+      properties:
+        shipmentId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        rentalItemVersion: { type: integer, format: int64, minimum: 0 }
+        rentalItemStatus: { type: string, enum: [FREE] }
+        closedRepairIds:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        outcome: { type: string, enum: [NOT_REQUIRED, CLOSED] }
     RepairPlan:
       type: object
       additionalProperties: false

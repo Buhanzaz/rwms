@@ -232,11 +232,11 @@ export function validateWorkSchedule(
 ): ValidationResult {
   if (
     !DATE_PATTERN.test(schedule.effectiveFrom) ||
-    schedule.effectiveFrom <= today
+    schedule.effectiveFrom < today
   ) {
     return {
       valid: false,
-      error: "Дата вступления должна быть не раньше следующего дня.",
+      error: "Дата вступления не может быть раньше сегодняшнего дня.",
     }
   }
 

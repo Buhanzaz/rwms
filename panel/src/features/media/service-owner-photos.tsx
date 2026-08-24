@@ -27,6 +27,7 @@ import { useServiceOwnerMedia } from "@/features/media/use-service-owner-media"
 import { serviceOwnerMediaQueryKey } from "@/features/media/use-service-owner-media"
 import { runMediaUploadQueue } from "@/features/media/media-upload-queue"
 import { ApiError } from "@/lib/api-client"
+import { cn } from "@/lib/utils"
 import {
   isRetryableOwnerProofError,
   retryOwnerProofOperation,
@@ -70,6 +71,7 @@ export function ServiceOwnerPhotos({
   maxItems = 20,
   title = "Фотографии",
   presentation = "default",
+  shrinkToContainer = false,
   toolbarAction,
   visibleMediaIds,
   authoritativeReadyReferences,
@@ -86,6 +88,8 @@ export function ServiceOwnerPhotos({
   maxItems?: number
   title?: string
   presentation?: ServiceOwnerPhotosPresentation
+  /** Allows the carousel viewport to shrink inside a height-bounded desktop workspace. */
+  shrinkToContainer?: boolean
   toolbarAction?: ReactNode
   visibleMediaIds?: readonly string[]
   /** Domain-owned references, not an unfiltered owner-media listing. */
@@ -120,6 +124,7 @@ export function ServiceOwnerPhotos({
       maxItems={maxItems}
       title={title}
       presentation={presentation}
+      shrinkToContainer={shrinkToContainer}
       toolbarAction={toolbarAction}
       visibleMediaIds={visibleMediaIds}
       authoritativeReadyReferences={authoritativeReadyReferences}
@@ -139,6 +144,7 @@ function OwnedServiceOwnerPhotos({
   maxItems,
   title,
   presentation,
+  shrinkToContainer,
   toolbarAction,
   visibleMediaIds,
   authoritativeReadyReferences,
@@ -154,6 +160,7 @@ function OwnedServiceOwnerPhotos({
   maxItems: number
   title: string
   presentation: ServiceOwnerPhotosPresentation
+  shrinkToContainer: boolean
   toolbarAction?: ReactNode
   visibleMediaIds?: readonly string[]
   authoritativeReadyReferences?: readonly ReadyMediaReference[]
@@ -615,7 +622,10 @@ function OwnedServiceOwnerPhotos({
               className={
                 workCarousel
                   ? "h-56 min-h-56 rounded-lg border"
-                  : "min-h-56 flex-1 rounded-lg border"
+                  : cn(
+                      "min-h-56 flex-1 rounded-lg border",
+                      shrinkToContainer && "xl:min-h-0"
+                    )
               }
               imageVariant="preview"
               fit="contain"

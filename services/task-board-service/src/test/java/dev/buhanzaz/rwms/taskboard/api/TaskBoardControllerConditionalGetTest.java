@@ -4,6 +4,7 @@ import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerFeedEntry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -13,6 +14,7 @@ import dev.buhanzaz.rwms.taskboard.domain.QueuePurpose;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
 import dev.buhanzaz.rwms.taskboard.domain.TaskLane;
 import dev.buhanzaz.rwms.taskboard.domain.TaskStatus;
+import dev.buhanzaz.rwms.taskboard.security.AccessLevel;
 import dev.buhanzaz.rwms.taskboard.security.WarehouseAccessAuthorizer;
 import dev.buhanzaz.rwms.taskboard.service.TaskBoardService;
 import java.math.BigDecimal;
@@ -155,6 +157,24 @@ class TaskBoardControllerConditionalGetTest {
     assertThat(feedJson.required("pinned").asBoolean()).isFalse();
     assertThat(feedJson.has("driverAudience")).isTrue();
     assertThat(feedJson.required("driverAudience").isNull()).isTrue();
+  }
+
+  @Test
+  void futureAvailabilityUsesUserWriteAndWarehouseEditAuthorization() {
+    SetFutureTaskEntryAvailabilityRequest request =
+        new SetFutureTaskEntryAvailabilityRequest(2L, true);
+    TaskBoardSnapshot expected =
+        snapshot(120, "2026-07-30T10:00:00Z", TimerState.WORKING);
+    when(service.setFutureTaskEntryAvailability(WAREHOUSE, ENTRY, request))
+        .thenReturn(expected);
+
+    TaskBoardSnapshot result =
+        controller.setFutureTaskEntryAvailability(JWT, WAREHOUSE, ENTRY, request);
+
+    assertThat(result).isSameAs(expected);
+    verify(access).requireUserScope(JWT, "rwms.write");
+    verify(access).requireWarehouse(JWT, WAREHOUSE, AccessLevel.EDIT, false);
+    verify(service).setFutureTaskEntryAvailability(WAREHOUSE, ENTRY, request);
   }
 
   private ResponseEntity<TaskBoardSnapshot> get(String ifNoneMatch) {

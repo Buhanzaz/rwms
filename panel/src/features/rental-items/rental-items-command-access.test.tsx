@@ -48,6 +48,10 @@ const propertyDispositionDialog = vi.hoisted(() => ({
   render: vi.fn(),
 }))
 
+const photoPresentationApi = vi.hoisted(() => ({
+  create: vi.fn(),
+}))
+
 vi.mock("@/features/auth/use-auth", () => ({
   useAuth: () => ({
     status: "authenticated",
@@ -113,6 +117,10 @@ vi.mock("@/features/media/media-service", () => ({
     context: "WAREHOUSE",
   }),
   createHttpMediaClient: () => mediaApi,
+}))
+
+vi.mock("@/features/rental-items/cabin-photo-presentations-api", () => ({
+  createCabinPhotoPresentation: photoPresentationApi.create,
 }))
 
 vi.mock("@/features/write-offs/property-disposition-create-dialog", () => ({
@@ -187,6 +195,11 @@ function RepairLocationProbe() {
   return <pre data-testid="repair-location">{JSON.stringify(location)}</pre>
 }
 
+function PhotoPresentationLocationProbe() {
+  const location = useLocation()
+  return <pre data-testid="photo-location">{JSON.stringify(location)}</pre>
+}
+
 function renderDetail(path = `/warehouse/${RENTAL_ITEM_ID}?tab=comments`) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -204,6 +217,10 @@ function renderDetail(path = `/warehouse/${RENTAL_ITEM_ID}?tab=comments`) {
             element={<RentalItemDetailPage />}
           />
           <Route path="/repairs" element={<RepairLocationProbe />} />
+          <Route
+            path="/photos/:token"
+            element={<PhotoPresentationLocationProbe />}
+          />
         </Routes>
       </QueryClientProvider>
     </MemoryRouter>
@@ -297,6 +314,21 @@ beforeEach(() => {
     session: {},
     uploadedObject: {},
     asset: {},
+  })
+  mediaApi.createVariantObjectUrl.mockResolvedValue({
+    url: "blob:ready-cabin-photo",
+    contentType: "image/jpeg",
+    size: 1024,
+    dispose: vi.fn(),
+  })
+  photoPresentationApi.create.mockResolvedValue({
+    id: "55555555-5555-4555-8555-555555555555",
+    version: 1,
+    cabinId: RENTAL_ITEM_ID,
+    cabinNumber: "БЫТ-001",
+    photoCount: 1,
+    createdAt: "2026-08-24T12:00:00Z",
+    publicPath: "/photos/public-photo-token",
   })
   propertyDispositionDialog.render.mockClear()
 })
@@ -664,6 +696,9 @@ describe("rental item command access", () => {
     expect(screen.queryByRole("button", { name: "Изменить статус" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Добавить фото" })).toBeNull()
     expect(
+      screen.queryByRole("button", { name: "Создать представление" })
+    ).toBeNull()
+    expect(
       screen.queryByRole("button", { name: "Отправить в ремонт" })
     ).toBeNull()
 
@@ -792,6 +827,64 @@ describe("rental item command access", () => {
         }
       )
     )
+  })
+
+  it("creates, copies and immediately opens an immutable photo presentation", async () => {
+    authState.level = "EDIT"
+    mediaApi.listOwnerMedia.mockResolvedValue({
+      items: [
+        {
+          id: "66666666-6666-4666-8666-666666666666",
+          folderId: "77777777-7777-4777-8777-777777777777",
+          fileName: "cabin.jpg",
+          contentType: "image/jpeg",
+          kind: "IMAGE",
+          status: "READY",
+          version: 3,
+          generation: 2,
+          rotationDegrees: 0,
+          sortOrder: 0,
+          sizeBytes: 1024,
+          createdAt: "2026-08-24T11:00:00Z",
+          variants: [
+            {
+              kind: "MEDIUM",
+              contentType: "image/jpeg",
+              contentPath: "/private/medium.jpg",
+              width: 1200,
+              height: 900,
+            },
+          ],
+        },
+      ],
+      next: null,
+    })
+    const user = userEvent.setup()
+    const clipboardWrite = vi.spyOn(navigator.clipboard, "writeText")
+    renderDetail(`/warehouse/${RENTAL_ITEM_ID}`)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Создать представление" })
+    )
+
+    await waitFor(() =>
+      expect(photoPresentationApi.create).toHaveBeenCalledWith({
+        accessToken: "asset-token",
+        cabinId: RENTAL_ITEM_ID,
+        warehouseId: WAREHOUSE_ID,
+        expectedRentalItemVersion: 1,
+        idempotencyKey: "33333333-3333-4333-8333-333333333333",
+      })
+    )
+    await waitFor(() =>
+      expect(clipboardWrite).toHaveBeenCalledWith(
+        new URL("/photos/public-photo-token", window.location.origin).toString()
+      )
+    )
+    const location = JSON.parse(
+      screen.getByTestId("photo-location").textContent ?? "{}"
+    ) as { pathname?: string }
+    expect(location.pathname).toBe("/photos/public-photo-token")
   })
 
   it("opens a service-backed repair with the selected cabin prefilled", async () => {

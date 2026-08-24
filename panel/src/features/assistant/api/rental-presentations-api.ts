@@ -80,6 +80,8 @@ export type PublicClientPresentation = {
   mode: PresentationMode
   requiredSelectionCount: number | null
   requiresDesiredDeliveryWindows: boolean
+  /** Warehouse-local dates that the client may request for this revision. */
+  requestableDeliveryDates: string[]
   desiredDeliveryWindows: DesiredDeliveryWindow[]
   equipmentAvailability: PresentationEquipmentAvailability[]
   groups: PresentationGroup[]

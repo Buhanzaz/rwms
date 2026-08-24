@@ -254,6 +254,21 @@ remaining order-level furniture reservations.
 A pre-shipment cancellation releases confirmed holds and leases. Cancellation
 is refused when a mutable preparation effect has an unknown result.
 
+### Historical rental entry
+
+For data migration, a manager may create one past shipment or return from a
+warehouse cabin dossier through the [logistics public contract](../../contracts/openapi/logistics-service.yaml).
+The record remains a normal logistics document marked `historicalRentalImport`,
+with a selected client and past date but no RWMS driver or route. A historical
+return follows the normal fenced `RENTED -> AFTER_RENT -> INSPECTION_REQUIRED`
+intake, so its later estimate and repair are unchanged. A shipment from
+`REPAIR`, `CAPITAL_REPAIR` or `WAITING_REPAIR_CHECK` first runs the
+[maintenance closure](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/HistoricalShipmentRepairClosureService.java):
+ordinary repair becomes system-completed, while eligible pre-start capital or
+repair-movement work is cancelled with `Автоматически закрыто в связи с
+отгрузкой.`. A started task, an active `IN_TRANSFER` cabin, or a stale fence is
+not overwritten and requires reconciliation.
+
 ## 4. Rental period
 
 While the cabin is at the client:
@@ -557,6 +572,9 @@ remain in the [full architecture audit](../reviews/20260808-full-architecture-au
 14. Multi-cabin trip: one shipment, return or transfer document -> one stable
     grouped driver task; board movement changes the whole group, never a
     member.
+15. Historical cabin entry: past shipment/return -> normal driverless logistics
+    document; a return reaches inspection, while an eligible repair shipment
+    records the automatic-closure reason before its normal shipment effect.
 
 ## Primary sources
 

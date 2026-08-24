@@ -11,6 +11,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerMediaReference;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
+import dev.buhanzaz.rwms.taskboard.domain.TaskLane;
+import dev.buhanzaz.rwms.taskboard.domain.TaskSourceType;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
 import dev.buhanzaz.rwms.taskboard.eventing.WorkerMediaEventProcessor;
 import dev.buhanzaz.rwms.taskboard.push.WorkerPushClient;
@@ -173,6 +175,35 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(feedEntry.entryType()).isEqualTo("REAL");
     assertThat(feedEntry.pinned()).isFalse();
 
+    var maintenanceRegistration =
+        board.registerExternalTask(
+            "maintenance-service",
+            new RegisterExternalTaskRequest(
+                WAREHOUSE,
+                UUID.randomUUID(),
+                "Ремонт одним пакетом на очередь",
+                "БТ-78",
+                null,
+                null,
+                null,
+                List.of(
+                    new RouteStepRequest(firstDefinition.id(), "Первая работа", null),
+                    new RouteStepRequest(firstDefinition.id(), "Вторая работа", null),
+                    new RouteStepRequest(secondDefinition.id(), "Другая очередь", null)),
+                null,
+                null,
+                new TaskSourceReferenceDto(
+                    TaskSourceType.MAINTENANCE_REPAIR, UUID.randomUUID()),
+                TaskLane.SCHEDULED));
+    var maintenanceFeedEntry =
+        workerBoard.feed(worker.id(), WAREHOUSE, null, 50).feed().categories().stream()
+            .flatMap(category -> category.entries().stream())
+            .filter(candidate -> candidate.taskId().equals(maintenanceRegistration.taskId()))
+            .findFirst()
+            .orElseThrow();
+    assertThat(maintenanceFeedEntry.routeIndex()).isZero();
+    assertThat(maintenanceFeedEntry.routeStepCount()).isEqualTo(2);
+
     BoardEntryDto active =
         board.take(
             WAREHOUSE,
@@ -180,6 +211,14 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
             new TakeEntryRequest(entry.version(), null, worker.id()),
             worker.id());
     var context = workerBoard.context(worker.id(), WAREHOUSE);
+    UUID expiredResultLeaseId =
+        leases
+            .issue(
+                worker.id(),
+                WAREHOUSE,
+                workerBoard.revision(),
+                context.serverTime().minusDays(2))
+            .id();
     UUID jpegOperationId = UUID.randomUUID();
     UUID jpegEvidenceId = UUID.randomUUID();
     var jpegRequest =
@@ -188,7 +227,7 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
             jpegEvidenceId,
             active.routeIndex(),
             context.serverTime(),
-            context.offlineLease().id(),
+            expiredResultLeaseId,
             "image/jpeg",
             15_728_640,
             "a".repeat(64));
@@ -206,7 +245,7 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
                 jpegEvidenceId,
                 active.routeIndex(),
                 context.serverTime(),
-                context.offlineLease().id(),
+                expiredResultLeaseId,
                 "IMAGE/JPEG",
                 15_728_640,
                 "a".repeat(64)));

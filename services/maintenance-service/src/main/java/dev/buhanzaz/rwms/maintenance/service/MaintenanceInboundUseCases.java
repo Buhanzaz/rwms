@@ -113,6 +113,11 @@ public class MaintenanceInboundUseCases {
     MaintenanceRepair initial = repairs.findByExternalTaskId(externalTaskId).orElseThrow(() ->
         new MaintenanceConflictException(
             "MAINTENANCE_STATE_CONFLICT", "Task-board fact has no maintenance repair owner"));
+    if (initial.getHistoricalShipmentDocumentId() != null) {
+      // Historical shipment closure owns every in-flight task fact after it has recorded the
+      // durable audit marker. A delayed task-board event must not reopen or overwrite that result.
+      return;
+    }
     if (eventType.endsWith("cancelled.v1")
         && prestartReplacementGuard.ownsTaskCancellation(initial.getId(), externalTaskId)) {
       // cancel-if-pre-start can publish before the coordinator has persisted compensation or

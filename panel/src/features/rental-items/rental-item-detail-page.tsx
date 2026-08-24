@@ -11,6 +11,7 @@ import {
   ArrowLeft01Icon,
   ImageUploadIcon,
   PencilEdit01Icon,
+  Share08Icon,
   Wrench01Icon,
 } from "@hugeicons/core-free-icons"
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
@@ -85,6 +86,11 @@ import {
   updateAssetRentalItemGeneralComment,
   updateAssetRentalItemStatus,
 } from "@/features/rental-items/api/asset-rental-items-api"
+import { createCabinPhotoPresentation } from "@/features/rental-items/cabin-photo-presentations-api"
+import {
+  HistoricalRentalMovementDialog,
+} from "@/features/rental-items/historical-rental-movement-dialog"
+import type { HistoricalRentalMovementKind } from "@/features/rental-items/historical-rental-movement-api"
 import {
   CharacteristicTags,
   EmptyDossierRegister,
@@ -253,6 +259,32 @@ function retryDossierQuery(failureCount: number, error: Error) {
   return failureCount < 2
 }
 
+async function copyPresentationLink(value: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value)
+      return
+    } catch {
+      // The same user action still gets a legacy in-document copy attempt below.
+    }
+  }
+
+  const textarea = document.createElement("textarea")
+  textarea.value = value
+  textarea.setAttribute("readonly", "")
+  textarea.style.position = "fixed"
+  textarea.style.opacity = "0"
+  document.body.append(textarea)
+  let copied: boolean
+  try {
+    textarea.select()
+    copied = document.execCommand?.("copy") ?? false
+  } finally {
+    textarea.remove()
+  }
+  if (!copied) throw new Error("Не удалось скопировать ссылку")
+}
+
 function DetailEmpty({
   title,
   description,
@@ -276,6 +308,8 @@ function DossierActions({
   canEdit,
   onAddPhoto,
   onEditPassport,
+  onCreateHistoricalShipment,
+  onCreateHistoricalReturn,
   onSaved,
 }: {
   rentalItem: RentalItemDto
@@ -283,6 +317,8 @@ function DossierActions({
   canEdit: boolean
   onAddPhoto: () => void
   onEditPassport: () => void
+  onCreateHistoricalShipment: () => void
+  onCreateHistoricalReturn: () => void
   onSaved: (value: RentalItemDto) => void
 }) {
   const navigate = useNavigate()
@@ -337,6 +373,12 @@ function DossierActions({
     "WRITTEN_OFF",
     "LOST",
   ].includes(rentalItem.status)
+  const historicalShipmentAllowed = [
+    "FREE",
+    "REPAIR",
+    "WAITING_REPAIR_CHECK",
+    "CAPITAL_REPAIR",
+  ].includes(rentalItem.status)
 
   function createRepair() {
     navigate("/repairs?create=1", {
@@ -363,6 +405,36 @@ function DossierActions({
         <Button size="sm" variant="outline" onClick={onAddPhoto}>
           <HugeiconsIcon icon={ImageUploadIcon} data-icon="inline-start" />
           Добавить фото
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!historicalShipmentAllowed}
+          title={
+            rentalItem.status === "RENTED"
+              ? "Для арендованной бытовки оформите возврат."
+              : !historicalShipmentAllowed
+                ? "Историческая отгрузка доступна для свободной бытовки или бытовки в ремонте."
+                : undefined
+          }
+          onClick={onCreateHistoricalShipment}
+        >
+          <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+          Отгрузка задним числом
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={rentalItem.status !== "RENTED"}
+          title={
+            rentalItem.status !== "RENTED"
+              ? "Возврат можно оформить для бытовки в аренде."
+              : undefined
+          }
+          onClick={onCreateHistoricalReturn}
+        >
+          <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+          Возврат задним числом
         </Button>
         {repairAllowed ? (
           <Button size="sm" variant="outline" onClick={createRepair}>
@@ -441,6 +513,7 @@ function DossierActions({
 
 export function RentalItemDetailPage() {
   const goBack = useWorkspaceBack("/warehouse")
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { rentalItemId } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -448,6 +521,8 @@ export function RentalItemDetailPage() {
   const { accessToken, currentUser } = useAuth()
   const [photoUploadOpen, setPhotoUploadOpen] = useState(false)
   const [passportEditOpen, setPassportEditOpen] = useState(false)
+  const [historicalMovementKind, setHistoricalMovementKind] =
+    useState<HistoricalRentalMovementKind | null>(null)
   const [addContentsOpen, setAddContentsOpen] = useState(false)
   const [moveContentsToStockOpen, setMoveContentsToStockOpen] = useState(false)
   const [moveContentsToRentalItemOpen, setMoveContentsToRentalItemOpen] =
@@ -690,6 +765,40 @@ export function RentalItemDetailPage() {
           : "Не удалось сохранить комментарий"
       ),
   })
+  const photoPresentationMutation = useMutation({
+    mutationFn: () => {
+      if (!accessToken || !rentalItem) {
+        throw new Error("Бытовка ещё не загружена")
+      }
+      return createCabinPhotoPresentation({
+        accessToken,
+        cabinId: rentalItem.id,
+        warehouseId: rentalItem.warehouseId,
+        expectedRentalItemVersion: rentalItem.version,
+        idempotencyKey: createIdempotencyKey(),
+      })
+    },
+    onSuccess: (presentation) => {
+      const publicUrl = new URL(
+        presentation.publicPath,
+        window.location.origin
+      ).toString()
+      void copyPresentationLink(publicUrl)
+        .then(() => toast.success("Ссылка на представление скопирована"))
+        .catch(() =>
+          toast.warning(
+            "Представление создано, но браузер не разрешил скопировать ссылку"
+          )
+        )
+      navigate(presentation.publicPath)
+    },
+    onError: (error) =>
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Не удалось создать представление"
+      ),
+  })
 
   function setRentalItem(saved: RentalItemDto) {
     queryClient.setQueryData(assetQueryKey, saved)
@@ -699,6 +808,16 @@ export function RentalItemDetailPage() {
     void queryClient.invalidateQueries({
       queryKey: RENTAL_ITEM_DOSSIER_QUERY_KEY,
     })
+  }
+  function historicalMovementCreated() {
+    setHistoricalMovementKind(null)
+    void queryClient.invalidateQueries({ queryKey: assetQueryKey })
+    void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
+    void queryClient.invalidateQueries({ queryKey: RETURNS_QUERY_KEY })
+    void queryClient.invalidateQueries({
+      queryKey: RENTAL_ITEM_DOSSIER_QUERY_KEY,
+    })
+    void queryClient.invalidateQueries({ queryKey: ["rental-items"] })
   }
   function changeTab(value: string) {
     const next = new URLSearchParams(searchParams)
@@ -806,8 +925,28 @@ export function RentalItemDetailPage() {
               canEdit={canEditRentalItem}
               onAddPhoto={() => setPhotoUploadOpen(true)}
               onEditPassport={() => setPassportEditOpen(true)}
+              onCreateHistoricalShipment={() =>
+                setHistoricalMovementKind("SHIPMENT")
+              }
+              onCreateHistoricalReturn={() => setHistoricalMovementKind("RETURN")}
               onSaved={setRentalItem}
             />
+            {historicalMovementKind && currentUser ? (
+              <HistoricalRentalMovementDialog
+                open
+                kind={historicalMovementKind}
+                rentalItem={rentalItem}
+                accessToken={accessToken}
+                actorId={currentUser.id}
+                responsibleManagerDisplayName={
+                  currentUser.displayName || currentUser.id
+                }
+                onOpenChange={(nextOpen) => {
+                  if (!nextOpen) setHistoricalMovementKind(null)
+                }}
+                onCreated={historicalMovementCreated}
+              />
+            ) : null}
             <Separator />
             <dl className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-xs">
               <dt className="text-muted-foreground">Склад</dt>
@@ -837,7 +976,7 @@ export function RentalItemDetailPage() {
               <dt className="text-muted-foreground">Комментарий</dt>
               <dd>{rentalItem.comment ?? "—"}</dd>
               <dt className="text-muted-foreground">Фото</dt>
-              <dd>
+              <dd className="flex flex-wrap items-center gap-2">
                 <Button
                   type="button"
                   variant="link"
@@ -846,6 +985,32 @@ export function RentalItemDetailPage() {
                 >
                   {media.logicalPhotoCount} фото
                 </Button>
+                {canEditRentalItem ? (
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    disabled={
+                      photoPresentationMutation.isPending ||
+                      media.isLoading ||
+                      !media.assets.some(
+                        (asset) =>
+                          asset.kind === "IMAGE" &&
+                          asset.status === "READY" &&
+                          asset.generation > 0
+                      )
+                    }
+                    onClick={() => photoPresentationMutation.mutate()}
+                  >
+                    <HugeiconsIcon
+                      icon={Share08Icon}
+                      data-icon="inline-start"
+                    />
+                    {photoPresentationMutation.isPending
+                      ? "Создаём..."
+                      : "Создать представление"}
+                  </Button>
+                ) : null}
               </dd>
               <dt className="text-muted-foreground">Наполнение</dt>
               <dd>

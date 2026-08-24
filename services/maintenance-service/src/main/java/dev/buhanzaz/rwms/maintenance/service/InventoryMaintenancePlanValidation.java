@@ -32,7 +32,9 @@ import tools.jackson.databind.ObjectMapper;
  * evidence into maintenance repair stages.
  *
  * <p>The component has no source-operation or repair ownership. It can ask task-board for a
- * routing preflight, but leaves transaction/retry control to the freeze and upsert use cases.
+ * routing preflight, but leaves transaction/retry control to the freeze and upsert use cases. Both
+ * newly frozen plans and older duplicate-stage snapshots are materialized as one ordinary stage per
+ * physical routing queue ID.
  */
 @Component
 final class InventoryMaintenancePlanValidation {
@@ -144,6 +146,7 @@ final class InventoryMaintenancePlanValidation {
     List<InventoryPlanStageSnapshot> stages = request.mode() == InventoryPlanMode.AUTO
         ? autoStages(request, catalog.getId(), nodes, incomingLinks, lines)
         : manualStages(request, catalog.getId(), nodes, incomingLinks);
+    stages = RepairPhaseSequence.canonicalInventoryStages(stages);
     if (request.mode() == InventoryPlanMode.MANUAL) {
       requireManualLineRoutesMatchSelectedStages(lines, stages);
     }
@@ -276,8 +279,8 @@ final class InventoryMaintenancePlanValidation {
         .filter(line -> line.type() == InventoryPlanLineType.WORK)
         .toList();
     if (stageLines.isEmpty()) {
-      // A historical material-only inventory plan remains executable, but a plan with work
-      // always has one stage per work line, even when several works share one queue.
+      // A historical material-only inventory plan remains executable. All generated stage
+      // candidates are coalesced by physical queue before routing preflight and freezing.
       stageLines = lines;
     }
     for (InventoryPlanLineSnapshot line : stageLines) {
@@ -469,13 +472,14 @@ final class InventoryMaintenancePlanValidation {
       UUID repairId,
       FrozenInventoryPlanSnapshot snapshot,
       List<InventoryRepairLine> lines) {
-    List<InventoryStageAllocation> allocations = new ArrayList<>(snapshot.stages().stream()
-        .map(InventoryStageAllocation::new)
-        .toList());
+    List<InventoryStageAllocation> allocations = new ArrayList<>(
+        RepairPhaseSequence.canonicalInventoryStages(snapshot.stages()).stream()
+            .map(InventoryStageAllocation::new)
+            .toList());
     Set<Integer> allocated = new HashSet<>();
 
-    // Preserve the user's selected work sequence. The same catalog work can be selected more
-    // than once, so each stage consumes exactly one matching work line in source order.
+    // Seed each physical queue with the first work matching its surviving catalog-stage snapshot;
+    // the first frozen stage identity remains stable when an older snapshot contains duplicates.
     for (InventoryStageAllocation allocation : allocations) {
       InventoryRepairLine primary = firstAvailable(
           lines,
@@ -500,8 +504,7 @@ final class InventoryMaintenancePlanValidation {
       }
     }
 
-    // Older frozen plans may have grouped several works under one queue stage. Keep those facts
-    // executable, but never copy an unassigned line into every stage of the same queue.
+    // Every remaining work joins the sole stage for its physical queue in source order.
     for (InventoryRepairLine line : lines) {
       if (!line.isWork() || allocated.contains(line.sourceIndex())) continue;
       InventoryStageAllocation target = routeStageFor(allocations, line);
@@ -510,8 +513,7 @@ final class InventoryMaintenancePlanValidation {
       allocated.add(line.sourceIndex());
     }
 
-    // Materials are shared estimate positions. They are attached once to the closest matching
-    // work stage, rather than duplicated into every stage that happens to use the same queue.
+    // Materials are shared estimate positions. They are attached once to the matching queue stage.
     for (InventoryRepairLine line : lines) {
       if (!line.isMaterial() || allocated.contains(line.sourceIndex())) continue;
       InventoryStageAllocation target = directCatalogStageFor(allocations, line);

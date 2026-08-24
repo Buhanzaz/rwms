@@ -15,7 +15,10 @@ vi.mock("@/features/media/service-owner-photos", () => ({
 import type { ServiceMediaOwner } from "@/features/media/media-service"
 import type { RepairTaskDto } from "@/features/repair-tasks/model/repair-task"
 import { RepairTaskDetailWorkspace } from "@/features/repair-tasks/repair-task-detail-workspace"
-import { repairTaskSourceMediaOwner } from "@/features/repair-tasks/repair-task-media-owner"
+import {
+  repairTaskGeneralMediaOwner,
+  repairTaskSourceMediaOwner,
+} from "@/features/repair-tasks/repair-task-media-owner"
 
 const warehouseId = "00000000-0000-4000-8000-000000000001"
 const repairId = "00000000-0000-4000-8000-000000000002"
@@ -162,10 +165,10 @@ describe("RepairTaskDetailWorkspace media", () => {
 
     expect(gallery("Общие медиа задания")).toMatchObject({
       owner: {
-        ownerType: "INVENTORY_FINDING",
-        ownerId: findingId,
+        ownerType: "TASK_BOARD_ENTRY",
+        ownerId: entryId,
         warehouseId,
-        context: "INSPECTION",
+        context: "WORK_RESULT",
       },
       visibleMediaIds: [generalMediaId],
       authoritativeReadyReferences: [
@@ -176,10 +179,10 @@ describe("RepairTaskDetailWorkspace media", () => {
     expect(gallery("Общие медиа задания")).not.toHaveProperty("presentation")
     expect(gallery("Фото работы «Заменить окно»")).toMatchObject({
       owner: {
-        ownerType: "INVENTORY_FINDING",
-        ownerId: findingId,
+        ownerType: "TASK_BOARD_ENTRY",
+        ownerId: entryId,
         warehouseId,
-        context: "INSPECTION",
+        context: "WORK_RESULT",
       },
       visibleMediaIds: [workMediaId],
       authoritativeReadyReferences: [{ mediaId: workMediaId, generation: 4 }],
@@ -202,6 +205,20 @@ describe("RepairTaskDetailWorkspace media", () => {
   })
 
   it("selects the original owner for inventory, estimate, and inherited rework media", () => {
+    expect(repairTaskGeneralMediaOwner(task)).toEqual({
+      ownerType: "TASK_BOARD_ENTRY",
+      ownerId: entryId,
+      warehouseId,
+      context: "WORK_RESULT",
+    })
+    expect(
+      repairTaskSourceMediaOwner(task, task.subtasks[0].workLines[0], entryId)
+    ).toEqual({
+      ownerType: "TASK_BOARD_ENTRY",
+      ownerId: entryId,
+      warehouseId,
+      context: "WORK_RESULT",
+    })
     expect(
       repairTaskSourceMediaOwner(task, task.subtasks[0].workLines[0])
     ).toEqual({

@@ -4,6 +4,7 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.AcceptReturnRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ArriveTransferLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateReturnRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateShipmentRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateHistoricalRentalMovementRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateTransferRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentView;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReconcileRequest;
@@ -52,6 +53,8 @@ public class LogisticsDocumentService {
       LogisticsDocumentEffectOperations.RETURN_ASSET_LEASE_RELEASE;
   static final String SHIPMENT_ASSET_SNAPSHOT =
       LogisticsDocumentEffectOperations.SHIPMENT_ASSET_SNAPSHOT;
+  static final String SHIPMENT_HISTORICAL_MAINTENANCE_CLOSE =
+      LogisticsDocumentEffectOperations.SHIPMENT_HISTORICAL_MAINTENANCE_CLOSE;
   static final String SHIPMENT_ASSET_LEASE_ACQUIRE =
       LogisticsDocumentEffectOperations.SHIPMENT_ASSET_LEASE_ACQUIRE;
   static final String SHIPMENT_ASSET_CONFIRM =
@@ -95,6 +98,7 @@ public class LogisticsDocumentService {
 
   private final LogisticsReturnDocumentCoordinator returnCoordinator;
   private final LogisticsShipmentDocumentCoordinator shipmentCoordinator;
+  private final HistoricalRentalMovementCoordinator historicalRentalMovementCoordinator;
   private final LogisticsTransferDocumentCoordinator transferCoordinator;
   private final LogisticsRentalOrderShipmentCoordinator rentalOrderShipmentCoordinator;
   private final LogisticsRentalOrderCompletionCoordinator rentalOrderCompletionCoordinator;
@@ -137,6 +141,28 @@ public class LogisticsDocumentService {
     return result(
         shipmentCoordinator.createShipment(
             subjectId, idempotencyKey, correlationId, request, admission));
+  }
+
+  /**
+   * Records one past rental fact as a real shipment or return document without a driver. The
+   * coordinator retains all cross-owner recovery work behind durable logistics attempts.
+   */
+  @Transactional
+  public CreateResult createHistoricalRentalMovement(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      CreateHistoricalRentalMovementRequest request,
+      String clientSnapshot,
+      AdmissionTicket admission) {
+    return result(
+        historicalRentalMovementCoordinator.create(
+            subjectId,
+            idempotencyKey,
+            correlationId,
+            request,
+            clientSnapshot,
+            admission));
   }
 
   @Transactional

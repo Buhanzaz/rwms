@@ -61,6 +61,18 @@ class MaintenanceAssetTransitionPolicyTest {
         MAINTENANCE_REPAIR, repairId, null))
         .isEqualTo(RentalItemStatus.FREE);
     assertThat(MaintenanceAssetTransitionPolicy.target(
+        RentalItemStatus.REPAIR, CLOSE_FOR_HISTORICAL_SHIPMENT,
+        MAINTENANCE_REPAIR, repairId, null))
+        .isEqualTo(RentalItemStatus.FREE);
+    assertThat(MaintenanceAssetTransitionPolicy.target(
+        RentalItemStatus.CAPITAL_REPAIR, CLOSE_FOR_HISTORICAL_SHIPMENT,
+        MAINTENANCE_REPAIR, repairId, null))
+        .isEqualTo(RentalItemStatus.FREE);
+    assertThat(MaintenanceAssetTransitionPolicy.target(
+        RentalItemStatus.WAITING_REPAIR_CHECK, CLOSE_FOR_HISTORICAL_SHIPMENT,
+        MAINTENANCE_REPAIR, repairId, null))
+        .isEqualTo(RentalItemStatus.FREE);
+    assertThat(MaintenanceAssetTransitionPolicy.target(
         RentalItemStatus.WAITING_REPAIR_CHECK, WRITE_OFF,
         MAINTENANCE_REPAIR, repairId, null))
         .isEqualTo(RentalItemStatus.WRITTEN_OFF);
@@ -87,6 +99,28 @@ class MaintenanceAssetTransitionPolicyTest {
             .isEqualTo(RentalItemStatus.REPAIR);
       }
     }
+  }
+
+  @Test
+  void historicalShipmentClosureRequiresTheCurrentRepairLeaseAndAnActiveRepairStatus() {
+    UUID repairId = UUID.randomUUID();
+
+    assertThatThrownBy(() -> MaintenanceAssetTransitionPolicy.target(
+        RentalItemStatus.REPAIR,
+        CLOSE_FOR_HISTORICAL_SHIPMENT,
+        MAINTENANCE_ESTIMATE,
+        repairId,
+        null))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("repair-owned lease");
+    assertThatThrownBy(() -> MaintenanceAssetTransitionPolicy.target(
+        RentalItemStatus.FREE,
+        CLOSE_FOR_HISTORICAL_SHIPMENT,
+        MAINTENANCE_REPAIR,
+        repairId,
+        null))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("not allowed");
   }
 
   @Test

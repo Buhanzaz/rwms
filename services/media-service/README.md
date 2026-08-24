@@ -254,9 +254,13 @@ public registration or administrative bypass:
 Membership-departed, membership-refreshed and completed-observation-restored
 facts are ordering/checkpoint markers only; they never open or close the media
 owner proof. `membershipActive` is optional on historical added/inspection
-markers, but a departed marker must carry `false` and a refreshed/restored
-marker must carry `true`. Completed restoration therefore lets the publication
-saga address retained finding media without reopening worker upload authority.
+markers. Live Kafka lifecycle markers stay strict: a departed marker must carry
+`false` and a refreshed/restored marker must carry `true`. Only the
+operator-reviewed reconciliation command accepts exact authoritative legacy
+lifecycle bytes that predate `membershipActive`; it infers `false` for departed
+and `true` for refreshed/restored without normalizing the wire body or its SHA.
+Completed restoration therefore lets the publication saga address retained
+finding media without reopening worker upload authority.
 [`V15__inventory_finding_membership_markers.sql`](db/migration/V15__inventory_finding_membership_markers.sql)
 admits those three markers into the durable inbox while requiring their
 `owner_revision` to remain null.

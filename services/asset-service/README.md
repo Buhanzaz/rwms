@@ -39,6 +39,12 @@ Private boundaries are deliberately limited to:
 Private callers use service credentials, not a forwarded user token. The security chain requires
 the exact service identity and single-purpose scope for each of those namespaces.
 
+For an imported historical rental shipment, maintenance may invoke only the fenced
+`CLOSE_FOR_HISTORICAL_SHIPMENT` action under its existing `MAINTENANCE_REPAIR` lease. The asset
+policy accepts it only from `REPAIR`, `CAPITAL_REPAIR` or `WAITING_REPAIR_CHECK` and releases the
+cabin to `FREE`; `IN_TRANSFER`, terminal and unrelated statuses remain conflicts. Logistics then
+acquires and applies its own normal shipment lease rather than writing cabin state directly.
+
 Within the logistics namespace, `/cabin-facets` returns availability-backed
 type, finish, dimension, category and characteristic values plus exact
 type-to-dimension relations. `/cabin-catalog` is a separate bounded, read-only

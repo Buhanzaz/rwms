@@ -704,9 +704,10 @@ producer/consumer compatibility tests.
 
 Owner-specific route gates close that second half. Inventory and logistics
 compare their canonical method/path sets with merged Spring controller mappings
-and exercise the production security chains. The gateway resolves all 274
+and exercise the production security chains. The gateway resolves all 295
 canonical domain-public operations through its 17 domain routers, keeps exactly
-four logistics presentation operations anonymous, and rejects canonical
+six logistics presentation operations anonymous (four client-presentation plus
+two cabin-photo read routes), and rejects canonical
 internal operations plus reserved private/internal aliases. The current focused
 route/security gate also proves that WorkerApp and DriverApp SSE routes win over
 the generic task-board route and that their scopes are not interchangeable.

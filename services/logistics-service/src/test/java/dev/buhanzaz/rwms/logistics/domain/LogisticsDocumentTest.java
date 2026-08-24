@@ -86,6 +86,31 @@ class LogisticsDocumentTest {
   }
 
   @Test
+  void historicalRentalDocumentsKeepThePastDateButNeverCreateDriverData() {
+    LocalDate occurredOn = LocalDate.parse("2026-08-01");
+    LogisticsDocument shipment =
+        LogisticsDocument.createHistoricalRentalShipment(
+            WAREHOUSE, UUID.randomUUID(), "ООО История", occurredOn, SUBJECT, CORRELATION);
+    LogisticsDocument rentalReturn =
+        LogisticsDocument.createHistoricalRentalReturn(
+            WAREHOUSE, UUID.randomUUID(), "ООО История", occurredOn, SUBJECT, CORRELATION);
+
+    shipment.beginShipmentPreparation();
+    rentalReturn.beginReturnRegistration();
+
+    assertThat(shipment.isHistoricalRentalImport()).isTrue();
+    assertThat(shipment.getScheduledDate()).isEqualTo(occurredOn);
+    assertThat(shipment.getDriverSnapshot()).isNull();
+    assertThat(shipment.getDriverWorkerId()).isNull();
+    assertThat(shipment.getState()).isEqualTo(LogisticsDocumentState.PREPARING);
+    assertThat(rentalReturn.isHistoricalRentalImport()).isTrue();
+    assertThat(rentalReturn.getScheduledDate()).isEqualTo(occurredOn);
+    assertThat(rentalReturn.getDriverSnapshot()).isNull();
+    assertThat(rentalReturn.getDriverWorkerId()).isNull();
+    assertThat(rentalReturn.getState()).isEqualTo(LogisticsDocumentState.REGISTERING);
+  }
+
+  @Test
   void transferRejectsSameOriginAndDestination() {
     assertThatThrownBy(
             () ->

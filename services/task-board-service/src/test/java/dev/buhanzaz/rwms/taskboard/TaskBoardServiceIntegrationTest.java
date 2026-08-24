@@ -74,6 +74,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   @org.springframework.beans.factory.annotation.Autowired WorkforceService workforce;
   @org.springframework.beans.factory.annotation.Autowired TaskBoardService board;
   @org.springframework.beans.factory.annotation.Autowired WorkerTaskBoardService workerBoard;
+  @org.springframework.beans.factory.annotation.Autowired WorkerOfflineLeaseCodec offlineLeases;
   @org.springframework.beans.factory.annotation.Autowired WorkerMediaEventProcessor mediaEvents;
   @org.springframework.beans.factory.annotation.Autowired FakeCredentials credentials;
   @org.springframework.beans.factory.annotation.Autowired JdbcTemplate jdbc;
@@ -3444,7 +3445,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void workerCompletesRemainingMaintenanceQueuePackageAsOneTask() {
+  void workerCompletesOverdueMaintenanceQueuePackageAndPublishesAcceptanceFact() {
     var workerClass = registry.createClass(workerClass("MAINTENANCE_PACKAGE_WORKER"));
     var queue =
         QueueRegistryTestFixtures.create(
@@ -3595,6 +3596,14 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     UUID completeOperation = UUID.randomUUID();
     WorkerContext completeContext =
         workerBoard.context(MobileTaskSurface.WORKER, worker.id(), W1);
+    UUID expiredCompletionLeaseId =
+        offlineLeases
+            .issue(
+                worker.id(),
+                W1,
+                workerBoard.revision(),
+                completeContext.serverTime().minusDays(2))
+            .id();
     WorkerActionRequest completeRequest =
         new WorkerActionRequest(
             completeOperation,
@@ -3602,7 +3611,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             ready.version(),
             group.id(),
             completeContext.serverTime(),
-            completeContext.offlineLease().id(),
+            expiredCompletionLeaseId,
             evidenceId);
     WorkerActionAppliedResult completed =
         workerBoard.applyAction(

@@ -697,6 +697,58 @@ public final class ApiModels {
       @NotNull TaskSourceType type, @NotNull UUID sourceId) {}
 
   /**
+   * One actual take-to-finish interval for a brigade on a physical task queue.
+   *
+   * @param workerGroupId stable brigade identity
+   * @param workerGroupName brigade name captured for presentation
+   * @param taskId task-board task identity
+   * @param entryId deterministic representative route-entry identity
+   * @param queueId physical queue identity
+   * @param queueName physical queue display name
+   * @param title task title
+   * @param unitNumber optional unit identifier
+   * @param taskText optional representative route-step text
+   * @param priority task priority from one through five
+   * @param startedAt actual assignment start produced by TAKE
+   * @param finishedAt actual assignment finish produced by completion, or null while live
+   * @param status current or terminal assignment status
+   * @param source immutable source-domain reference, if the task has one
+   */
+  public record DailyBrigadeActivityIntervalDto(
+      @NotNull UUID workerGroupId,
+      @NotBlank String workerGroupName,
+      @NotNull UUID taskId,
+      @NotNull UUID entryId,
+      @NotNull UUID queueId,
+      @NotBlank String queueName,
+      @NotBlank String title,
+      @JsonInclude(JsonInclude.Include.ALWAYS) String unitNumber,
+      @JsonInclude(JsonInclude.Include.ALWAYS) String taskText,
+      @Min(1) @Max(5) int priority,
+      @NotNull OffsetDateTime startedAt,
+      @JsonInclude(JsonInclude.Include.ALWAYS) OffsetDateTime finishedAt,
+      @NotNull AssignmentStatus status,
+      @JsonInclude(JsonInclude.Include.ALWAYS) TaskSourceReferenceDto source) {}
+
+  /**
+   * Current warehouse-local day and its task-board-owned brigade execution intervals.
+   *
+   * @param warehouseId owning warehouse identity
+   * @param localDate calendar date resolved in the current authoritative warehouse timezone
+   * @param serverTime UTC instant used to select the day and render live intervals
+   * @param intervals deterministically ordered actual assignment intervals
+   */
+  public record DailyBrigadeActivityDto(
+      @NotNull UUID warehouseId,
+      @NotNull LocalDate localDate,
+      @NotNull OffsetDateTime serverTime,
+      @NotNull List<@Valid DailyBrigadeActivityIntervalDto> intervals) {
+    public DailyBrigadeActivityDto {
+      intervals = List.copyOf(intervals);
+    }
+  }
+
+  /**
    * Stable worker audience planned for one logistics driver task.
    *
    * <p>Only {@code ASSIGNED_DRIVER} carries an exact worker identity. Shared warehouse-driver work
@@ -934,6 +986,15 @@ public final class ApiModels {
       @NotNull @Min(0) Long expectedQueueVersion,
       @NotNull UUID targetEntryId,
       @NotNull @Min(0) Integer targetIndex) {}
+
+  /**
+   * Manager command that changes whether one still-future ordinary route entry is executable.
+   *
+   * @param expectedEntryVersion observed entry version that fences route completion and take
+   * @param available whether the future entry must be {@code REAL} rather than {@code SHADOW}
+   */
+  public record SetFutureTaskEntryAvailabilityRequest(
+      @NotNull @Min(0) Long expectedEntryVersion, boolean available) {}
 
   /**
    * Version-fenced source request to place a driver task into an explicit lane.

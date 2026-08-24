@@ -32,6 +32,23 @@ members. Its persisted `tripNumber` is stable within the rental order. Pre-start
 document-line tasks are cancelled before one grouped task is created; a started historical member
 prevents regrouping, and no new document-line task is created.
 
+`POST /api/logistics/v1/historical-rental-movements` records one past shipment or return directly
+from a cabin card. It accepts a visible logistics client, the current cabin version and a
+non-future warehouse-local date, but no driver or route. The command creates a normal logistics
+document, line, event and durable effect attempts. An imported shipment first asks maintenance to
+finish eligible ordinary repair work or cancel eligible capital/movement work with the audit reason
+`Автоматически закрыто в связи с отгрузкой.`, then completes the normal fenced shipment effect.
+An imported return enters the ordinary fenced return-intake path and reaches
+`INSPECTION_REQUIRED`, so its estimate and repair remain normal maintenance-owned work. The
+`historicalRentalImport` document fact keeps either import out of driver planning and manual
+shipment/return lifecycle commands.
+
+An equipment-movement worker task is still accepted by Task Board after its operational deadline.
+When its authoritative `DONE` time is at or after the asset-reservation deadline, logistics records
+the completion and makes the local movement `RECONCILIATION_REQUIRED` with
+`TASK_BOARD_COMPLETED_AFTER_RESERVATION_EXPIRY`; it never rejects the worker fact or blindly applies
+an expired source reservation that another workflow may have reused.
+
 The public board and task detail expose the whole trip: operation, client, address and coordinates,
 primary plus client/order additional contacts, comment, advisory delivery dates, actual assigned
 date, cabins and per-cabin desired/actual furniture with movement-task and readiness facts. After
@@ -215,6 +232,16 @@ inventory outcome path deletes logistics history.
 presentation token, its revision and current viewability constrain access. Media access also verifies
 the requested item/generation/variant belongs to that presentation; this is not a general media proxy.
 
+An EDIT-authorized manager creates a cabin photo presentation through
+`POST /api/logistics/v1/cabins/{cabinId}/photo-presentations` with the current asset version and a
+stable idempotency key. Logistics rechecks warehouse access and the asset-owned cabin fence, freezes
+one to 100 READY image IDs/generations in order, and returns a non-expiring signed public path.
+Anonymous metadata and SMALL/LARGE media reads are limited to
+`/api/logistics/public/v1/cabin-photo-presentations/{token}/**`; the response contains only the cabin
+number, creation time and immutable photo references. Media bytes remain private and are proxied only
+after token, snapshot membership, generation and variant validation. Exact command replay returns the
+same presentation, while reusing its idempotency key for different input is a conflict.
+
 ## Internal application structure
 
 `HttpLogisticsDependencyGateway` is the stable implementation of the private
@@ -236,6 +263,8 @@ facade delegates every interface operation:
 | `RentalInquiryCabinSelectionStore` | Locked PREPARE/COMPLETE/REJECTED/EXPIRED selection receipt transactions, exact-byte retry and frozen-response replay |
 | `RentalInquiryCabinCatalogService` | Bounded facts-only cabin lookup with inquiry, warehouse and owner authorization |
 | `LogisticsDocumentService` | Stable return/shipment/transfer and rental-order hook facade over seven exact owners |
+| `HistoricalRentalMovementCoordinator` | One-client, one-cabin historical shipment/return intake; creates normal documents and durable owner effects without a driver or browser-owned saga |
+| `CabinPhotoPresentationService`, `CabinPhotoPresentationStore`, `CabinPhotoPresentationTokenService` | Version-fenced immutable READY-photo snapshot, exact idempotent replay and non-expiring signed public capability; no general media proxy or private cabin data |
 | Return, shipment and transfer document coordinators | Independent document state machines with their existing transaction and recovery order |
 | `DocumentDriverTaskPlanner` | One idempotent document-owned task with ordered cabin members for each new scheduled shipment, return or transfer; waiting legacy line tasks converge to the group and started ones fence replanning |
 | `DriverTripProjectionService` | Structured task/board trip facts with one asset read per distinct order and explicit unavailable readiness on dependency failure |
@@ -404,6 +433,18 @@ adds the false-by-default `warehouse_driver_pool` shipment intent. Its database 
 the flag only for a shipment without a concrete worker, so existing hidden unassigned and assigned
 documents retain their meaning and are not reclassified. The task-audience constraint is widened
 only for shipment `WAREHOUSE_DRIVERS`; returns keep their former assigned-or-hidden modes.
+
+Migration
+[`V54__historical_rental_documents.sql`](src/main/resources/db/migration/V54__historical_rental_documents.sql)
+adds the false-by-default `historical_rental_import` fact to logistics documents and a narrow
+read index. Existing documents remain unchanged; the flag only identifies a user-entered past
+physical shipment or return that intentionally has no RWMS driver task.
+
+Migration
+[`V55__cabin_photo_presentations.sql`](src/main/resources/db/migration/V55__cabin_photo_presentations.sql)
+adds the logistics-owned immutable photo snapshot, subject-scoped idempotency uniqueness and bounded
+JSON/photo-count checks. It contains no expiry column and neither copies media bytes nor changes
+existing cabin, client, order or document rows.
 
 Logistics commits facts, projection checkpoints and a transactional outbox together. Kafka delivery
 is at-least-once: aggregate IDs are record keys, event IDs are dedupe identities, and consumers retain

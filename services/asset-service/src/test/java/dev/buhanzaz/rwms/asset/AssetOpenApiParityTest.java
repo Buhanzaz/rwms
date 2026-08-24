@@ -358,6 +358,7 @@ class AssetOpenApiParityTest {
             "COMPLETE_EMPTY_REPAIR",
             "MARK_PENDING_ACCEPTANCE",
             "ACCEPT_REPAIR",
+            "CLOSE_FOR_HISTORICAL_SHIPMENT",
             "WRITE_OFF");
     Map<String, Object> maintenanceSnapshot = child(schemas, "MaintenanceRentalItemSnapshot");
     assertThat(list(maintenanceSnapshot.get("required")))

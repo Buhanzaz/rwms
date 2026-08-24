@@ -327,7 +327,8 @@ public final class WorkerApiModels {
    * @param action requested worker transition
    * @param expectedVersion observed entry version
    * @param workerGroupId optional selected group for an eligible action
-   * @param occurredAt actual action time within the lease
+   * @param occurredAt actual action time; TAKE/JOIN/PAUSE/RESUME must be within the lease, while
+   *     WorkerApp COMPLETE may be replayed after its offline window and after a task deadline
    * @param offlineLeaseId issued offline lease identity
    * @param evidenceId optional evidence selected by completion
    */
@@ -374,7 +375,8 @@ public final class WorkerApiModels {
    * @param operationId stable caller-generated reservation identity
    * @param evidenceId stable evidence identity to reserve
    * @param routeIndex route step to which evidence belongs
-   * @param capturedAt actual capture time within the lease
+   * @param capturedAt actual capture time; WorkerApp result evidence may be retried after its
+   *     offline window when the current task and assignment still permit it
    * @param offlineLeaseId issued offline lease identity
    * @param contentType declared media content type
    * @param sizeBytes declared byte length

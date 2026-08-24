@@ -73,6 +73,9 @@ function renderCard(
     onEdit = vi.fn<(entry: TaskBoardEntryDto) => void>(),
     onTake = vi.fn<(entry: TaskBoardEntryDto) => void>(),
     onPin = vi.fn<(entry: TaskBoardEntryDto, pinned: boolean) => void>(),
+    onFutureAvailabilityChange = vi.fn<
+      (entry: TaskBoardEntryDto, available: boolean) => void
+    >(),
     onShowFullRoute = vi.fn<(entry: TaskBoardEntryDto) => void>(),
     onToggleCollapsed = vi.fn<(entryId: string) => void>(),
     canEdit = true,
@@ -82,6 +85,7 @@ function renderCard(
     inDailyPlan = false,
     routeHighlighted = false,
     fullRouteSelected = false,
+    futureAvailabilityEligible = false,
     reorderEnabled = false,
     palette = null,
     repairComplexity = null,
@@ -90,6 +94,10 @@ function renderCard(
     onEdit?: (entry: TaskBoardEntryDto) => void
     onTake?: (entry: TaskBoardEntryDto) => void
     onPin?: (entry: TaskBoardEntryDto, pinned: boolean) => void
+    onFutureAvailabilityChange?: (
+      entry: TaskBoardEntryDto,
+      available: boolean
+    ) => void
     onShowFullRoute?: (entry: TaskBoardEntryDto) => void
     onToggleCollapsed?: (entryId: string) => void
     canEdit?: boolean
@@ -99,6 +107,7 @@ function renderCard(
     inDailyPlan?: boolean
     routeHighlighted?: boolean
     fullRouteSelected?: boolean
+    futureAvailabilityEligible?: boolean
     reorderEnabled?: boolean
     palette?: KpiPalette | null
     repairComplexity?: TaskBoardRepairComplexity | null
@@ -116,6 +125,7 @@ function renderCard(
       inDailyPlan={inDailyPlan}
       routeHighlighted={routeHighlighted}
       fullRouteSelected={fullRouteSelected}
+      futureAvailabilityEligible={futureAvailabilityEligible}
       reorderEnabled={reorderEnabled}
       onDetails={onDetails}
       onEdit={onEdit}
@@ -123,6 +133,7 @@ function renderCard(
       onPause={vi.fn()}
       onResume={vi.fn()}
       onPin={onPin}
+      onFutureAvailabilityChange={onFutureAvailabilityChange}
       onShowFullRoute={onShowFullRoute}
       onToggleCollapsed={onToggleCollapsed}
       palette={palette}
@@ -156,6 +167,7 @@ function CollapsibleCard() {
       onPause={vi.fn()}
       onResume={vi.fn()}
       onPin={vi.fn()}
+      onFutureAvailabilityChange={vi.fn()}
       onShowFullRoute={vi.fn()}
       onToggleCollapsed={() => setCollapsed((current) => !current)}
       repairComplexity={complexRepair}
@@ -480,15 +492,18 @@ describe("TaskBoardCard source details", () => {
     expect(onShowFullRoute).toHaveBeenCalledWith(entry)
   })
 
-  it("shows a future shadow but keeps every mutating action unavailable", () => {
+  it("lets an editor expose a future shadow without enabling unrelated actions", async () => {
     const onPin = vi.fn()
-    renderCard(
+    const onFutureAvailabilityChange = vi.fn()
+    const entry = renderCard(
       {
         type: "MAINTENANCE_REPAIR",
         sourceId: "repair-1",
       },
       {
         onPin,
+        onFutureAvailabilityChange,
+        futureAvailabilityEligible: true,
         entryPatch: {
           entryType: "SHADOW",
           routeIndex: 2,
@@ -502,11 +517,31 @@ describe("TaskBoardCard source details", () => {
     expect(screen.queryByRole("button", { name: "Полный путь" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Взять в работу" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Редактировать" })).toBeNull()
+    const availability = screen.getByRole("checkbox", {
+      name: "Доступность этапа БЫТ-001 для рабочих",
+    }) as HTMLButtonElement
+    expect(availability.getAttribute("data-state")).toBe("unchecked")
+    await userEvent.setup().click(availability)
+    expect(onFutureAvailabilityChange).toHaveBeenCalledWith(entry, true)
     const pin = screen.getByRole("button", {
       name: "Закрепить этап БЫТ-001",
     })
     expect((pin as HTMLButtonElement).disabled).toBe(true)
     expect(onPin).not.toHaveBeenCalled()
+  })
+
+  it("shows a future availability state read-only without EDIT access", () => {
+    renderCard(null, {
+      canEdit: false,
+      futureAvailabilityEligible: true,
+      entryPatch: { entryType: "REAL", routeIndex: 1, routeLength: 2 },
+    })
+
+    const availability = screen.getByRole("checkbox", {
+      name: "Доступность этапа БЫТ-001 для рабочих",
+    }) as HTMLButtonElement
+    expect(availability.getAttribute("data-state")).toBe("checked")
+    expect(availability.disabled).toBe(true)
   })
 
   it("hides repair editing without EDIT access", () => {

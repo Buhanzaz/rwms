@@ -102,6 +102,19 @@ final class MaintenanceAssetTransitionPolicy {
           RentalItemStatus.WAITING_REPAIR_CHECK);
       case ACCEPT_REPAIR -> requireExact(
           source, RentalItemStatus.WAITING_REPAIR_CHECK, RentalItemStatus.FREE);
+      case CLOSE_FOR_HISTORICAL_SHIPMENT -> {
+        if (ownerType != MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR) {
+          throw new AssetConflictException(
+              "Only a repair-owned lease may close work for a historical shipment");
+        }
+        yield requireSource(
+            source,
+            Set.of(
+                RentalItemStatus.REPAIR,
+                RentalItemStatus.CAPITAL_REPAIR,
+                RentalItemStatus.WAITING_REPAIR_CHECK),
+            RentalItemStatus.FREE);
+      }
       case WRITE_OFF -> requireSource(source, WRITE_OFF_SOURCES, RentalItemStatus.WRITTEN_OFF);
     };
   }

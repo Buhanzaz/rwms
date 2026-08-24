@@ -39,6 +39,12 @@ streaming и operator-reviewed outbox recovery. Изменяющие коман�
 Внутренние вызывающие стороны используют service credentials, а не проброшенный пользовательский
 token. Security chain требует точные identity сервиса и single-purpose scope для каждого namespace.
 
+Для импортированной исторической отгрузки аренды maintenance может вызвать только fenced action
+`CLOSE_FOR_HISTORICAL_SHIPMENT` под существующим lease `MAINTENANCE_REPAIR`. Политика asset
+допускает его только из `REPAIR`, `CAPITAL_REPAIR` или `WAITING_REPAIR_CHECK` и переводит бытовку в
+`FREE`; `IN_TRANSFER`, terminal и несвязанные статусы остаются конфликтом. Затем logistics получает
+и применяет собственный обычный shipment lease, а не записывает состояние бытовки напрямую.
+
 В logistics namespace маршрут `/cabin-facets` возвращает availability-backed
 значения type, finish, dimension, category и characteristics, а также точные
 type-to-dimension relations. `/cabin-catalog` — отдельный bounded read-only

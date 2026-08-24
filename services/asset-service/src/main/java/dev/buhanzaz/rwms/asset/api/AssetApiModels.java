@@ -247,6 +247,8 @@ public final class AssetApiModels {
     COMPLETE_EMPTY_REPAIR,
     MARK_PENDING_ACCEPTANCE,
     ACCEPT_REPAIR,
+    /** Releases an active repair only after a separately audited historical rental shipment. */
+    CLOSE_FOR_HISTORICAL_SHIPMENT,
     WRITE_OFF
   }
   /** Read projection exposes the canonical cabin number but excludes passport, comments and equipment. */

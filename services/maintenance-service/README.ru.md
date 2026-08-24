@@ -33,6 +33,15 @@
 - `/api/internal/maintenance/v1/logistics/**` обслуживает оркестрацию смет возврата и
   ремонтных мест для logistics.
 
+В этой logistics boundary точная private-команда
+`historical-shipments/{shipmentId}/close` позволяет только logistics-service подготовить
+импортированную отгрузку аренды. Maintenance сначала фиксирует durable shipment audit identity и
+комментарий `Автоматически закрыто в связи с отгрузкой.`, затем завершает допустимый обычный ремонт
+либо отменяет допустимую ветку капремонта/перемещения. Задание task-board до старта получает тот же
+комментарий и безопасно отменяется; его этап ремонта фиксируется как системно завершённый без
+подделки worker evidence. Начатая работа или version conflict отклоняются для operator
+reconciliation.
+
 Preflight публикации инвентаризации по-прежнему требует ограниченный список `findings`, принимает
 пустой список, когда итоговый план не содержит maintenance work, и всегда возвращает пустой массив
 `candidates` для каждого finding с работами. Последняя completed inventory является авторитетной,
@@ -104,7 +113,12 @@ plan version, поскольку исправленные планы намер�
 обычного или капитального routing, а также классификации `WORK`/`NO_WORK` вместо этого запускает ту
 же durable remote compensation и local supersession, что и более поздняя inventory. Прежний active
 outcome остаётся историей, а активным остаётся ровно один исправленный repair либо ни одного repair
-для `NO_WORK`. Меньшая
+для `NO_WORK`. Поиск predecessor всегда сохраняет стабильный внешний task ID ремонта, даже если
+после неоднозначного ответа регистрации его локальная task-board version осталась пустой.
+Compensation сначала читает эту source-owned задачу, сохраняет live version до отмены и записывает
+явный terminal `NOT_FOUND`, когда task-board подтверждает отсутствие identity. Поэтому замена из
+завершённой inventory не может оставить видимый исполнителю осиротевший task только из-за
+потерянного ответа первоначальной регистрации. Меньшая
 версия, drift той же версии, изменение identity inventory/finding/warehouse/completion,
 предыдущий outcome не в состоянии `APPLIED` и terminal accepted или written-off работа остаются
 конфликтами.
@@ -159,10 +173,14 @@ repair в очередь и либо сразу регистрирует
 Перед сохранением плана сметы или ремонта и повторно перед публикацией обычного задания
 maintenance применяет фиксированную последовательность `СЭС -> сварка -> внешние -> внутренние ->
 электрика -> сантехника`. Отсутствующие фазы не создают entries маршрута, завершённые entries больше
-не блокируют promotion, а несколько работ одной фазы сохраняют переданный порядок. Существующие
-ремонты публикуются в этом порядке без перезаписи append-only истории maintenance; миграция проекции
-task-board исправляет полностью ожидающие активные маршруты, а начатая и завершённая история
-остаётся неизменяемой.
+не блокируют promotion, а все переданные группы с одинаковым физическим task-board `queueId`
+объединяются в одну исполняемую стадию с полным упорядоченным составом работ, материалов и
+комментариев. Имена очередей являются display snapshots и никогда не объединяют разные queue IDs.
+Публикация замороженного inventory-плана применяет то же правило до распределения строк. Уже
+зарегистрированный ремонт с повторяющимися стадиями одной очереди перестраивается в одну
+объединённую подзадачу task-board, только пока весь его маршрут и назначения не начаты. Maintenance
+не объединяет сохранённые строки до атомарного принятия этой pre-start замены владельцем
+task-board; начатая и завершённая история остаётся неизменяемой.
 Каждый snapshot стадии обычного ремонта ставит выбранную обложку ремонта первой в упорядоченном
 `sourceMedia`; остальные общие фото сохраняют стабильный порядок, а каждая строка работы содержит
 только ID собственных фотографий. Общим заголовком задания служит рассчитанная maintenance
@@ -170,6 +188,19 @@ task-board исправляет полностью ожидающие актив
 технического `Maintenance repair`; task-board сохраняет этот source-owned title через существующий
 контракт. Эту worker-facing проекцию строит
 [`MaintenanceTaskBoardSupport`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceTaskBoardSupport.java).
+Для стадии `REWORK` со строкой `REPEAT` эта же проекция добавляет все фотографии результата
+рабочих из точной исходной стадии строки в общие `sourceMedia` дочерней стадии, сохраняя порядок
+evidence и удаляя повторы по media ID. Эти ссылки не прикрепляются к отдельной строке работы, не
+копируются в result evidence дочерней стадии и не могут выполнить её требование результата;
+рабочий всё равно обязан зафиксировать новый результат. Разрешением исходной стадии и пакетным
+чтением media владеет
+[`MaintenanceReworkSourceMediaResolver`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceReworkSourceMediaResolver.java).
+Проверенный task-evidence сначала попадает в durable replay journal, а затем в ordered inbox до
+изменения проекции стадии ремонта. Миграция
+[`V47__admit_task_evidence_transport_topic.sql`](src/main/resources/db/migration/V47__admit_task_evidence_transport_topic.sql)
+согласует оба PostgreSQL allow-list топиков с существующей Kafka-подпиской, разрешая только
+`rwms.task-board.task-evidence.v1`; она не переписывает существующие сообщения и не переносит
+владение транспортом.
 Публичная коллекция ремонтов применяет склад, состояния, бытовку, опциональный ограниченный фильтр
 `repairIds` и пагинацию в PostgreSQL до сборки DTO ремонтов. Потребители task-board используют этот
 добавочный ID-фильтр порциями не более 200, поэтому обновление доски никогда не гидратирует все
@@ -189,12 +220,21 @@ owner-version и разрешает только этому presentation recover
 стадию `QUEUED/GENERATED` к возвращённому owner entry. Task-board принимает полностью идентичный
 snapshot как replay без мутации; изменённые данные сохраняют version- и pre-start-fence. Поэтому
 eligible queued work получает канонический порядок стадий, обложку и заголовок, а quarantined
-v2/v3/v4/v5 work не возобновляется и не изменяется напрямую. Quarantined stable refresh текущего
+v2/v3/v4/v5 work не возобновляется и не изменяется напрямую. Presentation generation v7 добавляет
+один новый stable refresh только для queued repair, у которого repair-level доставка presentation
+завершилась ошибкой, но каждая стадия всё ещё имеет подтверждённые task-board entry и version в
+состоянии `QUEUED/GENERATED`. Он может восстановить общий заголовок сложности, обложку и source
+photos без принятия сомнительных mappings и без изменения начатой работы. Quarantined stable refresh текущего
 поколения остаётся в quarantine для reviewed resume, учитывается и пропускается; он не может сорвать
 application-ready event или запустить цикл рестартов. Любой другой конфликт stable identity
-по-прежнему отклоняется fail-closed. Существующая task-board pre-start command ставит fence для
-задания, начатого во время этого ограниченного recovery, а refresh не может ухудшить delivery state
-ремонта; см.
+по-прежнему отклоняется fail-closed. Presentation generation v8 сохраняет эти fences и дополнительно
+сводит legacy queued repairs, содержащие больше одной стадии одной физической очереди. Сначала она
+строит одну исходящую стадию со всеми упорядоченными работами, материалами, комментариями и
+source-media references, не меняя локальные строки. Затем task-board выполняет version-fenced
+атомарную pre-start замену маршрута. Только после ответа владельца maintenance объединяет свои
+queued stages и связывает возвращённые entry IDs в одной локальной транзакции. Конкурентный старт
+отклоняет remote replacement и оставляет локальный план без изменений; refresh не может ухудшить
+delivery state ремонта. См.
 [`MaintenanceWorkerCoverReconciliation`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceWorkerCoverReconciliation.java).
 Если catalog-enforced капремонт сохраняет `movementToRepair=true`, тот же frozen-выбор создаёт или
 переиспользует `CAPITAL_TO_PRODUCTION`; пересчёт не очищает этот выбор только потому, что целевой
@@ -302,6 +342,7 @@ workflow замены бытовки.
 | `MaintenanceCatalogUseCases` и catalog model/support types | Чтения catalog versions, draft mutation, forking, validation и activation |
 | `MaintenanceEstimateUseCases`, `MaintenanceEstimateCreationUseCases` и estimate/furniture/revision supports | Фасад lifecycle сметы; admission/deadline/idempotency создания; lines, plans, furniture admission и immutable revisions |
 | `MaintenanceRepairUseCases` и repair lifecycle/model/media/task-board supports | Создание ремонта, queueing, execution, acceptance и подготовка rework |
+| `HistoricalShipmentRepairClosureService` | Private-closure отгрузки logistics: durable marker, компенсация pre-start task/movement, fenced release бытовки и audit-finalization ремонта вне local transactions |
 | `MaintenanceTransferUseCases` и `MaintenanceTransferSupport` | Maintenance continuation при transfer departure/arrival |
 | `MaintenanceInboundUseCases` и `MaintenanceInboundFactProjectionUseCases` | Приём owner facts и обновление projections |
 | `MaintenanceReconciliationUseCases` | Только claim dispatch, media-owner proof и failure recording |
@@ -361,6 +402,11 @@ keys.
 Remote attempts фиксируются до вызовов вне local transactions; lost response разрешается через
 owner readback или тот же stable cancellation identity, а не через fabricated success. Local domain
 rows помечаются historical только после terminal-состояния каждого обязательного remote ledger.
+
+Миграция
+[`V48__historical_rental_shipment_repair_closure.sql`](src/main/resources/db/migration/V48__historical_rental_shipment_repair_closure.sql)
+аддитивно хранит identity импортирующей отгрузки и её audit-state `CLOSING`/`CLOSED` на ремонте. Она
+не переписывает исторические repair/task evidence и не создаёт cross-service foreign key.
 
 Зафиксированный факт агрегата записывается в local event stream, snapshot/checkpoint и
 transactional outbox в одной PostgreSQL-транзакции. Доставка Kafka — at-least-once: relay повторно

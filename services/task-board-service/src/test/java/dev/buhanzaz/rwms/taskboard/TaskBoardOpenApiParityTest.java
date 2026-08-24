@@ -156,6 +156,7 @@ class TaskBoardOpenApiParityTest {
             "/queue-definitions/order",
             "/warehouses/{warehouseId}/driver-queue",
             "/warehouses/{warehouseId}/work-queues/{queueId}/worker-plan",
+            "/warehouses/{warehouseId}/task-board/entries/{entryId}/future-availability",
             "/warehouses/{warehouseId}/task-board/entries/{entryId}/reorder")
         .doesNotContainKeys(
             "/warehouses/{warehouseId}/work-queues/{id}",
@@ -179,6 +180,8 @@ class TaskBoardOpenApiParityTest {
         .contains("queueVersion", "availableTaskLimit", "workerFeedEnabled");
     assertThat(list(child(schemas, "ReorderBoardEntryRequest").get("required")))
         .contains("expectedEntryVersion", "expectedQueueVersion", "targetEntryId", "targetIndex");
+    assertThat(list(child(schemas, "SetFutureTaskEntryAvailabilityRequest").get("required")))
+        .containsExactly("expectedEntryVersion", "available");
 
     assertThat(child(child(schemas, "GroupMember"), "properties"))
         .doesNotContainKey("roleInGroup");

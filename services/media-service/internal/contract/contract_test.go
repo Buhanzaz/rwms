@@ -148,6 +148,7 @@ func TestOpenAPIParsesAndExposesOnlyApprovedRuntimePaths(t *testing.T) {
 		"/api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content": "get",
 		"/api/media/v1/upload-sessions":                                                                    "post",
 		"/api/media/v1/upload-sessions/{uploadSessionId}/content":                                          "put",
+		"/api/media/v1/upload-sessions/{uploadSessionId}/variants/{variant}/content":                       "put",
 		"/api/media/v1/upload-sessions/{uploadSessionId}/complete":                                         "post",
 		"/api/media/v1/assets":                                      "get",
 		"/api/media/v1/cabin-covers":                                "post",

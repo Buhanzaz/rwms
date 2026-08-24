@@ -33,6 +33,14 @@ Private routes are narrow by design:
 - `/api/internal/maintenance/v1/logistics/**` supports logistics return-estimate and
   repair-place orchestration.
 
+Within that logistics boundary, the exact private
+`historical-shipments/{shipmentId}/close` command lets only logistics-service prepare an imported
+rental shipment. Maintenance first records the durable shipment audit identity and comment
+`Автоматически закрыто в связи с отгрузкой.`, then completes an eligible ordinary repair or
+cancels an eligible capital-repair/movement branch. A pre-start task-board task receives the same
+comment and is safely cancelled; its repair stage is recorded as system-completed without forging
+worker evidence. Started or version-conflicting work is rejected for operator reconciliation.
+
 Inventory publication preflight keeps `findings` required and bounded, accepts an empty list when
 the final inventory plan contains no maintenance work, and always returns an empty `candidates`
 array for each work finding. The latest completed inventory is authoritative, so an active estimate
@@ -103,7 +111,12 @@ finding revision, observed asset version, fingerprint, priority, dates, media, s
 movement, ordinary or capital routing, and `WORK`/`NO_WORK` classification instead run the same
 durable remote compensation and local supersession used by a later inventory. The former active
 outcome remains history and exactly one corrected repair, or no repair for `NO_WORK`, remains
-active. Lower
+active. Predecessor discovery always retains the repair's stable external task ID even when an
+ambiguous registration response left its local task-board version unset. Compensation first reads
+that source-owned task, persists the live version before cancellation, and records an explicit
+terminal `NOT_FOUND` when task-board proves the identity does not exist. A completed inventory
+replacement therefore cannot leave an owner-visible task orphan merely because maintenance missed
+the original registration response. Lower
 versions, same-version drift, changed inventory/finding/warehouse/completion identity, a predecessor
 that is not yet `APPLIED`, and terminal accepted or written-off predecessor work remain conflicts.
 
@@ -157,10 +170,13 @@ it queues the repair and either registers the task-board task directly or, when
 Before an estimate or repair plan is persisted, and again before an ordinary task is published,
 maintenance applies the fixed phase sequence `SES -> welding -> exterior -> interior -> electrical
 -> plumbing`. Missing phases do not create route entries, completed entries no longer block
-promotion, and multiple work stages inside one phase retain their submitted order. Existing repairs
-are published in that order without rewriting their append-only maintenance history; task-board's
-projection migration corrects fully waiting active routes, while started and completed history
-remains immutable.
+promotion, and all submitted groups with the same physical task-board `queueId` are coalesced into
+one executable stage containing their complete ordered work/material content and comments. Queue
+names are display snapshots and never merge different queue IDs. Frozen inventory publication uses
+the same rule before allocating lines. An already registered repair with repeated stages for one
+queue is rebuilt as one combined task-board subtask only while its complete route and assignments
+remain unstarted. Maintenance does not merge its persisted rows until task-board has atomically
+accepted that pre-start replacement; started and completed history remains immutable.
 Every ordinary repair-stage snapshot puts the selected repair cover first in ordered
 `sourceMedia`; the remaining aggregate photos retain their stable order, while each work line lists
 only its own photo IDs. The common task title is the maintenance-calculated complexity label
@@ -168,6 +184,19 @@ only its own photo IDs. The common task title is the maintenance-calculated comp
 technical `Maintenance repair`; task-board stores that source-owned title through its existing
 contract. This worker-facing projection is built by
 [`MaintenanceTaskBoardSupport`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceTaskBoardSupport.java).
+For a `REWORK` stage containing a `REPEAT` line, the same projection adds every worker-result photo
+from that line's exact source stage to the child stage's general `sourceMedia`, preserving evidence
+order and deduplicating by media ID. These references are not attached to an individual work line,
+are not copied into the child stage's result evidence, and cannot satisfy its result-photo gate;
+the worker must still record the new result. Source-stage resolution and batched media lookup are
+owned by
+[`MaintenanceReworkSourceMediaResolver`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceReworkSourceMediaResolver.java).
+Validated task-evidence first enters the durable replay journal and then the ordered inbox before
+the repair-stage projection is changed. Migration
+[`V47__admit_task_evidence_transport_topic.sql`](src/main/resources/db/migration/V47__admit_task_evidence_transport_topic.sql)
+aligns both PostgreSQL topic allow-lists with the existing Kafka subscription, admitting only
+`rwms.task-board.task-evidence.v1`; it does not rewrite existing messages or move transport
+ownership.
 The public repair collection applies warehouse, state, cabin, and optional bounded `repairIds`
 filters plus paging in PostgreSQL before assembling repair DTOs. Task-board consumers use that
 additive ID filter in batches of at most 200, so a board refresh never hydrates every repair in a
@@ -185,12 +214,21 @@ immutable. Presentation generation v6 uses another stable key, retains the owner
 lets only this presentation recovery rebind an already confirmed `QUEUED/GENERATED` stage to the
 returned owner entry. Task-board accepts an identical complete snapshot as a mutation-free replay;
 changed content remains version- and pre-start-fenced. Eligible queued work therefore receives the
-canonical stage order, cover and title while quarantined v2/v3/v4/v5 work is neither resumed nor changed directly.
-A quarantined stable refresh in the current generation
+canonical stage order, cover and title while quarantined v2/v3/v4/v5 work is neither resumed nor
+changed directly. Presentation generation v7 adds one new stable refresh only for a queued repair
+whose repair-level presentation delivery failed while every stage still has a confirmed
+`QUEUED/GENERATED` task-board entry and version. It can restore the common complexity title, cover
+and source photos without adopting uncertain mappings or touching started work. A quarantined
+stable refresh in the current generation
 remains quarantined for reviewed resume and is counted then skipped; it cannot fail the
 application-ready event or start a restart loop. Any other stable-identity conflict still fails
-closed. The existing task-board pre-start command fences a task started during that bounded
-recovery, and the refresh cannot degrade the repair's delivery state; see
+closed. Presentation generation v8 retains those fences and additionally converges legacy queued
+repairs that contain more than one stage for the same physical queue. It first builds one outbound
+stage containing every ordered work, material, comment and source-media reference without changing
+local rows. Task-board then performs the version-fenced atomic pre-start route replacement. Only
+after that owner response does maintenance merge its queued stages and bind the returned entry IDs
+in one local transaction. A concurrent start rejects the remote replacement and leaves the local
+plan unchanged; the refresh cannot degrade the repair's delivery state. See
 [`MaintenanceWorkerCoverReconciliation`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceWorkerCoverReconciliation.java).
 When catalog-enforced capital work retains `movementToRepair=true`, the same frozen choice creates
 or reuses `CAPITAL_TO_PRODUCTION`; recalculation never clears that choice merely because the target
@@ -296,6 +334,7 @@ application owners:
 | `MaintenanceCatalogUseCases` plus catalog model/support types | Catalog-version reads, draft mutation, forking, validation and activation |
 | `MaintenanceEstimateUseCases`, `MaintenanceEstimateCreationUseCases` and estimate/furniture/revision supports | Estimate lifecycle facade; creation admission/deadline/idempotency; lines, plans, furniture admission and immutable revisions |
 | `MaintenanceRepairUseCases` plus repair lifecycle/model/media/task-board supports | Repair creation, queueing, execution, acceptance and rework preparation |
+| `HistoricalShipmentRepairClosureService` | Private logistics shipment closure: durable marker, pre-start task/movement compensation, fenced asset release and audited repair finalization outside local transactions |
 | `MaintenanceTransferUseCases` and `MaintenanceTransferSupport` | Transfer departure/arrival maintenance continuation |
 | `MaintenanceInboundUseCases` and `MaintenanceInboundFactProjectionUseCases` | Owner-fact ingestion and projection updates |
 | `MaintenanceReconciliationUseCases` | Claim dispatch, media-owner proof and failure recording only |
@@ -354,6 +393,11 @@ adds permanent outcome, receipt, per-asset watermark, and predecessor-effect led
 attempts are committed before calls made outside local transactions; a lost response is resolved by
 owner readback or the same stable cancellation identity, never by fabricated success. Local domain
 rows are marked historical only after every required remote ledger is terminal.
+
+Migration
+[`V48__historical_rental_shipment_repair_closure.sql`](src/main/resources/db/migration/V48__historical_rental_shipment_repair_closure.sql)
+additively stores the importing shipment identity and its `CLOSING`/`CLOSED` audit state on a repair.
+It neither rewrites historical repair/task evidence nor creates a cross-service foreign key.
 
 A committed aggregate fact is written to the local event stream, snapshot/checkpoint and
 transactional outbox in the same PostgreSQL transaction. Kafka delivery is at-least-once: the relay

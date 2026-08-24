@@ -1,4 +1,5 @@
 import { cleanup, render, screen, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { WarehouseKpiSettings } from "@/features/settings/kpi/api/kpi-settings-api"
@@ -45,6 +46,40 @@ function renderCard(breaks: { start: string; end: string }[]) {
 }
 
 describe("WorkScheduleCard workday preview", () => {
+  it("allows saving a schedule effective today", async () => {
+    const onSave = vi.fn()
+    render(
+      <WorkScheduleCard
+        settings={{
+          ...settingsWithBreaks([]),
+          activeSchedule: null,
+          pendingSchedule: null,
+        }}
+        today="2026-07-30"
+        saving={false}
+        deleting={false}
+        blocked={false}
+        actionError={null}
+        onSave={onSave}
+        onDeletePending={vi.fn()}
+      />
+    )
+
+    const effectiveDate = screen.getByLabelText(
+      "Дата вступления графика"
+    ) as HTMLInputElement
+    expect(effectiveDate.min).toBe("2026-07-30")
+    expect(effectiveDate.value).toBe("2026-07-30")
+
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Сохранить график" }))
+
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ effectiveFrom: "2026-07-30" })
+    )
+  })
+
   it("shows every valid break as an accessible block with its time above the shift bar", () => {
     renderCard([
       { start: "10:30", end: "10:45" },

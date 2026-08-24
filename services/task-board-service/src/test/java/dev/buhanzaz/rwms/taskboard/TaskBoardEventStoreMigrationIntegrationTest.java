@@ -67,10 +67,10 @@ class TaskBoardEventStoreMigrationIntegrationTest {
   }
 
   @Test
-  void cleanInstallAppliesV4ThroughV29AndRepeatIsNoOp() {
+  void cleanInstallAppliesV4ThroughV35AndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(26);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(32);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -695,7 +695,7 @@ class TaskBoardEventStoreMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(25);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(31);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
     assertThat(retainedContentDigests()).containsExactlyInAnyOrderEntriesOf(before);
@@ -912,13 +912,15 @@ class TaskBoardEventStoreMigrationIntegrationTest {
             : "queue_entry".equals(table)
                 ? "to_jsonb(row_value) - array['queue_code','worker_works','worker_materials',"
                     + "'worker_comments','source_media_references','revision_marker',"
-                    + "'original_budget_seconds','current_budget_seconds']"
+                    + "'original_budget_seconds','current_budget_seconds','queue_position',"
+                    + "'entry_type']"
                 : "work_queue".equals(table)
                     ? "to_jsonb(row_value) - array['code','result_photo_min_count',"
                         + "'name','description','queue_type','definition_id',"
                         + "'sort_order','active','hidden','collapsed',"
                         + "'holding_period_minutes','notification_threshold',"
-                        + "'notify_when_threshold_reached','revision_marker']"
+                        + "'notify_when_threshold_reached','revision_marker',"
+                        + "'available_task_limit','worker_feed_enabled']"
                     : "queue_usage_reference".equals(table)
                         ? "to_jsonb(row_value) - array['queue_id','queue_definition_id']"
                     : "worker_class".equals(table)

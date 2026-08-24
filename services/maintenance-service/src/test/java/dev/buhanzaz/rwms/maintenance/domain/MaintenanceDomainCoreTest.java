@@ -111,6 +111,28 @@ class MaintenanceDomainCoreTest {
   }
 
   @Test
+  void historicalShipmentClosesOrdinaryStageWithoutWorkerEvidenceAndCancelsCapitalStage() {
+    RepairStage ordinary = new RepairStage(
+        UUID.randomUUID(), UUID.randomUUID(), 0, RepairStageKind.REPAIR_WORK,
+        UUID.randomUUID(), "REPAIR", "REPAIR", null);
+    RepairStage capital = new RepairStage(
+        UUID.randomUUID(), UUID.randomUUID(), 0, RepairStageKind.REPAIR_WORK,
+        UUID.randomUUID(), "REPAIR", "REPAIR", null);
+
+    ordinary.closeForHistoricalShipment(false);
+    capital.closeForHistoricalShipment(true);
+
+    assertThat(ordinary.getState()).isEqualTo(RepairStageState.DONE);
+    assertThat(ordinary.getCompletedEventId()).isNull();
+    assertThat(ordinary.getCompletedAt()).isNotNull();
+    assertThat(ordinary.getTaskGenerationState()).isEqualTo("NOT_REQUIRED");
+    assertThat(capital.getState()).isEqualTo(RepairStageState.CANCELLED);
+    assertThat(capital.getCompletedEventId()).isNull();
+    assertThat(capital.getCompletedAt()).isNull();
+    assertThat(capital.getTaskGenerationState()).isEqualTo("NOT_REQUIRED");
+  }
+
+  @Test
   void repairPriorityIsSelectedOnlyBeforeQueueing() {
     MaintenanceRepair repair =
         MaintenanceRepair.primary(

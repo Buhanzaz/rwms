@@ -9,9 +9,11 @@ import dev.buhanzaz.rwms.taskboard.domain.KpiSettingsStatus;
 import dev.buhanzaz.rwms.taskboard.repository.WarehouseMetadataRepository;
 import dev.buhanzaz.rwms.taskboard.service.KpiSettingsService;
 import dev.buhanzaz.rwms.taskboard.service.StaleVersionException;
+import dev.buhanzaz.rwms.taskboard.service.WarehouseKpiClock;
 import dev.buhanzaz.rwms.taskboard.service.WarehouseTimeZoneGateway.TimeZoneDecision;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
@@ -31,6 +33,7 @@ class KpiSettingsServiceIntegrationTest extends PostgresIntegrationTestSupport {
       UUID.fromString("00000000-0000-0000-0000-000000000202");
 
   @Autowired KpiSettingsService service;
+  @Autowired WarehouseKpiClock clock;
   @Autowired WarehouseMetadataRepository warehouses;
   @Autowired TestWarehouseTimeZoneGateway timeZones;
   @Autowired JdbcTemplate jdbc;
@@ -136,7 +139,7 @@ class KpiSettingsServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 0,
                 List.of(new KpiPaletteRangeRequest(0, 100, "#16A34A")),
                 "#7F1D1D"));
-    LocalDate effectiveFrom = LocalDate.now().plusDays(2);
+    LocalDate effectiveFrom = LocalDate.now(ZoneId.of("Europe/Moscow")).plusDays(2);
 
     var draft =
         service.saveWorkSchedule(
@@ -164,11 +167,13 @@ class KpiSettingsServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
     assertThat(scheduled.status()).isEqualTo(KpiSettingsStatus.SCHEDULED);
     assertThat(scheduled.dataAvailableFrom()).isEqualTo(effectiveFrom);
+    assertThat(scheduled.activeSchedule()).isNull();
     assertThat(scheduled.pendingSchedule()).isNotNull();
+    assertThat(scheduled.pendingSchedule().effectiveFrom()).isEqualTo(effectiveFrom);
   }
 
   @Test
-  void scheduleRejectsOvernightOverlappingAndNonFutureDefinitions() {
+  void scheduleAcceptsTodayButRejectsPastOvernightAndOverlappingDefinitions() {
     var settings =
         service.savePalette(
             W1,
@@ -176,42 +181,164 @@ class KpiSettingsServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 0,
                 List.of(new KpiPaletteRangeRequest(0, 100, "#16A34A")),
                 "#7F1D1D"));
+    LocalDate today = LocalDate.now(ZoneId.of("Europe/Moscow"));
+
+    var todayDraft =
+        service.saveWorkSchedule(
+            W1,
+            new SaveWorkScheduleRequest(
+                settings.version(),
+                today,
+                LocalTime.of(8, 0),
+                LocalTime.of(17, 0),
+                List.of(),
+                List.of()));
+
+    assertThat(todayDraft.status()).isEqualTo(KpiSettingsStatus.DRAFT);
+    assertThat(todayDraft.pendingSchedule().effectiveFrom()).isEqualTo(today);
 
     assertThatThrownBy(
             () ->
                 service.saveWorkSchedule(
                     W1,
                     new SaveWorkScheduleRequest(
-                        settings.version(),
-                        LocalDate.now(),
-                        java.time.LocalTime.of(20, 0),
-                        java.time.LocalTime.of(8, 0),
+                        todayDraft.version(),
+                        today.minusDays(1),
+                        LocalTime.of(8, 0),
+                        LocalTime.of(17, 0),
                         List.of(),
-                        List.of(
-                            new KpiWorkBreakRequest(
-                                java.time.LocalTime.of(23, 0),
-                                java.time.LocalTime.of(23, 30))))))
-        .isInstanceOf(IllegalArgumentException.class);
+                        List.of())))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("раньше текущего дня");
 
     assertThatThrownBy(
             () ->
                 service.saveWorkSchedule(
                     W1,
                     new SaveWorkScheduleRequest(
-                        settings.version(),
-                        LocalDate.now().plusDays(2),
-                        java.time.LocalTime.of(8, 0),
-                        java.time.LocalTime.of(17, 0),
+                        todayDraft.version(),
+                        today.plusDays(1),
+                        LocalTime.of(20, 0),
+                        LocalTime.of(8, 0),
                         List.of(),
                         List.of(
                             new KpiWorkBreakRequest(
-                                java.time.LocalTime.of(10, 0),
-                                java.time.LocalTime.of(11, 0)),
+                                LocalTime.of(23, 0), LocalTime.of(23, 30))))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("начинаться раньше");
+
+    assertThatThrownBy(
+            () ->
+                service.saveWorkSchedule(
+                    W1,
+                    new SaveWorkScheduleRequest(
+                        todayDraft.version(),
+                        today.plusDays(2),
+                        LocalTime.of(8, 0),
+                        LocalTime.of(17, 0),
+                        List.of(),
+                        List.of(
                             new KpiWorkBreakRequest(
-                                java.time.LocalTime.of(10, 30),
-                                java.time.LocalTime.of(11, 30))))))
+                                LocalTime.of(10, 0), LocalTime.of(11, 0)),
+                            new KpiWorkBreakRequest(
+                                LocalTime.of(10, 30), LocalTime.of(11, 30))))))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("пересек");
+  }
+
+  @Test
+  void sameDayActivationIsImmediatelyActiveForTheWholeWarehouseLocalDate() {
+    LocalDate today = LocalDate.now(ZoneId.of("Europe/Moscow"));
+    var palette =
+        service.savePalette(
+            W1,
+            new SaveKpiPaletteRequest(
+                0,
+                List.of(new KpiPaletteRangeRequest(0, 100, "#16A34A")),
+                "#7F1D1D"));
+    var draft =
+        service.saveWorkSchedule(
+            W1,
+            new SaveWorkScheduleRequest(
+                palette.version(),
+                today,
+                LocalTime.of(8, 0),
+                LocalTime.of(17, 0),
+                List.of(),
+                List.of()));
+    UUID operationId = UUID.randomUUID();
+
+    var active =
+        service.activate(
+            W1, operationId, new ActivateKpiSettingsRequest(draft.version()));
+    var replay =
+        service.activate(W1, operationId, new ActivateKpiSettingsRequest(draft.version()));
+
+    assertThat(active.status()).isEqualTo(KpiSettingsStatus.ACTIVE);
+    assertThat(active.activeSchedule()).isNotNull();
+    assertThat(active.activeSchedule().effectiveFrom()).isEqualTo(today);
+    assertThat(active.pendingSchedule()).isNull();
+    assertThat(active.dataAvailableFrom()).isEqualTo(today);
+    assertThat(replay.status()).isEqualTo(KpiSettingsStatus.ACTIVE);
+    assertThat(replay.version()).isEqualTo(active.version());
+    assertThat(replay.activeSchedule().id()).isEqualTo(active.activeSchedule().id());
+    assertThat(service.get(W1).status()).isEqualTo(KpiSettingsStatus.ACTIVE);
+  }
+
+  @Test
+  void sameDayReplacementUnschedulesOldRevisionAndDrivesClockDeterministically() {
+    ZoneId zone = ZoneId.of("Europe/Moscow");
+    LocalDate today = LocalDate.now(zone);
+    var palette =
+        service.savePalette(
+            W1,
+            new SaveKpiPaletteRequest(
+                0,
+                List.of(new KpiPaletteRangeRequest(0, 100, "#16A34A")),
+                "#7F1D1D"));
+    var firstDraft =
+        service.saveWorkSchedule(
+            W1,
+            new SaveWorkScheduleRequest(
+                palette.version(),
+                today,
+                LocalTime.of(8, 0),
+                LocalTime.of(17, 0),
+                List.of(),
+                List.of()));
+    var firstActive =
+        service.activate(
+            W1, UUID.randomUUID(), new ActivateKpiSettingsRequest(firstDraft.version()));
+    var replacementDraft =
+        service.saveWorkSchedule(
+            W1,
+            new SaveWorkScheduleRequest(
+                firstActive.version(),
+                today,
+                LocalTime.of(13, 0),
+                LocalTime.of(17, 0),
+                List.of(),
+                List.of()));
+
+    var replacement =
+        service.activate(
+            W1,
+            UUID.randomUUID(),
+            new ActivateKpiSettingsRequest(replacementDraft.version()));
+
+    assertThat(replacement.status()).isEqualTo(KpiSettingsStatus.ACTIVE);
+    assertThat(replacement.activeSchedule().shiftStart()).isEqualTo(LocalTime.of(13, 0));
+    assertThat(replacement.pendingSchedule()).isNull();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from kpi_work_schedule where warehouse_id=? and effective_from=? and scheduled",
+                Integer.class,
+                W1,
+                today))
+        .isOne();
+    assertThat(
+            clock.moment(W1, today.atTime(12, 0).atZone(zone).toInstant()).state())
+        .isEqualTo(WarehouseKpiClock.ScheduleState.OFF_SHIFT);
   }
 
   @Test
@@ -249,7 +376,7 @@ class KpiSettingsServiceIntegrationTest extends PostgresIntegrationTestSupport {
             W1,
             new SaveWorkScheduleRequest(
                 palette.version(),
-                LocalDate.now().plusDays(2),
+                LocalDate.now(ZoneId.of("Europe/Moscow")).plusDays(2),
                 java.time.LocalTime.of(8, 0),
                 java.time.LocalTime.of(17, 0),
                 List.of(6, 7),

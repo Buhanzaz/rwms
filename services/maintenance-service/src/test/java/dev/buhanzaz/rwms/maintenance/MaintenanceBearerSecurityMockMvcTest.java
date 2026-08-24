@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceCatalogController;
 import dev.buhanzaz.rwms.maintenance.api.EstimateCreationWindowSettingsController;
+import dev.buhanzaz.rwms.maintenance.api.MaintenanceHistoricalShipmentController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceEstimateController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceInventoryController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceLogisticsController;
@@ -23,6 +24,7 @@ import dev.buhanzaz.rwms.maintenance.service.InventoryMaintenanceService;
 import dev.buhanzaz.rwms.maintenance.service.InventoryAuthoritativeOutcomeService;
 import dev.buhanzaz.rwms.maintenance.service.EstimateCreationWindowSettingsService;
 import dev.buhanzaz.rwms.maintenance.service.InventoryPublicationReconciliationService;
+import dev.buhanzaz.rwms.maintenance.service.HistoricalShipmentRepairClosureService;
 import dev.buhanzaz.rwms.maintenance.service.LogisticsReturnShortageService;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
 import dev.buhanzaz.rwms.maintenance.service.RepairCapacitySettingsService;
@@ -50,6 +52,7 @@ import org.springframework.test.web.servlet.MockMvc;
       MaintenanceEstimateController.class,
       MaintenanceInventoryController.class,
       MaintenanceLogisticsController.class,
+      MaintenanceHistoricalShipmentController.class,
       MaintenanceRepairController.class,
       MaintenanceRepairPlaceLogisticsController.class,
       MaintenanceSettingsController.class,
@@ -76,6 +79,7 @@ class MaintenanceBearerSecurityMockMvcTest {
   @MockitoBean InventoryPublicationReconciliationService publicationService;
   @MockitoBean InventoryAuthoritativeOutcomeService inventoryAuthoritativeOutcomeService;
   @MockitoBean LogisticsReturnShortageService logisticsService;
+  @MockitoBean HistoricalShipmentRepairClosureService historicalShipmentRepairClosureService;
   @MockitoBean PropertyDispositionApplicationService propertyDispositionService;
   @MockitoBean RepairCapacitySettingsService repairCapacitySettingsService;
   @MockitoBean EstimateCreationWindowSettingsService estimateCreationWindowSettingsService;
@@ -93,6 +97,7 @@ class MaintenanceBearerSecurityMockMvcTest {
                   .replace("{inventoryId}", ID.toString())
                   .replace("{findingId}", ID.toString())
                   .replace("{returnId}", ID.toString())
+                  .replace("{shipmentId}", ID.toString())
                   .replace("{transferId}", ID.toString())
                   .replace("{repairId}", ID.toString())
                   .replace("{warehouseId}", ID.toString())

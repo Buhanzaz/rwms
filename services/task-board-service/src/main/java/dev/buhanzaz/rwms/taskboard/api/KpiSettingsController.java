@@ -28,9 +28,10 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * Public per-warehouse configuration API for task-board KPI presentation and working time.
  *
- * <p>Palette and schedule are version-fenced independently from task execution. A pending
- * schedule is deliberately activated with an idempotency key so a retry cannot create a second
- * effective configuration decision.
+ * <p>Palette and schedule are version-fenced independently from task execution. A pending schedule
+ * for the current or a future warehouse-local calendar date is deliberately activated with an
+ * idempotency key so a retry cannot create a second effective configuration decision. A
+ * current-day revision becomes active before the activation response is returned.
  */
 @RestController
 @RequiredArgsConstructor
@@ -58,7 +59,7 @@ public class KpiSettingsController {
     return service.savePalette(warehouseId, request);
   }
 
-  /** Saves a future-effective work schedule without making it active immediately. */
+  /** Saves a current-day or future-effective work schedule without activating it. */
   @PutMapping("/work-schedule")
   public WarehouseKpiSettingsResponse saveWorkSchedule(
       @AuthenticationPrincipal Jwt jwt,
@@ -79,7 +80,7 @@ public class KpiSettingsController {
     service.deletePendingWorkSchedule(warehouseId, expectedVersion);
   }
 
-  /** Activates the pending schedule exactly once for the supplied operation identity. */
+  /** Activates the pending schedule exactly once, applying a current-day revision immediately. */
   @PostMapping("/activate")
   public WarehouseKpiSettingsResponse activate(
       @AuthenticationPrincipal Jwt jwt,

@@ -36,15 +36,37 @@ contexts and screens are usable.
 - `/task-board` renders queues as side-by-side desktop columns with a vertical
   card stack in each column; mobile stacks the columns. It has no date selector
   or browser-owned queue decisions. The default view shows every current REAL
-  card and hides future SHADOW cards. “Show future subtasks” reveals all shadows;
-  “Full route” on a REAL card reveals and highlights that task's entries across
-  every queue even while the global checkbox is off. The first
+  card and hides future SHADOW cards. “Show future subtasks” reveals all shadows.
+  Every eligible future card exposes an `Available to workers` checkbox to an
+  `EDIT` user; it sends the entry version to the server and switches that stage
+  between `SHADOW` and `REAL`. A promoted ordinary stage can be taken in parallel
+  with an earlier ordinary stage, subject to the queue's WorkerApp switch, plan
+  limit and worker qualification. The current stage cannot be demoted, and no
+  later stage can be enabled while SES remains unfinished.
+  “Full route” on a REAL card
+  reveals and highlights that task's entries across
+  every queue even while the global checkbox is off, expands those queues and
+  vertically scrolls each column to its matching card without changing order; pressing
+  it again clears that temporary route view and restores the prior queue state and scroll
+  positions. The warehouse-scoped, versioned UI preference also restores the
+  future-card switch, collapsed queues, board scroll and each queue's vertical
+  scroll after task details/back navigation; it never stores task or queue facts.
+  The first
   `availableTaskLimit` waiting REAL cards (six by default) are marked as the
-  visual daily plan, but all later REAL cards remain visible and takeable.
+  visual daily plan on the complete manager board. A `MANAGE` user edits that
+  warehouse-local count from the column header and uses the adjacent checkbox
+  to publish or hide the queue in WorkerApp. WorkerApp retains active REAL work,
+  receives only that many waiting REAL cards and never receives shadows while the
+  queue is enabled; disabling it removes the whole queue, including active cards.
+  On an unfiltered desktop board an
+  `EDIT` user can drag unpinned `WAITING REAL` cards to reorder them inside the
+  same queue under entry/queue version fences and the observed target-card
+  identity. Active, pinned and shadow cards cannot be dragged. Equal-height
+  headers keep long names such as “Перемещение
+  мебели” aligned with every other column.
   A directly executable electricity task therefore appears immediately, while
-  promotion restores an earlier shadow ahead of a later unpinned REAL; a pinned
-  REAL stays ahead. SES remains the only executable gate, while its future path
-  is available only through the explicit shadow/full-route presentation. Driver
+  manager promotion restores a future shadow ahead of a later unpinned REAL; a
+  pinned REAL stays ahead. SES remains the exclusive holding gate. Driver
   movement and external capital work remain on their existing surfaces.
   Complexity is resolved only for currently rendered repair IDs in batches of
   at most 200.
@@ -130,16 +152,46 @@ contexts and screens are usable.
   media, and task-board result evidence in separate exact-reference galleries.
   Only each work-line gallery uses a compact carousel with an in-image photo count and
   always-visible previous/next controls; aggregate and result-evidence
-  galleries keep the standard shared presentation. Aggregate
-  and work-line references use their original inventory, estimate, or repair
-  owner proof; an authoritative inventory source wins over a legacy repair
-  origin or estimate link. Only worker-result evidence uses the task-board
-  entry proof.
+  galleries keep the standard shared presentation. For a synchronized repair,
+  the aggregate gallery uses the first executable task-board entry proof and
+  each work-line gallery uses its exact stage entry proof. These references
+  still point to the existing canonical media objects; the panel does not
+  change their owner. A draft without a task-board entry falls back to its
+  original inventory, estimate, or repair proof, with an authoritative
+  inventory source taking precedence. Worker-result evidence also uses its
+  exact task-board entry proof.
+  The acceptance/rework dossier uses the same synchronized-entry precedence. On desktop, its acceptance-photo
+  panel and selected-queue result-photo panel occupy bounded workspace rows, with a larger lower row
+  for result photos and queue details; the queue details
+  scroll within their own card rather than stretching or clipping the comparison carousel. Every
+  acceptance and result image preserves its full bounds with contain fitting. The right card does not
+  duplicate per-photo worker confirmation metadata already represented by the result carousel. The top panel can switch
+  between acceptance photos and aggregate task photos; while comparison is open, the alternate set
+  occupies the selected queue's result-photo card and closing comparison restores that queue's result
+  carousel. Work-line photos are not mixed into either set. The queue selector sits directly in the lower-right card
+  title and shows only one physical repair queue at a time without an extra selector row or an
+  `Очередь` prefix. Historical stages with the same non-null physical queue ID are coalesced only
+  for this read: the card keeps all of their work, material, task-board result, timing, brigade and
+  member facts while persisted history remains unchanged. Work and material rows use a matching
+  compact list style and description–quantity text, work comments open on demand, and each work source set stays in its
+  smaller line carousel. On the interactive acceptance page, the write-off and acceptance/rework
+  actions are rendered in the header beside the Back button rather than below the queue details.
+  These controls change presentation only and do not create browser-owned repair or media state.
   They do not substitute the cabin gallery. Inventory folders use the inventory
   dossier activity for their source, occurrence time, and actor labels. See the
   [rental-item media hook](src/features/rental-items/use-rental-item-media.ts),
   [cover parser](src/features/media/api/http-media-client.ts), and [media
   feature](src/features/media/).
+- A cabin detail with edit access and at least one READY image places `Создать
+  представление` directly beside the photo count. The version-fenced,
+  idempotent logistics command freezes the current READY photo set; after a
+  successful response the panel starts copying the absolute public link and
+  immediately opens its `/photos/{token}` route. That route is outside the
+  authenticated React subtree and renders only the cabin number, creation time,
+  photo count and immutable image grid with an accessible large-image dialog.
+  It never exposes warehouse, client, passport or storage-locator fields. See
+  the [photo-presentation client](src/features/rental-items/cabin-photo-presentations-api.ts)
+  and [public page](src/features/rental-items/public-cabin-photo-presentation-page.tsx).
 - The panel may combine independent public reads for a screen, but it must not
   orchestrate cross-service business workflows in the browser.
 
@@ -180,6 +232,13 @@ contexts and screens are usable.
   displayed as not specified and is never backfilled in the browser. See the
   [logistics OpenAPI](../contracts/openapi/logistics-service.yaml) and the
   [client feature](src/features/clients/).
+- A writable cabin dossier offers `Отгрузка задним числом` for `FREE` and the supported repair
+  statuses, plus `Возврат задним числом` for `RENTED`. Its modal reuses the rental-client chooser:
+  a new client is created first with a separate stable idempotency key, then the fenced historical
+  logistics command is retried with its own key. The UI never submits a driver or a route, and it
+  refreshes only the affected cabin, logistics and dossier queries after acceptance. See the
+  [dossier page](src/features/rental-items/rental-item-detail-page.tsx) and
+  [historical-movement dialog](src/features/rental-items/historical-rental-movement-dialog.tsx).
 - Booking requests 50 cabins per server page and defers text before it becomes
   a query. It does not poll the full catalogue on a timer, card grids size to
   their actual compact content, and each card initially loads one preview;
@@ -203,10 +262,14 @@ contexts and screens are usable.
   held cabins without double counting, then applies nullable `maximumPerCabin`.
   The presentation polls and refetches on focus/reconnect; a smaller refreshed
   pool keeps the explainable draft, marks it invalid, and disables confirmation
-  while the atomic server confirmation remains authoritative. A public
-  presentation collects one to five independent, date-only client wishes; the
-  manager order detail shows the returned values read-only and never overwrites
-  them.
+  while the atomic server confirmation remains authoritative. A NORMAL public
+  presentation exposes the server-owned `requestableDeliveryDates`: four
+  warehouse-local dates from day +2 through day +5. The calendar states that
+  these dates are available to request and coordinate, disables every other
+  date including today and tomorrow, and accepts one to four independent
+  date-only wishes from that list. This does not promise or reserve logistics
+  capacity; the manager order detail shows the returned values read-only and
+  never overwrites them.
 - A REPLACEMENT presentation requires the server's exact selection count and
   preserves client click order. It has no furniture editor: desired quantities
   remain reserved and transfer to the corresponding replacement in the current
@@ -217,8 +280,9 @@ contexts and screens are usable.
 - Order creation and edit screens persist the selected client, editable order
   contact phone, and comment only. The public presentation's second step
   collects the delivery address, optional coordinate pair, zero or more
-  order-owned additional contacts, one to five independently selected desired
-  dates, and the initial rental duration. The returned `desiredDeliveryWindows`
+  order-owned additional contacts, one to four independently selected desired
+  dates from the server-provided requestable list, and the initial rental
+  duration. The returned `desiredDeliveryWindows`
   are read-only on order detail as a client selection and remain distinct from
   the logistics-owned scheduled date. A DRAFT detail requires a nonblank contact
   phone, selected warehouse, and one or more cabins; it never offers a manager command for the
@@ -312,6 +376,36 @@ See the [canonical logistics contract](../contracts/openapi/logistics-service.ya
 [logistics board](src/features/logistics/driver-board/logistics-board-page.tsx),
 [movement board](src/features/logistics/driver-board/driver-board-page.tsx), and
 [warehouse-transfer adapter](src/features/logistics/warehouse-transfers/adapters/http-warehouse-transfer-client.ts).
+
+## Daily brigade status
+
+`/settings/kpi` accepts a schedule starting today or later. Save creates the
+normal `DRAFT`; explicit activation applies a today's revision immediately to
+the whole warehouse-local calendar day, while a future revision remains
+scheduled. Past dates are rejected.
+
+`/` is the selected warehouse's live daily-brigade view. It reads the current
+[task-board snapshot and daily activity projection](../contracts/openapi/task-board-service.yaml),
+active worker groups, the active KPI schedule/palette, and only the maintenance
+repairs referenced by today's intervals. It stores none of those facts in the
+browser. A row spans the warehouse-local `shiftStart` through `shiftEnd`; the
+current-time marker advances every second and is clamped outside the shift. No
+active schedule or a configured day off is shown as an explicit state rather
+than inventing a work line.
+
+Each segment starts at task-board's persisted TAKE timestamp and ends at its
+persisted completion timestamp; a live segment ends at current server-aligned
+time. Shift bounds only position and clip segments and never replace those
+actual times. Completed tasks remain as neutral history, while a currently
+`IN_PROGRESS` or `PAUSED` segment uses the server-configured KPI palette range
+for its live remaining percentage. Hover/focus shows its exact start and end,
+cabin, physical queue, repair complexity, priority and remaining percentage.
+An inactive palette leaves live work neutral and explains why. The dashboard
+refreshes both task-board reads every 30 seconds for external worker changes;
+[`HomePage`](src/features/home/home-page.tsx), the
+[activity client](src/features/home/daily-brigade-activity-api.ts), and the
+[presentation mapping](src/features/home/daily-brigade-timeline.ts) are the
+implementation references.
 
 ## Failures, concurrency, and commands
 

@@ -66,6 +66,7 @@ class MaintenanceWorkerCoverReconciliationTest {
     when(stage.getState()).thenReturn(RepairStageState.QUEUED);
     when(stage.getTaskGenerationState()).thenReturn("GENERATED");
     when(stage.getExternalQueueEntryId()).thenReturn(UUID.randomUUID());
+    when(stage.getTaskBoardVersion()).thenReturn(0L);
     when(repairs.findAll(any(Pageable.class)))
         .thenReturn(new PageImpl<>(List.of(repair)));
     when(repairs.findById(repairId)).thenReturn(Optional.of(repair));
@@ -85,13 +86,40 @@ class MaintenanceWorkerCoverReconciliationTest {
     assertThat(key.getValue())
         .isEqualTo(
             UUID.nameUUIDFromBytes(
-                ("worker-presentation-v6:" + repairId)
+                ("worker-presentation-v8:" + repairId)
                     .getBytes(StandardCharsets.UTF_8)));
     assertThat(key.getValue())
         .isNotEqualTo(
             UUID.nameUUIDFromBytes(
                 ("worker-presentation-v5:" + repairId)
                     .getBytes(StandardCharsets.UTF_8)));
+  }
+
+  @Test
+  void retriesRepairLevelQuarantineWhenEveryQueuedStageMappingIsStillConfirmed() {
+    UUID repairId = UUID.randomUUID();
+    MaintenanceRepair repair = eligibleRepair(repairId);
+    when(repair.getTaskGenerationState()).thenReturn("FAILED");
+    RepairStage stage = mock(RepairStage.class);
+    when(stage.getState()).thenReturn(RepairStageState.QUEUED);
+    when(stage.getTaskGenerationState()).thenReturn("GENERATED");
+    when(stage.getExternalQueueEntryId()).thenReturn(UUID.randomUUID());
+    when(stage.getTaskBoardVersion()).thenReturn(0L);
+    when(repairs.findAll(any(Pageable.class)))
+        .thenReturn(new PageImpl<>(List.of(repair)));
+    when(repairs.findById(repairId)).thenReturn(Optional.of(repair));
+    when(repairStages.findAllByRepairIdOrderByStageNo(repairId))
+        .thenReturn(List.of(stage));
+
+    reconciliation.enqueueWorkerPresentationSnapshots();
+
+    verify(reconciliations)
+        .enqueue(
+            eq(repairId),
+            eq("TASK_BOARD"),
+            eq("REFRESH_WORKER_MEDIA"),
+            any(),
+            eq(Map.of("repairId", repairId.toString())));
   }
 
   @Test
@@ -120,6 +148,7 @@ class MaintenanceWorkerCoverReconciliationTest {
     when(queuedStage.getState()).thenReturn(RepairStageState.QUEUED);
     when(queuedStage.getTaskGenerationState()).thenReturn("GENERATED");
     when(queuedStage.getExternalQueueEntryId()).thenReturn(UUID.randomUUID());
+    when(queuedStage.getTaskBoardVersion()).thenReturn(0L);
     when(repairs.findAll(any(Pageable.class)))
         .thenReturn(new PageImpl<>(List.of(quarantinedRepair, acceptedRepair)));
     when(repairs.findById(quarantinedRepairId))
@@ -228,6 +257,7 @@ class MaintenanceWorkerCoverReconciliationTest {
     when(repair.getExecutionState()).thenReturn(RepairExecutionState.QUEUED);
     when(repair.getTaskGenerationState()).thenReturn("GENERATED");
     when(repair.getExternalTaskId()).thenReturn(UUID.randomUUID());
+    when(repair.getTaskBoardVersion()).thenReturn(0L);
     return repair;
   }
 }

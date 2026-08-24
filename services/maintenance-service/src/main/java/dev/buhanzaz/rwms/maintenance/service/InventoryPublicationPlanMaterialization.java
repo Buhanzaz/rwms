@@ -26,7 +26,8 @@ import tools.jackson.databind.ObjectMapper;
 
 /**
  * Converts a validated frozen inventory plan into deterministic estimate/repair line and stage
- * material, including the residual calculation for a started predecessor repair.
+ * material, including the residual calculation for a started predecessor repair. Stage allocation
+ * is canonicalized to one executable stage per physical routing queue ID.
  */
 @Component
 final class InventoryPublicationPlanMaterialization {
@@ -247,9 +248,8 @@ final class InventoryPublicationPlanMaterialization {
 
   private List<InventoryPublicationPublishedStage> allocateStages(
       FrozenInventoryPlanSnapshot snapshot, List<InventoryPublicationPublishedLine> lines) {
-    List<InventoryPublicationPublishedStage> allocations = snapshot.stages().stream()
-        .sorted(Comparator.comparingInt(InventoryPlanStageSnapshot::order)
-            .thenComparing(InventoryPlanStageSnapshot::id))
+    List<InventoryPublicationPublishedStage> allocations =
+        RepairPhaseSequence.canonicalInventoryStages(snapshot.stages()).stream()
         .map(InventoryPublicationPublishedStage::new)
         .toList();
     Set<Integer> allocated = new HashSet<>();

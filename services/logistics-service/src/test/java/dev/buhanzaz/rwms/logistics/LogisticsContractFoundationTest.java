@@ -37,6 +37,7 @@ class LogisticsContractFoundationTest {
             "/api/logistics/v1/returns/{documentId}",
             "/api/logistics/v1/returns/{documentId}/register",
             "/api/logistics/v1/returns/{documentId}/start-estimates",
+            "/api/logistics/v1/historical-rental-movements",
             "/api/logistics/v1/shipments",
             "/api/logistics/v1/shipments/{documentId}",
             "/api/logistics/v1/shipments/{documentId}/furniture-readiness",
@@ -84,7 +85,10 @@ class LogisticsContractFoundationTest {
             "/api/logistics/v1/rental-inquiries/{inquiryId}/client-presentation",
             "/api/logistics/v1/settings/rental",
             "/api/logistics/v1/warehouses/{warehouseId}/shipment-task-settings",
+            "/api/logistics/v1/cabins/{cabinId}/photo-presentations",
             "/api/logistics/public/v1/client-presentations/{token}",
+            "/api/logistics/public/v1/cabin-photo-presentations/{token}",
+            "/api/logistics/public/v1/cabin-photo-presentations/{token}/media/{mediaId}/{generation}/{variant}",
             "/api/logistics/public/v1/client-presentations/{token}/bookings",
             "/api/logistics/public/v1/client-presentations/{token}/bookings/{bookingId}",
             "/api/logistics/public/v1/client-presentations/{token}/media/{cabinId}/{mediaId}/{generation}/{variant}",
@@ -97,6 +101,8 @@ class LogisticsContractFoundationTest {
     assertThat(child(child(document, "components"), "schemas"))
         .containsKeys(
             "CreateReturnRequest",
+            "HistoricalRentalMovementKind",
+            "CreateHistoricalRentalMovementRequest",
             "ReturnEstimateLineRequest",
             "StartReturnEstimatesRequest",
             "CreateShipmentRequest",
@@ -149,6 +155,10 @@ class LogisticsContractFoundationTest {
             "RentalSettings",
             "ShipmentTaskSettings",
             "UpdateShipmentTaskSettingsRequest",
+            "CreateCabinPhotoPresentationRequest",
+            "CabinPhotoPresentation",
+            "CabinPhotoPresentationPhoto",
+            "PublicCabinPhotoPresentation",
             "LogisticsDocument",
             "LogisticsLine",
             "ReconcileRequest");
@@ -159,6 +169,35 @@ class LogisticsContractFoundationTest {
         .doesNotContain("scheduledTime", "scheduledAt");
     assertThat(child(logisticsDocument, "properties"))
         .doesNotContainKeys("scheduledTime", "scheduledAt");
+    assertThat((List<String>) logisticsDocument.get("required"))
+        .contains("historicalRentalImport");
+    Map<String, Object> historicalMovement =
+        child(
+            child(document, "paths"),
+            "/api/logistics/v1/historical-rental-movements");
+    Map<String, Object> historicalMovementPost = child(historicalMovement, "post");
+    assertThat(historicalMovementPost.get("operationId"))
+        .isEqualTo("createHistoricalRentalMovement");
+    Map<String, Object> historicalMovementRequest =
+        child(schemas, "CreateHistoricalRentalMovementRequest");
+    assertThat(historicalMovementRequest.get("required"))
+        .isEqualTo(
+            List.of(
+                "warehouseId",
+                "rentalItemId",
+                "expectedRentalItemVersion",
+                "clientId",
+                "kind",
+                "occurredOn"));
+    assertThat(child(historicalMovementRequest, "properties"))
+        .containsOnlyKeys(
+            "warehouseId",
+            "rentalItemId",
+            "expectedRentalItemVersion",
+            "clientId",
+            "kind",
+            "occurredOn")
+        .doesNotContainKeys("driverSnapshot", "driverWorkerId", "scheduledDate");
     assertThat(child(child(child(schemas, "CabinSearchRequest"), "properties"), "groups"))
         .containsEntry("maxItems", 20);
     assertThat(child(child(child(schemas, "CabinSearchResponse"), "properties"), "groups"))
@@ -262,6 +301,7 @@ class LogisticsContractFoundationTest {
             "registerReturn",
             "acceptUndamagedReturn",
             "startReturnEstimates",
+            "createHistoricalRentalMovement",
             "listShipments",
             "createShipment",
             "getShipment",
@@ -340,7 +380,10 @@ class LogisticsContractFoundationTest {
             "updateRentalSettings",
             "getShipmentTaskSettings",
             "updateShipmentTaskSettings",
+            "createCabinPhotoPresentation",
             "getPublicClientPresentation",
+            "getPublicCabinPhotoPresentation",
+            "getPublicCabinPhotoPresentationMedia",
             "confirmPublicClientPresentation",
             "getPublicClientPresentationBooking",
             "getPublicClientPresentationMedia",

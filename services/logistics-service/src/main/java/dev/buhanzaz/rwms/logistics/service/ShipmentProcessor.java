@@ -39,6 +39,14 @@ public class ShipmentProcessor {
       LogisticsExternalAttemptClaimService.Claim claim, ShipmentWorkflowStore.Work work) {
     try {
       switch (work.type()) {
+        case HISTORICAL_MAINTENANCE_CLOSE ->
+            store.confirmHistoricalMaintenanceClose(
+                claim,
+                dependencies.closeHistoricalShipment(
+                    work.operationId(),
+                    work.documentId(),
+                    work.warehouseId(),
+                    work.assetId()));
         case SNAPSHOT ->
             store.confirmSnapshot(
                 claim, dependencies.readRentalItemSnapshot(work.assetId()));

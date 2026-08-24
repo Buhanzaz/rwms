@@ -184,6 +184,51 @@ class MaintenanceTaskCorrelationRecoveryIntegrationTest {
   }
 
   @Test
+  void workerCompletionAfterEarlierQueueTransitionsAppearsInAcceptance() {
+    CatalogRepairInput catalogInput = insertActiveCatalogPlan(UUID.randomUUID(), 1);
+    RepairFixture repair = createRegisteredRepair(1, catalogInput);
+    UUID boardTaskId = UUID.randomUUID();
+    UUID queueEntryId = repair.queueEntryIds().getFirst();
+
+    stageAndProcess(inbox, boardTask(boardTaskId, repair.externalTaskId(), 0));
+    stageAndProcess(
+        inbox,
+        queueTransition(
+            queueEntryId,
+            boardTaskId,
+            0,
+            0,
+            "task-board.queue-entry.created.v1",
+            "WAITING",
+            null));
+    stageAndProcess(
+        inbox,
+        queueTransition(
+            queueEntryId,
+            boardTaskId,
+            0,
+            1,
+            "task-board.queue-entry.taken.v1",
+            "IN_PROGRESS",
+            null));
+    var completion =
+        queueTransition(
+            queueEntryId,
+            boardTaskId,
+            0,
+            2,
+            "task-board.queue-entry.completed.v1",
+            "DONE",
+            "2026-07-17T00:00:00Z");
+    stageAndProcess(inbox, completion);
+
+    assertCompletedRepair(repair, List.of(completion.eventId()));
+    assertThat(service.acceptance(catalogInput.warehouseId()))
+        .extracting(value -> value.repairId())
+        .containsExactly(repair.repairId());
+  }
+
+  @Test
   void unownedTaskCompletionIsIgnoredWhileInboxAndCheckpointsAdvance() {
     UUID boardTaskId = UUID.randomUUID();
     UUID externalTaskId = UUID.randomUUID();
@@ -641,32 +686,54 @@ class MaintenanceTaskCorrelationRecoveryIntegrationTest {
 
   private MaintenanceInboundEnvelopeValidator.ValidatedInboundEvent queueCompletion(
       UUID queueEntryId, UUID boardTaskId, int routeIndex) {
+    return queueTransition(
+        queueEntryId,
+        boardTaskId,
+        routeIndex,
+        0,
+        "task-board.queue-entry.completed.v1",
+        "DONE",
+        "2026-07-17T00:00:00Z");
+  }
+
+  private MaintenanceInboundEnvelopeValidator.ValidatedInboundEvent queueTransition(
+      UUID queueEntryId,
+      UUID boardTaskId,
+      int routeIndex,
+      long aggregateVersion,
+      String eventType,
+      String status,
+      String doneAt) {
     byte[] raw =
         json(
             """
             {
               "envelopeVersion":2,"eventId":"%s",
-              "eventType":"task-board.queue-entry.completed.v1","eventVersion":1,
+              "eventType":"%s","eventVersion":1,
               "occurredAt":"2026-07-17T00:00:00Z","recordedAt":"2026-07-17T00:00:00Z",
               "producer":"task-board-service","aggregateType":"QUEUE_ENTRY",
-              "aggregateId":"%s","aggregateVersion":0,
+              "aggregateId":"%s","aggregateVersion":%d,
               "correlation":{"correlationId":"%s","causationId":null},"actorRef":null,
               "payload":{"queueEntryId":"%s","taskId":"%s","queueId":"%s",
               "queueName":"Repair %d","routeIndex":%d,"queuePosition":0,"entryType":"REAL",
-              "status":"DONE","plannedDurationMinutes":10,"activeStartedAt":null,"pausedAt":null,
-              "doneAt":"2026-07-17T00:00:00Z","activeWorkSeconds":10,"pauseOrigin":null,
+              "status":"%s","plannedDurationMinutes":10,"activeStartedAt":null,"pausedAt":null,
+              "doneAt":%s,"activeWorkSeconds":10,"pauseOrigin":null,
               "assignments":[],"timeEvents":[],"interruptions":[],"deleted":false}
             }
             """
                 .formatted(
                     UUID.randomUUID(),
+                    eventType,
                     queueEntryId,
+                    aggregateVersion,
                     UUID.randomUUID(),
                     queueEntryId,
                     boardTaskId,
                     UUID.randomUUID(),
                     routeIndex,
-                    routeIndex));
+                    routeIndex,
+                    status,
+                    doneAt == null ? "null" : "\"" + doneAt + "\""));
     return validator.validate(
         MaintenanceTransportTopics.QUEUE_ENTRY,
         queueEntryId.toString().getBytes(StandardCharsets.UTF_8),

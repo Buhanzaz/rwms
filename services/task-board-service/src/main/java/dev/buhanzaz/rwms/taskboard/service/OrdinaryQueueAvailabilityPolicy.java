@@ -16,9 +16,10 @@ import java.util.UUID;
  * <p>Active work remains at the front of its queue. Waiting work follows its aggregate queue
  * position, except that a pinned real card keeps its visible slot while an earlier shadow is
  * promoted; persisted schedule dates do not partition or order ordinary work. This policy never
- * truncates the backlog: a route's first unfinished entry is the only executable phase, and later
- * entries remain durable shadows until that phase completes. WorkerApp publication is a separate
- * warehouse-local policy layered over this complete canonical order.
+ * truncates the backlog: a route's first unfinished entry is executable by default, while a
+ * manager may explicitly make another future entry executable in parallel. WorkerApp publication
+ * and the mandatory SES gate are separate server policies layered over this complete canonical
+ * order.
  */
 final class OrdinaryQueueAvailabilityPolicy {
   private static final Set<EntryStatus> UNFINISHED =
@@ -66,8 +67,9 @@ final class OrdinaryQueueAvailabilityPolicy {
   }
 
   /**
-   * Chooses the next executable route step after excluding entries completed by the current
-   * atomic command. The persisted route order is the sole phase precedence.
+   * Chooses the earliest unfinished route step after excluding entries completed by the current
+   * atomic command. Completion uses this step for default promotion; manager-promoted future real
+   * entries may already be executable independently.
    */
   static QueueEntry nextExecutableRouteEntry(
       Collection<QueueEntry> route, Collection<UUID> excludedEntryIds) {

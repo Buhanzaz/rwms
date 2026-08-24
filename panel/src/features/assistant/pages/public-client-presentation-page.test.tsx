@@ -54,6 +54,13 @@ import {
 } from "@/features/assistant/pages/public-client-presentation-draft"
 import { PublicClientPresentationPage } from "@/features/assistant/pages/public-client-presentation-page"
 
+const REQUESTABLE_DELIVERY_DATES = [
+  "2026-08-25",
+  "2026-08-26",
+  "2026-08-27",
+  "2026-08-28",
+]
+
 const pointerCaptureDescriptors = new Map(
   [
     "hasPointerCapture",
@@ -129,6 +136,7 @@ function presentation(
     mode: "NORMAL",
     requiredSelectionCount: null,
     requiresDesiredDeliveryWindows: true,
+    requestableDeliveryDates: REQUESTABLE_DELIVERY_DATES,
     desiredDeliveryWindows: [],
     equipmentAvailability: [
       {
@@ -202,11 +210,10 @@ async function chooseCalendarDates(
   user: ReturnType<typeof userEvent.setup>,
   indexes: number[] = [0]
 ) {
-  const days = calendarDayButtons()
   const selectedDates = indexes.map((index) => {
-    const day = days[index]
-    if (!day) throw new Error("Календарь не показал нужный день.")
-    return calendarDateFromButton(day)
+    const date = api.presentation?.requestableDeliveryDates[index]
+    if (!date) throw new Error("Сервер не предложил нужную тестовую дату.")
+    return date
   })
   for (const date of selectedDates) {
     const day = calendarDayButtons().find(
@@ -454,6 +461,7 @@ describe("public client presentation", () => {
       mode: "REPLACEMENT",
       requiredSelectionCount: 2,
       requiresDesiredDeliveryWindows: false,
+      requestableDeliveryDates: [],
       desiredDeliveryWindows: [
         {
           startDate: "2026-08-11",
@@ -551,7 +559,7 @@ describe("public client presentation", () => {
     ).toHaveProperty("disabled", true)
 
     const selectedDates = await fillNormalDetails(user, [2, 0])
-    expect(screen.getByText("Выбрано дней: 2 из 5.")).toBeTruthy()
+    expect(screen.getByText("Выбрано дней: 2 из 4.")).toBeTruthy()
     expect(
       screen.getByRole("button", { name: "Уменьшить срок аренды" })
     ).toHaveProperty("disabled", true)
@@ -590,35 +598,50 @@ describe("public client presentation", () => {
     )
   }, 15_000)
 
-  it("allows non-adjacent dates, caps selection at five, and permits deselection", async () => {
+  it("enables only the four server-requestable dates and permits deselection", async () => {
     const user = userEvent.setup()
     renderPage()
 
     await openNormalDetails(user)
-    const selectedDates = await chooseCalendarDates(user, [0, 2, 4, 6, 8])
-    expect(screen.getByText("Выбрано дней: 5 из 5.")).toBeTruthy()
+    expect(
+      screen.getByText(
+        "Доступны для запроса и согласования: 25 авг. 2026 г., 26 авг. 2026 г., 27 авг. 2026 г., 28 авг. 2026 г."
+      )
+    ).toBeTruthy()
+    expect(
+      screen.getByText(
+        "Выбор даты не резервирует логистическую мощность до согласования с логистом."
+      )
+    ).toBeTruthy()
 
-    const selectedDateSet = new Set(selectedDates)
-    const sixthDate = calendarDayButtons()
-      .map(calendarDateFromButton)
-      .find((date) => !selectedDateSet.has(date))
-    if (!sixthDate) throw new Error("Календарь не показал шестой день.")
-    const sixthDay = calendarDayButtons().find(
-      (day) => calendarDateFromButton(day) === sixthDate
+    const tomorrow = calendarDayButtons().find(
+      (day) => calendarDateFromButton(day) === "2026-08-24"
     )
-    expect(sixthDay).toHaveProperty("disabled", true)
+    if (!tomorrow) throw new Error("Календарь не показал завтрашний день.")
+    expect(tomorrow).toHaveProperty("disabled", true)
+    for (const requestableDate of REQUESTABLE_DELIVERY_DATES) {
+      const day = calendarDayButtons().find(
+        (candidate) => calendarDateFromButton(candidate) === requestableDate
+      )
+      if (!day) throw new Error("Календарь не показал разрешённую дату.")
+      expect(day).toHaveProperty("disabled", false)
+    }
+    const outsideWindow = calendarDayButtons().find(
+      (day) => calendarDateFromButton(day) === "2026-08-29"
+    )
+    if (!outsideWindow) throw new Error("Календарь не показал дату вне окна.")
+    expect(outsideWindow).toHaveProperty("disabled", true)
+
+    const selectedDates = await chooseCalendarDates(user, [0, 1, 2, 3])
+    expect(screen.getByText("Выбрано дней: 4 из 4.")).toBeTruthy()
 
     const selectedDay = calendarDayButtons().find(
       (day) => calendarDateFromButton(day) === selectedDates[0]
     )
     if (!selectedDay) throw new Error("Календарь не сохранил выбранный день.")
     await user.click(selectedDay)
-    expect(screen.getByText("Выбрано дней: 4 из 5.")).toBeTruthy()
-    expect(
-      calendarDayButtons().find(
-        (day) => calendarDateFromButton(day) === sixthDate
-      )
-    ).toHaveProperty("disabled", false)
+    expect(screen.getByText("Выбрано дней: 3 из 4.")).toBeTruthy()
+    expect(outsideWindow).toHaveProperty("disabled", true)
   })
 
   it("accepts a complete coordinate pair and maps optional contacts from details", async () => {
@@ -705,7 +728,7 @@ describe("public client presentation", () => {
     await user.click(
       screen.getByRole("button", { name: "Далее: дата, срок и доставка" })
     )
-    expect(screen.getByText("Выбрано дней: 1 из 5.")).toBeTruthy()
+    expect(screen.getByText("Выбрано дней: 1 из 4.")).toBeTruthy()
     expect(screen.getByText("2 месяца")).toBeTruthy()
     expect(screen.getByLabelText("Адрес доставки")).toHaveProperty(
       "value",

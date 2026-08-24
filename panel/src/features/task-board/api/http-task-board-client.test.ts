@@ -6,6 +6,7 @@ import {
   listHttpEligibleWorkerGroups,
   pinHttpTaskBoardEntry,
   reorderHttpTaskBoardEntry,
+  setHttpFutureTaskBoardEntryAvailability,
   updateHttpTaskBoardWorkerPlan,
 } from "@/features/task-board/api/http-task-board-client"
 import { ApiError } from "@/lib/api-client"
@@ -299,6 +300,34 @@ describe("public task-board HTTP client", () => {
       expectedQueueVersion: 4,
       targetEntryId: "00000000-0000-4000-8000-000000000006",
       targetIndex: 1,
+    })
+  })
+
+  it("changes future availability with entry-version CAS", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(boardResponse))
+      .mockResolvedValueOnce(json(boardResponse))
+    vi.stubGlobal("fetch", fetchMock)
+    const futureEntry = (
+      await getHttpTaskBoard("task-board-token", warehouseId)
+    ).queues[0]!.entries[1]!
+
+    const updated = await setHttpFutureTaskBoardEntryAvailability({
+      accessToken: "task-board-token",
+      entry: futureEntry,
+      available: true,
+    })
+
+    expect(updated.warehouseId).toBe(warehouseId)
+    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(url).toContain(
+      `/api/task-board/warehouses/${warehouseId}/task-board/entries/${futureEntry.id}/future-availability`
+    )
+    expect(init.method).toBe("POST")
+    expect(JSON.parse(String(init.body))).toEqual({
+      expectedEntryVersion: 3,
+      available: true,
     })
   })
 

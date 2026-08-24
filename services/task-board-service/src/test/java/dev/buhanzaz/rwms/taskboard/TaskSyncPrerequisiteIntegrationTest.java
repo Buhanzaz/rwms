@@ -238,7 +238,9 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
                 .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(update)))
-        .andExpect(status().isConflict());
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.taskVersion").value(1))
+        .andExpect(jsonPath("$.route.length()").value(2));
     assertThat(jdbc.queryForObject("select count(*) from queue_entry", Integer.class)).isEqualTo(2);
 
     CancelTaskRequest cancel = new CancelTaskRequest(1L, "amended");

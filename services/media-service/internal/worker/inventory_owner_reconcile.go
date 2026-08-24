@@ -34,8 +34,10 @@ type inventoryReconciliationFile struct {
 }
 
 // RunInventoryOwnerReconciliationFile is the non-HTTP, operator-reviewed
-// command boundary. Every record is passed through the same strict parser as
-// live Kafka delivery before the repository applies the atomic reconciliation.
+// command boundary. Every record retains strict envelope and payload
+// validation, while reviewed legacy lifecycle markers may omit the
+// membershipActive field that was added after those exact bytes were emitted.
+// Live Kafka delivery remains strict and does not use this compatibility path.
 func RunInventoryOwnerReconciliationFile(
 	ctx context.Context,
 	repository *persistence.Repository,
@@ -70,7 +72,7 @@ func RunInventoryOwnerReconciliationFile(
 	}
 	messages := make([]persistence.InventoryFindingMessage, 0, len(batch.Records))
 	for _, source := range batch.Records {
-		message, ignored, err := parseInventoryFindingRecord(&kgo.Record{
+		message, ignored, err := parseInventoryFindingReconciliationRecord(&kgo.Record{
 			Topic: source.Topic, Key: []byte(source.Key), Value: source.Value,
 		})
 		if err != nil || ignored || message.AggregateID != aggregateID {

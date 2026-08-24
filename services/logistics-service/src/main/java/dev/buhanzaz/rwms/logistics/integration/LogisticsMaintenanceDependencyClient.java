@@ -51,6 +51,44 @@ final class LogisticsMaintenanceDependencyClient {
     return transferRepairDeparture(response);
   }
 
+  /** Closes maintenance-owned work before a historical shipment acquires its own asset lease. */
+  HistoricalShipmentRepairClosure closeHistoricalShipment(
+      UUID idempotencyKey, UUID shipmentId, UUID warehouseId, UUID rentalItemId) {
+    if (idempotencyKey == null || shipmentId == null || warehouseId == null || rentalItemId == null) {
+      throw new IllegalArgumentException("Historical shipment closure identity is required");
+    }
+    HistoricalShipmentRepairClosureResponse response =
+        transport.post(
+            maintenanceBase + "/historical-shipments/" + shipmentId + "/close",
+            idempotencyKey,
+            new HistoricalShipmentRepairClosureRequest(warehouseId, rentalItemId),
+            HistoricalShipmentRepairClosureResponse.class,
+            MAINTENANCE_CLIENT,
+            MAINTENANCE_SCOPE,
+            "Dependency returned an empty response",
+            DEFAULT);
+    if (response == null
+        || !shipmentId.equals(response.shipmentId())
+        || !warehouseId.equals(response.warehouseId())
+        || !rentalItemId.equals(response.rentalItemId())
+        || response.rentalItemVersion() < 0
+        || !"FREE".equals(response.rentalItemStatus())
+        || response.closedRepairIds() == null
+        || response.closedRepairIds().stream().anyMatch(java.util.Objects::isNull)
+        || response.closedRepairIds().size() != Set.copyOf(response.closedRepairIds()).size()
+        || !Set.of("NOT_REQUIRED", "CLOSED").contains(response.outcome())) {
+      throw malformed("Maintenance-service returned invalid historical shipment closure truth");
+    }
+    return new HistoricalShipmentRepairClosure(
+        response.shipmentId(),
+        response.warehouseId(),
+        response.rentalItemId(),
+        response.rentalItemVersion(),
+        response.rentalItemStatus(),
+        List.copyOf(response.closedRepairIds()),
+        response.outcome());
+  }
+
   TransferRepairArrivalPreflight preflightTransferArrival(
       UUID transferId,
       UUID lineId,
@@ -400,6 +438,19 @@ final class LogisticsMaintenanceDependencyClient {
    */
   private record TransferRepairContextRequest(
       UUID rentalItemId, UUID sourceWarehouseId, UUID targetWarehouseId) {}
+
+  /** Private maintenance request carrying only the warehouse and cabin identity being imported. */
+  private record HistoricalShipmentRepairClosureRequest(UUID warehouseId, UUID rentalItemId) {}
+
+  /** Private maintenance result that supplies the exact post-closure asset version for shipment. */
+  private record HistoricalShipmentRepairClosureResponse(
+      UUID shipmentId,
+      UUID warehouseId,
+      UUID rentalItemId,
+      long rentalItemVersion,
+      String rentalItemStatus,
+      List<UUID> closedRepairIds,
+      String outcome) {}
 
   /**
    * Arrival completion command fenced by the current rental-item version and carrying any required

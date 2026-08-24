@@ -3,13 +3,14 @@ package dev.buhanzaz.rwms.taskboard.api;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 
 import dev.buhanzaz.rwms.taskboard.security.*;
+import dev.buhanzaz.rwms.taskboard.service.DailyBrigadeActivityService;
 import dev.buhanzaz.rwms.taskboard.service.TaskBoardService;
 import jakarta.validation.Valid;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -29,12 +30,37 @@ import tools.jackson.databind.node.ObjectNode;
  * version-fenced commands rather than reconstructing workflow in the browser or app.
  */
 @RestController
-@RequiredArgsConstructor
 @RequestMapping("/api/warehouses/{warehouseId}/task-board")
 public class TaskBoardController {
   private final TaskBoardService service;
+  private final DailyBrigadeActivityService dailyBrigadeActivity;
   private final WarehouseAccessAuthorizer access;
   private final ObjectMapper objectMapper;
+
+  /** Creates the public board API with every owning read and command collaborator. */
+  @Autowired
+  public TaskBoardController(
+      TaskBoardService service,
+      DailyBrigadeActivityService dailyBrigadeActivity,
+      WarehouseAccessAuthorizer access,
+      ObjectMapper objectMapper) {
+    this.service = service;
+    this.dailyBrigadeActivity = dailyBrigadeActivity;
+    this.access = access;
+    this.objectMapper = objectMapper;
+  }
+
+  /**
+   * Retains the narrow constructor used by the isolated ETag unit test, which never invokes the
+   * daily-activity endpoint. Production dependency injection uses the complete constructor.
+   */
+  TaskBoardController(
+      TaskBoardService service, WarehouseAccessAuthorizer access, ObjectMapper objectMapper) {
+    this.service = service;
+    this.dailyBrigadeActivity = null;
+    this.access = access;
+    this.objectMapper = objectMapper;
+  }
 
   /**
    * Returns the aggregate ordinary board snapshot with a weak semantic ETag.
@@ -54,6 +80,14 @@ public class TaskBoardController {
       return ResponseEntity.status(HttpStatus.NOT_MODIFIED).eTag(etag).build();
     }
     return ResponseEntity.ok().eTag(etag).body(snapshot);
+  }
+
+  /** Returns actual TAKE-to-finish brigade intervals for the current warehouse-local day. */
+  @GetMapping("/daily-brigade-activity")
+  public DailyBrigadeActivityDto dailyBrigadeActivity(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID warehouseId) {
+    taskAccess(jwt, warehouseId, false);
+    return dailyBrigadeActivity.currentDay(warehouseId);
   }
 
   /** Returns the dedicated driver board without mixing it with ordinary operational queues. */
@@ -170,6 +204,19 @@ public class TaskBoardController {
       @Valid @RequestBody PinTaskRequest request) {
     userWrite(jwt, warehouseId);
     return service.pin(warehouseId, taskId, request);
+  }
+
+  /**
+   * Promotes or demotes one still-future ordinary route entry under its observed entry version.
+   */
+  @PostMapping("/entries/{entryId}/future-availability")
+  public TaskBoardSnapshot setFutureTaskEntryAvailability(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID warehouseId,
+      @PathVariable UUID entryId,
+      @Valid @RequestBody SetFutureTaskEntryAvailabilityRequest request) {
+    userWrite(jwt, warehouseId);
+    return service.setFutureTaskEntryAvailability(warehouseId, entryId, request);
   }
 
   /** Reorders one unpinned waiting real card inside its existing ordinary queue. */

@@ -88,8 +88,9 @@ class TaskBoardReadProjectionService {
    *
    * <p>Every unfinished real and shadow entry is returned in its persisted queue. The configured
    * warehouse-local publication controls are carried as metadata but do not truncate this manager
-   * view. Phase type and route order retain command authority. Manager clients can therefore
-   * reveal the complete future route, including the read-only path behind an active SES gate.
+   * view. Entry type and the mandatory SES gate retain command authority; route order supplies the
+   * default REAL step until a manager explicitly exposes another future step. Manager clients can
+   * therefore reveal the complete future route, including the read-only path behind active SES.
    */
   public TaskBoardSnapshot snapshot(UUID warehouseId) {
     return ordinarySnapshot(warehouseId, true, false);
@@ -495,14 +496,6 @@ class TaskBoardReadProjectionService {
 
   private OffsetDateTime now() {
     return OffsetDateTime.now(ZoneOffset.UTC);
-  }
-
-  private void ensureCompletionBeforeDeadline(BoardTask task, OffsetDateTime completionAt) {
-    if (!task.isCompletionDeadlineEnforced()) return;
-    OffsetDateTime deadline = task.getDeadlineAt();
-    if (deadline == null || !completionAt.isBefore(deadline)) {
-      throw new ConflictException("Срок резерва мебели истек: завершение задания недоступно");
-    }
   }
 
   private Map<UUID, TaskSourceReferenceDto> sourceReferences(

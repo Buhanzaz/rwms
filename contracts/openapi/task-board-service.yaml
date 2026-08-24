@@ -283,7 +283,10 @@ paths:
         canonical active/pinned/position order. availableTaskLimit and
         workerFeedEnabled are warehouse-local WorkerApp publication controls;
         they do not truncate this manager response or fence manager TAKE.
-        SHADOW remains read-only, and route order remains the execution gate.
+        SHADOW remains read-only. The earliest unfinished route step is REAL by
+        default; a manager may explicitly expose another future step through
+        the version-fenced future-availability command so those REAL steps can
+        execute in parallel without bypassing an unfinished SES phase.
         If-None-Match is evaluated with a weak semantic ETag over stable snapshot
         state. Rolling timer counters and serverTime do not invalidate the ETag;
         timer state and the next transition do.
@@ -310,6 +313,30 @@ paths:
               schema: { type: string }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /warehouses/{warehouseId}/task-board/daily-brigade-activity:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: getDailyBrigadeActivity
+      description: >-
+        Returns assignment intervals that actually started and overlap the
+        current calendar day in the warehouse timezone effective at serverTime.
+        startedAt is the persisted TAKE timestamp and finishedAt is the
+        persisted completion timestamp; configured workday bounds never replace
+        either value. Overlapping legacy route duplicates and joined-worker
+        assignments for the same brigade, task and physical queue are
+        coalesced. A live overlap keeps finishedAt null, while completed
+        overlaps use their latest finish. Non-overlapping retakes remain
+        distinct intervals.
+      responses:
+        '200': { $ref: '#/components/responses/DailyBrigadeActivityOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '502':
+          description: The authoritative warehouse timezone dependency is unavailable.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ApiProblem' }
   /warehouses/{warehouseId}/task-board/logistics:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -361,6 +388,11 @@ paths:
       - $ref: '#/components/parameters/WarehouseId'
     put:
       operationId: replacePendingWarehouseKpiWorkSchedule
+      description: >-
+        Saves one version-fenced pending schedule whose effectiveFrom is the
+        current warehouse-local date or a later date. Selecting today applies
+        the revision to the whole current local calendar day after explicit
+        activation; past dates are rejected.
       requestBody:
         required: true
         content:
@@ -392,6 +424,11 @@ paths:
       - $ref: '#/components/parameters/WarehouseId'
     post:
       operationId: activateWarehouseKpiSettings
+      description: >-
+        Idempotently activates the pending palette and schedule decision. A
+        schedule effective today is promoted to active in this response so
+        dashboard and timer reads use it immediately. A later schedule remains
+        SCHEDULED until its warehouse-local effective date.
       parameters:
         - name: Idempotency-Key
           in: header
@@ -815,6 +852,34 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/task-board/entries/{entryId}/future-availability:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/EntryId'
+    post:
+      operationId: setFutureTaskEntryAvailability
+      description: >-
+        Requires USER, rwms.write and EDIT. Changes only a WAITING future step
+        of an active ordinary route. available=true promotes SHADOW to REAL so
+        the step can be published and taken in parallel with an earlier route
+        step; available=false returns a still-future REAL step to SHADOW. The
+        earliest unfinished route step cannot be demoted, and an unfinished SES
+        phase cannot be bypassed. WorkerApp publication additionally remains
+        subject to the queue switch, waiting-real plan, audience and worker
+        eligibility. The observed entry version fences concurrent route
+        completion, take and another availability command.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetFutureTaskEntryAvailabilityRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/TaskBoardSnapshotOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /warehouses/{warehouseId}/task-board/entries/{entryId}/reorder:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -878,6 +943,10 @@ paths:
       - $ref: '#/components/parameters/EntryId'
     post:
       operationId: completeTaskEntry
+      description: >-
+        Completes the version-fenced entry when its current task-state and
+        evidence prerequisites are met. deadlineAt remains task metadata and
+        never rejects an otherwise valid completion.
       requestBody:
         $ref: '#/components/requestBodies/VersionCommand'
       responses:
@@ -1025,9 +1094,14 @@ paths:
       description: >-
         Applies or replays a worker transition. Idempotency-Key must equal the
         request operationId. The worker identity is derived from the JWT;
-        occurredAt is accepted only when it falls inside the referenced lease.
-        TAKE and JOIN recheck the current WorkerApp publication window so a
-        stale or crafted request cannot bypass the warehouse plan.
+        TAKE, JOIN, PAUSE and RESUME require occurredAt inside the referenced
+        lease. An already-assigned WorkerApp COMPLETE may use its signed lease
+        after that lease has elapsed, but still requires the current task
+        state, assignment, expectedVersion, evidence gate and a non-future
+        occurrence time. A task deadline never rejects a valid COMPLETE. TAKE
+        and JOIN recheck the current WorkerApp
+        publication window so a stale or crafted request cannot bypass the
+        warehouse plan.
         COMPLETE on a MAINTENANCE_REPAIR representative atomically completes
         every later unfinished entry in its consecutive same-queue package and
         publishes the ordinary completion fact for each source-mapped entry.
@@ -1062,7 +1136,10 @@ paths:
       description: >-
         Reserves a stable evidenceId before media upload. Idempotency-Key must
         equal operationId. Worker and group metadata are derived and validated
-        by task-board; client-supplied actor metadata is not accepted.
+        by task-board; client-supplied actor metadata is not accepted. A result
+        photo for an already-assigned WorkerApp task may retain its original
+        signed lease after its 24-hour window; current task/assignment gates
+        and the non-future capture-time check still apply.
       parameters:
         - $ref: '#/components/parameters/WorkerIdempotencyKey'
       requestBody:
@@ -1678,7 +1755,10 @@ components:
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
-        effectiveFrom: { type: string, format: date }
+        effectiveFrom:
+          description: Warehouse-local effective date, including today.
+          type: string
+          format: date
         shiftStart: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
         shiftEnd: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
         daysOff:
@@ -1733,7 +1813,12 @@ components:
       required: [expectedVersion, effectiveFrom, shiftStart, shiftEnd, daysOff, breaks]
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
-        effectiveFrom: { type: string, format: date }
+        effectiveFrom:
+          description: >-
+            Warehouse-local current date or a later date. Today takes effect
+            for the whole local calendar day after activation.
+          type: string
+          format: date
         shiftStart: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
         shiftEnd: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
         daysOff:
@@ -2206,7 +2291,13 @@ components:
         queuePurpose: { $ref: '#/components/schemas/QueuePurpose' }
         routeIndex: { type: integer }
         queuePosition: { type: integer }
-        entryType: { type: string, enum: [REAL, SHADOW] }
+        entryType:
+          description: >-
+            REAL is eligible for execution; SHADOW is a manager-visible,
+            read-only future route position. A future ordinary step may be
+            explicitly promoted to REAL by a manager.
+          type: string
+          enum: [REAL, SHADOW]
         status: { type: string, enum: [WAITING, IN_PROGRESS, PAUSED, DONE, CANCELLED] }
         taskText: { oneOf: [{ type: string }, { type: 'null' }] }
         plannedDurationMinutes: { oneOf: [{ type: integer }, { type: 'null' }] }
@@ -2230,6 +2321,61 @@ components:
       properties:
         type: { type: string, enum: [MAINTENANCE_REPAIR, LOGISTICS_DRIVER_TASK] }
         sourceId: { type: string, format: uuid }
+      additionalProperties: false
+    DailyBrigadeActivityInterval:
+      type: object
+      description: >-
+        One actual assignment interval, optionally coalesced from overlapping
+        legacy route or joined-worker rows for one brigade, task and physical
+        queue. The representative entry is selected by route index and then UUID.
+      required: [workerGroupId, workerGroupName, taskId, entryId, queueId, queueName, title, unitNumber, taskText, priority, startedAt, finishedAt, status, source]
+      properties:
+        workerGroupId: { type: string, format: uuid }
+        workerGroupName: { type: string, minLength: 1 }
+        taskId: { type: string, format: uuid }
+        entryId:
+          type: string
+          format: uuid
+          description: Deterministic representative route-entry identity.
+        queueId:
+          type: string
+          format: uuid
+          description: Physical warehouse queue identity.
+        queueName: { type: string, minLength: 1 }
+        title: { type: string, minLength: 1 }
+        unitNumber: { oneOf: [{ type: string }, { type: 'null' }] }
+        taskText: { oneOf: [{ type: string }, { type: 'null' }] }
+        priority: { type: integer, minimum: 1, maximum: 5 }
+        startedAt:
+          type: string
+          format: date-time
+          description: Actual persisted assignment start recorded when the task was taken.
+        finishedAt:
+          description: Actual persisted completion time, or null while any coalesced assignment is live.
+          oneOf: [{ type: string, format: date-time }, { type: 'null' }]
+        status: { type: string, enum: [ACTIVE, PAUSED, DONE] }
+        source:
+          oneOf:
+            - { $ref: '#/components/schemas/TaskSourceReference' }
+            - { type: 'null' }
+      additionalProperties: false
+    DailyBrigadeActivity:
+      type: object
+      description: Current warehouse-local day and its authoritative task execution intervals.
+      required: [warehouseId, localDate, serverTime, intervals]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        localDate:
+          type: string
+          format: date
+          description: Calendar date in the warehouse timezone effective at serverTime.
+        serverTime:
+          type: string
+          format: date-time
+          description: UTC instant used to resolve localDate and open live intervals.
+        intervals:
+          type: array
+          items: { $ref: '#/components/schemas/DailyBrigadeActivityInterval' }
       additionalProperties: false
     BoardColumn:
       type: object
@@ -2716,6 +2862,13 @@ components:
         targetEntryId: { type: string, format: uuid }
         targetIndex: { type: integer, minimum: 0 }
       additionalProperties: false
+    SetFutureTaskEntryAvailabilityRequest:
+      type: object
+      required: [expectedEntryVersion, available]
+      properties:
+        expectedEntryVersion: { type: integer, format: int64, minimum: 0 }
+        available: { type: boolean }
+      additionalProperties: false
     VersionCommand:
       type: object
       required: [expectedVersion]
@@ -2942,7 +3095,10 @@ components:
         taskId: { type: string, format: uuid }
         routeIndex: { type: integer, minimum: 0 }
         routeStepCount:
-          description: Authoritative total number of route steps for the task.
+          description: >-
+            Authoritative total number of worker-executable subtasks. For MAINTENANCE_REPAIR this
+            is the number of distinct physical queues, including compatibility packaging of an
+            immutable started legacy route; other task sources count persisted route steps.
           type: integer
           minimum: 1
         title: { type: string, minLength: 1 }
@@ -2953,7 +3109,10 @@ components:
         priority: { type: integer, minimum: 1, maximum: 5 }
         queuePosition: { type: integer, minimum: 0 }
         entryType:
-          description: REAL is executable; SHADOW reserves a future route position and is read-only.
+          description: >-
+            REAL is eligible for execution; SHADOW reserves a manager-visible,
+            read-only future route position. Manager promotion may make more
+            than one ordinary route step REAL at the same time.
           type: string
           enum: [REAL, SHADOW]
         pinned:
@@ -3408,6 +3567,11 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/TaskBoardSnapshot' }
+    DailyBrigadeActivityOk:
+      description: Actual brigade execution intervals for the current warehouse-local day
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/DailyBrigadeActivity' }
     TaskBoardSnapshotCreated:
       description: Current snapshot after task registration or idempotent replay
       content:

@@ -69,11 +69,16 @@ manager's daily plan without truncating that complete manager response. The glob
 supplies only the initial value for a new warehouse projection. Afterwards the warehouse queue owns
 both this count and `workerFeedEnabled`.
 Maintenance routes are normalized to `SES -> welding -> exterior -> interior -> electrical ->
-plumbing`. The first existing unfinished phase is the only `REAL` stage; absent or completed phases
-are skipped, and every later stage is `SHADOW`. Electricity is therefore immediately actionable
-only when all four preceding phases are absent or complete. Promotion restores a shadow's persisted
-place ahead of later unpinned work; a pinned real card stays ahead. Every current `REAL` route gate
-may be taken, while a shadow is never actionable.
+plumbing`. The first existing unfinished phase is `REAL` by default; absent or completed phases are
+skipped, and every later stage starts as `SHADOW`. An `EDIT` user may version-fence a still-future
+ordinary `WAITING` entry and explicitly switch it between `SHADOW` and `REAL`. A future `REAL` is
+eligible for WorkerApp publication and parallel execution without completing the earlier ordinary
+stage first; the warehouse queue switch, waiting-real plan and worker qualification still apply.
+The earliest unfinished stage cannot be demoted, and an unfinished SES stage forbids making any
+later stage available. Promotion restores the future entry's persisted place ahead of later
+unpinned work and refreshes its media-owner proof in the same transaction, granting or revoking
+the matching source-evidence read audience; a pinned real card stays ahead. Every `REAL` route gate
+may be taken, while a `SHADOW` is never actionable.
 
 A canonical SES stage remains the only executable card for its task until treatment finishes,
 including for retained definitions whose historical queue type is `REPAIR`. The manager snapshot
@@ -86,7 +91,17 @@ do not move. The daily plan creates no dated schedule.
 Dated driver and shipment planning remains on the separate logistics surfaces. These invariants are defined by
 [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
 [`TaskBoardReadProjectionService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardReadProjectionService.java),
+[`TaskBoardFutureAvailabilityService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardFutureAvailabilityService.java),
 and [`OrdinaryQueueAvailabilityPolicy`](src/main/java/dev/buhanzaz/rwms/taskboard/service/OrdinaryQueueAvailabilityPolicy.java).
+
+KPI schedule revisions may start on the warehouse-local current date or a future date. Saving keeps
+the revision in `DRAFT`; explicit activation makes a current-date revision `ACTIVE` in the same
+command and applies it to the whole current local calendar day. A future revision remains
+`SCHEDULED` until its date, and a past date is rejected. Activating a replacement for the same date
+retires the prior scheduled/active revision under the existing receipt and optimistic-concurrency
+fences. This behavior is owned by
+[`KpiSettingsService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/KpiSettingsService.java) and
+the [canonical contract](../../contracts/openapi/task-board-service.yaml).
 
 Flyway V31 normalizes existing ordinary `queue_entry.queue_position` values into that aggregate
 sequence and corrects the real/shadow shape of a fully waiting holding route. It does not rewrite
@@ -145,10 +160,12 @@ components own the decisions:
 | Collaborator | Owned responsibility |
 | --- | --- |
 | `TaskBoardReadProjectionService` | Board/task reads and response projections |
+| `DailyBrigadeActivityService` | Warehouse-local current-day projection of actual assignment take/finish intervals, including bounded overlap coalescing of legacy duplicate rows |
 | `TaskBoardExternalRegistrationService` | Source-owned task creation, identity, route and canonical retry fingerprint |
 | `TaskBoardExternalMutationService` | Source-authorized pre-start update/cancel, lane movement and relocation |
 | `TaskBoardLogisticsTaskService` | Logistics equipment/driver task boundary |
 | `TaskBoardWorkerExecutionService` | Assignment, timing, interruption, cancellation and worker execution |
+| `TaskBoardFutureAvailabilityService` | Version-fenced promotion and demotion of still-future ordinary entries, including the SES gate, transactional media-reader proof and post-commit WorkerApp invalidation |
 | `TaskBoardPinningService` | Version-fenced manager pin/unpin command |
 | `TaskBoardEntryOrderingService` | Same-queue reorder of unpinned waiting real cards under entry/queue/target-identity fences |
 | `WorkerQueuePlanService` | Warehouse-local WorkerApp publication switch and waiting-real plan command |
@@ -209,6 +226,7 @@ The public gateway maps `/api/task-board/**` to this service's downstream
 | `/api/warehouses/{warehouseId}/workers/**` | Warehouse-authorized manager | Workers, groups, credential operations, and reconciliation |
 | `/api/warehouses/{warehouseId}/work-queues` | Warehouse-authorized user | Physical queue projections and capabilities |
 | `/api/warehouses/{warehouseId}/task-board/**` | Warehouse-authorized user | Aggregate ordinary-board read and supported task commands |
+| `/api/warehouses/{warehouseId}/task-board/daily-brigade-activity` | Warehouse-authorized user | Actual task-assignment intervals overlapping the current warehouse-local day |
 | `/api/warehouses/{warehouseId}/task-board/kpi-settings/**` | Warehouse manager/admin | Palette and effective schedule revisions |
 | `/api/worker/v1/**` | Worker credential and `worker.tasks` scope | Context, feed, detail, actions, evidence reservations, devices, and events |
 | `/api/driver/v1/**` | Worker credential and `driver.tasks` scope | Driver-only context, primary feed, actions, evidence reservations, devices, and events |
@@ -220,6 +238,13 @@ The public gateway maps `/api/task-board/**` to this service's downstream
 Private paths are service-to-service boundaries and are never exposed as client
 shortcuts. Their exact `principal_type`, `client_id`, scope, source ownership,
 and warehouse checks are part of the contract.
+
+The daily-brigade activity read uses persisted assignment `startedAt` from TAKE
+and `finishedAt` from completion. Shift bounds select and position the display
+but never replace those timestamps. Overlapping joined-worker or legacy
+same-brigade/task/physical-queue rows are one interval; non-overlapping retakes
+remain distinct, and a live interval has a null finish. The projection is
+read-only, warehouse-authorized and owned entirely by task-board.
 
 ## Native streams and offline execution
 
@@ -256,12 +281,22 @@ references in that array; task-board does not flatten or infer that association.
 Every `WorkerFeedEntry` exposes zero-based `routeIndex`, positive `routeStepCount`, required
 `entryType` and required `pinned`. WorkerApp receives only server-selected `REAL` entries from
 enabled queues: active work plus the queue's bounded waiting plan. Future `SHADOW` stages stay in
-the manager snapshot and are never published to WorkerApp. Route cardinality and READY evidence
-counts are loaded for the selected feed page in one database projection rather than one query per
-card.
+the manager snapshot and are never published to WorkerApp. For maintenance, route cardinality
+counts physical queues, so a historical started same-queue package is still shown as one subtask
+even though its immutable source-mapped rows remain persisted; other task sources count route
+entries. Route cardinality and READY evidence counts are loaded for the selected feed page in one
+database projection rather than one query per card.
 
 The worker action path validates the worker identity, current assignment,
 entry version, action/status transition, and offline lease where applicable.
+The 24-hour window remains strict for `TAKE`, `JOIN`, `PAUSE` and `RESUME`.
+For an already assigned WorkerApp task, its signed lease may instead carry the
+result photo and `COMPLETE` beyond that window: task state, assignment,
+expected version, photo gate and non-future occurrence time remain mandatory.
+`deadlineAt` remains operational task metadata and never vetoes a valid
+completion. Each accepted completion emits the canonical `QUEUE_ENTRY_COMPLETED`
+fact; maintenance consumes the final mapped repair-stage fact to place the
+repair into pending acceptance.
 Evidence is first reserved with a stable client reference, then uploaded to
 media-service. A media fact links the processed generation back to the reserved
 evidence before completion may rely on it. A legacy `image/jpeg` declaration may be at most 15 MiB;

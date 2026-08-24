@@ -149,6 +149,18 @@ public interface LogisticsDependencyGateway {
     throw unavailable("Maintenance transfer departure preparation is not configured");
   }
 
+  /**
+   * Closes or cancels maintenance-owned work before an imported shipment may acquire a logistics
+   * lease. The response pins the asset version that the following shipment saga must fence.
+   */
+  default HistoricalShipmentRepairClosure closeHistoricalShipment(
+      UUID idempotencyKey,
+      UUID shipmentId,
+      UUID warehouseId,
+      UUID rentalItemId) {
+    throw unavailable("Maintenance historical shipment closure is not configured");
+  }
+
   default TransferRepairArrivalPreflight preflightTransferArrival(
       UUID transferId,
       UUID lineId,
@@ -804,6 +816,16 @@ public interface LogisticsDependencyGateway {
 
   record TransferRepairDeparture(
       UUID activeRepairId, Long activeRepairVersion, String assetStatus) {}
+
+  /** Stable maintenance result for exactly one imported rental shipment. */
+  record HistoricalShipmentRepairClosure(
+      UUID shipmentId,
+      UUID warehouseId,
+      UUID rentalItemId,
+      long rentalItemVersion,
+      String rentalItemStatus,
+      List<UUID> closedRepairIds,
+      String outcome) {}
 
   record TransferRepairArrivalPreflight(
       UUID activeRepairId, boolean priorityRequired, List<UUID> missingQueueDefinitionIds) {}

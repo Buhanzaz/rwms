@@ -115,6 +115,31 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/logistics/v1/historical-rental-movements:
+    post:
+      operationId: createHistoricalRentalMovement
+      description: >-
+        Creates one real past rental shipment or return from a warehouse cabin card. The command
+        requires an existing visible rental client, a non-future warehouse-local date and the
+        current cabin version; it never accepts a driver. An imported shipment first closes or
+        cancels eligible maintenance work through a durable server-side saga, while an imported
+        return enters the ordinary fenced return-intake and estimate flow.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateHistoricalRentalMovementRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/CreatedDocument" }
+        "201": { $ref: "#/components/responses/CreatedDocument" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/shipments:
     get:
       operationId: listShipments
@@ -1889,6 +1914,46 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/logistics/v1/cabins/{cabinId}/photo-presentations:
+    parameters:
+      - $ref: "#/components/parameters/CabinId"
+    post:
+      operationId: createCabinPhotoPresentation
+      description: >-
+        Creates an immutable, non-expiring public snapshot of the cabin's current READY images.
+        The caller must have rwms.write and EDIT access to the supplied warehouse. Logistics
+        verifies the current asset identity, warehouse and expected version before asking
+        media-service for presentation-safe opaque references. The response never exposes an
+        object-store locator. Exact subject-bound Idempotency-Key replay returns the original
+        public link; changed key reuse conflicts.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCabinPhotoPresentationRequest" }
+      responses:
+        "200":
+          description: Exact idempotent replay of the original immutable presentation.
+          headers:
+            Idempotency-Replayed:
+              required: true
+              schema: { type: string, const: "true" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CabinPhotoPresentation" }
+        "201":
+          description: New immutable non-expiring cabin photo presentation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CabinPhotoPresentation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/public/v1/client-presentations/{token}:
     parameters:
       - $ref: "#/components/parameters/PublicPresentationToken"
@@ -1907,6 +1972,47 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/ApiProblem" }
+  /api/logistics/public/v1/cabin-photo-presentations/{token}:
+    parameters:
+      - $ref: "#/components/parameters/PublicPresentationToken"
+    get:
+      security: []
+      operationId: getPublicCabinPhotoPresentation
+      description: >-
+        Resolves one non-expiring immutable photo snapshot. It exposes only the cabin number,
+        creation time and presentation-scoped image URLs; warehouse, actor, asset version and
+        object-store details remain private.
+      responses:
+        "200":
+          description: Public no-store cabin photo presentation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicCabinPhotoPresentation" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/logistics/public/v1/cabin-photo-presentations/{token}/media/{mediaId}/{generation}/{variant}:
+    parameters:
+      - $ref: "#/components/parameters/PublicPresentationToken"
+      - $ref: "#/components/parameters/MediaId"
+      - $ref: "#/components/parameters/MediaGeneration"
+      - $ref: "#/components/parameters/MediaVariant"
+    get:
+      security: []
+      operationId: getPublicCabinPhotoPresentationMedia
+      description: >-
+        Streams one exact image generation and SMALL or LARGE variant only when it belongs to the
+        immutable photo snapshot addressed by the signed token. Owner, generation and variant
+        mismatches are indistinguishable 404 responses.
+      responses:
+        "200":
+          description: Authorized no-store presentation image.
+          headers:
+            X-Content-Type-Options:
+              schema: { type: string, const: nosniff }
+          content:
+            image/webp:
+              schema: { type: string, format: binary }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/logistics/public/v1/client-presentations/{token}/bookings:
     parameters:
       - $ref: "#/components/parameters/PublicPresentationToken"
@@ -2413,6 +2519,7 @@ components:
           driverSnapshot,
           driverWorkerId,
           clientId,
+          historicalRentalImport,
           equipmentMovementTaskId,
           scheduledDate,
           rentalOrderId,
@@ -2479,6 +2586,11 @@ components:
             type: [string, "null"],
             format: uuid,
             description: Client bound to the return or shipment.,
+          }
+        historicalRentalImport:
+          {
+            type: boolean,
+            description: True when this document was entered as a past physical rental operation without a driver task.,
           }
         equipmentMovementTaskId:
           {
@@ -3384,6 +3496,23 @@ components:
           minItems: 1
           maxItems: 100
           items: { $ref: "#/components/schemas/ShipmentLineRequest" }
+    HistoricalRentalMovementKind:
+      type: string
+      enum: [SHIPMENT, RETURN]
+    CreateHistoricalRentalMovementRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, rentalItemId, expectedRentalItemVersion, clientId, kind, occurredOn]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        expectedRentalItemVersion: { type: integer, format: int64, minimum: 0 }
+        clientId: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/HistoricalRentalMovementKind" }
+        occurredOn:
+          type: string
+          format: date
+          description: Past or current warehouse-local physical operation date.
     ShipmentPlanRequest:
       type: object
       additionalProperties: false
@@ -4581,6 +4710,64 @@ components:
         equipmentName: { type: string, minLength: 1, maxLength: 512 }
         availableQuantity: { type: integer, format: int64, minimum: 0 }
         maximumPerCabin: { type: [integer, "null"], minimum: 1 }
+    CreateCabinPhotoPresentationRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, expectedRentalItemVersion]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        expectedRentalItemVersion:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Current asset-service version shown on the cabin card.
+    CabinPhotoPresentation:
+      type: object
+      additionalProperties: false
+      required: [id, version, cabinId, cabinNumber, photoCount, createdAt, publicPath]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        cabinId: { type: string, format: uuid }
+        cabinNumber: { type: string, minLength: 1, maxLength: 128 }
+        photoCount: { type: integer, minimum: 1, maximum: 100 }
+        createdAt: { type: string, format: date-time }
+        publicPath:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: Same-origin panel path `/photos/{signed-token}`.
+    CabinPhotoPresentationPhoto:
+      type: object
+      additionalProperties: false
+      required: [mediaId, generation, sortOrder, thumbnailUrl, contentUrl]
+      properties:
+        mediaId: { type: string, format: uuid }
+        generation: { type: integer, format: int64, minimum: 1 }
+        sortOrder: { type: integer, minimum: 0 }
+        thumbnailUrl:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          description: Presentation-scoped same-origin SMALL image path.
+        contentUrl:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          description: Presentation-scoped same-origin LARGE image path, or SMALL when LARGE was unavailable at snapshot creation.
+    PublicCabinPhotoPresentation:
+      type: object
+      additionalProperties: false
+      required: [id, cabinNumber, createdAt, photos]
+      properties:
+        id: { type: string, format: uuid }
+        cabinNumber: { type: string, minLength: 1, maxLength: 128 }
+        createdAt: { type: string, format: date-time }
+        photos:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: "#/components/schemas/CabinPhotoPresentationPhoto" }
     ClientPresentation:
       type: object
       additionalProperties: false
@@ -4962,7 +5149,7 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/LogisticsDocument" }
     CreatedDocument:
-      description: New DRAFT document, or the original successful create response.
+      description: New document, or the original successful create response. A historical rental import may already be advancing its durable effects.
       headers:
         ETag:
           required: true

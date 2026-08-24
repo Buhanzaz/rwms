@@ -296,7 +296,28 @@ type inventoryFindingPayload struct {
 	PlanFingerprint  json.RawMessage `json:"planFingerprintSha256"`
 }
 
+// parseInventoryFindingRecord strictly validates live Kafka records, including
+// the membershipActive value required on every finding lifecycle marker.
 func parseInventoryFindingRecord(record *kgo.Record) (persistence.InventoryFindingMessage, bool, error) {
+	return parseInventoryFindingRecordWithLegacyLifecycle(record, false)
+}
+
+// parseInventoryFindingReconciliationRecord validates operator-reviewed replay
+// bytes without rewriting them. It accepts only the historical lifecycle
+// marker omission that predates membershipActive and infers the expected value
+// from the event type; every other live-parser invariant remains unchanged.
+func parseInventoryFindingReconciliationRecord(
+	record *kgo.Record,
+) (persistence.InventoryFindingMessage, bool, error) {
+	return parseInventoryFindingRecordWithLegacyLifecycle(record, true)
+}
+
+// parseInventoryFindingRecordWithLegacyLifecycle centralizes strict parsing;
+// its compatibility switch is enabled only by the reviewed file command.
+func parseInventoryFindingRecordWithLegacyLifecycle(
+	record *kgo.Record,
+	allowLegacyLifecycleMembershipInference bool,
+) (persistence.InventoryFindingMessage, bool, error) {
 	if record == nil || record.Topic != persistence.InventorySessionTopic || len(record.Value) == 0 ||
 		len(record.Value) > inventoryRecordLimit {
 		return persistence.InventoryFindingMessage{}, false, errors.New("invalid inventory record")
@@ -344,7 +365,8 @@ func parseInventoryFindingRecord(record *kgo.Record) (persistence.InventoryFindi
 	case "inventory.finding.added.v1", "inventory.finding.inspection-saved.v1",
 		"inventory.finding.membership-departed.v1", "inventory.finding.membership-refreshed.v1",
 		"inventory.finding.membership-restored.v1":
-		warehouseID, err := validateFindingMarker(envelope.Payload, aggregateID, envelope.EventType)
+		warehouseID, err := validateFindingMarker(envelope.Payload, aggregateID, envelope.EventType,
+			allowLegacyLifecycleMembershipInference)
 		if err != nil {
 			return persistence.InventoryFindingMessage{}, false, err
 		}
@@ -386,6 +408,7 @@ func validateFindingMarker(
 	raw json.RawMessage,
 	aggregateID uuid.UUID,
 	eventType string,
+	allowLegacyLifecycleMembershipInference bool,
 ) (uuid.UUID, error) {
 	if err := exactJSONFieldsWithOptional(raw, []string{"membershipActive"},
 		"inventoryId", "findingId", "warehouseId", "sessionRevision",
@@ -397,6 +420,11 @@ func validateFindingMarker(
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return uuid.Nil, err
 	}
+	var payloadFields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payloadFields); err != nil {
+		return uuid.Nil, err
+	}
+	_, membershipActivePresent := payloadFields["membershipActive"]
 	_, inventoryErr := strictUUID(payload.InventoryID)
 	findingID, findingErr := strictUUID(payload.FindingID)
 	warehouseID, warehouseErr := strictUUID(payload.WarehouseID)
@@ -408,13 +436,25 @@ func validateFindingMarker(
 		!nullableInventoryUUID(payload.AssetID) || !nullableSHA256(payload.PlanFingerprint) {
 		return uuid.Nil, errors.New("invalid inventory finding marker")
 	}
+	membershipActive := payload.MembershipActive
+	if membershipActive == nil && !membershipActivePresent && allowLegacyLifecycleMembershipInference {
+		if eventType == "inventory.finding.membership-departed.v1" {
+			inactive := false
+			membershipActive = &inactive
+		}
+		if setContains(eventType, "inventory.finding.membership-refreshed.v1",
+			"inventory.finding.membership-restored.v1") {
+			active := true
+			membershipActive = &active
+		}
+	}
 	if eventType == "inventory.finding.membership-departed.v1" &&
-		(payload.MembershipActive == nil || *payload.MembershipActive) {
+		(membershipActive == nil || *membershipActive) {
 		return uuid.Nil, errors.New("invalid departed inventory finding marker")
 	}
 	if setContains(eventType, "inventory.finding.membership-refreshed.v1",
 		"inventory.finding.membership-restored.v1") &&
-		(payload.MembershipActive == nil || !*payload.MembershipActive) {
+		(membershipActive == nil || !*membershipActive) {
 		return uuid.Nil, errors.New("invalid active inventory finding marker")
 	}
 	return warehouseID, nil

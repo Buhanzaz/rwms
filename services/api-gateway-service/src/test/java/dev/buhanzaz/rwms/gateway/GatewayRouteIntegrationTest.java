@@ -415,6 +415,50 @@ class GatewayRouteIntegrationTest {
       assertThat(request.authorization()).isNull();
       assertThat(request.cookie()).isNull();
     });
+
+    LOGISTICS_REQUESTS.clear();
+    mvc.perform(
+            publicGet(
+                    "/api/logistics/public/v1/cabin-photo-presentations/public-photo-token")
+                .header(HttpHeaders.COOKIE, "AUTH_SESSION=secret"))
+        .andExpect(status().isOk())
+        .andExpect(
+            jsonPath("$.path")
+                .value(
+                    "/api/logistics/public/v1/cabin-photo-presentations/public-photo-token"));
+    assertThat(LOGISTICS_REQUESTS).singleElement().satisfies(request -> {
+      assertThat(request.authorization()).isNull();
+      assertThat(request.cookie()).isNull();
+    });
+
+    LOGISTICS_REQUESTS.clear();
+    mvc.perform(
+            publicGet(
+                    "/api/logistics/public/v1/cabin-photo-presentations/public-photo-token/media/10000000-0000-0000-0000-000000000014/3/SMALL")
+                .header(HttpHeaders.COOKIE, "AUTH_SESSION=secret"))
+        .andExpect(status().isOk())
+        .andExpect(
+            jsonPath("$.path")
+                .value(
+                    "/api/logistics/public/v1/cabin-photo-presentations/public-photo-token/media/10000000-0000-0000-0000-000000000014/3/SMALL"));
+    assertThat(LOGISTICS_REQUESTS).singleElement().satisfies(request -> {
+      assertThat(request.authorization()).isNull();
+      assertThat(request.cookie()).isNull();
+    });
+
+    LOGISTICS_REQUESTS.clear();
+    mvc.perform(
+            publicPost(
+                "/api/logistics/public/v1/cabin-photo-presentations/public-photo-token"))
+        .andExpect(status().isUnauthorized());
+    assertThat(LOGISTICS_REQUESTS).isEmpty();
+
+    LOGISTICS_REQUESTS.clear();
+    mvc.perform(
+            publicPost(
+                "/api/logistics/v1/cabins/10000000-0000-0000-0000-000000000014/photo-presentations"))
+        .andExpect(status().isUnauthorized());
+    assertThat(LOGISTICS_REQUESTS).isEmpty();
   }
 
   @Test

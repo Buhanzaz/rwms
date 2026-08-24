@@ -127,6 +127,8 @@ export function AcceptancePage() {
   const [search, setSearch] = useState("")
   const [filters, setFilters] = useState(createEmptyAcceptanceFilters)
   const { filtersOpen, setFiltersOpen } = useResponsiveFiltersOpen()
+  const [headerActionsContainer, setHeaderActionsContainer] =
+    useState<HTMLDivElement | null>(null)
   const acceptanceId = searchParams.get("acceptanceId")
   const listSearchParams = new URLSearchParams(searchParams)
   listSearchParams.delete("acceptanceId")
@@ -182,6 +184,12 @@ export function AcceptancePage() {
             <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
             Назад
           </Button>
+          <div
+            ref={setHeaderActionsContainer}
+            data-slot="acceptance-header-actions"
+            aria-label="Действия приёмки"
+            className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2"
+          />
         </header>
 
         {selectedTaskLoading ? (
@@ -210,6 +218,7 @@ export function AcceptancePage() {
             canManage={canManage}
             actorName={actorLabel(selectedTask.actorId)}
             decisionActorName={actorLabel(selectedTask.decisionActorId)}
+            headerActionsContainer={headerActionsContainer}
             onDecision={() => navigate(listHref, { replace: true })}
           />
         ) : null}

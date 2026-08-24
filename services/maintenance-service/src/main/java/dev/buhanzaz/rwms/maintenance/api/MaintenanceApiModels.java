@@ -68,6 +68,10 @@ public final class MaintenanceApiModels {
   public enum InventoryPlanMode { AUTO, MANUAL }
   public enum InventoryPlanLineKind { CATALOG, MANUAL }
   public enum InventoryPlanLineType { WORK, MATERIAL }
+  /** Asset state guaranteed to logistics after a successful historical-shipment repair closure. */
+  public enum HistoricalShipmentRentalItemStatus { FREE }
+  /** Result of the maintenance portion of one historical-shipment saga. */
+  public enum HistoricalShipmentClosureOutcome { NOT_REQUIRED, CLOSED }
   /** The maintenance aggregate selected from the current asset truth for an inventory finding. */
   public enum InventoryPublicationTargetKind { ESTIMATE, REPAIR }
   /** A manager-approved publication decision for one completed inventory finding. */
@@ -106,6 +110,18 @@ public final class MaintenanceApiModels {
       UUID estimateId,
       String snapshotSha256,
       OffsetDateTime receivedAt) {}
+  /** Private logistics request to settle source-owned repair work before a historical shipment. */
+  public record HistoricalShipmentRepairClosureRequest(
+      @NotNull UUID warehouseId, @NotNull UUID rentalItemId) {}
+  /** Immutable maintenance audit result consumed only by the logistics historical-shipment saga. */
+  public record HistoricalShipmentRepairClosureResponse(
+      UUID shipmentId,
+      UUID warehouseId,
+      UUID rentalItemId,
+      @Min(0) long rentalItemVersion,
+      @NotNull HistoricalShipmentRentalItemStatus rentalItemStatus,
+      @NotNull List<UUID> closedRepairIds,
+      @NotNull HistoricalShipmentClosureOutcome outcome) {}
   public record TransferRepairRequest(
       @NotNull UUID rentalItemId,
       @NotNull UUID sourceWarehouseId,

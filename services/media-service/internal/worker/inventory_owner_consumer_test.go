@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -93,6 +94,85 @@ func TestParseInventoryFindingRecordRejectsContractViolations(t *testing.T) {
 	oversized.record.Value = []byte(strings.Repeat("x", inventoryRecordLimit+1))
 	if _, _, err := parseInventoryFindingRecord(oversized.record); err == nil {
 		t.Fatal("oversized record was accepted")
+	}
+}
+
+func TestParseInventoryFindingReconciliationRecordAcceptsExactLegacyLifecycleBytes(t *testing.T) {
+	tests := []struct {
+		name      string
+		eventType string
+		active    bool
+	}{
+		{name: "departed", eventType: "inventory.finding.membership-departed.v1", active: false},
+		{name: "refreshed", eventType: "inventory.finding.membership-refreshed.v1", active: true},
+		{name: "restored", eventType: "inventory.finding.membership-restored.v1", active: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newInventoryRecord(t, test.eventType, 4, test.active)
+			delete(fixture.payload(), "membershipActive")
+			fixture.remarshal(t)
+			original := append([]byte(nil), fixture.record.Value...)
+
+			if _, _, err := parseInventoryFindingRecord(fixture.record); err == nil {
+				t.Fatal("live parser accepted lifecycle marker without membershipActive")
+			}
+			message, ignored, err := parseInventoryFindingReconciliationRecord(fixture.record)
+			if err != nil || ignored {
+				t.Fatalf("reconciliation parse ignored=%v, error=%v", ignored, err)
+			}
+			if !bytes.Equal(message.WireBody, original) || !bytes.Equal(fixture.record.Value, original) {
+				t.Fatal("reconciliation parser changed authoritative wire bytes")
+			}
+			sum := sha256.Sum256(original)
+			if message.BodySHA256 != hex.EncodeToString(sum[:]) {
+				t.Fatalf("reconciliation hash = %s, want exact raw-byte hash", message.BodySHA256)
+			}
+		})
+	}
+}
+
+func TestParseInventoryFindingReconciliationRecordRejectsOtherRelaxations(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*inventoryRecordFixture)
+	}{
+		{
+			name: "departed explicit true",
+			mutate: func(fixture *inventoryRecordFixture) {
+				fixture.payload()["membershipActive"] = true
+			},
+		},
+		{
+			name: "restored explicit false",
+			mutate: func(fixture *inventoryRecordFixture) {
+				fixture.envelope["eventType"] = "inventory.finding.membership-restored.v1"
+				fixture.payload()["membershipActive"] = false
+			},
+		},
+		{
+			name: "unknown payload field",
+			mutate: func(fixture *inventoryRecordFixture) {
+				delete(fixture.payload(), "membershipActive")
+				fixture.payload()["legacyOverride"] = true
+			},
+		},
+		{
+			name: "explicit null is not an omitted field",
+			mutate: func(fixture *inventoryRecordFixture) {
+				fixture.payload()["membershipActive"] = nil
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newInventoryRecord(t, "inventory.finding.membership-departed.v1", 4, false)
+			test.mutate(fixture)
+			fixture.remarshal(t)
+			if _, _, err := parseInventoryFindingReconciliationRecord(fixture.record); err == nil {
+				t.Fatal("reconciliation parser accepted a non-legacy relaxation")
+			}
+		})
 	}
 }
 

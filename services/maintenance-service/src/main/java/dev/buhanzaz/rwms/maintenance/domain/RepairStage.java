@@ -247,6 +247,68 @@ public class RepairStage {
     deliveryUpdatedAt = MaintenanceTime.now();
   }
 
+  /**
+   * Moves a still-queued stage through a collision-free temporary number during atomic route
+   * coalescing.
+   *
+   * <p>The caller uses this only after task-board accepted a complete pre-start replacement and
+   * before assigning final contiguous route numbers in the same local transaction.
+   */
+  public void resequenceQueuedTaskPlan(int replacementStageNo) {
+    requireQueuedTaskPlanMerge();
+    if (replacementStageNo < 0) {
+      throw new IllegalArgumentException("Repair stage number is invalid");
+    }
+    stageNo = replacementStageNo;
+  }
+
+  /**
+   * Replaces the local content of one queued physical-queue subtask after remote task truth is
+   * confirmed.
+   *
+   * <p>Work and material JSON are source-owned immutable snapshots. This transition changes only
+   * a pre-start local plan: it cannot rewrite an in-progress or completed stage. Entry identity is
+   * bound separately through the normal registration or pre-start replacement transition.
+   */
+  public void mergeQueuedTaskPlan(
+      int replacementStageNo,
+      String mergedWorkLines,
+      String mergedMaterialLines,
+      UUID mergedPrimaryLineId,
+      String mergedGroupComment,
+      OffsetDateTime mergedTaskDeadline) {
+    requireQueuedTaskPlanMerge();
+    if (replacementStageNo < 0
+        || mergedWorkLines == null
+        || mergedMaterialLines == null
+        || mergedGroupComment == null
+        || mergedGroupComment.length() > 2000) {
+      throw new IllegalArgumentException("Merged repair stage content is invalid");
+    }
+    stageNo = replacementStageNo;
+    workLines = mergedWorkLines;
+    materialLines = mergedMaterialLines;
+    primaryLineId = mergedPrimaryLineId;
+    groupComment = mergedGroupComment;
+    taskDeadline = MaintenanceTime.postgresPrecision(mergedTaskDeadline);
+    deliveryUpdatedAt = MaintenanceTime.now();
+  }
+
+  private void requireQueuedTaskPlanMerge() {
+    boolean unregistered =
+        externalQueueEntryId == null
+            && taskBoardVersion == null
+            && "PENDING_GENERATION".equals(taskGenerationState);
+    boolean registered =
+        externalQueueEntryId != null
+            && taskBoardVersion != null
+            && "GENERATED".equals(taskGenerationState);
+    if (state != RepairStageState.QUEUED || (!unregistered && !registered)) {
+      throw new IllegalStateException(
+          "Only a queued stage with a consistent task mapping can be merged");
+    }
+  }
+
   public void markTaskDeliveryFailed(boolean quarantined) {
     deliveryAttempts = Math.addExact(deliveryAttempts, 1);
     deliveryState = quarantined ? "QUARANTINED" : "RETRY_PENDING";
@@ -292,6 +354,21 @@ public class RepairStage {
     this.completedEventId = eventId;
     this.completedAt = occurredAt == null
         ? MaintenanceTime.now() : MaintenanceTime.postgresPrecision(occurredAt);
+  }
+
+  /**
+   * Finishes a stage from a logged historical shipment import rather than from worker evidence.
+   * The absence of a {@code completedEventId} deliberately distinguishes this system-recorded
+   * historical outcome from a worker-confirmed execution event.
+   */
+  public void closeForHistoricalShipment(boolean capitalRepair) {
+    if (state == RepairStageState.DONE || state == RepairStageState.CANCELLED) return;
+    state = capitalRepair ? RepairStageState.CANCELLED : RepairStageState.DONE;
+    taskGenerationState = "NOT_REQUIRED";
+    deliveryState = "DELIVERED";
+    deliveryUpdatedAt = MaintenanceTime.now();
+    completedEventId = null;
+    completedAt = capitalRepair ? null : MaintenanceTime.now();
   }
 
   public boolean cancelled(UUID eventId, long taskBoardVersion) {

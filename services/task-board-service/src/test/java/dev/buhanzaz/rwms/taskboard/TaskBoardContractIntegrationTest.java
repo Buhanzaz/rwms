@@ -611,6 +611,7 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(paths)
         .containsKeys(
             "/warehouses/{warehouseId}/work-queues/{queueId}/worker-plan",
+            "/warehouses/{warehouseId}/task-board/entries/{entryId}/future-availability",
             "/warehouses/{warehouseId}/task-board/entries/{entryId}/reorder")
         .doesNotContainKeys(
             "/warehouses/{warehouseId}/task-board/dates/swap",
@@ -618,7 +619,10 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
 
     Map<String, Object> schemas = child(child(contract, "components"), "schemas");
     assertThat(schemas)
-        .containsKeys("WorkerQueuePlanRequest", "ReorderBoardEntryRequest")
+        .containsKeys(
+            "WorkerQueuePlanRequest",
+            "SetFutureTaskEntryAvailabilityRequest",
+            "ReorderBoardEntryRequest")
         .doesNotContainKeys(
             "MoveEntryRequest", "SwapTaskBoardDatesRequest", "TaskBoardDateEntryExpectation");
     assertThat(child(schemas, "TaskBoardSnapshot").get("required"))
@@ -629,6 +633,8 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(child(schemas, "ReorderBoardEntryRequest").get("required"))
         .asList()
         .contains("expectedEntryVersion", "expectedQueueVersion", "targetEntryId", "targetIndex");
+    assertThat(child(schemas, "SetFutureTaskEntryAvailabilityRequest").get("required"))
+        .isEqualTo(List.of("expectedEntryVersion", "available"));
     assertAllLocalReferencesResolve(contract, contract);
   }
 

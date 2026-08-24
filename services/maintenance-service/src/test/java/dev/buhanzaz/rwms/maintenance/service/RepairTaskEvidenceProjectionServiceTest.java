@@ -17,6 +17,7 @@ import dev.buhanzaz.rwms.maintenance.repository.RepairTaskEvidenceRepository;
 import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -133,5 +134,78 @@ class RepairTaskEvidenceProjectionServiceTest {
                     "READY"))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("queue entry");
+  }
+
+  @Test
+  void advancesRecoveredOriginToThePreservedOriginalFact() {
+    UUID repairId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID entryId = UUID.randomUUID();
+    UUID taskId = UUID.randomUUID();
+    UUID evidenceId = UUID.randomUUID();
+    UUID workerId = UUID.randomUUID();
+    UUID mediaId = UUID.randomUUID();
+    OffsetDateTime capturedAt = OffsetDateTime.parse("2026-08-22T10:00:00Z");
+    OffsetDateTime recordedAt = capturedAt.plusSeconds(1);
+    MaintenanceRepair repair = mock(MaintenanceRepair.class);
+    when(repair.getWarehouseId()).thenReturn(warehouseId);
+    RepairStage stage =
+        new RepairStage(
+            UUID.randomUUID(),
+            repairId,
+            0,
+            RepairStageKind.REPAIR_WORK,
+            UUID.randomUUID(),
+            "INTERIOR",
+            "REPAIR",
+            null);
+    stage.confirmTaskBoardRegistration(entryId, 1);
+    when(repairs.findById(repairId)).thenReturn(Optional.of(repair));
+    when(stages.findByRepairIdAndStageNo(repairId, 0)).thenReturn(Optional.of(stage));
+    AtomicReference<RepairTaskEvidence> projected = new AtomicReference<>();
+    when(evidence.findById(evidenceId))
+        .thenAnswer(ignored -> Optional.ofNullable(projected.get()));
+    when(evidence.save(any(RepairTaskEvidence.class)))
+        .thenAnswer(
+            invocation -> {
+              RepairTaskEvidence value = invocation.getArgument(0);
+              projected.set(value);
+              return value;
+            });
+
+    service.apply(
+        evidenceId,
+        0,
+        repairId,
+        entryId,
+        taskId,
+        0,
+        warehouseId,
+        workerId,
+        null,
+        mediaId,
+        1,
+        capturedAt,
+        recordedAt,
+        "READY");
+    service.apply(
+        evidenceId,
+        1,
+        repairId,
+        entryId,
+        taskId,
+        0,
+        warehouseId,
+        workerId,
+        null,
+        mediaId,
+        1,
+        capturedAt,
+        recordedAt,
+        "READY");
+
+    assertThat(projected.get().getAggregateVersion()).isOne();
+    assertThat(projected.get().getEvidenceId()).isEqualTo(evidenceId);
+    assertThat(projected.get().getMediaId()).isEqualTo(mediaId);
   }
 }

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter, useLocation } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -12,6 +12,7 @@ import type {
 } from "@/features/task-board/model/task-board"
 import type { TaskBoardRepairComplexity } from "@/features/task-board/task-board-card"
 import { TaskBoardPage } from "@/features/task-board/task-board-page"
+import { readTaskBoardViewPreferences } from "@/features/task-board/task-board-view-preferences"
 
 const mocks = vi.hoisted(() => ({
   useAuth: vi.fn(),
@@ -21,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   listMaintenanceRepairs: vi.fn(),
   updateTaskBoardWorkerPlan: vi.fn(),
   reorderTaskBoardEntry: vi.fn(),
+  setFutureTaskBoardEntryAvailability: vi.fn(),
 }))
 
 vi.mock("@/features/auth/use-auth", () => ({ useAuth: mocks.useAuth }))
@@ -38,6 +40,8 @@ vi.mock("@/features/task-board/api/task-board-api", async () => {
     getTaskBoard: mocks.getTaskBoard,
     updateTaskBoardWorkerPlan: mocks.updateTaskBoardWorkerPlan,
     reorderTaskBoardEntry: mocks.reorderTaskBoardEntry,
+    setFutureTaskBoardEntryAvailability:
+      mocks.setFutureTaskBoardEntryAvailability,
   }
 })
 vi.mock("@/features/settings/kpi/api/kpi-settings-api", async () => {
@@ -68,6 +72,11 @@ vi.mock("@/features/task-board/task-board-column", () => ({
     onUpdateWorkerPlan,
     onReorder,
     collapsed,
+    futureEntryIds,
+    initialScrollTop,
+    onFutureAvailabilityChange,
+    onToggleCollapsed,
+    onScrollTopChange,
   }: {
     actionPending: boolean
     queueActionsDisabled: boolean
@@ -91,6 +100,14 @@ vi.mock("@/features/task-board/task-board-column", () => ({
     ) => void
     onReorder: (entry: TaskBoardEntryDto, targetIndex: number) => void
     collapsed: boolean
+    futureEntryIds: ReadonlySet<string>
+    initialScrollTop: number
+    onFutureAvailabilityChange: (
+      entry: TaskBoardEntryDto,
+      available: boolean
+    ) => void
+    onToggleCollapsed: (queueKey: string) => void
+    onScrollTopChange: (queueKey: string, scrollTop: number) => void
   }) => (
     <div
       data-testid="task-board-command-state"
@@ -101,6 +118,7 @@ vi.mock("@/features/task-board/task-board-column", () => ({
       data-can-manage={canManage}
       data-reorder-disabled={reorderDisabled}
       data-collapsed={collapsed}
+      data-initial-scroll-top={initialScrollTop}
     >
       {actionPending && queueActionsDisabled ? "read-only" : "editable"}
       <span data-testid="visible-task-external-ids">
@@ -146,6 +164,25 @@ vi.mock("@/features/task-board/task-board-column", () => ({
           Редактировать тестовый ремонт
         </button>
       ) : null}
+      {visibleEntries
+        .filter((entry) => futureEntryIds.has(entry.id))
+        .map((entry) => (
+          <button
+            key={`availability-${entry.id}`}
+            type="button"
+            onClick={() =>
+              onFutureAvailabilityChange(entry, entry.entryType !== "REAL")
+            }
+          >
+            Доступность {entry.id}
+          </button>
+        ))}
+      <button type="button" onClick={() => onToggleCollapsed(queue.key)}>
+        Переключить очередь {queue.key}
+      </button>
+      <button type="button" onClick={() => onScrollTopChange(queue.key, 275)}>
+        Прокрутить очередь {queue.key}
+      </button>
       <button type="button" onClick={() => onUpdateWorkerPlan(queue, false, 3)}>
         Настроить WorkerApp {queue.key}
       </button>
@@ -281,6 +318,7 @@ function renderPage(
     availableTaskLimit: 3,
   })
   mocks.reorderTaskBoardEntry.mockResolvedValue(currentBoard)
+  mocks.setFutureTaskBoardEntryAvailability.mockResolvedValue(currentBoard)
   mocks.getKpiSettings.mockResolvedValue({
     warehouseId: WAREHOUSE_ID,
     timeZone: "Europe/Moscow",
@@ -337,6 +375,7 @@ function LocationProbe() {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  window.localStorage.clear()
 })
 
 describe("task board warehouse access", () => {
@@ -716,6 +755,128 @@ describe("task board warehouse access", () => {
     expect(renderedIds("highlighted-route-entry-ids")).toEqual([])
     expect(screen.queryByText("Полный путь: БЫТ-001.")).toBeNull()
     expect(electricityColumn.dataset.collapsed).toBe("true")
+  })
+
+  it("changes availability only for a future route entry", async () => {
+    const routeReal = {
+      ...taskEntry("route-real", "Внешние работы"),
+      taskId: "route-task",
+      routeIndex: 0,
+      routeLength: 2,
+    }
+    const routeShadow = {
+      ...taskEntry("route-shadow", "Электрика"),
+      taskId: "route-task",
+      routeIndex: 1,
+      routeLength: 2,
+      entryType: "SHADOW" as const,
+    }
+    const currentBoard = {
+      ...board,
+      totalEntries: 2,
+      realEntries: 1,
+      shadowEntries: 1,
+      queues: [{ ...board.queues[0]!, entries: [routeReal, routeShadow] }],
+    }
+    renderPage("EDIT", { currentBoard })
+    const user = userEvent.setup()
+
+    await user.click(
+      await screen.findByRole("checkbox", {
+        name: "Отобразить будущие подзадачи",
+      })
+    )
+    await user.click(
+      screen.getByRole("button", {
+        name: `Доступность ${routeShadow.id}`,
+      })
+    )
+
+    await waitFor(() => {
+      expect(mocks.setFutureTaskBoardEntryAvailability).toHaveBeenCalledWith({
+        accessToken: "task-board-token",
+        entry: routeShadow,
+        available: true,
+      })
+    })
+    expect(
+      screen.queryByRole("button", {
+        name: `Доступность ${routeReal.id}`,
+      })
+    ).toBeNull()
+  })
+
+  it("restores future visibility, collapsed queues and scroll positions per warehouse", async () => {
+    const routeReal = {
+      ...taskEntry("route-real", "Внешние работы"),
+      taskId: "route-task",
+      routeIndex: 0,
+      routeLength: 2,
+    }
+    const routeShadow = {
+      ...taskEntry("route-shadow", "Электрика"),
+      taskId: "route-task",
+      routeIndex: 1,
+      routeLength: 2,
+      entryType: "SHADOW" as const,
+    }
+    const currentBoard = {
+      ...board,
+      totalEntries: 2,
+      realEntries: 1,
+      shadowEntries: 1,
+      queues: [{ ...board.queues[0]!, entries: [routeReal, routeShadow] }],
+    }
+    const firstView = renderPage("EDIT", { currentBoard })
+    const user = userEvent.setup()
+
+    await user.click(
+      await screen.findByRole("checkbox", {
+        name: "Отобразить будущие подзадачи",
+      })
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Переключить очередь repair" })
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Прокрутить очередь repair" })
+    )
+    const boardScroll = document.querySelector<HTMLElement>(
+      '[data-slot="task-board-scroll"]'
+    )!
+    boardScroll.scrollLeft = 310
+    boardScroll.scrollTop = 12
+    fireEvent.scroll(boardScroll)
+
+    await waitFor(() => {
+      expect(readTaskBoardViewPreferences(WAREHOUSE_ID)).toEqual({
+        showFutureSubtasks: true,
+        collapsedQueueKeys: ["repair"],
+        boardScrollLeft: 310,
+        boardScrollTop: 12,
+        queueScrollTops: { repair: 275 },
+      })
+    })
+    firstView.unmount()
+
+    renderPage("EDIT", { currentBoard })
+    const futureToggle = await screen.findByRole("checkbox", {
+      name: "Отобразить будущие подзадачи",
+    })
+    await waitFor(() => expect(futureToggle.getAttribute("data-state")).toBe("checked"))
+    expect(
+      (await screen.findByTestId("visible-task-external-ids")).textContent
+    ).toBe("route-real,route-shadow")
+    const commandState = screen.getByTestId("task-board-command-state")
+    expect(commandState.dataset.collapsed).toBe("true")
+    expect(commandState.dataset.initialScrollTop).toBe("275")
+    await waitFor(() => {
+      const restoredScroll = document.querySelector<HTMLElement>(
+        '[data-slot="task-board-scroll"]'
+      )!
+      expect(restoredScroll.scrollLeft).toBe(310)
+      expect(restoredScroll.scrollTop).toBe(12)
+    })
   })
 
   it("opens a waiting maintenance repair in edit mode", async () => {

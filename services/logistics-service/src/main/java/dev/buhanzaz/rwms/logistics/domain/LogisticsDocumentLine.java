@@ -310,6 +310,20 @@ public class LogisticsDocumentLine {
     return true;
   }
 
+  /**
+   * Advances the optimistic asset fence after maintenance has released a historical shipment from
+   * repair. No ordinary shipment or return may use this escape hatch.
+   */
+  public void synchronizeHistoricalShipmentAssetVersion(long nextAssetVersion) {
+    if (!document.isHistoricalRentalImport()
+        || document.getDocumentType() != LogisticsDocumentType.SHIPMENT
+        || state != LogisticsLineState.PENDING
+        || nextAssetVersion < assetVersion) {
+      throw new IllegalStateException("Historical shipment asset version cannot be synchronized");
+    }
+    assetVersion = nextAssetVersion;
+  }
+
   /** Replaces an unstarted rental-order line after an asset-side atomic cabin swap. */
   public void replaceRentalItem(
       UUID expectedOldRentalItemId, UUID replacementRentalItemId, long replacementAssetVersion) {

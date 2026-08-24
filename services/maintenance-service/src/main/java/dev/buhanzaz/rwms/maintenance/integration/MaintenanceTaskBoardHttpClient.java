@@ -142,10 +142,20 @@ final class MaintenanceTaskBoardHttpClient {
 
   PreStartTaskCancellation cancelTaskIfPreStart(
       UUID key, UUID externalTaskId, long expectedVersion) {
+    return cancelTaskIfPreStart(
+        key, externalTaskId, expectedVersion, "inventory-publication-replacement");
+  }
+
+  /** Sends the source-owned reason only to the task-board's atomic pre-start cancellation seam. */
+  PreStartTaskCancellation cancelTaskIfPreStart(
+      UUID key, UUID externalTaskId, long expectedVersion, String reason) {
+    if (reason == null || reason.isBlank() || reason.length() > 1000) {
+      throw new IllegalArgumentException("Task cancellation reason is required");
+    }
     PreStartCancellationResponse response = transport.post(
         taskBase + "/" + externalTaskId + "/cancel-if-pre-start",
         key,
-        new CancelTaskRequest(expectedVersion, "inventory-publication-replacement"),
+        new CancelTaskRequest(expectedVersion, reason),
         PreStartCancellationResponse.class,
         TASK_CLIENT,
         TASK_SCOPE);

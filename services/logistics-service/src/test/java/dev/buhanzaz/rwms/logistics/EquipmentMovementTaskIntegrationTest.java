@@ -411,6 +411,39 @@ class EquipmentMovementTaskIntegrationTest {
     verify(dependencies, never()).cancelEquipmentMovementTask(any(), anyLong());
   }
 
+  @Test
+  void completedAfterDeadlineClosesTheBoardTaskButRequiresEquipmentReconciliation()
+      throws Exception {
+    MvcResult created = createTask();
+    UUID taskId = UUID.fromString(json(created).get("id").stringValue());
+
+    OffsetDateTime deadline =
+        jdbc.queryForObject(
+            "select deadline_at from equipment_movement_task where id=?",
+            OffsetDateTime.class,
+            taskId);
+    workerDoneAt.set(deadline.plusMinutes(1));
+    workerDone.set(true);
+    jdbc.update(
+        "update equipment_movement_task set next_attempt_at=clock_timestamp() where id=?",
+        taskId);
+    processor.processUntilIdle(taskId);
+
+    mvc.perform(
+            org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                    "/api/logistics/v1/equipment-movement-tasks/{taskId}", taskId)
+                .with(actor()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.state").value("RECONCILIATION_REQUIRED"))
+        .andExpect(
+            jsonPath("$.failureCode").value("TASK_BOARD_COMPLETED_AFTER_RESERVATION_EXPIRY"));
+
+    verify(dependencies, never()).executeEquipmentMovement(any(), any(), any());
+    verify(dependencies, never()).cancelEquipmentMovementTask(any(), anyLong());
+    verify(dependencies, never())
+        .releaseEquipmentMovementReservation(any(), any(), anyLong(), any(), any());
+  }
+
   private MvcResult createTask() throws Exception {
     OffsetDateTime deadline = OffsetDateTime.now(ZoneOffset.UTC).plusHours(2);
     return mvc.perform(

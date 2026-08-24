@@ -403,6 +403,7 @@ final class MaintenanceAssetHttpClient {
       case "QUEUE_TO_CAPITAL_REPAIR" -> "QUEUE_FOR_CAPITAL_REPAIR";
       case "PENDING_ACCEPTANCE" -> "MARK_PENDING_ACCEPTANCE";
       case "ACCEPT_TO_FREE" -> "ACCEPT_REPAIR";
+      case "HISTORICAL_SHIPMENT_TO_FREE" -> "CLOSE_FOR_HISTORICAL_SHIPMENT";
       case "WRITE_OFF" -> "WRITE_OFF";
       default -> throw new IllegalArgumentException("Unsupported asset transition");
     };
@@ -423,7 +424,8 @@ final class MaintenanceAssetHttpClient {
         ASSET_CLIENT,
         ASSET_SCOPE);
     String expectedStatus = switch (transition) {
-      case "EMPTY_ESTIMATE_TO_FREE", "EMPTY_REPAIR_TO_FREE", "ACCEPT_TO_FREE" -> "FREE";
+      case "EMPTY_ESTIMATE_TO_FREE", "EMPTY_REPAIR_TO_FREE", "ACCEPT_TO_FREE",
+          "HISTORICAL_SHIPMENT_TO_FREE" -> "FREE";
       case "QUEUE_TO_REPAIR" -> "REPAIR";
       case "QUEUE_TO_CAPITAL_REPAIR" -> "CAPITAL_REPAIR";
       case "PENDING_ACCEPTANCE" -> "WAITING_REPAIR_CHECK";

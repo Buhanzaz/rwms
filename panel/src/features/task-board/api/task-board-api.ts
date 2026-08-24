@@ -6,6 +6,7 @@ import {
   pinHttpTaskBoardEntry,
   reorderHttpTaskBoardEntry,
   resumeHttpTaskBoardEntry,
+  setHttpFutureTaskBoardEntryAvailability,
   takeHttpTaskBoardEntry,
   updateHttpTaskBoardWorkerPlan,
 } from "@/features/task-board/api/http-task-board-client"
@@ -74,6 +75,14 @@ export function reorderTaskBoardEntry(params: {
     targetEntryId: params.targetEntryId,
     targetIndex: params.targetIndex,
   })
+}
+
+export function setFutureTaskBoardEntryAvailability(params: {
+  accessToken: string
+  entry: TaskBoardEntryDto
+  available: boolean
+}) {
+  return setHttpFutureTaskBoardEntryAvailability(params)
 }
 
 export function takeTaskBoardEntry(params: {

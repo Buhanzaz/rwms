@@ -102,6 +102,24 @@ describe("ServiceOwnerPhotos", () => {
         showPhotoCount: false,
         controlsVisibility: "mobile-visible",
         className: "min-h-56 flex-1 rounded-lg border",
+        fit: "contain",
+      })
+    )
+
+    view.rerender(
+      <ServiceOwnerPhotos
+        accessToken="token"
+        owner={owner}
+        readOnly
+        title="Фото работы"
+        shrinkToContainer
+      />
+    )
+
+    expect(photoCarousel).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        className: "min-h-56 flex-1 rounded-lg border xl:min-h-0",
+        fit: "contain",
       })
     )
 
@@ -112,6 +130,7 @@ describe("ServiceOwnerPhotos", () => {
         readOnly
         title="Фото работы"
         presentation="work-carousel"
+        shrinkToContainer
       />
     )
 
@@ -120,6 +139,7 @@ describe("ServiceOwnerPhotos", () => {
         showPhotoCount: true,
         controlsVisibility: "always",
         className: "h-56 min-h-56 rounded-lg border",
+        fit: "contain",
       })
     )
   })

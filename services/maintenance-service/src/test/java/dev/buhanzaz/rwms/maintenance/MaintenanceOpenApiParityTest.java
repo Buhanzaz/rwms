@@ -4,6 +4,7 @@ import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.*;
 import static dev.buhanzaz.rwms.maintenance.api.FurnitureEquipmentLinkApiModels.*;
 import static dev.buhanzaz.rwms.maintenance.api.WarehouseOperationMarkRecoveryApiModels.*;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request;
@@ -12,6 +13,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceCatalogController;
+import dev.buhanzaz.rwms.maintenance.api.MaintenanceHistoricalShipmentController;
+import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.HistoricalShipmentClosureOutcome;
+import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.HistoricalShipmentRentalItemStatus;
 import dev.buhanzaz.rwms.maintenance.api.EstimateCreationWindowSettingsController;
 import dev.buhanzaz.rwms.maintenance.api.EstimateCreationWindowSettingsResponse;
 import dev.buhanzaz.rwms.maintenance.api.FurnitureEquipmentLinkController;
@@ -86,6 +90,7 @@ import dev.buhanzaz.rwms.maintenance.service.FurnitureEquipmentLinkReviewService
 import dev.buhanzaz.rwms.maintenance.service.InventoryAuthoritativeOutcomeService;
 import dev.buhanzaz.rwms.maintenance.service.InventoryMaintenanceService;
 import dev.buhanzaz.rwms.maintenance.service.InventoryPublicationReconciliationService;
+import dev.buhanzaz.rwms.maintenance.service.HistoricalShipmentRepairClosureService;
 import dev.buhanzaz.rwms.maintenance.service.LogisticsReturnShortageService;
 import dev.buhanzaz.rwms.maintenance.service.RepairCapacitySettingsService;
 import dev.buhanzaz.rwms.maintenance.service.RepairComplexityColorsService;
@@ -154,12 +159,12 @@ class MaintenanceOpenApiParityTest {
   private static final List<OperationSpec> OPERATIONS = canonicalOperations();
 
   @Test
-  void allFiftyEightPathsAndSeventyOperationsExactlyMatchTheApprovedAcceptanceMatrix()
+  void allFiftyNinePathsAndSeventyOneOperationsExactlyMatchTheApprovedAcceptanceMatrix()
       throws Exception {
     Map<String, Object> document = openApi();
-    assertThat(child(document, "paths")).hasSize(58);
-    assertThat(openApiOperationCount(document)).isEqualTo(70);
-    assertThat(controllerOperations()).hasSize(70);
+    assertThat(child(document, "paths")).hasSize(59);
+    assertThat(openApiOperationCount(document)).isEqualTo(71);
+    assertThat(controllerOperations()).hasSize(71);
 
     for (OperationSpec expected : OPERATIONS) {
       assertOpenApiOperation(document, expected);
@@ -202,6 +207,7 @@ class MaintenanceOpenApiParityTest {
 
     assertThat(logisticsPaths).containsExactly(
         "/api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/estimate-source",
+        "/api/internal/maintenance/v1/logistics/historical-shipments/{shipmentId}/close",
         "/api/internal/maintenance/v1/logistics/transfers/{transferId}/lines/{lineId}/prepare-departure",
         "/api/internal/maintenance/v1/logistics/transfers/{transferId}/lines/{lineId}/arrival-preflight",
         "/api/internal/maintenance/v1/logistics/transfers/{transferId}/lines/{lineId}/complete-arrival",
@@ -534,6 +540,8 @@ class MaintenanceOpenApiParityTest {
     InventoryAuthoritativeOutcomeService authoritativeOutcomes =
         authoritativeOutcomesFixture();
     LogisticsReturnShortageService logistics = logisticsFixture();
+    HistoricalShipmentRepairClosureService historicalShipmentClosures =
+        mock(HistoricalShipmentRepairClosureService.class);
     RepairCapacitySettingsService settings = settingsFixture();
     EstimateCreationWindowSettingsService creationWindow = creationWindowFixture();
     RepairComplexitySettingsService complexitySettings = complexitySettingsFixture();
@@ -545,6 +553,17 @@ class MaintenanceOpenApiParityTest {
     FurnitureEquipmentLinkReviewService furnitureLinks = furnitureLinkReviewFixture();
     MaintenanceAuthorizer authorizer = mock(MaintenanceAuthorizer.class);
     when(authorizer.subjectId(null)).thenReturn(ID);
+    when(historicalShipmentClosures.close(any(), any(), any()))
+        .thenReturn(
+            new HistoricalShipmentRepairClosureService.CloseResult(
+                new HistoricalShipmentRepairClosureResponse(
+                    ID,
+                    ID,
+                    ID,
+                    1L,
+                    HistoricalShipmentRentalItemStatus.FREE,
+                    List.of(),
+                    HistoricalShipmentClosureOutcome.NOT_REQUIRED), true));
     MockMvc mvc = MockMvcBuilders.standaloneSetup(
             new MaintenanceCatalogController(service, authorizer),
             new FurnitureEquipmentLinkController(furnitureLinks, authorizer),
@@ -556,6 +575,7 @@ class MaintenanceOpenApiParityTest {
             new PropertyDispositionInventoryController(dispositions, authorizer),
             new WarehouseOperationMarkRecoveryController(operationMarkRecovery, authorizer),
             new MaintenanceLogisticsController(logistics, authorizer),
+            new MaintenanceHistoricalShipmentController(historicalShipmentClosures, authorizer),
             new MaintenanceTransferRepairController(service, authorizer),
             new MaintenanceRepairPlaceLogisticsController(
                 repairPlaces, service, authorizer),
@@ -576,6 +596,7 @@ class MaintenanceOpenApiParityTest {
               .replace("{inventoryId}", ID.toString())
               .replace("{findingId}", ID.toString())
               .replace("{returnId}", ID.toString())
+              .replace("{shipmentId}", ID.toString())
               .replace("{transferId}", ID.toString())
               .replace("{repairId}", ID.toString())
               .replace("{decisionId}", ID.toString())
@@ -776,6 +797,13 @@ class MaintenanceOpenApiParityTest {
         List.of(path("returnId"), path("lineId")),
         null, null, "200", "ReturnEstimateSource", false,
         "401", "403", "404"));
+    result.add(op("POST",
+        "/api/internal/maintenance/v1/logistics/historical-shipments/{shipmentId}/close",
+        "closeHistoricalShipmentMaintenance", MaintenanceHistoricalShipmentController.class, "close",
+        List.of(path("shipmentId"), requiredHeader("Idempotency-Key")),
+        HistoricalShipmentRepairClosureRequest.class, "HistoricalShipmentRepairClosureRequest",
+        "200", "HistoricalShipmentRepairClosureResponse", true,
+        "400", "401", "403", "409", "503"));
     result.add(op("POST",
         "/api/internal/maintenance/v1/logistics/transfers/{transferId}/lines/{lineId}/prepare-departure",
         "prepareRepairTransferDeparture",
@@ -1999,6 +2027,9 @@ class MaintenanceOpenApiParityTest {
     values.put(
         UpsertLogisticsReturnEstimateSourceRequest.class,
         "UpsertLogisticsReturnEstimateSourceRequest");
+    values.put(
+        HistoricalShipmentRepairClosureRequest.class,
+        "HistoricalShipmentRepairClosureRequest");
     values.put(ReturnEstimateSource.class, "ReturnEstimateSource");
     values.put(TransferRepairRequest.class, "TransferRepairRequest");
     values.put(PrepareTransferRepairResponse.class, "PrepareTransferRepairResult");
@@ -2036,6 +2067,9 @@ class MaintenanceOpenApiParityTest {
         "ImportRepairComplexitySettingsRequest");
     values.put(RepairComplexitySettingsResponse.class, "RepairComplexitySettings");
     values.put(RepairPlaceTransitionRequest.class, "RepairPlaceTransitionRequest");
+    values.put(
+        HistoricalShipmentRepairClosureResponse.class,
+        "HistoricalShipmentRepairClosureResponse");
     values.put(RepairPlaceAllocationResponse.class, "RepairPlaceAllocation");
     values.put(RepairPlaceProjectionResponse.class, "RepairPlaceProjection");
     values.put(
@@ -2335,6 +2369,7 @@ class MaintenanceOpenApiParityTest {
         MaintenanceRepairController.class,
         MaintenanceInventoryController.class,
         MaintenanceLogisticsController.class,
+        MaintenanceHistoricalShipmentController.class,
         MaintenanceTransferRepairController.class,
         MaintenanceRepairPlaceLogisticsController.class,
         MaintenanceSettingsController.class,

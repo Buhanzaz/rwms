@@ -304,6 +304,26 @@ public class RepairPlaceService {
     allocations.saveAndFlush(allocation);
   }
 
+  /**
+   * Releases a repair-place guard after the historical shipment coordinator has already proved
+   * that no pre-start task or driver movement can continue. This is not an inventory outcome and
+   * intentionally has its own audited entry point.
+   */
+  @Transactional
+  public void releaseForHistoricalShipment(UUID warehouseId, UUID repairId) {
+    if (warehouseId == null || repairId == null) {
+      throw new IllegalArgumentException("Historical shipment repair-place identity is required");
+    }
+    lockWarehouse(warehouseId);
+    RepairPlaceAllocation allocation = allocations.findByRepairIdForUpdate(repairId).orElse(null);
+    if (allocation == null || allocation.getState() == RepairPlaceAllocationState.RELEASED) return;
+    if (allocation.getState() == RepairPlaceAllocationState.OCCUPIED) {
+      allocation.readyToRelease();
+    }
+    allocation.release();
+    allocations.saveAndFlush(allocation);
+  }
+
   @Transactional
   public TransitionResult reserve(
       UUID warehouseId, UUID repairId, long expectedVersion, UUID idempotencyKey) {

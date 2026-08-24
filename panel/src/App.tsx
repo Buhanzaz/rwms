@@ -9,6 +9,7 @@ import { useWarehouse } from "@/hooks/use-warehouse"
 import { useWarehouseRealtime } from "@/hooks/use-warehouse-realtime"
 import { useAuth } from "@/features/auth/use-auth"
 import { EquipmentPage } from "@/features/equipment/equipment-page"
+import { HomePage } from "@/features/home/home-page"
 import { KpiPage } from "@/features/kpi/kpi-page"
 import { KpiSettingsPage } from "@/features/settings/kpi/kpi-settings-page"
 import { EstimatesRepairsSettingsPage } from "@/features/settings/estimates-repairs/estimates-repairs-settings-page"
@@ -88,12 +89,6 @@ const pages: PageConfig[] = [
     path: "/logistics/transfers",
     title: "Перемещения",
     description: "Перемещения бытовок и наполнения между складами.",
-  },
-  {
-    path: "/",
-    title: "Главная",
-    description:
-      "Общая сводка по складу, ремонтам, задачам и ключевым показателям.",
   },
   {
     path: "/kpi",
@@ -253,6 +248,7 @@ function AppLayout() {
                 element={<BookingContinuePage />}
               />
               <Route path="/equipment" element={<EquipmentPage />} />
+              <Route path="/" element={<HomePage />} />
               <Route path="/kpi" element={<KpiPage />} />
               <Route path="/warehouse" element={<RentalItemsPage />} />
               <Route path="/inventory" element={<InventoryEntryPage />} />

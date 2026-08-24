@@ -29,9 +29,10 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Owns versioned KPI palette and work-schedule settings for one warehouse.
  *
- * <p>Working time is interpreted in the warehouse's authoritative timezone. A future schedule is
- * stored as pending and activated through a replay-safe operation receipt, preserving a clear
- * effective configuration history for timer and KPI calculations.
+ * <p>Working time is interpreted in the warehouse's authoritative timezone. A schedule effective
+ * for the current or a future local calendar day is stored as pending and activated through a
+ * replay-safe operation receipt, preserving a clear effective configuration history for timer and
+ * KPI calculations. Current-day activation takes effect immediately for the whole local day.
  */
 @Service
 @RequiredArgsConstructor
@@ -80,7 +81,7 @@ public class KpiSettingsService {
     return response(settings);
   }
 
-  /** Saves a validated future work schedule as the single pending revision. */
+  /** Saves a validated current-day or future work schedule as the single pending revision. */
   @Transactional
   public WarehouseKpiSettingsResponse saveWorkSchedule(
       UUID warehouseId, SaveWorkScheduleRequest request) {
@@ -124,7 +125,13 @@ public class KpiSettingsService {
     settingsRepository.saveAndFlush(settings);
   }
 
-  /** Activates the pending schedule exactly once for the stable operation ID. */
+  /**
+   * Activates the pending schedule exactly once for the stable operation ID.
+   *
+   * <p>A revision effective for the warehouse's current local date is promoted before this method
+   * returns. Replacing an already active revision for that same local date first unschedules the
+   * old revision so timer selection remains deterministic.
+   */
   @Transactional
   public WarehouseKpiSettingsResponse activate(
       UUID warehouseId, UUID operationId, ActivateKpiSettingsRequest request) {
@@ -154,7 +161,17 @@ public class KpiSettingsService {
     WarehouseKpiSettings settings = requireSettings(warehouseId);
     requireVersion(settings, request.expectedVersion());
     try {
+      KpiWorkScheduleRevision activeSchedule = settings.getActiveSchedule();
+      KpiWorkScheduleRevision pendingSchedule = settings.getPendingSchedule();
+      if (activeSchedule != null
+          && pendingSchedule != null
+          && activeSchedule.getEffectiveFrom().equals(pendingSchedule.getEffectiveFrom())) {
+        activeSchedule.unschedule();
+        scheduleRepository.saveAndFlush(activeSchedule);
+      }
       settings.activatePendingSchedule();
+      LocalDate today = LocalDate.now(ZoneId.of(settings.getTimeZone()));
+      settings.promoteSchedule(today);
     } catch (IllegalStateException exception) {
       throw new ConflictException(exception.getMessage());
     }
@@ -253,9 +270,9 @@ public class KpiSettingsService {
 
   private void validateSchedule(String timeZone, SaveWorkScheduleRequest request) {
     LocalDate today = LocalDate.now(ZoneId.of(timeZone));
-    if (!request.effectiveFrom().isAfter(today)) {
+    if (request.effectiveFrom().isBefore(today)) {
       throw new IllegalArgumentException(
-          "Дата вступления графика должна быть не раньше следующего дня");
+          "Дата вступления графика не может быть раньше текущего дня");
     }
     if (!request.shiftStart().isBefore(request.shiftEnd())) {
       throw new IllegalArgumentException(

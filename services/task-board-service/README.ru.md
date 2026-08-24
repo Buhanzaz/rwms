@@ -68,12 +68,17 @@ manager-очередь возвращает все незавершённые `R
 manager-а, не обрезая полный manager-ответ. Global queue definition задаёт только начальное
 значение для новой проекции склада. Затем складская очередь сама владеет этим числом и
 `workerFeedEnabled`. Maintenance-маршруты нормализуются в порядок `СЭС -> сварка -> внешние ->
-внутренние -> электрика -> сантехника`. Первая существующая незавершённая фаза является
-единственным `REAL`; отсутствующие или завершённые фазы пропускаются, а все последующие остаются
-`SHADOW`. Поэтому электрика доступна сразу только когда все четыре предыдущие фазы отсутствуют или
-завершены. При promotion shadow возвращает сохранённое место перед более поздней незакреплённой
-работой; закреплённый REAL остаётся впереди. Любой текущий gate `REAL` можно взять, а shadow никогда
-не является исполнимым.
+внутренние -> электрика -> сантехника`. Первая существующая незавершённая фаза по умолчанию
+становится `REAL`; отсутствующие или завершённые фазы пропускаются, а все последующие начинают как
+`SHADOW`. Пользователь с `EDIT` может под version fence явно переключить строго будущий обычный
+`WAITING` entry между `SHADOW` и `REAL`. Будущий `REAL` допускается к публикации в WorkerApp и
+параллельному выполнению без предварительного завершения более ранней обычной стадии; при этом
+по-прежнему действуют switch и waiting-real план складской очереди, а также квалификация работника.
+Самую раннюю незавершённую стадию нельзя понизить, а незавершённый СЭС запрещает открывать любую
+более позднюю стадию. При promotion будущий entry возвращает сохранённое место перед более поздней
+незакреплённой работой и в той же транзакции обновляет media-owner proof, выдавая или отзывая
+соответствующую аудиторию чтения исходных evidence; закреплённый REAL остаётся впереди. Любой gate
+`REAL` можно взять, а `SHADOW` никогда не является исполнимым.
 
 Каноническая стадия СЭС остаётся единственной исполнимой карточкой задачи до конца обработки, в том
 числе для сохранённых definitions с историческим типом очереди `REPAIR`. Manager snapshot содержит
@@ -86,8 +91,18 @@ pinned-карточки, shadows и queue identity не двигаются. Пл
 расписание. Датированное планирование водителей и отгрузок остаётся в отдельных logistics
 surfaces. Инварианты подтверждаются
 [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
-[`TaskBoardReadProjectionService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardReadProjectionService.java) и
+[`TaskBoardReadProjectionService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardReadProjectionService.java),
+[`TaskBoardFutureAvailabilityService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardFutureAvailabilityService.java) и
 [`OrdinaryQueueAvailabilityPolicy`](src/main/java/dev/buhanzaz/rwms/taskboard/service/OrdinaryQueueAvailabilityPolicy.java).
+
+Ревизия графика KPI может начинаться с текущей warehouse-local даты или с будущей даты. Сохранение
+оставляет ревизию в `DRAFT`; явная активация в той же команде переводит ревизию текущей даты в
+`ACTIVE` и применяет её ко всему текущему локальному календарному дню. Будущая ревизия остаётся
+`SCHEDULED` до своей даты, а прошедшая дата отклоняется. Активация замены на ту же дату выводит
+предыдущую scheduled/active ревизию из действия под существующими receipt и
+optimistic-concurrency fences. Поведением владеют
+[`KpiSettingsService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/KpiSettingsService.java) и
+[канонический контракт](../../contracts/openapi/task-board-service.yaml).
 
 Flyway V31 нормализует существующие значения `queue_entry.queue_position` в эту агрегатную
 последовательность и исправляет real/shadow-форму полностью ожидающего holding-маршрута. Она не
@@ -148,10 +163,12 @@ move.
 | Компонент | Владеющая ответственность |
 | --- | --- |
 | `TaskBoardReadProjectionService` | Чтения board/task и response projections |
+| `DailyBrigadeActivityService` | Warehouse-local проекция фактических интервалов взятия/завершения assignments текущего дня с ограниченным объединением пересекающихся legacy-дублей |
 | `TaskBoardExternalRegistrationService` | Создание source-owned task, identity, route и canonical retry fingerprint |
 | `TaskBoardExternalMutationService` | Source-authorized pre-start update/cancel, перемещение lane и relocation |
 | `TaskBoardLogisticsTaskService` | Граница logistics equipment/driver task |
 | `TaskBoardWorkerExecutionService` | Assignment, timing, interruption, cancellation и worker execution |
+| `TaskBoardFutureAvailabilityService` | Version-fenced promotion/demotion строго будущих ordinary entries, включая gate СЭС, transactional media-reader proof и post-commit invalidation WorkerApp |
 | `TaskBoardPinningService` | Version-fenced manager-команда pin/unpin |
 | `TaskBoardEntryOrderingService` | Перестановка незакреплённых ожидающих REAL внутри очереди под entry/queue/target-identity fences |
 | `WorkerQueuePlanService` | Warehouse-local switch публикации WorkerApp и команда waiting-real плана |
@@ -212,6 +229,7 @@ Public gateway преобразует `/api/task-board/**` в downstream `/api/*
 | `/api/warehouses/{warehouseId}/workers/**` | Warehouse-authorized manager | Workers, groups, credential operations и reconciliation |
 | `/api/warehouses/{warehouseId}/work-queues` | Warehouse-authorized user | Physical queue projections и capabilities |
 | `/api/warehouses/{warehouseId}/task-board/**` | Warehouse-authorized user | Чтение агрегированной ordinary board и поддерживаемые task-команды |
+| `/api/warehouses/{warehouseId}/task-board/daily-brigade-activity` | Warehouse-authorized user | Фактические интервалы assignments, пересекающие текущий warehouse-local день |
 | `/api/warehouses/{warehouseId}/task-board/kpi-settings/**` | Warehouse manager/admin | Palette и effective schedule revisions |
 | `/api/worker/v1/**` | Worker credential и `worker.tasks` scope | Context, feed, detail, actions, evidence reservations, devices и events |
 | `/api/driver/v1/**` | Worker credential и `driver.tasks` scope | Driver-only context, primary feed, actions, evidence reservations, devices и events |
@@ -223,6 +241,14 @@ Public gateway преобразует `/api/task-board/**` в downstream `/api/*
 Private paths — service-to-service boundaries, а не client shortcuts. Их exact
 `principal_type`, `client_id`, scope, source ownership и warehouse checks входят
 в контракт.
+
+Чтение дневной активности бригад использует сохранённый `startedAt` assignment
+из TAKE и `finishedAt` из completion. Границы смены только выбирают и размещают
+данные на шкале, но никогда не заменяют эти timestamps. Пересекающиеся строки
+joined-worker или legacy одной бригады, задачи и physical queue образуют один
+интервал; непересекающиеся повторные взятия остаются отдельными, а у живого
+интервала finish равен null. Проекция read-only, warehouse-authorized и целиком
+принадлежит task-board.
 
 ## Native streams и offline execution
 
@@ -259,15 +285,23 @@ audit для каждого, выдаёт существующий queue-entry c
 Каждый `WorkerFeedEntry` возвращает zero-based `routeIndex`, положительный `routeStepCount`,
 обязательный `entryType` и обязательный `pinned`. WorkerApp получает только выбранные сервером
 `REAL` из включённых очередей: активную работу плюс ограниченный план ожидающих карточек. Будущие
-`SHADOW` остаются в manager snapshot и никогда не публикуются в WorkerApp. Route cardinality и
-число READY evidence загружаются для выбранной страницы feed одной database projection, а не
-отдельным запросом для каждой карточки.
+`SHADOW` остаются в manager snapshot и никогда не публикуются в WorkerApp. Для maintenance route
+cardinality считает физические очереди, поэтому исторический начатый same-queue пакет всё равно
+показывается одной подзадачей, хотя его immutable source-mapped строки остаются сохранёнными; для
+остальных источников считаются route entries. Route cardinality и число READY evidence загружаются
+для выбранной страницы feed одной database projection, а не отдельным запросом для каждой карточки.
 
 Worker action проверяет identity работника, current assignment, entry version,
-action/status transition и offline lease, где он нужен. Evidence сначала
-резервируется со stable client reference, затем загружается в media-service.
-Media fact связывает обработанную generation с reservation до использования в
-completion. Legacy-декларация `image/jpeg` может занимать не более 15 MiB; логический клиентский
+action/status transition и offline lease, где он нужен. 24-часовое окно строго
+для `TAKE`, `JOIN`, `PAUSE` и `RESUME`. Для уже назначенного задания WorkerApp
+тот же подписанный lease может передать фото результата и `COMPLETE` после этого
+окна: task state, assignment, expected version, photo gate и время не из
+будущего остаются обязательными. `deadlineAt` остаётся операционным metadata
+задания и не блокирует корректное завершение. Каждое принятое завершение
+публикует канонический факт `QUEUE_ENTRY_COMPLETED`; maintenance по финальному
+факту связанной стадии переводит ремонт в ожидание приёмки. Evidence сначала резервируется со stable client
+reference, затем загружается в media-service. Media fact связывает обработанную
+generation с reservation до использования в completion. Legacy-декларация `image/jpeg` может занимать не более 15 MiB; логический клиентский
 bundle `image/webp` — не более 1 MiB, а его `sha256` является детерминированным checksum manifest
 пакета. Оба формата сохраняют одну логическую evidence row, а replay reservation обязан совпадать
 с исходными entry, operation, route step, capture time, MIME type, size и checksum. Те же ограничения

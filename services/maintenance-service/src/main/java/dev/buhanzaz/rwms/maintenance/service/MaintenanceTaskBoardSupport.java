@@ -38,6 +38,7 @@ final class MaintenanceTaskBoardSupport {
   private final MaintenanceEstimateSupport estimateSupport;
   private final MaintenanceMediaSupport mediaSupport;
   private final MaintenanceRepairModelSupport repairModelSupport;
+  private final MaintenanceReworkSourceMediaResolver reworkSourceMedia;
 
   MaintenanceTaskBoardSupport(
       MaintenanceRepairRepository repairs,
@@ -48,7 +49,8 @@ final class MaintenanceTaskBoardSupport {
       MaintenanceCommandSupport commandSupport,
       MaintenanceEstimateSupport estimateSupport,
       MaintenanceMediaSupport mediaSupport,
-      MaintenanceRepairModelSupport repairModelSupport) {
+      MaintenanceRepairModelSupport repairModelSupport,
+      MaintenanceReworkSourceMediaResolver reworkSourceMedia) {
     this.repairs = repairs;
     this.repairStages = repairStages;
     this.mediaFacts = mediaFacts;
@@ -58,6 +60,7 @@ final class MaintenanceTaskBoardSupport {
     this.estimateSupport = estimateSupport;
     this.mediaSupport = mediaSupport;
     this.repairModelSupport = repairModelSupport;
+    this.reworkSourceMedia = reworkSourceMedia;
   }
 
   protected void enqueueRepairQueue(
@@ -241,14 +244,15 @@ final class MaintenanceTaskBoardSupport {
       UUID repairId,
       MaintenanceDependencyGateway.TaskSnapshot task,
       boolean preStartReplacement) {
-    List<RepairStage> stages =
-        RepairPhaseSequence.canonicalStages(
+    List<List<RepairStage>> stageGroups =
+        RepairPhaseSequence.canonicalStageGroups(
             repairStages.findAllByRepairIdOrderByStageNo(repairId));
-    if (task.stages().size() != stages.size()) {
+    if (task.stages().size() != stageGroups.size()) {
       throw new MaintenanceDependencyException(
           org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
           "Task-board route truth does not match the maintenance plan");
     }
+    List<RepairStage> stages = mergePersistedQueuedStageGroups(stageGroups);
     Map<Integer, MaintenanceDependencyGateway.TaskStageSnapshot> byRoute = new HashMap<>();
     task.stages().forEach(stage -> {
       if (byRoute.put(stage.routeIndex(), stage) != null) {
@@ -274,6 +278,68 @@ final class MaintenanceTaskBoardSupport {
       }
     }
     repairStages.saveAllAndFlush(stages);
+  }
+
+  /**
+   * Commits the local half of an already accepted task-board queue-package route.
+   *
+   * <p>The remote pre-start replacement happens before this method. Duplicate rows are deleted and
+   * survivors are moved through collision-free temporary stage numbers before their final
+   * contiguous order is written, so the existing {@code (repair_id, stage_no)} uniqueness fence is
+   * never weakened. A transaction rollback restores the complete former local plan.
+   */
+  private List<RepairStage> mergePersistedQueuedStageGroups(
+      List<List<RepairStage>> stageGroups) {
+    if (stageGroups.stream().noneMatch(group -> group.size() > 1)) {
+      return stageGroups.stream().map(List::getFirst).toList();
+    }
+    List<RepairStage> duplicates =
+        stageGroups.stream().flatMap(group -> group.stream().skip(1)).toList();
+    repairStages.deleteAll(duplicates);
+    repairStages.flush();
+
+    List<RepairStage> survivors = stageGroups.stream().map(List::getFirst).toList();
+    int temporaryBase =
+        stageGroups.stream()
+                .flatMap(List::stream)
+                .mapToInt(RepairStage::getStageNo)
+                .max()
+                .orElse(0)
+            + 1;
+    for (int index = 0; index < survivors.size(); index++) {
+      survivors.get(index).resequenceQueuedTaskPlan(temporaryBase + index);
+    }
+    repairStages.saveAllAndFlush(survivors);
+
+    for (int index = 0; index < stageGroups.size(); index++) {
+      mergePersistedQueuedStageGroup(stageGroups.get(index), index);
+    }
+    repairStages.saveAllAndFlush(survivors);
+    return List.copyOf(survivors);
+  }
+
+  /** Combines every source-owned content row of one physical queue into its stable first stage. */
+  private void mergePersistedQueuedStageGroup(List<RepairStage> group, int stageNo) {
+    RepairStage survivor = group.getFirst();
+    List<EstimateLineResponse> work = mergedWorkLines(group);
+    List<EstimateLineResponse> materials = mergedMaterialLines(group);
+    if (work.size() + materials.size() > 2000) {
+      throw new IllegalStateException(
+          "Combined repair queue stage exceeds the supported content limit");
+    }
+    UUID primaryLineId =
+        group.stream()
+            .map(RepairStage::getPrimaryLineId)
+            .filter(java.util.Objects::nonNull)
+            .findFirst()
+            .orElse(null);
+    survivor.mergeQueuedTaskPlan(
+        stageNo,
+        commandSupport.write(work),
+        commandSupport.write(materials),
+        primaryLineId,
+        mergedGroupComment(group),
+        mergedTaskDeadline(group));
   }
 
   protected Optional<MaintenanceRepair> primaryLifecycleOwnerWithLeaseIdentity(
@@ -334,6 +400,10 @@ final class MaintenanceTaskBoardSupport {
   /**
    * Builds canonically ordered worker snapshots with the selected cover first and line media linked
    * by work ID.
+   *
+   * <p>A repeated line also exposes the exact source stage's worker result photos as general source
+   * media. They remain input context for the new stage and are never copied into its result-evidence
+   * projection.
    */
   protected List<MaintenanceDependencyGateway.TaskStage> taskStages(MaintenanceRepair repair) {
     List<MediaReferenceInput> repairMedia = new ArrayList<>(mediaSupport.repairMedia(repair));
@@ -346,17 +416,23 @@ final class MaintenanceTaskBoardSupport {
           Comparator.comparingInt(
               reference -> coverMediaId.equals(reference.mediaId()) ? 0 : 1));
     }
-    List<RepairStage> orderedStages =
-        RepairPhaseSequence.canonicalStages(
+    List<MaintenanceDependencyGateway.TaskSourceMedia> commonRepairMedia =
+        repairMedia.stream()
+            .map(reference -> taskSourceMedia(reference, repair.getCreatedAt()))
+            .toList();
+    List<List<RepairStage>> stageGroups =
+        RepairPhaseSequence.canonicalStageGroups(
             repairStages.findAllByRepairIdOrderByStageNo(repair.getId()));
-    return IntStream.range(0, orderedStages.size())
+    List<RepairStage> orderedStages = stageGroups.stream().flatMap(List::stream).toList();
+    Map<UUID, List<MaintenanceDependencyGateway.TaskSourceMedia>> inheritedReworkMedia =
+        reworkSourceMedia.resolve(repair, orderedStages);
+    return IntStream.range(0, stageGroups.size())
         .mapToObj(
             routeIndex -> {
-              RepairStage stage = orderedStages.get(routeIndex);
-              List<EstimateLineResponse> work =
-                  commandSupport.readList(stage.getWorkLines(), EstimateLineResponse.class);
-              List<EstimateLineResponse> materials =
-                  commandSupport.readList(stage.getMaterialLines(), EstimateLineResponse.class);
+              List<RepairStage> group = stageGroups.get(routeIndex);
+              RepairStage stage = group.getFirst();
+              List<EstimateLineResponse> work = mergedWorkLines(group);
+              List<EstimateLineResponse> materials = mergedMaterialLines(group);
               List<MaintenanceDependencyGateway.TaskWork> workSnapshots =
                   taskWorkSnapshots(work);
               List<MaintenanceDependencyGateway.TaskMaterial> materialSnapshots =
@@ -380,36 +456,98 @@ final class MaintenanceTaskBoardSupport {
                               "Смета",
                               repair.getCreatedAt()))
                   .forEach(comments::add);
-              if (stage.getGroupComment() != null && !stage.getGroupComment().isBlank()) {
+              String groupComment = mergedGroupComment(group);
+              if (!groupComment.isBlank()) {
                 comments.add(
                     new MaintenanceDependencyGateway.TaskComment(
                         stage.getId(),
-                        stage.getGroupComment().trim(),
+                        groupComment,
                         "Диспетчер",
                         repair.getCreatedAt()));
               }
-              LinkedHashMap<UUID, MediaReferenceInput> sourceMedia = new LinkedHashMap<>();
-              repairMedia.forEach(reference -> sourceMedia.put(reference.mediaId(), reference));
+              LinkedHashMap<UUID, MaintenanceDependencyGateway.TaskSourceMedia> sourceMedia =
+                  new LinkedHashMap<>();
+              commonRepairMedia.forEach(media -> sourceMedia.put(media.mediaId(), media));
               java.util.stream.Stream.concat(work.stream(), materials.stream())
                   .flatMap(line -> line.mediaReferences().stream())
-                  .forEach(reference -> sourceMedia.put(reference.mediaId(), reference));
+                  .forEach(
+                      reference ->
+                          sourceMedia.put(
+                              reference.mediaId(),
+                              taskSourceMedia(reference, repair.getCreatedAt())));
+              group.forEach(
+                  member ->
+                      inheritedReworkMedia
+                          .getOrDefault(member.getId(), List.of())
+                          .forEach(media -> sourceMedia.putIfAbsent(media.mediaId(), media)));
+              if (sourceMedia.size() > 100) {
+                throw new IllegalStateException(
+                    "Worker task source media exceeds the supported limit");
+              }
               return new MaintenanceDependencyGateway.TaskStage(
                   stage.getId(),
                   routeIndex,
                   stage.getStageKind(),
-                  taskStageText(stage),
+                  taskStageText(
+                      work, materials, groupComment, stage.getRoutingQueueName()),
                   stage.getRoutingQueueId(),
-                  stage.getTaskDeadline(),
+                  mergedTaskDeadline(group),
                   workSnapshots,
                   materialSnapshots,
                   comments,
-                  sourceMedia.values().stream()
-                      .map(reference -> taskSourceMedia(reference, repair.getCreatedAt()))
-                      .toList(),
+                  List.copyOf(sourceMedia.values()),
                   plannedDurationMinutes(work),
                   taskTitle);
             })
         .toList();
+  }
+
+  private List<EstimateLineResponse> mergedWorkLines(List<RepairStage> group) {
+    return group.stream()
+        .flatMap(
+            stage ->
+                commandSupport
+                    .readList(stage.getWorkLines(), EstimateLineResponse.class)
+                    .stream())
+        .toList();
+  }
+
+  private List<EstimateLineResponse> mergedMaterialLines(List<RepairStage> group) {
+    return group.stream()
+        .flatMap(
+            stage ->
+                commandSupport
+                    .readList(stage.getMaterialLines(), EstimateLineResponse.class)
+                    .stream())
+        .toList();
+  }
+
+  private static String mergedGroupComment(List<RepairStage> group) {
+    String value =
+        group.stream()
+            .map(RepairStage::getGroupComment)
+            .filter(comment -> comment != null && !comment.isBlank())
+            .map(String::trim)
+            .collect(java.util.stream.Collectors.joining("\n\n"));
+    if (value.length() > 2000) {
+      throw new IllegalStateException(
+          "Combined repair queue comment exceeds the supported limit");
+    }
+    return value;
+  }
+
+  private static OffsetDateTime mergedTaskDeadline(List<RepairStage> group) {
+    List<OffsetDateTime> deadlines =
+        group.stream()
+            .map(RepairStage::getTaskDeadline)
+            .filter(java.util.Objects::nonNull)
+            .distinct()
+            .toList();
+    if (deadlines.size() > 1) {
+      throw new IllegalStateException(
+          "Combined repair queue stages have conflicting task deadlines");
+    }
+    return deadlines.isEmpty() ? null : deadlines.getFirst();
   }
 
   /** Returns the canonical maintenance-owned complexity label used as the WorkerApp task title. */
@@ -494,14 +632,18 @@ final class MaintenanceTaskBoardSupport {
         recordedAt);
   }
 
-  protected String taskStageText(RepairStage stage) {
+  protected String taskStageText(
+      List<EstimateLineResponse> workLines,
+      List<EstimateLineResponse> materialLines,
+      String groupComment,
+      String routingQueueName) {
     List<String> work =
-        commandSupport.readList(stage.getWorkLines(), EstimateLineResponse.class).stream()
+        workLines.stream()
             .map(EstimateLineResponse::description)
             .filter(value -> value != null && !value.isBlank())
             .toList();
     List<String> materials =
-        commandSupport.readList(stage.getMaterialLines(), EstimateLineResponse.class).stream()
+        materialLines.stream()
             .map(
                 line ->
                     line.description()
@@ -515,11 +657,11 @@ final class MaintenanceTaskBoardSupport {
     List<String> parts = new ArrayList<>();
     if (!work.isEmpty()) parts.add(String.join(", ", work));
     if (!materials.isEmpty()) parts.add("Материалы: " + String.join(", ", materials));
-    if (stage.getGroupComment() != null && !stage.getGroupComment().isBlank()) {
-      parts.add(stage.getGroupComment());
+    if (groupComment != null && !groupComment.isBlank()) {
+      parts.add(groupComment);
     }
-    String result =
-        parts.isEmpty() ? stage.getRoutingQueueName() : String.join(". ", parts);
+    String result = parts.isEmpty() ? routingQueueName : String.join(". ", parts);
     return result.length() <= 2000 ? result : result.substring(0, 2000);
   }
+
 }

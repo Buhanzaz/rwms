@@ -32,8 +32,9 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
  * Declares the public gateway's stateless authentication, authorization, and CORS policy.
  *
  * <p>Private service routes are denied at the edge, worker task routes require their dedicated
- * scope, and all other public API routes require a locally validated Bearer JWT. Authorization
- * decisions inside individual domain services are deliberately not replicated here.
+ * scope, explicitly published presentation reads remain anonymous, and all other public API routes
+ * require a locally validated Bearer JWT. Authorization decisions inside individual domain
+ * services are deliberately not replicated here.
  */
 @Configuration
 public class GatewaySecurityConfiguration {
@@ -72,6 +73,10 @@ public class GatewaySecurityConfiguration {
                     "/api/assistant/private/**",
                     "/auth/api/internal/**")
                 .denyAll()
+                .requestMatchers(
+                    HttpMethod.GET,
+                    "/api/logistics/public/v1/cabin-photo-presentations/**")
+                .permitAll()
                 .requestMatchers(
                     "/auth/**",
                     "/api/logistics/public/v1/client-presentations/**",

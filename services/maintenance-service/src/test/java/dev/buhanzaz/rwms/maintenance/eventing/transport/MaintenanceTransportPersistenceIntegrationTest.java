@@ -182,6 +182,41 @@ class MaintenanceTransportPersistenceIntegrationTest {
   }
 
   @Test
+  void taskEvidenceStreamOriginTraversesReplayAndDurableInbox() {
+    UUID evidenceId = UUID.randomUUID();
+    var event = taskEvidence(evidenceId);
+
+    stageAndProcess(event);
+
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select source_topic,aggregate_type,aggregate_version,status
+                  from inbox_message
+                 where consumer_group=? and event_id=?
+                """,
+                MaintenanceTransportTopics.CONSUMER_GROUP,
+                event.eventId()))
+        .containsEntry("source_topic", MaintenanceTransportTopics.TASK_EVIDENCE)
+        .containsEntry("aggregate_type", "TASK_EVIDENCE")
+        .containsEntry("aggregate_version", 0L)
+        .containsEntry("status", "PROCESSED");
+    assertThat(
+            jdbc.queryForObject(
+                "select state from maintenance_inbound_replay_message where event_id=?",
+                String.class,
+                event.eventId()))
+        .isEqualTo("APPLIED");
+    assertThat(EFFECTS)
+        .singleElement()
+        .satisfies(
+            effect -> {
+              assertThat(effect.aggregateId()).isEqualTo(evidenceId.toString());
+              assertThat(effect.aggregateVersion()).isZero();
+            });
+  }
+
+  @Test
   void approvedDltRemainsApprovedWhileAggregateIsBlockedAndCanResumeLater() {
     UUID boardTaskId = UUID.randomUUID();
     UUID externalTaskId = UUID.randomUUID();
@@ -356,7 +391,8 @@ class MaintenanceTransportPersistenceIntegrationTest {
               "producer":"task-board-service","aggregateType":"BOARD_TASK","aggregateId":"%s",
               "aggregateVersion":%d,"correlation":{"correlationId":"%s","causationId":null},
               "actorRef":null,"payload":{"boardTaskId":"%s","warehouseId":"%s",
-              "externalTaskId":"%s","status":"DONE","scheduledDate":"2026-07-17",
+              "externalTaskId":"%s","status":"DONE","lane":"SCHEDULED",
+              "scheduledDate":"2026-07-17",
               "priority":3,"pinned":false,"plannedDurationMinutes":10,
               "deadlineAt":null,"doneAt":"2026-07-17T00:00:00Z","deleted":false}
             }
@@ -405,6 +441,42 @@ class MaintenanceTransportPersistenceIntegrationTest {
     return validator.validate(
         MaintenanceTransportTopics.MEDIA,
         aggregateId.toString().getBytes(StandardCharsets.UTF_8),
+        raw);
+  }
+
+  private MaintenanceInboundEnvelopeValidator.ValidatedInboundEvent taskEvidence(
+      UUID evidenceId) {
+    byte[] raw =
+        json(
+            """
+            {
+              "envelopeVersion":2,"eventId":"%s",
+              "eventType":"task-board.task-evidence.ready.v1","eventVersion":1,
+              "occurredAt":"2026-08-22T10:00:00Z","recordedAt":"2026-08-22T10:00:01Z",
+              "producer":"task-board-service","aggregateType":"TASK_EVIDENCE",
+              "aggregateId":"%s","aggregateVersion":0,
+              "correlation":{"correlationId":"%s","causationId":null},"actorRef":null,
+              "payload":{"evidenceId":"%s","entryId":"%s","taskId":"%s","routeIndex":0,
+              "warehouseId":"%s","workerId":"%s","workerGroupId":null,"mediaId":"%s",
+              "mediaGeneration":1,"capturedAt":"2026-08-22T10:00:00Z",
+              "recordedAt":"2026-08-22T10:00:01Z","state":"READY",
+              "sourceType":"MAINTENANCE_REPAIR","sourceId":"%s"}
+            }
+            """
+                .formatted(
+                    UUID.randomUUID(),
+                    evidenceId,
+                    UUID.randomUUID(),
+                    evidenceId,
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID()));
+    return validator.validate(
+        MaintenanceTransportTopics.TASK_EVIDENCE,
+        evidenceId.toString().getBytes(StandardCharsets.UTF_8),
         raw);
   }
 

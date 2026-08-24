@@ -357,6 +357,24 @@ export function reorderHttpTaskBoardEntry(params: {
   ).then(parseBoard)
 }
 
+export function setHttpFutureTaskBoardEntryAvailability(params: {
+  accessToken: string
+  entry: TaskBoardEntryDto
+  available: boolean
+}) {
+  return bearerRequest<unknown>(
+    params.accessToken,
+    entryPath(params.entry, "future-availability"),
+    {
+      method: "POST",
+      body: JSON.stringify({
+        expectedEntryVersion: params.entry.version,
+        available: params.available,
+      }),
+    }
+  ).then(parseBoard)
+}
+
 export function takeHttpTaskBoardEntry(
   accessToken: string,
   entry: TaskBoardEntryDto,

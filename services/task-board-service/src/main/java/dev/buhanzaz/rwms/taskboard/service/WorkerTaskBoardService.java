@@ -463,8 +463,13 @@ public class WorkerTaskBoardService {
     if (request.routeIndex() != current.routeIndex()) {
       throw new ConflictException("Фотография относится к другому шагу задания");
     }
-    leases.requireValid(
-        request.offlineLeaseId(), workerId, warehouseId, request.capturedAt(), now());
+    if (surface == MobileTaskSurface.WORKER) {
+      leases.requireDeferredCompletionValid(
+          request.offlineLeaseId(), workerId, warehouseId, request.capturedAt(), now());
+    } else {
+      leases.requireValid(
+          request.offlineLeaseId(), workerId, warehouseId, request.capturedAt(), now());
+    }
 
     jdbc.queryForObject(
         "select id from queue_entry where id=? for update", UUID.class, entryId);
@@ -772,8 +777,13 @@ public class WorkerTaskBoardService {
             "К логистическому заданию можно присоединиться только текущей группой");
       }
     }
-    leases.requireValid(
-        request.offlineLeaseId(), workerId, warehouseId, request.occurredAt(), now());
+    if (surface == MobileTaskSurface.WORKER && request.action() == WorkerAction.COMPLETE) {
+      leases.requireDeferredCompletionValid(
+          request.offlineLeaseId(), workerId, warehouseId, request.occurredAt(), now());
+    } else {
+      leases.requireValid(
+          request.offlineLeaseId(), workerId, warehouseId, request.occurredAt(), now());
+    }
     String previousCorrelation = MDC.get(CorrelationIdFilter.MDC_KEY);
     MDC.put(CorrelationIdFilter.MDC_KEY, request.operationId().toString());
     try {

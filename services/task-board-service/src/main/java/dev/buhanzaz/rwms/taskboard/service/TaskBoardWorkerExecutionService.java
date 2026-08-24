@@ -604,7 +604,6 @@ class TaskBoardWorkerExecutionService {
             ? queuePositions.lockTaskAndEntryStreams(entry.getTask(), streamsToLock)
             : queuePositions.lockEntryStreams(streamsToLock);
     OffsetDateTime now = now();
-    ensureCompletionBeforeDeadline(entry.getTask(), now);
     stopTimer(entry, now);
     Set<UUID> completedKpiGroups = kpiEvidence.completeSegment(warehouseId, entry, now);
     entry.setStatus(EntryStatus.DONE);
@@ -758,9 +757,24 @@ class TaskBoardWorkerExecutionService {
         throw new ConflictException("Сначала возьмите первый доступный этап очереди");
       }
     }
+    List<QueueEntry> route =
+        entries.findAllByTaskIdOrderByRouteIndexAsc(entry.getTask().getId());
+    if (entry.getQueue().getPurpose() == QueuePurpose.GENERAL) {
+      QueueEntry unfinishedSes =
+          route.stream()
+              .filter(candidate -> UNFINISHED.contains(candidate.getStatus()))
+              .filter(candidate -> RepairRoutePhaseOrder.isSesQueue(candidate.getQueue()))
+              .min(Comparator.comparingInt(QueueEntry::getRouteIndex))
+              .orElse(null);
+      if (unfinishedSes != null && !entry.equals(unfinishedSes)) {
+        throw new ConflictException("Сначала завершите обязательный этап СЭС");
+      }
+      // The manager command is the explicit route-order exception for ordinary work. EntryType
+      // remains server-owned and the TAKE transition already rejects every SHADOW entry.
+      return;
+    }
     QueueEntry routeGate =
-        OrdinaryQueueAvailabilityPolicy.nextExecutableRouteEntry(
-            entries.findAllByTaskIdOrderByRouteIndexAsc(entry.getTask().getId()), Set.of());
+        OrdinaryQueueAvailabilityPolicy.nextExecutableRouteEntry(route, Set.of());
     if (!entry.equals(routeGate)) {
       throw new ConflictException("Сначала завершите обязательный этап маршрута");
     }
@@ -1027,14 +1041,6 @@ class TaskBoardWorkerExecutionService {
 
   private OffsetDateTime now() {
     return OffsetDateTime.now(ZoneOffset.UTC);
-  }
-
-  private void ensureCompletionBeforeDeadline(BoardTask task, OffsetDateTime completionAt) {
-    if (!task.isCompletionDeadlineEnforced()) return;
-    OffsetDateTime deadline = task.getDeadlineAt();
-    if (deadline == null || !completionAt.isBefore(deadline)) {
-      throw new ConflictException("Срок резерва мебели истек: завершение задания недоступно");
-    }
   }
 
   private void lock(String key) {

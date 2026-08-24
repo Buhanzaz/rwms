@@ -14,7 +14,10 @@ import org.springframework.stereotype.Component;
  * page.
  *
  * <p>The projection reads every persisted route step for each selected task while returning one
- * row per visible entry. It deliberately batches both counts in one database round trip.
+ * row per visible entry. A maintenance route counts physical queues because one queue is one
+ * worker-executable subtask even while a started historical task still retains several persisted
+ * content rows for that queue. Other task sources remain entry-counted. Both counts are batched in
+ * one database round trip.
  */
 @Component
 class WorkerFeedCountProjection {
@@ -42,11 +45,23 @@ class WorkerFeedCountProjection {
             selected_tasks as (
               select distinct task_id from selected
             ),
+            task_sources as (
+              select selected_tasks.task_id,
+                     coalesce(source.source_type='MAINTENANCE_REPAIR',false) maintenance_repair
+                from selected_tasks
+                left join task_sync_source source
+                  on source.board_task_id=selected_tasks.task_id
+            ),
             route_counts as (
-              select route.task_id,count(*)::integer route_step_count
+              select route.task_id,
+                     case when task_sources.maintenance_repair
+                          then count(distinct route.queue_id)::integer
+                          else count(*)::integer
+                      end route_step_count
                 from queue_entry route
                 join selected_tasks on selected_tasks.task_id=route.task_id
-               group by route.task_id
+                join task_sources on task_sources.task_id=route.task_id
+               group by route.task_id,task_sources.maintenance_repair
             ),
             evidence_counts as (
               select evidence.entry_id,

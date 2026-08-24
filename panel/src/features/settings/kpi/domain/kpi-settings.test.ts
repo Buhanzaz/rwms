@@ -126,11 +126,24 @@ describe("warehouse work schedule", () => {
     ).toEqual({ valid: true, error: null })
   })
 
-  it("rejects crossing midnight, overlapping breaks and activation today", () => {
+  it("accepts activation today and still rejects past or invalid shifts", () => {
     expect(
       validateWorkSchedule(
         {
           effectiveFrom: "2026-07-30",
+          shiftStart: "08:00",
+          shiftEnd: "17:00",
+          daysOff: [7],
+          breaks: [],
+        },
+        "2026-07-30"
+      )
+    ).toEqual({ valid: true, error: null })
+
+    expect(
+      validateWorkSchedule(
+        {
+          effectiveFrom: "2026-07-29",
           shiftStart: "22:00",
           shiftEnd: "06:00",
           daysOff: [7],

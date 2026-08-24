@@ -138,7 +138,9 @@ function renderColumn(params: {
       dailyPlanEntryIds={
         new Set(params.visibleEntries.slice(0, 1).map((item) => item.id))
       }
+      futureEntryIds={new Set()}
       highlightedTaskId={highlightedTaskId}
+      initialScrollTop={0}
       onToggleCollapsed={vi.fn()}
       onUpdateWorkerPlan={params.onUpdateWorkerPlan ?? vi.fn()}
       onReorder={params.onReorder ?? vi.fn()}
@@ -148,6 +150,8 @@ function renderColumn(params: {
       onPause={vi.fn()}
       onResume={vi.fn()}
       onPin={vi.fn()}
+      onFutureAvailabilityChange={vi.fn()}
+      onScrollTopChange={vi.fn()}
       onShowFullRoute={vi.fn()}
       isEntryCollapsed={() => false}
       onToggleEntryCollapsed={vi.fn()}

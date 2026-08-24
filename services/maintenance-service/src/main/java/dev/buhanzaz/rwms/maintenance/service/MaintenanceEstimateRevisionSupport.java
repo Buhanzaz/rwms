@@ -36,8 +36,9 @@ import org.springframework.stereotype.Service;
  * Materializes repair aggregates and persists estimate revisions in the mandatory phase order.
  *
  * <p>It has no public command boundary and delegates line, routing and plan validation to
- * {@link MaintenanceEstimateSupport}; source stage order is canonicalized only after that content
- * has passed validation.</p>
+ * {@link MaintenanceEstimateSupport}. Repeated groups targeting one physical queue are coalesced
+ * before implicit catalog content is resolved, so one queue cannot become several executable
+ * repair stages.</p>
  */
 @Service
 final class MaintenanceEstimateRevisionSupport {
@@ -277,8 +278,7 @@ final class MaintenanceEstimateRevisionSupport {
               List.copyOf(input.mediaReferences())));
     }
     estimateSupport.validateWorkLineMediaIsolation(canonicalLines);
-    List<PlanStageInput> resolvedPlanInputs =
-        estimateSupport.resolvePlanContent(canonicalLines, planInputs);
+    List<PlanStageInput> resolvedPlanInputs = canonicalResolvedPlan(canonicalLines, planInputs);
     estimateSupport.validateEstimateRouting(canonicalSnapshots, resolvedPlanInputs);
     estimateSupport.validatePlanContent(canonicalLines, resolvedPlanInputs);
     estimateSupport.validateCustomRoutingStructure(canonicalLines, resolvedPlanInputs);
@@ -327,10 +327,9 @@ final class MaintenanceEstimateRevisionSupport {
       List<PlanStageInput> inputs,
       List<EstimateLineResponse> lines) {
     estimateSupport.validatePlan(inputs, lines.isEmpty());
-    inputs = estimateSupport.resolvePlanContent(lines, inputs);
+    inputs = canonicalResolvedPlan(lines, inputs);
     estimateSupport.validatePlanContent(lines, inputs);
     estimateSupport.validateCustomRoutingStructure(lines, inputs);
-    inputs = RepairPhaseSequence.canonicalPlan(inputs);
     Map<UUID, EstimateLineResponse> lineById =
         lines.stream()
             .collect(
@@ -356,5 +355,20 @@ final class MaintenanceEstimateRevisionSupport {
       stages.add(stage);
     }
     repairStages.saveAllAndFlush(stages);
+  }
+
+  /**
+   * Coalesces physical queues before resolving an implicit catalog plan into line assignments.
+   *
+   * <p>This ordering prevents several catalog groups for one queue from making route-based content
+   * resolution ambiguous while retaining every submitted group in the resulting queue stage.
+   */
+  protected List<PlanStageInput> canonicalResolvedPlan(
+      List<EstimateLineResponse> lines, List<PlanStageInput> inputs) {
+    if (inputs.stream().anyMatch(stage -> !stage.includedLineIds().isEmpty())) {
+      estimateSupport.validatePlanContent(lines, inputs);
+      estimateSupport.validateCustomRoutingStructure(lines, inputs);
+    }
+    return estimateSupport.resolvePlanContent(lines, RepairPhaseSequence.canonicalPlan(inputs));
   }
 }

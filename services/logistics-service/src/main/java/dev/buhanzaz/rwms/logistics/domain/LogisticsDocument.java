@@ -81,6 +81,10 @@ public class LogisticsDocument {
   @Column(name = "client_id")
   private UUID clientId;
 
+  /** True only for a user-entered historical rental operation that deliberately has no driver. */
+  @Column(name = "historical_rental_import", nullable = false)
+  private boolean historicalRentalImport;
+
   /** Optional same-service worker task that moves transfer furniture. */
   @Column(name = "equipment_movement_task_id")
   private UUID equipmentMovementTaskId;
@@ -308,6 +312,56 @@ public class LogisticsDocument {
   }
 
   /**
+   * Creates an imported rental shipment that remains a normal logistics document and asset saga,
+   * but contains no driver assignment because the physical departure happened in the past.
+   */
+  public static LogisticsDocument createHistoricalRentalShipment(
+      UUID warehouseId,
+      UUID clientId,
+      String clientSnapshot,
+      LocalDate occurredOn,
+      UUID subjectId,
+      UUID correlationId) {
+    LogisticsDocument document =
+        initialize(
+            LogisticsDocumentType.SHIPMENT,
+            warehouseId,
+            null,
+            requiredSnapshot(clientSnapshot, "clientSnapshot"),
+            null,
+            subjectId,
+            correlationId);
+    document.clientId = Objects.requireNonNull(clientId, "clientId");
+    document.historicalRentalImport = true;
+    document.scheduleHistoricalRentalOperation(occurredOn);
+    return document;
+  }
+
+  /**
+   * Creates an imported rental return that enters the standard fenced intake and estimate flow
+   * without fabricating a driver or worker task.
+   */
+  public static LogisticsDocument createHistoricalRentalReturn(
+      UUID warehouseId,
+      UUID clientId,
+      String clientSnapshot,
+      LocalDate occurredOn,
+      UUID subjectId,
+      UUID correlationId) {
+    LogisticsDocument document =
+        createReturn(
+            warehouseId,
+            Objects.requireNonNull(clientId, "clientId"),
+            requiredSnapshot(clientSnapshot, "clientSnapshot"),
+            null,
+            subjectId,
+            correlationId);
+    document.historicalRentalImport = true;
+    document.scheduleHistoricalRentalOperation(occurredOn);
+    return document;
+  }
+
+  /**
    * Creates an already-completed historical return from reviewed inventory evidence. It deliberately
    * skips driver, acceptance, estimate, hold and ordinary return workflow states.
    */
@@ -456,7 +510,11 @@ public class LogisticsDocument {
   }
 
   public void beginReturnRegistration() {
-    requireSchedule("Return pickup");
+    if (historicalRentalImport) {
+      requireHistoricalSchedule("Return pickup");
+    } else {
+      requireSchedule("Return pickup");
+    }
     transition(
         LogisticsDocumentType.RETURN,
         LogisticsDocumentState.DRAFT,
@@ -561,7 +619,11 @@ public class LogisticsDocument {
   }
 
   public void beginShipmentPreparation() {
-    requireSchedule("Shipment");
+    if (historicalRentalImport) {
+      requireHistoricalSchedule("Shipment");
+    } else {
+      requireSchedule("Shipment");
+    }
     transition(
         LogisticsDocumentType.SHIPMENT,
         LogisticsDocumentState.DRAFT,
@@ -924,6 +986,25 @@ public class LogisticsDocument {
   private void requireSchedule(String subject) {
     if (driverSnapshot == null || scheduledDate == null) {
       throw new IllegalStateException(subject + " driver and date are required");
+    }
+  }
+
+  private void scheduleHistoricalRentalOperation(LocalDate occurredOn) {
+    if (!historicalRentalImport
+        || state != LogisticsDocumentState.DRAFT
+        || (documentType != LogisticsDocumentType.SHIPMENT
+            && documentType != LogisticsDocumentType.RETURN)) {
+      throw new IllegalStateException("Historical rental operation cannot be scheduled");
+    }
+    scheduledDate = Objects.requireNonNull(occurredOn, "occurredOn");
+  }
+
+  private void requireHistoricalSchedule(String subject) {
+    if (!historicalRentalImport
+        || scheduledDate == null
+        || driverSnapshot != null
+        || driverWorkerId != null) {
+      throw new IllegalStateException(subject + " historical date is required without a driver");
     }
   }
 

@@ -654,13 +654,13 @@ Inventory-service and logistics-service parse their owning OpenAPI documents,
 compare every method/path pair with merged Spring controller mappings, and send
 unauthenticated probes through the real owner security filter chain. Inventory
 contains 28 bearer operations. Logistics route parity derives its complete
-operation count from the current canonical file and permits exactly four
-anonymous client-presentation operations; every other route is bearer
-protected.
+operation count from the current canonical file and permits exactly six
+anonymous operations: four client-presentation routes plus cabin-photo
+metadata and media reads. Every other route is bearer protected.
 
 The gateway inventory resolves every canonical domain-public operation through
-the current functional routers and the real edge security chain. It covers 274
-domain-public operations, proves the four logistics presentation operations are
+the current functional routers and the real edge security chain. It covers 295
+domain-public operations, proves the six logistics presentation operations are
 the only anonymous domain routes, and proves canonical internal operations and
 reserved internal/private aliases are not public gateway routes. Auth callbacks
 and media health remain explicit owner-specific exclusions rather than hidden

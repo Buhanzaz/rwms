@@ -421,6 +421,7 @@ class RentalOrderPlanningIntegrationServiceTest {
             "Водитель 1",
             DRIVER_ID,
             null,
+            false,
             null,
             LocalDate.now(MOSCOW).plusDays(3),
             ORDER_ID,

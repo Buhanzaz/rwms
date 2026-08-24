@@ -42,6 +42,11 @@ public class SecurityConfiguration {
           authorize
               .requestMatchers("/api/logistics/public/v1/client-presentations/**")
               .permitAll();
+          authorize
+              .requestMatchers(
+                  HttpMethod.GET,
+                  "/api/logistics/public/v1/cabin-photo-presentations/**")
+              .permitAll();
           if (bypassEnabled) authorize.requestMatchers("/api/logistics/**").permitAll();
           authorize.anyRequest().authenticated();
         });

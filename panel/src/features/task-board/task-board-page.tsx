@@ -36,6 +36,7 @@ import {
   pinTaskBoardEntry,
   reorderTaskBoardEntry,
   resumeTaskBoardEntry,
+  setFutureTaskBoardEntryAvailability,
   takeTaskBoardEntry,
   TASK_BOARD_QUERY_KEY,
   taskBoardQueryKey,
@@ -56,6 +57,11 @@ import type { TaskBoardRepairComplexity } from "@/features/task-board/task-board
 import { TaskBoardColumn } from "@/features/task-board/task-board-column"
 import { TaskBoardCompletionDialog } from "@/features/task-board/task-board-completion-dialog"
 import { TaskBoardTakeDialog } from "@/features/task-board/task-board-take-dialog"
+import {
+  readTaskBoardViewPreferences,
+  writeTaskBoardViewPreferences,
+  type TaskBoardViewPreferences,
+} from "@/features/task-board/task-board-view-preferences"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
@@ -180,6 +186,14 @@ async function loadActiveRepairComplexities(
 
 /** Renders server-ordered queues as side-by-side columns with vertically stacked route entries. */
 export function TaskBoardPage() {
+  const { selectedWarehouse } = useWarehouse()
+  return (
+    <TaskBoardWarehousePage key={selectedWarehouse?.id ?? "no-warehouse"} />
+  )
+}
+
+/** Owns one warehouse-scoped board session so local view state resets on warehouse changes. */
+function TaskBoardWarehousePage() {
   const isMobile = useIsMobile()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -187,6 +201,10 @@ export function TaskBoardPage() {
   const { accessToken, currentUser } = useAuth()
   const { selectedWarehouse } = useWarehouse()
   const warehouseId = selectedWarehouse?.id ?? null
+  const [initialViewPreferences] = useState<TaskBoardViewPreferences | null>(
+    () =>
+      warehouseId ? readTaskBoardViewPreferences(warehouseId) : null
+  )
   const canEdit = Boolean(
     warehouseId && hasWarehouseAccess(currentUser, warehouseId, "EDIT")
   )
@@ -194,12 +212,14 @@ export function TaskBoardPage() {
     warehouseId && hasWarehouseAccess(currentUser, warehouseId, "MANAGE")
   )
   const [search, setSearch] = useState("")
-  const [showFutureSubtasks, setShowFutureSubtasks] = useState(false)
+  const [showFutureSubtasks, setShowFutureSubtasks] = useState(
+    initialViewPreferences?.showFutureSubtasks ?? false
+  )
   const [selectedRouteTaskId, setSelectedRouteTaskId] = useState<string | null>(
     null
   )
   const [collapsedQueues, setCollapsedQueues] = useState<Set<string>>(
-    () => new Set()
+    () => new Set(initialViewPreferences?.collapsedQueueKeys ?? [])
   )
   const [entryCollapseStates, setEntryCollapseStates] = useState<
     Map<string, boolean>
@@ -218,6 +238,74 @@ export function TaskBoardPage() {
     values: Map<string, boolean>
   } | null>(null)
   const fullRouteCollapsedQueuesRef = useRef<Set<string> | null>(null)
+  const collapsedPreferencesReadyRef = useRef<string | null>(null)
+  const boardScrollRef = useRef<HTMLDivElement | null>(null)
+  const boardScrollPositionRef = useRef({
+    left: initialViewPreferences?.boardScrollLeft ?? 0,
+    top: initialViewPreferences?.boardScrollTop ?? 0,
+  })
+  const queueScrollTopsRef = useRef<Map<string, number>>(
+    new Map(Object.entries(initialViewPreferences?.queueScrollTops ?? {}))
+  )
+  const restoredBoardScrollWarehouseRef = useRef<string | null>(null)
+  const scrollPersistTimerRef = useRef<number | null>(null)
+  const latestViewStateRef = useRef({
+    warehouseId,
+    showFutureSubtasks,
+    collapsedQueues,
+  })
+
+  const writeLatestViewPreferences = useCallback(() => {
+    const latest = latestViewStateRef.current
+    if (
+      !latest.warehouseId ||
+      collapsedPreferencesReadyRef.current !== latest.warehouseId
+    ) {
+      return
+    }
+    writeTaskBoardViewPreferences(latest.warehouseId, {
+      showFutureSubtasks: latest.showFutureSubtasks,
+      collapsedQueueKeys: [...latest.collapsedQueues],
+      boardScrollLeft: boardScrollPositionRef.current.left,
+      boardScrollTop: boardScrollPositionRef.current.top,
+      queueScrollTops: Object.fromEntries(queueScrollTopsRef.current),
+    })
+  }, [])
+
+  const scheduleScrollPreferenceWrite = useCallback(() => {
+    if (scrollPersistTimerRef.current !== null) {
+      window.clearTimeout(scrollPersistTimerRef.current)
+    }
+    scrollPersistTimerRef.current = window.setTimeout(() => {
+      scrollPersistTimerRef.current = null
+      writeLatestViewPreferences()
+    }, 100)
+  }, [writeLatestViewPreferences])
+
+  useEffect(() => {
+    latestViewStateRef.current = {
+      warehouseId,
+      showFutureSubtasks,
+      collapsedQueues,
+    }
+  }, [collapsedQueues, showFutureSubtasks, warehouseId])
+
+  useEffect(() => {
+    if (collapsedPreferencesReadyRef.current === warehouseId) {
+      writeLatestViewPreferences()
+    }
+  }, [collapsedQueues, showFutureSubtasks, warehouseId, writeLatestViewPreferences])
+
+  useEffect(
+    () => () => {
+      if (scrollPersistTimerRef.current !== null) {
+        window.clearTimeout(scrollPersistTimerRef.current)
+        scrollPersistTimerRef.current = null
+      }
+      writeLatestViewPreferences()
+    },
+    [writeLatestViewPreferences]
+  )
 
   const boardQuery = useQuery({
     queryKey: taskBoardQueryKey(warehouseId ?? "none"),
@@ -313,6 +401,30 @@ export function TaskBoardPage() {
       ),
     [boardQuery.data]
   )
+  const futureEntryIds = useMemo(() => {
+    const entries =
+      boardQuery.data?.queues.flatMap((queue) => queue.entries) ?? []
+    const earliestRouteIndexByTask = new Map<string, number>()
+    entries.forEach((entry) => {
+      earliestRouteIndexByTask.set(
+        entry.taskId,
+        Math.min(
+          earliestRouteIndexByTask.get(entry.taskId) ?? entry.routeIndex,
+          entry.routeIndex
+        )
+      )
+    })
+    return new Set(
+      entries
+        .filter(
+          (entry) =>
+            entry.status === "WAITING" &&
+            entry.routeIndex >
+              (earliestRouteIndexByTask.get(entry.taskId) ?? entry.routeIndex)
+        )
+        .map((entry) => entry.id)
+    )
+  }, [boardQuery.data])
   const highlightedRouteLabel = useMemo(() => {
     if (!highlightedTaskId) return null
     const entry = boardQuery.data?.queues
@@ -420,25 +532,63 @@ export function TaskBoardPage() {
   )
 
   useEffect(() => {
-    if (!warehouseId || !boardQuery.data) return
+    if (!warehouseId || !boardQuery.data) {
+      return
+    }
     const previous = collapsedSettingsRef.current
-    const merged = mergeQueueCollapsedSettings({
-      current: collapsedQueues,
-      previous:
-        previous && previous.warehouseId === warehouseId
-          ? previous.values
-          : null,
-      queues: boardQuery.data.queues,
-      reset: previous?.warehouseId !== warehouseId,
-    })
+    const persistedQueueKeys = initialViewPreferences?.collapsedQueueKeys ?? null
+    const firstWarehouseMerge = previous?.warehouseId !== warehouseId
+    const merged =
+      firstWarehouseMerge && persistedQueueKeys !== null
+        ? {
+            collapsed: new Set(
+              persistedQueueKeys.filter((queueKey) =>
+                boardQuery.data.queues.some((queue) => queue.key === queueKey)
+              )
+            ),
+            settings: new Map(
+              boardQuery.data.queues.map((queue) => [
+                queue.key,
+                queue.settingsCollapsed,
+              ])
+            ),
+          }
+        : mergeQueueCollapsedSettings({
+            current: collapsedQueues,
+            previous:
+              previous && previous.warehouseId === warehouseId
+                ? previous.values
+                : null,
+            queues: boardQuery.data.queues,
+            reset: firstWarehouseMerge,
+          })
     collapsedSettingsRef.current = { warehouseId, values: merged.settings }
+    collapsedPreferencesReadyRef.current = warehouseId
     if (
       merged.collapsed.size !== collapsedQueues.size ||
       [...merged.collapsed].some((queueKey) => !collapsedQueues.has(queueKey))
     ) {
       setCollapsedQueues(merged.collapsed)
     }
-  }, [boardQuery.data, collapsedQueues, warehouseId])
+  }, [boardQuery.data, collapsedQueues, initialViewPreferences, warehouseId])
+
+  useEffect(() => {
+    if (
+      !warehouseId ||
+      !boardQuery.data ||
+      restoredBoardScrollWarehouseRef.current === warehouseId
+    ) {
+      return
+    }
+    const frame = window.requestAnimationFrame(() => {
+      const scroll = boardScrollRef.current
+      if (!scroll) return
+      scroll.scrollLeft = boardScrollPositionRef.current.left
+      scroll.scrollTop = boardScrollPositionRef.current.top
+      restoredBoardScrollWarehouseRef.current = warehouseId
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [boardQuery.data, warehouseId])
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000)
@@ -628,12 +778,52 @@ export function TaskBoardPage() {
       })
     },
   })
+  const futureAvailabilityMutation = useMutation({
+    mutationFn: (params: {
+      entry: TaskBoardEntryDto
+      available: boolean
+    }) => {
+      if (!accessToken) {
+        throw new Error("Не получен токен доступа к доске заданий.")
+      }
+      return setFutureTaskBoardEntryAvailability({ accessToken, ...params })
+    },
+    onMutate: () => {
+      setNotice(null)
+      setError(null)
+    },
+    onSuccess: (snapshot, params) => {
+      setNotice(
+        params.available
+          ? "Будущий этап доступен рабочим."
+          : "Будущий этап снова скрыт от рабочих."
+      )
+      queryClient.setQueryData(
+        taskBoardQueryKey(params.entry.warehouseId),
+        snapshot
+      )
+    },
+    onError: async (unknownError, params) => {
+      setNotice(null)
+      setError(
+        errorMessage(
+          unknownError,
+          "Не удалось изменить доступность будущего этапа"
+        )
+      )
+      await queryClient.invalidateQueries({
+        queryKey: taskBoardQueryKey(params.entry.warehouseId),
+        exact: true,
+      })
+    },
+  })
 
   const busy =
     actionMutation.isPending ||
     pinMutation.isPending ||
     workerPlanMutation.isPending ||
-    reorderMutation.isPending
+    reorderMutation.isPending ||
+    futureAvailabilityMutation.isPending
   const reorderDisabled =
     isMobile ||
     busy ||
@@ -775,12 +965,21 @@ export function TaskBoardPage() {
         </p>
       ) : (
         <div
+          ref={boardScrollRef}
+          data-slot="task-board-scroll"
           className={cn(
             "min-h-0 flex-1",
             isMobile
               ? "overflow-x-hidden overflow-y-auto overscroll-y-contain"
               : "touch-pan-x overflow-x-auto overscroll-x-contain"
           )}
+          onScroll={(event) => {
+            boardScrollPositionRef.current = {
+              left: event.currentTarget.scrollLeft,
+              top: event.currentTarget.scrollTop,
+            }
+            scheduleScrollPreferenceWrite()
+          }}
         >
           <div
             className={cn(
@@ -807,7 +1006,11 @@ export function TaskBoardPage() {
                 dailyPlanEntryIds={
                   dailyPlanEntryIdsByQueue.get(queue.key) ?? EMPTY_ENTRY_IDS
                 }
+                futureEntryIds={futureEntryIds}
                 highlightedTaskId={highlightedTaskId}
+                initialScrollTop={
+                  initialViewPreferences?.queueScrollTops[queue.key] ?? 0
+                }
                 palette={taskBoardPalette}
                 repairComplexitiesByRepairId={repairComplexitiesByRepairId}
                 onToggleCollapsed={(queueKey) =>
@@ -888,6 +1091,14 @@ export function TaskBoardPage() {
                   if (canEdit && entry.entryType === "REAL") {
                     pinMutation.mutate({ entry, pinned })
                   }
+                }}
+                onFutureAvailabilityChange={(entry, available) => {
+                  if (!canEdit || !futureEntryIds.has(entry.id)) return
+                  futureAvailabilityMutation.mutate({ entry, available })
+                }}
+                onScrollTopChange={(queueKey, scrollTop) => {
+                  queueScrollTopsRef.current.set(queueKey, scrollTop)
+                  scheduleScrollPreferenceWrite()
                 }}
                 onShowFullRoute={toggleFullRoute}
                 isEntryCollapsed={isEntryCollapsed}

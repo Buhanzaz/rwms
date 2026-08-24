@@ -132,6 +132,9 @@ public class EquipmentMovementTask {
   @Column(name = "updated_at", nullable = false)
   private OffsetDateTime updatedAt;
 
+  private static final String LATE_BOARD_COMPLETION_RECONCILIATION_CODE =
+      "TASK_BOARD_COMPLETED_AFTER_RESERVATION_EXPIRY";
+
   public static EquipmentMovementTask create(
       UUID warehouseId,
       String unitNumber,
@@ -273,6 +276,15 @@ public class EquipmentMovementTask {
     scheduleImmediately();
   }
 
+  /**
+   * Records the authoritative Task Board outcome for the worker task.
+   *
+   * <p>A board completion that occurred after this movement's asset-reservation deadline is still
+   * accepted as a worker fact. It cannot, however, automatically debit an expired reservation:
+   * another workflow may already have claimed the source balance. The movement therefore becomes
+   * {@link EquipmentMovementTaskState#RECONCILIATION_REQUIRED} instead of rejecting or retrying
+   * the completed worker task.
+   */
   public void observeBoardTask(long taskVersion, String taskStatus, OffsetDateTime doneAt) {
     if (taskBoardTaskVersion == null || taskVersion < taskBoardTaskVersion || taskStatus == null) {
       throw new IllegalArgumentException("Task-board status result is invalid");
@@ -281,8 +293,12 @@ public class EquipmentMovementTask {
     taskBoardTaskVersion = taskVersion;
     taskBoardDoneAt = doneAt;
     if ("DONE".equals(taskStatus)) {
-      if (doneAt == null || !doneAt.isBefore(deadlineAt)) {
-        throw new IllegalArgumentException("Completed board task is outside the movement deadline");
+      if (doneAt == null) {
+        throw new IllegalArgumentException("Completed board task is missing completion time");
+      }
+      if (!doneAt.isBefore(deadlineAt)) {
+        requireReconciliation(LATE_BOARD_COMPLETION_RECONCILIATION_CODE);
+        return;
       }
       state = EquipmentMovementTaskState.EXECUTING;
       retryCount = 0;

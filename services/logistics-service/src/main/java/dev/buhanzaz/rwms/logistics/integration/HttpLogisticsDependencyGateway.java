@@ -256,6 +256,16 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   }
 
   @Override
+  public HistoricalShipmentRepairClosure closeHistoricalShipment(
+      UUID idempotencyKey,
+      UUID shipmentId,
+      UUID warehouseId,
+      UUID rentalItemId) {
+    return maintenance.closeHistoricalShipment(
+        idempotencyKey, shipmentId, warehouseId, rentalItemId);
+  }
+
+  @Override
   public TransferRepairArrivalPreflight preflightTransferArrival(
       UUID transferId,
       UUID lineId,

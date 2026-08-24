@@ -19,6 +19,7 @@ const repairTasksApi = vi.hoisted(() => ({
 }))
 const auth = vi.hoisted(() => ({ useAuth: vi.fn() }))
 const warehouse = vi.hoisted(() => ({ useWarehouse: vi.fn() }))
+const repairAcceptanceDossier = vi.hoisted(() => vi.fn())
 
 vi.mock("@/features/auth/use-auth", () => ({ useAuth: auth.useAuth }))
 vi.mock(
@@ -56,7 +57,10 @@ vi.mock("@/features/repair-tasks/api/repair-tasks-api", async () => {
   }
 })
 vi.mock("@/features/acceptance/repair-acceptance-dossier", () => ({
-  RepairAcceptanceDossier: () => <div>Досье приёмки</div>,
+  RepairAcceptanceDossier: (props: unknown) => {
+    repairAcceptanceDossier(props)
+    return <div>Досье приёмки</div>
+  },
 }))
 
 import { AcceptancePage } from "@/features/acceptance/acceptance-page"
@@ -235,5 +239,33 @@ describe("AcceptancePage actionable selection", () => {
 
     expect(await screen.findByText("Досье приёмки")).toBeTruthy()
     expect(screen.queryByText("Приёмка недоступна")).toBeNull()
+  })
+
+  it("provides the page-header action slot to an actionable dossier", async () => {
+    const actionableRepair = task("header-actions")
+    repairTasksApi.listPendingRepairAcceptance.mockResolvedValue([
+      actionableRepair,
+    ])
+    repairTasksApi.getRepairTask.mockResolvedValue(actionableRepair)
+
+    renderPage("/acceptance?acceptanceId=header-actions")
+
+    await screen.findByText("Досье приёмки")
+    await waitFor(() => {
+      const props = repairAcceptanceDossier.mock.calls.at(-1)?.[0] as
+        | { headerActionsContainer?: HTMLElement | null }
+        | undefined
+      expect(props?.headerActionsContainer).toBeInstanceOf(HTMLDivElement)
+    })
+
+    const headerActions = screen.getByLabelText("Действия приёмки")
+    expect(headerActions.getAttribute("data-slot")).toBe(
+      "acceptance-header-actions"
+    )
+    expect(
+      headerActions.parentElement?.contains(
+        screen.getByRole("button", { name: "Назад" })
+      )
+    ).toBe(true)
   })
 })

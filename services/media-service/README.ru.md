@@ -252,9 +252,13 @@ bypass нет:
 Факты membership-departed, membership-refreshed и completed-observation-restored
 служат только маркерами порядка/checkpoint и никогда не открывают и не закрывают
 media owner proof. `membershipActive` необязателен в исторических added/inspection
-markers, но departed marker обязан нести `false`, а refreshed/restored marker —
-`true`. Поэтому completed restoration позволяет publication saga адресовать
-сохранённые media finding без повторного открытия worker upload authority.
+markers. Lifecycle markers в live Kafka остаются строгими: departed marker обязан
+нести `false`, а refreshed/restored marker — `true`. Только operator-reviewed
+reconciliation command принимает точные authoritative legacy lifecycle bytes,
+созданные до появления `membershipActive`; она выводит `false` для departed и
+`true` для refreshed/restored без нормализации wire body или его SHA. Поэтому
+completed restoration позволяет publication saga адресовать сохранённые media
+finding без повторного открытия worker upload authority.
 [`V15__inventory_finding_membership_markers.sql`](db/migration/V15__inventory_finding_membership_markers.sql)
 допускает эти три marker в durable inbox и требует, чтобы их `owner_revision`
 оставался null.

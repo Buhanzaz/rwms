@@ -165,6 +165,14 @@ public class MaintenanceRepair {
   @Column(name = "reclassification_state", nullable = false, length = 24)
   private RepairReclassificationState reclassificationState;
 
+  /** Historical logistics document currently closing or already closed this repair. */
+  @Column(name = "historical_shipment_document_id")
+  private UUID historicalShipmentDocumentId;
+
+  /** Durable lifecycle marker for the audited historical-shipment closure. */
+  @Column(name = "historical_shipment_closure_state", length = 24)
+  private String historicalShipmentClosureState;
+
   @Column(name = "created_at", nullable = false)
   private OffsetDateTime createdAt;
 
@@ -928,6 +936,68 @@ public class MaintenanceRepair {
     markReconciled();
   }
 
+  /**
+   * Claims this repair for a historical rental-shipment closure before source-owned remote work is
+   * cancelled. A different shipment may never overwrite the audit identity.
+   */
+  public void beginHistoricalShipmentClosure(UUID shipmentId, String reason) {
+    if (shipmentId == null) {
+      throw new IllegalArgumentException("Historical shipment identity is required");
+    }
+    if (historicalShipmentDocumentId != null && !historicalShipmentDocumentId.equals(shipmentId)) {
+      throw new IllegalStateException("Repair is already closing for another historical shipment");
+    }
+    if (shipmentId.equals(historicalShipmentDocumentId)
+        && "CLOSED".equals(historicalShipmentClosureState)) {
+      return;
+    }
+    if (acceptanceState == RepairAcceptanceState.ACCEPTED
+        || acceptanceState == RepairAcceptanceState.WRITTEN_OFF) {
+      throw new IllegalStateException("A terminal repair cannot be closed for a historical shipment");
+    }
+    historicalShipmentDocumentId = shipmentId;
+    if (!"CLOSED".equals(historicalShipmentClosureState)) {
+      historicalShipmentClosureState = "CLOSING";
+    }
+    recordDecision(reason, historicalShipmentActor(shipmentId));
+  }
+
+  /**
+   * Commits the local repair outcome after task-board, driver, repair-place and asset effects have
+   * been settled for the exact historical shipment. Ordinary repairs become accepted historical
+   * completions; capital routes are cancelled rather than represented as a normal acceptance.
+   */
+  public void closeForHistoricalShipment(UUID shipmentId, boolean capitalRepair, String reason) {
+    beginHistoricalShipmentClosure(shipmentId, reason);
+    if ("CLOSED".equals(historicalShipmentClosureState)) return;
+    executionState = capitalRepair ? RepairExecutionState.CANCELLED : RepairExecutionState.COMPLETED;
+    acceptanceState =
+        capitalRepair ? RepairAcceptanceState.NOT_READY : RepairAcceptanceState.ACCEPTED;
+    taskGenerationState = "NOT_REQUIRED";
+    deliveryState = "DELIVERED";
+    reconciliationState = "RECONCILED";
+    deliveryUpdatedAt = MaintenanceTime.now();
+    historicalShipmentClosureState = "CLOSED";
+    recordDecision(reason, historicalShipmentActor(shipmentId));
+  }
+
+  /** Returns whether the repair has reserved its cancellation audit for this historical shipment. */
+  public boolean isClosingForHistoricalShipment(UUID shipmentId) {
+    return shipmentId != null && shipmentId.equals(historicalShipmentDocumentId);
+  }
+
+  /** Returns whether the historical shipment has durably finished this repair's local closure. */
+  public boolean isClosedForHistoricalShipment(UUID shipmentId) {
+    return isClosingForHistoricalShipment(shipmentId)
+        && "CLOSED".equals(historicalShipmentClosureState);
+  }
+
+  private static String historicalShipmentActor(UUID shipmentId) {
+    return "{\"source\":\"HISTORICAL_RENTAL_SHIPMENT\",\"shipmentId\":\""
+        + shipmentId
+        + "\"}";
+  }
+
   private void recordDecision(String reason, String actorRef) {
     decisionReason = normalize(reason, 2000);
     decisionActorRef = actorRef == null ? "{}" : actorRef;
@@ -998,6 +1068,8 @@ public class MaintenanceRepair {
   public String getLeaseReconciliationState() { return leaseReconciliationState; }
   public String getReconciliationState() { return reconciliationState; }
   public RepairReclassificationState getReclassificationState() { return reclassificationState; }
+  public UUID getHistoricalShipmentDocumentId() { return historicalShipmentDocumentId; }
+  public String getHistoricalShipmentClosureState() { return historicalShipmentClosureState; }
   public OffsetDateTime getCreatedAt() { return createdAt; }
   public OffsetDateTime getUpdatedAt() { return updatedAt; }
 }

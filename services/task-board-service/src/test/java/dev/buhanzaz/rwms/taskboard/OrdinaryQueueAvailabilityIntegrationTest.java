@@ -3,20 +3,28 @@ package dev.buhanzaz.rwms.taskboard;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import dev.buhanzaz.rwms.taskboard.domain.EntryStatus;
 import dev.buhanzaz.rwms.taskboard.domain.EntryType;
 import dev.buhanzaz.rwms.taskboard.domain.ParticipationPolicy;
 import dev.buhanzaz.rwms.taskboard.domain.QueuePurpose;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
+import dev.buhanzaz.rwms.taskboard.domain.TaskStatus;
 import dev.buhanzaz.rwms.taskboard.service.ConflictException;
+import dev.buhanzaz.rwms.taskboard.service.GlobalQueueProjectionService;
 import dev.buhanzaz.rwms.taskboard.service.MobileTaskSurface;
+import dev.buhanzaz.rwms.taskboard.service.NotFoundException;
 import dev.buhanzaz.rwms.taskboard.service.RegistryService;
 import dev.buhanzaz.rwms.taskboard.service.TaskBoardService;
-import dev.buhanzaz.rwms.taskboard.service.GlobalQueueProjectionService;
-import dev.buhanzaz.rwms.taskboard.service.NotFoundException;
-import dev.buhanzaz.rwms.taskboard.service.WorkerQueuePlanService;
 import dev.buhanzaz.rwms.taskboard.service.WorkerCredentialGateway;
+import dev.buhanzaz.rwms.taskboard.service.WorkerInvalidationHub;
+import dev.buhanzaz.rwms.taskboard.service.WorkerQueuePlanService;
+import dev.buhanzaz.rwms.taskboard.service.WorkerTaskBoardService;
 import dev.buhanzaz.rwms.taskboard.service.WorkforceService;
 import jakarta.persistence.EntityManagerFactory;
 import java.time.LocalDate;
@@ -32,6 +40,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /** Integration coverage for complete ordinary-board projection and canonical SES gating. */
 @SpringBootTest(properties = "spring.jpa.properties.hibernate.generate_statistics=true")
@@ -48,10 +58,14 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
   GlobalQueueProjectionService globalQueueProjections;
   @org.springframework.beans.factory.annotation.Autowired JdbcTemplate jdbc;
   @org.springframework.beans.factory.annotation.Autowired EntityManagerFactory entityManagerFactory;
+  @org.springframework.beans.factory.annotation.Autowired WorkerTaskBoardService workerTasks;
+  @org.springframework.beans.factory.annotation.Autowired TransactionTemplate transactions;
+  @MockitoSpyBean WorkerInvalidationHub workerInvalidations;
 
   @BeforeEach
   void clean() {
     cleanTaskBoardFixtures(jdbc);
+    clearInvocations(workerInvalidations);
   }
 
   @Test
@@ -406,6 +420,265 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
   }
 
   @Test
+  void managerCanExposeAndHideFutureElectricalWorkBeforeWorkerTakesItInParallel() {
+    WorkerClassDto exteriorClass = registry.createClass(workerClass("parallel-exterior"));
+    WorkerClassDto electricalClass = registry.createClass(workerClass("parallel-electrical"));
+    WorkQueueDto exterior =
+        queue("внешние работы", QueueType.REPAIR, 6, 0, exteriorClass.id());
+    WorkQueueDto electrical =
+        queue("электрика", QueueType.REPAIR, 6, 0, electricalClass.id());
+    WorkerDto exteriorWorker = worker(exteriorClass.id(), "Маляр");
+    WorkerDto electrician = worker(electricalClass.id(), "Электрик");
+    WorkerGroupDto exteriorGroup =
+        group(exteriorClass.id(), exteriorWorker.id(), "Бригада внешних работ");
+    WorkerGroupDto electricalGroup =
+        group(electricalClass.id(), electrician.id(), "Бригада электриков");
+    exteriorWorker =
+        workforce.setCurrentGroup(
+            WAREHOUSE_ID,
+            exteriorWorker.id(),
+            new SetCurrentGroupRequest(exteriorWorker.version(), exteriorGroup.id()));
+    electrician =
+        workforce.setCurrentGroup(
+            WAREHOUSE_ID,
+            electrician.id(),
+            new SetCurrentGroupRequest(electrician.version(), electricalGroup.id()));
+
+    TaskBoardSnapshot created = parallelRoute("parallel-route", exterior, electrical);
+    BoardEntryDto exteriorEntry = entry(created, "parallel-route", exterior.id());
+    BoardEntryDto futureElectrical = entry(created, "parallel-route", electrical.id());
+    assertThat(futureElectrical.entryType()).isEqualTo(EntryType.SHADOW);
+    clearInvocations(workerInvalidations);
+
+    TaskBoardSnapshot exposed =
+        board.setFutureTaskEntryAvailability(
+            WAREHOUSE_ID,
+            futureElectrical.id(),
+            new SetFutureTaskEntryAvailabilityRequest(futureElectrical.version(), true));
+    BoardEntryDto exposedElectrical = entry(exposed, "parallel-route", electrical.id());
+    assertThat(exposedElectrical.entryType()).isEqualTo(EntryType.REAL);
+    assertThat(exposedElectrical.version()).isGreaterThan(futureElectrical.version());
+    assertThat(workerFeedEntryIds(electrician.id())).contains(exposedElectrical.id());
+    assertThat(ownerProofReaderWorkerIds(exposedElectrical.id())).contains(electrician.id());
+    verify(workerInvalidations, times(1)).feedChanged(anyLong());
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from domain_event where aggregate_type='QUEUE_ENTRY' "
+                    + "and aggregate_id=? and event_type='task-board.queue-entry.changed.v1'",
+                Integer.class,
+                exposedElectrical.id().toString()))
+        .isEqualTo(1);
+
+    clearInvocations(workerInvalidations);
+    TaskBoardSnapshot hidden =
+        board.setFutureTaskEntryAvailability(
+            WAREHOUSE_ID,
+            exposedElectrical.id(),
+            new SetFutureTaskEntryAvailabilityRequest(exposedElectrical.version(), false));
+    BoardEntryDto hiddenElectrical = entry(hidden, "parallel-route", electrical.id());
+    assertThat(hiddenElectrical.entryType()).isEqualTo(EntryType.SHADOW);
+    assertThat(workerFeedEntryIds(electrician.id())).doesNotContain(hiddenElectrical.id());
+    assertThat(ownerProofReaderWorkerIds(hiddenElectrical.id())).doesNotContain(electrician.id());
+    verify(workerInvalidations, times(1)).feedChanged(anyLong());
+
+    clearInvocations(workerInvalidations);
+    TaskBoardSnapshot hiddenReplay =
+        board.setFutureTaskEntryAvailability(
+            WAREHOUSE_ID,
+            hiddenElectrical.id(),
+            new SetFutureTaskEntryAvailabilityRequest(hiddenElectrical.version(), false));
+    BoardEntryDto replayedElectrical = entry(hiddenReplay, "parallel-route", electrical.id());
+    assertThat(replayedElectrical.version()).isEqualTo(hiddenElectrical.version());
+    verify(workerInvalidations, never()).feedChanged(anyLong());
+
+    TaskBoardSnapshot exposedAgain =
+        board.setFutureTaskEntryAvailability(
+            WAREHOUSE_ID,
+            replayedElectrical.id(),
+            new SetFutureTaskEntryAvailabilityRequest(replayedElectrical.version(), true));
+    BoardEntryDto electricalToTake = entry(exposedAgain, "parallel-route", electrical.id());
+    BoardEntryDto exteriorInProgress =
+        board.takeFromMobile(
+            MobileTaskSurface.WORKER,
+            WAREHOUSE_ID,
+            exteriorEntry.id(),
+            new TakeEntryRequest(exteriorEntry.version(), exteriorGroup.id(), exteriorWorker.id()),
+            exteriorWorker.id());
+    BoardEntryDto electricalInProgress =
+        board.takeFromMobile(
+            MobileTaskSurface.WORKER,
+            WAREHOUSE_ID,
+            electricalToTake.id(),
+            new TakeEntryRequest(
+                electricalToTake.version(), electricalGroup.id(), electrician.id()),
+            electrician.id());
+
+    assertThat(exteriorInProgress.status()).isEqualTo(EntryStatus.IN_PROGRESS);
+    assertThat(electricalInProgress.status()).isEqualTo(EntryStatus.IN_PROGRESS);
+    BoardEntryDto electricalDone =
+        board.complete(
+            WAREHOUSE_ID,
+            electricalInProgress.id(),
+            new VersionCommand(electricalInProgress.version()),
+            electrician.id());
+    BoardEntryDto exteriorDone =
+        board.complete(
+            WAREHOUSE_ID,
+            exteriorInProgress.id(),
+            new VersionCommand(exteriorInProgress.version()),
+            exteriorWorker.id());
+    assertThat(electricalDone.status()).isEqualTo(EntryStatus.DONE);
+    assertThat(exteriorDone.taskStatus()).isEqualTo(TaskStatus.DONE);
+  }
+
+  @Test
+  void parallelFutureStagesCanAlsoFinishAfterTheEarlierStage() {
+    WorkerClassDto workerClass = registry.createClass(workerClass("parallel-completion-order"));
+    WorkQueueDto first = queue("parallel-first", QueueType.REPAIR, 6, 0, workerClass.id());
+    WorkQueueDto second = queue("parallel-second", QueueType.REPAIR, 6, 0, workerClass.id());
+    WorkerDto firstWorker = worker(workerClass.id(), "Первый исполнитель");
+    WorkerDto secondWorker = worker(workerClass.id(), "Второй исполнитель");
+    WorkerGroupDto firstGroup =
+        group(workerClass.id(), firstWorker.id(), "Первая бригада");
+    WorkerGroupDto secondGroup =
+        group(workerClass.id(), secondWorker.id(), "Вторая бригада");
+
+    TaskBoardSnapshot created = parallelRoute("parallel-earlier-first", first, second);
+    BoardEntryDto firstEntry = entry(created, "parallel-earlier-first", first.id());
+    BoardEntryDto futureEntry = entry(created, "parallel-earlier-first", second.id());
+    BoardEntryDto exposed =
+        entry(
+            board.setFutureTaskEntryAvailability(
+                WAREHOUSE_ID,
+                futureEntry.id(),
+                new SetFutureTaskEntryAvailabilityRequest(futureEntry.version(), true)),
+            "parallel-earlier-first",
+            second.id());
+    BoardEntryDto firstActive =
+        board.take(
+            WAREHOUSE_ID,
+            firstEntry.id(),
+            new TakeEntryRequest(firstEntry.version(), firstGroup.id(), firstWorker.id()),
+            null);
+    BoardEntryDto secondActive =
+        board.take(
+            WAREHOUSE_ID,
+            exposed.id(),
+            new TakeEntryRequest(exposed.version(), secondGroup.id(), secondWorker.id()),
+            null);
+
+    BoardEntryDto firstDone =
+        board.complete(
+            WAREHOUSE_ID, firstActive.id(), new VersionCommand(firstActive.version()), null);
+    assertThat(firstDone.taskStatus()).isEqualTo(TaskStatus.ACTIVE);
+    BoardEntryDto refreshedSecond = board.entry(WAREHOUSE_ID, secondActive.id());
+    BoardEntryDto secondDone =
+        board.complete(
+            WAREHOUSE_ID,
+            refreshedSecond.id(),
+            new VersionCommand(refreshedSecond.version()),
+            null);
+    assertThat(secondDone.taskStatus()).isEqualTo(TaskStatus.DONE);
+  }
+
+  @Test
+  void futureAvailabilityRejectsStaleCurrentActiveAndSesBlockedEntries() {
+    WorkerClassDto workerClass = registry.createClass(workerClass("future-guards"));
+    WorkQueueDto first = queue("future-guard-first", QueueType.REPAIR, 6, 0, workerClass.id());
+    WorkQueueDto future = queue("future-guard-second", QueueType.REPAIR, 6, 0, workerClass.id());
+    WorkerDto worker = worker(workerClass.id());
+    WorkerGroupDto group = group(workerClass.id(), worker.id());
+    TaskBoardSnapshot created = parallelRoute("future-guards", first, future);
+    BoardEntryDto current = entry(created, "future-guards", first.id());
+    BoardEntryDto futureEntry = entry(created, "future-guards", future.id());
+
+    assertThatThrownBy(
+            () ->
+                board.setFutureTaskEntryAvailability(
+                    WAREHOUSE_ID,
+                    current.id(),
+                    new SetFutureTaskEntryAvailabilityRequest(current.version(), false)))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("Текущий этап");
+
+    BoardEntryDto exposed =
+        entry(
+            board.setFutureTaskEntryAvailability(
+                WAREHOUSE_ID,
+                futureEntry.id(),
+                new SetFutureTaskEntryAvailabilityRequest(futureEntry.version(), true)),
+            "future-guards",
+            future.id());
+    assertThatThrownBy(
+            () ->
+                board.setFutureTaskEntryAvailability(
+                    WAREHOUSE_ID,
+                    futureEntry.id(),
+                    new SetFutureTaskEntryAvailabilityRequest(futureEntry.version(), false)))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("изменен");
+
+    BoardEntryDto active =
+        board.take(
+            WAREHOUSE_ID,
+            exposed.id(),
+            new TakeEntryRequest(exposed.version(), group.id(), worker.id()),
+            null);
+    assertThatThrownBy(
+            () ->
+                board.setFutureTaskEntryAvailability(
+                    WAREHOUSE_ID,
+                    active.id(),
+                    new SetFutureTaskEntryAvailabilityRequest(active.version(), false)))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("ожидающего");
+
+    WorkQueueDto ses = queue("сэс и санитария", QueueType.REPAIR, 6, 0, workerClass.id());
+    WorkQueueDto afterSes = queue("after-ses-guard", QueueType.REPAIR, 6, 0, workerClass.id());
+    TaskBoardSnapshot sesRoute = parallelRoute("ses-future-guard", ses, afterSes);
+    BoardEntryDto afterSesEntry = entry(sesRoute, "ses-future-guard", afterSes.id());
+    assertThatThrownBy(
+            () ->
+                board.setFutureTaskEntryAvailability(
+                    WAREHOUSE_ID,
+                    afterSesEntry.id(),
+                    new SetFutureTaskEntryAvailabilityRequest(afterSesEntry.version(), true)))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("СЭС");
+  }
+
+  @Test
+  void rolledBackFutureAvailabilityDoesNotChangeProjectionEventOrWorkerFeedRevision() {
+    WorkerClassDto workerClass = registry.createClass(workerClass("future-rollback"));
+    WorkQueueDto first = queue("future-rollback-first", QueueType.REPAIR, 6, 0, workerClass.id());
+    WorkQueueDto future = queue("future-rollback-second", QueueType.REPAIR, 6, 0, workerClass.id());
+    BoardEntryDto futureEntry =
+        entry(parallelRoute("future-rollback", first, future), "future-rollback", future.id());
+    clearInvocations(workerInvalidations);
+
+    transactions.executeWithoutResult(
+        status -> {
+          board.setFutureTaskEntryAvailability(
+              WAREHOUSE_ID,
+              futureEntry.id(),
+              new SetFutureTaskEntryAvailabilityRequest(futureEntry.version(), true));
+          status.setRollbackOnly();
+        });
+
+    BoardEntryDto afterRollback = board.entry(WAREHOUSE_ID, futureEntry.id());
+    assertThat(afterRollback.entryType()).isEqualTo(EntryType.SHADOW);
+    assertThat(afterRollback.version()).isEqualTo(futureEntry.version());
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from domain_event where aggregate_type='QUEUE_ENTRY' "
+                    + "and aggregate_id=? and event_type='task-board.queue-entry.changed.v1'",
+                Integer.class,
+                futureEntry.id().toString()))
+        .isZero();
+    verify(workerInvalidations, never()).feedChanged(anyLong());
+  }
+
+  @Test
   void pinnedRealStageStaysAheadWhenAnEarlierShadowIsPromoted() {
     WorkerClassDto workerClass = registry.createClass(workerClass("pinned-before-promotion"));
     WorkQueueDto exterior =
@@ -598,11 +871,15 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
   }
 
   private WorkerDto worker(UUID workerClassId) {
+    return worker(workerClassId, "Исполнитель");
+  }
+
+  private WorkerDto worker(UUID workerClassId, String displayName) {
     return workforce.createWorker(
         WAREHOUSE_ID,
         new WorkerRequest(
             0L,
-            "Исполнитель",
+            displayName,
             null,
             null,
             null,
@@ -614,15 +891,59 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
   }
 
   private WorkerGroupDto group(UUID workerClassId, UUID workerId) {
+    return group(workerClassId, workerId, "Бригада");
+  }
+
+  private WorkerGroupDto group(UUID workerClassId, UUID workerId, String name) {
     return workforce.createGroup(
         WAREHOUSE_ID,
         new WorkerGroupRequest(
             0L,
             workerClassId,
-            "Бригада",
+            name,
             null,
             true,
             List.of(new GroupMemberRequest(workerId, true))));
+  }
+
+  private TaskBoardSnapshot parallelRoute(
+      String title, WorkQueueDto first, WorkQueueDto second) {
+    return board.createTask(
+        WAREHOUSE_ID,
+        new CreateBoardTaskRequest(
+            null,
+            title,
+            null,
+            null,
+            null,
+            null,
+            List.of(
+                new RouteStepRequest(first.definitionId(), first.name(), null),
+                new RouteStepRequest(second.definitionId(), second.name(), null)),
+            LocalDate.of(2026, 8, 21),
+            3));
+  }
+
+  private List<UUID> workerFeedEntryIds(UUID workerId) {
+    return workerTasks.feed(workerId, WAREHOUSE_ID, null, 50).feed().categories().stream()
+        .flatMap(category -> category.entries().stream())
+        .map(entry -> entry.entryId())
+        .toList();
+  }
+
+  private List<UUID> ownerProofReaderWorkerIds(UUID entryId) {
+    return jdbc.queryForList(
+        """
+        select reader.value::uuid
+          from event_stream_head head
+          join domain_event event on event.event_id=head.last_event_id
+          cross join lateral jsonb_array_elements_text(event.payload->'readerWorkerIds') reader(value)
+         where head.aggregate_type='TASK_BOARD_ENTRY_OWNER_PROOF'
+           and head.aggregate_id=?
+         order by reader.value
+        """,
+        UUID.class,
+        entryId.toString());
   }
 
   private TaskBoardSnapshot create(

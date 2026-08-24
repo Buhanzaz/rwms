@@ -24,6 +24,7 @@ public class TaskBoardService {
   private final TaskBoardWorkerExecutionService workerExecutions;
   private final TaskBoardPinningService pinning;
   private final TaskBoardEntryOrderingService ordering;
+  private final TaskBoardFutureAvailabilityService futureAvailability;
 
   public TaskBoardService(
       TaskBoardReadProjectionService readProjections,
@@ -32,7 +33,8 @@ public class TaskBoardService {
       TaskBoardLogisticsTaskService logisticsTasks,
       TaskBoardWorkerExecutionService workerExecutions,
       TaskBoardPinningService pinning,
-      TaskBoardEntryOrderingService ordering) {
+      TaskBoardEntryOrderingService ordering,
+      TaskBoardFutureAvailabilityService futureAvailability) {
     this.readProjections = readProjections;
     this.externalTasks = externalTasks;
     this.externalMutations = externalMutations;
@@ -40,6 +42,7 @@ public class TaskBoardService {
     this.workerExecutions = workerExecutions;
     this.pinning = pinning;
     this.ordering = ordering;
+    this.futureAvailability = futureAvailability;
   }
 
   /** Returns every unfinished manager-visible entry in the stable aggregate ordinary board. */
@@ -116,7 +119,8 @@ public class TaskBoardService {
 
   /**
    * Registers a source-owned task whose generated detail is limited to typed furniture operations.
-   * The persisted flag fences completion at the reservation deadline without changing generic tasks.
+   * The persisted logistics discriminator preserves the immutable equipment-movement task shape;
+   * its deadline never prevents an authorized worker from recording actual completion.
    */
   @Transactional(propagation = Propagation.NEVER)
   /** Creates the task-board representation of immutable logistics equipment-movement facts. */
@@ -296,6 +300,21 @@ public class TaskBoardService {
   /** Pins or unpins all route entries for a task without changing their positions. */
   public TaskBoardSnapshot pin(UUID warehouseId, UUID taskId, PinTaskRequest request) {
     pinning.pin(warehouseId, taskId, request);
+    return readProjections.snapshot(warehouseId);
+  }
+
+  /**
+   * Changes one still-future ordinary route entry between executable and shadow states.
+   *
+   * <p>The collaborator owns route eligibility, the entry CAS, its event fact and the after-commit
+   * WorkerApp feed invalidation; this facade only returns the refreshed manager projection.
+   */
+  @Transactional
+  public TaskBoardSnapshot setFutureTaskEntryAvailability(
+      UUID warehouseId,
+      UUID entryId,
+      SetFutureTaskEntryAvailabilityRequest request) {
+    futureAvailability.setAvailability(warehouseId, entryId, request);
     return readProjections.snapshot(warehouseId);
   }
 

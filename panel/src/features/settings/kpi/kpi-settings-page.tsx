@@ -372,7 +372,7 @@ function KpiConfigurationContent({
           mutation.mutate({
             kind: "schedule",
             execute: () => saveWorkSchedule(accessToken, warehouseId, input),
-            success: "Будущий рабочий график сохранён.",
+            success: "Рабочий график сохранён и готов к активации.",
           })
         }}
         onDeletePending={() => {
@@ -385,7 +385,7 @@ function KpiConfigurationContent({
                 warehouseId,
                 settings.version
               ),
-            success: "Будущий рабочий график удалён.",
+            success: "Ожидающий активации рабочий график удалён.",
           })
         }}
       />

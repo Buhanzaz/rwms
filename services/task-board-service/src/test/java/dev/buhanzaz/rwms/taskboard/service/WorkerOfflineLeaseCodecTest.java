@@ -61,4 +61,39 @@ class WorkerOfflineLeaseCodecTest {
                     OffsetDateTime.now(ZoneOffset.UTC)))
         .isInstanceOf(ConflictException.class);
   }
+
+  @Test
+  void allowsDelayedCompletionResultButStillRejectsFutureTimeAndAnotherWorker() {
+    UUID workerId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    OffsetDateTime issuedAt = OffsetDateTime.now(ZoneOffset.UTC).minusDays(3);
+    var lease = codec.issue(workerId, warehouseId, 1, issuedAt);
+    OffsetDateTime serverNow = OffsetDateTime.now(ZoneOffset.UTC);
+
+    codec.requireDeferredCompletionValid(
+        lease.id(), workerId, warehouseId, issuedAt.plusHours(25), serverNow);
+    codec.requireDeferredCompletionValid(
+        lease.id(), workerId, warehouseId, issuedAt.minusHours(1), serverNow);
+
+    assertThatThrownBy(
+            () ->
+                codec.requireDeferredCompletionValid(
+                    lease.id(),
+                    workerId,
+                    warehouseId,
+                    serverNow.plusMinutes(3),
+                    serverNow))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("будущем");
+    assertThatThrownBy(
+            () ->
+                codec.requireDeferredCompletionValid(
+                    lease.id(),
+                    UUID.randomUUID(),
+                    warehouseId,
+                    issuedAt.plusHours(25),
+                    serverNow))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("не принадлежит");
+  }
 }

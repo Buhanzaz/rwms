@@ -16,7 +16,6 @@ import dev.buhanzaz.rwms.maintenance.domain.RentalItemFactProjection;
 import dev.buhanzaz.rwms.maintenance.domain.RepairAcceptanceState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairExecutionState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairReclassificationState;
-import dev.buhanzaz.rwms.maintenance.domain.RepairStage;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceJsonbCanonicalizer;
 import dev.buhanzaz.rwms.maintenance.repository.InventoryAuthoritativeOutcomeReceiptRepository;
 import dev.buhanzaz.rwms.maintenance.repository.InventoryAuthoritativeOutcomeRepository;
@@ -26,7 +25,6 @@ import dev.buhanzaz.rwms.maintenance.repository.InventoryPublicationPrestartRepl
 import dev.buhanzaz.rwms.maintenance.repository.MaintenanceEstimateRepository;
 import dev.buhanzaz.rwms.maintenance.repository.MaintenanceRepairRepository;
 import dev.buhanzaz.rwms.maintenance.repository.RentalItemFactProjectionRepository;
-import dev.buhanzaz.rwms.maintenance.repository.RepairStageRepository;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -58,7 +56,6 @@ final class InventoryAuthoritativeOutcomeStore {
   private final RentalItemFactProjectionRepository rentalItems;
   private final MaintenanceEstimateRepository estimates;
   private final MaintenanceRepairRepository repairs;
-  private final RepairStageRepository repairStages;
   private final InventoryPublicationSourceLifecycle sourceLifecycle;
   private final MaintenanceJsonbCanonicalizer canonicalizer;
   private final ObjectMapper mapper;
@@ -72,7 +69,6 @@ final class InventoryAuthoritativeOutcomeStore {
       RentalItemFactProjectionRepository rentalItems,
       MaintenanceEstimateRepository estimates,
       MaintenanceRepairRepository repairs,
-      RepairStageRepository repairStages,
       InventoryPublicationSourceLifecycle sourceLifecycle,
       MaintenanceJsonbCanonicalizer canonicalizer,
       ObjectMapper mapper) {
@@ -84,7 +80,6 @@ final class InventoryAuthoritativeOutcomeStore {
     this.rentalItems = rentalItems;
     this.estimates = estimates;
     this.repairs = repairs;
-    this.repairStages = repairStages;
     this.sourceLifecycle = sourceLifecycle;
     this.canonicalizer = canonicalizer;
     this.mapper = mapper;
@@ -906,13 +901,13 @@ final class InventoryAuthoritativeOutcomeStore {
           || repair.getId().equals(adoptedRepairId)) {
         continue;
       }
-      List<RepairStage> stages = repairStages.findAllByRepairIdOrderByStageNo(repair.getId());
-      boolean hasStageTask = stages.stream().anyMatch(value -> value.getExternalQueueEntryId() != null);
-      if (hasStageTask && repair.getTaskBoardVersion() == null) {
-        throw InventoryPublicationPlanValidation.conflict(
-            "Active repair has task-board entries without a repair task version");
-      }
-      UUID taskExternalId = repair.getTaskBoardVersion() == null ? null : repair.getExternalTaskId();
+      UUID taskExternalId = repair.getExternalTaskId();
+      // A missing local task-board version does not erase the stable remote identity. Zero is only
+      // the discovery checkpoint: settleTask reads owner truth and persists its live fence before
+      // issuing any cancellation command.
+      long taskExpectedVersion = repair.getTaskBoardVersion() == null
+          ? 0L
+          : repair.getTaskBoardVersion();
       String driverKind = driverKind(repair);
       LeaseIdentity lease = lease(repair, repairById);
       String identity = "REPAIR:" + repair.getId();
@@ -921,7 +916,7 @@ final class InventoryAuthoritativeOutcomeStore {
             outcome.getId(),
             repair.getId(),
             taskExternalId,
-            repair.getTaskBoardVersion(),
+            taskExpectedVersion,
             driverKind,
             lease));
       }

@@ -48,16 +48,6 @@ const WEEKDAYS = [
   { value: 7, label: "Вс" },
 ] as const
 
-function nextCalendarDate(value: string) {
-  const [year, month, day] = value.split("-").map(Number)
-  const next = new Date(Date.UTC(year!, month! - 1, day! + 1))
-  return [
-    String(next.getUTCFullYear()).padStart(4, "0"),
-    String(next.getUTCMonth() + 1).padStart(2, "0"),
-    String(next.getUTCDate()).padStart(2, "0"),
-  ].join("-")
-}
-
 function scheduleDraft(
   pendingSchedule: KpiWorkSchedule | null,
   activeSchedule: KpiWorkSchedule | null,
@@ -68,7 +58,7 @@ function scheduleDraft(
     return {
       effectiveFrom: pendingSchedule
         ? schedule.effectiveFrom
-        : nextCalendarDate(today),
+        : today,
       shiftStart: schedule.shiftStart,
       shiftEnd: schedule.shiftEnd,
       daysOff: [...schedule.daysOff].sort((left, right) => left - right),
@@ -76,7 +66,7 @@ function scheduleDraft(
     }
   }
   return {
-    effectiveFrom: nextCalendarDate(today),
+    effectiveFrom: today,
     shiftStart: "08:00",
     shiftEnd: "17:00",
     daysOff: [6, 7],
@@ -185,7 +175,7 @@ export function WorkScheduleCard({
                 <Input
                   id="kpi-schedule-effective"
                   type="date"
-                  min={nextCalendarDate(today)}
+                  min={today}
                   value={draft.effectiveFrom}
                   disabled={disabled}
                   aria-invalid={validationError !== null}
@@ -413,7 +403,8 @@ export function WorkScheduleCard({
             </Button>
           ) : (
             <span className="text-sm text-muted-foreground">
-              Новая ревизия начнёт действовать в указанную дату.
+              При выборе сегодняшней даты график после активации применяется ко
+              всему текущему дню склада.
             </span>
           )}
           <Button type="submit" disabled={disabled}>

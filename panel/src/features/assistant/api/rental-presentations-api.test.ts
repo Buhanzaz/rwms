@@ -149,6 +149,12 @@ describe("rental presentation API", () => {
   })
 
   it("keeps the public view and confirmation bearer-free", async () => {
+    const requestableDeliveryDates = [
+      "2026-08-25",
+      "2026-08-26",
+      "2026-08-27",
+      "2026-08-28",
+    ]
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -160,6 +166,7 @@ describe("rental presentation API", () => {
             expiresAt: "2026-07-27T09:00:00Z",
             viewUntil: "2026-07-28T09:00:00Z",
             viewOnly: false,
+            requestableDeliveryDates,
             bookedOrderId: null,
             groups: [],
           }),
@@ -180,7 +187,7 @@ describe("rental presentation API", () => {
       )
     vi.stubGlobal("fetch", fetchMock)
 
-    await getPublicPresentation("opaque-token")
+    const publicPresentation = await getPublicPresentation("opaque-token")
     await confirmPublicPresentation({
       token: "opaque-token",
       selections: [{ rentalItemId: CABIN_ID, equipment: [] }],
@@ -190,6 +197,9 @@ describe("rental presentation API", () => {
     for (const [, init] of fetchMock.mock.calls as [string, RequestInit][]) {
       expect(new Headers(init?.headers).has("Authorization")).toBe(false)
     }
+    expect(publicPresentation.requestableDeliveryDates).toEqual(
+      requestableDeliveryDates
+    )
     const [, confirmInit] = fetchMock.mock.calls[1] as [string, RequestInit]
     expect(new Headers(confirmInit.headers).get("Idempotency-Key")).toBe(
       IDEMPOTENCY_KEY

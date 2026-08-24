@@ -166,6 +166,7 @@ class LogisticsShipmentDocumentCoordinator {
         readProjection.document(documentId, LogisticsDocumentType.SHIPMENT);
     requireExpectedVersion(
         document, expectedDocumentVersion, "Shipment document version changed concurrently");
+    rejectManualHistoricalImport(document);
     boolean startPreparation = document.getState() == LogisticsDocumentState.DRAFT;
     if (startPreparation) {
       shipmentFurnitureTasks.requireShipmentFurnitureReady(documentId);
@@ -306,6 +307,7 @@ class LogisticsShipmentDocumentCoordinator {
         readProjection.document(documentId, LogisticsDocumentType.SHIPMENT);
     requireExpectedVersion(
         document, expectedDocumentVersion, "Shipment document version changed concurrently");
+    rejectManualHistoricalImport(document);
     if (document.getState() != LogisticsDocumentState.AWAITING_CONFIRMATION) {
       throw new LogisticsConflictException("Shipment preparation is not awaiting confirmation");
     }
@@ -356,6 +358,7 @@ class LogisticsShipmentDocumentCoordinator {
         readProjection.document(documentId, LogisticsDocumentType.SHIPMENT);
     requireExpectedVersion(
         document, expectedDocumentVersion, "Shipment document version changed concurrently");
+    rejectManualHistoricalImport(document);
     boolean cancellingDraft = document.getState() == LogisticsDocumentState.DRAFT;
     List<LogisticsDocumentLine> lines = readProjection.linesRequired(documentId);
     for (LogisticsExternalAttempt attempt :
@@ -439,6 +442,17 @@ class LogisticsShipmentDocumentCoordinator {
     }
     idempotency.remember(subjectId, idempotencyKey, CANCEL_SHIPMENT, checksum, document);
     return result(document, false);
+  }
+
+  /**
+   * Imported rental shipment documents deliberately have no driver, route, or manual confirmation
+   * stage. Their durable effects are advanced only by the historical-import workflow.
+   */
+  private static void rejectManualHistoricalImport(LogisticsDocument document) {
+    if (document.isHistoricalRentalImport()) {
+      throw new LogisticsConflictException(
+          "Historical rental shipment is advanced automatically and cannot be changed manually");
+    }
   }
 
   private void startShipmentPreparation(

@@ -144,15 +144,27 @@ share one evidence set and terminal transition. Completion by the driver or
 joined slinger requires at least one result photo whose media generation is
 `READY`, then removes the task for both.
 
-Maintenance preserves one task-board route entry per repair stage so every source stage has an
-independent completion fact. Consecutive entries for the same physical work queue nevertheless
-form one worker execution package. Worker detail aggregates all work, material, comment and source
-media snapshots from that complete segment, while its duration, countdown and KPI budget cover
-only the unfinished members. TAKE assigns the representative once. Its version-fenced COMPLETE
-atomically closes the representative plus all later unfinished shadow members, records audit facts
-for each and publishes their existing completion events; maintenance therefore advances every
-mapped stage and reaches pending acceptance without requiring the worker to take the same queue
-repeatedly. A different queue starts a different package, and non-maintenance sources remain
+Maintenance [canonicalizes each newly written ordinary plan](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/RepairPhaseSequence.java)
+to one repair stage per physical task-board queue ID before resolving and persisting its full work/material content. Missing phases
+create no stage, repeated source groups for one queue contribute all of their ordered lines and
+comments to the surviving stage, and equal display names with different queue IDs remain separate.
+That stage maps to one task-board route entry and therefore one WorkerApp subtask/result-photo
+owner: one cabin therefore appears at most once in each physical queue, with every assigned work
+and material line inside that one subtask. Already registered `QUEUED/GENERATED` repairs with
+duplicate same-queue stages converge through the source-owned pre-start workflow. Maintenance
+first builds the combined route without changing local rows; task-board atomically replaces only an
+entirely unstarted route, after which maintenance merges the queued rows and binds the returned
+entry IDs in one local transaction. A concurrent start rejects replacement and leaves the local
+plan unchanged. Started or completed historical routes remain immutable, and task-board retains its
+[compatibility execution package](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/MaintenanceTaskExecutionPackageService.java)
+only for those rows. Worker detail aggregates
+all work, material, comment and source-media snapshots from that complete historical segment,
+while its duration, countdown and KPI budget cover only unfinished members. TAKE assigns the
+representative once. Worker feed cardinality counts physical queues for maintenance, so the
+displayed `Этап X/Y` denominator never counts those retained content rows as extra subtasks. Its
+version-fenced COMPLETE atomically closes the representative plus later
+unfinished shadow members, records audit facts for each and publishes their existing completion
+events. A different queue starts a different package, and non-maintenance sources remain
 entry-scoped. Task-board changes no maintenance repair state directly.
 
 The ordinary repair board is one warehouse-wide queue projection, not a dated
@@ -168,25 +180,36 @@ do not truncate the manager projection. WorkerApp omits a disabled queue and
 all of its cards, including active work. In an enabled queue it omits every
 `SHADOW`, keeps active `REAL` work visible, and publishes only the first configured
 waiting `REAL` cards. Native detail, media reader authorization and `TAKE`/`JOIN`
-recheck the same window. Every current `REAL` route gate remains manager-actionable,
-while every `SHADOW` remains read-only. Promotion preserves the
-persisted position, so an earlier shadow moves ahead of later unpinned work;
-pinning is the explicit exception. The panel hides shadows by default, can show
-all future subtasks with one checkbox, and can reveal and highlight one task's
-complete route across queues from its `REAL` card. That action expands every
-route queue and vertically scrolls each column to the matching card without
-changing order. Managers may reorder only unpinned waiting real cards within
-one queue; entry and queue versions plus the observed target entry identity
-fence the command, while active, pinned and shadow entries keep their positions.
+recheck the same window. Every `REAL` route gate remains actionable, while every
+`SHADOW` remains read-only. Under the entry version fence, an `EDIT` user may
+promote or demote only a `WAITING` ordinary entry strictly after the earliest
+unfinished route position. Promotion permits parallel execution and preserves
+the persisted position, so the earlier future card moves ahead of later
+unpinned work; pinning is the explicit exception. The same transaction refreshes
+the entry media-owner proof, so the newly visible worker audience can read
+source evidence and demotion revokes it. The current stage cannot be demoted,
+and an unfinished SES stage rejects later promotion. The panel hides
+shadows by default, can show all future subtasks with one view checkbox, exposes
+one server-backed availability checkbox on each eligible future card, and can
+reveal and highlight one task's complete route across queues from its `REAL`
+card. That action expands every route queue and vertically scrolls each column
+to the matching card without changing order. The versioned warehouse-local UI
+preference preserves future visibility, collapsed queues, board scroll and each
+queue's scroll across details/back navigation, but contains no task or queue
+fact. Managers may reorder only unpinned waiting real cards within one queue;
+entry and queue versions plus the observed target entry identity fence the
+command, while active, pinned and shadow entries keep their positions.
 
 A route uses one mandatory phase sequence: SES, welding, exterior, interior,
-electrical, then plumbing. The first existing unfinished phase is the only
-`REAL` stage; absent or completed phases are skipped and all later work remains
-`SHADOW`. SES is the exclusive executable holding phase even for retained queue
-definitions whose historical type is `REPAIR`. Manager reads retain the later
-shadows for explicit route inspection, while WorkerApp receives only the SES
-entry until treatment completes and then only the promoted real stage admitted
-by its queue plan. Public date selection, cross-queue move/date-swap commands,
+electrical, then plumbing. The first existing unfinished phase is `REAL` by
+default; absent or completed phases are skipped and all later work starts as
+`SHADOW`. Managers may explicitly open several later ordinary stages for
+parallel work. SES remains the exclusive executable holding phase even for
+retained queue definitions whose historical type is `REPAIR`: while it is
+unfinished, later promotion is rejected and WorkerApp receives only SES. Once
+SES is complete, each promoted real stage is still admitted through its own
+queue's switch, plan and qualification policy. Public date selection,
+cross-queue move/date-swap commands,
 maintenance daily-capacity placement and overdue rollover are absent. The
 daily plan creates no dated schedule. Driver
 movement and external capital-repair routes remain on their owning surfaces.
@@ -197,6 +220,15 @@ Task-board independently normalizes maintenance-owned registrations and
 pre-start updates in
 [`RepairRoutePhaseOrder`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/RepairRoutePhaseOrder.java),
 so a producer cannot make a later phase executable by changing array order.
+
+KPI schedule revisions are effective-dated in the warehouse time zone. Saving
+creates or updates the pending `DRAFT`; activation of a revision effective
+today promotes it to `ACTIVE` in the same command and applies it to the whole
+current local calendar date. A future revision stays `SCHEDULED` until that
+date, a past date is rejected, and same-date replacement retires the previous
+scheduled or active revision under the existing optimistic-concurrency and
+activation-receipt fences. The task-board service remains the command owner;
+the panel and analytics projection do not manufacture an active schedule.
 
 A workforce group command may replace membership and version-fenced current
 group assignments atomically. Current assignment still requires active
@@ -219,10 +251,13 @@ Evidence: [`services/task-board-service/`](../../services/task-board-service/),
 [`MobileTaskSurfacePolicy.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/MobileTaskSurfacePolicy.java),
 [`WorkerTaskAccessService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/WorkerTaskAccessService.java),
 [`WorkerQueuePlanPolicy.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/WorkerQueuePlanPolicy.java),
+[`TaskBoardFutureAvailabilityService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardFutureAvailabilityService.java),
 [`TaskBoardEntryOrderingService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardEntryOrderingService.java),
 [`TaskBoardExternalRegistrationService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardExternalRegistrationService.java),
 [`TaskBoardEntryOwnerProofReconciler.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardEntryOwnerProofReconciler.java),
 [`TaskBoardWorkerExecutionService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardWorkerExecutionService.java),
+[`KpiSettingsService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/KpiSettingsService.java),
+[`task-board view preferences`](../../panel/src/features/task-board/task-board-view-preferences.ts),
 [`MaintenanceTaskExecutionPackageService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/MaintenanceTaskExecutionPackageService.java),
 [`OrdinaryQueueAvailabilityPolicy.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/OrdinaryQueueAvailabilityPolicy.java),
 [`V31__ordinary_queue_availability_and_holding_gate.sql`](../../services/task-board-service/src/main/resources/db/migration/V31__ordinary_queue_availability_and_holding_gate.sql),
@@ -258,6 +293,11 @@ manual estimate creation and logistics-origin automatic registration. It does
 not block the separate direct-repair workflow. Logistics freezes the normal
 intake transition as immutable `returnArrivedAt`; inventory-created historical
 returns have no intake timestamp and are not estimate sources.
+
+A user-entered historical rental return is different from an inventory-created
+historical return: it retains the selected past document date but executes the
+same current fenced intake and therefore becomes a normal estimate/repair
+source when that intake reaches `INSPECTION_REQUIRED`.
 
 Cabin and additional-equipment write-off/loss use one property-decision model.
 One list row is one decision/root asset; a repair chain remains visible in the
@@ -476,7 +516,11 @@ settled and reassert the retained repair's task, driver and lease effects. If th
 cancelled the retained ordinary pre-start task, maintenance rotates only that inventory-owned task
 to a deterministic replacement identity, clears its confirmed stage mappings, reacquires the
 released lease under a new fence and registers the replacement once. Started, completed, movement
-and capital work is not reopened. Media likewise requires
+and capital work is not reopened. A missing local task-board version never erases a predecessor
+repair's stable external task identity: maintenance must read current owner truth first, persist the
+live fence before cancellation and accept only an explicit owner `404` as terminal absence. This
+prevents a corrected inventory outcome from superseding the local repair while its old WorkerApp
+task remains active. Media likewise requires
 the exact prior photo set and keeps its stable gallery folder while advancing association metadata
 and the watermark. Its SERVICE-only completed-outcome path may use a retained checkpointed finding
 proof through a later `VERSION_GAP` only when the gap starts strictly after that proof; this does not
@@ -638,6 +682,19 @@ Evidence: [`services/inventory-service/`](../../services/inventory-service/),
 driver work and their orchestration. It persists its workflow/reconciliation
 state and calls other owners through versioned, idempotent boundaries.
 
+A warehouse-card historical rental command is a logistics-owned factual import,
+not an asset-status edit. It creates one normal, `historicalRentalImport`
+shipment or return document for a visible client, a current cabin-version fence
+and a non-future warehouse-local date, with neither a driver nor a route. An
+imported shipment first calls the private maintenance closure boundary: ordinary
+repair becomes system-completed and eligible pre-start capital/movement work is
+cancelled with `Автоматически закрыто в связи с отгрузкой.`; started or stale
+work remains a conflict for reconciliation. Maintenance releases the fenced
+cabin to `FREE`, then logistics performs its ordinary shipment lease and
+`RENTED` effect. An imported return instead enters the ordinary fenced intake
+from `RENTED` to `INSPECTION_REQUIRED`, so estimates and repairs retain their
+existing owners and commands.
+
 Rental counterparties are logistics domain records, not OAuth clients. Every
 new client has a normalized required phone and an authenticated responsible
 manager; a legal entity also requires a contact person. Reads are
@@ -694,6 +751,18 @@ Order read permissions expose the server-derived extension affordance separately
 from ordinary editability so `FULFILLED` orders can still show the supported
 extension action.
 
+A cabin photo presentation is a logistics-owned public capability, not a new
+media owner or a mutable cabin projection. Creation requires warehouse EDIT,
+the current asset-owned cabin version and a subject-scoped idempotency key.
+Logistics freezes the ordered set of one to 100 READY media IDs and generations
+plus the cabin-number snapshot; exact replay returns the same record and
+different bytes under the same key conflict. The signed public token and stored
+row do not expire. Anonymous metadata exposes only cabin number, creation time
+and presentation-scoped photo URLs, while every SMALL/LARGE byte read must match
+the frozen media ID and generation before logistics proxies the private
+media-service content. The panel's public `/photos/{token}` page owns no domain
+state and reveals no warehouse, client, passport or object-storage locator.
+
 The optional standalone simulator boundary does not move order ownership.
 With exact machine scope `logistics.planning`, it may read only a
 warehouse/date-bounded feed of saved, not-yet-shipped cabin units plus minimal
@@ -703,6 +772,14 @@ non-overlapping unit identities, and returns all applied/rejected parts under a
 stable idempotency key. Automatic assignments on the warehouse-local current
 day or next day are rejected; urgent additions on those dates remain a manual
 logistics action. The simulator has no RWMS database access.
+
+For equal hard-date priority, the simulator planner minimizes depot cycles and
+returns before weighted distance. Delivery-before-pickup is a hard invariant
+inside each depot cycle, while a later cycle in the same shift may load new
+deliveries. Detour minute/ratio thresholds are warnings and score inputs when a
+mixed backhaul removes a separate cycle; capacity, hard windows, shift end and
+blocked directed zone transitions remain infeasible. This simulator-only
+planning rule does not change RWMS order or assignment ownership.
 
 A distinct explicit operator choice may publish one selected unassigned
 delivery as future `WAREHOUSE_DRIVERS` work. It carries no concrete driver, may
@@ -755,8 +832,14 @@ Evidence: [`services/logistics-service/`](../../services/logistics-service/),
 [`RentalInquiryCabinSelectionStore.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/RentalInquiryCabinSelectionStore.java),
 [`RentalOrderUnitReplacementService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderUnitReplacementService.java),
 [`RentalOrderPlanningIntegrationService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderPlanningIntegrationService.java),
+[`HistoricalRentalMovementCoordinator.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/service/HistoricalRentalMovementCoordinator.java),
+[`HistoricalShipmentRepairClosureService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/HistoricalShipmentRepairClosureService.java),
+[`CabinPhotoPresentationService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/photo/CabinPhotoPresentationService.java),
+[`CabinPhotoPresentationTokenService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/photo/CabinPhotoPresentationTokenService.java),
+[`V47__order_contacts_windows_and_inquiry_target.sql`](../../services/logistics-service/src/main/resources/db/migration/V47__order_contacts_windows_and_inquiry_target.sql),
+[`V54__historical_rental_documents.sql`](../../services/logistics-service/src/main/resources/db/migration/V54__historical_rental_documents.sql),
 and
-[`V47__order_contacts_windows_and_inquiry_target.sql`](../../services/logistics-service/src/main/resources/db/migration/V47__order_contacts_windows_and_inquiry_target.sql).
+[`V55__cabin_photo_presentations.sql`](../../services/logistics-service/src/main/resources/db/migration/V55__cabin_photo_presentations.sql).
 
 ### Repair Places And Driver Queue
 

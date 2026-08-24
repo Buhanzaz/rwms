@@ -102,7 +102,11 @@ function RepairSnapshotLines({
                   {task && subtask && mediaReferences.length > 0 ? (
                     <ServiceOwnerPhotos
                       accessToken={accessToken}
-                      owner={repairTaskSourceMediaOwner(task, line)}
+                      owner={repairTaskSourceMediaOwner(
+                        task,
+                        line,
+                        subtask.taskBoardEntryId
+                      )}
                       readOnly
                       maxItems={100}
                       title={`Фото работы «${description}»`}

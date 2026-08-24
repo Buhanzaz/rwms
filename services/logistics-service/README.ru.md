@@ -32,6 +32,24 @@ document/workflow state, но не агрегатами кабин, оборуд
 Исторические задания по строкам документа до старта отменяются перед созданием одной группы;
 начатый исторический участник блокирует перегруппировку, новые задания по строкам не создаются.
 
+`POST /api/logistics/v1/historical-rental-movements` фиксирует одну прошлую отгрузку или возврат
+прямо из карточки бытовки. Команда принимает доступного пользователю клиента логистики, текущую
+версию бытовки и дату не позднее warehouse-local сегодняшнего дня, но не водителя и не маршрут.
+Она создаёт обычный logistics document, строку, событие и durable effect attempts. Импортированная
+отгрузка сначала просит maintenance завершить допустимый обычный ремонт либо отменить допустимую
+работу капремонта/перемещения с комментарием
+`Автоматически закрыто в связи с отгрузкой.`, а затем выполняет обычный fenced shipment effect.
+Импортированный возврат проходит обычный fenced return-intake и достигает
+`INSPECTION_REQUIRED`, поэтому смета и ремонт остаются обычной maintenance-owned работой. Факт
+документа `historicalRentalImport` не допускает такой импорт в driver planning и ручные команды
+жизненного цикла shipment/return.
+
+Worker-задача перемещения оборудования остаётся принятой Task Board и после операционного дедлайна.
+Если авторитетное время `DONE` наступило в дедлайн резерва или позднее, логистика фиксирует
+завершение и переводит локальное перемещение в `RECONCILIATION_REQUIRED` с
+`TASK_BOARD_COMPLETED_AFTER_RESERVATION_EXPIRY`: она не отклоняет факт от рабочего и не применяет
+вслепую истёкший резерв источника, который уже мог быть использован другой операцией.
+
 Public board и detail задания показывают всю ходку: операцию, клиента, адрес и координаты, основной
 и дополнительные контакты клиента/заказа, комментарий, желаемые даты, фактически назначенную дату,
 бытовки и желаемую/фактическую мебель каждой бытовки со статусами movement task и readiness. После
@@ -225,6 +243,16 @@ outcome path ничего не удаляет из logistics history.
 signed presentation token, его revision и current viewability. Media access также проверяет, что
 запрошенный item/generation/variant принадлежит этой presentation; это не общий media proxy.
 
+Менеджер с правом EDIT создаёт фото-представление бытовки через
+`POST /api/logistics/v1/cabins/{cabinId}/photo-presentations` с текущей asset version и стабильным
+idempotency key. Logistics повторно проверяет доступ к складу и asset-owned fence бытовки,
+замораживает по порядку от одного до 100 READY image ID/generation и возвращает бессрочный signed
+public path. Anonymous metadata и SMALL/LARGE media reads ограничены маршрутами
+`/api/logistics/public/v1/cabin-photo-presentations/{token}/**`; ответ содержит только номер бытовки,
+время создания и неизменяемые ссылки на фото. Media bytes остаются приватными и проксируются лишь
+после проверки token, membership в snapshot, generation и variant. Exact replay команды возвращает
+то же представление, а повтор idempotency key с другими входными данными завершается conflict.
+
 ## Внутренняя структура приложения
 
 `HttpLogisticsDependencyGateway` — стабильная реализация private dependency
@@ -246,6 +274,8 @@ port. Его неизменённый constructor собирает шесть ow
 | `RentalInquiryCabinSelectionStore` | Locked PREPARE/COMPLETE/REJECTED/EXPIRED transactions selection receipt, exact-byte retry и frozen-response replay |
 | `RentalInquiryCabinCatalogService` | Ограниченный facts-only cabin lookup с authorization inquiry, warehouse и owner |
 | `LogisticsDocumentService` | Стабильный facade return/shipment/transfer и rental-order hooks над семью точными owners |
+| `HistoricalRentalMovementCoordinator` | Приём одной исторической отгрузки/возврата одной бытовки и клиента; создаёт обычные документы и durable owner effects без водителя и browser-owned saga |
+| `CabinPhotoPresentationService`, `CabinPhotoPresentationStore`, `CabinPhotoPresentationTokenService` | Version-fenced неизменяемый snapshot READY-фото, exact idempotent replay и бессрочная signed public capability без общего media proxy и приватных данных бытовки |
 | Coordinators документов return, shipment и transfer | Независимые document state machines с исходным порядком transaction и recovery |
 | `DocumentDriverTaskPlanner` | Одно idempotent document-owned задание с упорядоченными участниками-бытовками на каждую новую запланированную shipment, return или transfer; ожидающие legacy line tasks сходятся в группу, а начатые блокируют replanning |
 | `DriverTripProjectionService` | Structured task/board facts ходки с одним asset read на отдельный заказ и явным unavailable readiness при dependency failure |
@@ -415,6 +445,18 @@ Migration
 назначенные документы сохраняют прежний смысл и не переклассифицируются. Task-audience constraint
 расширяется только для shipment `WAREHOUSE_DRIVERS`; у returns остаются прежние assigned-or-hidden
 режимы.
+
+Миграция
+[`V54__historical_rental_documents.sql`](src/main/resources/db/migration/V54__historical_rental_documents.sql)
+добавляет false-by-default факт документа `historical_rental_import` и узкий read index. Существующие
+документы не меняются; флаг отмечает только введённую пользователем прошлую физическую отгрузку или
+возврат, для которой намеренно нет задания водителя RWMS.
+
+Миграция
+[`V55__cabin_photo_presentations.sql`](src/main/resources/db/migration/V55__cabin_photo_presentations.sql)
+добавляет logistics-owned неизменяемый photo snapshot, subject-scoped уникальность idempotency и
+ограничения JSON/числа фото. В ней нет expiry column; media bytes не копируются, а существующие строки
+бытовок, клиентов, заказов и документов не изменяются.
 
 Logistics вместе фиксирует facts, projection checkpoints и transactional outbox. Kafka delivery —
 at-least-once: aggregate IDs являются record keys, event IDs — dedupe identities, а consumers хранят

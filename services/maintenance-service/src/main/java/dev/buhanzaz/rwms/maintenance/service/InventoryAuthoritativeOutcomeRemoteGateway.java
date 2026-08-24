@@ -21,7 +21,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 @Service
 public class InventoryAuthoritativeOutcomeRemoteGateway {
   private static final Set<String> TERMINAL_TASK_STATES =
-      Set.of("CANCELLED", "COMPLETED", "DONE");
+      Set.of("CANCELLED", "COMPLETED", "DONE", "NOT_FOUND");
 
   private final MaintenanceDependencyGateway dependencies;
 
@@ -36,7 +36,15 @@ public class InventoryAuthoritativeOutcomeRemoteGateway {
     if (target == null || target.getTaskExternalId() == null) {
       throw new IllegalArgumentException("Authoritative task identity is required");
     }
-    TaskSnapshot current = dependencies.getTask(target.getTaskExternalId());
+    TaskSnapshot current;
+    try {
+      current = dependencies.getTask(target.getTaskExternalId());
+    } catch (MaintenanceDependencyException exception) {
+      if (exception.status() == HttpStatus.NOT_FOUND) {
+        return new TaskCancellation("NOT_FOUND", 0L);
+      }
+      throw exception;
+    }
     requireTask(target, current);
     return new TaskCancellation(normalize(current.state()), current.version());
   }

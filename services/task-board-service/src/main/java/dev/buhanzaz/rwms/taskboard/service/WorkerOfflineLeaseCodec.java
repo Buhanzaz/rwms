@@ -57,17 +57,45 @@ public class WorkerOfflineLeaseCodec {
       UUID warehouseId,
       OffsetDateTime occurredAt,
       OffsetDateTime serverNow) {
-    long issuedAtMillis = leaseId.getMostSignificantBits() >>> 16;
-    UUID expected = signedId(workerId, warehouseId, issuedAtMillis);
-    if (!MessageDigest.isEqual(bytes(leaseId), bytes(expected))) {
-      throw new ConflictException("Offline lease не принадлежит текущему рабочему");
-    }
-    Instant issuedAt = Instant.ofEpochMilli(issuedAtMillis);
+    Instant issuedAt = requireOwnedLease(leaseId, workerId, warehouseId);
     Instant expiresAt = issuedAt.plus(LIFETIME);
     Instant occurred = occurredAt.toInstant();
     if (occurred.isBefore(issuedAt) || occurred.isAfter(expiresAt)) {
       throw new ConflictException("Действие создано вне срока offline lease");
     }
+    requireNotFuture(occurred, serverNow);
+  }
+
+  /**
+   * Validates the signed lease for a delayed WorkerApp completion or its result evidence.
+   *
+   * <p>The 24-hour window still fences ordinary offline transitions such as take, join, pause and
+   * resume. A worker who remains the current assigned participant may, however, submit the actual
+   * result photo and close the already-started task after that window. The caller must still enforce
+   * the current assignment, task state, expected version and evidence gate; this method only relaxes
+   * the historical occurrence time while retaining cryptographic lease ownership and future-time
+   * protection.
+   */
+  public void requireDeferredCompletionValid(
+      UUID leaseId,
+      UUID workerId,
+      UUID warehouseId,
+      OffsetDateTime occurredAt,
+      OffsetDateTime serverNow) {
+    requireOwnedLease(leaseId, workerId, warehouseId);
+    requireNotFuture(occurredAt.toInstant(), serverNow);
+  }
+
+  private Instant requireOwnedLease(UUID leaseId, UUID workerId, UUID warehouseId) {
+    long issuedAtMillis = leaseId.getMostSignificantBits() >>> 16;
+    UUID expected = signedId(workerId, warehouseId, issuedAtMillis);
+    if (!MessageDigest.isEqual(bytes(leaseId), bytes(expected))) {
+      throw new ConflictException("Offline lease не принадлежит текущему рабочему");
+    }
+    return Instant.ofEpochMilli(issuedAtMillis);
+  }
+
+  private void requireNotFuture(Instant occurred, OffsetDateTime serverNow) {
     if (occurred.isAfter(serverNow.toInstant().plus(FUTURE_TOLERANCE))) {
       throw new ConflictException("Время offline-действия находится в будущем");
     }

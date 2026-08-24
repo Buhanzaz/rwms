@@ -264,6 +264,12 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   }
 
   @Override
+  public PreStartTaskCancellation cancelTaskIfPreStart(
+      UUID key, UUID externalTaskId, long expectedVersion, String reason) {
+    return taskBoard.cancelTaskIfPreStart(key, externalTaskId, expectedVersion, reason);
+  }
+
+  @Override
   public TaskSnapshot relocateTask(
       UUID key, UUID externalTaskId, long expectedVersion, UUID targetWarehouseId) {
     return taskBoard.relocateTask(key, externalTaskId, expectedVersion, targetWarehouseId);

@@ -17,6 +17,7 @@ import {
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Card,
   CardContent,
@@ -25,6 +26,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Field, FieldLabel } from "@/components/ui/field"
 import type { KpiPalette } from "@/features/settings/kpi/api/kpi-settings-api"
 import {
   paletteColorForRemainingPercent,
@@ -468,6 +470,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   inDailyPlan,
   routeHighlighted,
   fullRouteSelected,
+  futureAvailabilityEligible = false,
   reorderEnabled = false,
   onDetails,
   onEdit,
@@ -475,6 +478,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   onPause,
   onResume,
   onPin,
+  onFutureAvailabilityChange,
   onShowFullRoute,
   onToggleCollapsed,
   palette = null,
@@ -489,6 +493,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   inDailyPlan: boolean
   routeHighlighted: boolean
   fullRouteSelected: boolean
+  futureAvailabilityEligible?: boolean
   reorderEnabled?: boolean
   onDetails: (entry: TaskBoardEntryDto) => void
   onEdit: (entry: TaskBoardEntryDto) => void
@@ -496,6 +501,10 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   onPause: (entry: TaskBoardEntryDto) => void
   onResume: (entry: TaskBoardEntryDto) => void
   onPin: (entry: TaskBoardEntryDto, pinned: boolean) => void
+  onFutureAvailabilityChange: (
+    entry: TaskBoardEntryDto,
+    available: boolean
+  ) => void
   onShowFullRoute: (entry: TaskBoardEntryDto) => void
   onToggleCollapsed: (entryId: string) => void
   palette?: KpiPalette | null
@@ -528,6 +537,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   } = cardActionVisibility(entry, mobile, canEdit)
   const appearance = kpiCardAppearance(entry, now, palette)
   const unitLabel = entry.unitNumber ?? "Задание без номера"
+  const futureAvailabilityId = `future-task-availability-${entry.id}`
   const sortableStyle = {
     ...appearance.style,
     transform: CSS.Transform.toString(transform),
@@ -613,6 +623,32 @@ export const TaskBoardCard = memo(function TaskBoardCard({
         </div>
         {!collapsed && description ? (
           <CardDescription>{description}</CardDescription>
+        ) : null}
+        {futureAvailabilityEligible ? (
+          <Field
+            orientation="horizontal"
+            className="w-full gap-2 rounded-md border border-border/70 px-2 py-1.5"
+            data-disabled={!canEdit || actionPending || undefined}
+          >
+            <Checkbox
+              id={futureAvailabilityId}
+              checked={entry.entryType === "REAL"}
+              disabled={!canEdit || actionPending}
+              aria-label={`Доступность этапа ${unitLabel} для рабочих`}
+              onCheckedChange={(checked) => {
+                if (typeof checked !== "boolean" || !canEdit || actionPending) {
+                  return
+                }
+                onFutureAvailabilityChange(entry, checked)
+              }}
+            />
+            <FieldLabel
+              htmlFor={futureAvailabilityId}
+              className="min-w-0 text-xs"
+            >
+              Доступна рабочим
+            </FieldLabel>
+          </Field>
         ) : null}
       </CardHeader>
       <TaskBoardCardContent

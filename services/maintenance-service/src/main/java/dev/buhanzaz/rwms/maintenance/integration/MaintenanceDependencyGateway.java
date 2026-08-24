@@ -220,6 +220,19 @@ public interface MaintenanceDependencyGateway {
   PreStartTaskCancellation cancelTaskIfPreStart(
       UUID idempotencyKey, UUID externalTaskId, long expectedVersion);
 
+  /**
+   * Same atomic pre-start fence with the source-owned audit reason retained by task-board.
+   * Adapters that do not yet have a reason-aware transport still preserve the safe cancellation
+   * semantics through the original command.
+   */
+  default PreStartTaskCancellation cancelTaskIfPreStart(
+      UUID idempotencyKey, UUID externalTaskId, long expectedVersion, String reason) {
+    if (reason == null || reason.isBlank() || reason.length() > 1000) {
+      throw new IllegalArgumentException("Task cancellation reason is required");
+    }
+    return cancelTaskIfPreStart(idempotencyKey, externalTaskId, expectedVersion);
+  }
+
   TaskSnapshot relocateTask(
       UUID idempotencyKey,
       UUID externalTaskId,

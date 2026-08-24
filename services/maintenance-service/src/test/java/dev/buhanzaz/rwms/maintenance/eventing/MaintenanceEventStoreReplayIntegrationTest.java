@@ -830,6 +830,7 @@ class MaintenanceEventStoreReplayIntegrationTest {
     result.put("lineCount", 0);
     result.put("completionKind", "NOT_COMPLETED");
     result.put("repairId", repairId == null ? null : repairId.toString());
+    result.put("forceCapitalRepair", false);
     return result;
   }
 
@@ -848,6 +849,7 @@ class MaintenanceEventStoreReplayIntegrationTest {
     result.put("dispatchDate", "2026-07-18");
     result.put("priority", 3);
     result.put("stages", List.of());
+    result.put("forceCapitalRepair", false);
     return result;
   }
 

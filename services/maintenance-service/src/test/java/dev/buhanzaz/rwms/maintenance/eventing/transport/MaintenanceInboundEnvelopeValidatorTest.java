@@ -327,7 +327,7 @@ class MaintenanceInboundEnvelopeValidatorTest {
           "eventType":"task-board.task-evidence.ready.v1","eventVersion":1,
           "occurredAt":"2026-07-17T00:00:00Z","recordedAt":"2026-07-17T00:00:01Z",
           "producer":"task-board-service","aggregateType":"TASK_EVIDENCE",
-          "aggregateId":"%s","aggregateVersion":1,
+          "aggregateId":"%s","aggregateVersion":0,
           "correlation":{"correlationId":"%s","causationId":null},"actorRef":null,
           "payload":{"evidenceId":"%s","entryId":"%s","taskId":"%s","routeIndex":0,
           "warehouseId":"%s","workerId":"%s","workerGroupId":null,"mediaId":"%s",

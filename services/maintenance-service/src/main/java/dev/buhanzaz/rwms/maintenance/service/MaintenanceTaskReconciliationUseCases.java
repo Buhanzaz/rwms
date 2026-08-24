@@ -333,7 +333,7 @@ final class MaintenanceTaskReconciliationUseCases {
     if (update && "REFRESH_WORKER_MEDIA".equals(work.operation())) {
       MaintenanceDependencyGateway.TaskSnapshot currentTask =
           dependencies.getTask(plan.externalTaskId());
-      validateTaskPlanTruth(plan, currentTask);
+      validateCurrentPreStartTaskIdentity(plan, currentTask);
       expectedTaskVersion = currentTask.version();
     }
     MaintenanceDependencyGateway.TaskSnapshot task = update
@@ -457,6 +457,29 @@ final class MaintenanceTaskReconciliationUseCases {
       throw new MaintenanceDependencyException(
           org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
           "Task-board truth does not match the maintenance repair");
+    }
+  }
+
+  /**
+   * Fences the owner task read used before presentation and duplicate-route convergence.
+   *
+   * <p>The old route may legitimately contain more entries than the canonical maintenance plan;
+   * requiring equal route sizes here would prevent the pre-start command that removes that exact
+   * legacy duplication. The subsequent task-board mutation owns the all-waiting/assignment fence,
+   * and its returned replacement is still checked by {@link #validateTaskPlanTruth(TaskPlan,
+   * MaintenanceDependencyGateway.TaskSnapshot)} with exact canonical stage count.
+   */
+  private static void validateCurrentPreStartTaskIdentity(
+      TaskPlan plan, MaintenanceDependencyGateway.TaskSnapshot task) {
+    if (task == null
+        || !plan.externalTaskId().equals(task.externalTaskId())
+        || task.version() < 0
+        || !"ACTIVE".equals(task.state())
+        || task.stages() == null
+        || task.stages().isEmpty()) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Task-board pre-start truth does not match the maintenance repair");
     }
   }
 }

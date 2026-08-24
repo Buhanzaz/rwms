@@ -1157,7 +1157,7 @@ class MaintenanceInventoryBoundaryIntegrationTest {
   }
 
   @Test
-  void repeatedCatalogWorkCreatesSeparateRepairStagesWithoutDuplicatingLines() {
+  void repeatedCatalogWorkCreatesOnePhysicalQueueStageWithEveryLine() {
     UUID inventoryId = UUID.randomUUID();
     UUID findingId = UUID.randomUUID();
     FreezeInventoryPlanRequest request = new FreezeInventoryPlanRequest(
@@ -1177,10 +1177,10 @@ class MaintenanceInventoryBoundaryIntegrationTest {
     FrozenInventoryPlanResponse frozen = inventory.freeze(request).response();
     assertThat(frozen.snapshot().stages())
         .extracting(InventoryPlanStageSnapshot::catalogNodeId)
-        .containsExactly(workNodeId, workNodeId);
+        .containsExactly(workNodeId);
     assertThat(frozen.snapshot().stages())
         .extracting(InventoryPlanStageSnapshot::order)
-        .containsExactly(0, 1);
+        .containsExactly(0);
 
     UUID rentalItemId = UUID.randomUUID();
     rentalItems.saveAndFlush(
@@ -1207,13 +1207,13 @@ class MaintenanceInventoryBoundaryIntegrationTest {
                 """,
                 (row, ignored) -> row.getInt(1),
                 created.repairId()))
-        .containsExactly(1, 1);
+        .containsExactly(2);
     assertThat(
             jdbc.queryForObject(
                 "select count(distinct primary_line_id) from repair_stage where repair_id=?",
                 Integer.class,
                 created.repairId()))
-        .isEqualTo(2);
+        .isEqualTo(1);
   }
 
   @Test
@@ -1789,6 +1789,133 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         eq(active.repairId().toString()));
   }
 
+  @ParameterizedTest(name = "remote task exists: {0}")
+  @ValueSource(booleans = {true, false})
+  void authoritativeWorkProbesOrphanedTaskBeforeReplacingRepair(boolean remoteTaskExists)
+      throws Exception {
+    AuthoritativeActiveRepair active = authoritativeActiveRepair(false, false);
+    jdbc.update(
+        "update maintenance_repair set task_board_version=null, "
+            + "task_generation_state='PENDING_GENERATION', delivery_state='RETRY_PENDING' "
+            + "where id=?",
+        active.repairId());
+    jdbc.update(
+        "update repair_stage set external_queue_entry_id=null, task_board_version=null, "
+            + "task_generation_state='PENDING_GENERATION', delivery_state='RETRY_PENDING' "
+            + "where repair_id=?",
+        active.repairId());
+    assertThat(jdbc.queryForObject(
+        "select task_board_version from maintenance_repair where id=?",
+        Long.class,
+        active.repairId())).isNull();
+
+    String originalSnapshot = jdbc.queryForObject(
+        "select request_snapshot::text from inventory_authoritative_outcome "
+            + "where inventory_id=? and final_plan_version=1 and finding_id=?",
+        String.class,
+        active.inventoryId(),
+        active.findingId());
+    InventoryPublicationApplyRequest original =
+        mapper.readValue(originalSnapshot, InventoryPublicationApplyRequest.class);
+    ObjectNode changedSnapshot = ((ObjectNode) original.snapshot()).deepCopy();
+    ((ObjectNode) changedSnapshot.withArray("lines").get(0)).put("quantity", "7.500000");
+    InventoryPublicationApplyRequest corrected = new InventoryPublicationApplyRequest(
+        original.warehouseId(),
+        2L,
+        finalPlanSha(2L),
+        original.findingRevision() + 1,
+        original.assetId(),
+        active.assetVersion(),
+        active.assetVersion(),
+        original.inventoryCompletedAt(),
+        canonicalizer.sha256(changedSnapshot),
+        5,
+        false,
+        null,
+        original.repairScheduledDate(),
+        changedSnapshot,
+        original.media(),
+        original.snapshotSchemaVersion(),
+        InventoryPublicationStrategy.MERGE,
+        InventoryPublicationTargetKind.REPAIR,
+        active.repairId(),
+        false);
+
+    if (remoteTaskExists) {
+      when(dependencies.getTask(active.externalTaskId()))
+          .thenAnswer(invocation -> {
+            assertNoRemoteTransaction();
+            return new MaintenanceDependencyGateway.TaskSnapshot(
+                active.externalTaskId(), 19L, "ACTIVE", List.of());
+          });
+      when(dependencies.cancelTask(any(), eq(active.externalTaskId()), eq(19L)))
+          .thenAnswer(invocation -> {
+            assertNoRemoteTransaction();
+            return new MaintenanceDependencyGateway.TaskSnapshot(
+                active.externalTaskId(), 20L, "CANCELLED", List.of());
+          });
+    } else {
+      when(dependencies.getTask(active.externalTaskId()))
+          .thenAnswer(invocation -> {
+            assertNoRemoteTransaction();
+            throw new MaintenanceDependencyException(
+                HttpStatus.NOT_FOUND, "task does not exist");
+          });
+    }
+    doAnswer(invocation -> {
+      assertNoRemoteTransaction();
+      return null;
+    }).when(dependencies).releaseLease(
+        any(),
+        eq(active.leaseId()),
+        eq(0L),
+        eq(13L),
+        eq("MAINTENANCE_REPAIR"),
+        eq(active.repairId().toString()));
+
+    InventoryPublicationReconciliationService.PublicationResult replaced = publications.apply(
+        active.inventoryId(), active.findingId(), UUID.randomUUID(), corrected);
+
+    assertThat(replaced.response().repairId()).isNotEqualTo(active.repairId());
+    assertThat(jdbc.queryForMap(
+            "select execution_state,task_generation_state from maintenance_repair where id=?",
+            active.repairId()))
+        .containsEntry("execution_state", "CANCELLED")
+        .containsEntry("task_generation_state", "NOT_REQUIRED");
+    assertThat(jdbc.queryForObject(
+        "select count(*) from maintenance_repair where rental_item_id=? "
+            + "and execution_state<>'CANCELLED' "
+            + "and acceptance_state not in ('ACCEPTED','WRITTEN_OFF')",
+        Integer.class,
+        active.assetId())).isOne();
+    assertThat(jdbc.queryForMap(
+            "select task_external_id,task_expected_version,task_attempt_count,task_outcome,"
+                + "local_superseded from inventory_authoritative_outcome_target "
+                + "where inventory_id=? and final_plan_version=2 and finding_id=? "
+                + "and target_id=?",
+            active.inventoryId(),
+            active.findingId(),
+            active.repairId()))
+        .containsEntry("task_external_id", active.externalTaskId())
+        .containsEntry("task_expected_version", remoteTaskExists ? 20L : 0L)
+        .containsEntry("task_attempt_count", remoteTaskExists ? 1L : 0L)
+        .containsEntry("task_outcome", remoteTaskExists ? "CANCELLED" : "NOT_FOUND")
+        .containsEntry("local_superseded", true);
+    verify(dependencies).getTask(active.externalTaskId());
+    if (remoteTaskExists) {
+      verify(dependencies).cancelTask(any(), eq(active.externalTaskId()), eq(19L));
+    } else {
+      verify(dependencies, never()).cancelTask(any(), any(), anyLong());
+    }
+    verify(dependencies).releaseLease(
+        any(),
+        eq(active.leaseId()),
+        eq(0L),
+        eq(13L),
+        eq("MAINTENANCE_REPAIR"),
+        eq(active.repairId().toString()));
+  }
+
   @Test
   void authoritativeNoWorkRecoversLostRemoteResponseWithTheSameDurableAttempts() {
     AuthoritativeActiveRepair active = authoritativeActiveRepair(true, false);
@@ -1978,6 +2105,7 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         finding, 1L, InventoryPublicationStrategy.CREATE, null, null);
     UUID originalRepairId = publications.apply(
         inventoryId, findingId, UUID.randomUUID(), original).response().repairId();
+    stubTaskNotFound(repairs.findById(originalRepairId).orElseThrow().getExternalTaskId());
     InventoryNoWorkOutcomeRequest noWork = new InventoryNoWorkOutcomeRequest(
         warehouseId,
         assetId,
@@ -2060,6 +2188,7 @@ class MaintenanceInventoryBoundaryIntegrationTest {
 
     authoritativeOutcomes.applyNoWork(inventoryId, findingId, firstKey, request);
     MaintenanceRepair concurrent = directDraftRepair(assetId, 7L, "After first FREE outcome");
+    stubTaskNotFound(concurrent.getExternalTaskId());
 
     InventoryNoWorkOutcomeResult sameKey =
         authoritativeOutcomes.applyNoWork(inventoryId, findingId, firstKey, request);
@@ -2114,6 +2243,8 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         "Concurrent predecessor",
         "{}"));
     insertEventHead("REPAIR", secondRepair.getId(), secondRepair.getVersion());
+    stubTaskNotFound(repairs.findById(firstRepairId).orElseThrow().getExternalTaskId());
+    stubTaskNotFound(secondRepair.getExternalTaskId());
     MaintenanceEstimate estimate = estimates.saveAndFlush(MaintenanceEstimate.create(
         warehouseId,
         assetId,
@@ -2184,6 +2315,8 @@ class MaintenanceInventoryBoundaryIntegrationTest {
     UUID exactRepairId = first.response().repairId();
     MaintenanceRepair firstConcurrent =
         directDraftRepair(assetId, 11L, "After first WORK outcome");
+    stubTaskNotFound(repairs.findById(exactRepairId).orElseThrow().getExternalTaskId());
+    stubTaskNotFound(firstConcurrent.getExternalTaskId());
     UUID secondKey = UUID.randomUUID();
 
     InventoryPublicationReconciliationService.PublicationResult reasserted = publications.apply(
@@ -2214,6 +2347,7 @@ class MaintenanceInventoryBoundaryIntegrationTest {
 
     MaintenanceRepair secondConcurrent =
         directDraftRepair(assetId, 11L, "After first same-source reassertion");
+    stubTaskNotFound(secondConcurrent.getExternalTaskId());
     InventoryPublicationReconciliationService.PublicationResult frozen = publications.apply(
         inventoryId, findingId, secondKey, request);
 
@@ -4366,6 +4500,13 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         "{}"));
     insertEventHead("REPAIR", repair.getId(), repair.getVersion());
     return repair;
+  }
+
+  /** Makes a local pre-registration task identity resolve like task-board's ordinary 404 truth. */
+  private void stubTaskNotFound(UUID externalTaskId) {
+    when(dependencies.getTask(externalTaskId))
+        .thenThrow(new MaintenanceDependencyException(
+            HttpStatus.NOT_FOUND, "task does not exist"));
   }
 
   /** Creates an inventory-owned queued repair with one durably confirmed task-board mapping. */

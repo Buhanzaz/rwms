@@ -161,7 +161,9 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   queueActionsDisabled,
   reorderDisabled,
   dailyPlanEntryIds,
+  futureEntryIds,
   highlightedTaskId,
+  initialScrollTop,
   onToggleCollapsed,
   onUpdateWorkerPlan,
   onReorder,
@@ -171,6 +173,8 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   onPause,
   onResume,
   onPin,
+  onFutureAvailabilityChange,
+  onScrollTopChange,
   onShowFullRoute,
   isEntryCollapsed,
   onToggleEntryCollapsed,
@@ -190,7 +194,9 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   queueActionsDisabled: boolean
   reorderDisabled: boolean
   dailyPlanEntryIds: ReadonlySet<string>
+  futureEntryIds: ReadonlySet<string>
   highlightedTaskId: string | null
+  initialScrollTop: number
   onToggleCollapsed: (queueKey: string) => void
   onUpdateWorkerPlan: (
     queue: TaskBoardQueueDto,
@@ -204,6 +210,11 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   onPause: (entry: TaskBoardEntryDto) => void
   onResume: (entry: TaskBoardEntryDto) => void
   onPin: (entry: TaskBoardEntryDto, pinned: boolean) => void
+  onFutureAvailabilityChange: (
+    entry: TaskBoardEntryDto,
+    available: boolean
+  ) => void
+  onScrollTopChange: (queueKey: string, scrollTop: number) => void
   onShowFullRoute: (entry: TaskBoardEntryDto) => void
   isEntryCollapsed: (entryId: string) => boolean
   onToggleEntryCollapsed: (entryId: string) => void
@@ -212,6 +223,7 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   repairComplexitiesByRepairId: ReadonlyMap<string, TaskBoardRepairComplexity>
 }) {
   const scrollBodyRef = useRef<HTMLDivElement | null>(null)
+  const restoredScrollQueueRef = useRef<string | null>(null)
   const fullRouteScrollTopRef = useRef<number | null>(null)
   const reorderableEntries = useMemo(
     () => visibleEntries.filter(isReorderableEntry),
@@ -229,6 +241,15 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   const inProgress = visibleEntries.find(
     (entry) => entry.status === "IN_PROGRESS"
   )
+
+  useEffect(() => {
+    const scrollBody = scrollBodyRef.current
+    if (!scrollBody || mobile || restoredScrollQueueRef.current === queue.key) {
+      return
+    }
+    restoredScrollQueueRef.current = queue.key
+    scrollBody.scrollTop = initialScrollTop
+  }, [initialScrollTop, mobile, queue.key])
 
   useEffect(() => {
     const scrollBody = scrollBodyRef.current
@@ -400,6 +421,9 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
               ? "overflow-visible"
               : "[scrollbar-width:none] overflow-y-auto overscroll-contain [&::-webkit-scrollbar]:hidden"
           )}
+          onScroll={(event) =>
+            onScrollTopChange(queue.key, event.currentTarget.scrollTop)
+          }
         >
           <SortableContext
             items={reorderableEntries.map((entry) => entry.id)}
@@ -417,6 +441,7 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
                 inDailyPlan={dailyPlanEntryIds.has(entry.id)}
                 routeHighlighted={highlightedTaskId === entry.taskId}
                 fullRouteSelected={highlightedTaskId === entry.taskId}
+                futureAvailabilityEligible={futureEntryIds.has(entry.id)}
                 reorderEnabled={!reorderDisabled}
                 onDetails={onDetails}
                 onEdit={onEdit}
@@ -424,6 +449,7 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
                 onPause={onPause}
                 onResume={onResume}
                 onPin={onPin}
+                onFutureAvailabilityChange={onFutureAvailabilityChange}
                 onShowFullRoute={onShowFullRoute}
                 onToggleCollapsed={onToggleEntryCollapsed}
                 palette={palette}

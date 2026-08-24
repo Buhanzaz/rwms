@@ -77,8 +77,6 @@ import type { DesiredDeliveryWindow } from "@/features/orders/domain/orders"
 import { ApiError } from "@/lib/api-client"
 import { cn } from "@/lib/utils"
 
-const MAX_DESIRED_DELIVERY_DATES = 5
-
 export function PublicClientPresentationPage() {
   const { token = "" } = useParams()
   const [selectedIds, setSelectedIds] = useState<string[]>([])
@@ -124,6 +122,25 @@ export function PublicClientPresentationPage() {
   })
   const effectiveBooking = bookingQuery.data ?? booking
   const presentation = presentationQuery.data
+  const requestableDeliveryDates = useMemo(
+    () =>
+      Array.from(new Set(presentation?.requestableDeliveryDates ?? [])).sort(
+        (left, right) => left.localeCompare(right)
+      ),
+    [presentation?.requestableDeliveryDates]
+  )
+  const requestableDeliveryDateSet = useMemo(
+    () => new Set(requestableDeliveryDates),
+    [requestableDeliveryDates]
+  )
+  const maxDesiredDeliveryDates = requestableDeliveryDates.length
+  const requestableDesiredDates = useMemo(
+    () =>
+      desiredDates.filter((date) =>
+        requestableDeliveryDateSet.has(calendarDateValue(date))
+      ),
+    [desiredDates, requestableDeliveryDateSet]
+  )
   const draftIssues = presentation
     ? presentationDraftIssues({
         presentation,
@@ -133,11 +150,11 @@ export function PublicClientPresentationPage() {
     : []
   const desiredWindowInputs = useMemo<DesiredDeliveryWindow[]>(
     () =>
-      [...desiredDates]
+      [...requestableDesiredDates]
         .map(calendarDateValue)
         .sort((left, right) => left.localeCompare(right))
         .map((date) => ({ startDate: date, endDate: date })),
-    [desiredDates]
+    [requestableDesiredDates]
   )
   const normalizedDeliveryAddress = deliveryAddress.trim()
   const parsedCoordinates = parseCoordinates(coordinates)
@@ -151,6 +168,11 @@ export function PublicClientPresentationPage() {
       ? selectedIds.length > 0
       : selectedIds.length === requiredSelectionCount
   const normalPresentation = presentation?.mode === "NORMAL"
+  const desiredDatesAreRequestable =
+    desiredWindowInputs.length <= maxDesiredDeliveryDates &&
+    desiredWindowInputs.every((window) =>
+      requestableDeliveryDateSet.has(window.startDate)
+    )
 
   const confirmMutation = useMutation({
     mutationFn: async () => {
@@ -158,6 +180,7 @@ export function PublicClientPresentationPage() {
       if (presentation.mode === "NORMAL") {
         if (
           desiredWindowInputs.length === 0 ||
+          !desiredDatesAreRequestable ||
           rentalMonths < 1 ||
           !normalizedDeliveryAddress ||
           parsedCoordinates.error ||
@@ -297,6 +320,7 @@ export function PublicClientPresentationPage() {
     (!normalPresentation ||
       (normalDetailsStep &&
         desiredWindowInputs.length > 0 &&
+        desiredDatesAreRequestable &&
         rentalMonths > 0 &&
         normalizedDeliveryAddress.length > 0 &&
         parsedCoordinates.error === null &&
@@ -327,21 +351,23 @@ export function PublicClientPresentationPage() {
   }
 
   function selectDesiredDates(nextDates: Date[] | undefined) {
-    const uniqueDates = Array.from(
+    const uniqueRequestableDates = Array.from(
       new Map(
         (nextDates ?? []).map((date) => [calendarDateValue(date), date])
       ).values()
-    ).sort((left, right) =>
-      calendarDateValue(left).localeCompare(calendarDateValue(right))
     )
-    if (uniqueDates.length > MAX_DESIRED_DELIVERY_DATES) {
+      .filter((date) => requestableDeliveryDateSet.has(calendarDateValue(date)))
+      .sort((left, right) =>
+        calendarDateValue(left).localeCompare(calendarDateValue(right))
+      )
+    if (uniqueRequestableDates.length > maxDesiredDeliveryDates) {
       setDesiredDateError(
-        `Можно выбрать не больше ${MAX_DESIRED_DELIVERY_DATES} дней.`
+        `Можно выбрать не больше ${maxDesiredDeliveryDates} дней.`
       )
       return
     }
     setDesiredDateError(null)
-    setDesiredDates(uniqueDates)
+    setDesiredDates(uniqueRequestableDates)
   }
 
   function addFurniturePosition(equipmentId: string) {
@@ -597,7 +623,8 @@ export function PublicClientPresentationPage() {
               <FieldGroup className="gap-5">
                 <Field
                   data-invalid={
-                    desiredDates.length === 0 || Boolean(desiredDateError)
+                    requestableDesiredDates.length === 0 ||
+                    Boolean(desiredDateError)
                       ? true
                       : undefined
                   }
@@ -605,31 +632,49 @@ export function PublicClientPresentationPage() {
                   <FieldLabel>Желаемые даты получения</FieldLabel>
                   <div className="w-fit max-w-full overflow-x-auto rounded-lg border">
                     <Calendar
+                      key={requestableDeliveryDates[0] ?? "no-dates"}
                       mode="multiple"
                       locale={ru}
-                      selected={desiredDates}
+                      defaultMonth={
+                        requestableDeliveryDates[0]
+                          ? new Date(`${requestableDeliveryDates[0]}T12:00:00`)
+                          : undefined
+                      }
+                      selected={requestableDesiredDates}
                       disabled={(date) =>
                         viewOnly ||
                         Boolean(effectiveBooking) ||
-                        (desiredDates.length >= MAX_DESIRED_DELIVERY_DATES &&
-                          !desiredDates.some(
+                        !requestableDeliveryDateSet.has(
+                          calendarDateValue(date)
+                        ) ||
+                        (requestableDesiredDates.length >=
+                          maxDesiredDeliveryDates &&
+                          !requestableDesiredDates.some(
                             (selectedDate) =>
                               calendarDateValue(selectedDate) ===
                               calendarDateValue(date)
                           ))
                       }
                       aria-label="Календарь выбора желаемой даты получения"
-                      aria-invalid={desiredDates.length === 0}
+                      aria-invalid={requestableDesiredDates.length === 0}
                       onSelect={selectDesiredDates}
                     />
                   </div>
                   <FieldDescription>
-                    Выберите до {MAX_DESIRED_DELIVERY_DATES} отдельных дней.
+                    {requestableDeliveryDates.length > 0
+                      ? `Доступны для запроса и согласования: ${requestableDeliveryDates
+                          .map(formatCalendarDate)
+                          .join(", ")}`
+                      : "Сейчас нет дат, доступных для запроса. Обратитесь к менеджеру за новым предложением."}
                   </FieldDescription>
                   <FieldDescription>
-                    {`Выбрано дней: ${desiredDates.length} из ${MAX_DESIRED_DELIVERY_DATES}.`}
+                    Выбор даты не резервирует логистическую мощность до
+                    согласования с логистом.
                   </FieldDescription>
-                  {desiredDates.length > 0 ? (
+                  <FieldDescription>
+                    {`Выбрано дней: ${requestableDesiredDates.length} из ${maxDesiredDeliveryDates}.`}
+                  </FieldDescription>
+                  {requestableDesiredDates.length > 0 ? (
                     <FieldDescription>
                       {desiredWindowInputs
                         .map((window) => formatCalendarDate(window.startDate))

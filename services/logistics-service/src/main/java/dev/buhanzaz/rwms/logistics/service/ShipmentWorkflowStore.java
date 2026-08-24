@@ -105,6 +105,50 @@ class ShipmentWorkflowStore {
         completedAt);
   }
 
+  /**
+   * Records maintenance's terminal repair decision, refreshes the asset-version fence produced by
+   * that decision, then starts the ordinary shipment asset snapshot. The maintenance call itself
+   * occurred outside this transaction under the same claimed attempt.
+   */
+  @Transactional
+  public void confirmHistoricalMaintenanceClose(
+      LogisticsExternalAttemptClaimService.Claim claim,
+      LogisticsDependencyGateway.HistoricalShipmentRepairClosure closure) {
+    LogisticsExternalAttempt attempt =
+        attempt(claim, LogisticsDocumentService.SHIPMENT_HISTORICAL_MAINTENANCE_CLOSE);
+    if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
+    LogisticsDocument document = attempt.getDocument();
+    LogisticsDocumentLine line = requiredLine(attempt);
+    if (document.getState() != LogisticsDocumentState.PREPARING
+        || !document.isHistoricalRentalImport()) {
+      return;
+    }
+    requireHistoricalMaintenanceClosure(document, line, closure);
+
+    OffsetDateTime completedAt = now();
+    line.synchronizeHistoricalShipmentAssetVersion(closure.rentalItemVersion());
+    lineRepository.saveAndFlush(line);
+    attempt.confirm(
+        LogisticsCommandChecksum.sha256(
+            "SHIPMENT_HISTORICAL_MAINTENANCE_CLOSE_RESPONSE",
+            List.of(
+                closure.shipmentId().toString(),
+                closure.rentalItemId().toString(),
+                Long.toString(closure.rentalItemVersion()),
+                closure.rentalItemStatus(),
+                closure.outcome())),
+        completedAt);
+    createAttemptIfMissing(
+        document,
+        line,
+        LogisticsTargetService.ASSET,
+        LogisticsDocumentService.SHIPMENT_ASSET_SNAPSHOT,
+        LogisticsCommandChecksum.sha256(
+            LogisticsDocumentService.SHIPMENT_ASSET_SNAPSHOT,
+            List.of(line.getAssetId().toString(), Long.toString(line.getAssetVersion()))),
+        completedAt);
+  }
+
   /** Records asset lease acquisition only if the supplied lease is still exact and current. */
   @Transactional
   public void confirmLease(
@@ -341,6 +385,12 @@ class ShipmentWorkflowStore {
 
   private Optional<Work> preparationWork(
       LogisticsExternalAttempt attempt, LogisticsDocument document, LogisticsDocumentLine line) {
+    if (LogisticsDocumentService.SHIPMENT_HISTORICAL_MAINTENANCE_CLOSE.equals(
+        attempt.getOperationType())) {
+      return Optional.of(
+          Work.historicalMaintenanceClose(
+              attempt.getOperationId(), document.getId(), document.getWarehouseId(), line.getAssetId()));
+    }
     if (LogisticsDocumentService.SHIPMENT_ASSET_SNAPSHOT.equals(attempt.getOperationType())) {
       return Optional.of(Work.snapshot(attempt.getOperationId(), line.getAssetId()));
     }
@@ -512,6 +562,21 @@ class ShipmentWorkflowStore {
         document.getRequestedBySubjectId(),
         LogisticsEventType.SHIPMENT_PLANNED,
         null);
+    if (!document.isHistoricalRentalImport()) return;
+
+    OffsetDateTime confirmationStartedAt = now();
+    document.beginShipmentConfirmation();
+    documentRepository.saveAndFlush(document);
+    for (LogisticsDocumentLine line : lines(document.getId())) {
+      createShipmentConfirmAttempt(document, line, confirmationStartedAt);
+    }
+    eventStore.append(
+        document,
+        lineCount(document),
+        document.getCorrelationId(),
+        document.getRequestedBySubjectId(),
+        LogisticsEventType.SHIPMENT_CONFIRMATION_STARTED,
+        "HISTORICAL_RENTAL_IMPORT");
   }
 
   private boolean allPreparationEffectsConfirmed(LogisticsDocument document) {
@@ -670,6 +735,24 @@ class ShipmentWorkflowStore {
       throw new LogisticsDependencyException(
           LogisticsDependencyException.FailureKind.PERMANENT_REJECTION,
           "Asset-service rejected the shipment preconditions");
+    }
+  }
+
+  private static void requireHistoricalMaintenanceClosure(
+      LogisticsDocument document,
+      LogisticsDocumentLine line,
+      LogisticsDependencyGateway.HistoricalShipmentRepairClosure closure) {
+    if (closure == null
+        || !document.getId().equals(closure.shipmentId())
+        || !document.getWarehouseId().equals(closure.warehouseId())
+        || !line.getAssetId().equals(closure.rentalItemId())
+        || closure.rentalItemVersion() < line.getAssetVersion()
+        || !"FREE".equals(closure.rentalItemStatus())
+        || closure.closedRepairIds() == null
+        || closure.closedRepairIds().stream().anyMatch(java.util.Objects::isNull)
+        || closure.closedRepairIds().size() != Set.copyOf(closure.closedRepairIds()).size()
+        || !Set.of("NOT_REQUIRED", "CLOSED").contains(closure.outcome())) {
+      throw malformed("Maintenance-service returned malformed historical shipment closure truth");
     }
   }
 
@@ -995,6 +1078,29 @@ class ShipmentWorkflowStore {
           null);
     }
 
+    static Work historicalMaintenanceClose(
+        UUID operationId, UUID documentId, UUID warehouseId, UUID assetId) {
+      return new Work(
+          WorkType.HISTORICAL_MAINTENANCE_CLOSE,
+          operationId,
+          documentId,
+          null,
+          warehouseId,
+          assetId,
+          -1,
+          null,
+          -1,
+          -1,
+          null,
+          -1,
+          -1,
+          null,
+          null,
+          null,
+          -1,
+          null);
+    }
+
     static Work lease(
         UUID operationId, UUID documentId, UUID lineId, UUID assetId, long expectedAssetVersion) {
       return lease(
@@ -1147,6 +1253,7 @@ class ShipmentWorkflowStore {
   }
 
   enum WorkType {
+    HISTORICAL_MAINTENANCE_CLOSE,
     SNAPSHOT,
     LEASE,
     HOLD_ACQUIRE,

@@ -80,6 +80,26 @@ public final class LogisticsApiModels {
     }
   }
 
+  /** Direction of one imported rental fact that has no driver assignment or worker execution. */
+  public enum HistoricalRentalMovementKind {
+    SHIPMENT,
+    RETURN
+  }
+
+  /**
+   * Creates one real rental shipment or return from a verified historical operation date.
+   *
+   * <p>The client is a logistics-owned counterparty reference; the caller supplies the latest
+   * cabin version observed in the warehouse card, but never a driver or a raw target status.
+   */
+  public record CreateHistoricalRentalMovementRequest(
+      @NotNull UUID warehouseId,
+      @NotNull UUID rentalItemId,
+      @NotNull @Min(0) Long expectedRentalItemVersion,
+      @NotNull UUID clientId,
+      @NotNull HistoricalRentalMovementKind kind,
+      @NotNull LocalDate occurredOn) {}
+
   public record ShipmentPlanRequest(
       @NotBlank @Size(max = 512) String driverSnapshot,
       UUID driverWorkerId,
@@ -254,6 +274,7 @@ public final class LogisticsApiModels {
       String driverSnapshot,
       UUID driverWorkerId,
       UUID clientId,
+      boolean historicalRentalImport,
       UUID equipmentMovementTaskId,
       LocalDate scheduledDate,
       UUID rentalOrderId,
@@ -286,6 +307,7 @@ public final class LogisticsApiModels {
       String driverSnapshot,
       UUID driverWorkerId,
       UUID clientId,
+      boolean historicalRentalImport,
       UUID equipmentMovementTaskId,
       LocalDate scheduledDate,
       UUID rentalOrderId,

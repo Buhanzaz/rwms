@@ -279,7 +279,7 @@ class LogisticsEquipmentMovementTaskIntegrationTest extends PostgresIntegrationT
   }
 
   @Test
-  void onlyEquipmentMovementTaskCompletionIsFencedAtDeadline() {
+  void overdueEquipmentMovementTaskStillCompletesAndPublishesCompletionFact() {
     var definition =
         registry.createQueueDefinition(
             QueueRegistryTestFixtures.globalDefinition(0L, "Movement", null, QueueType.MOVEMENT));
@@ -349,13 +349,20 @@ class LogisticsEquipmentMovementTaskIntegrationTest extends PostgresIntegrationT
             null);
     jdbc.update("update board_task set deadline_at=clock_timestamp() where id=?", movement.taskId());
 
-    assertThatThrownBy(
-            () ->
-                board.complete(
-                    WAREHOUSE, started.id(), new VersionCommand(started.version()), null))
-        .isInstanceOf(ConflictException.class)
-        .hasMessageContaining("Срок резерва мебели истек");
-    assertThat(tasks.findById(movement.taskId()).orElseThrow().getStatus()).isEqualTo(TaskStatus.ACTIVE);
+    board.complete(WAREHOUSE, started.id(), new VersionCommand(started.version()), null);
+
+    assertThat(tasks.findById(movement.taskId()).orElseThrow().getStatus()).isEqualTo(TaskStatus.DONE);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from domain_event
+                 where aggregate_type='QUEUE_ENTRY' and aggregate_id=?
+                   and event_type=?
+                """,
+                Integer.class,
+                movementEntry.getId().toString(),
+                TaskBoardEventTypes.QUEUE_ENTRY_COMPLETED))
+        .isEqualTo(1);
   }
 
   private RegisterLogisticsEquipmentMovementTaskRequest movementRequest(

@@ -28,15 +28,16 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <p>The startup pass performs only owner-local reads and durable reconciliation inserts. Existing
  * task-board update orchestration performs every remote call later, outside the local transaction.
  * A versioned stable key makes the pass safe across restarts and multiple application instances.
- * Advancing that version schedules a fresh pre-start update without resuming or changing
- * quarantined work from an earlier presentation generation.
+ * Advancing that version schedules a fresh pre-start update. A repair-level delivery quarantine
+ * may also be repaired when every queued stage still has its confirmed task-board mapping; this
+ * changes only the worker presentation snapshot and leaves unrelated quarantined work untouched.
  */
 @Service
 public class MaintenanceWorkerCoverReconciliation {
   private static final Logger log =
       LoggerFactory.getLogger(MaintenanceWorkerCoverReconciliation.class);
   private static final int PAGE_SIZE = 100;
-  private static final String RECONCILIATION_VERSION = "worker-presentation-v6";
+  private static final String RECONCILIATION_VERSION = "worker-presentation-v8";
   private static final String QUARANTINED_RECONCILIATION_CODE =
       "MAINTENANCE_RECONCILIATION_QUARANTINED";
 
@@ -60,8 +61,9 @@ public class MaintenanceWorkerCoverReconciliation {
    * Enqueues one idempotent pre-start task update per eligible repair after application startup.
    * No remote dependency is contacted on the application-ready thread. An existing quarantined
    * stable update in the current generation remains quarantined for reviewed resume and is skipped
-   * without failing startup. Older-generation work keeps its existing state and identity; every
-   * other conflict still fails closed.
+   * without failing startup. Older-generation work keeps its existing identity. Repairs degraded
+   * by an earlier presentation attempt are eligible only while their complete queued stage mapping
+   * is still confirmed; every other conflict fails closed.
    */
   @EventListener(ApplicationReadyEvent.class)
   public void enqueueWorkerPresentationSnapshots() {
@@ -122,7 +124,8 @@ public class MaintenanceWorkerCoverReconciliation {
                 stage ->
                     stage.getState() != RepairStageState.QUEUED
                         || !"GENERATED".equals(stage.getTaskGenerationState())
-                        || stage.getExternalQueueEntryId() == null)) {
+                        || stage.getExternalQueueEntryId() == null
+                        || stage.getTaskBoardVersion() == null)) {
       return false;
     }
     reconciliations.enqueue(
@@ -137,8 +140,10 @@ public class MaintenanceWorkerCoverReconciliation {
   private static boolean isCandidate(MaintenanceRepair repair) {
     return repair != null
         && repair.getExecutionState() == RepairExecutionState.QUEUED
-        && "GENERATED".equals(repair.getTaskGenerationState())
-        && repair.getExternalTaskId() != null;
+        && ("GENERATED".equals(repair.getTaskGenerationState())
+            || "FAILED".equals(repair.getTaskGenerationState()))
+        && repair.getExternalTaskId() != null
+        && repair.getTaskBoardVersion() != null;
   }
 
   private static UUID stableKey(UUID repairId) {

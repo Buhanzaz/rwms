@@ -50,10 +50,11 @@ public final class KpiSettingsApiModels {
       @NotNull @JsonFormat(pattern = "HH:mm") LocalTime end) {}
 
   /**
-   * Version-fenced future-effective warehouse work schedule.
+   * Version-fenced current-day or future-effective warehouse work schedule.
    *
    * @param expectedVersion observed settings version
-   * @param effectiveFrom local date when the schedule takes effect
+   * @param effectiveFrom warehouse-local calendar date when the schedule takes effect; the current
+   *     date applies to the whole local day after explicit activation
    * @param shiftStart local working-shift start
    * @param shiftEnd local working-shift end
    * @param daysOff ISO weekday numbers excluded from work time
@@ -107,7 +108,7 @@ public final class KpiSettingsApiModels {
    * @param dataAvailableFrom earliest date with KPI data
    * @param palette current display palette
    * @param activeSchedule active working-time schedule, if configured
-   * @param pendingSchedule next future-effective schedule, if configured
+   * @param pendingSchedule current-day draft or next future-effective schedule, if configured
    */
   public record WarehouseKpiSettingsResponse(
       UUID warehouseId,
