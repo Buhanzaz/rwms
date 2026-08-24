@@ -54,7 +54,10 @@ The split protects four important properties:
 | [`app/`](app/) | Android manager client | Mobile manager workflows |
 | [`worker-app/`](worker-app/) | Android worker client | Ordinary worker assignments plus active slinger collaboration, shared completion, and media capture |
 | [`driver-app/`](driver-app/) | Android driver client | Driver-only warehouse work and durable upload recovery |
-| [`worker-download-site/`](worker-download-site/) | Independent public OpenNext/Sites release surface | [Signed WorkerApp 0.1.14 APK download page](https://rwms-worker-download.lebaagatabx.chatgpt.site) |
+| [`manager-download-site/`](manager-download-site/) | ManagerApp release record | Immutable ManagerApp APK metadata and artefact preparation |
+| [`driver-download-site/`](driver-download-site/) | DriverApp release record | Immutable DriverApp APK metadata; it does not contain another application's APK |
+| [`worker-download-site/`](worker-download-site/) | WorkerApp release record and public page | Immutable WorkerApp APK metadata and its dedicated page |
+| [`downloads-site/`](downloads-site/) | Static public aggregate page | Links to the three separate immutable Android APK releases at [`/downloads/`](https://77-90-158-90.sslip.io/downloads/) |
 | [`api-gateway-service`](services/api-gateway-service/) | Stateless Spring edge | Public `/auth/**` and `/api/**` routing, JWT edge policy, bounded streaming, and transport failures |
 | [`auth-service`](services/auth-service/) | Stateful Spring service | OIDC/OAuth2, users, workers, roles, clients, and warehouse grants |
 | [`warehouse-service`](services/warehouse-service/) | Stateful Spring service | Warehouse identity, lifecycle, metadata, and effective-dated timezone |
@@ -120,7 +123,10 @@ smallest product decision needed.
 | [`app/`](app/) | Manager Android app |
 | [`worker-app/`](worker-app/) | Worker Android app |
 | [`driver-app/`](driver-app/) | Driver Android app |
-| [`worker-download-site/`](worker-download-site/) | Public WorkerApp 0.1.14 APK download page |
+| [`manager-download-site/`](manager-download-site/) | ManagerApp release record |
+| [`driver-download-site/`](driver-download-site/) | DriverApp release record |
+| [`worker-download-site/`](worker-download-site/) | WorkerApp release record and page |
+| [`downloads-site/`](downloads-site/) | Static aggregate page for the three immutable Android APK links |
 | [`docs/project-knowledge/`](docs/project-knowledge/) | Maintained architecture and domain navigation layer |
 | [`docs/reviews/`](docs/reviews/) | Evidence-backed audits and remediation plans |
 | [`compose.yaml`](compose.yaml) | Local/test dependencies only, never production orchestration |

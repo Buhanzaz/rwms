@@ -55,7 +55,10 @@ media-service дополнительно владеет приватными о�
 | [`app/`](app/) | Android-клиент менеджера | Мобильные сценарии менеджера |
 | [`worker-app/`](worker-app/) | Android-клиент работника | Обычные назначения и активная совместная работа стропальщика, общее завершение и съёмка медиа |
 | [`driver-app/`](driver-app/) | Android-клиент водителя | Только складские задания водителя и надёжное восстановление загрузок |
-| [`worker-download-site/`](worker-download-site/) | Независимая публичная OpenNext/Sites release-площадка | [Страница скачивания подписанного WorkerApp APK 0.1.14](https://rwms-worker-download.lebaagatabx.chatgpt.site) |
+| [`manager-download-site/`](manager-download-site/) | Запись релиза ManagerApp | Метаданные и подготовка неизменяемого APK ManagerApp |
+| [`driver-download-site/`](driver-download-site/) | Запись релиза DriverApp | Метаданные неизменяемого APK DriverApp; в нём нет APK другого приложения |
+| [`worker-download-site/`](worker-download-site/) | Запись релиза и публичная страница WorkerApp | Метаданные неизменяемого APK WorkerApp и его отдельная страница |
+| [`downloads-site/`](downloads-site/) | Статическая общая публичная страница | Ссылки на три раздельных неизменяемых Android APK по [`/downloads/`](https://77-90-158-90.sslip.io/downloads/) |
 | [`api-gateway-service`](services/api-gateway-service/) | Stateless Spring edge | Публичные `/auth/**` и `/api/**`, edge-политика JWT, ограниченные стримы и transport failures |
 | [`auth-service`](services/auth-service/) | Stateful Spring-сервис | OIDC/OAuth2, пользователи, работники, роли, клиенты и доступ к складам |
 | [`warehouse-service`](services/warehouse-service/) | Stateful Spring-сервис | Идентичность, lifecycle, метаданные и effective-dated timezone склада |
@@ -120,7 +123,10 @@ work. Браузер никогда не координирует согласо
 | [`app/`](app/) | Android-приложение менеджера |
 | [`worker-app/`](worker-app/) | Android-приложение работника |
 | [`driver-app/`](driver-app/) | Android-приложение водителя |
-| [`worker-download-site/`](worker-download-site/) | Публичная страница скачивания WorkerApp APK 0.1.14 |
+| [`manager-download-site/`](manager-download-site/) | Запись релиза ManagerApp |
+| [`driver-download-site/`](driver-download-site/) | Запись релиза DriverApp |
+| [`worker-download-site/`](worker-download-site/) | Запись релиза и страница WorkerApp |
+| [`downloads-site/`](downloads-site/) | Статическая общая страница трёх неизменяемых Android APK |
 | [`docs/project-knowledge/`](docs/project-knowledge/) | Поддерживаемая навигация по архитектуре и домену |
 | [`docs/reviews/`](docs/reviews/) | Аудиты с доказательствами и планы исправлений |
 | [`compose.yaml`](compose.yaml) | Только локальные/test-зависимости, не production orchestration |

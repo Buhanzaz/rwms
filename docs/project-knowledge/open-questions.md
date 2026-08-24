@@ -246,8 +246,8 @@ work.
 
 - Status: `Open`
 - Affected owner and consumers: manager Android app, WorkerApp, DriverApp,
-  manager-download-site, worker-download-site, release engineering and device
-  administrators.
+  manager-download-site, driver-download-site, worker-download-site,
+  downloads-site, release engineering and device administrators.
 - Requested behavior: every published APK must be traceable to one reviewed
   source revision and expose a verifiable version, signature and checksum.
 - Conflicting contract or invariant: the manager download site still has two
@@ -255,10 +255,11 @@ work.
   test APK. Its active release now has a Manager-owned immutable route and one
   integrity record covering source, package, version, signer and SHA-256. The
   worker site separately publishes through its own validated manifest and
-  Worker-owned route, but there is still no shared release registry, documented
+  Worker-owned route. DriverApp now has its own release record and immutable
+  route; the static `/downloads/` page reads all three records rather than
+  duplicating APKs or mutable metadata. There is still no documented
   production-signing authority/retention policy or organization-wide
-  checksum-verification flow. DriverApp has no assigned download-site or
-  published release contract yet.
+  checksum-verification flow.
 - Evidence:
   [`manager app build`](../../app/build.gradle.kts),
   [`manager release record`](../../manager-download-site/release.json),
@@ -268,7 +269,9 @@ work.
   [`worker manifest`](../../worker-download-site/release.json),
   [`worker route`](../../worker-download-site/scripts/build-site.mjs),
   [`worker app build`](../../worker-app/app/build.gradle.kts),
-  [`driver app build`](../../driver-app/app/build.gradle.kts).
+  [`driver app build`](../../driver-app/app/build.gradle.kts),
+  [`Driver release record`](../../driver-download-site/release.json), and
+  [`aggregate Downloads builder`](../../downloads-site/scripts/build-site.mjs).
 - Smallest decision needed: choose the supported page implementation, release
   signing authority and key custody, artifact repository/retention policy, and
   manifest fields used as the only rendered version source.
@@ -277,7 +280,11 @@ work.
   its mutable external artifact link with a versioned Manager-owned asset and
   recorded the exact reviewed source, signing certificate and checksum. The
   overall question remains open for production signing, the duplicate Manager
-  page implementation, DriverApp and the organization-wide release policy.
+  page implementation and the organization-wide release policy. On 2026-08-24
+  a dedicated DriverApp release record and the aggregate `/downloads/` page
+  resolved the missing DriverApp download surface without mixing application
+  artefacts; all three current APKs are still test/distribution artefacts, not
+  a production-signing policy.
 
 ## Media Terminal Retry Authorization
 
@@ -329,6 +336,69 @@ work.
   later approval; an empty legacy cabin requires an explicit completion retry,
   then creates `UNACCOUNTED` maintenance decisions that become effective
   without an asset-service or warehouse-balance effect.
+
+## Address-Only Order Geocoding For Planning
+
+- Status: `Open`
+- Affected owner and consumers: logistics-service, standalone logistics
+  simulator and logistics operators.
+- Requested behavior: allow an RWMS order with an address but no coordinates to
+  enter route planning, while coordinates remain authoritative when both are
+  present.
+- Conflicting contract or invariant: no approved private geocoder, data-sharing
+  policy, result-confidence threshold or operator correction owner exists. The
+  current simulator therefore returns `COORDINATES_REQUIRED` and never sends a
+  customer address to an undeclared public service or fabricates coordinates.
+- Evidence:
+  [`sync orchestration`](../../logistics/backend/app/integrations/rwms_sync.py),
+  [`planning contract`](../../contracts/openapi/logistics-service.yaml).
+- Smallest decision needed: select and approve the geocoding provider/runtime
+  boundary, address-data policy, confidence/error behavior and explicit manual
+  correction workflow.
+- Resolution and date: none. Coordinate-bearing orders synchronize now;
+  address-only orders fail per order without partially corrupting the scenario.
+
+## Capacity-Backed Client Dates
+
+- Status: `Open`
+- Affected owner and consumers: logistics-service, standalone planner, public
+  client presentation and manager logistics panel.
+- Requested behavior: show clients dates that are actually free for delivery,
+  not only dates permitted by the five-day service policy.
+- Conflicting contract or invariant: the current `requestableDeliveryDates`
+  list is the warehouse-local `today+2...today+5` request horizon and explicitly
+  makes no capacity promise. The standalone plan is independently versioned and
+  does not reserve RWMS driver/vehicle capacity while a client is choosing.
+- Evidence:
+  [`ClientDeliveryDatePolicy.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/ClientDeliveryDatePolicy.java),
+  [`public presentation`](../../panel/src/features/assistant/pages/public-client-presentation-page.tsx),
+  [`simulator planner`](../../logistics/backend/app/planner/heuristic.py).
+- Smallest decision needed: choose the capacity owner, freshness/version fence,
+  reservation lifetime and fallback shown when the planner is unavailable.
+- Resolution and date: none. The UI labels current values as requested dates,
+  and final logistics scheduling remains authoritative.
+
+## Planned Arrival Time In DriverApp
+
+- Status: `Open`
+- Affected owner and consumers: standalone planner, logistics-service and
+  DriverApp.
+- Requested behavior: show the driver an approximate arrival time before
+  claiming an extra trip.
+- Conflicting contract or invariant: current RWMS shipment/task contracts are
+  intentionally date-only, while planned arrival/route segment timestamps live
+  only in a versioned simulator plan. Applying a plan currently assigns date,
+  driver and cabin IDs but does not establish which service owns ETA updates,
+  delay propagation or stale-plan display.
+- Evidence:
+  [`planning assignment schema`](../../contracts/openapi/logistics-service.yaml),
+  [`RouteStopRead`](../../logistics/backend/app/schemas/domain.py),
+  [`DriverTripDetailsBlock`](../../driver-app/feature-task-detail/src/main/java/dev/buhanzaz/rwms/driver/feature/taskdetail/TaskDetailScreen.kt).
+- Smallest decision needed: approve an additive planned-arrival snapshot owner,
+  its timezone/version semantics and whether DriverApp labels it as the last
+  applied estimate or obtains a live planner read.
+- Resolution and date: none. DriverApp currently shows the assigned date and a
+  prefilled Yandex Maps route, but does not invent an ETA.
 
 ## Retention And Archive Policy For Immutable Operational Evidence
 

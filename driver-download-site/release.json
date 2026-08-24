@@ -1,0 +1,13 @@
+{
+  "applicationName": "RWMS Driver",
+  "packageName": "dev.buhanzaz.rwms.driver.debug",
+  "versionCode": 19,
+  "versionName": "0.1.18-debug",
+  "status": "published",
+  "minimumAndroidVersion": "Android 6.0",
+  "publicGateway": "https://77-90-158-90.sslip.io",
+  "artifactPath": "/downloads/rwms-driver-0.1.18-debug.apk",
+  "downloadUrl": "https://77-90-158-90.sslip.io/downloads/rwms-driver-0.1.18-debug.apk",
+  "sha256": "332515d369a6f0032f919af07c73f5df5088a4fb1767fe94f0d10c0508a53372",
+  "publishedAt": "2026-08-24"
+}

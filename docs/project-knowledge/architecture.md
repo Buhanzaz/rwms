@@ -21,6 +21,8 @@ flowchart LR
     Manager[Manager Android app] --> Gateway
     Worker[Worker Android app] --> Gateway
     Driver[Driver Android app] --> Gateway
+    Simulator[Standalone logistics simulator] -. OAuth2 planning boundary .-> Auth
+    Simulator -. private versioned planning API .-> Domain
     Gateway --> Auth[Auth service]
     Gateway --> Domain[Public domain APIs]
     Domain --> ServiceDB[(Service-owned PostgreSQL)]
@@ -47,7 +49,7 @@ Evidence:
 [`SseProxyHandler.java`](../../services/api-gateway-service/src/main/java/dev/buhanzaz/rwms/gateway/config/SseProxyHandler.java),
 [`GatewaySseConcurrencyIntegrationTest.java`](../../services/api-gateway-service/src/test/java/dev/buhanzaz/rwms/gateway/GatewaySseConcurrencyIntegrationTest.java).
 
-### Standalone engineering prototype
+### Standalone engineering prototypes
 
 `cabin-cad/` is a separate browser engineering prototype rather than an RWMS
 domain client. It currently keeps its CAD document and Fusion-derived Master
@@ -57,6 +59,40 @@ occurrences, assigns type geometry and occurrence placement rules, and feeds
 the same renderer-neutral evaluator to Master Setup and ordinary CAD. See the
 [`Cabin CAD flow`](cabin-cad.md) and
 [`application shell`](../../cabin-cad/src/app/App.tsx).
+
+`logistics/` is a separate React/FastAPI/PostGIS planning and simulation
+deployable with its own schema, zones, route plans and private OSRM graph. It
+never reads an RWMS service database. Its optional integration is disabled by
+default; when enabled, the backend authenticates as the dedicated
+`logistics-planner` client with sole scope `logistics.planning`, imports a
+warehouse/date-bounded minimal order feed from `logistics-service`, and applies
+only an explicitly reviewed exact plan version. Unassigned parts remain hidden
+unless the operator explicitly selects a future delivery for the qualified
+warehouse-driver pool. A bounded status read returns only planner-created
+assignment/task ownership, allowing the simulator to show who claimed a shared
+part without task-board or database access. RWMS remains the owner of orders,
+shipments, driver identities and assignment validation. See the
+[`simulator architecture`](../../logistics/docs/ARCHITECTURE.md),
+[`planning controller`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/planning/api/PlanningIntegrationController.java)
+and
+[`RWMS adapter`](../../logistics/backend/app/integrations/rwms.py).
+
+### Android release surfaces
+
+`downloads-site/` is a static aggregate page at `/downloads/`; it has no
+Android package identity, OAuth client, database or mutable release state. It
+renders three cards from the separate ManagerApp, DriverApp and WorkerApp
+release records and links only to their immutable versioned APK URLs. The
+aggregate page never copies an APK between application-owned roots. Nginx
+serves the Manager, Driver and Worker artefacts from separate filesystem roots;
+each release record supplies the exact public URL, package identity, version
+and SHA-256 before its card can render.
+
+Evidence:
+[`aggregate builder`](../../downloads-site/scripts/build-site.mjs),
+[`DriverApp release record`](../../driver-download-site/release.json),
+[`ManagerApp release record`](../../manager-download-site/release.json), and
+[`WorkerApp release record`](../../worker-download-site/release.json).
 
 ## Deployables And Ownership
 
@@ -105,6 +141,9 @@ Evidence:
 ## Client Boundaries
 
 - `panel/`, `app/`, `worker-app/` and `driver-app/` use the public gateway.
+- The standalone logistics simulator is not an interactive gateway client. Its
+  backend alone uses the private OAuth-protected planning operations; its
+  browser calls only the simulator's same-origin API.
 - Browser requests are same-origin `/auth/**` and `/api/**` only.
 - Clients do not call `/api/internal/**` or direct service database/storage
   endpoints.
@@ -137,8 +176,8 @@ rather than implicit conventions. The manager inventory contains 62 methods:
 60 fixed public-gateway routes plus two media-only dynamic URLs whose callers
 enforce the same public media origin. The worker inventory contains 11 methods:
 nine fixed public-gateway routes and the same two guarded media URL families.
-The driver inventory contains 12 methods: ten fixed public-gateway routes and
-two guarded media URL families. Converter construction and representative
+The driver inventory contains 13 methods: eleven fixed public-gateway routes
+and two guarded media URL families. Converter construction and representative
 request/response fixtures cover every consumed JSON root family.
 
 The worker and driver action DTOs have targeted serializers because their
@@ -233,13 +272,23 @@ dated logistics and durable uploads. The dated surface selects only
 `ASSIGNED_DRIVER` work; shared `WAREHOUSE_DRIVERS` movements remain on the
 warehouse board. WorkerApp contains ordinary worker work plus active secondary
 logistics collaboration, but no driver board, driver trip read or driver take
-surface. Both retain encrypted JPEG evidence and durable outbox state across a
+surface. For ordinary work, task-board publishes only enabled warehouse queues,
+active real work and each queue's bounded waiting-real plan; shadows remain in
+the manager projection. Feed, detail, TAKE and media-reader authorization share
+that owner-side policy, so the Android client owns no plan state. Both retain
+encrypted JPEG evidence and durable outbox state across a
 process or device restart; server projections remain authoritative. WorkerApp
 keeps selected task execution full-screen at every window width because its
 general/work-bound media and result capture require the complete surface. Its
 header projects only the task-board timer snapshot, and its existing
 Manager-derived CameraX surface routes either volume key to one foreground
 capture without moving evidence ownership into the client.
+
+The same stateful task-board owner keeps local plan changes and same-queue card
+reordering in narrow collaborators rather than in the panel or gateway:
+[`WorkerQueuePlanService`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/WorkerQueuePlanService.java),
+[`WorkerQueuePlanPolicy`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/WorkerQueuePlanPolicy.java) and
+[`TaskBoardEntryOrderingService`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardEntryOrderingService.java).
 
 Evidence:
 [`WorkerAuthConfiguration.kt`](../../worker-app/core-auth/src/main/java/dev/buhanzaz/rwms/worker/core/auth/WorkerAuthConfiguration.kt),
