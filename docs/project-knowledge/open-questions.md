@@ -4,6 +4,37 @@ Use this file only for unresolved contradictions or product decisions that
 block a safe implementation. This is not a backlog and does not authorize
 work.
 
+## Cabin Creation With Durable Photo Completion
+
+- Status: `Open`
+- Affected owner and consumers: asset-service as cabin-creation owner;
+  media-service as photo owner; panel administrators creating cabins.
+- Requested behavior: creating a cabin with selected photos should produce one
+  recoverable outcome even if the browser closes, the network response is lost
+  or one photo upload fails after the cabin already exists.
+- Conflicting contract or invariant: the public asset create command and every
+  media upload are individually idempotent, but the panel currently invokes the
+  asset command first and then uploads in-memory browser files to media-service.
+  No owning service persists that cross-service intent, and the architecture
+  forbids a browser-owned saga. A tab or process loss after asset creation can
+  therefore leave the cabin without the selected photos; inventing a temporary
+  media owner or making asset-service write media state would also violate the
+  current ownership contracts.
+- Evidence:
+  [`RentalItemCreationDialog`](../../panel/src/features/rental-items/rental-item-create-dialog.tsx),
+  [`asset create client`](../../panel/src/features/rental-items/api/asset-rental-items-api.ts),
+  [`media upload client`](../../panel/src/features/media/api/http-media-client.ts),
+  [`asset-service contract`](../../contracts/openapi/asset-service.yaml), and
+  [`media-service contract`](../../contracts/openapi/media-service.yaml).
+- Smallest decision needed: choose an owning service and contract for a durable
+  creation-with-photos intent, including how staged bytes are identified before
+  the cabin exists and how an administrator resumes or abandons an incomplete
+  intent without deleting retained media.
+- Resolution and date: none. The current panel reports the already-created
+  cabin and upload failure honestly and can retry while its in-memory files
+  remain available; it must not claim atomic completion or persist a browser
+  saga.
+
 ## Explicitly Empty Inventory Passport
 
 - Status: `Open`

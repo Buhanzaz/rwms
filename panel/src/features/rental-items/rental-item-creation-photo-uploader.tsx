@@ -69,8 +69,11 @@ export function RentalItemCreationPhotoUploader({
 
   function addFiles(files: FileList | File[] | null) {
     const candidates = Array.from(files ?? [])
-    const valid = candidates.filter((file) =>
+    const supportedImages = candidates.filter((file) =>
       ACCEPTED_IMAGE_TYPES.has(file.type.toLowerCase())
+    )
+    const valid = supportedImages.filter(
+      (file) => file.size > 0 && file.name.trim().length > 0
     )
     const remaining = Math.max(0, MAX_CREATION_PHOTOS - photos.length)
     const selected = valid.slice(0, remaining)
@@ -81,13 +84,24 @@ export function RentalItemCreationPhotoUploader({
       )
       onChange([...photos, ...stagedPhotos])
     }
-    if (valid.length !== candidates.length) {
-      setError("Поддерживаются только JPEG, PNG и WebP.")
-    } else if (valid.length > remaining) {
-      setError(`Можно добавить не более ${MAX_CREATION_PHOTOS} фотографий.`)
-    } else {
-      setError(null)
+    const validationErrors: string[] = []
+    if (supportedImages.length !== candidates.length) {
+      validationErrors.push("Поддерживаются только JPEG, PNG и WebP.")
     }
+    if (supportedImages.some((file) => file.size <= 0)) {
+      validationErrors.push(
+        "Пустое изображение нельзя загрузить. Сделайте фото заново или выберите другой файл."
+      )
+    }
+    if (supportedImages.some((file) => file.name.trim().length === 0)) {
+      validationErrors.push("У каждого изображения должно быть имя файла.")
+    }
+    if (valid.length > remaining) {
+      validationErrors.push(
+        `Можно добавить не более ${MAX_CREATION_PHOTOS} фотографий.`
+      )
+    }
+    setError(validationErrors.length > 0 ? validationErrors.join(" ") : null)
     if (fileInputRef.current) fileInputRef.current.value = ""
   }
 
@@ -125,8 +139,11 @@ export function RentalItemCreationPhotoUploader({
   return (
     <>
       <FieldSet>
+        <FieldLegend className="sr-only">Фото бытовки</FieldLegend>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <FieldLegend>Фото бытовки</FieldLegend>
+          <span className="text-base font-medium" aria-hidden="true">
+            Фото бытовки
+          </span>
           <Button
             type="button"
             variant="outline"
@@ -134,7 +151,11 @@ export function RentalItemCreationPhotoUploader({
             disabled={disabled || photos.length >= MAX_CREATION_PHOTOS}
             onClick={() => fileInputRef.current?.click()}
           >
-            <HugeiconsIcon icon={ImageUploadIcon} data-icon="inline-start" />
+            <HugeiconsIcon
+              icon={ImageUploadIcon}
+              data-icon="inline-start"
+              aria-hidden="true"
+            />
             Загрузить фото
           </Button>
         </div>
@@ -143,6 +164,7 @@ export function RentalItemCreationPhotoUploader({
           type="file"
           accept="image/jpeg,image/png,image/webp"
           multiple
+          name="rental-item-creation-photos"
           className="hidden"
           aria-label="Фотографии новой бытовки"
           disabled={disabled}
@@ -173,18 +195,22 @@ export function RentalItemCreationPhotoUploader({
           }}
           onDrop={drop}
         >
-          Перетащите несколько изображений
+          Перетащите изображения сюда или нажмите, чтобы выбрать
         </button>
         {photos.length === 0 ? (
           <FieldDescription>
-            Оригиналы загрузятся после создания бытовки; small, medium и large
-            сформирует media-service.
+            Первое добавленное фото будет выбрано титульным автоматически. Можно
+            добавить до {MAX_CREATION_PHOTOS} JPEG, PNG или WebP.
           </FieldDescription>
         ) : (
           <>
             <FieldDescription>
-              Выберите титульное фото. Оно обведено цветом и будет показано
-              первым.
+              Выберите титульное фото отдельной кнопкой. Оно загрузится первым и
+              будет показано на карточке бытовки. Добавлено{" "}
+              <span aria-live="polite">
+                {photos.length} из {MAX_CREATION_PHOTOS}
+              </span>
+              .
             </FieldDescription>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {photos.map((photo) => (
@@ -195,24 +221,24 @@ export function RentalItemCreationPhotoUploader({
                     photo.title && "border-primary ring-2 ring-primary/30"
                   )}
                 >
-                  <button
-                    type="button"
-                    className="block aspect-[4/3] w-full overflow-hidden bg-muted"
-                    aria-label={`Выбрать титульным ${photo.file.name}`}
-                    aria-pressed={photo.title}
-                    disabled={disabled}
-                    onClick={() => selectTitlePhoto(photo.id)}
-                  >
+                  <div className="aspect-[4/3] w-full overflow-hidden bg-muted">
                     <img
                       src={photo.previewUrl}
                       alt={photo.file.name}
+                      width={480}
+                      height={360}
+                      loading="lazy"
+                      decoding="async"
                       className="size-full object-cover"
                     />
-                  </button>
+                  </div>
                   <div className="flex flex-col gap-2 p-2">
                     <div className="flex items-center justify-between gap-2">
                       <div className="min-w-0">
-                        <div className="truncate text-xs font-medium">
+                        <div
+                          className="truncate text-xs font-medium"
+                          title={photo.file.name}
+                        >
                           {photo.file.name}
                         </div>
                       </div>
@@ -224,7 +250,7 @@ export function RentalItemCreationPhotoUploader({
                           aria-label={`Просмотреть ${photo.file.name}`}
                           onClick={() => setPreviewId(photo.id)}
                         >
-                          <HugeiconsIcon icon={EyeIcon} />
+                          <HugeiconsIcon icon={EyeIcon} aria-hidden="true" />
                         </Button>
                         <Button
                           type="button"
@@ -234,10 +260,27 @@ export function RentalItemCreationPhotoUploader({
                           disabled={disabled}
                           onClick={() => removePhoto(photo)}
                         >
-                          <HugeiconsIcon icon={Delete02Icon} />
+                          <HugeiconsIcon
+                            icon={Delete02Icon}
+                            aria-hidden="true"
+                          />
                         </Button>
                       </div>
                     </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={photo.title ? "secondary" : "outline"}
+                      className="w-full"
+                      aria-label={`${
+                        photo.title ? "Титульное фото" : "Сделать титульным"
+                      } ${photo.file.name}`}
+                      aria-pressed={photo.title}
+                      disabled={disabled}
+                      onClick={() => selectTitlePhoto(photo.id)}
+                    >
+                      {photo.title ? "Титульное фото" : "Сделать титульным"}
+                    </Button>
                   </div>
                 </article>
               ))}
@@ -266,11 +309,13 @@ export function RentalItemCreationPhotoUploader({
             </DialogDescription>
           </DialogHeader>
           {selectedPhoto ? (
-            <div className="flex max-h-[70svh] items-center justify-center overflow-hidden rounded-lg border bg-muted">
+            <div className="flex aspect-[4/3] max-h-[70svh] w-full items-center justify-center overflow-hidden rounded-lg border bg-muted">
               <img
                 src={selectedPhoto.previewUrl}
                 alt={selectedPhoto.file.name}
-                className="max-h-[70svh] max-w-full object-contain"
+                width={1200}
+                height={900}
+                className="size-full object-contain"
               />
             </div>
           ) : null}

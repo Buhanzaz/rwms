@@ -300,8 +300,9 @@ func insertCabinCoverFact(
 }
 
 // associateProcessedCabinImage makes direct CABIN uploads/imports participate
-// in the canonical gallery. The first direct READY photo becomes the explicit
-// cover; subsequent direct photos never replace it implicitly.
+// in the canonical gallery. Direct photos in one folder choose the earliest
+// stable gallery position as cover, independently of READY completion order;
+// an explicit cover from another source or folder is never replaced implicitly.
 func (repository *Repository) associateProcessedCabinImage(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -314,9 +315,14 @@ func (repository *Repository) associateProcessedCabinImage(
 	now := repository.now().UTC().Truncate(time.Microsecond)
 	var cabinID, associationWarehouseID, galleryFolderID uuid.UUID
 	var associatedEntryID *uuid.UUID
-	err := tx.QueryRow(ctx, `select cabin_id,warehouse_id,task_board_entry_id,gallery_folder_id
+	var associationSource string
+	var associationSortOrder int64
+	var associationAttachedAt time.Time
+	err := tx.QueryRow(ctx, `select cabin_id,warehouse_id,task_board_entry_id,gallery_folder_id,
+		association_source,sort_order,attached_at
 		from media_cabin_photo where media_id=$1 for update`, asset.ID).
-		Scan(&cabinID, &associationWarehouseID, &associatedEntryID, &galleryFolderID)
+		Scan(&cabinID, &associationWarehouseID, &associatedEntryID, &galleryFolderID,
+			&associationSource, &associationSortOrder, &associationAttachedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if asset.OwnerType != OwnerTypeCabin {
 			return nil
@@ -327,6 +333,9 @@ func (repository *Repository) associateProcessedCabinImage(
 		}
 		associationWarehouseID = asset.WarehouseID
 		galleryFolderID = asset.FolderID
+		associationSource = "DIRECT"
+		associationSortOrder = asset.SortOrder
+		associationAttachedAt = asset.CreatedAt
 		_, err = tx.Exec(ctx, `insert into media_cabin_photo (
 			cabin_id,media_id,warehouse_id,media_generation,task_board_entry_id,
 			association_source,gallery_folder_id,sort_order,attached_at)
@@ -374,7 +383,33 @@ func (repository *Repository) associateProcessedCabinImage(
 			return err
 		}
 	} else {
-		return nil
+		var currentSource string
+		var currentFolderID uuid.UUID
+		var currentSortOrder int64
+		var currentAttachedAt time.Time
+		err := tx.QueryRow(ctx, `select association_source,gallery_folder_id,sort_order,attached_at
+			from media_cabin_photo where cabin_id=$1 and media_id=$2`, cabinID, *currentCover).
+			Scan(&currentSource, &currentFolderID, &currentSortOrder, &currentAttachedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrConflict
+		}
+		if err != nil {
+			return err
+		}
+		incomingComesFirst := associationSortOrder < currentSortOrder ||
+			(associationSortOrder == currentSortOrder && associationAttachedAt.Before(currentAttachedAt)) ||
+			(associationSortOrder == currentSortOrder && associationAttachedAt.Equal(currentAttachedAt) &&
+				asset.ID.String() < currentCover.String())
+		if associationSource != "DIRECT" || currentSource != "DIRECT" ||
+			galleryFolderID != currentFolderID || !incomingComesFirst {
+			return nil
+		}
+		version++
+		if _, err := tx.Exec(ctx, `update media_cabin_photo_library
+			set cover_media_id=$2,version=$3,updated_at=$4,active_gallery_folder_id=$5
+			where cabin_id=$1`, cabinID, asset.ID, version, now, galleryFolderID); err != nil {
+			return err
+		}
 	}
 	_, err = tx.Exec(ctx, `insert into media_cabin_cover_history (
 		cabin_id,version,warehouse_id,previous_media_id,cover_media_id,

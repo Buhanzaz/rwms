@@ -25,8 +25,10 @@ type DeleteCommand struct {
 }
 
 // Delete is an owner-scoped logical transition. It deliberately leaves source
-// objects, immutable versions and derived variant rows untouched. The command,
-// domain event and one public DELETED fact commit atomically.
+// objects, immutable versions, derived variant rows and CABIN photo associations
+// untouched. If the asset is the current CABIN cover, the same transaction
+// clears both current-library pointers without selecting a replacement. The
+// command, domain event and one public DELETED fact commit atomically.
 func (repository *Repository) Delete(
 	ctx context.Context,
 	command DeleteCommand,
@@ -112,9 +114,12 @@ func (repository *Repository) Delete(
 	if err != nil {
 		return AssetRecord{}, false, err
 	}
-	if _, err := tx.Exec(ctx, `update media_cabin_photo_library
-		set cover_media_id=null,version=version+1,updated_at=$2
-		where cover_media_id=$1`, asset.ID, now); err != nil {
+	if _, err := tx.Exec(ctx, `update media_cabin_photo_library library
+		set cover_media_id=null,active_gallery_folder_id=null,
+			version=version+1,updated_at=$2
+		from media_cabin_photo photo
+		where photo.media_id=$1 and library.cabin_id=photo.cabin_id
+		  and library.cover_media_id=photo.media_id`, asset.ID, now); err != nil {
 		return AssetRecord{}, false, err
 	}
 	_, err = tx.Exec(ctx, `insert into media_command_idempotency (

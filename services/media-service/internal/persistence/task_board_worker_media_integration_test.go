@@ -13,6 +13,7 @@ import (
 	"dev.buhanzaz.rwms/media-service/internal/media"
 	"dev.buhanzaz.rwms/media-service/internal/testsupport"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestTaskBoardWorkerProofGatesEvidenceAndSourceReadsIntegration(t *testing.T) {
@@ -91,6 +92,23 @@ func TestTaskBoardWorkerProofGatesEvidenceAndSourceReadsIntegration(t *testing.T
 		IdempotencyKey: uuid.New(), RequestSHA256: hex64('f'), ObjectVersionID: "task-source-v1",
 		ETag: "task-etag-v1", ChecksumSHA256: create.ChecksumSHA256, ContentType: "image/jpeg",
 		SizeBytes: create.ContentLength, CorrelationID: uuid.New(),
+	}
+	wrongChecksum := finalize
+	wrongChecksum.IdempotencyKey = uuid.New()
+	wrongChecksum.RequestSHA256 = hex64('e')
+	wrongChecksum.ChecksumSHA256 = hex64('c')
+	if _, _, finalizeErr := repository.FinalizeUpload(ctx, wrongChecksum); !errors.Is(finalizeErr, ErrConflict) {
+		t.Fatalf("finalize worker evidence with wrong checksum error=%v, want ErrConflict", finalizeErr)
+	}
+	var uploadStatus string
+	var uploadCompleted bool
+	if err := database.Pool.QueryRow(ctx, `select asset.processing_status,session.completed_at is not null
+		from media_asset asset join media_upload_session session on session.media_id=asset.media_id
+		where asset.media_id=$1`, asset.ID).Scan(&uploadStatus, &uploadCompleted); err != nil {
+		t.Fatalf("read rejected finalize state: %v", err)
+	}
+	if uploadStatus != string(media.StatusUploading) || uploadCompleted {
+		t.Fatalf("rejected finalize mutated upload status=%s completed=%v", uploadStatus, uploadCompleted)
 	}
 	if _, finalizeReplayed, finalizeErr := repository.FinalizeUpload(ctx, finalize); finalizeErr != nil || finalizeReplayed {
 		t.Fatalf("finalize worker evidence replayed=%v error=%v", finalizeReplayed, finalizeErr)
@@ -263,6 +281,147 @@ func TestTaskBoardWorkerProofGatesEvidenceAndSourceReadsIntegration(t *testing.T
 		where consumer_name=$1 and aggregate_type=$2 and aggregate_id=$3 and reconciled_at is null`,
 		TaskBoardEntryOwnerProofConsumer, TaskBoardEntryOwnerProofAggregate, gapEntry).Scan(&reason); err != nil || reason != "VERSION_GAP" {
 		t.Fatalf("version-gap quarantine reason=%q error=%v", reason, err)
+	}
+}
+
+func TestTaskBoardAuthorizationLocksProofBeforeBindingAndAudienceIntegration(t *testing.T) {
+	databaseURL := os.Getenv("MEDIA_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("MEDIA_TEST_DATABASE_URL is not configured")
+	}
+	databaseURL = testsupport.NewMigratedMediaDatabase(t, databaseURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open media database: %v", err)
+	}
+	defer database.Close()
+	repository := NewRepository(database.Pool)
+
+	warehouseID, entryID, workerID := uuid.New(), uuid.New(), uuid.New()
+	proof := taskBoardOwnerProofMessage(t, entryID, warehouseID, 0, true, []uuid.UUID{workerID}, nil)
+	if result, applyErr := repository.ApplyTaskBoardEntryOwnerProofMessage(ctx, proof); applyErr != nil ||
+		result.Duplicate || result.Quarantined {
+		t.Fatalf("apply task-board proof = %#v, %v", result, applyErr)
+	}
+
+	tests := []struct {
+		name          string
+		authorize     func(pgx.Tx) error
+		lockAudience  func(pgx.Tx) error
+		audienceLabel string
+	}{
+		{
+			name: "worker upload",
+			authorize: func(tx pgx.Tx) error {
+				return RequireTaskBoardEntryWorkerAccess(ctx, tx, entryID, warehouseID, workerID)
+			},
+			lockAudience: func(tx pgx.Tx) error {
+				var lockedWorkerID uuid.UUID
+				return tx.QueryRow(ctx, `select worker_id from media_task_board_entry_allowed_worker
+					where entry_id=$1 and worker_id=$2 for update nowait`, entryID, workerID).
+					Scan(&lockedWorkerID)
+			},
+			audienceLabel: "upload audience",
+		},
+		{
+			name: "worker read",
+			authorize: func(tx pgx.Tx) error {
+				return RequireTaskBoardEntryWorkerReadAccess(ctx, tx, entryID, warehouseID, workerID)
+			},
+			lockAudience: func(tx pgx.Tx) error {
+				var lockedWorkerID uuid.UUID
+				return tx.QueryRow(ctx, `select worker_id from media_task_board_entry_reader_worker
+					where entry_id=$1 and worker_id=$2 for update nowait`, entryID, workerID).
+					Scan(&lockedWorkerID)
+			},
+			audienceLabel: "read audience",
+		},
+		{
+			name: "user read",
+			authorize: func(tx pgx.Tx) error {
+				return RequireTaskBoardEntryUserReadAccess(ctx, tx, entryID, warehouseID)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			projectionTx, beginErr := database.Pool.Begin(ctx)
+			if beginErr != nil {
+				t.Fatalf("begin projection transaction: %v", beginErr)
+			}
+			defer projectionTx.Rollback(ctx)
+			var lockedEntryID uuid.UUID
+			if err := projectionTx.QueryRow(ctx, `select entry_id from media_task_board_entry_owner_proof
+				where entry_id=$1 for update`, entryID).Scan(&lockedEntryID); err != nil {
+				t.Fatalf("lock task-board proof: %v", err)
+			}
+
+			authorizationTx, beginErr := database.Pool.Begin(ctx)
+			if beginErr != nil {
+				t.Fatalf("begin authorization transaction: %v", beginErr)
+			}
+			defer authorizationTx.Rollback(ctx)
+			var authorizationPID int32
+			if err := authorizationTx.QueryRow(ctx, `select pg_backend_pid()`).Scan(&authorizationPID); err != nil {
+				t.Fatalf("read authorization backend PID: %v", err)
+			}
+			authorizationResult := make(chan error, 1)
+			go func() {
+				if accessErr := test.authorize(authorizationTx); accessErr != nil {
+					authorizationResult <- accessErr
+					return
+				}
+				authorizationResult <- authorizationTx.Commit(ctx)
+			}()
+
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				select {
+				case authorizationErr := <-authorizationResult:
+					t.Fatalf("authorization completed before the proof lock was released: %v", authorizationErr)
+				default:
+				}
+				var waitingForLock bool
+				if err := database.Pool.QueryRow(ctx, `select coalesce(wait_event_type='Lock',false)
+					from pg_stat_activity where pid=$1`, authorizationPID).Scan(&waitingForLock); err != nil {
+					t.Fatalf("inspect authorization lock wait: %v", err)
+				}
+				if waitingForLock {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("authorization did not wait on the task-board proof lock")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+
+			var lockedOwnerID string
+			if err := projectionTx.QueryRow(ctx, `select owner_id from media_owner_binding
+				where owner_type='TASK_BOARD_ENTRY' and owner_id=$1 for update nowait`, entryID.String()).
+				Scan(&lockedOwnerID); err != nil {
+				t.Fatalf("authorization locked owner binding before proof: %v", err)
+			}
+			if test.lockAudience != nil {
+				if err := test.lockAudience(projectionTx); err != nil {
+					t.Fatalf("authorization locked %s before proof: %v", test.audienceLabel, err)
+				}
+			}
+
+			if err := projectionTx.Commit(ctx); err != nil {
+				t.Fatalf("release projection locks: %v", err)
+			}
+			select {
+			case authorizationErr := <-authorizationResult:
+				if authorizationErr != nil {
+					t.Fatalf("authorization after proof release: %v", authorizationErr)
+				}
+			case <-ctx.Done():
+				t.Fatalf("authorization did not complete after proof release: %v", ctx.Err())
+			}
+		})
 	}
 }
 

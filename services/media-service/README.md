@@ -53,7 +53,9 @@ This design solves four concrete problems:
   has separate read and upload audiences: a feed/detail-visible worker may use
   read-only list/original/variant access, while upload creation and finalization
   require the active proof's assigned/evidence worker. Closure retains only the
-  historical assigned/evidence readers.
+  historical assigned/evidence readers. Every task-entry authorization locks
+  its local proof before binding and audience rows, matching proof replacement
+  order so a concurrent projection refresh cannot deadlock media access.
 - **Recoverable delivery:** PostgreSQL owns state and exact replay; Kafka
   carries at-least-once facts through a transactional outbox and idempotent
   consumers. A broker outage cannot make Kafka the media database.
@@ -74,13 +76,21 @@ gateway; private `/api/internal/**` routes are service-to-service only.
    is length/SHA/version/ETag verified and may run concurrently; MinIO stays
    private and media-service does not buffer or decode the image.
 3. It completes the session with the same idempotency key. The service commits
-   the upload fact and processing request atomically.
+   the upload fact and processing request atomically. Source-mode finalization
+   reloads the expected length, content type, and checksum from the locked
+   upload session before accepting immutable object metadata
+   ([`FinalizeUpload`](internal/persistence/repository.go)).
 4. The durable Kafka worker promotes verified image-part metadata to one READY
    generation without object I/O. For a retained single-source image it points
    all logical image variants at that exact source. Video processing still
    validates the source, preserves its exact original and creates compressed
    MP4 playback. The worker then publishes a safe invalidation; clients refresh
-   their scoped projection.
+   their scoped projection. For direct CABIN photos in one gallery folder, the
+   READY photo with the smallest stable `(sortOrder, attachedAt, mediaId)` tuple
+   is the cover, so asynchronous processing order cannot override the title
+   selected by the client. Explicit covers from task evidence, inventory, or a
+   different folder are not replaced by this rule
+   ([`associateProcessedCabinImage`](internal/persistence/cabin_photo_library.go)).
 5. Scoped reads stream only the pinned object version through media-service
    with `private, no-store` headers. Logical deletion changes PostgreSQL state
    and emits one fact; it never physically deletes versioned bytes.
@@ -220,7 +230,12 @@ single-source ingress also retains content sniffing. Public reads stream the pin
 API with private/no-store headers. The runtime has no unversioned download path
 and no physical object delete, retention or orphan-cleanup behavior. The
 owner-scoped deletion command is a PostgreSQL soft-delete only: it preserves all
-MinIO versions and variant provenance while emitting one DELETED fact.
+MinIO versions and variant provenance while emitting one DELETED fact. When the
+deleted asset is the current CABIN cover, that transaction clears both current
+library pointers and advances the library version; CABIN associations, media
+rows, variants and versioned object bytes/history remain retained. It does not
+automatically select a replacement cover
+([`Repository.Delete`](internal/persistence/soft_delete.go)).
 
 Public access is restricted to a `USER` JWT with a UUID subject, exact RWMS
 scope and warehouse grant. Canonical owner/context pairs cover inventory,

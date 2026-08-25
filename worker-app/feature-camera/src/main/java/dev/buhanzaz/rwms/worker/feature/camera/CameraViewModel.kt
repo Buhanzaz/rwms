@@ -25,10 +25,15 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-/** Tracks capture/import progress and a one-shot immutable list of saved evidence identifiers. */
+/**
+ * Tracks capture/import progress, partial camera-batch persistence and a one-shot immutable list
+ * of saved evidence identifiers.
+ */
 data class CameraUiState(
     val saving: Boolean = false,
     val savedEvidenceIds: List<String> = emptyList(),
+    val persistedCapturePaths: Set<String> = emptySet(),
+    val persistedCameraCaptureCount: Int = 0,
     val error: String? = null,
 )
 
@@ -45,36 +50,116 @@ class CameraViewModel @Inject constructor(
     private val json: Json,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(CameraUiState())
+    private val accumulatedCameraEvidenceIds = mutableListOf<String>()
+    private val accumulatedCameraCapturePaths = linkedSetOf<String>()
     val uiState: StateFlow<CameraUiState> = mutableState.asStateFlow()
 
     /** Saved captures are one-shot navigation results, never durable route state. */
     fun consumeSavedCaptures(evidenceIds: List<String>) {
-        mutableState.value = mutableState.value.consumeSavedCaptures(evidenceIds)
+        val current = mutableState.value
+        val consumed = current.consumeSavedCaptures(evidenceIds)
+        if (consumed !== current) {
+            accumulatedCameraEvidenceIds.clear()
+            accumulatedCameraCapturePaths.clear()
+        }
+        mutableState.value = consumed
+    }
+
+    /** Clears the acknowledgement after the camera removes already persisted transient files. */
+    fun consumePersistedCaptures(filePaths: Set<String>) {
+        mutableState.value = mutableState.value.consumePersistedCaptures(filePaths)
     }
 
     /**
-     * Converts a confirmed CameraX result into encrypted WebP evidence. Completion flows defer
-     * scheduling until their action is in the outbox; ordinary evidence capture schedules immediately.
+     * Converts one confirmed CameraX batch into encrypted WebP evidence in capture order.
+     *
+     * Successful files are acknowledged once and excluded from a retry. If part of the batch
+     * fails, already durable evidence IDs remain accumulated while only failed transient files
+     * stay in the camera gallery. Completion flows defer their final scheduling until the matching
+     * task action enters the outbox; ordinary capture requests sync after the batch.
      */
-    fun confirmCapture(
+    fun confirmCaptures(
         userId: String,
         entryId: String,
         routeIndex: Int,
-        temporaryFile: File,
+        temporaryFiles: List<File>,
         requestSyncAfterSave: Boolean = true,
     ) {
         if (mutableState.value.saving) return
+        val selectedFiles = remainingWorkerCameraCaptures(
+            files = temporaryFiles.distinctBy(File::getAbsolutePath),
+            persistedPaths = accumulatedCameraCapturePaths,
+        )
+        if (selectedFiles.isEmpty()) {
+            mutableState.value = if (accumulatedCameraEvidenceIds.isEmpty()) {
+                CameraUiState(error = EMPTY_CAMERA_BATCH_ERROR)
+            } else {
+                CameraUiState(savedEvidenceIds = accumulatedCameraEvidenceIds.toList())
+            }
+            return
+        }
         mutableState.value = CameraUiState(saving = true)
         viewModelScope.launch {
-            runCatching {
-                saveEvidence(userId, entryId, routeIndex, temporaryFile).also {
-                    if (requestSyncAfterSave) scheduler.request(userId)
+            val saved = mutableListOf<Pair<File, String>>()
+            val failures = mutableListOf<Exception>()
+            try {
+                withContext(Dispatchers.IO) {
+                    selectedFiles.forEach { temporaryFile ->
+                        try {
+                            val evidenceId = saveEvidence(
+                                userId,
+                                entryId,
+                                routeIndex,
+                                temporaryFile,
+                            )
+                            saved += temporaryFile to evidenceId
+                            temporaryFile.delete()
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            failures += error
+                        }
+                    }
                 }
-            }.onSuccess { evidenceId ->
-                mutableState.value = CameraUiState(savedEvidenceIds = listOf(evidenceId))
-            }.onFailure { error ->
-                temporaryFile.delete()
-                mutableState.value = CameraUiState(error = error.message ?: "Не удалось сохранить фотографию")
+            } catch (error: CancellationException) {
+                if (saved.isNotEmpty()) runCatching { scheduler.request(userId) }
+                throw error
+            }
+
+            accumulatedCameraEvidenceIds += saved.map { it.second }
+            accumulatedCameraCapturePaths += saved.map { it.first.absolutePath }
+            val syncFailure = if (
+                accumulatedCameraEvidenceIds.isNotEmpty() &&
+                (failures.isNotEmpty() || requestSyncAfterSave)
+            ) {
+                runCatching { scheduler.request(userId) }.exceptionOrNull()
+            } else {
+                null
+            }
+            if (failures.isEmpty()) {
+                mutableState.value = CameraUiState(
+                    savedEvidenceIds = accumulatedCameraEvidenceIds.toList(),
+                    error = syncFailure?.let { failure ->
+                        "Фотографии сохранены, но синхронизация не запущена: " +
+                            (failure.message ?: "неизвестная ошибка")
+                    },
+                )
+            } else {
+                val batchFailure = cameraBatchFailureMessage(
+                    savedCount = saved.size,
+                    selectedCount = selectedFiles.size,
+                    causeMessage = failures.firstNotNullOfOrNull { it.message },
+                )
+                mutableState.value = CameraUiState(
+                    persistedCapturePaths = saved.mapTo(linkedSetOf()) { it.first.absolutePath },
+                    persistedCameraCaptureCount = accumulatedCameraEvidenceIds.size,
+                    error = if (syncFailure == null) {
+                        batchFailure
+                    } else {
+                        "$batchFailure Синхронизация сохранённых фото не запущена: " +
+                            (syncFailure.message ?: "неизвестная ошибка")
+                    },
+                )
             }
         }
     }
@@ -211,6 +296,28 @@ class CameraViewModel @Inject constructor(
 internal fun CameraUiState.consumeSavedCaptures(evidenceIds: List<String>): CameraUiState =
     if (savedEvidenceIds.isNotEmpty() && savedEvidenceIds == evidenceIds) CameraUiState() else this
 
+/** Clears only the exact partial-batch acknowledgement consumed by the active camera screen. */
+internal fun CameraUiState.consumePersistedCaptures(filePaths: Set<String>): CameraUiState =
+    if (persistedCapturePaths.isNotEmpty() && persistedCapturePaths == filePaths) {
+        copy(persistedCapturePaths = emptySet())
+    } else {
+        this
+    }
+
+/** Builds an honest user-facing result for a partially persisted CameraX batch. */
+internal fun cameraBatchFailureMessage(
+    savedCount: Int,
+    selectedCount: Int,
+    causeMessage: String?,
+): String {
+    val cause = causeMessage ?: "Не удалось сохранить фотографию"
+    return if (savedCount > 0) {
+        "Сохранено $savedCount из $selectedCount фото. Остальные не сохранены: $cause"
+    } else {
+        cause
+    }
+}
+
 /** Builds an honest user-facing result for a failed multi-image import. */
 internal fun galleryBatchFailureMessage(
     savedCount: Int,
@@ -226,3 +333,4 @@ internal fun galleryBatchFailureMessage(
 }
 
 private const val EMPTY_GALLERY_SELECTION_ERROR = "Выберите хотя бы одну фотографию"
+private const val EMPTY_CAMERA_BATCH_ERROR = "Сделайте хотя бы одну фотографию"

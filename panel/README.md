@@ -132,7 +132,15 @@ contexts and screens are usable.
   byte progress directly below that preview; cover/delete actions appear only
   after the server item is ready. Only an image can be selected as the cover,
   and protected blob URLs are released when their generation or owner scope
-  changes. A cabin detail carousel reads the media-service cabin-cover
+  changes. During cabin creation the first added image is the default title;
+  every preview exposes an explicit title button, and the selected image is
+  uploaded first with `sortOrder=0`. Zero-byte or nameless selections are
+  rejected locally before the asset command; media-service remains the
+  authoritative upload validator. Cabin and booking previews request
+  `SMALL`, an opened gallery or work workspace requests `MEDIUM`, and the
+  fullscreen viewer requests `LARGE` only on demand. See the
+  [creation uploader](src/features/rental-items/rental-item-creation-photo-uploader.tsx).
+  A cabin detail carousel reads the media-service cabin-cover
   projection across retained archive associations; its photo archive still
   lists every historical folder. If that
   auxiliary cover projection fails while owner media loaded successfully, the

@@ -11,6 +11,7 @@ import android.media.MediaActionSound
 import android.net.Uri
 import android.provider.Settings
 import android.view.OrientationEventListener
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -29,6 +30,7 @@ import androidx.camera.extensions.ExtensionsManager
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -49,12 +51,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -78,6 +81,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
@@ -109,9 +113,10 @@ import kotlinx.coroutines.delay
 
 private val WorkerCameraBlue = Color(0xFF3B82F6)
 private val WorkerCameraPanel = Color(0xE6191919)
-private const val CAMERA_CONFIRMATION_MAX_PIXELS = 2_000_000L
+private const val CAMERA_THUMBNAIL_MAX_PIXELS = 256_000L
+private const val CAMERA_GALLERY_MAX_PIXELS = 2_000_000L
 
-/** Captures and confirms one CameraX result JPEG for the selected task route. */
+/** Captures an ordered CameraX batch and persists it once the worker continues. */
 @Composable
 fun CameraScreen(
     userId: String,
@@ -181,13 +186,16 @@ fun CameraScreen(
             title = "Фото результата",
             saving = state.saving,
             saveError = state.error,
+            persistedCapturePaths = state.persistedCapturePaths,
+            persistedCaptureCount = state.persistedCameraCaptureCount,
             onBack = onBack,
-            onConfirm = { file ->
-                viewModel.confirmCapture(
+            onPersistedCapturesConsumed = viewModel::consumePersistedCaptures,
+            onConfirm = { files ->
+                viewModel.confirmCaptures(
                     userId,
                     entryId,
                     routeIndex,
-                    file,
+                    files,
                     requestSyncAfterSave,
                 )
             },
@@ -277,8 +285,11 @@ private fun WorkerCameraExperience(
     title: String,
     saving: Boolean,
     saveError: String?,
+    persistedCapturePaths: Set<String>,
+    persistedCaptureCount: Int,
     onBack: () -> Unit,
-    onConfirm: (File) -> Unit,
+    onPersistedCapturesConsumed: (Set<String>) -> Unit,
+    onConfirm: (List<File>) -> Unit,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -297,7 +308,8 @@ private fun WorkerCameraExperience(
     var camera by remember { mutableStateOf<Camera?>(null) }
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var captureInProgress by remember { mutableStateOf(false) }
-    var pendingFile by remember { mutableStateOf<File?>(null) }
+    var capturedFiles by remember { mutableStateOf<List<File>>(emptyList()) }
+    var galleryStartIndex by remember { mutableStateOf<Int?>(null) }
     var settingsOpen by remember { mutableStateOf(false) }
     var lightMode by remember { mutableStateOf(WorkerCameraLightMode.Off) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -307,7 +319,7 @@ private fun WorkerCameraExperience(
         mutableIntStateOf(workerCaptureTargetRotation(previewView.display?.rotation))
     }
     var nightExtensionActive by remember { mutableStateOf(false) }
-    val pendingForDisposal by rememberUpdatedState(pendingFile)
+    val capturesForDisposal by rememberUpdatedState(capturedFiles)
     val shutterSound = remember { MediaActionSound().apply { load(MediaActionSound.SHUTTER_CLICK) } }
     val cameraExperienceDisposed = remember { AtomicBoolean(false) }
 
@@ -317,8 +329,11 @@ private fun WorkerCameraExperience(
             cameraExperienceDisposed.set(true)
             shutterSound.release()
             photoFileExecutor.shutdown()
-            pendingForDisposal?.delete()
+            capturesForDisposal.forEach(File::delete)
         }
+    }
+    BackHandler(enabled = saving) {
+        message = "Дождитесь сохранения фотографий"
     }
     DisposableEffect(context, previewView) {
         val listener = object : OrientationEventListener(context.applicationContext) {
@@ -347,6 +362,14 @@ private fun WorkerCameraExperience(
         if (focusPoint != null) {
             delay(1_500)
             focusPoint = null
+        }
+    }
+    LaunchedEffect(persistedCapturePaths) {
+        if (persistedCapturePaths.isNotEmpty()) {
+            capturedFiles = remainingWorkerCameraCaptures(capturedFiles, persistedCapturePaths)
+            galleryStartIndex = galleryStartIndex?.takeIf { capturedFiles.isNotEmpty() }
+                ?.coerceAtMost(capturedFiles.lastIndex)
+            onPersistedCapturesConsumed(persistedCapturePaths)
         }
     }
 
@@ -500,7 +523,7 @@ private fun WorkerCameraExperience(
             message = "Камера ещё запускается"
             return
         }
-        if (captureInProgress || pendingFile != null) return
+        if (captureInProgress || saving || galleryStartIndex != null) return
         captureInProgress = true
         settingsOpen = false
         if (cameraMode == WorkerCameraMode.Night) {
@@ -538,7 +561,10 @@ private fun WorkerCameraExperience(
                             }
                             if (normalized != target) target.delete()
                             when (val result = validateCameraXSave(normalized)) {
-                                is CameraXSaveResult.Saved -> pendingFile = result.file
+                                is CameraXSaveResult.Saved -> {
+                                    capturedFiles = capturedFiles + result.file
+                                    message = "Снято фотографий: ${capturedFiles.size}"
+                                }
                                 is CameraXSaveResult.Failed -> {
                                     normalized.delete()
                                     message = result.message
@@ -569,20 +595,6 @@ private fun WorkerCameraExperience(
         val host = context.volumeShutterHost()
         host?.setVolumeShutterHandler { volumeShutterAction() }
         onDispose { host?.setVolumeShutterHandler(null) }
-    }
-
-    if (pendingFile != null) {
-        CaptureConfirmation(
-            file = requireNotNull(pendingFile),
-            saving = saving,
-            error = saveError,
-            onRetake = {
-                pendingFile?.delete()
-                pendingFile = null
-            },
-            onConfirm = { onConfirm(requireNotNull(pendingFile)) },
-        )
-        return
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
@@ -637,10 +649,28 @@ private fun WorkerCameraExperience(
                         modifier = Modifier.align(Alignment.TopCenter).padding(top = 16.dp),
                     ) { Text(it, color = Color.White, modifier = Modifier.padding(14.dp, 8.dp)) }
                 }
+                saveError?.let { error ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.94f),
+                        shape = RoundedCornerShape(18.dp),
+                        modifier = Modifier.align(Alignment.TopCenter).padding(top = 62.dp, start = 16.dp, end = 16.dp),
+                    ) {
+                        Text(
+                            error,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.padding(14.dp, 9.dp),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
             }
             CameraBottomControls(
                 mode = cameraMode,
                 captureInProgress = captureInProgress,
+                saving = saving,
+                lastCapture = capturedFiles.lastOrNull(),
+                captureCount = capturedFiles.size,
+                persistedCaptureCount = persistedCaptureCount,
                 canSwitch = remember(camera) {
                     camera != null
                 },
@@ -650,6 +680,9 @@ private fun WorkerCameraExperience(
                     message = selection.message
                     lightMode = WorkerCameraLightMode.Off
                 },
+                onThumbnail = {
+                    if (capturedFiles.isNotEmpty()) galleryStartIndex = capturedFiles.lastIndex
+                },
                 onShutter = ::takePhoto,
                 onSwitch = {
                     lightMode = WorkerCameraLightMode.Off
@@ -658,7 +691,15 @@ private fun WorkerCameraExperience(
                         CameraSelector.LENS_FACING_FRONT
                     } else CameraSelector.LENS_FACING_BACK
                 },
-                onClose = onBack,
+                onDone = {
+                    settingsOpen = false
+                    galleryStartIndex = null
+                    if (capturedFiles.isEmpty() && persistedCaptureCount == 0) {
+                        onBack()
+                    } else {
+                        onConfirm(capturedFiles.toList())
+                    }
+                },
             )
         }
         if (settingsOpen) {
@@ -666,6 +707,21 @@ private fun WorkerCameraExperience(
                 settings = cameraSettings,
                 onSettings = { cameraSettings = normalizeWorkerCameraSettings(it) },
                 modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp, 12.dp, 12.dp, 188.dp),
+            )
+        }
+        galleryStartIndex?.let { initialIndex ->
+            WorkerPendingCaptureGallery(
+                files = capturedFiles,
+                initialIndex = initialIndex,
+                onRemove = { file ->
+                    if (!saving) {
+                        file.delete()
+                        capturedFiles = capturedFiles.filterNot { it.absolutePath == file.absolutePath }
+                        galleryStartIndex = galleryStartIndex?.takeIf { capturedFiles.isNotEmpty() }
+                            ?.coerceAtMost(capturedFiles.lastIndex)
+                    }
+                },
+                onDismiss = { galleryStartIndex = null },
             )
         }
     }
@@ -704,11 +760,16 @@ private fun CameraTopBar(
 private fun CameraBottomControls(
     mode: WorkerCameraMode,
     captureInProgress: Boolean,
+    saving: Boolean,
+    lastCapture: File?,
+    captureCount: Int,
+    persistedCaptureCount: Int,
     canSwitch: Boolean,
     onMode: (WorkerCameraMode) -> Unit,
+    onThumbnail: () -> Unit,
     onShutter: () -> Unit,
     onSwitch: () -> Unit,
-    onClose: () -> Unit,
+    onDone: () -> Unit,
 ) {
     Column(
         Modifier.fillMaxWidth().navigationBarsPadding().height(174.dp).padding(top = 4.dp, bottom = 10.dp),
@@ -720,7 +781,10 @@ private fun CameraBottomControls(
                     candidate.label,
                     color = if (candidate == mode) WorkerCameraBlue else Color.White.copy(alpha = 0.72f),
                     fontSize = 15.sp,
-                    modifier = Modifier.clip(CircleShape).clickable(role = Role.Tab) { onMode(candidate) }
+                    modifier = Modifier.clip(CircleShape).clickable(
+                        enabled = !captureInProgress && !saving,
+                        role = Role.Tab,
+                    ) { onMode(candidate) }
                         .padding(horizontal = 18.dp, vertical = 9.dp),
                 )
             }
@@ -729,11 +793,58 @@ private fun CameraBottomControls(
             Modifier.fillMaxWidth().weight(1f).padding(horizontal = 18.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.weight(1f))
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                if (lastCapture != null) {
+                    Box(
+                        modifier = Modifier
+                            .size(56.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.12f))
+                            .clickable(
+                                enabled = !captureInProgress && !saving,
+                                role = Role.Button,
+                                onClick = onThumbnail,
+                            )
+                            .semantics(mergeDescendants = true) {
+                                role = Role.Button
+                                contentDescription = "Открыть снятые фотографии, всего $captureCount"
+                            },
+                    ) {
+                        WorkerCapturedPhotoPreview(
+                            file = lastCapture,
+                            maxPixels = CAMERA_THUMBNAIL_MAX_PIXELS,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        Surface(
+                            color = WorkerCameraBlue,
+                            shape = CircleShape,
+                            modifier = Modifier.align(Alignment.BottomEnd).size(22.dp),
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(
+                                    text = captureCount.toString(),
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
             Box(
                 modifier = Modifier.size(86.dp).clip(CircleShape)
-                    .clickable(enabled = !captureInProgress, role = Role.Button, onClick = onShutter)
-                    .semantics { contentDescription = "Снять фотографию" },
+                    .clickable(
+                        enabled = !captureInProgress && !saving,
+                        role = Role.Button,
+                        onClick = onShutter,
+                    )
+                    .semantics(mergeDescendants = true) {
+                        role = Role.Button
+                        contentDescription = "Снять фотографию"
+                    },
                 contentAlignment = Alignment.Center,
             ) {
                 Canvas(Modifier.fillMaxSize()) {
@@ -754,20 +865,172 @@ private fun CameraBottomControls(
                         }
                     }
                 }
-                if (captureInProgress) CircularProgressIndicator(color = WorkerCameraBlue, modifier = Modifier.size(78.dp))
+                if (captureInProgress || saving) {
+                    CircularProgressIndicator(color = WorkerCameraBlue, modifier = Modifier.size(78.dp))
+                }
             }
-            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End) {
-                if (canSwitch) {
+            Row(
+                Modifier.weight(1f),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (canSwitch && !saving) {
                     TextButton(
                         onClick = onSwitch,
+                        enabled = !captureInProgress,
                         contentPadding = PaddingValues(horizontal = 4.dp),
                     ) { Text("↻", color = Color.White, fontSize = 26.sp) }
+                    Spacer(Modifier.width(8.dp))
                 }
-                TextButton(
-                    onClick = onClose,
-                    contentPadding = PaddingValues(horizontal = 4.dp),
-                ) { Text("Готово", color = WorkerCameraBlue, maxLines = 1) }
+                WorkerCameraDoneButton(
+                    enabled = !captureInProgress && !saving,
+                    captureCount = captureCount + persistedCaptureCount,
+                    onClick = onDone,
+                )
             }
+        }
+    }
+}
+
+/** Renders one transient CameraX file without retaining its decoded bitmap after disposal. */
+@Composable
+private fun WorkerCapturedPhotoPreview(
+    file: File,
+    maxPixels: Long,
+    contentDescription: String?,
+    contentScale: ContentScale,
+    modifier: Modifier = Modifier,
+) {
+    val bitmap = remember(file.absolutePath, file.lastModified(), maxPixels) {
+        runCatching { decodeWorkerBitmapFile(file, maxPixels) }.getOrNull()
+    }
+    DisposableEffect(bitmap) {
+        onDispose {
+            if (bitmap != null && !bitmap.isRecycled) bitmap.recycle()
+        }
+    }
+    if (bitmap == null) {
+        Box(modifier.background(Color.White.copy(alpha = 0.08f)), contentAlignment = Alignment.Center) {
+            Text("Фото", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+        }
+    } else {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = contentDescription,
+            contentScale = contentScale,
+            modifier = modifier,
+        )
+    }
+}
+
+/** Shows the worker's transient camera batch only when its bottom-left thumbnail is opened. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun WorkerPendingCaptureGallery(
+    files: List<File>,
+    initialIndex: Int,
+    onRemove: (File) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    if (files.isEmpty()) {
+        LaunchedEffect(Unit) { onDismiss() }
+        return
+    }
+    val pagerState = rememberPagerState(
+        initialPage = initialIndex.coerceIn(files.indices),
+        pageCount = { files.size },
+    )
+    val currentIndex = pagerState.currentPage.coerceIn(files.indices)
+    BackHandler(onBack = onDismiss)
+    LaunchedEffect(files.size) {
+        if (pagerState.currentPage > files.lastIndex) {
+            pagerState.scrollToPage(files.lastIndex)
+        }
+    }
+
+    Surface(color = Color.Black, modifier = Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().statusBarsPadding()) {
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            ) { page ->
+                files.getOrNull(page)?.let { file ->
+                    Box(
+                        modifier = Modifier.fillMaxSize().padding(12.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        WorkerCapturedPhotoPreview(
+                            file = file,
+                            maxPixels = CAMERA_GALLERY_MAX_PIXELS,
+                            contentDescription = "Фотография ${page + 1} из ${files.size}",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "${currentIndex + 1} из ${files.size}",
+                    color = Color.White,
+                    modifier = Modifier.weight(1f),
+                )
+                files.getOrNull(currentIndex)?.let { current ->
+                    TextButton(onClick = { onRemove(current) }) {
+                        Text("Удалить", color = Color(0xFFFFB4AB))
+                    }
+                }
+                TextButton(onClick = onDismiss) { Text("Готово", color = Color.White) }
+            }
+        }
+    }
+}
+
+/** Continues with every captured photo or closes an empty camera session. */
+@Composable
+private fun WorkerCameraDoneButton(
+    enabled: Boolean,
+    captureCount: Int,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.1f))
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .semantics(mergeDescendants = true) {
+                role = Role.Button
+                contentDescription = if (captureCount == 0) {
+                    "Закрыть камеру"
+                } else {
+                    "Сохранить $captureCount фотографий"
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.size(21.dp)) {
+            val color = Color.White.copy(alpha = if (enabled) 1f else 0.35f)
+            drawLine(
+                color,
+                Offset(size.width * 0.32f, size.height * 0.12f),
+                Offset(size.width * 0.7f, size.height * 0.5f),
+                2.2.dp.toPx(),
+                StrokeCap.Round,
+            )
+            drawLine(
+                color,
+                Offset(size.width * 0.7f, size.height * 0.5f),
+                Offset(size.width * 0.32f, size.height * 0.88f),
+                2.2.dp.toPx(),
+                StrokeCap.Round,
+            )
         }
     }
 }
@@ -845,55 +1108,6 @@ private fun FocusIndicator(point: Offset) {
     Canvas(Modifier.fillMaxSize()) {
         drawCircle(WorkerCameraBlue, radius = 26.dp.toPx(), center = point, style = Stroke(2.dp.toPx()))
         drawCircle(WorkerCameraBlue, radius = 3.dp.toPx(), center = point)
-    }
-}
-
-@Composable
-private fun CaptureConfirmation(
-    file: File,
-    saving: Boolean,
-    error: String?,
-    onRetake: () -> Unit,
-    onConfirm: () -> Unit,
-) {
-    val bitmap = remember(file) {
-        runCatching {
-            decodeWorkerBitmapFile(file, CAMERA_CONFIRMATION_MAX_PIXELS)
-        }.getOrNull()
-    }
-    DisposableEffect(bitmap) {
-        onDispose {
-            if (bitmap != null && !bitmap.isRecycled) bitmap.recycle()
-        }
-    }
-    Column(
-        Modifier.fillMaxSize().background(Color.Black).statusBarsPadding().navigationBarsPadding().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Проверьте фото", color = Color.White, style = MaterialTheme.typography.titleLarge)
-        bitmap?.let {
-            Image(
-                bitmap = it.asImageBitmap(),
-                contentDescription = "Предпросмотр фотографии",
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-            )
-        }
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedButton(
-                onClick = onRetake,
-                enabled = !saving,
-                modifier = Modifier.weight(1f),
-            ) { Text("Переснять", maxLines = 1) }
-        }
-        Button(
-            onClick = onConfirm,
-            enabled = !saving,
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text(if (saving) "Сохраняем…" else "Использовать", maxLines = 1) }
     }
 }
 

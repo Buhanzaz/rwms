@@ -141,6 +141,29 @@ func TestV1UpgradeQuarantinedAssetsAreRuntimeInvisibleAndDoNotConsumeQuota(t *te
 			oneItemFolders, distinctFolders, len(quarantinedIDs))
 	}
 
+	// The assertions above deliberately inspect the V8 quarantine result. The
+	// repository below is current runtime code, so finish the immutable upgrade
+	// path before using it instead of exercising it against an obsolete schema.
+	remainingMigrations := []struct {
+		name string
+		body []byte
+	}{
+		{"V9", mediamigration.V9},
+		{"V10", mediamigration.V10},
+		{"V11", mediamigration.V11},
+		{"V12", mediamigration.V12},
+		{"V13", mediamigration.V13},
+		{"V14", mediamigration.V14},
+		{"V15", mediamigration.V15},
+		{"V16", mediamigration.V16},
+		{"V17", mediamigration.V17},
+	}
+	for _, migration := range remainingMigrations {
+		if _, err := runtimePool.Exec(ctx, string(migration.body)); err != nil {
+			t.Fatalf("upgrade isolated schema through %s: %v", migration.name, err)
+		}
+	}
+
 	repository := NewRepository(runtimePool)
 	proof := ValidatedOwnerProof{
 		ConsumerName: InventoryOwnerConsumerGroup, EventID: uuid.New(), BodySHA256: hex64('1'),

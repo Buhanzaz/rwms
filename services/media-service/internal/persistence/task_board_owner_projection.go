@@ -458,14 +458,17 @@ func insertTaskBoardOwnerProofDeadLetter(ctx context.Context, tx pgx.Tx, eventID
 	return translateConstraint(err)
 }
 
-// RequireTaskBoardEntryWorkerAccess is used by command transactions and by
-// request handlers before streaming bytes. It locks both the current binding
-// and the membership row so a revocation cannot race a metadata/read callback.
 // RequireTaskBoardEntryWorkerAccess confirms current worker authorization for a
-// task-board entry in the requested warehouse.
+// task-board entry in the requested warehouse. Command transactions and request
+// handlers acquire the proof row before the binding and membership rows so a
+// revocation cannot race a metadata or content callback and cannot invert the
+// projection's lock order.
 func RequireTaskBoardEntryWorkerAccess(ctx context.Context, database queryer, entryID, warehouseID, workerID uuid.UUID) error {
 	if entryID == uuid.Nil || warehouseID == uuid.Nil || workerID == uuid.Nil {
 		return ErrOwnerProofMissing
+	}
+	if err := lockTaskBoardEntryOwnerProofForAuthorization(ctx, database, entryID); err != nil {
+		return err
 	}
 	var found string
 	err := database.QueryRow(ctx, `select binding.owner_id
@@ -500,6 +503,9 @@ func RequireTaskBoardEntryWorkerAccess(ctx context.Context, database queryer, en
 func RequireTaskBoardEntryWorkerReadAccess(ctx context.Context, database queryer, entryID, warehouseID, workerID uuid.UUID) error {
 	if entryID == uuid.Nil || warehouseID == uuid.Nil || workerID == uuid.Nil {
 		return ErrOwnerProofMissing
+	}
+	if err := lockTaskBoardEntryOwnerProofForAuthorization(ctx, database, entryID); err != nil {
+		return err
 	}
 	var found string
 	err := database.QueryRow(ctx, `select binding.owner_id
@@ -544,11 +550,12 @@ func RequireTaskBoardEntryWorkerReadAccess(ctx context.Context, database queryer
 // The proof and binding rows remain share-locked for the caller's complete
 // metadata or content callback so a concurrent proof replacement cannot race
 // a source-reference read.
-// RequireTaskBoardEntryUserReadAccess confirms that a task-board entry is
-// currently readable within the requested warehouse.
 func RequireTaskBoardEntryUserReadAccess(ctx context.Context, database queryer, entryID, warehouseID uuid.UUID) error {
 	if entryID == uuid.Nil || warehouseID == uuid.Nil {
 		return ErrOwnerProofMissing
+	}
+	if err := lockTaskBoardEntryOwnerProofForAuthorization(ctx, database, entryID); err != nil {
+		return err
 	}
 	var found string
 	err := database.QueryRow(ctx, `select binding.owner_id
@@ -582,6 +589,24 @@ func RequireTaskBoardEntryUserReadAccess(ctx context.Context, database queryer, 
 		return err
 	}
 	return nil
+}
+
+// lockTaskBoardEntryOwnerProofForAuthorization establishes the same leading
+// row-lock order as task-board proof replacement. Authorization transactions
+// therefore wait before locking binding or audience rows, avoiding a lock
+// inversion while still fencing concurrent revocation for their full scope.
+func lockTaskBoardEntryOwnerProofForAuthorization(
+	ctx context.Context,
+	database queryer,
+	entryID uuid.UUID,
+) error {
+	var found uuid.UUID
+	err := database.QueryRow(ctx, `select entry_id from media_task_board_entry_owner_proof
+		where entry_id=$1 for share`, entryID).Scan(&found)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrOwnerProofMissing
+	}
+	return err
 }
 
 // AuthorizeTaskBoardEntryWorker applies the worker-access check through this

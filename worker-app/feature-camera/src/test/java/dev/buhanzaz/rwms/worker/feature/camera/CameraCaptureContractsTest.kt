@@ -99,6 +99,69 @@ class CameraCaptureContractsTest {
     }
 
     @Test
+    fun `partial camera acknowledgement is consumed once without hiding its error`() {
+        val savedPath = File("saved.jpg").absolutePath
+        val partial = CameraUiState(
+            persistedCapturePaths = setOf(savedPath),
+            persistedCameraCaptureCount = 1,
+            error = "one capture failed",
+        )
+
+        val consumed = partial.consumePersistedCaptures(setOf(savedPath))
+
+        assertThat(consumed.persistedCapturePaths).isEmpty()
+        assertThat(consumed.persistedCameraCaptureCount).isEqualTo(1)
+        assertThat(consumed.error).isEqualTo("one capture failed")
+        assertThat(consumed.consumePersistedCaptures(setOf(savedPath))).isEqualTo(consumed)
+    }
+
+    @Test
+    fun `different camera acknowledgement cannot remove retry state`() {
+        val partial = CameraUiState(persistedCapturePaths = setOf(File("saved.jpg").absolutePath))
+
+        val unchanged = partial.consumePersistedCaptures(setOf(File("other.jpg").absolutePath))
+
+        assertThat(unchanged).isEqualTo(partial)
+    }
+
+    @Test
+    fun `persisted camera files are removed while failed files keep capture order`() {
+        val first = File("first.jpg")
+        val saved = File("saved.jpg")
+        val last = File("last.jpg")
+
+        val remaining = remainingWorkerCameraCaptures(
+            files = listOf(first, saved, last),
+            persistedPaths = setOf(saved.absolutePath),
+        )
+
+        assertThat(remaining).containsExactly(first, last).inOrder()
+    }
+
+    @Test
+    fun `partial camera failure reports the durable subset`() {
+        val message = cameraBatchFailureMessage(
+            savedCount = 2,
+            selectedCount = 4,
+            causeMessage = "нет места",
+        )
+
+        assertThat(message).contains("Сохранено 2 из 4 фото")
+        assertThat(message).contains("нет места")
+    }
+
+    @Test
+    fun `camera failure without saved evidence returns its cause`() {
+        assertThat(
+            cameraBatchFailureMessage(
+                savedCount = 0,
+                selectedCount = 3,
+                causeMessage = "файл недоступен",
+            ),
+        ).isEqualTo("файл недоступен")
+    }
+
+    @Test
     fun `partial gallery failure reports the durable subset`() {
         val message = galleryBatchFailureMessage(
             savedCount = 2,

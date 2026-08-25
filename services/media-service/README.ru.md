@@ -54,7 +54,10 @@ source и result; неподтверждённые размеры видео о�
   разделяет read и upload audiences: рабочий, которому доступны feed/detail,
   получает только list/original/variant read, а создание upload и finalization
   требуют assigned/evidence worker из active proof. После закрытия остаются
-  только исторические assigned/evidence readers.
+  только исторические assigned/evidence readers. Каждая авторизация task-entry
+  сначала блокирует local proof, а затем binding и audience rows, совпадая с
+  порядком proof replacement; поэтому параллельное обновление projection не
+  создаёт deadlock с media access.
 - **Восстановимая доставка.** PostgreSQL владеет состоянием и точным replay;
   Kafka переносит at-least-once факты через transactional outbox и
   идемпотентных consumers. Недоступность брокера не превращает Kafka в базу
@@ -75,12 +78,21 @@ gateway; private `/api/internal/**` доступны только сервиса
    каждый проверяется по длине, SHA, version и ETag. MinIO остаётся приватным,
    а media-service не буферизует и не декодирует изображение.
 3. Клиент завершает session тем же idempotency key. Upload fact и processing
-   request коммитятся атомарно.
+   request коммитятся атомарно. При source-mode finalization ожидаемые длина,
+   content type и checksum заново читаются из заблокированной upload session до
+   принятия immutable object metadata
+   ([`FinalizeUpload`](internal/persistence/repository.go)).
 4. Durable Kafka worker без object I/O переводит проверенные metadata вариантов
    изображения в READY generation. Для сохранённого single-source изображения
    все логические варианты указывают на точный source. Видео по-прежнему
    проверяется, сохраняется его exact original и создаётся MP4 playback. После этого публикуется безопасный
-   invalidation-сигнал, а клиенты обновляют только свою scoped projection.
+   invalidation-сигнал, а клиенты обновляют только свою scoped projection. Для
+   прямых CABIN-фото в одной gallery folder обложкой становится READY-фото с
+   минимальным стабильным кортежем `(sortOrder, attachedAt, mediaId)`, поэтому
+   порядок асинхронной обработки не может заменить выбранное клиентом титульное
+   фото. Явные обложки из task evidence, inventory или другой folder это правило
+   не заменяет
+   ([`associateProcessedCabinImage`](internal/persistence/cabin_photo_library.go)).
 5. Scoped read отдаёт ровно закреплённую версию объекта через media-service с
    `private, no-store`. Логическое удаление меняет PostgreSQL и создаёт один
    факт, но не удаляет версии байтов физически.
@@ -223,7 +235,11 @@ checksum; legacy single-source ingress также сохраняет content sni
 `private, no-store`. В runtime нет unversioned download, физического delete,
 retention или orphan cleanup. Owner-scoped deletion — только PostgreSQL
 soft-delete: MinIO versions и provenance variants сохраняются, а наружу выходит
-один `DELETED` fact.
+один `DELETED` fact. Если удаляемый asset является текущей CABIN-обложкой, эта
+же транзакция очищает оба указателя текущей библиотеки и продвигает её версию;
+CABIN associations, media rows, variants и versioned object bytes/history
+сохраняются. Новая обложка автоматически не выбирается
+([`Repository.Delete`](internal/persistence/soft_delete.go)).
 
 Публичный доступ разрешён USER JWT с UUID subject, точным RWMS scope и
 warehouse grant. Канонические owner/context пары покрывают inventory, CABIN,

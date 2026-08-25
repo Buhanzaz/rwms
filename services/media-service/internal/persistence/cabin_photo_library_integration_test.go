@@ -138,6 +138,24 @@ func TestCabinTaskEvidenceAtomicallyReplacesOneCoverIntegration(t *testing.T) {
 		t.Fatalf("second cover result = %#v replayed=%v error=%v", secondResult, replayed, err)
 	}
 
+	// A later processing replay of an older direct photo must not replace the
+	// explicit task-evidence cover or emit another cover transition.
+	tx, err := database.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin direct processing replay: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	replayedDirect, err := repository.assetForUpdate(ctx, tx, directAsset.ID)
+	if err != nil {
+		t.Fatalf("load direct processing replay: %v", err)
+	}
+	if err := repository.associateProcessedCabinImage(ctx, tx, replayedDirect, uuid.New()); err != nil {
+		t.Fatalf("associate direct processing replay: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit direct processing replay: %v", err)
+	}
+
 	var libraryRows, associatedRows, historyRows int
 	var currentCover uuid.UUID
 	if err := database.Pool.QueryRow(ctx, `select 1,cover_media_id
@@ -176,6 +194,97 @@ func TestCabinTaskEvidenceAtomicallyReplacesOneCoverIntegration(t *testing.T) {
 		where media_id in ($1,$2) and owner_type='TASK_BOARD_ENTRY'`,
 		firstEvidence, secondEvidence).Scan(&evidenceOwnerCount); err != nil || evidenceOwnerCount != 2 {
 		t.Fatalf("evidence assets were copied or re-owned: count=%d error=%v", evidenceOwnerCount, err)
+	}
+}
+
+func TestDirectCabinCoverUsesStableFolderOrderIntegration(t *testing.T) {
+	databaseURL := os.Getenv("MEDIA_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("MEDIA_TEST_DATABASE_URL is not configured")
+	}
+	databaseURL = testsupport.NewMigratedMediaDatabase(t, databaseURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer database.Close()
+	repository := NewRepository(database.Pool)
+
+	cabinID := uuid.MustParse("51000000-0000-4000-8000-000000000001")
+	warehouseID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	folderID := uuid.New()
+	title := createCommand(cabinID, warehouseID, media.KindImage, 0)
+	title.OwnerType = OwnerTypeCabin
+	title.FolderID = folderID
+	later := createCommand(cabinID, warehouseID, media.KindImage, 1)
+	later.OwnerType = OwnerTypeCabin
+	later.FolderID = folderID
+	otherFolder := createCommand(cabinID, warehouseID, media.KindImage, -1)
+	otherFolder.OwnerType = OwnerTypeCabin
+
+	for _, command := range []CreateUploadCommand{title, later, otherFolder} {
+		if _, replayed, createErr := repository.CreateUpload(ctx, command); createErr != nil || replayed {
+			t.Fatalf("CreateUpload(%s) = replayed:%v error:%v", command.MediaID, replayed, createErr)
+		}
+		if _, updateErr := database.Pool.Exec(ctx, `update media_asset set
+			processing_status='READY',current_generation=1,next_generation=2,version=2,
+			source_version_id='ready-version',source_etag='ready-etag',
+			source_checksum_sha256=$2,finalized_content_type='image/jpeg',
+			finalized_size_bytes=128,size_bytes=128 where media_id=$1`,
+			command.MediaID, command.ChecksumSHA256); updateErr != nil {
+			t.Fatalf("mark %s READY: %v", command.MediaID, updateErr)
+		}
+	}
+
+	associate := func(command CreateUploadCommand) {
+		t.Helper()
+		tx, beginErr := database.Pool.Begin(ctx)
+		if beginErr != nil {
+			t.Fatalf("begin association transaction: %v", beginErr)
+		}
+		defer tx.Rollback(ctx)
+		asset, loadErr := repository.assetForUpdate(ctx, tx, command.MediaID)
+		if loadErr != nil {
+			t.Fatalf("load READY asset %s: %v", command.MediaID, loadErr)
+		}
+		if associateErr := repository.associateProcessedCabinImage(ctx, tx, asset, uuid.New()); associateErr != nil {
+			t.Fatalf("associate READY asset %s: %v", command.MediaID, associateErr)
+		}
+		if commitErr := tx.Commit(ctx); commitErr != nil {
+			t.Fatalf("commit READY asset %s: %v", command.MediaID, commitErr)
+		}
+	}
+
+	// Processing may finish out of order: the selected title (sort order zero)
+	// must still replace a later photo from the same creation folder.
+	associate(later)
+	associate(title)
+	// A direct photo from another folder must not replace an existing cover
+	// implicitly, even when its local sort order is smaller.
+	associate(otherFolder)
+
+	var coverMediaID, activeFolderID uuid.UUID
+	var version, historyRows, coverFactRows int64
+	if err := database.Pool.QueryRow(ctx, `select cover_media_id,active_gallery_folder_id,version
+		from media_cabin_photo_library where cabin_id=$1`, cabinID).
+		Scan(&coverMediaID, &activeFolderID, &version); err != nil {
+		t.Fatalf("read direct cover: %v", err)
+	}
+	if err := database.Pool.QueryRow(ctx, `select count(*) from media_cabin_cover_history
+		where cabin_id=$1`, cabinID).Scan(&historyRows); err != nil {
+		t.Fatalf("count direct cover history: %v", err)
+	}
+	if err := database.Pool.QueryRow(ctx, `select count(*) from media_transport_outbox
+		where aggregate_type='CABIN_PHOTO_LIBRARY' and aggregate_id=$1
+		  and event_type='media.cabin.cover-changed.v1'`, cabinID).Scan(&coverFactRows); err != nil {
+		t.Fatalf("count direct cover facts: %v", err)
+	}
+	if coverMediaID != title.MediaID || activeFolderID != folderID || version != 2 ||
+		historyRows != 2 || coverFactRows != 2 {
+		t.Fatalf("stable direct cover = media:%s folder:%s version:%d history:%d facts:%d",
+			coverMediaID, activeFolderID, version, historyRows, coverFactRows)
 	}
 }
 

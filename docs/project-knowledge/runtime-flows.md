@@ -1550,10 +1550,18 @@ and
    compatible source-upload request remains available for panel, video and
    older clients.
 2. The service validates the authenticated warehouse and a service-owned proof
-   that the referenced domain entity may own media.
+   that the referenced domain entity may own media. Task-board media access
+   locks the local entry proof before its binding and worker-audience rows,
+   matching proof replacement order. This prevents lock inversion during a
+   concurrent projection refresh while retaining the transaction-scoped
+   revocation fence.
 3. ManagerApp and WorkerApp physically orient a still image and durably encode
    the three upload parts while keeping one phone-only original for local
-   display. They upload only the WebP parts through authenticated same-origin
+   display. WorkerApp's CameraX surface collects an ordered transient batch
+   without a per-shot confirmation screen and persists it only when the worker
+   continues; a partial persistence result removes acknowledged frames and a
+   retry processes only the remaining paths while retaining the already durable
+   evidence IDs. The clients upload only the WebP parts through authenticated same-origin
    variant PUT routes, using a stable idempotency key per part and bounded
    photo/part concurrency. Panel, video and legacy clients stream their source
    through the corresponding authenticated content route. Object storage
@@ -1564,9 +1572,10 @@ and
 4. `media-service` verifies each streamed length, checksum, object version,
    ETag and WebP type without reading the object back into an image decoder.
    Finalization accepts only the complete persisted bundle and records its
-   immutable metadata. The Android app retains its local original and generated
-   parts through READY polling, then deletes them only after the media owner
-   reports the asset as `READY`.
+   immutable metadata. Compatible source finalization reloads expected length,
+   content type and checksum from the locked upload session. The Android app
+   retains its local original and generated parts through READY polling, then
+   deletes them only after the media owner reports the asset as `READY`.
 5. The worker promotes current Android image parts to READY without decoding or
    transforming them. For a compatible legacy source image, it creates logical
    variant aliases to the same pinned object. An accepted video retains its
@@ -1585,6 +1594,14 @@ and
    error so supervisor restart/redelivery can use the durable inbox result.
 8. Media facts notify owning domains and projections. A generation/revision
    prevents clients from retaining a stale transformed URL after replacement.
+   Direct CABIN photos in one gallery folder select the READY image with the
+   smallest stable `(sortOrder, attachedAt, mediaId)` tuple as cover. Therefore
+   a title uploaded with `sortOrder=0` remains deterministic when processing
+   completes out of order; explicit task-evidence/inventory covers and covers
+   from another folder are not replaced implicitly. Soft-deleting the current
+   CABIN cover clears both the cover and active-folder pointers in the same
+   transaction while retaining the photo association, variants, immutable
+   bytes and cover history; no replacement cover is selected implicitly.
 
 Terminal evidence and operator review receipts are append-only and contain no
 raw record, object key or free-form dependency error. A review receipt is audit
@@ -1613,7 +1630,14 @@ Evidence:
 [`Manager media uploader`](../../app/src/main/java/dev/buhanzaz/rwms/manager/media/MediaUploader.kt),
 [`Manager image bundle encoder`](../../app/src/main/java/dev/buhanzaz/rwms/manager/media/ImageUploadBundleEncoder.kt),
 [`Worker image upload pipeline`](../../worker-app/core-media/src/main/java/dev/buhanzaz/rwms/worker/core/media/MediaUploadPipeline.kt),
+[`Worker CameraX batch`](../../worker-app/feature-camera/src/main/java/dev/buhanzaz/rwms/worker/feature/camera/CameraScreen.kt),
+[`Worker camera persistence`](../../worker-app/feature-camera/src/main/java/dev/buhanzaz/rwms/worker/feature/camera/CameraViewModel.kt),
 [`media upload API`](../../services/media-service/internal/api/server.go),
+[`media upload persistence`](../../services/media-service/internal/persistence/repository.go),
+[`task-board media authorization`](../../services/media-service/internal/persistence/task_board_owner_projection.go),
+[`task-board lock-order regression`](../../services/media-service/internal/persistence/task_board_worker_media_integration_test.go),
+[`CABIN photo library`](../../services/media-service/internal/persistence/cabin_photo_library.go),
+[`CABIN cover soft-delete`](../../services/media-service/internal/persistence/soft_delete.go),
 [`V12__video_playback_variant.sql`](../../services/media-service/db/migration/V12__video_playback_variant.sql),
 [`V16__client_image_variants.sql`](../../services/media-service/db/migration/V16__client_image_variants.sql),
 [`processing_metrics.go`](../../services/media-service/internal/observability/processing_metrics.go),

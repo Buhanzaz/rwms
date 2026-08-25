@@ -229,6 +229,7 @@ describe("RentalItemCreationPhotoUploader title photo", () => {
       new File(["second"], "second.jpg", { type: "image/jpeg" }),
     ])
 
+    expect(screen.getByRole("group", { name: "Фото бытовки" })).toBeTruthy()
     const firstCard = screen
       .getByRole("img", { name: "first.jpg" })
       .closest("article")
@@ -237,14 +238,56 @@ describe("RentalItemCreationPhotoUploader title photo", () => {
       .closest("article")
 
     expect(firstCard?.className).toContain("border-primary")
+    expect(
+      within(firstCard as HTMLElement)
+        .getByRole("button", { name: "Титульное фото first.jpg" })
+        .getAttribute("aria-pressed")
+    ).toBe("true")
 
     await user.click(
       within(secondCard as HTMLElement).getByRole("button", {
-        name: "Выбрать титульным second.jpg",
+        name: "Сделать титульным second.jpg",
       })
     )
 
     expect(secondCard?.className).toContain("border-primary")
+    expect(
+      within(secondCard as HTMLElement)
+        .getByRole("button", { name: "Титульное фото second.jpg" })
+        .getAttribute("aria-pressed")
+    ).toBe("true")
+
+    await user.click(
+      within(secondCard as HTMLElement).getByRole("button", {
+        name: "Удалить second.jpg",
+      })
+    )
+
+    expect(screen.queryByRole("img", { name: "second.jpg" })).toBeNull()
+    expect(
+      within(firstCard as HTMLElement)
+        .getByRole("button", { name: "Титульное фото first.jpg" })
+        .getAttribute("aria-pressed")
+    ).toBe("true")
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:second.jpg")
+  })
+
+  it("rejects an empty image before creating a staged photo", async () => {
+    const user = userEvent.setup()
+    render(<PhotoUploaderHarness />)
+
+    await user.upload(
+      screen.getByLabelText("Фотографии новой бытовки"),
+      new File([], "empty.jpg", { type: "image/jpeg" })
+    )
+
+    expect(
+      screen.getByText(
+        "Пустое изображение нельзя загрузить. Сделайте фото заново или выберите другой файл."
+      )
+    ).toBeTruthy()
+    expect(screen.queryByRole("img", { name: "empty.jpg" })).toBeNull()
+    expect(URL.createObjectURL).not.toHaveBeenCalled()
   })
 
   it("uploads the chosen title with sortOrder zero", async () => {
@@ -288,7 +331,7 @@ describe("RentalItemCreationPhotoUploader title photo", () => {
       .closest("article") as HTMLElement
     await user.click(
       within(secondCard).getByRole("button", {
-        name: "Выбрать титульным second.jpg",
+        name: "Сделать титульным second.jpg",
       })
     )
     await user.click(screen.getByRole("button", { name: "Создать бытовку" }))

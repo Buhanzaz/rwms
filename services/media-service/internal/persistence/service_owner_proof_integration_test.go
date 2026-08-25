@@ -367,6 +367,105 @@ func TestServiceOwnerProofAndSoftDeleteIntegration(t *testing.T) {
 				deletedFacts, variants, sourceObjectKey, create.SourceObjectKey)
 		}
 	})
+
+	t.Run("current cabin cover soft delete retains archive metadata", func(t *testing.T) {
+		cabinID, warehouseID := uuid.New(), uuid.New()
+		proof := cabinOwnerProofMessage(cabinID, cabinID, warehouseID, 0,
+			cabinCreatedEvent, "FREE")
+		if result, err := repository.ApplyCabinOwnerMessage(ctx, proof); err != nil ||
+			result.Duplicate || result.Quarantined {
+			t.Fatalf("apply cabin proof = %#v error:%v", result, err)
+		}
+
+		create := cabinUploadCommand(cabinID, warehouseID, 0)
+		asset, replayed, err := repository.CreateUpload(ctx, create)
+		if err != nil || replayed {
+			t.Fatalf("create cabin cover = %#v replayed:%v error:%v", asset, replayed, err)
+		}
+		if _, err := database.Pool.Exec(ctx, `update media_asset set
+			processing_status='READY',current_generation=1,next_generation=2,version=2,
+			source_version_id='retained-source-version',source_etag='retained-source-etag',
+			source_checksum_sha256=$2,finalized_content_type='image/jpeg',
+			finalized_size_bytes=128,size_bytes=128 where media_id=$1`,
+			asset.ID, create.ChecksumSHA256); err != nil {
+			t.Fatalf("prepare cabin cover: %v", err)
+		}
+		variantObjectKey := "retained/" + asset.ID.String() + "/small.webp"
+		if _, err := database.Pool.Exec(ctx, `insert into media_variant (
+			media_id,generation,variant,object_key,object_version_id,content_type,
+			size_bytes,width,height,checksum_sha256)
+		values ($1,1,'SMALL',$2,'retained-variant-version','image/webp',64,360,240,$3)`,
+			asset.ID, variantObjectKey, create.ChecksumSHA256); err != nil {
+			t.Fatalf("insert retained cabin variant: %v", err)
+		}
+		associationTx, err := database.Pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin cabin cover association: %v", err)
+		}
+		defer associationTx.Rollback(ctx)
+		readyAsset, err := repository.assetForUpdate(ctx, associationTx, asset.ID)
+		if err != nil {
+			t.Fatalf("load ready cabin cover: %v", err)
+		}
+		if err := repository.associateProcessedCabinImage(ctx, associationTx, readyAsset, uuid.New()); err != nil {
+			t.Fatalf("associate cabin cover: %v", err)
+		}
+		if err := associationTx.Commit(ctx); err != nil {
+			t.Fatalf("commit cabin cover association: %v", err)
+		}
+
+		deleteCommand := DeleteCommand{
+			MediaID: asset.ID, OwnerType: OwnerTypeCabin, OwnerID: cabinID.String(),
+			WarehouseID: warehouseID, SubjectID: uuid.New(), IdempotencyKey: uuid.New(),
+			RequestSHA256: hex64('9'), ExpectedVersion: 2, CorrelationID: uuid.New(),
+		}
+		deleted, replayed, err := repository.Delete(ctx, deleteCommand)
+		if err != nil || replayed || deleted.Status != media.StatusDeleted || deleted.Version != 3 {
+			t.Fatalf("delete current cabin cover = %#v replayed:%v error:%v", deleted, replayed, err)
+		}
+
+		var coverIsNull, folderIsNull bool
+		var libraryVersion int64
+		if err := database.Pool.QueryRow(ctx, `select cover_media_id is null,
+			active_gallery_folder_id is null,version
+			from media_cabin_photo_library where cabin_id=$1`, cabinID).
+			Scan(&coverIsNull, &folderIsNull, &libraryVersion); err != nil {
+			t.Fatalf("read cleared cabin cover pointers: %v", err)
+		}
+		var photoRows, variantRows, historyRows int
+		var mediaGeneration int
+		var galleryFolderID uuid.UUID
+		if err := database.Pool.QueryRow(ctx, `select count(*),max(media_generation),
+			max(gallery_folder_id::text)::uuid from media_cabin_photo
+			where cabin_id=$1 and media_id=$2`, cabinID, asset.ID).
+			Scan(&photoRows, &mediaGeneration, &galleryFolderID); err != nil {
+			t.Fatalf("read retained cabin photo association: %v", err)
+		}
+		if err := database.Pool.QueryRow(ctx, `select count(*) from media_variant
+			where media_id=$1 and object_key=$2`, asset.ID, variantObjectKey).Scan(&variantRows); err != nil {
+			t.Fatalf("read retained cabin variant metadata: %v", err)
+		}
+		if err := database.Pool.QueryRow(ctx, `select count(*) from media_cabin_cover_history
+			where cabin_id=$1 and cover_media_id=$2`, cabinID, asset.ID).Scan(&historyRows); err != nil {
+			t.Fatalf("read retained cabin cover history: %v", err)
+		}
+		var deletedAtPresent bool
+		var status, sourceObjectKey, sourceVersionID string
+		if err := database.Pool.QueryRow(ctx, `select processing_status,deleted_at is not null,
+			source_object_key,source_version_id from media_asset where media_id=$1`, asset.ID).
+			Scan(&status, &deletedAtPresent, &sourceObjectKey, &sourceVersionID); err != nil {
+			t.Fatalf("read logically deleted cabin asset: %v", err)
+		}
+		if !coverIsNull || !folderIsNull || libraryVersion != 2 || photoRows != 1 ||
+			mediaGeneration != 1 || galleryFolderID != asset.FolderID || variantRows != 1 ||
+			historyRows != 1 || status != string(media.StatusDeleted) || !deletedAtPresent ||
+			sourceObjectKey != create.SourceObjectKey || sourceVersionID != "retained-source-version" {
+			t.Fatalf("deleted cabin cover pointers=%v/%v library=%d photo=%d generation=%d folder=%s variant=%d history=%d status=%s deletedAt=%v source=%q version=%q",
+				coverIsNull, folderIsNull, libraryVersion, photoRows, mediaGeneration,
+				galleryFolderID, variantRows, historyRows, status, deletedAtPresent,
+				sourceObjectKey, sourceVersionID)
+		}
+	})
 }
 
 func seedLegacyAggregateVersionGap(

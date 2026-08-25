@@ -1041,7 +1041,9 @@ type FinalizeCommand struct {
 }
 
 // FinalizeUpload confirms a version-pinned upload and atomically enqueues its
-// media-processing request, or returns an exact idempotent replay.
+// media-processing request, or returns an exact idempotent replay. Source mode
+// validates immutable object metadata against expectations reloaded from the
+// locked upload session rather than trusting caller or asset projection state.
 func (repository *Repository) FinalizeUpload(ctx context.Context, command FinalizeCommand) (AssetRecord, bool, error) {
 	actor, err := normalizeActor(command.SubjectID, command.PrincipalType, command.Actor)
 	if err != nil {
@@ -1109,13 +1111,19 @@ func (repository *Repository) FinalizeUpload(ctx context.Context, command Finali
 	var expiresAt time.Time
 	var completedAt *time.Time
 	var uploadMode UploadMode
+	var expectedLength int64
+	var expectedContentType, expectedChecksum string
 	err = tx.QueryRow(ctx, `
-		select s.media_id, s.expires_at, s.completed_at, s.upload_mode from media_upload_session s
+		select s.media_id,s.expires_at,s.completed_at,s.upload_mode,
+			s.expected_content_length,s.expected_content_type,
+			coalesce(s.expected_checksum_sha256,'')
+		from media_upload_session s
 		join media_asset a on a.media_id=s.media_id
 		where s.upload_session_id=$1 and s.subject_id=$2 and s.principal_type=$3
 		  and media_asset_is_available(a.media_id) for update of s`,
 		command.SessionID, command.SubjectID, command.PrincipalType).
-		Scan(&assetID, &expiresAt, &completedAt, &uploadMode)
+		Scan(&assetID, &expiresAt, &completedAt, &uploadMode, &expectedLength,
+			&expectedContentType, &expectedChecksum)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AssetRecord{}, false, ErrNotFound
 	}
@@ -1138,7 +1146,12 @@ func (repository *Repository) FinalizeUpload(ctx context.Context, command Finali
 	if asset.Status != media.StatusUploading {
 		return AssetRecord{}, false, ErrConflict
 	}
+	if asset.ContentType != expectedContentType {
+		return AssetRecord{}, false, ErrConflict
+	}
 	asset.UploadMode = uploadMode
+	asset.ExpectedLength = expectedLength
+	asset.ExpectedChecksum = expectedChecksum
 	command, err = requireFinalizeUploadParts(ctx, tx, asset, command)
 	if err != nil {
 		return AssetRecord{}, false, err
@@ -1223,7 +1236,8 @@ func requireFinalizeUploadParts(
 	case UploadModeSource:
 		if len(command.ImageVariants) != 0 || command.ObjectVersionID == "" || len(command.ObjectVersionID) > 255 ||
 			command.ETag == "" || len(command.ETag) > 255 || !validSHA256(command.ChecksumSHA256) ||
-			command.SizeBytes != asset.ExpectedLength || command.ContentType != asset.ContentType {
+			command.ChecksumSHA256 != asset.ExpectedChecksum || command.SizeBytes != asset.ExpectedLength ||
+			command.ContentType != asset.ContentType {
 			return command, ErrConflict
 		}
 		return command, nil

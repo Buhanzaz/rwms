@@ -32,7 +32,7 @@ internal fun cameraPermissionGate(
 /**
  * CameraX reports a successful callback even when an OEM camera writes an
  * unusable zero-byte output. Validate the exact private-cache target before
- * offering confirmation so a user can retake instead of reaching a dead end.
+ * adding it to the batch so a user never reaches persistence with a broken frame.
  */
 internal sealed interface CameraXSaveResult {
     data class Saved(val file: File) : CameraXSaveResult
@@ -47,6 +47,12 @@ internal fun validateCameraXSave(target: File): CameraXSaveResult = when {
         CameraXSaveResult.Failed("Фотография больше 15 МБ. Снимите её ещё раз")
     else -> CameraXSaveResult.Saved(target)
 }
+
+/** Removes only acknowledged CameraX files while preserving the order of every retryable photo. */
+internal fun remainingWorkerCameraCaptures(
+    files: List<File>,
+    persistedPaths: Set<String>,
+): List<File> = files.filterNot { it.absolutePath in persistedPaths }
 
 /** Returns a valid CameraX target rotation while the preview is attaching to its display. */
 internal fun workerCaptureTargetRotation(displayRotation: Int?): Int = when (displayRotation) {

@@ -127,7 +127,9 @@ Evicted and route-cleared bitmaps are recycled after the published UI state no
 longer references them. Task-detail thumbnails
 are decoded to at most 256,000 pixels, at most three are fetched/decoded in
 parallel, and the ViewModel retains no more than 16 recent entries while
-recycling evicted bitmaps. Camera confirmation uses a separate two-million-pixel preview.
+recycling evicted bitmaps. The transient CameraX thumbnail is decoded to at
+most 256,000 pixels, while its user-opened capture gallery uses a separate
+two-million-pixel preview.
 These bounds prevent a large retained inventory archive from becoming an
 Android heap-sized bitmap cache. Evidence:
 [`PhotoViewModel.kt`](app/src/main/java/dev/buhanzaz/rwms/worker/PhotoViewModel.kt),
@@ -142,9 +144,10 @@ Other task sources retain entry-level execution.
 
 Completing a task opens three equal-width, vertically stacked actions: CameraX,
 Android photo picker, and cancel. The picker accepts up to ten images. Every
-selected image is physically oriented, converted to a local WebP original plus
-SMALL/MEDIUM/LARGE WebP upload parts, encrypted, and durably queued in selection
-order before the completion callback is emitted. The three upload parts total
+camera batch and every picker selection is physically oriented, converted to a
+local WebP original plus SMALL/MEDIUM/LARGE WebP upload parts, encrypted, and
+durably queued in capture or selection order before the completion callback is
+emitted. The three upload parts total
 at most 1 MiB; only the original is visible in the UI. The final
 saved evidence ID is attached only where the logistics completion contract
 requires a selected photo. The sync coordinator never sends `COMPLETE` until
@@ -244,7 +247,16 @@ and
 [`CameraViewModel.kt`](feature-camera/src/main/java/dev/buhanzaz/rwms/worker/feature/camera/CameraViewModel.kt).
 The WorkerApp CameraX surface carries the ManagerApp photo controls needed in
 the field: rear/front selection, supported optical zoom, focus/metering, night
-mode, flash/torch, framing grid and exposure. While the camera is active, either
+mode, flash/torch, framing grid and exposure. Every shutter action immediately
+returns to the live preview without an accept/retake screen. A circular
+bottom-left thumbnail and count open the swipeable transient batch gallery,
+where individual frames can be removed; the bottom-right arrow persists the
+whole ordered batch. If persistence partially fails, already durable frames
+leave the transient gallery and a retry sends only the remaining files. If the
+worker removes the last failed frame, the arrow completes the already durable
+subset; in both cases the completion callback receives all evidence IDs exactly
+once. While the
+camera is active, either
 hardware volume key triggers exactly one photo per press; holding a key does not
 create duplicate evidence and normal volume handling returns after the camera
 closes.
