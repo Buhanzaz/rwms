@@ -7,6 +7,7 @@ import type { RoutePlan, ScenarioWorkspace, SimulationDerivedState } from '../sr
 import { PlanPanel } from '../src/features/planning/PlanPanel';
 import { SimulationBar } from '../src/features/simulation/SimulationBar';
 import { Inspector } from '../src/app/Inspector';
+import { Sidebar } from '../src/app/Sidebar';
 import { useUiStore } from '../src/stores/ui-store';
 
 function planFixture(): RoutePlan {
@@ -94,6 +95,15 @@ function inspectorProps(plan: RoutePlan, simulation: SimulationDerivedState): Co
 
 afterEach(() => {
   useUiStore.setState({ mode: 'EDITOR', section: 'SCENARIO' });
+});
+
+describe('application shell', () => {
+  it('identifies the active truck routing stack', () => {
+    render(<Sidebar workspace={workspaceFixture()} plan={null} />);
+
+    expect(screen.getByText('Valhalla · OpenStreetMap · грузовой граф')).toBeVisible();
+    expect(screen.queryByText(/OSRM/)).not.toBeInTheDocument();
+  });
 });
 
 describe('built plan UI', () => {

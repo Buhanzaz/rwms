@@ -45,7 +45,7 @@ export function Sidebar({ workspace, plan }: { workspace: ScenarioWorkspace; pla
           {item.icon}<span className="nav-item__label">{item.label}</span>{item.count ? <span className="nav-item__count">{item.count(workspace, plan)}</span> : null}
         </button>)}
       </nav>
-      <footer className="sidebar__footer"><small style={{ color: 'var(--muted)' }}>OSRM · OpenStreetMap · дорожный граф</small></footer>
+      <footer className="sidebar__footer"><small style={{ color: 'var(--muted)' }}>Valhalla · OpenStreetMap · грузовой граф</small></footer>
     </aside>
   );
 }
