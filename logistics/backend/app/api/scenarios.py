@@ -121,7 +121,7 @@ async def generate_workload(
     session: SessionDep,
     snapper: RoadSnapperDep,
 ) -> WorkloadGenerationResult:
-    """Replace and regenerate deterministic workload inside current zones."""
+    """Delete affected plans, then replace deterministic workload inside current zones."""
 
     return await generate_scenario_workload(session, scenario_id, payload, snapper)
 
@@ -135,7 +135,7 @@ async def delete_workload(
     target_date: Annotated[date, Query(alias="date")],
     session: SessionDep,
 ) -> WorkloadDeletionResult:
-    """Delete generator-owned workload for one exact preferred date."""
+    """Delete generator-owned workload and every saved plan for one exact date."""
 
     return await delete_generated_workload(session, scenario_id, target_date)
 

@@ -119,17 +119,19 @@ the batch (defaults 6000×2400×2400 mm and 1200 kg). It fails explicitly with
 points, snaps each through the configured road provider while retaining zone
 coverage, and creates each request through the normal server-side classifier.
 
-Every run is replacement-only for generator-owned, unplanned requests whose
-primary date lies in the selected horizon. It returns the removed count as
-`replaced_requests`; manual/RWMS requests and other dates are outside this
-selection. `DELETE /api/scenarios/{scenario_id}/generated-workload?date=...`
-performs the same ownership check for one exact date without generating a
-replacement. Tasks referenced by any saved route or unassigned-plan result
-fence either command with `409 GENERATED_REQUESTS_ALREADY_PLANNED`; no row is
-deleted. Newly generated requests have stable source IDs so concurrent/retried
-inserts remain protected by external-source uniqueness. Scenario clone and
-JSON export/import preserve source identity plus truck/trailer/profile/segment
-snapshots; older additive-field-free documents remain valid.
+Every run is replacement-only for generator-owned requests whose primary date
+lies in the selected horizon. In the same transaction it first deletes every
+saved route plan in that horizon, then removes the previous generated requests
+and creates their replacement. The response reports `deleted_plans` and
+`replaced_requests`; manual/RWMS requests, generated requests outside the
+horizon and plans on other dates are preserved. A later generation failure
+rolls the complete transaction back, including the old plans and workload.
+`DELETE /api/scenarios/{scenario_id}/generated-workload?date=...` applies the
+same rule to one exact date without generating a replacement. Newly generated
+requests have stable source IDs so concurrent/retried inserts remain protected
+by external-source uniqueness. Scenario clone and JSON export/import preserve
+source identity plus truck/trailer/profile/segment snapshots; older
+additive-field-free documents remain valid.
 
 `POST /api/scenarios/{scenario_id}/plans/generate` plans unscheduled requests
 whose `date_options` contain the requested date, plus scheduled requests whose

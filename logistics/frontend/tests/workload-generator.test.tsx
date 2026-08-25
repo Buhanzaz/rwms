@@ -31,7 +31,7 @@ describe('workload generator dialog', () => {
     expect(screen.getByLabelText('Масса груза, кг')).toHaveValue(1200);
     expect(screen.getByLabelText('Seed')).toHaveValue(42);
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
-    expect(screen.getByText(/прежняя нагрузка генератора заменяется атомарно/)).toBeVisible();
+    expect(screen.getByText(/прежняя нагрузка генератора и все сохранённые планы этих дат удаляются атомарно/)).toBeVisible();
     expect(screen.getByText(/ручные и RWMS-заявки, а также другие даты не затрагиваются/)).toBeVisible();
     expect(screen.getByTestId('workload-preview')).toHaveTextContent('25 августа 2026 г. — 25 августа 2026 г.');
     expect(screen.getByTestId('workload-preview')).toHaveTextContent('Всего заявок8');

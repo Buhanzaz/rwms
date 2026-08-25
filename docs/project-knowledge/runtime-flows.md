@@ -1091,6 +1091,28 @@ Evidence:
 and
 [`rwms_sync.py`](../../logistics/backend/app/integrations/rwms_sync.py).
 
+### Standalone simulator workload replacement
+
+1. Regenerating a workload locks the simulator scenario and treats every saved
+   plan in the selected date horizon as a projection of the workload being
+   replaced. Those plans are deleted before their generated source requests,
+   so route-stop and unassigned-task references cannot retain a stale plan.
+2. **Delete workload** applies the same rule to one exact planning date. Plan
+   children are removed through their existing database cascades; an optimizer
+   run remains independent and loses only its nullable plan reference.
+3. Plan deletion, removal of generator-owned requests, road snapping and
+   insertion of the replacement batch share one database transaction. Any
+   later failure rolls back to the complete previous plan and workload.
+4. Manual and RWMS requests are not selected by workload ownership. Generated
+   requests and saved plans outside the affected dates are preserved.
+
+Evidence:
+[`workload generator`](../../logistics/backend/app/services/workload_generator.py),
+[`route-plan persistence`](../../logistics/backend/app/models/domain.py),
+[`public schemas`](../../logistics/backend/app/schemas/domain.py),
+and
+[`regression`](../../logistics/backend/tests/test_workload_generator.py).
+
 ### Maintenance repair package to worker completion
 
 The ordinary panel board is one aggregate warehouse projection with a single persisted ordering

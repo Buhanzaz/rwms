@@ -539,34 +539,35 @@ date, a one-to-31-day horizon, an exact daily count of zero-to-ten deliveries
 and zero-to-ten pickups, zero-to-three additional accepted dates per request,
 and a seed. Additional dates are selected only inside the horizon. Cargo
 defaults are 6000×2400×2400 mm and 1200 kg; they remain editable before
-generation. Every run first removes only unplanned requests previously owned
-by this generator whose
-preferred date falls inside the selected horizon, then creates the replacement
-batch in the same database transaction. It never appends a second generated
-batch to the same date. Every generated request is explicitly assigned to its
-preferred date; alternative accepted dates remain visible for a later manual
-dispatcher decision but never move work to another day automatically. Manual
-and RWMS requests and generated requests for other dates are never selected.
-Use **Delete workload** to remove the generated workload of the date currently
-selected in the header without immediately creating a replacement. If any
-selected generated task is referenced by a saved plan, replacement or deletion
-returns
-`409 GENERATED_REQUESTS_ALREADY_PLANNED` without deleting anything. Every
-generated candidate starts inside a current Polygon or MultiPolygon. With
+generation. Every run first deletes all saved plans whose date is inside the
+selected horizon, then removes requests previously owned by this generator
+whose preferred date is inside that horizon and creates the replacement batch
+in the same database transaction. It never appends a second generated batch to
+the same date. The response shows the number of deleted plans and replaced
+requests. Every generated request is explicitly assigned to its preferred date;
+alternative accepted dates remain visible for a later manual dispatcher
+decision but never move work to another day automatically. Manual and RWMS
+requests, generated requests for other dates and plans on other dates are never
+selected. If road snapping or later generation fails, the transaction restores
+the previous plans and workload. Use **Delete workload** to remove both the
+generated workload and all saved plans of the date currently selected in the
+header without creating a replacement. Every generated candidate starts inside
+a current Polygon or MultiPolygon. With
 Valhalla it is snapped through `/locate` and accepted only when the
 resulting road point is still covered by that zone; an unavailable in-zone road
 fails the complete atomic run with `422 NO_ROUTABLE_POINT_IN_ZONE`. The mock
 provider keeps the deterministic candidate for offline tests. Normal backend
 classification then creates the request and its transport parts. Equal
 geometry, routing graph, inputs and seed reproduce the same business values.
-New generated requests also receive stable source identities. Legacy repeated
-generator rows remain stored for plan history, but automatic planning schedules
-only their oldest logical source and reports the repeats as
-`DUPLICATE_ASSIGNMENT_CONFLICT`. New rows use their stable external ID; legacy
-generator rows without one are matched by direction, exact generated point and
-primary logistics date rather than mutable display numbers, notes or
-quantities. Renumbering a displayed `№3` as `№7` therefore cannot create
-another visit.
+New generated requests also receive stable source identities. Until a dated
+workload is replaced, automatic planning schedules only the oldest legacy
+duplicate logical source and reports repeats as
+`DUPLICATE_ASSIGNMENT_CONFLICT`. A replacement removes those generator-owned
+legacy rows together with plans of the affected dates. New rows use their
+stable external ID; legacy generator rows without one are matched by direction,
+exact generated point and primary logistics date rather than mutable display
+numbers, notes or quantities. Renumbering a displayed `№3` as `№7` therefore
+cannot create another visit.
 Real manual and RWMS requests retain their authoritative identities even when
 two customers intentionally use the same address. Scenario clone and JSON
 export/import preserve that source system, external identity, source version

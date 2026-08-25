@@ -687,7 +687,7 @@ export interface paths {
         put?: never;
         /**
          * Generate Workload
-         * @description Replace and regenerate deterministic workload inside current zones.
+         * @description Delete affected plans, then replace deterministic workload inside current zones.
          */
         post: operations["generate_workload_api_scenarios__scenario_id__generate_workload_post"];
         delete?: never;
@@ -708,7 +708,7 @@ export interface paths {
         post?: never;
         /**
          * Delete Workload
-         * @description Delete generator-owned workload for one exact preferred date.
+         * @description Delete generator-owned workload and every saved plan for one exact date.
          */
         delete: operations["delete_workload_api_scenarios__scenario_id__generated_workload_delete"];
         options?: never;
@@ -3756,7 +3756,7 @@ export interface components {
         };
         /**
          * WorkloadDeletionResult
-         * @description Summary of an idempotent generated-workload deletion for one date.
+         * @description Summary of idempotently deleting dated generated workload and its plans.
          */
         WorkloadDeletionResult: {
             /**
@@ -3764,6 +3764,11 @@ export interface components {
              * Format: date
              */
             date: string;
+            /**
+             * Deleted Plans
+             * @default 0
+             */
+            deleted_plans: number;
             /** Deleted Requests */
             deleted_requests: number;
             /**
@@ -3800,6 +3805,11 @@ export interface components {
             created_requests: number;
             /** Daily Counts */
             daily_counts: components["schemas"]["WorkloadGenerationDailyCount"][];
+            /**
+             * Deleted Plans
+             * @default 0
+             */
+            deleted_plans: number;
             /**
              * End Date
              * Format: date

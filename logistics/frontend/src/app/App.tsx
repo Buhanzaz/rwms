@@ -153,6 +153,8 @@ export function App() {
   const clearSimulationOverrides = useUiStore((state) => state.clearSimulationOverrides);
 
   const clearLocalPlanningState = useCallback(() => {
+    queryClient.removeQueries({ queryKey: ['plan'] });
+    queryClient.removeQueries({ queryKey: ['optimization-run'] });
     setPlanId(null);
     setPlan(null);
     setRunId(null);
@@ -164,7 +166,7 @@ export function App() {
     setSimulationTimestamp(null);
     setMode('EDITOR');
     setSelected(null);
-  }, [clearSimulationOverrides, clearTrace, setMode, setSelected, setSimulationPlaying, setSimulationTimestamp]);
+  }, [clearSimulationOverrides, clearTrace, queryClient, setMode, setSelected, setSimulationPlaying, setSimulationTimestamp]);
 
   const selectPlanningDate = useCallback((date: string) => {
     setPlanningDate(date);
@@ -604,10 +606,10 @@ export function App() {
       setDialog(null);
       toast({
         tone: 'success',
-        title: result.replaced_requests > 0
+        title: result.replaced_requests > 0 || result.deleted_plans > 0
           ? `Нагрузка заменена: ${result.created_requests} заявок`
           : `Нагрузка создана: ${result.created_requests} заявок`,
-        detail: `${result.created_deliveries} доставок · ${result.created_pickups} вывозов · ${formatDate(result.start_date)}–${formatDate(result.end_date)} · заменено прежних заявок: ${result.replaced_requests}`,
+        detail: `${result.created_deliveries} доставок · ${result.created_pickups} вывозов · ${formatDate(result.start_date)}–${formatDate(result.end_date)} · заменено прежних заявок: ${result.replaced_requests} · удалено планов: ${result.deleted_plans}`,
       });
     }, undefined).catch(() => undefined);
   };
@@ -788,13 +790,13 @@ export function App() {
       {dialog?.kind === 'relation' ? <RelationDialog fromZone={dialog.from} toZone={dialog.to} relation={dialog.value} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => { if (dialog.value) await api.updateZoneRelation(dialog.value.id, { relation_type: input.relation_type, delivery_pair_allowed: input.delivery_pair_allowed, pickup_allowed: input.pickup_allowed, max_detour_minutes: input.max_detour_minutes, max_detour_ratio: input.max_detour_ratio, penalty: input.penalty, is_bidirectional: input.is_bidirectional }); else await api.createZoneRelation(workspace.scenario.id, input); await refresh(); setDialog(null); }, 'Связь зон сохранена'); }} onDelete={dialog.value ? async () => { await execute(async () => { await api.deleteZoneRelation(dialog.value!.id); await refresh(); setDialog(null); }, 'Связь удалена'); } : undefined} /> : null}
       {dialog?.kind === 'delete-entity' ? <ConfirmDialog title={`Удалить «${dialog.label}»?`} description="Действие изменит только текущий тестовый сценарий. Backend проверит ссылки и вернёт ошибку, если объект используется." confirmLabel="Удалить" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => { if (dialog.entityKind === 'zone') await api.deleteZone(dialog.id); else if (dialog.entityKind === 'driver') await api.deleteDriver(dialog.id); else if (dialog.entityKind === 'vehicle') await api.deleteVehicle(dialog.id); else if (dialog.entityKind === 'trailer') await api.deleteTrailer(dialog.id); else if (dialog.entityKind === 'shift') await api.deleteShift(dialog.id); else await api.deleteRequest(dialog.id); await refresh(); setDialog(null); }, 'Объект удалён'); }} /> : null}
       {dialog?.kind === 'delete-scenario' ? <ConfirmDialog title={`Удалить сценарий «${workspace.scenario.name}»?`} description="Сценарий и его тестовые данные будут удалены. Это не затрагивает другие сценарии." confirmLabel="Удалить сценарий" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => { await api.deleteScenario(workspace.scenario.id); setDialog(null); setScenarioId(null); await refresh(); }, 'Сценарий удалён'); }} /> : null}
-      {dialog?.kind === 'delete-generated-workload' ? <ConfirmDialog title={`Удалить нагрузку за ${formatDate(dialog.date)}?`} description="Будут удалены только заявки, созданные генератором на эту дату. Ручные и RWMS-заявки, а также нагрузка других дат останутся без изменений. Если заявки уже входят в сохранённый план, сервер сохранит историю и отменит удаление." confirmLabel="Удалить нагрузку" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => {
+      {dialog?.kind === 'delete-generated-workload' ? <ConfirmDialog title={`Удалить нагрузку за ${formatDate(dialog.date)}?`} description="Будут удалены заявки, созданные генератором на эту дату, и все сохранённые планы этой даты. Ручные и RWMS-заявки, а также нагрузка и планы других дат останутся без изменений." confirmLabel="Удалить нагрузку" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => {
         const result = await api.deleteGeneratedWorkload(workspace.scenario.id, dialog.date);
         await refresh();
         if (dialog.date === planningDate) clearLocalPlanningState();
         setDialog(null);
-        toast(result.deleted_requests > 0
-          ? { tone: 'success', title: `Удалено заявок: ${result.deleted_requests}`, detail: formatDate(result.date) }
+        toast(result.deleted_requests > 0 || result.deleted_plans > 0
+          ? { tone: 'success', title: `Удалено заявок: ${result.deleted_requests} · планов: ${result.deleted_plans}`, detail: formatDate(result.date) }
           : { tone: 'info', title: 'На выбранную дату нагрузки генератора нет', detail: formatDate(result.date) });
       }, undefined).catch(() => undefined); }} /> : null}
       {dialog?.kind === 'reset-demo' ? <ConfirmDialog title={`Заменить данные сценария «${workspace.scenario.name}» демонстрационными?`} description="Склады, зоны, ресурсы, заявки и сохранённые планы только этого сценария будут удалены и созданы заново. Другие сценарии не изменятся." confirmLabel="Создать demo" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => { await api.generateDemo(workspace.scenario.id); await refresh(); setDialog(null); }, 'Demo scenario готов'); }} /> : null}

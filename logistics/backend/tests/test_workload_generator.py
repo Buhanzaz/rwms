@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 import pytest
 from geoalchemy2.shape import to_shape
 from shapely.geometry import Point
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
@@ -626,7 +627,9 @@ async def test_delete_generated_workload_is_exact_and_idempotent(
     remaining = await catalog.list_requests(db_session, scenario.id)
 
     assert deleted.deleted_requests == 2
+    assert deleted.deleted_plans == 0
     assert repeated.deleted_requests == 0
+    assert repeated.deleted_plans == 0
     assert any(request.id == manual.id for request in remaining)
     assert Counter(request.scheduled_date for request in remaining) == Counter(
         {date(2026, 12, 26): 2, None: 1}
@@ -696,10 +699,10 @@ async def test_generator_rejects_zone_without_a_routable_point(
 
 
 @pytest.mark.asyncio
-async def test_saved_plan_reference_blocks_regeneration_and_deletion(
+async def test_saved_plan_is_deleted_with_replaced_or_deleted_workload(
     db_session: AsyncSession,
 ) -> None:
-    """A saved plan reference fences regeneration before any generated row is removed."""
+    """Replacing or deleting dated workload also removes only that day's saved plans."""
 
     scenario, _ = await _scenario_with_zone(db_session, name="Planned regeneration")
     await _generate_workload(
@@ -723,17 +726,23 @@ async def test_saved_plan_reference_blocks_regeneration_and_deletion(
             longitude=37.1,
         ),
     )
-    plan = RoutePlan(
+    affected_plan = RoutePlan(
         scenario_id=scenario.id,
         warehouse_id=warehouse.id,
         date=date(2026, 12, 25),
-        name="Сохранённый план",
+        name="План удаляемого дня",
     )
-    db_session.add(plan)
+    neighboring_plan = RoutePlan(
+        scenario_id=scenario.id,
+        warehouse_id=warehouse.id,
+        date=date(2026, 12, 26),
+        name="План соседнего дня",
+    )
+    db_session.add_all((affected_plan, neighboring_plan))
     await db_session.flush()
     db_session.add(
         UnassignedTask(
-            route_plan_id=plan.id,
+            route_plan_id=affected_plan.id,
             task_id=request.tasks[0].id,
             reason_codes=["NO_SHIFT_CAPACITY"],
             descriptions_ru=["Нет свободной смены"],
@@ -741,38 +750,60 @@ async def test_saved_plan_reference_blocks_regeneration_and_deletion(
     )
     await db_session.flush()
 
-    with pytest.raises(ApiError) as deletion_failure:
-        await delete_generated_workload(
-            db_session,
-            scenario.id,
-            date(2026, 12, 25),
+    regenerated = await _generate_workload(
+        db_session,
+        scenario.id,
+        WorkloadGeneratorInput(
+            start_date=date(2026, 12, 25),
+            days=1,
+            deliveries_per_day=2,
+            pickups_per_day=2,
+            seed=2502,
+        ),
+    )
+
+    assert regenerated.replaced_requests == 1
+    assert regenerated.deleted_plans == 1
+    assert await db_session.scalar(
+        select(RoutePlan.id).where(RoutePlan.id == affected_plan.id)
+    ) is None
+    assert await db_session.scalar(
+        select(RoutePlan.id).where(RoutePlan.id == neighboring_plan.id)
+    ) == neighboring_plan.id
+    current_requests = await catalog.list_requests(db_session, scenario.id)
+    assert len(current_requests) == 4
+    assert all(item.id != request.id for item in current_requests)
+
+    replacement_plan = RoutePlan(
+        scenario_id=scenario.id,
+        warehouse_id=warehouse.id,
+        date=date(2026, 12, 25),
+        name="Новый план удаляемого дня",
+    )
+    db_session.add(replacement_plan)
+    await db_session.flush()
+    db_session.add(
+        UnassignedTask(
+            route_plan_id=replacement_plan.id,
+            task_id=current_requests[0].tasks[0].id,
+            reason_codes=["NO_SHIFT_CAPACITY"],
+            descriptions_ru=["Нет свободной смены"],
         )
+    )
+    await db_session.flush()
 
-    assert deletion_failure.value.status_code == 409
-    assert deletion_failure.value.code == "GENERATED_REQUESTS_ALREADY_PLANNED"
-    assert deletion_failure.value.extra == {
-        "route_stop_references": 0,
-        "unassigned_references": 1,
-    }
+    deleted = await delete_generated_workload(
+        db_session,
+        scenario.id,
+        date(2026, 12, 25),
+    )
 
-    with pytest.raises(ApiError) as failure:
-        await _generate_workload(
-            db_session,
-            scenario.id,
-            WorkloadGeneratorInput(
-                start_date=date(2026, 12, 25),
-                days=1,
-                deliveries_per_day=2,
-                pickups_per_day=2,
-                seed=2502,
-            ),
-        )
-
-    assert failure.value.status_code == 409
-    assert failure.value.code == "GENERATED_REQUESTS_ALREADY_PLANNED"
-    assert failure.value.extra == {
-        "route_stop_references": 0,
-        "unassigned_references": 1,
-    }
-    remaining = await catalog.list_requests(db_session, scenario.id)
-    assert [item.id for item in remaining] == [request.id]
+    assert deleted.deleted_requests == 4
+    assert deleted.deleted_plans == 1
+    assert await db_session.scalar(
+        select(RoutePlan.id).where(RoutePlan.id == replacement_plan.id)
+    ) is None
+    assert await db_session.scalar(
+        select(RoutePlan.id).where(RoutePlan.id == neighboring_plan.id)
+    ) == neighboring_plan.id
+    assert await catalog.list_requests(db_session, scenario.id) == []

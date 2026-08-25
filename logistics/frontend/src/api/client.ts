@@ -210,6 +210,7 @@ export interface WorkloadGenerationResult {
   created_deliveries: number;
   created_pickups: number;
   replaced_requests: number;
+  deleted_plans: number;
   daily_counts: WorkloadGenerationDailyCount[];
 }
 
@@ -218,6 +219,7 @@ export interface GeneratedWorkloadDeletionResult {
   scenario_id: UUID;
   date: string;
   deleted_requests: number;
+  deleted_plans: number;
 }
 
 export interface ZoneCutoutResult {

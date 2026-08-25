@@ -8,17 +8,15 @@ from uuid import UUID, uuid5
 
 from geoalchemy2.shape import to_shape
 from shapely.geometry import MultiPolygon, Point, Polygon
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.errors import ApiError, not_found
 from app.models import (
     LogisticsRequest,
     RequestDateOption,
-    RouteStop,
+    RoutePlan,
     Scenario,
-    UnassignedTask,
     Zone,
 )
 from app.models.domain import RequestStatus, RequestType
@@ -155,45 +153,33 @@ async def _replace_generated_requests(
             RequestDateOption.date.between(horizon[0], horizon[-1]),
             generated_marker,
         )
-        .options(selectinload(LogisticsRequest.tasks))
         .with_for_update()
     )
     requests = list((await session.scalars(statement)).unique().all())
-    task_ids = [task.id for request in requests for task in request.tasks]
-    if task_ids:
-        route_stop_count = int(
-            await session.scalar(
-                select(func.count(RouteStop.id)).where(RouteStop.task_id.in_(task_ids))
-            )
-            or 0
-        )
-        unassigned_count = int(
-            await session.scalar(
-                select(func.count(UnassignedTask.id)).where(
-                    UnassignedTask.task_id.in_(task_ids)
-                )
-            )
-            or 0
-        )
-        if route_stop_count or unassigned_count:
-            raise ApiError(
-                409,
-                "GENERATED_REQUESTS_ALREADY_PLANNED",
-                (
-                    "Тестовые заявки выбранного периода уже входят в сохранённый план. "
-                    "Чтобы сохранить историю плана, выберите другой день или создайте "
-                    "новый тестовый сценарий."
-                ),
-                extra={
-                    "route_stop_references": route_stop_count,
-                    "unassigned_references": unassigned_count,
-                },
-            )
-
     for request in requests:
         await session.delete(request)
     await session.flush()
     return len(requests)
+
+
+async def _delete_route_plans(
+    session: AsyncSession,
+    scenario_id: UUID,
+    horizon: tuple[date, ...],
+) -> int:
+    """Delete every saved plan derived from workload inside the affected horizon."""
+
+    result = await session.execute(
+        delete(RoutePlan)
+        .where(
+            RoutePlan.scenario_id == scenario_id,
+            RoutePlan.date.between(horizon[0], horizon[-1]),
+        )
+        .returning(RoutePlan.id)
+    )
+    deleted_plan_ids = list(result.scalars().all())
+    await session.flush()
+    return len(deleted_plan_ids)
 
 
 def _generated_external_id(
@@ -216,7 +202,7 @@ async def generate_scenario_workload(
     payload: WorkloadGeneratorInput,
     snapper: RoadSnapper,
 ) -> WorkloadGenerationResult:
-    """Replace and regenerate deterministic dated workload through canonical creation."""
+    """Delete affected plans and replace deterministic workload through canonical creation."""
 
     # The scenario row serializes replacement and insertion so concurrent runs
     # cannot interleave deletion with another command's stable source identities.
@@ -242,6 +228,7 @@ async def generate_scenario_workload(
     rng = random.Random(payload.seed)
     settings = ScenarioSettings.model_validate(scenario.settings)
     horizon = tuple(payload.start_date + timedelta(days=offset) for offset in range(payload.days))
+    deleted_plans = await _delete_route_plans(session, scenario_id, horizon)
     replaced_requests = await _replace_generated_requests(
         session,
         scenario_id,
@@ -324,6 +311,7 @@ async def generate_scenario_workload(
         created_deliveries=created_deliveries,
         created_pickups=created_pickups,
         replaced_requests=replaced_requests,
+        deleted_plans=deleted_plans,
         daily_counts=daily_counts,
     )
 
@@ -333,20 +321,23 @@ async def delete_generated_workload(
     scenario_id: UUID,
     target_date: date,
 ) -> WorkloadDeletionResult:
-    """Atomically delete only generated requests whose preferred date matches exactly."""
+    """Atomically delete generated requests and saved plans for one exact date."""
 
     scenario = await session.scalar(
         select(Scenario).where(Scenario.id == scenario_id).with_for_update()
     )
     if scenario is None:
         raise not_found("scenario", scenario_id)
+    horizon = (target_date,)
+    deleted_plans = await _delete_route_plans(session, scenario_id, horizon)
     deleted_requests = await _replace_generated_requests(
         session,
         scenario_id,
-        (target_date,),
+        horizon,
     )
     return WorkloadDeletionResult(
         scenario_id=scenario_id,
         date=target_date,
         deleted_requests=deleted_requests,
+        deleted_plans=deleted_plans,
     )

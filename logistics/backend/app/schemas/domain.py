@@ -189,15 +189,17 @@ class WorkloadGenerationResult(ApiModel):
     created_deliveries: int
     created_pickups: int
     replaced_requests: int = 0
+    deleted_plans: int = 0
     daily_counts: list[WorkloadGenerationDailyCount]
 
 
 class WorkloadDeletionResult(ApiModel):
-    """Summary of an idempotent generated-workload deletion for one date."""
+    """Summary of idempotently deleting dated generated workload and its plans."""
 
     scenario_id: UUID
     date: date
     deleted_requests: int
+    deleted_plans: int = 0
 
 
 class CloneRequest(ApiModel):

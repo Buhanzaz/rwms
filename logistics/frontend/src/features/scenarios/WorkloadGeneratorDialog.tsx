@@ -81,7 +81,7 @@ export function WorkloadGeneratorDialog({ planningDate, seed, busy, onClose, onS
     <Modal
       wide
       title="Сгенерировать рабочую нагрузку"
-      description="Создаст воспроизводимые доставки и вывозы. Для выбранного дня или периода прежняя нагрузка генератора заменяется атомарно; ручные и RWMS-заявки, а также другие даты не затрагиваются."
+      description="Создаст воспроизводимые доставки и вывозы. Для выбранного дня или периода прежняя нагрузка генератора и все сохранённые планы этих дат удаляются атомарно; ручные и RWMS-заявки, а также другие даты не затрагиваются."
       onClose={onClose}
     >
       <form className="form-grid" onSubmit={handleSubmit((values) => onSubmit(values))}>

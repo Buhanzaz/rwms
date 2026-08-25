@@ -563,6 +563,7 @@ async def test_http_workload_generator_can_regenerate_one_day() -> None:
             assert generated.status_code == 201, generated.text
             assert generated.json()["created_requests"] == 2
             assert generated.json()["replaced_requests"] == 0
+            assert generated.json()["deleted_plans"] == 0
 
             regenerated = await client.post(
                 f"/api/scenarios/{scenario_id}/generate-workload",
@@ -580,6 +581,7 @@ async def test_http_workload_generator_can_regenerate_one_day() -> None:
             assert regenerated.json()["created_deliveries"] == 2
             assert regenerated.json()["created_pickups"] == 1
             assert regenerated.json()["replaced_requests"] == 2
+            assert regenerated.json()["deleted_plans"] == 0
 
             requests = await client.get(f"/api/scenarios/{scenario_id}/requests")
             assert requests.status_code == 200
@@ -612,6 +614,7 @@ async def test_http_workload_generator_can_regenerate_one_day() -> None:
                 "scenario_id": scenario_id,
                 "date": "2026-08-24",
                 "deleted_requests": 3,
+                "deleted_plans": 0,
             }
             repeated_delete = await client.delete(
                 f"/api/scenarios/{scenario_id}/generated-workload",
@@ -619,6 +622,7 @@ async def test_http_workload_generator_can_regenerate_one_day() -> None:
             )
             assert repeated_delete.status_code == 200, repeated_delete.text
             assert repeated_delete.json()["deleted_requests"] == 0
+            assert repeated_delete.json()["deleted_plans"] == 0
             remaining = await client.get(f"/api/scenarios/{scenario_id}/requests")
             assert len(remaining.json()) == 2
             assert all(

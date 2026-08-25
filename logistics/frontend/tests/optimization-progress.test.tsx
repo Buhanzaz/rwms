@@ -71,7 +71,7 @@ function jsonResponse(value: unknown): Response {
   return new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }
 
-function installFetchRouter(options: { requestOutside?: boolean; deletedRequests?: number } = {}) {
+function installFetchRouter(options: { requestOutside?: boolean; deletedRequests?: number; deletedPlans?: number } = {}) {
   let reclassified = false;
   const routeFetch = (input: RequestInfo | URL, init?: RequestInit): Response => {
     const url = typeof input === 'string'
@@ -126,7 +126,12 @@ function installFetchRouter(options: { requestOutside?: boolean; deletedRequests
       }]);
     }
     if (url === '/api/scenarios/scenario-id/generated-workload?date=2026-08-25' && method === 'DELETE') {
-      return jsonResponse({ scenario_id: 'scenario-id', date: '2026-08-25', deleted_requests: options.deletedRequests ?? 1 });
+      return jsonResponse({
+        scenario_id: 'scenario-id',
+        date: '2026-08-25',
+        deleted_requests: options.deletedRequests ?? 1,
+        deleted_plans: options.deletedPlans ?? 0,
+      });
     }
     if (url === '/api/scenarios/scenario-id/reclassify-requests' && method === 'POST') {
       reclassified = true;
@@ -223,23 +228,41 @@ describe('optimization progress', () => {
 
 describe('generated workload deletion', () => {
   it('confirms the selected date and waits for the scenario workspace refresh', async () => {
-    const fetchMock = installFetchRouter({ deletedRequests: 1 });
+    const fetchMock = installFetchRouter({ deletedRequests: 1, deletedPlans: 1 });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    client.setQueryData(['plan', 'deleted-plan'], { id: 'deleted-plan' });
+    client.setQueryData(['optimization-run', 'deleted-run'], { id: 'deleted-run' });
     const user = userEvent.setup();
     render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
 
     await user.click(await screen.findByRole('button', { name: 'Удалить нагрузку' }));
     const dialog = screen.getByRole('dialog', { name: 'Удалить нагрузку за 25 августа 2026 г.?' });
-    expect(dialog).toHaveTextContent('Ручные и RWMS-заявки, а также нагрузка других дат останутся без изменений.');
+    expect(dialog).toHaveTextContent('все сохранённые планы этой даты');
+    expect(dialog).toHaveTextContent('нагрузка и планы других дат останутся без изменений');
     await user.click(within(dialog).getByRole('button', { name: 'Удалить нагрузку' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       '/api/scenarios/scenario-id/generated-workload?date=2026-08-25',
       expect.objectContaining({ method: 'DELETE' }),
     ));
-    expect(await screen.findByText('Удалено заявок: 1')).toBeVisible();
+    expect(await screen.findByText('Удалено заявок: 1 · планов: 1')).toBeVisible();
     expect(screen.queryByRole('dialog', { name: /Удалить нагрузку за/ })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([input]) => input === '/api/scenarios/scenario-id').length).toBeGreaterThan(1);
+    expect(client.getQueryData(['plan', 'deleted-plan'])).toBeUndefined();
+    expect(client.getQueryData(['optimization-run', 'deleted-run'])).toBeUndefined();
+  });
+
+  it('reports a removed plan even when no generated request remains', async () => {
+    installFetchRouter({ deletedRequests: 0, deletedPlans: 1 });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const user = userEvent.setup();
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+
+    await user.click(await screen.findByRole('button', { name: 'Удалить нагрузку' }));
+    const dialog = screen.getByRole('dialog', { name: 'Удалить нагрузку за 25 августа 2026 г.?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Удалить нагрузку' }));
+
+    expect(await screen.findByText('Удалено заявок: 0 · планов: 1')).toBeVisible();
   });
 
   it('reports a clear neutral result when the day has no generator workload', async () => {
