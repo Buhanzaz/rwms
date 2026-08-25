@@ -34,13 +34,16 @@ costing.
 The optional **Ограничения грузового транспорта** MapLibre layer reads a
 bounded viewport from `GET /api/routing/truck-restrictions`. It stays off by
 default, starts loading at zoom 8, requests at most 2000 features per viewport
-and asks the operator to zoom in when the response is truncated. Line/area
-outlines and point signs carry text markers as well as colors. Clicking a
+and asks the operator to zoom in when the response is truncated. Road lines
+and point signs carry text markers as well as colors. Clicking a
 feature shows its primary tag/value, all retained truck-relevant OSM tags, OSM
 object identity, data version and the capability status from this table.
 
 The indexer extracts nodes and ways from the exact PBF mounted for the current
-Valhalla build. It deliberately does not flatten OSM relation semantics into
+Valhalla build. Osmium is restricted to point and line output: derived
+`a<id>` area copies of closed ways are skipped so one OSM restriction has one
+stable identity and access-tagged buildings or parking areas do not clutter the
+road overlay. It deliberately does not flatten OSM relation semantics into
 decorative map lines: turn restrictions remain enforced by the routing graph
 but are not advertised as separately clickable overlay features. Conversely,
 an `UNSUPPORTED` or `PARTIAL` feature may be visible for diagnosis without

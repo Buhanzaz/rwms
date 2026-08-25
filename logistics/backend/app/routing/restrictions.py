@@ -107,6 +107,7 @@ _TRAILER_TAGS = ("hgv_articulated", "trailer")
 _GEOMETRY_TYPES = frozenset({"Point", "LineString", "MultiLineString", "Polygon"})
 _LONG_ID_PATTERN = re.compile(r"^(node|way)/([1-9][0-9]*)$")
 _SHORT_ID_PATTERN = re.compile(r"^([nw])([1-9][0-9]*)$")
+_DERIVED_AREA_ID_PATTERN = re.compile(r"^(?:area/|a)[1-9][0-9]*$")
 
 
 def classify_truck_restriction(
@@ -182,6 +183,17 @@ def parse_geojsonseq_feature(feature: Mapping[str, Any]) -> ParsedTruckRestricti
     }
     classification = classify_truck_restriction(tags)
     if classification is None:
+        return None
+
+    # ``osmium export`` can emit a second ``a<2 * way id>`` area feature for
+    # every tagged closed way, in addition to the canonical ``w<id>`` road
+    # line. It has no independent OSM identity and would duplicate the same
+    # restriction. Road overlays therefore keep only node/way features.
+    if any(
+        isinstance(candidate, str)
+        and _DERIVED_AREA_ID_PATTERN.fullmatch(candidate.strip()) is not None
+        for candidate in (properties_raw.get("@id"), feature.get("id"))
+    ):
         return None
 
     osm_identity = _parse_osm_identity(properties_raw.get("@id"), feature.get("id"))

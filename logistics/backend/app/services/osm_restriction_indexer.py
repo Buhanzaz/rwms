@@ -117,6 +117,7 @@ def extract_restrictions(source_pbf: Path, work_directory: Path) -> Path:
             "--overwrite",
             "--index-type=sparse_file_array",
             "--add-unique-id=type_id",
+            "--geometry-types=point,linestring",
             "-f",
             "geojsonseq",
             "-o",

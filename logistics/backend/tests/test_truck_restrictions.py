@@ -14,7 +14,8 @@ from app.routing.restrictions import (
     classify_truck_restriction,
     parse_geojsonseq_feature,
 )
-from app.services.osm_restriction_indexer import iter_extracted_restrictions
+from app.services import osm_restriction_indexer
+from app.services.osm_restriction_indexer import extract_restrictions, iter_extracted_restrictions
 
 
 @pytest.mark.parametrize(
@@ -188,6 +189,45 @@ def test_irrelevant_dependency_object_is_skipped_before_geometry_validation() ->
         )
         is None
     )
+
+
+def test_osmium_derived_area_duplicate_is_skipped() -> None:
+    """An ``a<id>`` copy of a closed way cannot duplicate its canonical line."""
+
+    assert (
+        parse_geojsonseq_feature(
+            {
+                "type": "Feature",
+                "id": "a45764942",
+                "properties": {"access": "customers", "amenity": "parking"},
+                "geometry": {
+                    "type": "MultiPolygon",
+                    "coordinates": [[[[37.54, 55.91], [37.55, 55.91], [37.54, 55.91]]]],
+                },
+            }
+        )
+        is None
+    )
+
+
+def test_extractor_requests_only_canonical_road_geometries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Osmium must not emit derived area copies of closed tagged ways."""
+
+    source = tmp_path / "region.osm.pbf"
+    source.write_bytes(b"pbf")
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(arguments: tuple[str, ...], *, phase: str) -> None:
+        calls.append(arguments)
+        if phase == "export":
+            Path(arguments[arguments.index("-o") + 1]).write_text("{}\n", encoding="utf-8")
+
+    monkeypatch.setattr(osm_restriction_indexer, "_run_osmium", fake_run)
+    extract_restrictions(source, tmp_path)
+    assert "--geometry-types=point,linestring" in calls[-1]
 
 
 def test_relevant_feature_without_supported_identity_fails_explicitly() -> None:

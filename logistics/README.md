@@ -422,7 +422,7 @@ conditional tags are explicitly identified there rather than claimed as safe.
 
 The map layer menu has an optional **Ограничения грузового транспорта** switch.
 At zoom 8 or closer it loads a bounded PostGIS viewport from the same
-`OSM_DATA_VERSION`, draws road/area restrictions and point signs with textual
+`OSM_DATA_VERSION`, draws road restrictions and point signs with textual
 markers, and opens tag/support diagnostics on click. Partial and unsupported
 tags stay visibly labelled; the overlay never decides route feasibility and
 never substitutes for Valhalla truck costing. OSM turn-restriction relations
