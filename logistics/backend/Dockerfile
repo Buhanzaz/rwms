@@ -20,6 +20,15 @@ COPY scripts ./scripts
 
 CMD ["python", "-m", "pytest"]
 
+FROM base AS restriction-indexer
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends osmium-tool=1.18.0-1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir .
+
+CMD ["sh", "-ec", "alembic upgrade head && python -m app.services.osm_restriction_indexer"]
+
 FROM base AS runtime
 
 RUN pip install --no-cache-dir .

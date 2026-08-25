@@ -290,6 +290,38 @@ def test_peak_axle_load_is_configured_and_never_averaged() -> None:
     assert captured.value.code is TruckProfileErrorCode.AXLE_LOAD_EXCEEDED
 
 
+def test_combination_peak_is_not_compared_to_every_trailer_axle_rating() -> None:
+    """A measured truck peak can exceed a lighter trailer's own axle rating."""
+
+    vehicle = _vehicle()
+    trailer = _trailer(
+        tare_weight_kg=1_080,
+        max_gross_weight_kg=3_500,
+        payload_capacity_kg=2_420,
+        max_platform_payload_kg=2_420,
+        max_axle_load_kg=1_675,
+        max_cargo_weight_kg=2_420,
+    )
+    placements = (
+        _cargo(CargoPosition.TRUCK_PLATFORM, weight_kg=1_200),
+        _cargo(CargoPosition.TRAILER_PLATFORM, weight_kg=1_200),
+    )
+
+    profile = EffectiveTruckProfileCalculator().calculate(
+        vehicle=vehicle,
+        trailer=trailer,
+        load=LoadConfiguration(
+            vehicle_id=vehicle.vehicle_id,
+            trailer_id=trailer.trailer_id,
+            trailer_attached=True,
+            cargo_placements=placements,
+        ),
+        axle_profiles=_profiles(TWO_CARGO_SPLIT=7_400),
+    )
+
+    assert profile.max_axle_load_tons == 7.4
+
+
 def test_missing_physical_values_report_exact_fields() -> None:
     """Incomplete legacy vehicles fail safely and identify every critical missing value."""
 

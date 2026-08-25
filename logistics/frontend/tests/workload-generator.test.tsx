@@ -28,7 +28,7 @@ describe('workload generator dialog', () => {
     expect(screen.getByLabelText('Длина груза, мм')).toHaveValue(6000);
     expect(screen.getByLabelText('Ширина груза, мм')).toHaveValue(2400);
     expect(screen.getByLabelText('Высота груза, мм')).toHaveValue(2400);
-    expect(screen.getByLabelText('Масса груза, кг')).toHaveValue(2500);
+    expect(screen.getByLabelText('Масса груза, кг')).toHaveValue(1200);
     expect(screen.getByLabelText('Seed')).toHaveValue(42);
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
     expect(screen.getByText(/прежняя нагрузка генератора заменяется атомарно/)).toBeVisible();
@@ -80,7 +80,7 @@ describe('workload generator dialog', () => {
       cargo_length_mm: 6000,
       cargo_width_mm: 2400,
       cargo_height_mm: 2400,
-      cargo_weight_kg: 2500,
+      cargo_weight_kg: 1200,
       seed: 77,
     });
   });

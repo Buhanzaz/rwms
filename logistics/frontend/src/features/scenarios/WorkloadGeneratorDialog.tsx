@@ -55,7 +55,7 @@ export function WorkloadGeneratorDialog({ planningDate, seed, busy, onClose, onS
       cargo_length_mm: 6_000,
       cargo_width_mm: 2_400,
       cargo_height_mm: 2_400,
-      cargo_weight_kg: 2_500,
+      cargo_weight_kg: 1_200,
       seed,
     },
   });

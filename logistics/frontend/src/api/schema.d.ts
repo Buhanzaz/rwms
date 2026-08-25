@@ -480,6 +480,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/routing/truck-restrictions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Truck Restrictions
+         * @description Return bounded real OSM truck restrictions intersecting the map viewport.
+         */
+        get: operations["list_truck_restrictions_api_routing_truck_restrictions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/scenarios": {
         parameters: {
             query?: never;
@@ -2144,6 +2164,12 @@ export interface components {
          */
         RequestType: "DELIVERY" | "PICKUP";
         /**
+         * RestrictionSupportStatus
+         * @description Truthful Valhalla support level for one source restriction.
+         * @enum {string}
+         */
+        RestrictionSupportStatus: "SUPPORTED" | "PARTIAL" | "UNSUPPORTED";
+        /**
          * RouteCycleRead
          * @description One route cycle with ordered stops, segments, and explanations.
          */
@@ -3157,6 +3183,91 @@ export interface components {
             width_mm?: number | null;
         };
         /**
+         * TruckRestrictionCategory
+         * @description Stable map categories understood by the backend and frontend.
+         * @enum {string}
+         */
+        TruckRestrictionCategory: "HGV_ACCESS" | "MAX_HEIGHT" | "MAX_WIDTH" | "MAX_LENGTH" | "MAX_WEIGHT" | "MAX_AXLE_LOAD" | "CONDITIONAL" | "TRAILER_ACCESS";
+        /**
+         * TruckRestrictionFeature
+         * @description One GeoJSON feature from the active OSM routing-data version.
+         */
+        TruckRestrictionFeature: {
+            geometry: components["schemas"]["TruckRestrictionGeometry"];
+            properties: components["schemas"]["TruckRestrictionProperties"];
+            /**
+             * Type
+             * @default Feature
+             * @constant
+             */
+            type: "Feature";
+        };
+        /**
+         * TruckRestrictionFeatureCollection
+         * @description Bounded GeoJSON collection used by the optional map overlay.
+         */
+        TruckRestrictionFeatureCollection: {
+            /** Features */
+            features: components["schemas"]["TruckRestrictionFeature"][];
+            metadata: components["schemas"]["TruckRestrictionMetadata"];
+            /**
+             * Type
+             * @default FeatureCollection
+             * @constant
+             */
+            type: "FeatureCollection";
+        };
+        /**
+         * TruckRestrictionGeometry
+         * @description GeoJSON geometry shapes emitted by the node/way OSM extractor.
+         */
+        TruckRestrictionGeometry: {
+            /** Coordinates */
+            coordinates: unknown[];
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "Point" | "LineString" | "MultiLineString" | "Polygon";
+        };
+        /**
+         * TruckRestrictionMetadata
+         * @description Completeness and provenance metadata for one viewport query.
+         */
+        TruckRestrictionMetadata: {
+            /** Count */
+            count: number;
+            /** Generated At */
+            generated_at: string | null;
+            /** Osm Data Version */
+            osm_data_version: string;
+            /** Truncated */
+            truncated: boolean;
+        };
+        /**
+         * TruckRestrictionProperties
+         * @description Map styling and diagnostic properties for one OSM restriction.
+         */
+        TruckRestrictionProperties: {
+            category: components["schemas"]["TruckRestrictionCategory"];
+            /** Osm Id */
+            osm_id: number;
+            /**
+             * Osm Type
+             * @enum {string}
+             */
+            osm_type: "node" | "way";
+            /** Primary Tag */
+            primary_tag: string;
+            support_status: components["schemas"]["RestrictionSupportStatus"];
+            /** Tags */
+            tags: {
+                [key: string]: string;
+            };
+            /** Value */
+            value: string;
+        };
+        /**
          * UnassignedTaskRead
          * @description Task with actionable assignment failure detail.
          */
@@ -3734,7 +3845,7 @@ export interface components {
             cargo_length_mm: number;
             /**
              * Cargo Weight Kg
-             * @default 2500
+             * @default 1200
              */
             cargo_weight_kg: number;
             /**
@@ -4918,6 +5029,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LogisticsRequestRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_truck_restrictions_api_routing_truck_restrictions_get: {
+        parameters: {
+            query: {
+                west: number;
+                south: number;
+                east: number;
+                north: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TruckRestrictionFeatureCollection"];
                 };
             };
             /** @description Validation Error */

@@ -2332,6 +2332,16 @@
         "title": "RequestType",
         "type": "string"
       },
+      "RestrictionSupportStatus": {
+        "description": "Truthful Valhalla support level for one source restriction.",
+        "enum": [
+          "SUPPORTED",
+          "PARTIAL",
+          "UNSUPPORTED"
+        ],
+        "title": "RestrictionSupportStatus",
+        "type": "string"
+      },
       "RouteCycleRead": {
         "additionalProperties": false,
         "description": "One route cycle with ordered stops, segments, and explanations.",
@@ -4627,6 +4637,188 @@
         "title": "TrailerUpdate",
         "type": "object"
       },
+      "TruckRestrictionCategory": {
+        "description": "Stable map categories understood by the backend and frontend.",
+        "enum": [
+          "HGV_ACCESS",
+          "MAX_HEIGHT",
+          "MAX_WIDTH",
+          "MAX_LENGTH",
+          "MAX_WEIGHT",
+          "MAX_AXLE_LOAD",
+          "CONDITIONAL",
+          "TRAILER_ACCESS"
+        ],
+        "title": "TruckRestrictionCategory",
+        "type": "string"
+      },
+      "TruckRestrictionFeature": {
+        "additionalProperties": false,
+        "description": "One GeoJSON feature from the active OSM routing-data version.",
+        "properties": {
+          "geometry": {
+            "$ref": "#/components/schemas/TruckRestrictionGeometry"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/TruckRestrictionProperties"
+          },
+          "type": {
+            "const": "Feature",
+            "default": "Feature",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "geometry",
+          "properties"
+        ],
+        "title": "TruckRestrictionFeature",
+        "type": "object"
+      },
+      "TruckRestrictionFeatureCollection": {
+        "additionalProperties": false,
+        "description": "Bounded GeoJSON collection used by the optional map overlay.",
+        "properties": {
+          "features": {
+            "items": {
+              "$ref": "#/components/schemas/TruckRestrictionFeature"
+            },
+            "title": "Features",
+            "type": "array"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/TruckRestrictionMetadata"
+          },
+          "type": {
+            "const": "FeatureCollection",
+            "default": "FeatureCollection",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "features",
+          "metadata"
+        ],
+        "title": "TruckRestrictionFeatureCollection",
+        "type": "object"
+      },
+      "TruckRestrictionGeometry": {
+        "additionalProperties": false,
+        "description": "GeoJSON geometry shapes emitted by the node/way OSM extractor.",
+        "properties": {
+          "coordinates": {
+            "items": {},
+            "title": "Coordinates",
+            "type": "array"
+          },
+          "type": {
+            "enum": [
+              "Point",
+              "LineString",
+              "MultiLineString",
+              "Polygon"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "coordinates"
+        ],
+        "title": "TruckRestrictionGeometry",
+        "type": "object"
+      },
+      "TruckRestrictionMetadata": {
+        "additionalProperties": false,
+        "description": "Completeness and provenance metadata for one viewport query.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "generated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          },
+          "osm_data_version": {
+            "title": "Osm Data Version",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "osm_data_version",
+          "count",
+          "truncated",
+          "generated_at"
+        ],
+        "title": "TruckRestrictionMetadata",
+        "type": "object"
+      },
+      "TruckRestrictionProperties": {
+        "additionalProperties": false,
+        "description": "Map styling and diagnostic properties for one OSM restriction.",
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/TruckRestrictionCategory"
+          },
+          "osm_id": {
+            "title": "Osm Id",
+            "type": "integer"
+          },
+          "osm_type": {
+            "enum": [
+              "node",
+              "way"
+            ],
+            "title": "Osm Type",
+            "type": "string"
+          },
+          "primary_tag": {
+            "title": "Primary Tag",
+            "type": "string"
+          },
+          "support_status": {
+            "$ref": "#/components/schemas/RestrictionSupportStatus"
+          },
+          "tags": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "object"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "osm_type",
+          "osm_id",
+          "category",
+          "primary_tag",
+          "value",
+          "tags",
+          "support_status"
+        ],
+        "title": "TruckRestrictionProperties",
+        "type": "object"
+      },
       "UnassignedTaskRead": {
         "additionalProperties": false,
         "description": "Task with actionable assignment failure detail.",
@@ -6388,7 +6580,7 @@
             "type": "integer"
           },
           "cargo_weight_kg": {
-            "default": 2500,
+            "default": 1200,
             "exclusiveMinimum": 0.0,
             "title": "Cargo Weight Kg",
             "type": "integer"
@@ -8324,6 +8516,96 @@
         "summary": "Split Request",
         "tags": [
           "catalog"
+        ]
+      }
+    },
+    "/api/routing/truck-restrictions": {
+      "get": {
+        "description": "Return bounded real OSM truck restrictions intersecting the map viewport.",
+        "operationId": "list_truck_restrictions_api_routing_truck_restrictions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "west",
+            "required": true,
+            "schema": {
+              "maximum": 180,
+              "minimum": -180,
+              "title": "West",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "south",
+            "required": true,
+            "schema": {
+              "maximum": 90,
+              "minimum": -90,
+              "title": "South",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "east",
+            "required": true,
+            "schema": {
+              "maximum": 180,
+              "minimum": -180,
+              "title": "East",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "north",
+            "required": true,
+            "schema": {
+              "maximum": 90,
+              "minimum": -90,
+              "title": "North",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 2000,
+              "maximum": 5000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TruckRestrictionFeatureCollection"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Truck Restrictions",
+        "tags": [
+          "routing"
         ]
       }
     },

@@ -1,3 +1,4 @@
+import type { Feature, FeatureCollection, Geometry } from 'geojson';
 import type {
   Driver,
   DriverShift,
@@ -96,8 +97,51 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     return await parseResponse<T>(response);
   } catch (error: unknown) {
     if (error instanceof ApiError) throw error;
+    if (init.signal?.aborted) throw error;
     throw new ApiError(0, null, 'Backend недоступен. Проверьте контейнер и соединение.');
   }
+}
+
+export type TruckRestrictionCategory =
+  | 'HGV_ACCESS'
+  | 'MAX_HEIGHT'
+  | 'MAX_WIDTH'
+  | 'MAX_LENGTH'
+  | 'MAX_WEIGHT'
+  | 'MAX_AXLE_LOAD'
+  | 'CONDITIONAL'
+  | 'TRAILER_ACCESS';
+
+export type TruckRestrictionSupportStatus = 'SUPPORTED' | 'PARTIAL' | 'UNSUPPORTED';
+
+export interface TruckRestrictionProperties {
+  osm_type: 'node' | 'way';
+  osm_id: number;
+  category: TruckRestrictionCategory;
+  primary_tag: string;
+  value: string;
+  tags: Record<string, string>;
+  support_status: TruckRestrictionSupportStatus;
+}
+
+export type TruckRestrictionFeature = Feature<Geometry, TruckRestrictionProperties>;
+
+export interface TruckRestrictionMetadata {
+  osm_data_version: string;
+  count: number;
+  truncated: boolean;
+  generated_at: string | null;
+}
+
+export interface TruckRestrictionCollection extends FeatureCollection<Geometry, TruckRestrictionProperties> {
+  metadata: TruckRestrictionMetadata;
+}
+
+export interface TruckRestrictionBounds {
+  west: number;
+  south: number;
+  east: number;
+  north: number;
 }
 
 function jsonBody(value: unknown): string {
@@ -556,6 +600,22 @@ function normalizeValidationWithDiagnostics(
 
 export const api = {
   health: () => request<{ status: string }>('/health'),
+
+  getTruckRestrictions: (
+    bounds: TruckRestrictionBounds,
+    signal?: AbortSignal,
+    limit = 2000,
+  ) => {
+    const query = new URLSearchParams({
+      west: String(bounds.west),
+      south: String(bounds.south),
+      east: String(bounds.east),
+      north: String(bounds.north),
+      limit: String(limit),
+    });
+    const init: RequestInit = signal ? { signal } : {};
+    return request<TruckRestrictionCollection>(`/routing/truck-restrictions?${query.toString()}`, init);
+  },
 
   listScenarios: async () => (await request<RawScenario[]>('/scenarios')).map((scenario) => normalizeScenario(scenario)),
   getScenario: async (id: UUID) => normalizeScenario(await request<RawScenario>(`/scenarios/${id}`)),

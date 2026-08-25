@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help up down logs ps reset-db test test-backend test-frontend test-valhalla-truck typecheck lint openapi e2e
+.PHONY: help up down logs ps reset-db index-truck-restrictions test test-backend test-frontend test-valhalla-truck typecheck lint openapi e2e
 
 help:
 	@awk 'BEGIN {FS = ":.*## "; printf "Logistics simulator commands:\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -19,6 +19,9 @@ ps: ## Show container and health status.
 
 reset-db: ## Delete only this simulator's Compose volume and rebuild demo data on next start.
 	docker compose down --volumes
+
+index-truck-restrictions: ## Import the configured OSM_DATA_VERSION into the PostGIS map index.
+	docker compose run --rm truck-restrictions-indexer
 
 test: test-backend test-frontend ## Run all unit and component checks.
 

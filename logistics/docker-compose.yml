@@ -138,6 +138,24 @@ services:
       start_period: 30m
     restart: unless-stopped
 
+  truck-restrictions-indexer:
+    build:
+      context: ./backend
+      target: restriction-indexer
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://logistics:logistics@db:5432/logistics}
+      OSM_DATA_VERSION: ${OSM_DATA_VERSION:-unknown}
+      OSM_RESTRICTIONS_PBF_PATH: /osm-source/region.osm.pbf
+      OSM_RESTRICTIONS_BATCH_SIZE: ${OSM_RESTRICTIONS_BATCH_SIZE:-1000}
+    depends_on:
+      db:
+        condition: service_healthy
+      osrm-download:
+        condition: service_completed_successfully
+    volumes:
+      - logistics-osrm-data:/osm-source:ro
+    restart: "no"
+
   backend:
     build:
       context: ./backend
@@ -170,6 +188,8 @@ services:
         condition: service_healthy
       valhalla:
         condition: service_healthy
+      truck-restrictions-indexer:
+        condition: service_completed_successfully
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
     healthcheck:

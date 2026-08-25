@@ -61,8 +61,12 @@ the same renderer-neutral evaluator to Master Setup and ordinary CAD. See the
 [`application shell`](../../cabin-cad/src/app/App.tsx).
 
 `logistics/` is a separate React/FastAPI/PostGIS planning and simulation
-deployable with its own schema, zones, route plans and private OSRM graph. It
-never reads an RWMS service database. Its optional integration is disabled by
+deployable with its own schema, zones and route plans. A private Valhalla truck
+graph is built from the pinned OpenStreetMap PBF; a one-shot Osmium importer
+atomically derives the same-version PostGIS truck-restriction overlay before
+the backend starts. That overlay is diagnostic only: per-leg Valhalla truck
+costing remains the route-safety authority. The simulator never reads an RWMS
+service database. Its optional integration is disabled by
 default; when enabled, the backend authenticates as the dedicated
 `logistics-planner` client with sole scope `logistics.planning`, imports a
 warehouse/date-bounded minimal order feed from `logistics-service`, and applies

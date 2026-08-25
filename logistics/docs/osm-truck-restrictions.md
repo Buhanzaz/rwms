@@ -29,6 +29,24 @@ costing.
 | `maxweightrating:hgv=*` | Unsupported | Not parsed into a truck-costing restriction by the pinned engine. |
 | `hgv_articulated=*`, `trailer=*` | Unsupported as dedicated semantics | Valhalla still receives and enforces the effective dimensions and weight of the attached combination, but these OSM tags have no dedicated 3.8.3 behavior. |
 
+## Operator map overlay
+
+The optional **Ограничения грузового транспорта** MapLibre layer reads a
+bounded viewport from `GET /api/routing/truck-restrictions`. It stays off by
+default, starts loading at zoom 8, requests at most 2000 features per viewport
+and asks the operator to zoom in when the response is truncated. Line/area
+outlines and point signs carry text markers as well as colors. Clicking a
+feature shows its primary tag/value, all retained truck-relevant OSM tags, OSM
+object identity, data version and the capability status from this table.
+
+The indexer extracts nodes and ways from the exact PBF mounted for the current
+Valhalla build. It deliberately does not flatten OSM relation semantics into
+decorative map lines: turn restrictions remain enforced by the routing graph
+but are not advertised as separately clickable overlay features. Conversely,
+an `UNSUPPORTED` or `PARTIAL` feature may be visible for diagnosis without
+being presented as enforced. The overlay is explanatory evidence only; route
+feasibility always comes from a per-leg `costing=truck` Valhalla request.
+
 ## Operational data identity
 
 OSM PBF files and generated Valhalla tiles live only in Docker volumes and are

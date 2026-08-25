@@ -69,6 +69,15 @@ button { color: inherit; }
 .layer-menu { top: 12px; right: 12px; width: 224px; max-height: calc(100% - 24px); overflow: auto; pointer-events: auto; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: rgba(8, 17, 30, .94); box-shadow: 0 10px 30px #0006; }
 .layer-menu h3 { margin: 0 0 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
 .layer-menu .checkbox-field { margin: 5px 0; }
+.truck-restriction-layer-menu { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--line); }
+.truck-restriction-layer-menu__details { display: grid; gap: 7px; margin-top: 7px; }
+.truck-restriction-layer-menu__details > p { margin: 0; padding: 6px 7px; border-radius: 6px; background: #111f32; color: var(--muted); font-size: 10px; line-height: 1.4; }
+.truck-restriction-layer-menu__details > p strong { color: var(--text); }
+.truck-restriction-layer-menu__details > p span { color: var(--warning); }
+.truck-restriction-layer-menu__error { display: grid; gap: 3px; padding: 7px; border: 1px solid #7f3544; border-radius: 7px; background: #321621; color: #fecdd3; font-size: 10px; line-height: 1.4; }
+.truck-restriction-legend { display: grid; gap: 4px; padding-top: 2px; }
+.truck-restriction-legend > span { min-width: 0; display: grid; grid-template-columns: 28px 1fr; align-items: center; gap: 6px; color: #b8c8d9; font-size: 9px; line-height: 1.25; }
+.truck-restriction-legend i { min-height: 16px; display: grid; place-items: center; border: 1px solid #07101d; border-radius: 4px; color: #07101d; font-size: 8px; font-style: normal; font-weight: 900; }
 .route-legend { top: 12px; right: 12px; width: 224px; max-height: calc(100% - 100px); overflow: auto; pointer-events: auto; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: rgba(8, 17, 30, .94); box-shadow: 0 10px 30px #0006; }
 .route-legend > strong { display: block; font-size: 11px; color: var(--text); text-transform: uppercase; letter-spacing: .07em; }
 .route-legend > small { display: block; margin: 4px 0 7px; color: var(--muted); font-size: 10px; line-height: 1.35; }
@@ -119,6 +128,15 @@ button { color: inherit; }
 .map-marker--selected { box-shadow: 0 0 0 5px #fbbf2466, 0 6px 18px #000b; }
 .maplibregl-popup-content { background: #101e31 !important; color: var(--text); border: 1px solid var(--line); border-radius: 8px !important; box-shadow: 0 12px 35px #0009 !important; }
 .maplibregl-popup-tip { border-top-color: #101e31 !important; }
+.truck-restriction-map-popup { z-index: 19; }
+.truck-restriction-map-popup .maplibregl-popup-content { width: min(360px, calc(100vw - 32px)); max-height: min(540px, calc(100vh - 120px)); overflow: auto; padding: 13px !important; border-color: #5d496f; background: rgba(8, 17, 30, .97) !important; }
+.truck-restriction-popup__eyebrow { display: block; padding-right: 20px; color: var(--warning); font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+.truck-restriction-popup h3 { margin: 5px 18px 10px 0; font-size: 15px; line-height: 1.3; }
+.truck-restriction-popup > strong { display: block; margin: 11px 0 5px; color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
+.truck-restriction-popup dl { display: grid; gap: 4px; margin: 0; }
+.truck-restriction-popup dl > div { display: grid; grid-template-columns: minmax(82px, .75fr) minmax(0, 1.25fr); gap: 7px; padding: 4px 0; border-bottom: 1px solid #22364c; }
+.truck-restriction-popup dt { color: var(--muted); font-size: 9px; overflow-wrap: anywhere; }
+.truck-restriction-popup dd { margin: 0; color: var(--text); font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
 
 .inspector { border-right: 0; border-left: 1px solid var(--line); }
 .workspace--collapsed .inspector { display: none; }

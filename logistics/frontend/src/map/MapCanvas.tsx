@@ -6,7 +6,7 @@ import {
   type GeoJSONStoreFeatures,
 } from 'terra-draw';
 import { TerraDrawMapLibreGLAdapter } from 'terra-draw-maplibre-gl-adapter';
-import maplibregl, { type GeoJSONSource, type Map as MapLibreMap, type Marker } from 'maplibre-gl';
+import maplibregl, { type GeoJSONSource, type Map as MapLibreMap, type Marker, type Popup } from 'maplibre-gl';
 import {
   Box,
   Crosshair,
@@ -37,12 +37,22 @@ import type {
   UUID,
   Zone,
 } from '../domain/types';
+import { api, type TruckRestrictionCategory, type TruckRestrictionMetadata } from '../api/client';
 import { CheckboxField } from '../components/ui';
 import { isRequestVisibleOnDate } from '../domain/request-dates';
 import { useUiStore, type LayerVisibility, type MapTool } from '../stores/ui-store';
 import { formatTime } from '../utils/format';
 import { deriveSimulationRouteLayers } from '../simulation/route-layers';
 import { RequestMapPopup } from './RequestMapCard';
+import {
+  buildTruckRestrictionPopupContent,
+  truckRestrictionKey,
+  truckRestrictionLookup,
+  truckRestrictionMapData,
+  truckRestrictionPresentation,
+  type TruckRestrictionLayerState,
+} from './TruckRestrictions';
+import { TruckRestrictionLayerMenuItem } from './TruckRestrictionsLayer';
 
 const BLANK_STYLE: maplibregl.StyleSpecification = {
   version: 8,
@@ -52,8 +62,21 @@ const BLANK_STYLE: maplibregl.StyleSpecification = {
 };
 
 const EMPTY_COLLECTION: FeatureCollection = { type: 'FeatureCollection', features: [] };
-const SOURCE_IDS = ['rwms-zones', 'rwms-corridor', 'rwms-routes', 'rwms-traveled', 'rwms-active', 'rwms-candidates', 'rwms-selected'] as const;
+const SOURCE_IDS = ['rwms-zones', 'rwms-corridor', 'rwms-routes', 'rwms-traveled', 'rwms-active', 'rwms-candidates', 'rwms-selected', 'rwms-truck-restrictions'] as const;
 const ROUTE_COLORS = ['#5ee2b2', '#60a5fa', '#fb923c', '#c084fc', '#facc15', '#22d3ee'];
+const TRUCK_RESTRICTION_MIN_ZOOM = 8;
+const TRUCK_RESTRICTION_LAYER_IDS = [
+  'rwms-truck-restrictions-lines',
+  'rwms-truck-restrictions-points',
+  'rwms-truck-restrictions-line-labels',
+  'rwms-truck-restrictions-point-labels',
+] as const;
+const EMPTY_TRUCK_RESTRICTION_STATE: TruckRestrictionLayerState = {
+  status: 'off',
+  count: 0,
+  truncated: false,
+  error: null,
+};
 
 const layerLabels: Record<keyof LayerVisibility, string> = {
   base: 'Базовая карта / сетка',
@@ -70,6 +93,7 @@ const layerLabels: Record<keyof LayerVisibility, string> = {
   trucks: 'Машины',
   corridor: 'Маршрутный коридор',
   selected: 'Выбранный объект',
+  truckRestrictions: 'Ограничения грузового транспорта',
 };
 
 interface MapCanvasProps {
@@ -197,13 +221,65 @@ function featureProperty(feature: unknown, key: string): string | null {
   return typeof value === 'string' ? value : null;
 }
 
+function featureNumberProperty(feature: unknown, key: string): number | null {
+  if (!feature || typeof feature !== 'object' || !('properties' in feature)) return null;
+  const properties = feature.properties;
+  if (!properties || typeof properties !== 'object' || !(key in properties)) return null;
+  const value = (properties as Record<string, unknown>)[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+const TRUCK_RESTRICTION_CATEGORIES: TruckRestrictionCategory[] = [
+  'HGV_ACCESS',
+  'MAX_HEIGHT',
+  'MAX_WIDTH',
+  'MAX_LENGTH',
+  'MAX_WEIGHT',
+  'MAX_AXLE_LOAD',
+  'CONDITIONAL',
+  'TRAILER_ACCESS',
+];
+
+function addTruckRestrictionIcons(map: MapLibreMap): void {
+  TRUCK_RESTRICTION_CATEGORIES.forEach((category) => {
+    const imageName = `rwms-truck-restriction-${category}`;
+    if (map.hasImage(imageName)) return;
+    const presentation = truckRestrictionPresentation(category);
+    const canvas = document.createElement('canvas');
+    canvas.width = 72;
+    canvas.height = 36;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    context.fillStyle = '#07101d';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.strokeStyle = presentation.color;
+    context.lineWidth = 5;
+    context.strokeRect(2.5, 2.5, canvas.width - 5, canvas.height - 5);
+    context.fillStyle = '#f8fafc';
+    context.font = 'bold 20px sans-serif';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(presentation.marker, canvas.width / 2, canvas.height / 2 + 1);
+    map.addImage(imageName, context.getImageData(0, 0, canvas.width, canvas.height), { pixelRatio: 2 });
+  });
+}
+
 function addOverlaySources(map: MapLibreMap): void {
   for (const id of SOURCE_IDS) {
-    if (!map.getSource(id)) map.addSource(id, { type: 'geojson', data: EMPTY_COLLECTION });
+    if (!map.getSource(id)) {
+      map.addSource(id, {
+        type: 'geojson',
+        data: EMPTY_COLLECTION,
+        ...(id === 'rwms-truck-restrictions'
+          ? { attribution: '<a href="https://www.openstreetmap.org/copyright" target="_blank">© OpenStreetMap contributors</a>' }
+          : {}),
+      });
+    }
   }
   const addLayer = (layer: maplibregl.LayerSpecification) => {
     if (!map.getLayer(layer.id)) map.addLayer(layer);
   };
+  addTruckRestrictionIcons(map);
   addLayer({
     id: 'rwms-zones-fill', type: 'fill', source: 'rwms-zones',
     paint: { 'fill-color': ['case', ['==', ['get', 'group'], 'WEST'], '#60a5fa', ['==', ['get', 'group'], 'EAST'], '#fb923c', ['==', ['get', 'group'], 'REGION'], '#a78bfa', '#5ee2b2'], 'fill-opacity': 0.16 },
@@ -217,6 +293,58 @@ function addOverlaySources(map: MapLibreMap): void {
   addLayer({ id: 'rwms-active-line', type: 'line', source: 'rwms-active', paint: { 'line-color': '#fbbf24', 'line-width': 7, 'line-opacity': 0.95 } });
   addLayer({ id: 'rwms-selected-fill', type: 'fill', source: 'rwms-selected', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#fbbf24', 'fill-opacity': 0.22 } });
   addLayer({ id: 'rwms-selected-line', type: 'line', source: 'rwms-selected', paint: { 'line-color': '#fbbf24', 'line-width': 6, 'line-opacity': 0.9 } });
+  addLayer({
+    id: 'rwms-truck-restrictions-lines',
+    type: 'line',
+    source: 'rwms-truck-restrictions',
+    filter: ['!=', ['geometry-type'], 'Point'],
+    layout: { visibility: 'none' },
+    paint: {
+      'line-color': ['get', 'color'],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 8, 3, 14, 7],
+      'line-opacity': 0.82,
+    },
+  });
+  addLayer({
+    id: 'rwms-truck-restrictions-points',
+    type: 'circle',
+    source: 'rwms-truck-restrictions',
+    filter: ['==', ['geometry-type'], 'Point'],
+    layout: { visibility: 'none' },
+    paint: {
+      'circle-color': ['get', 'color'],
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 6, 14, 10],
+      'circle-stroke-color': '#07101d',
+      'circle-stroke-width': 2,
+      'circle-opacity': 0.9,
+    },
+  });
+  addLayer({
+    id: 'rwms-truck-restrictions-line-labels',
+    type: 'symbol',
+    source: 'rwms-truck-restrictions',
+    filter: ['!=', ['geometry-type'], 'Point'],
+    layout: {
+      visibility: 'none',
+      'symbol-placement': 'line',
+      'symbol-spacing': 180,
+      'icon-image': ['concat', 'rwms-truck-restriction-', ['get', 'category']],
+      'icon-keep-upright': true,
+      'icon-rotation-alignment': 'map',
+    },
+  });
+  addLayer({
+    id: 'rwms-truck-restrictions-point-labels',
+    type: 'symbol',
+    source: 'rwms-truck-restrictions',
+    filter: ['==', ['geometry-type'], 'Point'],
+    layout: {
+      visibility: 'none',
+      'icon-image': ['concat', 'rwms-truck-restriction-', ['get', 'category']],
+      'icon-offset': [0, -14],
+      'icon-allow-overlap': false,
+    },
+  });
 }
 
 function splitZoneForDraw(zone: Zone): GeoJSONStoreFeatures<Polygon>[] {
@@ -261,12 +389,17 @@ export function MapCanvas({
   const mapRef = useRef<MapLibreMap | null>(null);
   const drawRef = useRef<TerraDraw | null>(null);
   const markersRef = useRef<Marker[]>([]);
+  const truckRestrictionPopupRef = useRef<Popup | null>(null);
+  const truckRestrictionAbortRef = useRef<AbortController | null>(null);
+  const truckRestrictionLookupRef = useRef<ReturnType<typeof truckRestrictionLookup>>(new Map());
+  const truckRestrictionMetadataRef = useRef<TruckRestrictionMetadata | null>(null);
   const hydratedRef = useRef(false);
   const fittedPlanIdRef = useRef<UUID | null>(null);
   const zonesRef = useRef(workspace.zones);
   const [mapReady, setMapReady] = useState(false);
   const [offlineMode, setOfflineMode] = useState(!import.meta.env.VITE_MAP_STYLE_URL);
   const [layersOpen, setLayersOpen] = useState(false);
+  const [truckRestrictionState, setTruckRestrictionState] = useState<TruckRestrictionLayerState>(EMPTY_TRUCK_RESTRICTION_STATE);
   const mapTool = useUiStore((state) => state.mapTool);
   const setMapTool = useUiStore((state) => state.setMapTool);
   const relationSourceZoneId = useUiStore((state) => state.relationSourceZoneId);
@@ -329,10 +462,137 @@ export function MapCanvas({
       drawRef.current = null;
       markersRef.current.forEach((marker) => marker.remove());
       markersRef.current = [];
+      truckRestrictionAbortRef.current?.abort();
+      truckRestrictionAbortRef.current = null;
+      truckRestrictionPopupRef.current?.remove();
+      truckRestrictionPopupRef.current = null;
       map.remove();
       mapRef.current = null;
     };
   }, [onMapError, styleUrl]);
+
+  const loadTruckRestrictions = useCallback(async () => {
+    const map = mapRef.current;
+    if (!map || !mapReady || !layers.truckRestrictions) return;
+    if (map.getZoom() < TRUCK_RESTRICTION_MIN_ZOOM) {
+      truckRestrictionAbortRef.current?.abort();
+      truckRestrictionAbortRef.current = null;
+      truckRestrictionLookupRef.current.clear();
+      truckRestrictionMetadataRef.current = null;
+      setSource(map, 'rwms-truck-restrictions', EMPTY_COLLECTION);
+      setTruckRestrictionState({ status: 'zoom', count: 0, truncated: false, error: null });
+      return;
+    }
+
+    truckRestrictionAbortRef.current?.abort();
+    const controller = new AbortController();
+    truckRestrictionAbortRef.current = controller;
+    setTruckRestrictionState((current) => ({ ...current, status: 'loading', error: null }));
+    const bounds = map.getBounds();
+    try {
+      const collection = await api.getTruckRestrictions({
+        west: bounds.getWest(),
+        south: bounds.getSouth(),
+        east: bounds.getEast(),
+        north: bounds.getNorth(),
+      }, controller.signal, 2000);
+      if (controller.signal.aborted || truckRestrictionAbortRef.current !== controller) return;
+      truckRestrictionLookupRef.current = truckRestrictionLookup(collection.features);
+      truckRestrictionMetadataRef.current = collection.metadata;
+      setSource(map, 'rwms-truck-restrictions', truckRestrictionMapData(collection));
+      setTruckRestrictionState({
+        status: 'loaded',
+        count: collection.metadata.count,
+        truncated: collection.metadata.truncated,
+        error: null,
+      });
+    } catch (error: unknown) {
+      if (controller.signal.aborted || truckRestrictionAbortRef.current !== controller) return;
+      truckRestrictionLookupRef.current.clear();
+      truckRestrictionMetadataRef.current = null;
+      setSource(map, 'rwms-truck-restrictions', EMPTY_COLLECTION);
+      setTruckRestrictionState({
+        status: 'error',
+        count: 0,
+        truncated: false,
+        error: error instanceof Error ? error.message : 'Неизвестная ошибка',
+      });
+    } finally {
+      if (truckRestrictionAbortRef.current === controller) truckRestrictionAbortRef.current = null;
+    }
+  }, [layers.truckRestrictions, mapReady]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!layers.truckRestrictions) {
+      truckRestrictionAbortRef.current?.abort();
+      truckRestrictionAbortRef.current = null;
+      truckRestrictionPopupRef.current?.remove();
+      truckRestrictionPopupRef.current = null;
+      truckRestrictionLookupRef.current.clear();
+      truckRestrictionMetadataRef.current = null;
+      if (map && mapReady) setSource(map, 'rwms-truck-restrictions', EMPTY_COLLECTION);
+      setTruckRestrictionState(EMPTY_TRUCK_RESTRICTION_STATE);
+      return;
+    }
+    if (!map || !mapReady) return;
+
+    void loadTruckRestrictions();
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const onMoveEnd = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => { void loadTruckRestrictions(); }, 250);
+    };
+    map.on('moveend', onMoveEnd);
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      map.off('moveend', onMoveEnd);
+      truckRestrictionAbortRef.current?.abort();
+      truckRestrictionAbortRef.current = null;
+    };
+  }, [layers.truckRestrictions, loadTruckRestrictions, mapReady]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    const onRestrictionClick = (event: maplibregl.MapLayerMouseEvent) => {
+      const renderedFeature = event.features?.[0];
+      const osmType = featureProperty(renderedFeature, 'osm_type');
+      const osmId = featureNumberProperty(renderedFeature, 'osm_id');
+      const metadata = truckRestrictionMetadataRef.current;
+      if (!osmType || osmId === null || !metadata) return;
+      const restriction = truckRestrictionLookupRef.current.get(truckRestrictionKey(osmType, osmId));
+      if (!restriction) return;
+      event.originalEvent.stopPropagation();
+      truckRestrictionPopupRef.current?.remove();
+      const popup = new maplibregl.Popup({ closeButton: true, closeOnClick: true, maxWidth: '360px', offset: 12 })
+        .setLngLat(event.lngLat)
+        .setDOMContent(buildTruckRestrictionPopupContent(restriction, metadata))
+        .addTo(map);
+      popup.addClassName('truck-restriction-map-popup');
+      popup.on('close', () => {
+        if (truckRestrictionPopupRef.current === popup) truckRestrictionPopupRef.current = null;
+      });
+      truckRestrictionPopupRef.current = popup;
+    };
+    const onPointerEnter = () => { map.getCanvas().style.cursor = 'pointer'; };
+    const onPointerLeave = () => { map.getCanvas().style.cursor = ''; };
+    TRUCK_RESTRICTION_LAYER_IDS.forEach((layerId) => {
+      map.on('mouseenter', layerId, onPointerEnter);
+      map.on('mouseleave', layerId, onPointerLeave);
+    });
+    map.on('click', 'rwms-truck-restrictions-lines', onRestrictionClick);
+    map.on('click', 'rwms-truck-restrictions-points', onRestrictionClick);
+    return () => {
+      TRUCK_RESTRICTION_LAYER_IDS.forEach((layerId) => {
+        map.off('mouseenter', layerId, onPointerEnter);
+        map.off('mouseleave', layerId, onPointerLeave);
+      });
+      map.off('click', 'rwms-truck-restrictions-lines', onRestrictionClick);
+      map.off('click', 'rwms-truck-restrictions-points', onRestrictionClick);
+      map.getCanvas().style.cursor = '';
+    };
+  }, [mapReady]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -564,6 +824,10 @@ export function MapCanvas({
       ['rwms-active-line', layers.activeLeg],
       ['rwms-selected-fill', layers.selected],
       ['rwms-selected-line', layers.selected],
+      ['rwms-truck-restrictions-lines', layers.truckRestrictions],
+      ['rwms-truck-restrictions-points', layers.truckRestrictions],
+      ['rwms-truck-restrictions-line-labels', layers.truckRestrictions],
+      ['rwms-truck-restrictions-point-labels', layers.truckRestrictions],
     ];
     visibility.forEach(([id, visible]) => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none'));
     const overlayIds = new Set(visibility.map(([id]) => id));
@@ -593,7 +857,14 @@ export function MapCanvas({
       {layersOpen ? (
         <div className="map-overlay layer-menu" aria-label="Видимость слоёв">
           <h3>Слои карты</h3>
-          {(Object.keys(layerLabels) as Array<keyof LayerVisibility>).map((layer) => (
+          {(Object.keys(layerLabels) as Array<keyof LayerVisibility>).map((layer) => layer === 'truckRestrictions' ? (
+            <TruckRestrictionLayerMenuItem
+              key={layer}
+              checked={layers.truckRestrictions}
+              state={truckRestrictionState}
+              onChange={() => toggleLayer('truckRestrictions')}
+            />
+          ) : (
             <CheckboxField key={layer} label={layerLabels[layer]} checked={layers[layer]} onChange={() => toggleLayer(layer)} />
           ))}
         </div>

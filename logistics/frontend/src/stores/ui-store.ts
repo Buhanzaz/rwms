@@ -31,6 +31,7 @@ export interface LayerVisibility {
   trucks: boolean;
   corridor: boolean;
   selected: boolean;
+  truckRestrictions: boolean;
 }
 
 export interface ToastMessage {
@@ -89,6 +90,7 @@ const initialLayers: LayerVisibility = {
   trucks: true,
   corridor: false,
   selected: true,
+  truckRestrictions: false,
 };
 
 export const useUiStore = create<UiState>((set) => ({

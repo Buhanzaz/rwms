@@ -9,6 +9,7 @@ from uuid import UUID
 
 from geoalchemy2 import Geometry
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     Date,
@@ -118,6 +119,70 @@ class VehicleLoadProfileType(StrEnum):
     CARGO_ON_TRUCK_WITH_TRAILER = "CARGO_ON_TRUCK_WITH_TRAILER"
     CARGO_ON_TRAILER_WITH_TRAILER = "CARGO_ON_TRAILER_WITH_TRAILER"
     TWO_CARGO_SPLIT = "TWO_CARGO_SPLIT"
+
+
+class OsmRestrictionImport(Base):
+    """Completed, immutable import metadata for one OpenStreetMap data version."""
+
+    __tablename__ = "osm_restriction_imports"
+    __table_args__ = (CheckConstraint("restriction_count >= 0", name="nonnegative_count"),)
+
+    osm_data_version: Mapped[str] = mapped_column(String(128), primary_key=True)
+    source_file: Mapped[str] = mapped_column(String(255), nullable=False)
+    restriction_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class OsmTruckRestriction(UuidPrimaryKeyMixin, Base):
+    """One spatial OSM truck restriction extracted for map diagnostics."""
+
+    __tablename__ = "osm_truck_restrictions"
+    __table_args__ = (
+        UniqueConstraint(
+            "osm_data_version",
+            "osm_type",
+            "osm_id",
+            name="uq_osm_truck_restrictions_version_object",
+        ),
+        CheckConstraint("osm_type IN ('node', 'way')", name="supported_osm_type"),
+        CheckConstraint(
+            "category IN ('HGV_ACCESS', 'MAX_HEIGHT', 'MAX_WIDTH', 'MAX_LENGTH', "
+            "'MAX_WEIGHT', 'MAX_AXLE_LOAD', 'CONDITIONAL', 'TRAILER_ACCESS')",
+            name="supported_category",
+        ),
+        CheckConstraint(
+            "support_status IN ('SUPPORTED', 'PARTIAL', 'UNSUPPORTED')",
+            name="supported_status",
+        ),
+        Index(
+            "ix_osm_truck_restrictions_version_category",
+            "osm_data_version",
+            "category",
+        ),
+        Index("ix_osm_truck_restrictions_geometry_gist", "geometry", postgresql_using="gist"),
+    )
+
+    osm_data_version: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey(
+            "osm_restriction_imports.osm_data_version",
+            ondelete="CASCADE",
+            name="fk_osm_truck_restrictions_import_version",
+        ),
+        nullable=False,
+    )
+    osm_type: Mapped[str] = mapped_column(String(8), nullable=False)
+    osm_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    primary_tag: Mapped[str] = mapped_column(String(64), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    tags: Mapped[dict[str, str]] = mapped_column(JSONB, nullable=False)
+    support_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    geometry: Mapped[Any] = mapped_column(
+        Geometry("GEOMETRY", srid=4326, spatial_index=False), nullable=False
+    )
 
 
 class Scenario(UuidPrimaryKeyMixin, TimestampMixin, Base):

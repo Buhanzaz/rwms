@@ -73,6 +73,8 @@ This directory is a monorepo with isolated runtime containers:
 - `db`: PostgreSQL with PostGIS and one simulator-only named volume.
 - `osrm-download`: a one-shot PBF downloader shared read-only with Valhalla;
 - `valhalla-init` and `valhalla`: private tile preparation and truck routing;
+- `truck-restrictions-indexer`: a one-shot, versioned Osmium import of
+  truck-related OSM nodes/ways into the PostGIS viewport index;
 - legacy `osrm-prepare`/`osrm` exist only behind the explicit
   `legacy-routing` Compose profile and are never a truck fallback.
 
@@ -232,10 +234,11 @@ Open <http://localhost:5173>. The API documentation is available at
 <http://localhost:8000/api/docs> and its schema at
 <http://localhost:8000/api/openapi.json>. Compose binds both development ports
 to loopback only. Valhalla is internal to the Compose network and has no host
-port. The first `up` downloads and builds the configured OpenStreetMap extract,
-so it can take tens of minutes for a regional graph; later starts reuse
-`logistics-osrm-data` and `logistics-valhalla-data`. No routing or map key is
-required.
+port. The first `up` downloads and builds the configured OpenStreetMap extract
+and indexes its truck restrictions, so it can take tens of minutes for a
+regional graph; later starts reuse `logistics-osrm-data`,
+`logistics-valhalla-data` and skip an already imported `OSM_DATA_VERSION`. No
+routing or map key is required.
 
 On the current VPS, Nginx publishes the workspace at
 <https://77-90-158-90.sslip.io/logistics-simulator/>. This path-based reverse
@@ -267,11 +270,14 @@ Useful commands:
 make up
 make ps
 make logs
+make index-truck-restrictions
 make down
 ```
 
 `make reset-db` deletes only the Compose volume named for this simulator. It is
 intentionally explicit because the operation removes all local simulator data.
+`make index-truck-restrictions` is non-destructive for scenario data and skips
+an OSM version that has already been imported.
 
 ## Test
 
@@ -332,6 +338,7 @@ make openapi
 | `VALHALLA_TIMEOUT_SECONDS` | `30` | Deadline for one truck-routing request |
 | `VALHALLA_SERVER_THREADS` | `2` | Self-hosted Valhalla worker threads |
 | `OSM_DATA_VERSION` | configured extract identity | Immutable PBF/tile identity stored in route snapshots and cache keys |
+| `OSM_RESTRICTIONS_BATCH_SIZE` | `1000` | Atomic PostGIS restriction-import batch size, from 1 to 10000 |
 | `OSRM_DATA_URL` | Central Federal District extract | One-time OpenStreetMap PBF download shared with Valhalla |
 | `OSRM_BASE_URL`, `OSRM_PROFILE`, `OSRM_TIMEOUT_SECONDS` | legacy values | Used only with provider `osrm` and Compose profile `legacy-routing` |
 | `DEFAULT_SCENARIO_TIMEZONE` | `Europe/Moscow` | Timezone for new scenarios |
@@ -413,6 +420,14 @@ capability table in
 [`docs/osm-truck-restrictions.md`](docs/osm-truck-restrictions.md); unsupported
 conditional tags are explicitly identified there rather than claimed as safe.
 
+The map layer menu has an optional **Ограничения грузового транспорта** switch.
+At zoom 8 or closer it loads a bounded PostGIS viewport from the same
+`OSM_DATA_VERSION`, draws road/area restrictions and point signs with textual
+markers, and opens tag/support diagnostics on click. Partial and unsupported
+tags stay visibly labelled; the overlay never decides route feasibility and
+never substitutes for Valhalla truck costing. OSM turn-restriction relations
+remain routing-graph behavior and are not fabricated as clickable lines.
+
 The graph has no live traffic feed: durations reflect the built OSM graph, not
 Yandex traffic. To change regions, update `OSRM_DATA_URL` and
 `OSM_DATA_VERSION`, then explicitly rebuild the routing-data volumes; this does
@@ -441,7 +456,10 @@ select it as the vehicle's default compatible trailer and enter either the
 exact combined length or the coupling length used to derive it. Finally provide
 the measured `maxActualAxleLoadKg` for every operational state used by the
 vehicle; the application deliberately never estimates it as total mass divided
-by axle count. The vehicle fields and complete axle-profile set are saved by one
+by axle count. For a combination this scalar is the measured peak among all
+truck and trailer axles; it is not a per-component axle-load vector, so each
+component's limits still require an operational measurement. The vehicle
+fields and complete axle-profile set are saved by one
 backend transaction, so a failed validation cannot leave a half-edited truck.
 
 The form previews one-unit and two-unit configurations before save. Generated
@@ -519,8 +537,10 @@ For a configurable workload, choose **Request generator** in the current
 scenario. It opens in one-day mode with no alternative dates. Set the first
 date, a one-to-31-day horizon, an exact daily count of zero-to-ten deliveries
 and zero-to-ten pickups, zero-to-three additional accepted dates per request,
-and a seed. Additional dates are selected only inside the horizon. Every run
-first removes only unplanned requests previously owned by this generator whose
+and a seed. Additional dates are selected only inside the horizon. Cargo
+defaults are 6000×2400×2400 mm and 1200 kg; they remain editable before
+generation. Every run first removes only unplanned requests previously owned
+by this generator whose
 preferred date falls inside the selected horizon, then creates the replacement
 batch in the same database transaction. It never appends a second generated
 batch to the same date. Every generated request is explicitly assigned to its

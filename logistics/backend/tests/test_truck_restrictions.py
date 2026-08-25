@@ -1,0 +1,207 @@
+"""Pure classification and extraction tests for OSM truck restrictions."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from app.routing.restrictions import (
+    RestrictionFeatureError,
+    RestrictionSupportStatus,
+    TruckRestrictionCategory,
+    classify_truck_restriction,
+    parse_geojsonseq_feature,
+)
+from app.services.osm_restriction_indexer import iter_extracted_restrictions
+
+
+@pytest.mark.parametrize(
+    ("tags", "category", "primary_tag", "status"),
+    [
+        (
+            {"hgv": "no"},
+            TruckRestrictionCategory.HGV_ACCESS,
+            "hgv",
+            RestrictionSupportStatus.SUPPORTED,
+        ),
+        (
+            {"access": "private"},
+            TruckRestrictionCategory.HGV_ACCESS,
+            "access",
+            RestrictionSupportStatus.SUPPORTED,
+        ),
+        (
+            {"maxheight": "3.8"},
+            TruckRestrictionCategory.MAX_HEIGHT,
+            "maxheight",
+            RestrictionSupportStatus.SUPPORTED,
+        ),
+        (
+            {"maxwidth": "2.5"},
+            TruckRestrictionCategory.MAX_WIDTH,
+            "maxwidth",
+            RestrictionSupportStatus.SUPPORTED,
+        ),
+        (
+            {"maxwidth:physical": "2.45"},
+            TruckRestrictionCategory.MAX_WIDTH,
+            "maxwidth:physical",
+            RestrictionSupportStatus.SUPPORTED,
+        ),
+        (
+            {"maxlength": "12"},
+            TruckRestrictionCategory.MAX_LENGTH,
+            "maxlength",
+            RestrictionSupportStatus.SUPPORTED,
+        ),
+        (
+            {"maxweight": "20"},
+            TruckRestrictionCategory.MAX_WEIGHT,
+            "maxweight",
+            RestrictionSupportStatus.SUPPORTED,
+        ),
+        (
+            {"maxweightrating:hgv": "18"},
+            TruckRestrictionCategory.MAX_WEIGHT,
+            "maxweightrating:hgv",
+            RestrictionSupportStatus.UNSUPPORTED,
+        ),
+        (
+            {"maxaxleload": "8"},
+            TruckRestrictionCategory.MAX_AXLE_LOAD,
+            "maxaxleload",
+            RestrictionSupportStatus.SUPPORTED,
+        ),
+        (
+            {"hgv:conditional": "no @ (Mo-Fr 08:00-20:00)"},
+            TruckRestrictionCategory.CONDITIONAL,
+            "hgv:conditional",
+            RestrictionSupportStatus.PARTIAL,
+        ),
+        (
+            {"maxweight:conditional": "12 @ (wet)"},
+            TruckRestrictionCategory.CONDITIONAL,
+            "maxweight:conditional",
+            RestrictionSupportStatus.UNSUPPORTED,
+        ),
+        (
+            {"maxwidth:physical:conditional": "2.4 @ (snow)"},
+            TruckRestrictionCategory.CONDITIONAL,
+            "maxwidth:physical:conditional",
+            RestrictionSupportStatus.UNSUPPORTED,
+        ),
+        (
+            {"trailer": "no"},
+            TruckRestrictionCategory.TRAILER_ACCESS,
+            "trailer",
+            RestrictionSupportStatus.UNSUPPORTED,
+        ),
+    ],
+)
+def test_restriction_support_mapping(
+    tags: dict[str, str],
+    category: TruckRestrictionCategory,
+    primary_tag: str,
+    status: RestrictionSupportStatus,
+) -> None:
+    """Every advertised category reports the audited Valhalla support level."""
+
+    result = classify_truck_restriction(tags)
+    assert result is not None
+    assert (result.category, result.primary_tag, result.support_status) == (
+        category,
+        primary_tag,
+        status,
+    )
+
+
+@pytest.mark.parametrize("value", ["yes", "designated", "permissive"])
+def test_unrestricted_access_values_are_not_map_features(value: str) -> None:
+    """Positive access declarations do not clutter the restrictions overlay."""
+
+    assert classify_truck_restriction({"access": value}) is None
+    assert classify_truck_restriction({"hgv": value}) is None
+
+
+def test_static_dimension_wins_category_priority_and_all_tags_survive() -> None:
+    """A dimensional limit styles a multi-tag object while preserving diagnostics."""
+
+    feature = {
+        "type": "Feature",
+        "id": "w987",
+        "properties": {
+            "@id": "way/987",
+            "highway": "secondary",
+            "name": "Низкий мост",
+            "hgv": "no",
+            "maxheight:physical": "3.9",
+        },
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[37.60, 55.70], [37.61, 55.71]],
+        },
+    }
+    parsed = parse_geojsonseq_feature(feature)
+    assert parsed is not None
+    assert (parsed.osm_type, parsed.osm_id) == ("way", 987)
+    assert parsed.classification.category == TruckRestrictionCategory.MAX_HEIGHT
+    assert parsed.classification.primary_tag == "maxheight:physical"
+    assert parsed.tags == {
+        "highway": "secondary",
+        "name": "Низкий мост",
+        "hgv": "no",
+        "maxheight:physical": "3.9",
+    }
+    assert parsed.geometry.geom_type == "LineString"
+
+
+def test_geojsonseq_parser_handles_record_separator_and_short_node_id(tmp_path: Path) -> None:
+    """The importer accepts osmium's RFC 8142 prefix and ``n123`` unique IDs."""
+
+    path = tmp_path / "restrictions.geojsonseq"
+    feature = {
+        "type": "Feature",
+        "id": "n123",
+        "properties": {"maxweight": "20", "barrier": "height_restrictor"},
+        "geometry": {"type": "Point", "coordinates": [37.6, 55.7]},
+    }
+    path.write_text("\x1e" + json.dumps(feature) + "\n", encoding="utf-8")
+    restrictions = list(iter_extracted_restrictions(path))
+    assert len(restrictions) == 1
+    assert restrictions[0].osm_type == "node"
+    assert restrictions[0].osm_id == 123
+
+
+def test_irrelevant_dependency_object_is_skipped_before_geometry_validation() -> None:
+    """Tagged dependency nodes without truck tags cannot break an extraction."""
+
+    assert (
+        parse_geojsonseq_feature(
+            {
+                "type": "Feature",
+                "id": "n1",
+                "properties": {"highway": "traffic_signals"},
+                "geometry": None,
+            }
+        )
+        is None
+    )
+
+
+def test_relevant_feature_without_supported_identity_fails_explicitly() -> None:
+    """Relations/areas cannot be silently misidentified as node or way restrictions."""
+
+    with pytest.raises(RestrictionFeatureError, match="identifier"):
+        parse_geojsonseq_feature(
+            {
+                "type": "Feature",
+                "id": "r55",
+                "properties": {"hgv": "no"},
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": [[37.6, 55.7], [37.7, 55.8]],
+                },
+            }
+        )

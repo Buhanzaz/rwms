@@ -14,6 +14,9 @@ flowchart LR
     Planner --> Routing[RoutingProvider per route leg]
     Routing --> Profile[EffectiveTruckProfileCalculator]
     Profile --> Valhalla[Private Valhalla truck / OpenStreetMap]
+    PBF[(Pinned OSM PBF)] --> Valhalla
+    PBF --> RestrictionIndexer[One-shot truck restriction indexer]
+    RestrictionIndexer --> PostGIS
     Routing -. explicit legacy development only .-> OSRM[Private OSRM car]
     Routing --> Mock[Explicit deterministic MockRoutingProvider]
     FastAPI --> PostGIS[(PostgreSQL + PostGIS)]
@@ -65,6 +68,11 @@ disabled by default and never exposes its client secret to the browser.
 - `backend/app/routing` contains the provider protocol, Valhalla truck adapter,
   immutable effective-profile calculator, capability audit, explicit legacy
   OSRM adapter and deterministic Haversine implementation.
+- `backend/app/services/osm_restriction_indexer.py` performs a one-shot,
+  versioned Osmium extraction from the same PBF used to build Valhalla and
+  atomically replaces the derived PostGIS viewport index. The read-only
+  routing API exposes only bounded node/way GeoJSON; it does not become a
+  second routing engine.
 - `backend/app/services/truck_cycle_router.py` evolves cargo placement after
   every stop, computes one profile per leg, asks Valhalla for exact geometry
   and reschedules windows/shift finish from the returned travel time. Trailer
@@ -134,6 +142,11 @@ cannot delete or overwrite the scenario which an operator is currently testing.
   `OSM_DATA_VERSION` and calculation time. Route cache identity includes that
   profile and data version, so one- and two-unit configurations cannot share a
   result accidentally.
+- The truck-restriction overlay is derived global routing data, not a scenario
+  aggregate. Its import metadata and features share `OSM_DATA_VERSION`; a
+  complete new extraction is committed atomically and older derived versions
+  are removed only in that transaction. A missing active-version index fails
+  explicitly instead of appearing as an empty viewport.
 - Temporary simulation delay and driver-unavailability overrides remain in the
   browser and are derived as pure timestamp functions. `persist=true` is the
   explicit audited mutation boundary.

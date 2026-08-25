@@ -158,7 +158,7 @@ class WorkloadGeneratorInput(ApiModel):
     cargo_length_mm: int = Field(default=6_000, gt=0)
     cargo_width_mm: int = Field(default=2_400, gt=0)
     cargo_height_mm: int = Field(default=2_400, gt=0)
-    cargo_weight_kg: int = Field(default=2_500, gt=0)
+    cargo_weight_kg: int = Field(default=1_200, gt=0)
     seed: int
 
     @model_validator(mode="after")

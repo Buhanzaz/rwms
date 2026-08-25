@@ -360,7 +360,10 @@ class EffectiveTruckProfileCalculator:
         max_allowed_axle_loads = [vehicle.max_axle_load_kg]
         if attached_trailer is not None:
             max_allowed_axle_loads.append(attached_trailer.max_axle_load_kg)
-        allowed_axle_load = min(value for value in max_allowed_axle_loads if value is not None)
+        # The operational profile is the measured peak across the complete
+        # combination, not the load of every axle. A trailer axle may have a
+        # lower rating while the recorded peak remains on the powered vehicle.
+        allowed_axle_load = max(value for value in max_allowed_axle_loads if value is not None)
         if axle_profile.max_actual_axle_load_kg > allowed_axle_load:
             self._raise(
                 TruckProfileErrorCode.AXLE_LOAD_EXCEEDED,

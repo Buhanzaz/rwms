@@ -240,7 +240,7 @@ async def test_demo_export_import_preserves_seed_versions_and_counts(
         item.data.cargo_length_mm == 6_000
         and item.data.cargo_width_mm == 2_400
         and item.data.cargo_height_mm == 2_400
-        and item.data.cargo_weight_kg == 2_500
+        and item.data.cargo_weight_kg == 1_200
         for item in imported_document.requests
     )
     imported_segment = imported_document.plans[0].cycles[0].segments[0]

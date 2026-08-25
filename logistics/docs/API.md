@@ -41,6 +41,12 @@
 - Every Valhalla-built route segment returns `routing_profile_snapshot`,
   `routing_provider`, `osm_data_version` and `routed_at`. The snapshot is the
   effective vehicle/trailer/cargo state used on that exact leg.
+- `GET /api/routing/truck-restrictions` accepts a WGS84
+  `west/south/east/north` viewport and a bounded `limit` (2000 by default,
+  5000 maximum). It returns a GeoJSON FeatureCollection of indexed OSM
+  node/way restrictions plus active data-version, count, truncation and import
+  timestamp metadata. Missing index data for the configured OSM version is an
+  explicit service error, never an invented empty map.
 - Mutable plan operations carry `expected_version`; stale writes return HTTP
   409 with code `PLAN_VERSION_CONFLICT`.
 - Validation and manual edits return the complete updated plan with structured
@@ -108,7 +114,7 @@ test workload in the selected scenario. `days` defaults to one and
 31 days, zero to ten deliveries and pickups per day, and zero to three
 additional accepted dates. Every additional date must fit inside the horizon.
 The command also carries one positive cargo length, width, height and mass for
-the batch (defaults 6000×2400×2400 mm and 2500 kg). It fails explicitly with
+the batch (defaults 6000×2400×2400 mm and 1200 kg). It fails explicitly with
 `NO_ZONES` when no polygon exists; otherwise it samples strictly interior
 points, snaps each through the configured road provider while retaining zone
 coverage, and creates each request through the normal server-side classifier.

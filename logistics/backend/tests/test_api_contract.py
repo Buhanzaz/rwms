@@ -40,6 +40,7 @@ def test_openapi_is_served_under_api_and_contains_core_operations() -> None:
     assert "/api/optimization-runs/{run_id}/stream" in paths
     assert "/api/plans/{plan_id}/simulation/delay" in paths
     assert "/api/plans/{plan_id}/simulation/driver-unavailable" in paths
+    assert "/api/routing/truck-restrictions" in paths
     with TestClient(create_app()) as client:
         response = client.get("/api/openapi.json")
     assert response.status_code == 200
@@ -94,6 +95,10 @@ def test_workload_generator_contract_keeps_alternatives_inside_horizon() -> None
     )
     assert one_day.days == 1
     assert one_day.alternative_dates_count == 0
+    assert one_day.cargo_length_mm == 6_000
+    assert one_day.cargo_width_mm == 2_400
+    assert one_day.cargo_height_mm == 2_400
+    assert one_day.cargo_weight_kg == 1_200
 
     accepted = WorkloadGeneratorInput(
         start_date=date(2026, 8, 24),
