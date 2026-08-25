@@ -421,6 +421,18 @@ driver audience; queue-entry fact содержит nullable original/current bud
 переиграна из DLT; после исправления validator восстановление повторно публикует immutable source
 envelopes по порядку aggregate version, а не редактирует inbox или domain rows.
 
+Завершение queue-entry не зависит исключительно от соответствующего факта создания board-task.
+Если этот ранний факт появился до запуска consumer group maintenance, inbound domain effect
+определяет владельца только по существующей локальной связи
+`repair_stage.external_queue_entry_id` и external task ID связанного ремонта, без межсервисного
+запроса. При готовности приложения
+[`MaintenanceProcessedTaskOutcomeRecovery`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceProcessedTaskOutcomeRecovery.java)
+запускается до worker-presentation reconciliation и идемпотентно применяет через обычный task-
+outcome use case неизменяемые факты завершения `PROCESSED`, чья связанная стадия всё ещё
+`QUEUED`. Он не изменяет audit-строки inbox/replay, исключает закрытия исторической отгрузкой и
+использует существующие locks потока ремонта и стадии для безопасности повторного запуска и
+конкурентных экземпляров.
+
 `MAINTENANCE_KAFKA_ENABLED` управляет Kafka-specific relay и consumer beans. Он может быть `false`
 только в явном профиле `dev` или `test`; любой другой профиль отклоняет startup при выключенной
 доставке. Канонические owner outputs имеют строгий порядок: catalog-version, estimate, repair,

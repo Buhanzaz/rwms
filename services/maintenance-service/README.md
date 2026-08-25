@@ -412,6 +412,16 @@ driver-audience pair; queue-entry facts carry nullable original/current budgets 
 after a validator correction, recovery republishes the immutable source envelopes in aggregate
 version order instead of editing inbox or domain rows.
 
+A queue-entry completion does not depend exclusively on the matching board-task creation fact. If
+that earlier fact predates the maintenance consumer group, the inbound domain effect resolves the
+owner only through the existing local `repair_stage.external_queue_entry_id` mapping and the
+mapped repair's external task ID; it performs no cross-service lookup. At application ready,
+[`MaintenanceProcessedTaskOutcomeRecovery`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceProcessedTaskOutcomeRecovery.java)
+runs before worker-presentation reconciliation and idempotently applies immutable `PROCESSED`
+completion facts whose mapped stage is still `QUEUED` through the ordinary task-outcome use case.
+It leaves inbox/replay audit rows unchanged, excludes historical-shipment closures, and relies on
+the existing repair-stream and stage locks for restart/concurrent-instance safety.
+
 `MAINTENANCE_KAFKA_ENABLED` controls Kafka-specific relay and consumer beans. It may be `false`
 only in an explicit `dev` or `test` profile; every other profile fails startup if delivery is
 disabled. The canonical ordered owner outputs are catalog-version, estimate, repair,

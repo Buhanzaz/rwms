@@ -58,6 +58,8 @@ data class WorkerDownloadItem(
  */
 data class WorkerDownloadsUiState(
     val items: List<WorkerDownloadItem> = emptyList(),
+    val syncMessage: String? = null,
+    val retryStarting: Boolean = false,
 )
 
 @HiltViewModel
@@ -70,6 +72,7 @@ class WorkerDownloadsViewModel @Inject constructor(
     private val scheduler: WorkerSyncScheduler,
 ) : ViewModel() {
     private val userId = MutableStateFlow<String?>(null)
+    private val retryRequestedAtEpochMillis = MutableStateFlow<Long?>(null)
 
     val state: StateFlow<WorkerDownloadsUiState> = userId.flatMapLatest { id ->
         if (id == null) {
@@ -78,8 +81,20 @@ class WorkerDownloadsViewModel @Inject constructor(
             combine(
                 localStore.observePendingOutbox(id),
                 localStore.observeEvidence(id),
-            ) { outbox, evidence ->
-                WorkerDownloadsUiState(workerDownloadItems(outbox, evidence))
+                localStore.observeProgress(id),
+                retryRequestedAtEpochMillis,
+            ) { outbox, evidence, progress, retryRequestedAt ->
+                val retryStarting = retryRequestedAt != null &&
+                    (progress?.updatedAtEpochMillis ?: Long.MIN_VALUE) < retryRequestedAt
+                WorkerDownloadsUiState(
+                    items = workerDownloadItems(outbox, evidence),
+                    syncMessage = if (retryStarting) {
+                        "Повтор поставлен в очередь"
+                    } else {
+                        progress?.message
+                    },
+                    retryStarting = retryStarting,
+                )
             }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WorkerDownloadsUiState())
@@ -90,7 +105,11 @@ class WorkerDownloadsViewModel @Inject constructor(
     }
 
     fun retry() {
-        userId.value?.let(scheduler::request)
+        val currentUserId = userId.value ?: return
+        // A one-millisecond lead guarantees immediate queued feedback even if the previous
+        // persisted progress update was written in the same wall-clock millisecond.
+        retryRequestedAtEpochMillis.value = System.currentTimeMillis() + 1
+        scheduler.request(currentUserId)
     }
 }
 
@@ -169,6 +188,9 @@ fun WorkerDownloadsScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text("Нет активных загрузок", style = MaterialTheme.typography.titleMedium)
+                state.syncMessage?.let { message ->
+                    Text(message, color = MaterialTheme.colorScheme.primary)
+                }
                 Text(
                     "Успешно отправленные действия и фотографии исчезают отсюда автоматически.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -180,8 +202,17 @@ fun WorkerDownloadsScreen(
                 contentPadding = PaddingValues(14.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                state.syncMessage?.let { message ->
+                    item(key = "sync-message") {
+                        Text(message, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
                 items(state.items, key = WorkerDownloadItem::id) { item ->
-                    WorkerDownloadCard(item = item, onRetry = viewModel::retry)
+                    WorkerDownloadCard(
+                        item = item,
+                        retryStarting = state.retryStarting,
+                        onRetry = viewModel::retry,
+                    )
                 }
             }
         }
@@ -189,7 +220,11 @@ fun WorkerDownloadsScreen(
 }
 
 @Composable
-private fun WorkerDownloadCard(item: WorkerDownloadItem, onRetry: () -> Unit) {
+private fun WorkerDownloadCard(
+    item: WorkerDownloadItem,
+    retryStarting: Boolean,
+    onRetry: () -> Unit,
+) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -212,8 +247,12 @@ private fun WorkerDownloadCard(item: WorkerDownloadItem, onRetry: () -> Unit) {
             }
             item.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             if (item.canRetry) {
-                OutlinedButton(onClick = onRetry, modifier = Modifier.fillMaxWidth()) {
-                    Text("Повторить")
+                OutlinedButton(
+                    onClick = onRetry,
+                    enabled = !retryStarting,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (retryStarting) "Запускаем повтор…" else "Повторить")
                 }
             }
         }

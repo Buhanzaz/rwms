@@ -226,10 +226,8 @@ class WorkerLocalStore @Inject constructor(
     suspend fun requeueExpiredLeaseEvidenceReservations(userId: String, freshLeaseId: String): Int {
         val now = System.currentTimeMillis()
         return database.withTransaction {
-            val pendingOperationIds = database.outboxDao().pending(userId).mapTo(mutableSetOf()) { it.operationId }
             var restored = 0
             for (evidence in database.evidenceDao().reviewRequiredByReason(userId, EXPIRED_OFFLINE_LEASE_ERROR)) {
-                if (!pendingOperationIds.add(evidence.reservationOperationId)) continue
                 val payload = PendingEvidenceReservation(
                     operationId = evidence.reservationOperationId,
                     evidenceId = evidence.evidenceId,
@@ -249,24 +247,54 @@ class WorkerLocalStore @Inject constructor(
                         updatedAtEpochMillis = now,
                     ),
                 )
-                database.outboxDao().insert(
-                    WorkerOutboxEntity(
-                        operationId = evidence.reservationOperationId,
-                        userId = userId,
-                        entryId = evidence.entryId,
-                        kind = OUTBOX_EVIDENCE_RESERVATION,
-                        encryptedPayload = pendingPayloadCipher.encrypt(json.encodeToString(payload)),
-                        expectedVersion = null,
-                        state = OUTBOX_PENDING,
-                        retryCount = 0,
-                        createdAtEpochMillis = now,
-                        updatedAtEpochMillis = now,
-                        lastError = null,
-                    ),
+                val encryptedPayload = pendingPayloadCipher.encrypt(json.encodeToString(payload))
+                val recovered = database.outboxDao().recoverEvidenceReservation(
+                    operationId = evidence.reservationOperationId,
+                    userId = userId,
+                    entryId = evidence.entryId,
+                    encryptedPayload = encryptedPayload,
+                    now = now,
                 )
+                if (recovered == 0) {
+                    database.outboxDao().insert(
+                        WorkerOutboxEntity(
+                            operationId = evidence.reservationOperationId,
+                            userId = userId,
+                            entryId = evidence.entryId,
+                            kind = OUTBOX_EVIDENCE_RESERVATION,
+                            encryptedPayload = encryptedPayload,
+                            expectedVersion = null,
+                            state = OUTBOX_PENDING,
+                            retryCount = 0,
+                            createdAtEpochMillis = now,
+                            updatedAtEpochMillis = now,
+                            lastError = null,
+                        ),
+                    )
+                }
                 restored += 1
             }
             restored
+        }
+    }
+
+    /**
+     * Stops replay after the server proves that the owning task is terminal. The encrypted local
+     * photo and its metadata remain intact for recovery; only the unfulfillable outbox effect is
+     * completed and the row is removed from active upload projections.
+     */
+    suspend fun supersedeTerminalTaskEvidence(
+        userId: String,
+        evidenceId: String,
+        reservationOperationId: String,
+        reason: String,
+    ) {
+        val now = System.currentTimeMillis()
+        database.withTransaction {
+            check(database.evidenceDao().markSuperseded(userId, evidenceId, reason, now) == 1) {
+                "Terminal task evidence is missing from the current account"
+            }
+            database.outboxDao().delete(reservationOperationId)
         }
     }
 
@@ -363,6 +391,7 @@ class WorkerLocalStore @Inject constructor(
         const val OUTBOX_PENDING = "PENDING"
         const val OUTBOX_RETRY = "RETRY"
         const val EVIDENCE_CAPTURED = "CAPTURED"
+        const val EVIDENCE_SUPERSEDED = "SUPERSEDED"
         const val EXPIRED_OFFLINE_LEASE_ERROR = "Действие создано вне срока offline lease"
     }
 }

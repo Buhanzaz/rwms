@@ -175,9 +175,15 @@ is invented. Worker-facing work data does not expose price/cost fields.
   acceptance.
   Unique connected WorkManager work sends actions, reserves/uploads/finalizes
   evidence, waits for 'READY', then refreshes the feed. A historical
-  `Действие создано вне срока offline lease` result-photo failure is rebuilt
-  once from its retained encrypted record after the next authenticated context,
-  without fabricating a new photo.
+  `Действие создано вне срока offline lease` result-photo failure is recognized
+  from either retained review or upload-error state. After the next authenticated
+  context, the same reservation outbox row is reset with the fresh lease while
+  preserving the encrypted bytes, evidence identity and capture time; no photo is
+  fabricated. If task-board proves that the task is already `DONE` or `CANCELLED`,
+  WorkerApp retains those encrypted bytes as local `SUPERSEDED` recovery data and
+  removes only the unfulfillable active replay. Downloads hides that archived row,
+  while a manual retry immediately reports that sync was queued and then displays
+  persisted sync progress.
 - FCM and SSE carry invalidation/revision signals only. They trigger a focused
   refresh; they never replace the authoritative feed. FCM device registration
   uses `targetKind=FID` with the Firebase Installation ID, never a messaging

@@ -425,8 +425,9 @@ class WorkerSyncCoordinator @Inject constructor(
     }
 
     /**
-     * Retains a server-rejected evidence row as review-required instead of
-     * replaying a request that has already reached a terminal response.
+     * Reconciles a terminal reservation response with the owning task. A photo that can no longer
+     * be attached to a server-confirmed completed/cancelled task is archived locally without
+     * deleting its encrypted bytes; every other rejection remains visible for worker review.
      */
     private suspend fun resolveTerminalEvidenceReservationProblem(
         userId: String,
@@ -435,6 +436,23 @@ class WorkerSyncCoordinator @Inject constructor(
         error: GatewayProblemException,
     ) {
         recordConflict(userId, operation, error)
+        val terminalDetail = try {
+            gateway.detail(operation.entryId).takeIf { it.status.isTerminalWorkerTaskStatus() }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (_: Exception) {
+            null
+        }
+        if (terminalDetail != null) {
+            projections.applyDetail(userId, terminalDetail)
+            localStore.supersedeTerminalTaskEvidence(
+                userId = userId,
+                evidenceId = pending.evidenceId,
+                reservationOperationId = operation.operationId,
+                reason = TERMINAL_TASK_EVIDENCE_REASON,
+            )
+            return
+        }
         database.evidenceDao().updateState(
             pending.evidenceId,
             "REVIEW_REQUIRED",
@@ -718,3 +736,8 @@ internal fun cachedFeedMatchesContext(
 
 private const val MAX_FEED_PAGES = 100
 private const val MAX_PARALLEL_EVIDENCE_UPLOADS = 2
+private const val TERMINAL_TASK_EVIDENCE_REASON =
+    "Задание уже завершено; локальная фотография сохранена на устройстве"
+
+/** Returns whether task-board proved that no further worker evidence can be attached. */
+private fun String.isTerminalWorkerTaskStatus(): Boolean = this == "DONE" || this == "CANCELLED"

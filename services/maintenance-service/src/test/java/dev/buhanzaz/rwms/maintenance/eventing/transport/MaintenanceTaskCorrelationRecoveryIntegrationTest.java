@@ -28,6 +28,7 @@ import dev.buhanzaz.rwms.maintenance.repository.MaintenanceRepairRepository;
 import dev.buhanzaz.rwms.maintenance.repository.RentalItemFactProjectionRepository;
 import dev.buhanzaz.rwms.maintenance.repository.RepairStageRepository;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
+import dev.buhanzaz.rwms.maintenance.service.MaintenanceProcessedTaskOutcomeRecovery;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -77,6 +78,7 @@ class MaintenanceTaskCorrelationRecoveryIntegrationTest {
   @Autowired MaintenanceInboundStagingStore staging;
   @Autowired MaintenanceInboxProcessor inbox;
   @Autowired MaintenanceInboundEffects productionEffects;
+  @Autowired MaintenanceProcessedTaskOutcomeRecovery processedTaskOutcomeRecovery;
   @Autowired PlatformTransactionManager transactionManager;
 
   @MockitoBean MaintenanceDependencyGateway dependencies;
@@ -146,9 +148,8 @@ class MaintenanceTaskCorrelationRecoveryIntegrationTest {
                 Integer.class,
                 queueFirstTaskId))
         .isEqualTo(2);
-    assertThat(stages.findAllByRepairIdOrderByStageNo(queueFirst.repairId()))
-        .extracting(value -> value.getState())
-        .containsExactly(RepairStageState.QUEUED, RepairStageState.QUEUED);
+    assertCompletedRepair(
+        queueFirst, List.of(firstStageCompletion.eventId(), secondStageCompletion.eventId()));
 
     var recoveredBoardMapping = boardTask(queueFirstTaskId, queueFirst.externalTaskId(), 0);
     staging.stage(recoveredBoardMapping);
@@ -226,6 +227,83 @@ class MaintenanceTaskCorrelationRecoveryIntegrationTest {
     assertThat(service.acceptance(catalogInput.warehouseId()))
         .extracting(value -> value.repairId())
         .containsExactly(repair.repairId());
+  }
+
+  @Test
+  void workerCompletionWithoutBoardTaskMappingAppearsInAcceptanceAndRemainsIdempotent() {
+    CatalogRepairInput catalogInput = insertActiveCatalogPlan(UUID.randomUUID(), 1);
+    RepairFixture repair = createRegisteredRepair(1, catalogInput);
+    UUID queueEntryId = repair.queueEntryIds().getFirst();
+    var completion = queueCompletion(queueEntryId, UUID.randomUUID(), 0);
+    Integer eventsBefore = jdbc.queryForObject(
+        "select count(*) from domain_event where aggregate_type='REPAIR' and aggregate_id=?",
+        Integer.class,
+        repair.repairId().toString());
+
+    stageAndProcess(inbox, completion);
+    Integer eventsAfterCompletion = jdbc.queryForObject(
+        "select count(*) from domain_event where aggregate_type='REPAIR' and aggregate_id=?",
+        Integer.class,
+        repair.repairId().toString());
+    assertThat(inbox.process(completion)).isEqualTo(MaintenanceInboxProcessor.Outcome.DUPLICATE);
+
+    assertCompletedRepair(repair, List.of(completion.eventId()));
+    assertThat(service.acceptance(catalogInput.warehouseId()))
+        .extracting(value -> value.repairId())
+        .containsExactly(repair.repairId());
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from domain_event where aggregate_type='REPAIR' and aggregate_id=?",
+                Integer.class,
+                repair.repairId().toString()))
+        .isEqualTo(eventsAfterCompletion)
+        .isEqualTo(eventsBefore + 1);
+  }
+
+  @Test
+  void startupRecoveryAppliesOldProcessedCompletionAndRepeatIsIdempotent() {
+    CatalogRepairInput catalogInput = insertActiveCatalogPlan(UUID.randomUUID(), 1);
+    RepairFixture repair = createRegisteredRepair(1, catalogInput);
+    UUID queueEntryId = repair.queueEntryIds().getFirst();
+    var completion = queueCompletion(queueEntryId, UUID.randomUUID(), 0);
+    staging.stage(completion);
+    MaintenanceInboxProcessor legacyProcessor =
+        new MaintenanceInboxProcessor(jdbc, (event, correlation) -> {}, staging);
+    var legacyOutcome = new TransactionTemplate(transactionManager)
+        .execute(status -> legacyProcessor.process(completion));
+
+    assertThat(legacyOutcome).isEqualTo(MaintenanceInboxProcessor.Outcome.PROCESSED);
+    assertThat(stages.findAllByRepairIdOrderByStageNo(repair.repairId()))
+        .extracting(value -> value.getState())
+        .containsExactly(RepairStageState.QUEUED);
+    assertThat(
+            jdbc.queryForObject(
+                "select status from inbox_message where event_id=?",
+                String.class,
+                completion.eventId()))
+        .isEqualTo("PROCESSED");
+
+    processedTaskOutcomeRecovery.recoverProcessedTaskOutcomes();
+    assertCompletedRepair(repair, List.of(completion.eventId()));
+    Integer eventCount = jdbc.queryForObject(
+        "select count(*) from domain_event where aggregate_type='REPAIR' and aggregate_id=?",
+        Integer.class,
+        repair.repairId().toString());
+
+    processedTaskOutcomeRecovery.recoverProcessedTaskOutcomes();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from domain_event where aggregate_type='REPAIR' and aggregate_id=?",
+                Integer.class,
+                repair.repairId().toString()))
+        .isEqualTo(eventCount);
+    assertThat(
+            jdbc.queryForObject(
+                "select status from inbox_message where event_id=?",
+                String.class,
+                completion.eventId()))
+        .isEqualTo("PROCESSED");
   }
 
   @Test

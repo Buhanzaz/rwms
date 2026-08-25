@@ -53,6 +53,7 @@ class ExpiredLeaseEvidenceRecoveryRobolectricTest {
             evidenceId = "evidence-unrelated",
             state = "REVIEW_REQUIRED",
             reviewReason = "Фотография относится к другому шагу задания",
+            lastError = "Фотография относится к другому шагу задания",
         )
         database.evidenceDao().upsert(original)
         database.evidenceDao().upsert(unrelated)
@@ -78,10 +79,97 @@ class ExpiredLeaseEvidenceRecoveryRobolectricTest {
         assertThat(payload.offlineLeaseId).isEqualTo("fresh-lease")
     }
 
+    @Test
+    fun `rebuilds a retained retry outbox when legacy error exists only in last error`() = runTest {
+        val original = evidence(
+            evidenceId = "evidence-retained-retry",
+            state = "REVIEW_REQUIRED",
+            reviewReason = null,
+            lastError = WorkerLocalStore.EXPIRED_OFFLINE_LEASE_ERROR,
+        )
+        database.evidenceDao().upsert(original)
+        database.outboxDao().insert(
+            WorkerOutboxEntity(
+                operationId = original.reservationOperationId,
+                userId = USER_ID,
+                entryId = original.entryId,
+                kind = WorkerLocalStore.OUTBOX_EVIDENCE_RESERVATION,
+                encryptedPayload = "retained-old-lease-payload",
+                expectedVersion = null,
+                state = WorkerLocalStore.OUTBOX_RETRY,
+                retryCount = 3,
+                createdAtEpochMillis = 17,
+                updatedAtEpochMillis = 18,
+                lastError = WorkerLocalStore.EXPIRED_OFFLINE_LEASE_ERROR,
+            ),
+        )
+
+        val restored = store.requeueExpiredLeaseEvidenceReservations(USER_ID, "replacement-lease")
+
+        assertThat(restored).isEqualTo(1)
+        val operations = database.outboxDao().pending(USER_ID)
+        assertThat(operations).hasSize(1)
+        val operation = operations.single()
+        assertThat(operation.operationId).isEqualTo(original.reservationOperationId)
+        assertThat(operation.state).isEqualTo(WorkerLocalStore.OUTBOX_PENDING)
+        assertThat(operation.retryCount).isEqualTo(0)
+        assertThat(operation.createdAtEpochMillis).isEqualTo(17)
+        assertThat(operation.lastError).isNull()
+        val payload = Json.decodeFromString<PendingEvidenceReservation>(
+            store.decryptOutboxPayload(operation),
+        )
+        assertThat(payload.offlineLeaseId).isEqualTo("replacement-lease")
+        assertThat(payload.capturedAt).isEqualTo(original.capturedAt)
+        val recovered = database.evidenceDao().evidence(USER_ID, original.evidenceId)
+        assertThat(recovered?.encryptedFilePath).isEqualTo(original.encryptedFilePath)
+        assertThat(recovered?.state).isEqualTo(WorkerLocalStore.EVIDENCE_CAPTURED)
+    }
+
+    @Test
+    fun `superseding terminal task evidence preserves bytes and removes only active replay`() = runTest {
+        val original = evidence(
+            evidenceId = "evidence-terminal-task",
+            state = WorkerLocalStore.EVIDENCE_CAPTURED,
+            reviewReason = null,
+            lastError = null,
+        )
+        database.evidenceDao().upsert(original)
+        database.outboxDao().insert(
+            WorkerOutboxEntity(
+                operationId = original.reservationOperationId,
+                userId = USER_ID,
+                entryId = original.entryId,
+                kind = WorkerLocalStore.OUTBOX_EVIDENCE_RESERVATION,
+                encryptedPayload = "encrypted-payload",
+                expectedVersion = null,
+                state = WorkerLocalStore.OUTBOX_PENDING,
+                retryCount = 0,
+                createdAtEpochMillis = 17,
+                updatedAtEpochMillis = 18,
+                lastError = null,
+            ),
+        )
+
+        store.supersedeTerminalTaskEvidence(
+            userId = USER_ID,
+            evidenceId = original.evidenceId,
+            reservationOperationId = original.reservationOperationId,
+            reason = "Задание уже завершено",
+        )
+
+        val retained = database.evidenceDao().evidence(USER_ID, original.evidenceId)
+        assertThat(retained?.state).isEqualTo(WorkerLocalStore.EVIDENCE_SUPERSEDED)
+        assertThat(retained?.encryptedFilePath).isEqualTo(original.encryptedFilePath)
+        assertThat(retained?.reviewReason).isEqualTo("Задание уже завершено")
+        assertThat(database.outboxDao().pending(USER_ID)).isEmpty()
+        assertThat(database.evidenceDao().pending(USER_ID)).isEmpty()
+    }
+
     private fun evidence(
         evidenceId: String,
         state: String,
-        reviewReason: String,
+        reviewReason: String?,
+        lastError: String? = WorkerLocalStore.EXPIRED_OFFLINE_LEASE_ERROR,
     ) = TaskEvidenceEntity(
         evidenceId = evidenceId,
         userId = USER_ID,
@@ -100,7 +188,7 @@ class ExpiredLeaseEvidenceRecoveryRobolectricTest {
         mediaGeneration = null,
         reviewReason = reviewReason,
         uploadPercent = 0,
-        lastError = "Действие создано вне срока offline lease",
+        lastError = lastError,
         createdAtEpochMillis = 1,
         updatedAtEpochMillis = 2,
     )

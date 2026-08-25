@@ -158,6 +158,29 @@ interface WorkerOutboxDao {
     @Query("UPDATE worker_outbox SET state = :state, retryCount = :retryCount, lastError = :lastError, updatedAtEpochMillis = :now WHERE operationId = :operationId")
     suspend fun updateState(operationId: String, state: String, retryCount: Int, lastError: String?, now: Long)
 
+    /** Rebuilds one retained evidence reservation with the current authenticated lease. */
+    @Query(
+        """
+        UPDATE worker_outbox
+        SET encryptedPayload = :encryptedPayload,
+            state = 'PENDING',
+            retryCount = 0,
+            lastError = NULL,
+            updatedAtEpochMillis = :now
+        WHERE operationId = :operationId
+          AND userId = :userId
+          AND entryId = :entryId
+          AND kind = 'EVIDENCE_RESERVATION'
+        """,
+    )
+    suspend fun recoverEvidenceReservation(
+        operationId: String,
+        userId: String,
+        entryId: String,
+        encryptedPayload: String,
+        now: Long,
+    ): Int
+
     @Query("DELETE FROM worker_outbox WHERE operationId = :operationId")
     suspend fun delete(operationId: String)
 }
@@ -170,20 +193,20 @@ interface TaskEvidenceDao {
     @Upsert
     suspend fun upsert(evidence: TaskEvidenceEntity)
 
-    @Query("SELECT * FROM task_evidence WHERE userId = :userId AND state NOT IN ('READY', 'REJECTED', 'REVIEW_REQUIRED') ORDER BY createdAtEpochMillis")
+    @Query("SELECT * FROM task_evidence WHERE userId = :userId AND state IN ('CAPTURED', 'RESERVED', 'UPLOADING', 'PROCESSING') ORDER BY createdAtEpochMillis")
     suspend fun pending(userId: String): List<TaskEvidenceEntity>
 
     @Query("SELECT * FROM task_evidence WHERE evidenceId = :evidenceId AND userId = :userId LIMIT 1")
     suspend fun evidence(userId: String, evidenceId: String): TaskEvidenceEntity?
 
-    /** Returns only the deterministic pre-fix offline-lease failure eligible for safe recovery. */
+    /** Returns only deterministic pre-fix offline-lease failures eligible for safe recovery. */
     @Query(
         """
         SELECT * FROM task_evidence
         WHERE userId = :userId
           AND state = 'REVIEW_REQUIRED'
           AND mediaId IS NULL
-          AND reviewReason = :reviewReason
+          AND (reviewReason = :reviewReason OR lastError = :reviewReason)
         ORDER BY createdAtEpochMillis ASC
         """,
     )
@@ -203,6 +226,23 @@ interface TaskEvidenceDao {
 
     @Query("UPDATE task_evidence SET lastError = :error, updatedAtEpochMillis = :now WHERE evidenceId = :evidenceId")
     suspend fun updateUploadError(evidenceId: String, error: String, now: Long)
+
+    /** Archives an unattachable local photo without deleting its encrypted bytes. */
+    @Query(
+        """
+        UPDATE task_evidence
+        SET state = 'SUPERSEDED',
+            mediaId = NULL,
+            mediaGeneration = NULL,
+            reviewReason = :reason,
+            uploadPercent = 0,
+            lastError = NULL,
+            updatedAtEpochMillis = :now
+        WHERE evidenceId = :evidenceId
+          AND userId = :userId
+        """,
+    )
+    suspend fun markSuperseded(userId: String, evidenceId: String, reason: String, now: Long): Int
 }
 
 @Dao

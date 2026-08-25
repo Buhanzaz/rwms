@@ -1227,15 +1227,23 @@ and is covered by adopted-V4, Flyway-upgrade and eventing-runtime integration te
    board task becomes done only when no unfinished package remains, independent of parallel
    completion order.
 5. Maintenance consumes those ordinary per-entry facts idempotently and marks every mapped repair
-   stage done. The final fact moves the repair to pending acceptance. The transport payload and
-   service/database owners do not change; logistics and other task sources remain entry-scoped.
+   stage done. If the board-task creation fact predates the maintenance consumer group, the
+   completion effect resolves its owner through the existing local
+   `repair_stage.external_queue_entry_id` mapping instead of waiting for cross-topic correlation or
+   making a remote read. A highest-precedence application-ready pass also reapplies immutable
+   `PROCESSED` completion facts whose mapped stage is still `QUEUED`; the ordinary task-outcome use
+   case supplies the repair/stage locks, while inbox and replay audit rows remain unchanged. The
+   final fact moves the repair to pending acceptance. The transport payload and service/database
+   owners do not change; logistics and other task sources remain entry-scoped.
 
 Evidence:
 [`MaintenanceTaskBoardSupport.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceTaskBoardSupport.java),
 [`MaintenanceWorkerCoverReconciliation.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceWorkerCoverReconciliation.java),
 [`MaintenanceTaskExecutionPackageService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/MaintenanceTaskExecutionPackageService.java),
 [`TaskBoardWorkerExecutionService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardWorkerExecutionService.java),
+[`MaintenanceInboundDomainEffects.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceInboundDomainEffects.java),
 [`MaintenanceInboundUseCases.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceInboundUseCases.java),
+[`MaintenanceProcessedTaskOutcomeRecovery.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceProcessedTaskOutcomeRecovery.java),
 and
 [`task-board OpenAPI`](../../contracts/openapi/task-board-service.yaml).
 
@@ -1365,10 +1373,15 @@ is operational metadata rather than a completion fence. A server-accepted
 `COMPLETE` emits `QUEUE_ENTRY_COMPLETED`; maintenance's ordered inbox consumes
 the mapped final repair-stage fact and moves the repair to pending acceptance.
 An old WorkerApp that persisted the exact `Действие создано вне срока offline
-lease` evidence conflict retains the encrypted original; after a fresh
-authenticated context its sync coordinator recreates only that idempotent
-reservation with the fresh lease, retains the original capture timestamp and
-does not recreate any other review-required photo.
+lease` evidence conflict in either review or upload-error state retains the
+encrypted original. After a fresh authenticated context its sync coordinator
+resets the same retained reservation outbox row with the fresh lease, evidence
+identity and original capture timestamp; it does not recreate any other
+review-required photo. If task-board proves the owning entry is already `DONE`
+or `CANCELLED`, WorkerApp preserves the encrypted original as local
+`SUPERSEDED` recovery data and removes only the impossible active replay. The
+Downloads screen hides that archived row and gives immediate queued/progress
+feedback when the worker requests a retry.
 
 For an equipment-movement task, logistics records the same authoritative Task Board `DONE` fact
 even when `taskBoardDoneAt` is at or after the asset-reservation `deadlineAt`. It must not debit an
@@ -1398,6 +1411,8 @@ Evidence:
 [`Worker TasksScreen.kt`](../../worker-app/feature-tasks/src/main/java/dev/buhanzaz/rwms/worker/feature/tasks/TasksScreen.kt),
 [`Worker task detail`](../../worker-app/feature-task-detail/src/main/java/dev/buhanzaz/rwms/worker/feature/taskdetail/TaskDetailScreen.kt),
 [`Worker offline recovery`](../../worker-app/core-database/src/main/java/dev/buhanzaz/rwms/worker/core/database/WorkerLocalStore.kt),
+[`Worker sync coordinator`](../../worker-app/core-sync/src/main/java/dev/buhanzaz/rwms/worker/core/sync/WorkerSyncCoordinator.kt),
+[`Worker Downloads`](../../worker-app/app/src/main/java/dev/buhanzaz/rwms/worker/WorkerDownloads.kt),
 [`Worker photo viewer`](../../worker-app/app/src/main/java/dev/buhanzaz/rwms/worker/PhotoPagerScreen.kt),
 and
 [`Driver TasksScreen.kt`](../../driver-app/feature-tasks/src/main/java/dev/buhanzaz/rwms/driver/feature/tasks/TasksScreen.kt).

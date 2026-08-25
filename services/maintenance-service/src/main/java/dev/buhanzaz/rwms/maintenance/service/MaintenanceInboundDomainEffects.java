@@ -53,16 +53,42 @@ public class MaintenanceInboundDomainEffects implements MaintenanceInboundEffect
       applyTaskSchedule(event, correlation);
       return;
     }
-    if (!correlation.complete()) return;
-    if (repairs.findByExternalTaskId(correlation.externalTaskId()).isEmpty()) return;
+    TaskCorrelation resolved = resolveMaintenanceTask(correlation);
+    if (!resolved.complete()) return;
+    if (repairs.findByExternalTaskId(resolved.externalTaskId()).isEmpty()) return;
     QueueFact queue = "QUEUE_ENTRY".equals(event.aggregateType())
         ? new QueueFact(
             event.eventId(), event.eventType(), event.aggregateVersion(),
             nullableTime(event.payload(), "doneAt"))
-        : loadQueueFact(correlation.queueEntryEventId());
+        : loadQueueFact(resolved.queueEntryEventId());
     service.applyInboundTaskOutcome(
-        queue.eventId(), queue.eventType(), correlation.externalTaskId(),
-        correlation.queueEntryId(), queue.aggregateVersion(), queue.occurredAt());
+        queue.eventId(), queue.eventType(), resolved.externalTaskId(),
+        resolved.queueEntryId(), queue.aggregateVersion(), queue.occurredAt());
+  }
+
+  /** Resolves a missing transport peer only through maintenance's persisted queue-stage owner. */
+  private TaskCorrelation resolveMaintenanceTask(TaskCorrelation correlation) {
+    if (correlation.externalTaskId() != null || correlation.queueEntryId() == null) {
+      return correlation;
+    }
+    return jdbc.query(
+            """
+            select repair.external_task_id
+              from repair_stage stage
+              join maintenance_repair repair on repair.id=stage.repair_id
+             where stage.external_queue_entry_id=?
+            """,
+            (result, row) ->
+                new TaskCorrelation(
+                    result.getObject("external_task_id", UUID.class),
+                    correlation.boardTaskId(),
+                    correlation.queueEntryId(),
+                    correlation.boardTaskEventId(),
+                    correlation.queueEntryEventId()),
+            correlation.queueEntryId())
+        .stream()
+        .findFirst()
+        .orElse(correlation);
   }
 
   private void applyTaskSchedule(InboundEvent event, TaskCorrelation correlation) {

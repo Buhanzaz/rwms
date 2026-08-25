@@ -49,6 +49,21 @@ class WorkerDownloadsTest {
         assertThat(items.mapNotNull { it.error }).containsExactly("Нет связи с RWMS", "Тайм-аут")
     }
 
+    @Test
+    fun `locally retained evidence for a terminal task is not shown as an active upload`() {
+        val superseded = evidence(
+            "terminal-task",
+            state = WorkerLocalStore.EVIDENCE_SUPERSEDED,
+            percent = 0,
+            lastError = null,
+        ).copy(reviewReason = "Задание уже завершено; локальная фотография сохранена на устройстве")
+
+        val items = workerDownloadItems(outbox = emptyList(), evidence = listOf(superseded))
+
+        assertThat(items).isEmpty()
+        assertThat(superseded.encryptedFilePath).isEqualTo("encrypted-file")
+    }
+
     private fun outbox(
         operationId: String,
         kind: String,
