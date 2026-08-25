@@ -22,7 +22,7 @@ from app.schemas.domain import (
     ScenarioCreate,
     ScenarioExportDocument,
 )
-from app.services import catalog, scenarios
+from app.services import catalog, plans, scenarios
 
 pytestmark = pytest.mark.integration
 
@@ -248,6 +248,22 @@ async def test_demo_export_import_preserves_seed_versions_and_counts(
     assert imported_segment.routing_provider == "valhalla"
     assert imported_segment.osm_data_version == "moscow-2026-08-24"
     assert imported_segment.routed_at == routed_at
+    imported_plan = await plans.get_plan(db_session, imported_document.plans[0].id)
+    projected_segment = plans.plan_read(imported_plan).cycles[0].segments[0]
+    assert projected_segment.routing_profile_snapshot == profile_snapshot
+    assert projected_segment.routing_provider == "valhalla"
+    assert projected_segment.osm_data_version == "moscow-2026-08-24"
+    assert projected_segment.routed_at == routed_at
+    cloned_plan = await plans.clone_plan(
+        db_session,
+        imported_plan.id,
+        name="Truck snapshot clone",
+    )
+    cloned_segment = plans.plan_read(cloned_plan).cycles[0].segments[0]
+    assert cloned_segment.routing_profile_snapshot == profile_snapshot
+    assert cloned_segment.routing_provider == "valhalla"
+    assert cloned_segment.osm_data_version == "moscow-2026-08-24"
+    assert cloned_segment.routed_at == routed_at
     assert [item.scheduled_date for item in imported_document.requests].count(selected_date) == 1
     imported_source = next(
         item

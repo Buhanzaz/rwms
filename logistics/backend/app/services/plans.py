@@ -200,7 +200,7 @@ async def get_plan(session: AsyncSession, plan_id: UUID, *, for_update: bool = F
 
 
 def _segment_read(segment: RouteSegment) -> RouteSegmentRead:
-    """Serialize a persisted spatial segment as GeoJSON."""
+    """Serialize geometry and the immutable truck-routing audit snapshot."""
 
     return RouteSegmentRead(
         id=segment.id,
@@ -212,6 +212,14 @@ def _segment_read(segment: RouteSegment) -> RouteSegmentRead:
         distance_meters=segment.distance_meters,
         travel_seconds=segment.travel_seconds,
         geometry=geometry_to_geojson(segment.geometry),
+        routing_profile_snapshot=(
+            dict(segment.routing_profile_snapshot)
+            if segment.routing_profile_snapshot is not None
+            else None
+        ),
+        routing_provider=segment.routing_provider,
+        osm_data_version=segment.osm_data_version,
+        routed_at=segment.routed_at,
     )
 
 
@@ -414,6 +422,14 @@ async def clone_plan(session: AsyncSession, plan_id: UUID, *, name: str | None =
                     distance_meters=source_segment.distance_meters,
                     travel_seconds=source_segment.travel_seconds,
                     geometry=source_segment.geometry,
+                    routing_profile_snapshot=(
+                        dict(source_segment.routing_profile_snapshot)
+                        if source_segment.routing_profile_snapshot is not None
+                        else None
+                    ),
+                    routing_provider=source_segment.routing_provider,
+                    osm_data_version=source_segment.osm_data_version,
+                    routed_at=source_segment.routed_at,
                 )
             )
         for source_explanation in source_cycle.explanations:
