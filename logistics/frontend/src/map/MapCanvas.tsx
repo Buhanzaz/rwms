@@ -33,12 +33,15 @@ import type {
   RoutePlan,
   ScenarioWorkspace,
   SimulationDerivedState,
+  SimulationVehicleState,
   UUID,
   Zone,
 } from '../domain/types';
 import { CheckboxField } from '../components/ui';
 import { isRequestVisibleOnDate } from '../domain/request-dates';
 import { useUiStore, type LayerVisibility, type MapTool } from '../stores/ui-store';
+import { formatTime } from '../utils/format';
+import { deriveSimulationRouteLayers } from '../simulation/route-layers';
 import { RequestMapPopup } from './RequestMapCard';
 
 const BLANK_STYLE: maplibregl.StyleSpecification = {
@@ -173,6 +176,12 @@ function markerElement(kind: 'warehouse' | 'delivery' | 'pickup' | 'truck', labe
   span.textContent = kind === 'warehouse' ? 'С' : kind === 'delivery' ? 'Д' : kind === 'pickup' ? 'В' : '🚚';
   element.append(span);
   return element;
+}
+
+function simulationVehicleMapLabel(vehicle: SimulationVehicleState, timeZone: string): string {
+  const destination = vehicle.next_stop_label ?? (vehicle.status === 'FINISHED' ? 'маршрут завершён' : 'не определён');
+  const eta = vehicle.eta ? formatTime(vehicle.eta, timeZone) : '—';
+  return `${vehicle.driver_name} · ${vehicle.registration_number} · загрузка ${vehicle.load} · ${vehicle.status} · адрес назначения: ${destination} · ETA ${eta}`;
 }
 
 function setSource(map: MapLibreMap, id: typeof SOURCE_IDS[number], data: FeatureCollection): void {
@@ -473,19 +482,9 @@ export function MapCanvas({
     setSource(map, 'rwms-candidates', featureCollection(candidateFeatures(traceEvents)));
     setSource(map, 'rwms-selected', featureCollection(selectedFeatures(selected, workspace, plan)));
 
-    const traveled: Feature<LineString>[] = [];
-    const active: Feature<LineString>[] = [];
-    if (simulation && plan) {
-      for (const vehicle of simulation.vehicles) {
-        const route = plan.driver_routes.find((candidate) => candidate.driver_shift_id === vehicle.driver_shift_id);
-        const cycle = route?.cycles.find((candidate) => candidate.id === vehicle.active_cycle_id);
-        if (!cycle) continue;
-        cycle.legs.forEach((leg, index) => {
-          if (vehicle.active_leg_index !== null && index < vehicle.active_leg_index) traveled.push(leg.geometry);
-          if (index === vehicle.active_leg_index) active.push(leg.geometry);
-        });
-      }
-    }
+    const { traveled, active } = simulation && plan
+      ? deriveSimulationRouteLayers(plan, simulation)
+      : { traveled: [], active: [] };
     setSource(map, 'rwms-traveled', featureCollection(traveled));
     setSource(map, 'rwms-active', featureCollection(active));
   }, [allRoutes, mapReady, plan, selected, simulation, traceEvents, workspace]);
@@ -540,15 +539,16 @@ export function MapCanvas({
     if (layers.trucks && simulation) {
       simulation.vehicles.forEach((vehicle) => {
         const coordinates = vehicle.position.geometry.coordinates;
-        const element = markerElement('truck', `${vehicle.driver_name}, загрузка ${vehicle.load}, ${vehicle.status}`, selected?.kind === 'driver' && selected.id === vehicle.driver_shift_id);
+        const vehicleLabel = simulationVehicleMapLabel(vehicle, workspace.scenario.timezone);
+        const element = markerElement('truck', vehicleLabel, selected?.kind === 'driver' && selected.id === vehicle.driver_shift_id);
         element.addEventListener('click', (event) => { event.stopPropagation(); onSelect({ kind: 'driver', id: vehicle.driver_shift_id }); });
-        const popup = new maplibregl.Popup({ offset: 18 }).setText(`${vehicle.driver_name} · ${vehicle.registration_number} · загрузка ${vehicle.load} · ${vehicle.status}`);
+        const popup = new maplibregl.Popup({ offset: 18 }).setText(vehicleLabel);
         markers.push(new maplibregl.Marker({ element, anchor: 'center' }).setLngLat(coordinates as [number, number]).setPopup(popup).addTo(map));
       });
     }
     markersRef.current = markers;
     return () => markers.forEach((marker) => marker.remove());
-  }, [layers.deliveries, layers.pickups, layers.trucks, layers.unassigned, layers.warehouse, mapReady, onRequestMoveDraft, onSelect, requestsForPlanningDate, selected, simulation, unassignedRequestIds, workspace.warehouses]);
+  }, [layers.deliveries, layers.pickups, layers.trucks, layers.unassigned, layers.warehouse, mapReady, onRequestMoveDraft, onSelect, requestsForPlanningDate, selected, simulation, unassignedRequestIds, workspace.scenario.timezone, workspace.warehouses]);
 
   useEffect(() => {
     const map = mapRef.current;

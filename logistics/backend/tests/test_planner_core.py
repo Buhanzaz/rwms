@@ -8,6 +8,8 @@ import asyncio
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 from itertools import pairwise
+from time import perf_counter
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from app.planner import (
@@ -225,6 +227,75 @@ def test_quantity_two_delivery_never_pairs_with_another_delivery() -> None:
     assert all(len(customer_stops(cycle, StopType.DELIVERY)) == 1 for cycle in result.cycles)
 
 
+def test_quantity_two_delivery_is_one_task_one_stop_and_one_driver() -> None:
+    """A full-capacity source request is not split into duplicate visits."""
+
+    result = run_plan(
+        three_shift_input((request("full-address", TaskType.DELIVERY, quantity=2),))
+    )
+
+    delivery_stops = [
+        (cycle.driver_shift_id, stop)
+        for cycle in result.cycles
+        for stop in customer_stops(cycle, StopType.DELIVERY)
+    ]
+    assert len(delivery_stops) == 1
+    assert delivery_stops[0][1].request_id == "full-address"
+    assert delivery_stops[0][1].quantity_delta == -2
+    assert sum(
+        stop.task_id == "full-address:part:1"
+        for cycle in result.cycles
+        for stop in cycle.stops
+    ) == 1
+
+
+def test_quantity_three_delivery_uses_exactly_two_vehicle_sized_visits() -> None:
+    """Only a source quantity above capacity may legitimately revisit one address."""
+
+    result = run_plan(
+        three_shift_input((request("three-at-address", TaskType.DELIVERY, quantity=3),))
+    )
+
+    delivery_stops = [
+        stop
+        for cycle in result.cycles
+        for stop in customer_stops(cycle, StopType.DELIVERY)
+    ]
+    assert len(delivery_stops) == 2
+    assert {stop.request_id for stop in delivery_stops} == {"three-at-address"}
+    assert sorted(-stop.quantity_delta for stop in delivery_stops) == [1, 2]
+    assert len({stop.task_id for stop in delivery_stops}) == 2
+
+
+def test_duplicate_generated_source_is_reported_instead_of_visited_twice() -> None:
+    """Legacy repeated generator rows cannot send two drivers to one logical order."""
+
+    first = replace(
+        request("generated-original", TaskType.DELIVERY, quantity=2),
+        source_key="SIMULATOR_GENERATOR:20260822:2026-08-25:DELIVERY:1",
+    )
+    repeated = replace(
+        first,
+        id="generated-repeat",
+        created_at=first.created_at + timedelta(seconds=1),
+    )
+
+    result = run_plan(three_shift_input((first, repeated)))
+
+    delivery_stops = [
+        stop
+        for cycle in result.cycles
+        for stop in customer_stops(cycle, StopType.DELIVERY)
+    ]
+    assert len(delivery_stops) == 1
+    assert delivery_stops[0].request_id == "generated-original"
+    assert len(result.unassigned) == 1
+    assert result.unassigned[0].task.id == "generated-repeat"
+    assert result.unassigned[0].reason_codes == (
+        UnassignedReasonCode.DUPLICATE_ASSIGNMENT_CONFLICT,
+    )
+
+
 def test_two_single_pickups_pair_and_quantity_two_pickup_uses_full_capacity() -> None:
     paired = run_plan(
         planning_input(
@@ -365,33 +436,36 @@ def test_default_settings_minimize_returns_with_two_full_mixed_cycles() -> None:
     assert not result.unassigned
     assert len(result.cycles) == 2
     assert len({cycle.driver_shift_id for cycle in result.cycles}) == 1
-    assert {
-        tuple(stop.load_after for stop in cycle.stops)
+    assert all(
+        customer_stops(cycle, StopType.DELIVERY)
+        and customer_stops(cycle, StopType.PICKUP)
         for cycle in result.cycles
-    } == {
-        (2, 1, 0, 1, 2, 0),
-        (2, 0, 2, 0),
-    }
-    quantity_two_cycle = next(
-        cycle
+    )
+    assert all(
+        sum(-stop.quantity_delta for stop in customer_stops(cycle, StopType.DELIVERY))
+        == 2
+        and sum(stop.quantity_delta for stop in customer_stops(cycle, StopType.PICKUP))
+        == 2
         for cycle in result.cycles
-        if [stop.load_after for stop in cycle.stops] == [2, 0, 2, 0]
     )
     delivery_ids = {
         stop.task_id
-        for stop in quantity_two_cycle.stops
+        for cycle in result.cycles
+        for stop in cycle.stops
         if stop.stop_type is StopType.DELIVERY
     }
     pickup_ids = {
         stop.task_id
-        for stop in quantity_two_cycle.stops
+        for cycle in result.cycles
+        for stop in cycle.stops
         if stop.stop_type is StopType.PICKUP
     }
-    assert delivery_ids == {"d-far:part:1"}
-    assert pickup_ids == {"p-south:part:1"}
+    assert delivery_ids == {"d-west:part:1", "d-east:part:1", "d-far:part:1"}
+    assert pickup_ids == {"p-east:part:1", "p-west:part:1", "p-south:part:1"}
     assert any(
         "убирает отдельный рейс" in explanation
-        for explanation in quantity_two_cycle.explanation
+        for cycle in result.cycles
+        for explanation in cycle.explanation
     )
 
 
@@ -431,6 +505,35 @@ def test_delivery_prefers_compatible_return_pickup_over_pickup_only_cycle() -> N
         StopType.PICKUP,
         StopType.DEPOT_RETURN,
     ]
+
+
+def test_full_delivery_takes_nearby_full_pickup_before_returning_to_depot() -> None:
+    """A nearby backhaul fills the empty vehicle even with realistic service time."""
+
+    delivery = replace(
+        request("full-delivery", TaskType.DELIVERY, quantity=2, lon=37.80),
+        service_minutes=30,
+    )
+    pickup = replace(
+        request("near-full-pickup", TaskType.PICKUP, quantity=2, lon=37.805),
+        service_minutes=30,
+    )
+
+    result = run_plan(
+        three_shift_input((delivery, pickup)),
+        PlanningSettings(seed=17, max_detour_minutes=15),
+    )
+
+    assert not result.unassigned
+    assert len(result.cycles) == 1
+    assert [stop.stop_type for stop in result.cycles[0].stops] == [
+        StopType.DEPOT_LOAD,
+        StopType.DELIVERY,
+        StopType.PICKUP,
+        StopType.DEPOT_RETURN,
+    ]
+    assert [stop.load_after for stop in result.cycles[0].stops] == [2, 0, 2, 0]
+    assert result.cycles[0].detour_seconds < 15 * 60
 
 
 def test_one_driver_can_run_multiple_mixed_cycles_with_per_cycle_ordering() -> None:
@@ -526,6 +629,200 @@ def test_feasible_work_is_consolidated_without_activating_all_three_resources() 
         for explanation in cycle.explanation
     )
     assert result.score == round(sum(cycle.score for cycle in result.cycles), 6)
+
+
+def test_dense_fifteen_delivery_ten_pickup_day_stays_bounded_and_delivery_first() -> None:
+    """A generated-size day packs work without fanning it out to all resources."""
+
+    deliveries = tuple(
+        request(
+            f"dense-d-{index:02}",
+            TaskType.DELIVERY,
+            lon=37.61 + (index % 5) * 0.004,
+            lat=55.70 + (index // 5) * 0.004,
+        )
+        for index in range(15)
+    )
+    pickups = tuple(
+        request(
+            f"dense-p-{index:02}",
+            TaskType.PICKUP,
+            lon=37.612 + (index % 5) * 0.004,
+            lat=55.702 + (index // 5) * 0.004,
+        )
+        for index in range(10)
+    )
+
+    started = perf_counter()
+    result = run_plan(
+        three_shift_input((*deliveries, *pickups), shift_end=aware(23)),
+        PlanningSettings(seed=17),
+    )
+    elapsed = perf_counter() - started
+
+    delivery_stops = [
+        stop
+        for cycle in result.cycles
+        for stop in cycle.stops
+        if stop.stop_type is StopType.DELIVERY
+    ]
+    pickup_stops = [
+        stop
+        for cycle in result.cycles
+        for stop in cycle.stops
+        if stop.stop_type is StopType.PICKUP
+    ]
+    assert len(delivery_stops) == 15
+    assert len(pickup_stops) == 10
+    assert not result.unassigned
+    assert len(result.cycles) == 8
+    assert len({cycle.driver_shift_id for cycle in result.cycles}) == 1
+    assert elapsed < 5
+
+
+def test_pickup_never_consumes_the_last_feasible_delivery_slot() -> None:
+    """A return is sacrificed when its extra service would strand a delivery."""
+
+    result = run_plan(
+        planning_input(
+            (
+                request("must-deliver-1", TaskType.DELIVERY, quantity=2, lon=37.61),
+                request("must-deliver-2", TaskType.DELIVERY, quantity=2, lon=37.62),
+                request("optional-return", TaskType.PICKUP, quantity=2, lon=37.615),
+            ),
+            shift_end=aware(9, 55),
+        ),
+        PlanningSettings(seed=17, max_detour_minutes=120, max_detour_ratio=5),
+    )
+
+    assigned_delivery_ids = {
+        stop.request_id
+        for cycle in result.cycles
+        for stop in cycle.stops
+        if stop.stop_type is StopType.DELIVERY
+    }
+    assigned_pickup_ids = {
+        stop.request_id
+        for cycle in result.cycles
+        for stop in cycle.stops
+        if stop.stop_type is StopType.PICKUP
+    }
+    assert assigned_delivery_ids == {"must-deliver-1", "must-deliver-2"}
+    assert assigned_pickup_ids == set()
+    assert {item.task.request_id for item in result.unassigned} == {"optional-return"}
+
+
+def test_delivery_reference_attaches_near_pickup_without_dropping_later_delivery() -> None:
+    """A safe backhaul may shift a suffix while preserving all delivery work."""
+
+    deliveries = (
+        request("near-delivery", TaskType.DELIVERY, quantity=2, lon=37.62),
+        request("far-delivery", TaskType.DELIVERY, quantity=2, lon=38.10),
+    )
+    pickup = request("near-return", TaskType.PICKUP, quantity=2, lon=37.625)
+    source = planning_input(deliveries)
+    settings = PlanningSettings(
+        seed=17,
+        max_detour_minutes=30,
+        max_detour_ratio=5,
+    )
+    delivery_result = run_plan(source, settings)
+    tasks = tuple(
+        task
+        for item in (*deliveries, pickup)
+        for task in split_request(
+            item,
+            item.date_options[0],
+            remaining_date_count=1,
+            is_last_available_date=True,
+        )
+    )
+    ordered_tasks = tuple(sorted(tasks, key=lambda task: task.id))
+    provider = MockRoutingProvider(
+        RoutingSettings(
+            seed=17,
+            deterministic_noise_ratio=0,
+            road_factor=1.1,
+        )
+    )
+    matrix = asyncio.run(
+        provider.get_matrix(
+            [source.warehouse.point, *(task.point for task in ordered_tasks)],
+            aware(8),
+        )
+    )
+    matrix_index = {
+        task.id: index + 1 for index, task in enumerate(ordered_tasks)
+    }
+    planner = HeuristicPlanner(provider)
+
+    restored, _, evaluated = planner._attach_pickups_to_delivery_reference(
+        pickup_tasks=tuple(
+            task for task in tasks if task.task_type is TaskType.PICKUP
+        ),
+        shifts=source.shifts,
+        available_at={
+            source.shifts[0].id: delivery_result.cycles[-1].planned_finish
+            + timedelta(
+                minutes=source.warehouse.turnaround_minutes
+                + settings.default_route_buffer_minutes
+            )
+        },
+        warehouse=source.warehouse,
+        vehicles={vehicle.id: vehicle for vehicle in source.vehicles},
+        matrix=matrix,
+        matrix_index=matrix_index,
+        zones={zone.id: zone for zone in source.zones},
+        relations={},
+        settings=settings,
+        cycles=delivery_result.cycles,
+        task_by_id={task.id: task for task in tasks},
+        max_evaluations=1_000,
+    )
+
+    assert evaluated > 0
+    assert {
+        stop.request_id
+        for cycle in restored
+        for stop in cycle.stops
+        if stop.stop_type is StopType.DELIVERY
+    } == {"near-delivery", "far-delivery"}
+    assert {
+        stop.request_id
+        for cycle in restored
+        for stop in cycle.stops
+        if stop.stop_type is StopType.PICKUP
+    } == {"near-return"}
+    assert all(cycle.planned_finish <= source.shifts[0].end_at for cycle in restored)
+
+
+def test_delivery_reference_restores_coverage_when_main_search_has_no_candidate() -> None:
+    """The delivery coverage fence is a working fallback, not an untested dead branch."""
+
+    source = planning_input(
+        (request("reference-delivery", TaskType.DELIVERY, quantity=2),)
+    )
+    provider = MockRoutingProvider(
+        RoutingSettings(seed=17, deterministic_noise_ratio=0, road_factor=1.1)
+    )
+    planner = HeuristicPlanner(provider)
+
+    with patch.object(
+        planner,
+        "_candidates_for_shift",
+        return_value=([], 0, False),
+    ):
+        result = asyncio.run(
+            planner.generate_plan(
+                source,
+                PlanningSettings(seed=17),
+                NullProgressPublisher(),
+            )
+        )
+
+    assert not result.unassigned
+    assert len(result.cycles) == 1
+    assert result.cycles[0].task_ids == ("reference-delivery:part:1",)
 
 
 def test_additional_driver_is_activated_when_hard_windows_require_parallel_work() -> None:
@@ -676,8 +973,8 @@ def test_blocked_transition_prevents_mixed_cycle() -> None:
     )
 
 
-def test_large_detour_is_kept_when_it_removes_a_depot_cycle() -> None:
-    """Recommended detour limits warn but do not force a separate pickup trip."""
+def test_large_detour_forces_a_separate_pickup_cycle() -> None:
+    """A cycle saving never overrides the configured detour feasibility limit."""
 
     result = run_plan(
         planning_input(
@@ -691,11 +988,11 @@ def test_large_detour_is_kept_when_it_removes_a_depot_cycle() -> None:
     )
 
     assert not result.unassigned
-    assert len(result.cycles) == 1
-    assert ValidationWarningCode.HIGH_DETOUR in result.cycles[0].warnings
-    assert any(
-        "Крюк выше рекомендуемого порога" in explanation
-        for explanation in result.cycles[0].explanation
+    assert len(result.cycles) == 2
+    assert not any(
+        customer_stops(cycle, StopType.DELIVERY)
+        and customer_stops(cycle, StopType.PICKUP)
+        for cycle in result.cycles
     )
 
 
@@ -853,6 +1150,6 @@ def test_candidate_evaluations_stay_bounded_across_driver_shifts() -> None:
     )
     evaluation_count = completed.payload["evaluation_count"]
     assert isinstance(evaluation_count, int)
-    assert evaluation_count <= len(requests) * len(shifts) * 2
+    assert evaluation_count <= len(requests) * len(shifts) * 4
     assert result.metrics.assigned_tasks == len(requests)
     assert not result.timed_out

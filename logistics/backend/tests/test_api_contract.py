@@ -1,6 +1,8 @@
 """FastAPI and Pydantic contract tests that do not require a database."""
 
+import json
 from datetime import date, datetime
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,6 +17,8 @@ from app.schemas.domain import (
     ShiftCreate,
     SimulationDelayRequest,
     VehicleCreate,
+    WorkloadGeneratorInput,
+    ZoneCreate,
 )
 from app.services.catalog import split_quantities
 from app.services.planner_runtime import request_is_available_on_date
@@ -30,6 +34,7 @@ def test_openapi_is_served_under_api_and_contains_core_operations() -> None:
     assert "/api/scenarios/{scenario_id}/requests" in paths
     assert "/api/requests/{request_id}/schedule" in paths
     assert "/api/zones/{zone_id}/cutouts" in paths
+    assert "/api/scenarios/{scenario_id}/generate-workload" in paths
     assert "/api/scenarios/{scenario_id}/plans/generate" in paths
     assert "/api/optimization-runs/{run_id}/stream" in paths
     assert "/api/plans/{plan_id}/simulation/delay" in paths
@@ -38,6 +43,15 @@ def test_openapi_is_served_under_api_and_contains_core_operations() -> None:
         response = client.get("/api/openapi.json")
     assert response.status_code == 200
     assert response.json()["info"]["title"] == "RWMS Logistics Simulator"
+
+
+def test_checked_in_openapi_matches_generated_contract() -> None:
+    """The checked-in schema cannot silently drift from the FastAPI application."""
+
+    schema_path = Path(__file__).resolve().parents[1] / "openapi.json"
+    checked_in = json.loads(schema_path.read_text(encoding="utf-8"))
+
+    assert checked_in == openapi_document()
 
 
 def test_unwired_planner_returns_honest_problem_details() -> None:
@@ -65,6 +79,68 @@ def test_request_create_forbids_client_zone_override() -> None:
                 "quantity": 1,
                 "zone_id": "00000000-0000-0000-0000-000000000001",
             }
+        )
+
+
+def test_workload_generator_contract_keeps_alternatives_inside_horizon() -> None:
+    """The requested alternatives always fit alongside the primary date."""
+
+    one_day = WorkloadGeneratorInput(
+        start_date=date(2026, 8, 24),
+        deliveries_per_day=1,
+        pickups_per_day=1,
+        seed=24,
+    )
+    assert one_day.days == 1
+    assert one_day.alternative_dates_count == 0
+    assert one_day.replace_existing_generated is False
+
+    accepted = WorkloadGeneratorInput(
+        start_date=date(2026, 8, 24),
+        days=4,
+        deliveries_per_day=10,
+        pickups_per_day=0,
+        alternative_dates_count=3,
+        replace_existing_generated=True,
+        seed=42,
+    )
+    assert accepted.alternative_dates_count == 3
+    assert accepted.replace_existing_generated is True
+    with pytest.raises(ValidationError, match="smaller than days"):
+        WorkloadGeneratorInput(
+            start_date=date(2026, 8, 24),
+            days=2,
+            deliveries_per_day=0,
+            pickups_per_day=10,
+            alternative_dates_count=2,
+            seed=42,
+        )
+
+
+def test_zone_prices_are_nonnegative_integer_rubles() -> None:
+    """Direction-specific tariffs reject negative values at the API boundary."""
+
+    geometry = {
+        "type": "Polygon",
+        "coordinates": [[[37, 55], [38, 55], [38, 56], [37, 56], [37, 55]]],
+    }
+    zone = ZoneCreate(
+        name="Тарифная зона",
+        code="PRICE",
+        route_group="CUSTOM",
+        geometry=geometry,
+        delivery_price=12_500,
+        pickup_price=9_000,
+    )
+    assert zone.delivery_price == 12_500
+    assert zone.pickup_price == 9_000
+    with pytest.raises(ValidationError):
+        ZoneCreate(
+            name="Ошибка",
+            code="NEGATIVE",
+            route_group="CUSTOM",
+            geometry=geometry,
+            delivery_price=-1,
         )
 
 

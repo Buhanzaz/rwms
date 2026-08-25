@@ -239,6 +239,15 @@ textarea.input { resize: vertical; min-height: 74px; }
 .route-driver__workload { font-variant-numeric: tabular-nums; }
 .route-driver__select { flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
 .route-driver__select:hover strong { color: var(--accent); }
+.simulation-route-statuses { margin-bottom: 2px; }
+.simulation-route-status { border-color: #296b5a; background: #0b201f; }
+.simulation-route-status__driver { display: grid; gap: 3px; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.simulation-route-status__driver:hover strong { color: var(--accent); }
+.simulation-route-status__driver small { color: var(--muted); font-size: 10px; }
+.simulation-route-status__destination { display: grid; gap: 3px; margin-top: 9px; padding: 8px; border: 1px solid #24554d; border-radius: 7px; background: #071817; }
+.simulation-route-status__destination small { color: var(--muted); font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; }
+.simulation-route-status__destination strong { overflow-wrap: anywhere; color: #d5fff0; font-size: 12px; line-height: 1.4; }
+.simulation-route-status__destination span { color: #9fc7ba; font-size: 10px; font-variant-numeric: tabular-nums; }
 .cycle-card { margin: 8px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .cycle-card__head { padding: 8px 9px; display: flex; align-items: center; justify-content: space-between; background: #0e1c2e; }
 .stop-list { padding: 5px; }

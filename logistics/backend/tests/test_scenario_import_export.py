@@ -1,5 +1,6 @@
 """PostGIS integration tests for demo data and atomic scenario interchange."""
 
+from copy import deepcopy
 from uuid import uuid4
 
 import pytest
@@ -27,6 +28,20 @@ async def test_demo_export_import_preserves_seed_versions_and_counts(
     )
     await scenarios.reset_demo_scenario(db_session, source.id)
     source_requests = await catalog.list_requests(db_session, source.id)
+    source_requests[0].source_system = "RWMS"
+    source_requests[0].external_id = uuid4()
+    source_requests[0].external_version = 7
+    source_requests[0].external_payload = {
+        "orderNumber": "R-007",
+        "nested": {"unitIds": [str(uuid4())]},
+    }
+    expected_source_metadata = (
+        source_requests[0].source_system,
+        source_requests[0].external_id,
+        source_requests[0].external_version,
+        deepcopy(source_requests[0].external_payload),
+    )
+    await db_session.flush()
     selected_date = source.default_planning_date
     assert selected_date is not None
     await catalog.schedule_request(
@@ -35,6 +50,8 @@ async def test_demo_export_import_preserves_seed_versions_and_counts(
         RequestScheduleInput(date=selected_date),
     )
     document = await scenarios.export_scenario(db_session, source.id, include_plans=True)
+    document.zones[0].data.delivery_price = 12_500
+    document.zones[0].data.pickup_price = 9_000
     imported = await scenarios.import_scenario(db_session, document, settings, name="Imported demo")
     imported_document = await scenarios.export_scenario(db_session, imported.id, include_plans=True)
 
@@ -45,11 +62,24 @@ async def test_demo_export_import_preserves_seed_versions_and_counts(
     ]
     assert len(imported_document.warehouses) == 1
     assert len(imported_document.zones) == 4
+    assert imported_document.zones[0].data.delivery_price == 12_500
+    assert imported_document.zones[0].data.pickup_price == 9_000
     assert len(imported_document.drivers) == 3
     assert len(imported_document.vehicles) == 3
     assert len(imported_document.shifts) == 3
     assert len(imported_document.requests) == 6
     assert [item.scheduled_date for item in imported_document.requests].count(selected_date) == 1
+    imported_source = next(
+        item
+        for item in imported_document.requests
+        if item.external_id == expected_source_metadata[1]
+    )
+    assert (
+        imported_source.source_system,
+        imported_source.external_id,
+        imported_source.external_version,
+        imported_source.external_payload,
+    ) == expected_source_metadata
 
 
 @pytest.mark.asyncio

@@ -63,6 +63,8 @@ export function RequestMapCard({
     : request.zone_status === 'STALE'
       ? `Зона ${zone?.code ?? '—'} требует пересчёта`
       : `Зона ${zone?.code ?? '—'} · версия ${request.zone_version ?? '—'}`;
+  const zonePrice = zone ? request.type === 'DELIVERY' ? zone.delivery_price : zone.pickup_price : null;
+  const priceLabel = request.type === 'DELIVERY' ? 'Доставка' : 'Вывоз';
 
   return (
     <section className="request-map-menu" aria-label="Заявка на карте" aria-busy={busy} data-testid="request-map-menu">
@@ -77,6 +79,7 @@ export function RequestMapCard({
         <div><dt><MapPin size={12} aria-hidden="true" />Адрес</dt><dd>{request.address_label}</dd></div>
         <div><dt><PackageOpen size={12} aria-hidden="true" />Объём</dt><dd>{request.quantity} бытов. · обслуживание {request.service_minutes} мин</dd></div>
         <div><dt><Clock3 size={12} aria-hidden="true" />Классификация</dt><dd>{zoneState}</dd></div>
+        <div><dt>Тариф</dt><dd>{zonePrice === null ? '—' : `${priceLabel} · ${zonePrice} ₽`}</dd></div>
       </dl>
       {request.notes ? <p className="request-map-menu__notes">{request.notes}</p> : null}
 

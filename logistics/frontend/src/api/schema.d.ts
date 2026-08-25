@@ -656,6 +656,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/scenarios/{scenario_id}/generate-workload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Generate Workload
+         * @description Generate or safely regenerate a deterministic workload inside current zones.
+         */
+        post: operations["generate_workload_api_scenarios__scenario_id__generate_workload_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/scenarios/{scenario_id}/plans/generate": {
         parameters: {
             query?: never;
@@ -1193,10 +1213,18 @@ export interface components {
         };
         /**
          * ExportRequest
-         * @description Source request record inside a scenario document.
+         * @description Source request record with optional upstream lineage for reproducible imports.
          */
         ExportRequest: {
             data: components["schemas"]["LogisticsRequestCreate"];
+            /** External Id */
+            external_id?: string | null;
+            /** External Payload */
+            external_payload?: {
+                [key: string]: unknown;
+            } | null;
+            /** External Version */
+            external_version?: number | null;
             /**
              * Id
              * Format: uuid
@@ -1204,6 +1232,8 @@ export interface components {
             id: string;
             /** Scheduled Date */
             scheduled_date?: string | null;
+            /** Source System */
+            source_system?: string | null;
             zone_classification_status: components["schemas"]["ZoneClassificationStatus"];
             /** Zone Id */
             zone_id: string | null;
@@ -2974,6 +3004,89 @@ export interface components {
             working_day_start?: string | null;
         };
         /**
+         * WorkloadGenerationDailyCount
+         * @description Created source-request counts attributed to one primary date.
+         */
+        WorkloadGenerationDailyCount: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Deliveries */
+            deliveries: number;
+            /** Pickups */
+            pickups: number;
+        };
+        /**
+         * WorkloadGenerationResult
+         * @description Auditable summary of one workload generation command.
+         */
+        WorkloadGenerationResult: {
+            /** Created Deliveries */
+            created_deliveries: number;
+            /** Created Pickups */
+            created_pickups: number;
+            /** Created Requests */
+            created_requests: number;
+            /** Daily Counts */
+            daily_counts: components["schemas"]["WorkloadGenerationDailyCount"][];
+            /**
+             * End Date
+             * Format: date
+             */
+            end_date: string;
+            /**
+             * Replaced Requests
+             * @default 0
+             */
+            replaced_requests: number;
+            /**
+             * Scenario Id
+             * Format: uuid
+             */
+            scenario_id: string;
+            /** Seed */
+            seed: number;
+            /**
+             * Start Date
+             * Format: date
+             */
+            start_date: string;
+        };
+        /**
+         * WorkloadGeneratorInput
+         * @description Bounded deterministic request workload generated for one scenario horizon.
+         */
+        WorkloadGeneratorInput: {
+            /**
+             * Alternative Dates Count
+             * @default 0
+             */
+            alternative_dates_count: number;
+            /**
+             * Days
+             * @default 1
+             */
+            days: number;
+            /** Deliveries Per Day */
+            deliveries_per_day: number;
+            /** Pickups Per Day */
+            pickups_per_day: number;
+            /**
+             * Replace Existing Generated
+             * @default false
+             */
+            replace_existing_generated: boolean;
+            /** Seed */
+            seed: number;
+            /**
+             * Start Date
+             * Format: date
+             */
+            start_date: string;
+        };
+        /**
          * ZoneClassificationStatus
          * @description Result of authoritative server-side point classification.
          * @enum {string}
@@ -2985,6 +3098,11 @@ export interface components {
          */
         ZoneCreate: {
             code: components["schemas"]["NonBlank"];
+            /**
+             * Delivery Price
+             * @default 0
+             */
+            delivery_price: number;
             geometry: components["schemas"]["GeoJsonGeometry"];
             /**
              * Locked
@@ -2992,6 +3110,11 @@ export interface components {
              */
             locked: boolean;
             name: components["schemas"]["NonBlank"];
+            /**
+             * Pickup Price
+             * @default 0
+             */
+            pickup_price: number;
             /**
              * Priority
              * @default 0
@@ -3005,9 +3128,19 @@ export interface components {
          */
         ZoneCutoutInnerZone: {
             code: components["schemas"]["NonBlank"];
+            /**
+             * Delivery Price
+             * @default 0
+             */
+            delivery_price: number;
             /** Locked */
             locked: boolean;
             name: components["schemas"]["NonBlank"];
+            /**
+             * Pickup Price
+             * @default 0
+             */
+            pickup_price: number;
             /** Priority */
             priority: number;
             route_group: components["schemas"]["NonBlank"];
@@ -3051,6 +3184,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Delivery Price */
+            delivery_price: number;
             geometry: components["schemas"]["GeoJsonGeometry"];
             /**
              * Id
@@ -3061,6 +3196,8 @@ export interface components {
             locked: boolean;
             /** Name */
             name: string;
+            /** Pickup Price */
+            pickup_price: number;
             /** Priority */
             priority: number;
             /** Route Group */
@@ -3214,8 +3351,12 @@ export interface components {
          */
         ZoneUpdate: {
             code?: components["schemas"]["NonBlank"] | null;
+            /** Delivery Price */
+            delivery_price?: number | null;
             geometry?: components["schemas"]["GeoJsonGeometry"] | null;
             name?: components["schemas"]["NonBlank"] | null;
+            /** Pickup Price */
+            pickup_price?: number | null;
             /** Priority */
             priority?: number | null;
             route_group?: components["schemas"]["NonBlank"] | null;
@@ -4470,6 +4611,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScenarioRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    generate_workload_api_scenarios__scenario_id__generate_workload_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scenario_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkloadGeneratorInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkloadGenerationResult"];
                 };
             };
             /** @description Validation Error */

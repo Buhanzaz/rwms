@@ -188,12 +188,14 @@ class Warehouse(UuidPrimaryKeyMixin, Base):
 
 
 class Zone(UuidPrimaryKeyMixin, TimestampMixin, Base):
-    """Versioned operational polygon used to classify request coordinates."""
+    """Versioned operational polygon with direction-specific test tariffs."""
 
     __tablename__ = "zones"
     __table_args__ = (
         UniqueConstraint("scenario_id", "code", name="uq_zones_scenario_code"),
         CheckConstraint("version >= 1", name="positive_version"),
+        CheckConstraint("delivery_price >= 0", name="nonnegative_delivery_price"),
+        CheckConstraint("pickup_price >= 0", name="nonnegative_pickup_price"),
         Index("ix_zones_scenario_priority", "scenario_id", "priority"),
         Index("ix_zones_geometry_gist", "geometry", postgresql_using="gist"),
     )
@@ -209,6 +211,8 @@ class Zone(UuidPrimaryKeyMixin, TimestampMixin, Base):
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    delivery_price: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pickup_price: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     scenario: Mapped[Scenario] = relationship(back_populates="zones")

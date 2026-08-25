@@ -43,6 +43,17 @@ disabled by default and never exposes its client secret to the browser.
   priority wins; equal priority selects the smallest covering geometry.
 - `backend/app/services/catalog.py` owns the atomic cutout command: it versions
   the source geometry and creates the independent inner zone in one transaction.
+- `backend/app/services/workload_generator.py` creates bounded, seed-stable
+  request workloads. Its explicit replacement mode locks and removes only
+  generator-owned, unplanned rows in the chosen horizon; manual/RWMS rows and
+  saved-plan references are fenced. Repeating one seed in an overlapping
+  horizon fails before insertion, and new rows use stable external source IDs.
+  Planner projection additionally identifies legacy generator rows without an
+  external ID by direction, exact point and primary logistics date rather than
+  mutable display data, so renumbered legacy batches cannot revisit one point.
+  Non-generator sources continue to use their authoritative external IDs.
+  It samples only inside current Polygon/MultiPolygon geometry and delegates
+  every create to the canonical catalog classifier.
 - `backend/app/routing` contains the provider protocol, the private OSRM HTTP
   adapter and deterministic Haversine implementation.
 - `backend/app/planner` creates and validates delivery-before-pickup schedules
@@ -77,9 +88,20 @@ cannot delete or overwrite the scenario which an operator is currently testing.
 - An optimization run is persisted separately and never overwrites a confirmed
   plan. Trace events are bounded progress evidence, not the plan itself.
 - Import runs in one database transaction. Invalid input creates no partial
-  scenario.
+  scenario. Clone and JSON round trips preserve optional request source
+  identity/version/payload so generator duplicate fences and RWMS lineage do
+  not silently degrade.
+- Workload generation uses the request-scoped transaction: any failed generated
+  request rolls back the complete batch. A lock on the scenario row serializes
+  concurrent generator commands before duplicate detection. Append is the
+  default. Explicit regeneration replaces only generator-owned rows whose
+  priority-100 date is in the horizon and aborts before deletion when a task is
+  referenced by a saved route or unassigned-plan row.
 - Existing requests retain `zone_id` and `zone_version` after zone geometry
   changes. Reclassification is a separate explicit operation.
+- Zone delivery/pickup prices are non-negative integer-ruble simulator facts.
+  They are independent of geometry version and currently inform the operator
+  without changing route feasibility or score.
 - A zone cutout is a server-validated geometry subtraction. It must be strictly
   contained by an unlocked source zone, becomes an interior ring, increments
   the zone version once and follows the same explicit reclassification rule.
@@ -131,13 +153,26 @@ local MVP, while interruptible live cancellation and concurrent heavy runs
 need a future worker/queue boundary.
 
 Candidate selection is lexicographic for domain priority and weighted for
-operating cost. Hard dates/windows, capacity, per-cycle delivery-before-pickup
-ordering, blocked zone transitions, resource overlap and shift limits first
-remove infeasible variants. The next rank prefers mixed cycles, full
-outbound/return quantities and then more compatible stops, so depot returns
-are minimized before weighted route length. The scenario defaults of 35
-minutes and a 1.5 detour ratio are warning/score thresholds, including tighter
-zone-relation thresholds, rather than hard reasons to create another cycle.
+operating cost. Delivery urgency is ranked independently from pickup urgency;
+hard dates/windows, capacity, per-cycle delivery-before-pickup ordering,
+blocked zone transitions, resource overlap and shift limits first remove
+infeasible variants. Equal-priority deliveries are batched nearest-first and a
+delivery group evaluates at most `max_candidate_neighbors` detour-ranked pickup
+groups. The scenario defaults of 35 minutes and a 1.5 travel-detour ratio,
+including tighter zone-relation thresholds, are hard automatic-planning limits.
+The engine constructs bounded nearest-first and longest-first delivery-only
+references before mixed search and keeps the one with the strongest hard-date,
+last-date and total delivery coverage. When the mixed draft covers less, the
+reference cycles and shift availability are restored before pickup-only
+scheduling. After restoration, an optional pickup may replace a delivery cycle
+only when the selected cycle and its complete shift suffix can be rescheduled
+without dropping a task or violating a hard window/shift limit. Detour minutes
+and ratio measure additional road travel only; pickup service remains in cycle
+duration, windows, workload and shift-end validation.
+Equal business-priority candidates use exact compact route-rank buckets, so
+dense identical-priority workloads do not require a full cross-product of task
+pairs and shifts. Within that fence, full mixed loads are preferred to reduce
+depot returns.
 Within that rank, a first resource is chosen with enough remaining shift
 reserve and subsequent cycles reuse it unless a new shift improves the route
 by more than `additional_resource_activation_penalty` or is required for
@@ -147,6 +182,11 @@ capacity: minutes above `preferred_shift_utilization_percent` receive
 `driver_workload_weight`, so a heavily loaded shift can justify a second
 resource before the hard shift end. Manual changes recalculate both objective
 components from the complete resulting plan.
+
+Candidate construction yields to the API event loop between assigned cycles.
+Selected road geometry is fetched with one complete-route call per depot cycle,
+at most four calls concurrently, and provider legs are mapped back without
+changing matrix-derived schedule metrics.
 
 Manual editing currently supports validated task move/reorder, task lock at the
 API boundary and cycle lock. Reoptimization carries locked cycles into a new
@@ -159,5 +199,8 @@ OSRM is selected by `ROUTING_PROVIDER=osrm` and runs only inside the Compose
 network. Its one-shot download/preparation containers own only the separate
 `logistics-osrm-data` volume; scenario facts remain in PostGIS. Another routing
 adapter implements the same matrix/route protocol and must not bypass domain
-validation. OR-Tools or CP-SAT can implement `PlannerEngine`, returning the
-same validated result contract, explanations and unassigned reasons.
+validation. The current adapter keeps every Table request within OSRM's
+100-coordinate limit by splitting large directed matrices into rectangular
+source/destination blocks, then reconstructing the full matrix without a mock
+fallback. OR-Tools or CP-SAT can implement `PlannerEngine`, returning the same
+validated result contract, explanations and unassigned reasons.

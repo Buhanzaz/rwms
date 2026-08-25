@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MultiPolygon, Polygon } from 'geojson';
-import { api, ApiError, getScenarioWorkspace, optimizationStreamUrl, type ZoneInput } from '../api/client';
+import { api, getScenarioWorkspace, optimizationStreamUrl, type ZoneInput } from '../api/client';
 import type {
   Driver,
   DriverShift,
@@ -51,9 +51,13 @@ import { Inspector, type EditableEntity, type EntityKind } from './Inspector';
 import type { PlanMove } from '../features/planning/PlanPanel';
 import { SimulationBar } from '../features/simulation/SimulationBar';
 import { RwmsIntegrationDialog } from '../features/rwms/RwmsIntegrationDialog';
+import { WorkloadGeneratorDialog } from '../features/scenarios/WorkloadGeneratorDialog';
+import { saveZoneUpdate } from '../features/zones/zone-update';
+import { actionErrorFeedback } from './action-error';
 
 type DialogState =
   | { kind: 'scenario'; value?: Scenario }
+  | { kind: 'workload-generator' }
   | { kind: 'warehouse'; value?: Warehouse; point?: { latitude: number; longitude: number } }
   | { kind: 'zone'; value?: Zone; geometry: Polygon | MultiPolygon }
   | { kind: 'zone-cutout'; sourceZone: Zone; geometry: Polygon; initialValues: Partial<Omit<ZoneInput, 'geometry'>> }
@@ -107,14 +111,6 @@ function parseTraceEvent(value: string, runId: UUID): OptimizationTraceEvent | n
   } catch {
     return null;
   }
-}
-
-function zoneContentChanged(zone: Zone, input: ZoneInput): boolean {
-  return zone.name !== input.name ||
-    zone.code !== input.code ||
-    zone.route_group !== input.route_group ||
-    zone.priority !== input.priority ||
-    JSON.stringify(zone.geometry) !== JSON.stringify(input.geometry);
 }
 
 export function App() {
@@ -299,13 +295,9 @@ export function App() {
       if (success) toast({ tone: 'success', title: success });
       return result;
     } catch (error: unknown) {
-      const conflict = error instanceof ApiError && error.status === 409;
-      toast({
-        tone: conflict ? 'warning' : 'error',
-        title: conflict ? 'Конфликт версии плана' : 'Операция не выполнена',
-        detail: conflict ? 'План уже изменён. Загружена актуальная версия; повторите действие.' : error instanceof Error ? error.message : 'Неизвестная ошибка',
-      });
-      if (conflict && planId) await queryClient.invalidateQueries({ queryKey: ['plan', planId] });
+      const { refreshPlan, ...message } = actionErrorFeedback(error);
+      toast(message);
+      if (refreshPlan && planId) await queryClient.invalidateQueries({ queryKey: ['plan', planId] });
       throw error;
     }
   }, [actionMutation, planId, queryClient, toast]);
@@ -368,6 +360,8 @@ export function App() {
         name: `${sourceZone.name} · внутренняя ${innerNumber}`,
         code: `${prefix}${innerNumber}`,
         route_group: sourceZone.route_group,
+        delivery_price: sourceZone.delivery_price,
+        pickup_price: sourceZone.pickup_price,
         priority: sourceZone.priority + 1,
         locked: false,
       },
@@ -535,6 +529,23 @@ export function App() {
     }, 'Создан отдельный тестовый стенд на три дня').catch(() => undefined);
   };
 
+  const generateWorkload = async (input: Parameters<typeof api.generateWorkload>[1]) => {
+    if (!workspace) return;
+    await execute(async () => {
+      const result = await api.generateWorkload(workspace.scenario.id, input);
+      await refresh();
+      selectPlanningDate(result.start_date);
+      setDialog(null);
+      toast({
+        tone: 'success',
+        title: input.replace_existing_generated || result.replaced_requests > 0
+          ? `Нагрузка перегенерирована: ${result.created_requests} заявок`
+          : `Нагрузка создана: ${result.created_requests} заявок`,
+        detail: `${result.created_deliveries} доставок · ${result.created_pickups} вывозов · ${formatDate(result.start_date)}–${formatDate(result.end_date)}${result.replaced_requests > 0 ? ` · заменено заявок: ${result.replaced_requests}` : ''}`,
+      });
+    }, undefined).catch(() => undefined);
+  };
+
   const scheduleRequestDate = async (requestId: UUID, date: string, addIfMissing: boolean) => {
     await execute(async () => {
       await api.scheduleRequest(requestId, { date, add_if_missing: addIfMissing });
@@ -620,6 +631,7 @@ export function App() {
           onCreate={openCreate} onEdit={openEdit} onDelete={(entityKind, id, label) => setDialog({ kind: 'delete-entity', entityKind, id, label })}
           onGenerateDemo={() => setDialog({ kind: 'reset-demo' })}
           onGenerateMultiDayDemo={() => void generateMultiDayDemo()}
+          onGenerateWorkload={() => setDialog({ kind: 'workload-generator' })}
           onCloneScenario={() => void execute(async () => { const clone = await api.cloneScenario(workspace.scenario.id, `${workspace.scenario.name} · копия`); await refresh(); setScenarioId(clone.id); }, 'Сценарий клонирован')}
           onDeleteScenario={() => setDialog({ kind: 'delete-scenario' })}
           onExport={() => void exportScenario()} onImport={() => importRef.current?.click()}
@@ -645,13 +657,20 @@ export function App() {
         if (createdScenarioId) setScenarioId(createdScenarioId);
         setDialog(null);
       }, 'Сценарий сохранён'); }} /> : null}
+      {dialog?.kind === 'workload-generator' ? <WorkloadGeneratorDialog
+        planningDate={planningDate}
+        seed={workspace.scenario.seed ?? 42}
+        busy={busy}
+        onClose={() => setDialog(null)}
+        onSubmit={generateWorkload}
+      /> : null}
       {dialog?.kind === 'warehouse' ? <WarehouseDialog warehouse={dialog.value} point={dialog.point} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => { if (dialog.value) await api.updateWarehouse(dialog.value.id, input); else await api.createWarehouse(workspace.scenario.id, input); await refresh(); setDialog(null); setMapTool('SELECT'); }, 'Склад сохранён'); }} /> : null}
       {dialog?.kind === 'zone' ? <ZoneDialog zone={dialog.value} geometry={dialog.geometry} busy={busy} onClose={() => { setDialog(null); setMapTool('SELECT'); }} onSubmit={async (input) => { await execute(async () => {
         if (dialog.value) {
-          const { locked, ...update } = input;
-          if (dialog.value.locked && !locked) await api.setZoneLocked(dialog.value.id, false);
-          if (zoneContentChanged(dialog.value, input)) await api.updateZone(dialog.value.id, update);
-          if (!dialog.value.locked && locked) await api.setZoneLocked(dialog.value.id, true);
+          await saveZoneUpdate(dialog.value, input, {
+            setLocked: (locked) => api.setZoneLocked(dialog.value!.id, locked),
+            update: (payload) => api.updateZone(dialog.value!.id, payload),
+          });
         } else await api.createZone(workspace.scenario.id, input);
         await refresh(); setDialog(null); setMapTool('SELECT');
       }, 'Зона сохранена'); }} /> : null}

@@ -293,6 +293,10 @@ async def export_scenario(
                         for option in request.date_options
                     ],
                 ),
+                source_system=request.source_system,
+                external_id=request.external_id,
+                external_version=request.external_version,
+                external_payload=request.external_payload,
                 scheduled_date=request.scheduled_date,
                 zone_id=request.zone_id,
                 zone_version=request.zone_version,
@@ -322,6 +326,8 @@ async def export_scenario(
                     route_group=item.route_group,
                     geometry=GeoJsonGeometry.model_validate(geometry_to_geojson(item.geometry)),
                     priority=item.priority,
+                    delivery_price=item.delivery_price,
+                    pickup_price=item.pickup_price,
                     locked=item.locked,
                 ),
                 version=item.version,
@@ -443,6 +449,10 @@ async def import_scenario(
         shift_ids[shift_item.id] = shift.id
     for request_item in document.requests:
         logistics_request = await create_request(session, scenario.id, request_item.data)
+        logistics_request.source_system = request_item.source_system
+        logistics_request.external_id = request_item.external_id
+        logistics_request.external_version = request_item.external_version
+        logistics_request.external_payload = request_item.external_payload
         logistics_request.scheduled_date = request_item.scheduled_date
         if request_item.zone_id is None:
             logistics_request.zone_id = None
@@ -632,7 +642,10 @@ async def reset_demo_scenario(session: AsyncSession, scenario_id: UUID) -> Scena
     scenario = await get_required(session, Scenario, scenario_id, "scenario")
     await _clear_scenario_data(session, scenario_id)
     scenario.description = "Демонстрационный сценарий: четыре зоны, три смены и парные заявки."
-    scenario.settings = ScenarioSettings().model_dump()
+    scenario.settings = ScenarioSettings(
+        max_detour_minutes=60,
+        max_detour_ratio=3.0,
+    ).model_dump()
     zone_info = ZoneInfo(scenario.timezone)
     planning_date = scenario.default_planning_date or datetime.now(zone_info).date()
     scenario.default_planning_date = planning_date
@@ -679,8 +692,8 @@ async def reset_demo_scenario(session: AsyncSession, scenario_id: UUID) -> Scena
                 relation_type="ADJACENT",
                 delivery_pair_allowed=True,
                 pickup_allowed=True,
-                max_detour_minutes=35,
-                max_detour_ratio=1.5,
+                max_detour_minutes=60,
+                max_detour_ratio=3.0,
                 penalty=0,
                 is_bidirectional=True,
             )

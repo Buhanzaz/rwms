@@ -123,9 +123,42 @@ export interface ZoneInput {
   name: string;
   code: string;
   route_group: string;
+  delivery_price: number;
+  pickup_price: number;
   geometry: Zone['geometry'];
   priority: number;
   locked: boolean;
+}
+
+/** Request body for generating reproducible workload in one scenario. */
+export interface WorkloadGenerationInput {
+  start_date: string;
+  days: number;
+  deliveries_per_day: number;
+  pickups_per_day: number;
+  alternative_dates_count: number;
+  seed: number;
+  replace_existing_generated: boolean;
+}
+
+/** Daily breakdown returned by the workload-generation endpoint. */
+export interface WorkloadGenerationDailyCount {
+  date: string;
+  deliveries: number;
+  pickups: number;
+}
+
+/** Result of a workload-generation command. */
+export interface WorkloadGenerationResult {
+  scenario_id: UUID;
+  seed: number;
+  start_date: string;
+  end_date: string;
+  created_requests: number;
+  created_deliveries: number;
+  created_pickups: number;
+  replaced_requests: number;
+  daily_counts: WorkloadGenerationDailyCount[];
 }
 
 export interface ZoneCutoutResult {
@@ -298,6 +331,8 @@ export const api = {
     normalizeScenario(await request<RawScenario>(`/scenarios/${id}/generate-demo`, { method: 'POST' })),
   generateMultiDayDemo: async () =>
     normalizeScenario(await request<RawScenario>('/scenarios/generate-multi-day-demo', { method: 'POST' })),
+  generateWorkload: (scenarioId: UUID, input: WorkloadGenerationInput) =>
+    request<WorkloadGenerationResult>(`/scenarios/${scenarioId}/generate-workload`, { method: 'POST', body: jsonBody(input) }),
   exportScenario: (id: UUID, includePlans = true) =>
     request<Record<string, unknown>>(`/scenarios/${id}/export?include_plans=${includePlans ? 'true' : 'false'}`, { method: 'POST' }),
   importScenario: async (payload: unknown) =>

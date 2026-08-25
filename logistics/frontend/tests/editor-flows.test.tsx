@@ -32,6 +32,8 @@ const zone: Zone = {
   name: 'Западная зона',
   code: 'Z1',
   route_group: 'WEST',
+  delivery_price: 120,
+  pickup_price: 80,
   geometry: polygon,
   version: 7,
   priority: 10,
@@ -141,6 +143,7 @@ function inspectorProps(workspace: ScenarioWorkspace): ComponentProps<typeof Ins
     onDelete: () => undefined,
     onGenerateDemo: () => undefined,
     onGenerateMultiDayDemo: () => undefined,
+    onGenerateWorkload: () => undefined,
     onCloneScenario: () => undefined,
     onDeleteScenario: () => undefined,
     onExport: () => undefined,
@@ -196,6 +199,8 @@ describe('zone editor', () => {
       name: 'Северная зона',
       code: 'N1',
       route_group: 'NORTH_CUSTOM',
+      delivery_price: 0,
+      pickup_price: 0,
       priority: 4,
       locked: true,
       geometry: polygon,
@@ -209,7 +214,7 @@ describe('zone editor', () => {
     render(
       <ZoneDialog
         geometry={polygon}
-        initialValues={{ name: 'Западная зона · внутренняя 1', code: 'Z1-IN1', route_group: 'WEST', priority: 11, locked: false }}
+        initialValues={{ name: 'Западная зона · внутренняя 1', code: 'Z1-IN1', route_group: 'WEST', delivery_price: 120, pickup_price: 80, priority: 11, locked: false }}
         title="Новая зона внутри Z1"
         description="Отмена не изменит геометрию."
         submitLabel="Вырезать и создать зону"
@@ -222,6 +227,8 @@ describe('zone editor', () => {
     expect(screen.getByRole('dialog', { name: 'Новая зона внутри Z1' })).toBeVisible();
     expect(screen.getByLabelText('Название')).toHaveValue('Западная зона · внутренняя 1');
     expect(screen.getByLabelText('Код')).toHaveValue('Z1-IN1');
+    expect(screen.getByLabelText('Тариф доставки, ₽')).toHaveValue(120);
+    expect(screen.getByLabelText('Тариф вывоза, ₽')).toHaveValue(80);
     expect(screen.getByLabelText('Приоритет')).toHaveValue(11);
     await user.click(screen.getByRole('button', { name: 'Вырезать и создать зону' }));
 
@@ -229,6 +236,8 @@ describe('zone editor', () => {
       name: 'Западная зона · внутренняя 1',
       code: 'Z1-IN1',
       route_group: 'WEST',
+      delivery_price: 120,
+      pickup_price: 80,
       priority: 11,
       locked: false,
       geometry: polygon,
@@ -248,10 +257,14 @@ describe('zone editor', () => {
     expect(screen.getByLabelText('Название')).not.toHaveAttribute('readonly');
     await user.clear(screen.getByLabelText('Название'));
     await user.type(screen.getByLabelText('Название'), 'Западная зона — новая');
+    await user.clear(screen.getByLabelText('Тариф доставки, ₽'));
+    await user.type(screen.getByLabelText('Тариф доставки, ₽'), '150');
+    await user.clear(screen.getByLabelText('Тариф вывоза, ₽'));
+    await user.type(screen.getByLabelText('Тариф вывоза, ₽'), '95');
     await user.click(screen.getByRole('button', { name: 'Сохранить зону' }));
 
     await waitFor(() => expect(submit).toHaveBeenCalledOnce());
-    expect(submit.mock.calls[0]?.[0]).toMatchObject({ name: 'Западная зона — новая', locked: false, geometry: polygon });
+    expect(submit.mock.calls[0]?.[0]).toMatchObject({ name: 'Западная зона — новая', locked: false, delivery_price: 150, pickup_price: 95, geometry: polygon });
   });
 });
 

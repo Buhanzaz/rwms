@@ -52,6 +52,7 @@ interface InspectorProps {
   onDelete: (kind: Exclude<EntityKind, 'scenario' | 'warehouse'>, id: UUID, label: string) => void;
   onGenerateDemo: () => void;
   onGenerateMultiDayDemo: () => void;
+  onGenerateWorkload: () => void;
   onCloneScenario: () => void;
   onDeleteScenario: () => void;
   onExport: () => void;
@@ -97,7 +98,7 @@ function Metrics({ metrics }: { metrics: PlanMetrics }) {
     ['Ожидание', formatDuration(metrics.waiting_seconds)],
     ['Крюк', formatDuration(metrics.detour_seconds)],
     ['Пары доставок', String(metrics.paired_deliveries)],
-    ['Вывозы на возврате', String(metrics.paired_pickups)],
+    ['Пары вывозов', String(metrics.paired_pickups)],
     ['Средняя загрузка', metrics.average_load.toFixed(2)],
     ['Переработка', formatDuration(metrics.overtime_seconds)],
     ['Минимальный резерв', formatDuration(metrics.minimum_buffer_seconds)],
@@ -122,6 +123,7 @@ function ScenarioSection({ props }: { props: InspectorProps }) {
       <Button onClick={() => props.onCreate('scenario')}><Plus size={14} />Новый сценарий</Button>
       <Button variant="primary" onClick={() => props.onGenerateDemo()} disabled={props.busy}><RefreshCw size={14} />Demo scenario</Button>
       <Button onClick={() => props.onGenerateMultiDayDemo()} disabled={props.busy}><CalendarRange size={14} />Тест на 3 дня</Button>
+      <Button onClick={props.onGenerateWorkload} disabled={props.busy}><CalendarPlus size={14} />Сгенерировать нагрузку</Button>
       <Button onClick={() => props.onEdit('scenario', workspace.scenario)}><Edit3 size={14} />Изменить</Button>
       <Button onClick={props.onCloneScenario}><Copy size={14} />Клонировать</Button>
       <Button onClick={props.onExport}><Download size={14} />Экспорт JSON</Button>
@@ -145,7 +147,7 @@ function ZonesSection({ props }: { props: InspectorProps }) {
   return <>
     <h2 className="section-title">Логистические зоны</h2><p className="section-subtitle">Принадлежность заявки определяет только backend. Изменение полигона не переклассифицирует старые заявки молча.</p>
     <div className="toolbar-row"><Button variant="primary" onClick={() => props.onSetMapTool('DRAW_ZONE')}><Plus size={14} />Нарисовать</Button><Button onClick={() => props.onSetMapTool('CUT_ZONE')}><Scissors size={14} aria-hidden="true" />Сделать вырез</Button><Button onClick={() => props.onSetMapTool('EDIT_ZONE')}><Edit3 size={14} />Вершины</Button><Button onClick={props.onReclassify}><RefreshCw size={14} />Пересчитать заявки</Button></div>
-    <div className="entity-list">{props.workspace.zones.map((zone) => <EntityCard key={zone.id} title={`${zone.code} · ${zone.name}`} subtitle={`${zone.route_group} · приоритет ${zone.priority} · версия ${zone.version}${zone.stale_request_count ? ` · устарело ${zone.stale_request_count}` : ''}`} badges={<>{zone.locked ? <Badge tone="warning"><Lock size={10} />locked</Badge> : <Badge tone="neutral"><LockOpen size={10} />editable</Badge>}</>} onClick={() => props.onSelect('zone', zone.id)} onEdit={() => props.onEdit('zone', zone)} onDelete={() => props.onDelete('zone', zone.id, zone.name)} />)}</div>
+    <div className="entity-list">{props.workspace.zones.map((zone) => <EntityCard key={zone.id} title={`${zone.code} · ${zone.name}`} subtitle={`доставка ${zone.delivery_price} ₽ · вывоз ${zone.pickup_price} ₽ · ${zone.route_group} · приоритет ${zone.priority} · версия ${zone.version}${zone.stale_request_count ? ` · устарело ${zone.stale_request_count}` : ''}`} badges={<>{zone.locked ? <Badge tone="warning"><Lock size={10} />locked</Badge> : <Badge tone="neutral"><LockOpen size={10} />editable</Badge>}</>} onClick={() => props.onSelect('zone', zone.id)} onEdit={() => props.onEdit('zone', zone)} onDelete={() => props.onDelete('zone', zone.id, zone.name)} />)}</div>
   </>;
 }
 
@@ -235,14 +237,14 @@ function RequestsSection({ props }: { props: InspectorProps }) {
 
 function SimulationDrivers({ props }: { props: InspectorProps }) {
   if (!props.simulation) return null;
-  return <><h2 className="section-title">Машины сейчас</h2><p className="section-subtitle">Состояние вычислено из плана и timestamp; прокрутка назад детерминирована.</p><div className="entity-list">{props.simulation.vehicles.map((vehicle) => <article className="entity-card" key={vehicle.driver_shift_id}><div className="entity-card__row"><strong>{vehicle.driver_name}</strong><Badge tone={vehicle.status === 'DELAYED' ? 'danger' : vehicle.status === 'FINISHED' ? 'neutral' : 'success'}>{vehicle.status}</Badge></div><p>{vehicle.registration_number} · загрузка {vehicle.load} · далее {vehicle.next_stop_label ?? '—'}</p><div className="toolbar-row" style={{ margin: '8px 0 0' }}><Button size="sm" onClick={() => props.onSimulationOverride('delay', vehicle.driver_shift_id)}>+ Задержка</Button><Button size="sm" variant="danger" onClick={() => props.onSimulationOverride('unavailable', vehicle.driver_shift_id)}>Недоступен</Button></div></article>)}</div>{props.simulation.warnings.map((warning) => <div className="error-panel" key={`${warning.code}-${warning.message}`}><strong>{warning.code}</strong><p>{warning.message}</p></div>)}</>;
+  return <section className="simulation-route-statuses" aria-label="Текущее состояние маршрутов"><h2 className="section-title">Машины сейчас</h2><p className="section-subtitle">План остаётся ниже целиком. Здесь показаны текущий этап, адрес назначения и расчётное время прибытия.</p><div className="entity-list">{props.simulation.vehicles.map((vehicle) => <article className="entity-card simulation-route-status" key={vehicle.driver_shift_id} data-testid={`simulation-route-${vehicle.driver_shift_id}`}><div className="entity-card__row"><button type="button" className="simulation-route-status__driver" onClick={() => props.onSelect('driver', vehicle.driver_shift_id)}><strong>{vehicle.driver_name}</strong><small>{vehicle.vehicle_name} · {vehicle.registration_number}</small></button><Badge tone={vehicle.status === 'DELAYED' ? 'danger' : vehicle.status === 'FINISHED' ? 'neutral' : 'success'}>{vehicle.status}</Badge></div><div className="simulation-route-status__destination"><small>Адрес назначения</small><strong>{vehicle.next_stop_label ?? (vehicle.status === 'FINISHED' ? 'Маршрут завершён' : 'Не определён')}</strong><span>ETA: {vehicle.eta ? formatTime(vehicle.eta, props.workspace.scenario.timezone) : '—'} · загрузка {vehicle.load}</span></div><div className="toolbar-row" style={{ margin: '8px 0 0' }}><Button size="sm" onClick={() => props.onSimulationOverride('delay', vehicle.driver_shift_id)}>+ Задержка</Button><Button size="sm" variant="danger" onClick={() => props.onSimulationOverride('unavailable', vehicle.driver_shift_id)}>Недоступен</Button></div></article>)}</div>{props.simulation.warnings.map((warning) => <div className="error-panel" key={`${warning.code}-${warning.message}`}><strong>{warning.code}</strong><p>{warning.message}</p></div>)}</section>;
 }
 
 export function Inspector(props: InspectorProps) {
   const section = useUiStore((state) => state.section);
+  const mode = useUiStore((state) => state.mode);
   let content: React.ReactNode;
-  if (props.simulation && section === 'ROUTES') content = <SimulationDrivers props={props} />;
-  else switch (section) {
+  switch (section) {
     case 'SCENARIO': content = <ScenarioSection props={props} />; break;
     case 'WAREHOUSE': content = <WarehouseSection props={props} />; break;
     case 'ZONES': content = <ZonesSection props={props} />; break;
@@ -251,7 +253,7 @@ export function Inspector(props: InspectorProps) {
     case 'VEHICLES': content = <CatalogSection props={props} kind="vehicle" />; break;
     case 'SHIFTS': content = <ShiftsSection props={props} />; break;
     case 'REQUESTS': content = <RequestsSection props={props} />; break;
-    case 'ROUTES': content = <><div className="entity-card__row"><span><h2 className="section-title">Маршруты</h2><p className="section-subtitle">Нажмите водителя, чтобы выделить все его рейсы на карте; цикл — чтобы выделить один рейс.</p></span>{props.plan ? <Button size="sm" onClick={props.onClonePlan}><Copy size={13} />Клон</Button> : null}</div>{props.plan ? <><Metrics metrics={props.plan.metrics} /><div className="divider" /></> : null}<PlanPanel plan={props.plan} timeZone={props.workspace.scenario.timezone} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} /></>; break;
+    case 'ROUTES': content = <><div className="entity-card__row"><span><h2 className="section-title">Маршруты</h2><p className="section-subtitle">Нажмите водителя, чтобы выделить все его рейсы на карте; цикл — чтобы выделить один рейс.</p></span>{props.plan ? <Button size="sm" onClick={props.onClonePlan}><Copy size={13} />Клон</Button> : null}</div>{props.plan ? <><Metrics metrics={props.plan.metrics} /><div className="divider" /></> : null}{mode === 'SIMULATION' && props.simulation ? <><SimulationDrivers props={props} /><div className="divider" /></> : null}<PlanPanel plan={props.plan} timeZone={props.workspace.scenario.timezone} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} /></>; break;
     case 'UNASSIGNED': content = <PlanPanel plan={props.plan} timeZone={props.workspace.scenario.timezone} showUnassignedOnly onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} />; break;
     case 'SETTINGS': content = <SettingsEditor settings={props.workspace.scenario.settings} busy={props.busy} onSave={props.onSaveSettings} />; break;
   }

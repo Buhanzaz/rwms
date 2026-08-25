@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import OrderedDict
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, fields, replace
 from datetime import date, datetime, timedelta
+from itertools import pairwise
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -670,6 +672,49 @@ class RuntimePlannerFacade:
             created_at=request.created_at.astimezone(zone_info),
             split_allowed=request.split_allowed,
             notes=request.notes,
+            source_key=RuntimePlannerFacade._request_source_key(request),
+        )
+
+    @staticmethod
+    def _request_source_key(request: DbLogisticsRequest) -> str | None:
+        """Return authoritative source identity or a coordinate key for legacy generator rows."""
+
+        if not request.source_system:
+            return None
+        if (
+            request.source_system != "SIMULATOR_GENERATOR"
+            or request.external_id is not None
+        ):
+            return (
+                f"{request.source_system}:{request.external_id}"
+                if request.external_id is not None
+                else None
+            )
+        options = tuple(request.date_options)
+        if options:
+            highest_option_priority = max(option.priority for option in options)
+            primary_dates = tuple(
+                sorted(
+                    option.date.isoformat()
+                    for option in options
+                    if option.priority == highest_option_priority
+                )
+            )
+        else:
+            scheduled_date = getattr(request, "scheduled_date", None)
+            primary_dates = (
+                (scheduled_date.isoformat(),)
+                if isinstance(scheduled_date, date)
+                else ()
+            )
+        return repr(
+            (
+                request.source_system,
+                request.type,
+                round(request.latitude, 7),
+                round(request.longitude, 7),
+                primary_dates,
+            )
         )
 
     @staticmethod
@@ -861,19 +906,44 @@ class RuntimePlannerFacade:
         saved geometry consumed by map rendering and the pure simulation function.
         """
 
-        enriched_cycles: list[RouteCycle] = []
-        for cycle in result.cycles:
-            enriched_legs = []
-            for leg in cycle.legs:
-                road_route = await provider.get_route(
-                    [
-                        cycle.stops[leg.from_stop_sequence].point,
-                        cycle.stops[leg.to_stop_sequence].point,
-                    ],
-                    leg.departure_at,
+        semaphore = asyncio.Semaphore(4)
+
+        async def enrich_cycle(cycle: RouteCycle) -> RouteCycle:
+            ordered_stops = tuple(sorted(cycle.stops, key=lambda stop: stop.sequence))
+            expected_pairs = tuple(
+                (first.sequence, second.sequence)
+                for first, second in pairwise(ordered_stops)
+            )
+            if len(cycle.legs) != len(expected_pairs):
+                raise RuntimeError(
+                    "planner cycle leg count does not match its ordered stop count"
                 )
-                enriched_legs.append(replace(leg, geometry=road_route.geometry))
-            enriched_cycles.append(replace(cycle, legs=tuple(enriched_legs)))
+            departure_at = cycle.legs[0].departure_at if cycle.legs else cycle.planned_start
+            async with semaphore:
+                road_route = await provider.get_route(
+                    [stop.point for stop in ordered_stops],
+                    departure_at,
+                )
+            if len(road_route.legs) != len(cycle.legs):
+                raise RuntimeError(
+                    "routing provider returned a route leg count that does not match "
+                    "the planner cycle"
+                )
+
+            enriched_legs: list[PlannedLeg] = []
+            for index, (leg, road_leg, expected_pair) in enumerate(
+                zip(cycle.legs, road_route.legs, expected_pairs, strict=True)
+            ):
+                if (leg.from_stop_sequence, leg.to_stop_sequence) != expected_pair:
+                    raise RuntimeError("planner cycle legs do not follow its ordered stops")
+                if (road_leg.from_index, road_leg.to_index) != (index, index + 1):
+                    raise RuntimeError("routing provider returned route legs out of order")
+                enriched_legs.append(replace(leg, geometry=road_leg.geometry))
+            return replace(cycle, legs=tuple(enriched_legs))
+
+        enriched_cycles = await asyncio.gather(
+            *(enrich_cycle(cycle) for cycle in result.cycles)
+        )
         return replace(result, cycles=tuple(enriched_cycles))
 
     async def _persist_result(

@@ -41,7 +41,10 @@ The supported flow creates or resets a scenario, places a warehouse, draws
 zones, manages directed relations, creates resources and requests, generates a
 plan, validates manual changes and replays vehicles at any timestamp. The
 built-in demo supplies four zones, three drivers, three capacity-two vehicles,
-shifts and compatible delivery/pickup tasks.
+shifts and compatible delivery/pickup tasks. It deliberately uses a 60-minute,
+3.0-ratio detour allowance so both mock routing and the local OSRM graph produce
+a minimum-cycle plan without delivery-only returns; ordinary scenarios keep the
+default 35-minute, 1.5-ratio policy.
 
 The **Test for 3 days** action creates a separate, non-destructive workload:
 six zones, exactly three simultaneously available vehicles/drivers, and three
@@ -102,8 +105,9 @@ the browser and token form body do not receive the service secret.
 ## Domain model
 
 The persisted model contains scenarios and settings, warehouses, versioned
-Polygon/MultiPolygon zones with interior rings and directed relations, drivers,
-vehicles and dated shifts, logistics requests, date options and a separate
+Polygon/MultiPolygon zones with interior rings, direction-specific test prices
+and directed relations, drivers, vehicles and dated shifts, logistics requests,
+date options and a separate
 dispatcher-selected logistics date, split planning tasks, versioned
 route plans/cycles/stops/legs, optimization runs/trace events and manual-change
 audit. All timestamps are timezone-aware; the default scenario timezone is
@@ -140,10 +144,17 @@ the optimizer.
   actual time windows, travel length, shift end and capacity are validated.
 - Within the same mandatory-date priority, the planner prefers a full outbound
   and return load: `2 -> 1 -> 0 -> 1 -> 2 -> 0`. Fewer depot cycles and returns
-  rank ahead of weighted distance. The default 35-minute and 1.5 detour
-  thresholds add `HIGH_DETOUR` and score cost rather than forcing a separate
-  pickup cycle; a zone relation may set tighter warning thresholds. Capacity,
-  hard windows, shift end and blocked transitions remain infeasible.
+  rank ahead of weighted distance only while deliveries remain protected. The
+  planner builds bounded longest-first and nearest-first delivery-only
+  references and keeps the one covering the strongest hard-date, last-date and
+  total delivery demand; if the mixed draft covers less, it is replaced by that
+  reference. It then attaches a nearby pickup only when fully rescheduling that
+  driver's remaining cycles preserves every delivery and shift limit. The
+  default 35-minute detour and 1.5 ratio limit only extra road travel; pickup
+  service still counts in ETA, windows, workload and shift-end feasibility. A
+  zone relation may make the travel limits tighter. An
+  oversized return becomes a later pickup-only cycle or remains unassigned
+  instead of displacing a delivery.
 - Driver route groups are soft preferences. Hard dates/windows, task
   uniqueness, driver/vehicle overlap and hard shift limits remain infeasible
   constraints.
@@ -185,7 +196,9 @@ and temporary overrides. Seeking backward therefore reproduces the same truck
 position, load and event journal. A delay shifts subsequent ETA values without
 changing the source plan; driver unavailability freezes the selected truck and
 marks its remaining tasks as affected. An override is persisted only when the
-request explicitly sets `persist=true`.
+request explicitly sets `persist=true`. Simulation mode keeps the full plan and
+all cycle cards visible; each active driver status and truck popup shows the
+current destination address, ETA and load.
 
 ## Start
 
@@ -358,15 +371,19 @@ simulator releases its database transaction before this read-only RWMS call.
 
 ## OSRM and OpenStreetMap routing
 
-The default `ROUTING_PROVIDER=osrm` sends the heuristic's full directed matrix
-to the private OSRM Table API and uses OSRM Route API geometry for every saved
-route segment. Thus route cards, map polylines and truck interpolation use the
-road graph rather than straight candidate lines. OSRM currently has no live
-traffic feed: durations come from the prepared driving profile, not Yandex
-traffic. The graph for the Central Federal District covers the built-in Moscow
-demo. To select another region, set `OSRM_DATA_URL`, explicitly remove only the
-`logistics-osrm-data` volume, then start Compose again; this discards routing
-cache data but not the PostGIS scenario volume.
+The default `ROUTING_PROVIDER=osrm` obtains the heuristic's full directed
+matrix from the private OSRM Table API. When a scenario exceeds OSRM's
+100-coordinate Table limit, the adapter requests bounded rectangular blocks
+and reassembles the exact directed matrix. After selection it makes one Route
+API request for each complete depot cycle, with at most four cycle requests in
+flight, then maps the returned leg geometries back to the saved segments. Thus
+route cards, map polylines and truck interpolation use the road graph rather
+than straight candidate lines without issuing one HTTP request per segment.
+OSRM currently has no live traffic feed: durations come from the prepared
+driving profile, not Yandex traffic. The graph for the Central Federal District
+covers the built-in Moscow demo. To select another region, set `OSRM_DATA_URL`,
+explicitly remove only the `logistics-osrm-data` volume, then start Compose
+again; this discards routing cache data but not the PostGIS scenario volume.
 
 OpenStreetMap attribution remains visible through the MapLibre base style.
 Use OpenStreetMap-derived data under its applicable ODbL attribution and
@@ -388,17 +405,20 @@ pattern instead of pretending to be a universal VRP solver. It:
 
 1. validates dated shifts/resources and splits ready requests;
 2. builds the deterministic travel matrix;
-3. prioritizes hard/last-date, manual priority, scarce dates, narrow windows,
-   distance and creation time;
+3. prioritizes deliveries by hard/last-date, manual priority, scarce dates and
+   narrow windows, then batches equal-priority work nearest-first;
 4. considers bounded delivery pairs and both orders;
-5. packs return pickups into every compatible delivery cycle before comparing
-   travel/detour cost, minimizing warehouse returns for equal hard priority;
-6. allows a later depot-loaded cycle for the same driver and creates penalized
+5. considers at most `max_candidate_neighbors` detour-ranked pickup groups per
+   delivery group and keeps only groups inside both detour limits;
+6. compares the mixed draft with one bounded delivery-only reference and
+   restores it if mandatory/last-date/total delivery coverage fell, then tries
+   pickup attachments only through a fully valid reschedule of the shift suffix;
+7. allows a later depot-loaded cycle for the same driver and creates penalized
    pickup-only cycles only after no delivery candidate remains;
-7. globally assigns the best next feasible cycle to an available driver;
-8. compares resource activation against break-adjusted driver workload;
-9. performs bounded, fully revalidated local improvements;
-10. persists metrics, explanations, reasons and bounded trace events.
+8. globally assigns the best next feasible cycle to an available driver;
+9. compares resource activation against break-adjusted driver workload;
+10. performs bounded, fully revalidated local improvements;
+11. persists metrics, explanations, reasons and bounded trace events.
 
 The engine stops predictably at the configured time/iteration limit and
 returns the best valid plan found. The optimization seed is stored with the
@@ -412,7 +432,12 @@ demo state after confirming the scenario-scoped replacement. Select the demo
 planning date and press **Build routes**. The demo is safe to edit and can be
 recreated at any time. Its primary mixed cycle is
 `depot -> delivery -> delivery -> pickup -> pickup -> depot` with the load
-sequence `2 -> 1 -> 0 -> 1 -> 2 -> 0`.
+sequence `2 -> 1 -> 0 -> 1 -> 2 -> 0`. This reproducibility fixture uses the
+scenario-local 60-minute/3.0 detour allowance described above. Mock routing
+reproduces that exact illustrative sequence; OSRM may choose a shorter equivalent
+pairing across the same two minimum mixed cycles. In either case every cycle
+delivers before collecting, respects load `0..2`, and returns to the depot. The
+fixture does not change the defaults of newly created scenarios.
 
 For date and capacity experiments, use **Test for 3 days** instead. It never
 resets the scenario currently open. The header date, **Requests** date chips,
@@ -424,9 +449,45 @@ form to name the new zone; the source cutout and inner-zone creation are saved
 together. Both actions record a dispatcher decision in the simulator; neither
 confirms a production dispatch.
 
+For a configurable workload, choose **Request generator** in the current
+scenario. It opens in one-day mode with no alternative dates. Set the first
+date, a one-to-31-day horizon, an exact daily count of zero-to-ten deliveries
+and zero-to-ten pickups, zero-to-three additional accepted dates per request,
+and a seed. Additional dates are selected only inside the horizon. A normal
+run appends data, but repeating the same seed in an overlapping period returns
+`409 GENERATED_WORKLOAD_ALREADY_EXISTS` instead of creating identical customer
+stops. **Regenerate selected period** first removes only unplanned
+requests previously owned by this generator whose preferred date falls inside
+the selected horizon, then creates the replacement batch in the same database
+transaction. Manual and RWMS requests are never selected. If any generated
+task is referenced by a saved plan, the command returns
+`409 GENERATED_REQUESTS_ALREADY_PLANNED` without deleting anything. Every
+generated coordinate is inside a current Polygon or MultiPolygon before the
+normal backend classification creates the request and its transport parts.
+Equal geometry, inputs and seed reproduce the same business values.
+New generated requests also receive stable source identities. Legacy repeated
+generator rows remain stored for plan history, but automatic planning schedules
+only their oldest logical source and reports the repeats as
+`DUPLICATE_ASSIGNMENT_CONFLICT`. New rows use their stable external ID; legacy
+generator rows without one are matched by direction, exact generated point and
+primary logistics date rather than mutable display numbers, notes or
+quantities. Renumbering a displayed `№3` as `№7` therefore cannot create
+another visit.
+Real manual and RWMS requests retain their authoritative identities even when
+two customers intentionally use the same address. Scenario clone and JSON
+export/import preserve that source system, external identity, source version
+and source payload, so reproducibility does not disable duplicate protection or
+RWMS synchronization lineage.
+
+Each zone also stores independent non-negative whole-ruble test prices for a
+delivery and a pickup. The editor, zone list and request popup show the
+applicable price. A tariff change does not alter geometry version or planner
+feasibility and is preserved by clone and JSON import/export.
+
 Use **Export JSON** in the scenario actions. The single file can include
 settings, geography, resources, requests/date options, seed and selected saved
-plans. **Import JSON** validates the complete document in one transaction; a
+plans, including request source identity. **Import JSON** validates the complete
+document in one transaction; a
 failure creates no partial scenario. Exported scenarios are intended for bug
 reports and seed-based planner reproduction and must not contain customer
 production data.
@@ -446,8 +507,7 @@ The delivered P1 subset includes persisted planner phases/candidate events,
 plan cloning and driver-unavailability simulation. The following extensions
 remain deliberately outside this MVP:
 
-- a side-by-side saved-plan comparison screen and a configurable random
-  scenario generator (the deterministic four-zone demo is available now);
+- a side-by-side saved-plan comparison screen;
 - a dedicated multi-contour drawing workflow for a new MultiPolygon (import,
   storage, rendering and editing of existing MultiPolygon values are supported);
 - manual split/merge of cycles and a full remaining-day replan from a truck's

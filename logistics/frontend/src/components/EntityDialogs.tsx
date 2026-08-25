@@ -137,6 +137,8 @@ const zoneSchema = z.object({
   name: z.string().trim().min(1, 'Введите название'),
   code: z.string().trim().min(1, 'Введите код'),
   route_group: z.string().trim().min(1, 'Введите группу'),
+  delivery_price: z.number().int().min(0, 'Тариф не может быть отрицательным'),
+  pickup_price: z.number().int().min(0, 'Тариф не может быть отрицательным'),
   priority: z.number().int().min(0),
   locked: z.boolean(),
 });
@@ -159,6 +161,8 @@ export function ZoneDialog({ zone, geometry, initialValues, title, description, 
       name: zone?.name ?? initialValues?.name ?? '',
       code: zone?.code ?? initialValues?.code ?? '',
       route_group: zone?.route_group ?? initialValues?.route_group ?? 'CUSTOM',
+      delivery_price: zone?.delivery_price ?? initialValues?.delivery_price ?? 0,
+      pickup_price: zone?.pickup_price ?? initialValues?.pickup_price ?? 0,
       priority: zone?.priority ?? initialValues?.priority ?? 0,
       locked: zone?.locked ?? initialValues?.locked ?? false,
     },
@@ -172,6 +176,8 @@ export function ZoneDialog({ zone, geometry, initialValues, title, description, 
         <Field label="Название" readOnly={editingLockedZone} {...register('name')} error={errors.name?.message} />
         <Field label="Код" readOnly={editingLockedZone} {...register('code')} error={errors.code?.message} />
         <Field label="Группа маршрута" readOnly={editingLockedZone} {...register('route_group')} error={errors.route_group?.message} hint="Можно ввести свою группу" />
+        <Field label="Тариф доставки, ₽" type="number" min="0" step="1" readOnly={editingLockedZone} {...register('delivery_price', { valueAsNumber: true })} error={errors.delivery_price?.message} />
+        <Field label="Тариф вывоза, ₽" type="number" min="0" step="1" readOnly={editingLockedZone} {...register('pickup_price', { valueAsNumber: true })} error={errors.pickup_price?.message} />
         <Field label="Приоритет" type="number" readOnly={editingLockedZone} {...register('priority', { valueAsNumber: true })} />
         <div className="span-2"><CheckboxField label="Заблокировать редактирование геометрии" checked={locked} onChange={(value) => setValue('locked', value)} /></div>
         <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}><Button type="button" onClick={onClose}>Отмена</Button><Button type="submit" variant="primary" disabled={busy}>{submitLabel ?? 'Сохранить зону'}</Button></div>

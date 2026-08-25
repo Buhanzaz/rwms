@@ -144,7 +144,15 @@ function routeStateAt(
     .reduce((sum, override) => sum + override.delay_minutes, 0);
 
   const firstStart = adjusted(cycles[0]?.planned_start ?? '', route.driver_shift_id, timestamp, delayOverrides);
-  if (timestamp < firstStart) return { ...base, status: 'WAITING_SHIFT', delayed_by_minutes: delayedMinutes };
+  if (timestamp < firstStart) {
+    return {
+      ...base,
+      status: 'WAITING_SHIFT',
+      next_stop_label: firstStop?.label ?? firstStop?.stop_type ?? null,
+      eta: firstStop ? iso(adjusted(firstStop.planned_arrival, route.driver_shift_id, timestamp, delayOverrides)) : iso(firstStart),
+      delayed_by_minutes: delayedMinutes,
+    };
+  }
 
   for (const cycle of cycles) {
     const cycleStart = adjusted(cycle.planned_start, route.driver_shift_id, timestamp, delayOverrides);
@@ -152,8 +160,16 @@ function routeStateAt(
     if (timestamp < cycleStart) {
       const prior = cycles.filter((candidate) => millis(candidate.planned_finish) <= millis(cycle.planned_start)).at(-1);
       const lastStop = prior?.stops.at(-1) ?? cycle.stops[0];
+      const nextStop = [...cycle.stops].sort((a, b) => a.sequence - b.sequence)[0];
       const point: Position = lastStop ? [lastStop.longitude, lastStop.latitude] : fallback;
-      return { ...vehicleBase(route, point), status: 'BREAK', delayed_by_minutes: delayedMinutes };
+      return {
+        ...vehicleBase(route, point),
+        status: 'BREAK',
+        load: lastStop?.load_after ?? 0,
+        next_stop_label: nextStop?.label ?? nextStop?.stop_type ?? null,
+        eta: nextStop ? iso(adjusted(nextStop.planned_arrival, route.driver_shift_id, timestamp, delayOverrides)) : iso(cycleStart),
+        delayed_by_minutes: delayedMinutes,
+      };
     }
     if (timestamp > cycleFinish) continue;
 
@@ -201,10 +217,13 @@ function routeStateAt(
       .reverse()
       .find((stop) => adjusted(stop.planned_departure, route.driver_shift_id, timestamp, delayOverrides) < timestamp);
     if (previousStop) {
+      const nextStop = stops.find((stop) => adjusted(stop.planned_arrival, route.driver_shift_id, timestamp, delayOverrides) > timestamp);
       return {
         ...vehicleBase(route, [previousStop.longitude, previousStop.latitude]),
         status: 'BREAK',
         load: previousStop.load_after,
+        next_stop_label: nextStop?.label ?? nextStop?.stop_type ?? null,
+        eta: nextStop ? iso(adjusted(nextStop.planned_arrival, route.driver_shift_id, timestamp, delayOverrides)) : null,
         active_cycle_id: cycle.id,
         delayed_by_minutes: delayedMinutes,
       };
@@ -284,7 +303,12 @@ export function deriveSimulationState(
       const state = routeStateAt(route, millis(unavailable.effective_at), delayOverrides);
       route.cycles
         .flatMap((cycle) => cycle.stops)
-        .filter((stop) => stop.task_id && millis(stop.planned_arrival) >= millis(unavailable.effective_at))
+        .filter((stop) => stop.task_id && adjusted(
+          stop.planned_arrival,
+          route.driver_shift_id,
+          millis(unavailable.effective_at),
+          delayOverrides,
+        ) >= millis(unavailable.effective_at))
         .forEach((stop) => {
           if (stop.task_id) affectedTaskIds.add(stop.task_id);
         });
@@ -313,18 +337,27 @@ export function deriveSimulationState(
   const completedStopIds: UUID[] = [];
   const activeStopIds: UUID[] = [];
   for (const route of plan.driver_routes) {
+    const unavailable = findUnavailable(route.driver_shift_id, timestamp, simulationOverrides);
+    const routeTimestamp = unavailable ? millis(unavailable.effective_at) : timestamp;
     for (const cycle of route.cycles) {
       for (const stop of cycle.stops) {
-        const arrival = adjusted(stop.planned_arrival, route.driver_shift_id, timestamp, delayOverrides);
-        const departure = adjusted(stop.planned_departure, route.driver_shift_id, timestamp, delayOverrides);
-        if (departure < timestamp) completedStopIds.push(stop.id);
-        else if (arrival <= timestamp && timestamp <= departure) activeStopIds.push(stop.id);
+        const arrival = adjusted(stop.planned_arrival, route.driver_shift_id, routeTimestamp, delayOverrides);
+        const departure = adjusted(stop.planned_departure, route.driver_shift_id, routeTimestamp, delayOverrides);
+        if (departure < routeTimestamp) completedStopIds.push(stop.id);
+        else if (arrival <= routeTimestamp && routeTimestamp <= departure) activeStopIds.push(stop.id);
       }
     }
   }
 
   const events = plan.driver_routes
-    .flatMap((route) => buildEvents(route, timestamp, delayOverrides))
+    .flatMap((route) => {
+      const unavailable = findUnavailable(route.driver_shift_id, timestamp, simulationOverrides);
+      return buildEvents(
+        route,
+        unavailable ? millis(unavailable.effective_at) : timestamp,
+        delayOverrides,
+      );
+    })
     .sort((a, b) => millis(a.timestamp) - millis(b.timestamp));
 
   return {

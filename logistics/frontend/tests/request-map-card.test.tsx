@@ -79,6 +79,8 @@ const zone: Zone = {
   name: 'Запад',
   code: 'Z1',
   route_group: 'WEST',
+  delivery_price: 125,
+  pickup_price: 75,
   geometry: { type: 'Polygon', coordinates: [[[37, 55], [38, 55], [38, 56], [37, 55]]] },
   version: 3,
   priority: 1,
@@ -159,10 +161,27 @@ describe('request map card', () => {
     expect(screen.getByText('Москва, Тестовая улица, 25')).toBeVisible();
     expect(screen.getByText('2 бытов. · обслуживание 35 мин')).toBeVisible();
     expect(screen.getByText('Зона Z1 · версия 3')).toBeVisible();
+    expect(screen.getByText('Доставка · 125 ₽')).toBeVisible();
     expect(screen.getByText(/25 августа 2026.*09:00–11:00.*жёстко/)).toBeVisible();
 
     await user.click(screen.getByRole('button', { name: 'Выставить на 25 августа 2026 г.' }));
     expect(onSchedule).toHaveBeenCalledWith('request-142', '2026-08-25', false);
+  });
+
+  it('shows the pickup tariff from the current zone', () => {
+    render(
+      <RequestMapCard
+        request={{ ...request, type: 'PICKUP', name: 'Вывоз №142' }}
+        zone={zone}
+        planningDate="2026-08-25"
+        busy={false}
+        onSchedule={() => undefined}
+        onUnschedule={() => undefined}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText('Вывоз · 75 ₽')).toBeVisible();
   });
 
   it('marks a manually chosen date as an explicit agreement', async () => {

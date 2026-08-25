@@ -15,8 +15,11 @@ from app.schemas.domain import (
     ScenarioImportRequest,
     ScenarioRead,
     ScenarioUpdate,
+    WorkloadGenerationResult,
+    WorkloadGeneratorInput,
 )
 from app.services import scenarios as service
+from app.services.workload_generator import generate_scenario_workload
 
 router = APIRouter(prefix="/scenarios", tags=["scenarios"])
 
@@ -100,6 +103,21 @@ async def generate_demo(scenario_id: UUID, session: SessionDep) -> Scenario:
     """Explicitly reset one scenario to deterministic demo contents."""
 
     return await service.reset_demo_scenario(session, scenario_id)
+
+
+@router.post(
+    "/{scenario_id}/generate-workload",
+    response_model=WorkloadGenerationResult,
+    status_code=status.HTTP_201_CREATED,
+)
+async def generate_workload(
+    scenario_id: UUID,
+    payload: WorkloadGeneratorInput,
+    session: SessionDep,
+) -> WorkloadGenerationResult:
+    """Generate or safely regenerate a deterministic workload inside current zones."""
+
+    return await generate_scenario_workload(session, scenario_id, payload)
 
 
 @router.post("/generate-multi-day-demo", response_model=ScenarioRead, status_code=201)

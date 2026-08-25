@@ -178,6 +178,7 @@ class LogisticsRequest:
     created_at: datetime
     split_allowed: bool = True
     notes: str = ""
+    source_key: str | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.created_at, "created_at")

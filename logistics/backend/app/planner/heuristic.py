@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from asyncio import sleep
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
@@ -234,8 +235,53 @@ class HeuristicPlanner:
         evaluation_budget = max(0, round(settings.max_optimization_seconds * 50_000))
         timed_out = evaluation_budget == 0
         evaluation_count = 0
+        task_by_id = {task.id: task for task in tasks}
+        delivery_reference_cycles = tuple(cycles)
+        delivery_reference_available = dict(available_at)
+        if evaluation_budget:
+            delivery_references = tuple(
+                self._project_delivery_plan(
+                    remaining_deliveries=tuple(
+                        task
+                        for task in remaining.values()
+                        if task.task_type is TaskType.DELIVERY
+                    ),
+                    shifts=active_shifts,
+                    available_at=available_at,
+                    warehouse=input_data.warehouse,
+                    vehicles=active_vehicles,
+                    matrix=matrix,
+                    matrix_index=matrix_index,
+                    zones=zone_by_id,
+                    relations=relation_index,
+                    settings=settings,
+                    cycles=tuple(cycles),
+                    longest_first=longest_first,
+                )
+                for longest_first in (True, False)
+            )
+            delivery_reference_cycles, delivery_reference_available, _ = max(
+                delivery_references,
+                key=lambda reference: (
+                    _delivery_coverage_key(
+                        _delivery_task_ids(reference[0], task_by_id),
+                        task_by_id,
+                    ),
+                    -len(reference[0]),
+                    -sum(cycle.total_travel_seconds for cycle in reference[0]),
+                    tuple(cycle.id for cycle in reference[0]),
+                ),
+            )
+        delivery_reference_ids = _delivery_task_ids(
+            delivery_reference_cycles,
+            task_by_id,
+        )
         delivery_phase_complete = False
         while remaining and active_shifts and not timed_out:
+            # Candidate construction is CPU-bound. Yield once per assigned cycle so
+            # health checks and optimization-status requests remain responsive even
+            # for dense generated workloads.
+            await sleep(0)
             all_candidate_specs = _candidate_specs(
                 tuple(remaining.values()),
                 matrix,
@@ -321,6 +367,79 @@ class HeuristicPlanner:
                     break
             if not best_per_shift:
                 if delivery_phase:
+                    current_delivery_ids = _delivery_task_ids(cycles, task_by_id)
+                    if _delivery_coverage_key(
+                        current_delivery_ids,
+                        task_by_id,
+                    ) < _delivery_coverage_key(
+                        delivery_reference_ids,
+                        task_by_id,
+                    ):
+                        (
+                            restored_cycles,
+                            restored_available,
+                            attachment_evaluations,
+                        ) = self._attach_pickups_to_delivery_reference(
+                            pickup_tasks=tuple(
+                                task
+                                for task in tasks
+                                if task.task_type is TaskType.PICKUP
+                            ),
+                            shifts=active_shifts,
+                            available_at=delivery_reference_available,
+                            warehouse=input_data.warehouse,
+                            vehicles=active_vehicles,
+                            matrix=matrix,
+                            matrix_index=matrix_index,
+                            zones=zone_by_id,
+                            relations=relation_index,
+                            settings=settings,
+                            cycles=delivery_reference_cycles,
+                            task_by_id=task_by_id,
+                            max_evaluations=max(
+                                0,
+                                evaluation_budget - evaluation_count,
+                            ),
+                        )
+                        evaluation_count += attachment_evaluations
+                        cycles = list(restored_cycles)
+                        available_at = dict(restored_available)
+                        assigned_ids = {
+                            task_id
+                            for cycle in cycles
+                            for task_id in cycle.task_ids
+                        }
+                        remaining = {
+                            task.id: task
+                            for task in tasks
+                            if task.id not in assigned_ids
+                        }
+                        next_sequence = {
+                            shift.id: max(
+                                (
+                                    cycle.sequence
+                                    for cycle in cycles
+                                    if cycle.driver_shift_id == shift.id
+                                ),
+                                default=0,
+                            )
+                            + 1
+                            for shift in active_shifts
+                        }
+                        cycle_counts = {
+                            shift.id: sum(
+                                cycle.driver_shift_id == shift.id for cycle in cycles
+                            )
+                            for shift in active_shifts
+                        }
+                        await trace.emit(
+                            TracePhase.BUILDING_CYCLES,
+                            TraceEventType.ASSIGNMENT_CHANGED,
+                            {
+                                "reason": "DELIVERY_COVERAGE_RESTORED",
+                                "delivery_task_ids": sorted(delivery_reference_ids),
+                            },
+                        )
                     delivery_phase_complete = True
                     continue
                 break
@@ -572,6 +691,421 @@ class HeuristicPlanner:
                 candidates.append(candidate)
         return candidates, evaluated, False
 
+    def _project_delivery_plan(
+        self,
+        *,
+        remaining_deliveries: tuple[PlanningTask, ...],
+        shifts: tuple[DriverShift, ...],
+        available_at: Mapping[str, datetime],
+        warehouse: Warehouse,
+        vehicles: Mapping[str, Vehicle],
+        matrix: TravelMatrix,
+        matrix_index: Mapping[str, int],
+        zones: Mapping[str, ZoneSnapshot],
+        relations: Mapping[tuple[str, str], ZoneRelation],
+        settings: PlanningSettings,
+        cycles: tuple[RouteCycle, ...],
+        longest_first: bool = True,
+    ) -> tuple[tuple[RouteCycle, ...], dict[str, datetime], frozenset[str]]:
+        """Build one bounded delivery-only reference in the selected distance order."""
+
+        pending = {task.id: task for task in remaining_deliveries}
+        projected_cycles = list(cycles)
+        projected_available = dict(available_at)
+        assigned: set[str] = set()
+        turnaround = timedelta(
+            minutes=warehouse.turnaround_minutes + settings.default_route_buffer_minutes
+        )
+        while pending:
+            ordered = sorted(
+                pending.values(),
+                key=lambda task: _delivery_reference_priority_key(
+                    task,
+                    matrix,
+                    matrix_index,
+                    longest_first=longest_first,
+                ),
+            )
+            anchor = ordered[0]
+            groups: list[tuple[PlanningTask, ...]] = [(anchor,)]
+            if anchor.quantity == 1:
+                # The reference plan is a coverage fence, not a second full
+                # optimization pass. Trying every configured neighbor here
+                # duplicated the dense-day search and made 15 + 10 workloads
+                # CPU-bound. Two nearest compatible alternatives retain a
+                # deterministic escape when the closest pair misses a window
+                # while keeping the projection linear in practice.
+                reference_neighbor_limit = min(
+                    2,
+                    settings.max_candidate_neighbors,
+                )
+                neighbors = sorted(
+                    (
+                        task
+                        for task in pending.values()
+                        if task.id != anchor.id
+                        and task.quantity == 1
+                        and _pair_zones_allowed(anchor, task, relations, True)
+                    ),
+                    key=lambda task: (
+                        matrix.at(
+                            matrix_index[anchor.id],
+                            matrix_index[task.id],
+                        ).travel_seconds,
+                        _task_priority_key(task),
+                    ),
+                )[:reference_neighbor_limit]
+                for neighbor in neighbors:
+                    groups.append((anchor, neighbor))
+                    if _pair_zones_allowed(neighbor, anchor, relations, True):
+                        groups.append((neighbor, anchor))
+
+            candidates: list[_Candidate] = []
+            activated_shift_ids = frozenset(
+                cycle.driver_shift_id for cycle in projected_cycles
+            )
+            for shift in shifts:
+                own_cycles = tuple(
+                    cycle
+                    for cycle in projected_cycles
+                    if cycle.driver_shift_id == shift.id
+                )
+                for group in groups:
+                    probe = self._schedule_candidate(
+                        shift=shift,
+                        start_at=projected_available[shift.id],
+                        sequence=max(
+                            (cycle.sequence for cycle in own_cycles),
+                            default=0,
+                        )
+                        + 1,
+                        deliveries=group,
+                        pickups=(),
+                        warehouse=warehouse,
+                        vehicle=vehicles[shift.vehicle_id],
+                        matrix=matrix,
+                        matrix_index=matrix_index,
+                        zones=zones,
+                        relations=relations,
+                        settings=settings,
+                        cycle_count=len(own_cycles),
+                        resource_activation_penalty=(
+                            settings.additional_resource_activation_penalty
+                            if activated_shift_ids and shift.id not in activated_shift_ids
+                            else 0.0
+                        ),
+                        prefer_shift_reserve=not activated_shift_ids,
+                        activates_additional_resource=(
+                            bool(activated_shift_ids)
+                            and shift.id not in activated_shift_ids
+                        ),
+                        existing_shift_cycles=own_cycles,
+                    )
+                    if probe is not None and not _resource_overlap(
+                        probe.cycle,
+                        projected_cycles,
+                    ):
+                        candidates.append(probe)
+            if not candidates:
+                pending.pop(anchor.id)
+                continue
+            chosen = min(candidates, key=lambda item: item.selection_key)
+            projected_cycles.append(chosen.cycle)
+            projected_available[chosen.cycle.driver_shift_id] = (
+                chosen.cycle.planned_finish + turnaround
+            )
+            for task in chosen.deliveries:
+                pending.pop(task.id, None)
+                assigned.add(task.id)
+        return (
+            tuple(projected_cycles),
+            projected_available,
+            frozenset(assigned),
+        )
+
+    def _attach_pickups_to_delivery_reference(
+        self,
+        *,
+        pickup_tasks: tuple[PlanningTask, ...],
+        shifts: tuple[DriverShift, ...],
+        available_at: Mapping[str, datetime],
+        warehouse: Warehouse,
+        vehicles: Mapping[str, Vehicle],
+        matrix: TravelMatrix,
+        matrix_index: Mapping[str, int],
+        zones: Mapping[str, ZoneSnapshot],
+        relations: Mapping[tuple[str, str], ZoneRelation],
+        settings: PlanningSettings,
+        cycles: tuple[RouteCycle, ...],
+        task_by_id: Mapping[str, PlanningTask],
+        max_evaluations: int,
+    ) -> tuple[tuple[RouteCycle, ...], dict[str, datetime], int]:
+        """Attach pickups without dropping or invalidating reference deliveries.
+
+        Every candidate is accepted only when a full reschedule of that shift's
+        suffix preserves every delivery, window and hard shift limit.
+        """
+
+        assigned_ids = {
+            task_id for cycle in cycles for task_id in cycle.task_ids
+        }
+        pending = {
+            task.id: task
+            for task in pickup_tasks
+            if task.id not in assigned_ids
+        }
+        rebuilt_cycles = list(cycles)
+        evaluated = 0
+        turnaround = timedelta(
+            minutes=warehouse.turnaround_minutes
+            + settings.default_route_buffer_minutes
+        )
+        while pending and evaluated < max_evaluations:
+            candidates: list[
+                tuple[
+                    tuple[object, ...],
+                    tuple[RouteCycle, ...],
+                    tuple[PlanningTask, ...],
+                ]
+            ] = []
+            budget_exhausted = False
+            for target_index, target in enumerate(rebuilt_cycles):
+                if target.locked or any(
+                    task_id in task_by_id
+                    and task_by_id[task_id].task_type is TaskType.PICKUP
+                    for task_id in target.task_ids
+                ):
+                    continue
+                shift = next(
+                    (
+                        item
+                        for item in shifts
+                        if item.id == target.driver_shift_id
+                    ),
+                    None,
+                )
+                if shift is None:
+                    continue
+                deliveries = tuple(
+                    task_by_id[task_id]
+                    for task_id in target.task_ids
+                    if task_id in task_by_id
+                    and task_by_id[task_id].task_type is TaskType.DELIVERY
+                )
+                if not deliveries:
+                    continue
+                last_delivery_index = matrix_index[deliveries[-1].id]
+                nearby_pickups = sorted(
+                    pending.values(),
+                    key=lambda task: (
+                        matrix.at(
+                            last_delivery_index,
+                            matrix_index[task.id],
+                        ).travel_seconds,
+                        _task_priority_key(task),
+                    ),
+                )[: settings.max_candidate_neighbors]
+                pickup_groups = _ordered_groups(
+                    nearby_pickups,
+                    matrix,
+                    matrix_index,
+                    relations,
+                    for_delivery=False,
+                    max_neighbors=settings.max_candidate_neighbors,
+                    anchor_limit=settings.max_candidate_neighbors,
+                )
+                pickup_groups.sort(
+                    key=lambda group: _pickup_attachment_rank(
+                        deliveries,
+                        group,
+                        matrix,
+                        matrix_index,
+                    )
+                )
+                for pickup_group in pickup_groups[
+                    : settings.max_candidate_neighbors
+                ]:
+                    if evaluated >= max_evaluations:
+                        budget_exhausted = True
+                        break
+                    rebuilt, rebuild_evaluations = (
+                        self._reschedule_reference_attachment(
+                            target_index=target_index,
+                            pickup_group=pickup_group,
+                            shift=shift,
+                            warehouse=warehouse,
+                            vehicle=vehicles[shift.vehicle_id],
+                            matrix=matrix,
+                            matrix_index=matrix_index,
+                            zones=zones,
+                            relations=relations,
+                            settings=settings,
+                            cycles=tuple(rebuilt_cycles),
+                            task_by_id=task_by_id,
+                            max_evaluations=max_evaluations - evaluated,
+                        )
+                    )
+                    evaluated += rebuild_evaluations
+                    if rebuilt is None:
+                        continue
+                    candidates.append(
+                        (
+                            _pickup_attachment_rank(
+                                deliveries,
+                                pickup_group,
+                                matrix,
+                                matrix_index,
+                            ),
+                            rebuilt,
+                            pickup_group,
+                        )
+                    )
+                if budget_exhausted:
+                    break
+            if not candidates:
+                break
+            _, chosen_cycles, chosen_pickups = min(
+                candidates,
+                key=lambda item: (
+                    item[0],
+                    sum(cycle.score for cycle in item[1]),
+                    tuple(cycle.id for cycle in item[1]),
+                ),
+            )
+            rebuilt_cycles = list(chosen_cycles)
+            for pickup in chosen_pickups:
+                pending.pop(pickup.id, None)
+
+        final_available = dict(available_at)
+        for shift in shifts:
+            final_available[shift.id] = max(
+                (
+                    cycle.planned_finish + turnaround
+                    for cycle in rebuilt_cycles
+                    if cycle.driver_shift_id == shift.id
+                ),
+                default=shift.start_at,
+            )
+        return tuple(rebuilt_cycles), final_available, evaluated
+
+    def _reschedule_reference_attachment(
+        self,
+        *,
+        target_index: int,
+        pickup_group: tuple[PlanningTask, ...],
+        shift: DriverShift,
+        warehouse: Warehouse,
+        vehicle: Vehicle,
+        matrix: TravelMatrix,
+        matrix_index: Mapping[str, int],
+        zones: Mapping[str, ZoneSnapshot],
+        relations: Mapping[tuple[str, str], ZoneRelation],
+        settings: PlanningSettings,
+        cycles: tuple[RouteCycle, ...],
+        task_by_id: Mapping[str, PlanningTask],
+        max_evaluations: int,
+    ) -> tuple[tuple[RouteCycle, ...] | None, int]:
+        """Rebuild one shift suffix for a proposed reference pickup attachment."""
+
+        shift_entries = sorted(
+            (
+                (index, cycle)
+                for index, cycle in enumerate(cycles)
+                if cycle.driver_shift_id == shift.id
+            ),
+            key=lambda item: (
+                item[1].planned_start,
+                item[1].sequence,
+                item[1].id,
+            ),
+        )
+        target_position = next(
+            (
+                position
+                for position, (index, _) in enumerate(shift_entries)
+                if index == target_index
+            ),
+            None,
+        )
+        if target_position is None:
+            return None, 0
+        suffix_indices = {
+            index for index, _ in shift_entries[target_position:]
+        }
+        fixed_cycles = [
+            cycle
+            for index, cycle in enumerate(cycles)
+            if index not in suffix_indices
+        ]
+        rebuilt = list(cycles)
+        cursor = cycles[target_index].planned_start
+        turnaround = timedelta(
+            minutes=warehouse.turnaround_minutes
+            + settings.default_route_buffer_minutes
+        )
+        evaluated = 0
+        for source_index, source in shift_entries[target_position:]:
+            if source.locked:
+                if (
+                    cursor > source.planned_start
+                    or _resource_overlap(source, fixed_cycles)
+                ):
+                    return None, evaluated
+                fixed_cycles.append(source)
+                cursor = source.planned_finish + turnaround
+                continue
+            if evaluated >= max_evaluations:
+                return None, evaluated
+            source_tasks = tuple(
+                task_by_id[task_id]
+                for task_id in source.task_ids
+                if task_id in task_by_id
+            )
+            if len(source_tasks) != len(source.task_ids):
+                return None, evaluated
+            deliveries = tuple(
+                task
+                for task in source_tasks
+                if task.task_type is TaskType.DELIVERY
+            )
+            pickups = (
+                pickup_group
+                if source_index == target_index
+                else tuple(
+                    task
+                    for task in source_tasks
+                    if task.task_type is TaskType.PICKUP
+                )
+            )
+            existing_shift_cycles = tuple(
+                cycle
+                for cycle in fixed_cycles
+                if cycle.driver_shift_id == shift.id
+            )
+            evaluated += 1
+            probe = self._schedule_candidate(
+                shift=shift,
+                start_at=max(cursor, source.planned_start),
+                sequence=source.sequence,
+                deliveries=deliveries,
+                pickups=pickups,
+                warehouse=warehouse,
+                vehicle=vehicle,
+                matrix=matrix,
+                matrix_index=matrix_index,
+                zones=zones,
+                relations=relations,
+                settings=settings,
+                cycle_count=len(existing_shift_cycles),
+                existing_shift_cycles=existing_shift_cycles,
+            )
+            if probe is None or _resource_overlap(probe.cycle, fixed_cycles):
+                return None, evaluated
+            rebuilt[source_index] = probe.cycle
+            fixed_cycles.append(probe.cycle)
+            cursor = probe.cycle.planned_finish + turnaround
+        return tuple(rebuilt), evaluated
+
     def _schedule_candidate(
         self,
         *,
@@ -787,16 +1321,15 @@ class HeuristicPlanner:
             relations,
         ):
             return None
-        high_detour = _pickup_detour_exceeds_recommended_limit(
+        if _pickup_detour_exceeds_limit(
             deliveries,
             pickups,
             detour_seconds,
             detour_ratio,
             relations,
             settings,
-        )
-        if high_detour:
-            warnings.add(ValidationWarningCode.HIGH_DETOUR)
+        ):
+            return None
         route_groups = tuple(
             zone.route_group
             for task in task_sequence
@@ -834,7 +1367,6 @@ class HeuristicPlanner:
             shift,
             detour_seconds,
             preferred_match,
-            high_detour=high_detour,
             resource_reused=cycle_count > 0,
             activates_additional_resource=activates_additional_resource,
         )
@@ -882,8 +1414,6 @@ class HeuristicPlanner:
         priority_key = _candidate_priority_key(
             deliveries,
             pickups,
-            matrix,
-            matrix_index,
         )
         stable_rank = _stable_rank(settings.seed, shift.id, *task_ids)
         warning_rank = (
@@ -901,6 +1431,8 @@ class HeuristicPlanner:
             selection_key=(
                 *priority_key,
                 *warning_rank,
+                -int(bool(deliveries and pickups)),
+                -sum(task.quantity for task in pickups),
                 -remaining_shift_seconds if prefer_shift_reserve else 0,
                 cycle.score + resource_activation_penalty + workload_penalty,
                 cycle.planned_finish,
@@ -1112,6 +1644,7 @@ def split_requests_for_date(
 
     tasks: list[PlanningTask] = []
     unassigned: list[UnassignedTask] = []
+    seen_source_keys: set[str] = set()
     for request in sorted(requests, key=lambda item: (item.created_at, item.id)):
         if request.status is not RequestStatus.READY:
             unassigned.append(_unassigned_task(request, (UnassignedReasonCode.REQUEST_NOT_READY,)))
@@ -1123,6 +1656,16 @@ def split_requests_for_date(
         if not matching:
             unassigned.append(_unassigned_task(request, (UnassignedReasonCode.NO_ALLOWED_DATE,)))
             continue
+        if request.source_key is not None:
+            if request.source_key in seen_source_keys:
+                unassigned.append(
+                    _unassigned_task(
+                        request,
+                        (UnassignedReasonCode.DUPLICATE_ASSIGNMENT_CONFLICT,),
+                    )
+                )
+                continue
+            seen_source_keys.add(request.source_key)
         option = min(
             matching,
             key=lambda item: (
@@ -1183,27 +1726,56 @@ def _candidate_specs(
                 _task_priority_key(task),
             ),
         )[: settings.max_candidate_neighbors]
-        pickup_groups: list[tuple[PlanningTask, ...]] = [()]
-        pickup_groups.extend(
-            _ordered_groups(
-                eligible_pickups,
-                matrix,
-                matrix_index,
-                relations,
-                for_delivery=False,
-                max_neighbors=settings.max_candidate_neighbors,
-                anchor_limit=settings.max_candidate_neighbors,
-            )
-        )
-        combinations.extend(
-            (delivery_group, pickup_group)
-            for pickup_group in pickup_groups
-            if _pickup_transition_allowed(
+        ranked_pickup_groups: list[
+            tuple[tuple[object, ...], tuple[PlanningTask, ...]]
+        ] = []
+        for pickup_group in _ordered_groups(
+            eligible_pickups,
+            matrix,
+            matrix_index,
+            relations,
+            for_delivery=False,
+            max_neighbors=settings.max_candidate_neighbors,
+            anchor_limit=settings.max_candidate_neighbors,
+        ):
+            if not _pickup_transition_allowed(delivery_group, pickup_group, relations):
+                continue
+            detour_seconds, detour_ratio = _pickup_detour(
                 delivery_group,
                 pickup_group,
-                relations,
+                matrix,
+                matrix_index,
             )
-        )
+            if _pickup_detour_exceeds_limit(
+                delivery_group,
+                pickup_group,
+                detour_seconds,
+                detour_ratio,
+                relations,
+                settings,
+            ):
+                continue
+            ranked_pickup_groups.append(
+                (
+                    (
+                        -sum(task.quantity for task in pickup_group),
+                        detour_seconds,
+                        detour_ratio,
+                        min(_task_priority_key(task) for task in pickup_group),
+                        tuple(task.id for task in pickup_group),
+                    ),
+                    pickup_group,
+                )
+            )
+        ranked_pickup_groups.sort(key=lambda item: item[0])
+        pickup_groups = [
+            pickup_group
+            for _, pickup_group in ranked_pickup_groups[
+                : settings.max_candidate_neighbors
+            ]
+        ]
+        combinations.append((delivery_group, ()))
+        combinations.extend((delivery_group, pickup_group) for pickup_group in pickup_groups)
 
     pickup_only_groups = _ordered_groups(
         pickups,
@@ -1219,11 +1791,17 @@ def _candidate_specs(
         _CandidateSpec(
             deliveries=delivery_group,
             pickups=pickup_group,
-            priority_key=_candidate_priority_key(
-                delivery_group,
-                pickup_group,
-                matrix,
-                matrix_index,
+            priority_key=(
+                *_candidate_priority_key(
+                    delivery_group,
+                    pickup_group,
+                ),
+                *_candidate_route_rank(
+                    delivery_group,
+                    pickup_group,
+                    matrix,
+                    matrix_index,
+                ),
             ),
         )
         for delivery_group, pickup_group in combinations
@@ -1243,30 +1821,172 @@ def _candidate_specs(
 def _candidate_priority_key(
     deliveries: tuple[PlanningTask, ...],
     pickups: tuple[PlanningTask, ...],
-    matrix: TravelMatrix,
-    matrix_index: Mapping[str, int],
 ) -> tuple[object, ...]:
     """Return the shift-independent prefix of a candidate's final selection key.
 
-    A cycle that can bring cabins back after its deliveries is preferred over a
-    separate pickup-only cycle. Within the same urgency bucket, full outbound
-    and return loads rank ahead of a partially loaded mixed cycle. That
-    lexicographic packing rule minimizes depot returns before weighted travel
-    and detour cost, while hard-task urgency still remains the first rule.
+    Delivery-bearing candidates are ranked only by delivery urgency and outbound
+    packing. Pickup urgency therefore cannot pull a less urgent delivery ahead of
+    a mandatory one. Mixed-cycle preference is applied later, after the delivery
+    rank and the delivery-capacity reservation check.
     """
 
-    all_tasks = deliveries + pickups
+    tasks = deliveries or pickups
+    anchor = min(tasks, key=_task_priority_key)
     return (
-        -sum(task.is_hard for task in all_tasks),
-        -int(any(task.is_last_available_date for task in all_tasks)),
-        -int(bool(deliveries and pickups)),
-        -sum(task.quantity for task in deliveries),
+        0 if deliveries else 1,
+        not anchor.is_hard,
+        not anchor.is_last_available_date,
+        -anchor.priority,
+        anchor.remaining_date_count,
+        anchor.selected_option.width,
+        -sum(task.quantity for task in tasks),
+        -sum(task.is_hard for task in tasks),
+        -sum(task.is_last_available_date for task in tasks),
+        -sum(task.priority for task in tasks),
+        sum(task.remaining_date_count for task in tasks),
+        sum(task.selected_option.width.total_seconds() for task in tasks),
+    )
+
+
+def _candidate_route_rank(
+    deliveries: tuple[PlanningTask, ...],
+    pickups: tuple[PlanningTask, ...],
+    matrix: TravelMatrix,
+    matrix_index: Mapping[str, int],
+) -> tuple[object, ...]:
+    """Rank equal-urgency combinations by compact, nearby full cycles.
+
+    This shift-independent suffix turns a potentially huge equal-priority
+    bucket into small deterministic route buckets. Delivery locality is
+    evaluated before any pickup property. Once the delivery sequence is fixed,
+    a full nearby backhaul is preferred over a partial or empty return.
+    """
+
+    delivery_distance, delivery_travel = _round_trip_metric(
+        deliveries or pickups,
+        matrix,
+        matrix_index,
+    )
+    full_distance, full_travel = _round_trip_metric(
+        deliveries + pickups,
+        matrix,
+        matrix_index,
+    )
+    detour_seconds, detour_ratio = _pickup_detour(
+        deliveries,
+        pickups,
+        matrix,
+        matrix_index,
+    )
+    pickup_anchor = min(pickups, key=_task_priority_key) if pickups else None
+    return (
+        delivery_distance,
+        delivery_travel,
         -sum(task.quantity for task in pickups),
-        -len(all_tasks),
-        -sum(task.priority for task in all_tasks),
-        sum(task.remaining_date_count for task in all_tasks),
-        sum(task.selected_option.width.total_seconds() for task in all_tasks),
-        -max(matrix.at(0, matrix_index[task.id]).distance_meters for task in all_tasks),
+        not bool(pickup_anchor and pickup_anchor.is_hard),
+        not bool(pickup_anchor and pickup_anchor.is_last_available_date),
+        -(pickup_anchor.priority if pickup_anchor is not None else 0),
+        pickup_anchor.remaining_date_count if pickup_anchor is not None else 0,
+        pickup_anchor.selected_option.width if pickup_anchor is not None else timedelta(0),
+        detour_seconds,
+        detour_ratio,
+        full_distance,
+        full_travel,
+    )
+
+
+def _pickup_attachment_rank(
+    deliveries: tuple[PlanningTask, ...],
+    pickups: tuple[PlanningTask, ...],
+    matrix: TravelMatrix,
+    matrix_index: Mapping[str, int],
+) -> tuple[object, ...]:
+    """Rank safe reference backhauls by pickup urgency, fill and detour."""
+
+    anchor = min(pickups, key=_task_priority_key)
+    detour_seconds, detour_ratio = _pickup_detour(
+        deliveries,
+        pickups,
+        matrix,
+        matrix_index,
+    )
+    full_distance, full_travel = _round_trip_metric(
+        deliveries + pickups,
+        matrix,
+        matrix_index,
+    )
+    return (
+        not anchor.is_hard,
+        not anchor.is_last_available_date,
+        -anchor.priority,
+        anchor.remaining_date_count,
+        anchor.selected_option.width,
+        -sum(task.quantity for task in pickups),
+        detour_seconds,
+        detour_ratio,
+        full_distance,
+        full_travel,
+        tuple(task.id for task in pickups),
+    )
+
+
+def _round_trip_metric(
+    tasks: Sequence[PlanningTask],
+    matrix: TravelMatrix,
+    matrix_index: Mapping[str, int],
+) -> tuple[int, int]:
+    """Return matrix distance and travel seconds for depot, tasks, depot."""
+
+    if not tasks:
+        return (0, 0)
+    distance_meters = 0
+    travel_seconds = 0
+    current_index = 0
+    for task in tasks:
+        next_index = matrix_index[task.id]
+        metric = matrix.at(current_index, next_index)
+        distance_meters += metric.distance_meters
+        travel_seconds += metric.travel_seconds
+        current_index = next_index
+    return_metric = matrix.at(current_index, 0)
+    return (
+        distance_meters + return_metric.distance_meters,
+        travel_seconds + return_metric.travel_seconds,
+    )
+
+
+def _delivery_coverage_key(
+    task_ids: Iterable[str],
+    task_by_id: Mapping[str, PlanningTask],
+) -> tuple[int, ...]:
+    """Rank projected delivery coverage with mandatory cabins first."""
+
+    selected = tuple(task_by_id[task_id] for task_id in task_ids)
+    return (
+        sum(task.quantity for task in selected if task.is_hard),
+        sum(task.quantity for task in selected if task.is_last_available_date),
+        sum(task.quantity for task in selected),
+        len(selected),
+        sum(task.priority for task in selected),
+        -sum(task.remaining_date_count for task in selected),
+        -round(
+            sum(task.selected_option.width.total_seconds() for task in selected)
+        ),
+    )
+
+
+def _delivery_task_ids(
+    cycles: Iterable[RouteCycle],
+    task_by_id: Mapping[str, PlanningTask],
+) -> frozenset[str]:
+    """Return assigned delivery task IDs from a cycle collection."""
+
+    return frozenset(
+        task_id
+        for cycle in cycles
+        for task_id in cycle.task_ids
+        if task_id in task_by_id
+        and task_by_id[task_id].task_type is TaskType.DELIVERY
     )
 
 
@@ -1354,22 +2074,27 @@ def _pickup_detour(
     matrix: TravelMatrix,
     matrix_index: Mapping[str, int],
 ) -> tuple[int, float]:
-    """Return actual extra return duration and ratio caused by pickup stops."""
+    """Return extra road travel and ratio caused by pickup stops.
+
+    Pickup service is mandatory work, not a geographic detour. It remains in
+    cycle duration, shift/window feasibility and service metrics, while the
+    detour limit answers only whether the vehicle drives too far off its return
+    corridor.
+    """
 
     if not deliveries or not pickups:
         return 0, 0.0
     last_delivery_index = matrix_index[deliveries[-1].id]
     direct = matrix.at(last_delivery_index, 0).travel_seconds
-    with_pickup = 0
+    with_pickup_travel = 0
     current = last_delivery_index
     for pickup in pickups:
         next_index = matrix_index[pickup.id]
-        with_pickup += matrix.at(current, next_index).travel_seconds
-        with_pickup += pickup.service_minutes * 60
+        with_pickup_travel += matrix.at(current, next_index).travel_seconds
         current = next_index
-    with_pickup += matrix.at(current, 0).travel_seconds
-    detour = max(0, with_pickup - direct)
-    return detour, detour / max(1, direct)
+    with_pickup_travel += matrix.at(current, 0).travel_seconds
+    travel_detour = max(0, with_pickup_travel - direct)
+    return travel_detour, travel_detour / max(1, direct)
 
 
 def _pickup_transition_allowed(
@@ -1393,7 +2118,7 @@ def _pickup_transition_allowed(
     )
 
 
-def _pickup_detour_exceeds_recommended_limit(
+def _pickup_detour_exceeds_limit(
     deliveries: tuple[PlanningTask, ...],
     pickups: tuple[PlanningTask, ...],
     detour_seconds: int,
@@ -1401,7 +2126,7 @@ def _pickup_detour_exceeds_recommended_limit(
     relations: Mapping[tuple[str, str], ZoneRelation],
     settings: PlanningSettings,
 ) -> bool:
-    """Return whether a cycle-saving backhaul exceeds its warning thresholds."""
+    """Return whether a backhaul exceeds its configured feasibility thresholds."""
 
     if not deliveries or not pickups:
         return False
@@ -1437,7 +2162,7 @@ def _task_priority_with_distance(
     matrix: TravelMatrix,
     matrix_index: Mapping[str, int],
 ) -> tuple[object, ...]:
-    """Extend business priority with the documented farther-first criterion."""
+    """Extend business priority with nearest-first deterministic batching."""
 
     return (
         not task.is_hard,
@@ -1445,7 +2170,35 @@ def _task_priority_with_distance(
         -task.priority,
         task.remaining_date_count,
         task.selected_option.width,
-        -matrix.at(0, matrix_index[task.id]).distance_meters,
+        matrix.at(0, matrix_index[task.id]).distance_meters,
+        task.created_at,
+        task.id,
+    )
+
+
+def _delivery_reference_priority_key(
+    task: PlanningTask,
+    matrix: TravelMatrix,
+    matrix_index: Mapping[str, int],
+    *,
+    longest_first: bool,
+) -> tuple[object, ...]:
+    """Build a delivery coverage order using one explicit distance direction.
+
+    The planner compares longest-first protection against nearest-first packing.
+    This preserves a long mandatory trip when it increases coverage without
+    sacrificing a larger number of cabins that fit into compact nearby cycles.
+    """
+
+    travel_seconds = matrix.at(0, matrix_index[task.id]).travel_seconds
+
+    return (
+        not task.is_hard,
+        not task.is_last_available_date,
+        -task.priority,
+        task.remaining_date_count,
+        task.selected_option.width,
+        -travel_seconds if longest_first else travel_seconds,
         task.created_at,
         task.id,
     )
@@ -1524,7 +2277,6 @@ def _cycle_explanation(
     detour_seconds: int,
     preferred_match: bool,
     *,
-    high_detour: bool,
     resource_reused: bool,
     activates_additional_resource: bool,
 ) -> tuple[str, ...]:
@@ -1543,17 +2295,13 @@ def _cycle_explanation(
     if pickups and deliveries:
         reasons.append(
             f"Вывозы {', '.join(task.request_id for task in pickups)} добавлены после "
-            f"всех доставок; расчётный крюк {round(detour_seconds / 60)} мин."
+            f"всех доставок; расчётный крюк {round(detour_seconds / 60)} мин "
+            "не превышает настроенный лимит."
         )
         reasons.append(
             "Смешанный цикл убирает отдельный рейс за вывозом и дополнительный "
             "возврат на склад."
         )
-        if high_detour:
-            reasons.append(
-                "Крюк выше рекомендуемого порога, но сохранён ради меньшего "
-                "числа циклов; вместимость, окна и смена не нарушены."
-            )
     elif pickups:
         reasons.append("Создан отдельный pickup-only цикл с учётом пустого пробега.")
     if resource_reused:
@@ -1627,7 +2375,9 @@ def _unassigned_task(
         UnassignedReasonCode.OUTSIDE_ZONES: "Точка находится вне настроенных логистических зон.",
         UnassignedReasonCode.REQUEST_NOT_READY: "Заявка не находится в статусе READY.",
         UnassignedReasonCode.NO_ALLOWED_DATE: "Выбранная дата отсутствует среди допустимых.",
-        UnassignedReasonCode.DUPLICATE_ASSIGNMENT_CONFLICT: "Транспортная часть уже назначена.",
+        UnassignedReasonCode.DUPLICATE_ASSIGNMENT_CONFLICT: (
+            "Заявка повторяет уже учтённый внешний или сгенерированный источник."
+        ),
         UnassignedReasonCode.NO_FEASIBLE_DELIVERY_PAIR: "Не найдена допустимая пара доставок.",
         UnassignedReasonCode.NO_FEASIBLE_PICKUP_PAIR: "Не найдена допустимая пара вывозов.",
         UnassignedReasonCode.UNKNOWN: "Не удалось построить допустимый рейс.",

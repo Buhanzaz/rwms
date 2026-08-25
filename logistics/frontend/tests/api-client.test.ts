@@ -40,6 +40,8 @@ const zone: Zone = {
   name: 'Зона 1',
   code: 'Z1',
   route_group: 'WEST',
+  delivery_price: 120,
+  pickup_price: 80,
   geometry: { type: 'Polygon', coordinates: [[[37, 55], [38, 55], [38, 56], [37, 55]]] },
   version: 1,
   priority: 1,
@@ -127,6 +129,8 @@ describe('actual backend transport contract', () => {
       name: 'Внутренняя',
       code: 'Z1-IN1',
       route_group: 'WEST',
+      delivery_price: 120,
+      pickup_price: 80,
       geometry: cutout,
       priority: 2,
       locked: false,
@@ -136,11 +140,47 @@ describe('actual backend transport contract', () => {
     expect(mock.mock.calls[0]?.[0]).toBe('/api/zones/zone-id/cutouts');
     expect(requestBody(mock, 0)).toEqual({
       geometry: cutout,
-      inner_zone: { name: 'Внутренняя', code: 'Z1-IN1', route_group: 'WEST', priority: 2, locked: false },
+      inner_zone: { name: 'Внутренняя', code: 'Z1-IN1', route_group: 'WEST', delivery_price: 120, pickup_price: 80, priority: 2, locked: false },
     });
     expect(result.inner_zone.id).toBe('inner-zone-id');
     expect(mock.mock.calls[1]?.[0]).toBe('/api/requests/request-id/schedule');
     expect(requestBody(mock, 1)).toEqual({ date: '2026-08-26', add_if_missing: true });
+  });
+
+  it('posts deterministic workload generation with the scenario-scoped endpoint', async () => {
+    const mock = fetchMock({
+      scenario_id: 'scenario-id',
+      seed: 99,
+      start_date: '2026-08-25',
+      end_date: '2026-08-27',
+      created_requests: 24,
+      created_deliveries: 12,
+      created_pickups: 12,
+      replaced_requests: 0,
+      daily_counts: [
+        { date: '2026-08-25', deliveries: 4, pickups: 4 },
+        { date: '2026-08-26', deliveries: 4, pickups: 4 },
+        { date: '2026-08-27', deliveries: 4, pickups: 4 },
+      ],
+    });
+    const input = {
+      start_date: '2026-08-25',
+      days: 3,
+      deliveries_per_day: 4,
+      pickups_per_day: 4,
+      alternative_dates_count: 2,
+      seed: 99,
+      replace_existing_generated: false,
+    };
+
+    const result = await api.generateWorkload('scenario-id', input);
+
+    expect(mock.mock.calls[0]?.[0]).toBe('/api/scenarios/scenario-id/generate-workload');
+    expect(mock.mock.calls[0]?.[1]?.method).toBe('POST');
+    expect(requestBody(mock, 0)).toEqual(input);
+    expect(result.created_requests).toBe(24);
+    expect(result.replaced_requests).toBe(0);
+    expect(result.daily_counts).toHaveLength(3);
   });
 
   it('nests manual-change payload but leaves dedicated simulation bodies raw', async () => {

@@ -26,6 +26,8 @@ async def zone_read(session: AsyncSession, zone: Zone) -> ZoneRead:
         geometry=GeoJsonGeometry.model_validate(geometry_to_geojson(zone.geometry)),
         version=zone.version,
         priority=zone.priority,
+        delivery_price=zone.delivery_price,
+        pickup_price=zone.pickup_price,
         locked=zone.locked,
         stale_request_count=await count_stale_requests(session, zone),
         created_at=zone.created_at,

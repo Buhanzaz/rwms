@@ -18,6 +18,10 @@
   `{source_zone, inner_zone}`. Existing request snapshots remain unchanged until
   explicit reclassification; a duplicate inner-zone code returns
   `409 ZONE_CODE_CONFLICT` before either geometry changes.
+- Zone create/read/update and cutout metadata carry non-negative integer-ruble
+  `delivery_price` and `pickup_price`. Tariff-only edits do not increment the
+  geometry `version`; existing zones receive zero through the additive
+  migration.
 - `POST /api/requests/{request_id}/schedule` sets or clears the authoritative
   logistics date. A date outside the accepted options fails unless
   `add_if_missing=true`, which records an explicit soft whole-day agreement in
@@ -74,6 +78,39 @@ than one date. Request date negotiation uses the dedicated scheduling command:
 `scheduled_date=null` leaves every accepted option eligible, while a selected
 date makes that request eligible only for the selected day. Explicitly adding
 a negotiated date retains all prior options.
+
+The reset-style four-zone demo uses scenario-local detour limits of 60 minutes
+and a 3.0 ratio so both mock routing and the local Moscow OSRM graph produce a
+minimum-cycle plan without delivery-only returns. Mock routing preserves the
+exact illustrative two-delivery/two-pickup cycle; OSRM may choose a shorter
+equivalent grouping across the same two mixed cycles. New ordinary scenarios
+retain the 35-minute and 1.5-ratio defaults.
+
+`POST /api/scenarios/{scenario_id}/generate-workload` creates a deterministic
+test workload in the selected scenario. `days` defaults to one and
+`alternative_dates_count` defaults to zero; the supported ranges remain one to
+31 days, zero to ten deliveries and pickups per day, and zero to three
+additional accepted dates. Every additional date must fit inside the horizon.
+The command fails explicitly with `NO_ZONES` when no polygon exists; otherwise
+it samples strictly interior points and creates each request through the normal
+server-side classifier.
+
+By default the command appends. With `replace_existing_generated=true`, it
+atomically removes only requests owned by the simulator generator whose
+priority-100 date is inside the selected horizon and returns their count as
+`replaced_requests`. Manual and RWMS requests are outside this selection.
+Tasks referenced by any saved route or unassigned-plan result fence the whole
+operation with `409 GENERATED_REQUESTS_ALREADY_PLANNED`; neither the old batch
+nor any plan is deleted. A zero/zero replacement therefore acts as an explicit
+safe clear only when the selected generated rows have no plan references.
+Repeating the same seed in an overlapping horizon without replacement fails
+with `409 GENERATED_WORKLOAD_ALREADY_EXISTS`; it never inserts a second set of
+identical points. Newly generated requests have stable source IDs so concurrent
+or retried inserts remain protected by the existing external-source uniqueness
+constraint. Scenario clone and JSON export/import preserve each request's
+optional `source_system`, `external_id`, `external_version` and
+`external_payload`; older documents without those additive fields remain
+valid.
 
 `POST /api/scenarios/{scenario_id}/plans/generate` plans unscheduled requests
 whose `date_options` contain the requested date, plus scheduled requests whose

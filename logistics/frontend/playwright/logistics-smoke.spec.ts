@@ -2,8 +2,18 @@ import { expect, test } from '@playwright/test';
 import { z } from 'zod';
 
 const optimizationRunSchema = z.object({ plan_id: z.string().nullable() });
+const stopTypeSchema = z.enum(['DEPOT_LOAD', 'DELIVERY', 'PICKUP', 'DEPOT_UNLOAD', 'DEPOT_RETURN']);
 const planScheduleSchema = z.object({
+  unassigned_tasks: z.array(z.unknown()),
   cycles: z.array(z.object({
+    id: z.string(),
+    stops: z.array(z.object({
+      task_id: z.string().nullable(),
+      stop_type: stopTypeSchema,
+      quantity_delta: z.number(),
+      load_before: z.number(),
+      load_after: z.number(),
+    })),
     segments: z.array(z.object({ departure_at: z.string(), arrival_at: z.string() })),
   })),
 });
@@ -55,8 +65,8 @@ test('создание, demo-план, симуляция, задержка и �
   await sidebar.getByRole('button', { name: /Смены/ }).click();
   await expect(page.locator('.entity-card')).toHaveCount(3);
   await sidebar.getByRole('button', { name: /Заявки/ }).click();
-  await expect(page.getByText(/D ·/).first()).toBeVisible();
-  await expect(page.getByText(/P ·/).first()).toBeVisible();
+  await expect(page.getByText(/Д ·/).first()).toBeVisible();
+  await expect(page.getByText(/В ·/).first()).toBeVisible();
 
   const generationResponsePromise = page.waitForResponse((response) =>
     response.request().method() === 'POST' && response.url().endsWith(`/api/scenarios/${createdScenarioId}/plans/generate`),
@@ -69,16 +79,51 @@ test('создание, demo-план, симуляция, задержка и �
   if (await progress.isVisible().catch(() => false)) await expect(progress).toBeHidden({ timeout: 30_000 });
   await sidebar.getByRole('button', { name: /Маршруты/ }).click();
   await expect(page.getByTestId('driver-route').first()).toBeVisible();
-  const canonicalCycle = page
-    .locator('[data-testid^="cycle-"]')
-    .filter({ hasText: 'Загрузка: 2 → 1 → 0 → 1 → 2 → 0' })
-    .first();
-  await expect(canonicalCycle).toBeVisible();
-  await expect(canonicalCycle.locator('.stop-row__type')).toHaveText(['С', 'D', 'D', 'P', 'P', 'С']);
+  const initialPlanResponse = await request.get(`/api/plans/${planId}`);
+  expect(initialPlanResponse.ok()).toBe(true);
+  const initialPlan = planScheduleSchema.parse(await initialPlanResponse.json());
+  expect(initialPlan.unassigned_tasks).toHaveLength(0);
+
+  const taskIds = initialPlan.cycles.flatMap((cycle) =>
+    cycle.stops.flatMap((stop) => stop.task_id ? [stop.task_id] : []),
+  );
+  expect(new Set(taskIds).size).toBe(taskIds.length);
+  const deliveryQuantity = initialPlan.cycles.reduce((total, cycle) => total + cycle.stops
+    .filter((stop) => stop.stop_type === 'DELIVERY')
+    .reduce((cycleTotal, stop) => cycleTotal - stop.quantity_delta, 0), 0);
+  const pickupQuantity = initialPlan.cycles.reduce((total, cycle) => total + cycle.stops
+    .filter((stop) => stop.stop_type === 'PICKUP')
+    .reduce((cycleTotal, stop) => cycleTotal + stop.quantity_delta, 0), 0);
+  expect(initialPlan.cycles).toHaveLength(Math.ceil(Math.max(deliveryQuantity, pickupQuantity) / 2));
+
+  for (const cycle of initialPlan.cycles) {
+    expect(cycle.stops[0]?.stop_type).toBe('DEPOT_LOAD');
+    expect(cycle.stops.at(-1)?.stop_type).toBe('DEPOT_RETURN');
+    expect(cycle.stops.every((stop) => stop.load_before >= 0 && stop.load_before <= 2
+      && stop.load_after >= 0 && stop.load_after <= 2)).toBe(true);
+    const deliveryIndexes = cycle.stops.flatMap((stop, index) => stop.stop_type === 'DELIVERY' ? [index] : []);
+    const pickupIndexes = cycle.stops.flatMap((stop, index) => stop.stop_type === 'PICKUP' ? [index] : []);
+    expect(deliveryIndexes.length).toBeGreaterThan(0);
+    expect(pickupIndexes.length).toBeGreaterThan(0);
+    expect(Math.max(...deliveryIndexes)).toBeLessThan(Math.min(...pickupIndexes));
+  }
+
+  const deliveryPairCycleData = initialPlan.cycles.find((cycle) =>
+    cycle.stops.filter((stop) => stop.stop_type === 'DELIVERY').length === 2,
+  );
+  if (!deliveryPairCycleData) throw new Error('Generated route plan has no paired-delivery cycle');
+  expect(initialPlan.cycles.some((cycle) =>
+    cycle.stops.filter((stop) => stop.stop_type === 'PICKUP').length === 2,
+  )).toBe(true);
+  const deliveryPairCycle = page.getByTestId(`cycle-${deliveryPairCycleData.id}`);
+  await expect(deliveryPairCycle).toBeVisible();
+  await expect(deliveryPairCycle.locator('.stop-row__type')).toHaveText(
+    deliveryPairCycleData.stops.map((stop) => stop.stop_type === 'DELIVERY' ? 'D' : stop.stop_type === 'PICKUP' ? 'P' : 'С'),
+  );
 
   // Exercise the real dnd-kit keyboard sensor: swap the two delivery stops,
   // then require the backend-validated plan version returned by the mutation.
-  const firstDelivery = canonicalCycle.locator('.stop-row[role="button"]').nth(1);
+  const firstDelivery = deliveryPairCycle.locator('.stop-row:has(.stop-row__type[title="DELIVERY"])').first();
   await firstDelivery.focus();
   await firstDelivery.press('Space');
   await firstDelivery.press('ArrowDown');

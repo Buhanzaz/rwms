@@ -146,6 +146,48 @@ class ScenarioRead(ApiModel):
     updated_at: AwareDatetime
 
 
+class WorkloadGeneratorInput(ApiModel):
+    """Bounded deterministic request workload generated for one scenario horizon."""
+
+    start_date: date
+    days: int = Field(default=1, ge=1, le=31)
+    deliveries_per_day: int = Field(ge=0, le=10)
+    pickups_per_day: int = Field(ge=0, le=10)
+    alternative_dates_count: int = Field(default=0, ge=0, le=3)
+    replace_existing_generated: bool = False
+    seed: int
+
+    @model_validator(mode="after")
+    def validate_date_choices_fit_horizon(self) -> WorkloadGeneratorInput:
+        """Keep the primary and all alternative dates inside the horizon."""
+
+        if self.alternative_dates_count > self.days - 1:
+            raise ValueError("alternative_dates_count must be smaller than days")
+        return self
+
+
+class WorkloadGenerationDailyCount(ApiModel):
+    """Created source-request counts attributed to one primary date."""
+
+    date: date
+    deliveries: int
+    pickups: int
+
+
+class WorkloadGenerationResult(ApiModel):
+    """Auditable summary of one workload generation command."""
+
+    scenario_id: UUID
+    seed: int
+    start_date: date
+    end_date: date
+    created_requests: int
+    created_deliveries: int
+    created_pickups: int
+    replaced_requests: int = 0
+    daily_counts: list[WorkloadGenerationDailyCount]
+
+
 class CloneRequest(ApiModel):
     """Optional name override for a cloned scenario or plan."""
 
@@ -238,6 +280,8 @@ class ZoneCreate(ApiModel):
     route_group: NonBlank
     geometry: GeoJsonGeometry
     priority: int = 0
+    delivery_price: int = Field(default=0, ge=0)
+    pickup_price: int = Field(default=0, ge=0)
     locked: bool = False
 
 
@@ -249,6 +293,8 @@ class ZoneUpdate(ApiModel):
     route_group: NonBlank | None = None
     geometry: GeoJsonGeometry | None = None
     priority: int | None = None
+    delivery_price: int | None = Field(default=None, ge=0)
+    pickup_price: int | None = Field(default=None, ge=0)
 
 
 class ZoneRead(ApiModel):
@@ -262,6 +308,8 @@ class ZoneRead(ApiModel):
     geometry: GeoJsonGeometry
     version: int
     priority: int
+    delivery_price: int
+    pickup_price: int
     locked: bool
     stale_request_count: int = 0
     created_at: AwareDatetime
@@ -281,6 +329,8 @@ class ZoneCutoutInnerZone(ApiModel):
     code: NonBlank
     route_group: NonBlank
     priority: int
+    delivery_price: int = Field(default=0, ge=0)
+    pickup_price: int = Field(default=0, ge=0)
     locked: bool
 
 
@@ -1051,10 +1101,14 @@ class ExportShift(ApiModel):
 
 
 class ExportRequest(ApiModel):
-    """Source request record inside a scenario document."""
+    """Source request record with optional upstream lineage for reproducible imports."""
 
     id: UUID
     data: LogisticsRequestCreate
+    source_system: str | None = Field(default=None, max_length=64)
+    external_id: UUID | None = None
+    external_version: int | None = Field(default=None, ge=0)
+    external_payload: dict[str, Any] | None = None
     scheduled_date: date | None = None
     zone_id: UUID | None
     zone_version: int | None

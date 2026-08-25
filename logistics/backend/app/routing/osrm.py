@@ -33,6 +33,7 @@ class OsrmRoutingProvider:
         *,
         profile: str = "driving",
         timeout_seconds: float = 15.0,
+        max_table_points: int = 100,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         normalized_url = base_url.rstrip("/")
@@ -44,16 +45,19 @@ class OsrmRoutingProvider:
             raise ValueError("OSRM profile must contain letters, digits, '_' or '-'")
         if timeout_seconds <= 0:
             raise ValueError("OSRM timeout_seconds must be positive")
+        if max_table_points < 2:
+            raise ValueError("OSRM max_table_points must be at least two")
         self.base_url = normalized_url
         self.profile = normalized_profile
         self.timeout_seconds = timeout_seconds
+        self.max_table_points = max_table_points
         self._transport = transport
 
     @property
-    def cache_key(self) -> tuple[str, str, float]:
+    def cache_key(self) -> tuple[str, str, float, int]:
         """Expose only stable, non-secret connection facts for matrix cache partitioning."""
 
-        return (self.base_url, self.profile, self.timeout_seconds)
+        return (self.base_url, self.profile, self.timeout_seconds, self.max_table_points)
 
     async def get_matrix(
         self,
@@ -71,12 +75,25 @@ class OsrmRoutingProvider:
                 points=immutable_points,
                 rows=((TravelMetric(distance_meters=0, travel_seconds=0),),),
             )
-        payload = await self._request(
-            f"/table/v1/{self.profile}/{self._coordinates(immutable_points)}",
-            {"annotations": "distance,duration"},
-        )
-        distances = self._matrix(payload, "distances", len(immutable_points))
-        durations = self._matrix(payload, "durations", len(immutable_points))
+        if len(immutable_points) <= self.max_table_points:
+            payload = await self._request(
+                f"/table/v1/{self.profile}/{self._coordinates(immutable_points)}",
+                {"annotations": "distance,duration"},
+            )
+            distances = self._matrix(
+                payload,
+                "distances",
+                len(immutable_points),
+                len(immutable_points),
+            )
+            durations = self._matrix(
+                payload,
+                "durations",
+                len(immutable_points),
+                len(immutable_points),
+            )
+        else:
+            distances, durations = await self._partitioned_matrix(immutable_points)
         rows = tuple(
             tuple(
                 TravelMetric(
@@ -88,6 +105,63 @@ class OsrmRoutingProvider:
             for row in range(len(immutable_points))
         )
         return TravelMatrix(points=immutable_points, rows=rows)
+
+    async def _partitioned_matrix(
+        self,
+        points: tuple[GeoPoint, ...],
+    ) -> tuple[tuple[tuple[object, ...], ...], tuple[tuple[object, ...], ...]]:
+        """Assemble a full directed matrix from bounded rectangular Table requests."""
+
+        block_size = self.max_table_points // 2
+        size = len(points)
+        distances: list[list[object]] = [[None] * size for _ in range(size)]
+        durations: list[list[object]] = [[None] * size for _ in range(size)]
+
+        for source_start in range(0, size, block_size):
+            sources = points[source_start : source_start + block_size]
+            for destination_start in range(0, size, block_size):
+                destinations = points[destination_start : destination_start + block_size]
+                request_points = sources + destinations
+                source_indexes = ";".join(str(index) for index in range(len(sources)))
+                destination_indexes = ";".join(
+                    str(index)
+                    for index in range(len(sources), len(request_points))
+                )
+                payload = await self._request(
+                    f"/table/v1/{self.profile}/{self._coordinates(request_points)}",
+                    {
+                        "annotations": "distance,duration",
+                        "sources": source_indexes,
+                        "destinations": destination_indexes,
+                    },
+                )
+                block_distances = self._matrix(
+                    payload,
+                    "distances",
+                    len(sources),
+                    len(destinations),
+                )
+                block_durations = self._matrix(
+                    payload,
+                    "durations",
+                    len(sources),
+                    len(destinations),
+                )
+                for source_offset in range(len(sources)):
+                    source_index = source_start + source_offset
+                    for destination_offset in range(len(destinations)):
+                        destination_index = destination_start + destination_offset
+                        distances[source_index][destination_index] = block_distances[
+                            source_offset
+                        ][destination_offset]
+                        durations[source_index][destination_index] = block_durations[
+                            source_offset
+                        ][destination_offset]
+
+        return (
+            tuple(tuple(row) for row in distances),
+            tuple(tuple(row) for row in durations),
+        )
 
     async def get_route(
         self,
@@ -149,10 +223,31 @@ class OsrmRoutingProvider:
                 transport=self._transport,
             ) as client:
                 response = await client.get(path, params=params)
-                response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise OsrmRoutingProviderError(f"OSRM request failed: {exc}") from exc
-        raw_payload: object = response.json()
+        except httpx.TimeoutException as exc:
+            raise OsrmRoutingProviderError(
+                "OSRM не ответил за отведённое время. Повторите построение маршрутов."
+            ) from exc
+        except httpx.RequestError as exc:
+            raise OsrmRoutingProviderError(
+                "OSRM недоступен. Проверьте состояние сервиса маршрутизации."
+            ) from exc
+        try:
+            raw_payload: object = response.json()
+        except ValueError as exc:
+            if response.is_error:
+                raise OsrmRoutingProviderError(
+                    f"OSRM отклонил запрос маршрутизации (HTTP {response.status_code})."
+                ) from exc
+            raise OsrmRoutingProviderError("OSRM вернул некорректный JSON-ответ.") from exc
+        if response.is_error:
+            code = raw_payload.get("code") if isinstance(raw_payload, Mapping) else None
+            message = raw_payload.get("message") if isinstance(raw_payload, Mapping) else None
+            code_suffix = f", код {code}" if isinstance(code, str) else ""
+            message_suffix = f": {message[:300]}" if isinstance(message, str) else ""
+            raise OsrmRoutingProviderError(
+                f"OSRM отклонил запрос маршрутизации "
+                f"(HTTP {response.status_code}{code_suffix}){message_suffix}"
+            )
         if not isinstance(raw_payload, Mapping):
             raise OsrmRoutingProviderError("OSRM returned a non-object JSON response")
         code = raw_payload.get("code")
@@ -181,17 +276,18 @@ class OsrmRoutingProvider:
         cls,
         payload: Mapping[str, object],
         field: str,
-        size: int,
+        row_count: int,
+        column_count: int,
     ) -> tuple[tuple[object, ...], ...]:
-        """Validate one square OSRM matrix while preserving unreachable cells for diagnostics."""
+        """Validate one rectangular OSRM matrix while preserving unreachable cells."""
 
         rows = cls._sequence(payload.get(field), field)
-        if len(rows) != size:
+        if len(rows) != row_count:
             raise OsrmRoutingProviderError(f"OSRM {field} matrix has an unexpected row count")
         normalized: list[tuple[object, ...]] = []
         for row in rows:
             values = cls._sequence(row, field)
-            if len(values) != size:
+            if len(values) != column_count:
                 raise OsrmRoutingProviderError(
                     f"OSRM {field} matrix has an unexpected column count"
                 )

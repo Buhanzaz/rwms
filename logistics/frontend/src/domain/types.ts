@@ -98,6 +98,8 @@ export interface Zone {
   name: string;
   code: string;
   route_group: string;
+  delivery_price: number;
+  pickup_price: number;
   geometry: Polygon | MultiPolygon;
   version: number;
   priority: number;

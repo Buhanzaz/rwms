@@ -773,13 +773,44 @@ stable idempotency key. Automatic assignments on the warehouse-local current
 day or next day are rejected; urgent additions on those dates remain a manual
 logistics action. The simulator has no RWMS database access.
 
-For equal hard-date priority, the simulator planner minimizes depot cycles and
-returns before weighted distance. Delivery-before-pickup is a hard invariant
-inside each depot cycle, while a later cycle in the same shift may load new
-deliveries. Detour minute/ratio thresholds are warnings and score inputs when a
-mixed backhaul removes a separate cycle; capacity, hard windows, shift end and
-blocked directed zone transitions remain infeasible. This simulator-only
-planning rule does not change RWMS order or assignment ownership.
+The simulator planner globally ranks delivery urgency independently from pickup
+urgency. Delivery-before-pickup is a hard invariant inside each depot cycle,
+while a later cycle in the same shift may load new deliveries. A pickup may
+reduce depot returns only inside the configured minute/travel-ratio limits for
+additional road movement; its service time still participates in windows,
+workload and shift-end feasibility. The engine builds bounded nearest-first and
+longest-first delivery-only references and keeps the one with the strongest
+hard-date, last-date and total delivery coverage. If a mixed draft covers less,
+it restores that reference before scheduling pickup-only work. A nearby pickup
+is reattached only when a full reschedule of the affected shift suffix preserves
+all deliveries and hard constraints. Compact route-rank buckets bound dense
+equal-priority evaluation.
+Capacity, hard windows, shift end and blocked directed zone transitions remain
+infeasible. This simulator-only planning rule does not change RWMS order or
+assignment ownership.
+
+The simulator can append a bounded deterministic workload to an existing test
+scenario, including a one-day horizon with no alternatives. Its explicit
+regeneration command atomically replaces only simulator-generator requests
+whose preferred date is in the horizon; it never selects manual/RWMS requests
+and refuses to delete any generated task referenced by a saved plan. A seed
+controls interior point placement, request quantities and alternative dates,
+all of which remain inside the operator-selected date horizon; request creation
+still passes through the authoritative PostGIS classifier. Repeating one seed
+in an overlapping horizon is rejected before insertion, new generated requests
+use stable external source IDs, and legacy repeated generator rows are reported
+as `DUPLICATE_ASSIGNMENT_CONFLICT` rather than scheduled as a second customer
+visit. Generator projection matches the direction, exact point and primary
+logistics date rather than mutable display sequence, note or quantity only for
+legacy generator rows without a stable external ID;
+manual and RWMS requests remain distinct by authoritative source identity even
+when they share an address. Scenario clone and JSON export/import preserve the
+optional source system, external identity, source version and payload. Large
+private-OSRM matrices are reconstructed from bounded directed Table blocks rather than
+falling back to mock distances. Simulator zones own independent non-negative
+whole-ruble delivery and pickup prices. Those prices survive clone/import/export
+and are currently explanatory operator data, not a planner feasibility or RWMS
+billing input.
 
 A distinct explicit operator choice may publish one selected unassigned
 delivery as future `WAREHOUSE_DRIVERS` work. It carries no concrete driver, may

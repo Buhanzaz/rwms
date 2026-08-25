@@ -36,6 +36,8 @@ def _cutout_payload(
     name: str = "Внутренняя зона",
     route_group: str = "CITY",
     priority: int = 50,
+    delivery_price: int = 0,
+    pickup_price: int = 0,
     locked: bool = False,
 ) -> dict[str, object]:
     """Build the atomic source-cutout and inner-zone command body."""
@@ -47,6 +49,8 @@ def _cutout_payload(
             "code": code,
             "route_group": route_group,
             "priority": priority,
+            "delivery_price": delivery_price,
+            "pickup_price": pickup_price,
             "locked": locked,
         },
     }
@@ -74,6 +78,8 @@ async def test_http_relation_uuid_bind_and_backend_request_classification() -> N
                     "route_group": "CUSTOM",
                     "geometry": _geometry(37.0, 55.0, 38.0, 56.0),
                     "priority": 1,
+                    "delivery_price": 12_500,
+                    "pickup_price": 9_000,
                 },
             )
             second_response = await client.post(
@@ -87,8 +93,19 @@ async def test_http_relation_uuid_bind_and_backend_request_classification() -> N
                 },
             )
             assert first_response.status_code == second_response.status_code == 201
+            assert first_response.json()["delivery_price"] == 12_500
+            assert first_response.json()["pickup_price"] == 9_000
             first_id = first_response.json()["id"]
             second_id = second_response.json()["id"]
+
+            repriced = await client.patch(
+                f"/api/zones/{first_id}",
+                json={"delivery_price": 13_000, "pickup_price": 9_500},
+            )
+            assert repriced.status_code == 200
+            assert repriced.json()["delivery_price"] == 13_000
+            assert repriced.json()["pickup_price"] == 9_500
+            assert repriced.json()["version"] == 1
 
             relation = await client.post(
                 f"/api/scenarios/{scenario_id}/zone-relations",
@@ -206,6 +223,8 @@ async def test_http_zone_cutout_versions_geometry_and_preserves_request_snapshot
                     name="Центральная внутренняя зона",
                     route_group="CENTER",
                     priority=75,
+                    delivery_price=15_000,
+                    pickup_price=11_000,
                     locked=False,
                 ),
             )
@@ -223,6 +242,8 @@ async def test_http_zone_cutout_versions_geometry_and_preserves_request_snapshot
             assert inner_zone["name"] == "Центральная внутренняя зона"
             assert inner_zone["route_group"] == "CENTER"
             assert inner_zone["priority"] == 75
+            assert inner_zone["delivery_price"] == 15_000
+            assert inner_zone["pickup_price"] == 11_000
             assert inner_zone["version"] == 1
             assert inner_zone["locked"] is False
             assert len(inner_zone["geometry"]["coordinates"][0]) == 1
@@ -381,6 +402,8 @@ async def test_demo_plan_is_immediately_visible_editable_exportable_and_deletabl
             demo = await client.post(f"/api/scenarios/{scenario_id}/generate-demo")
             assert demo.status_code == 200
             planning_date = demo.json()["default_planning_date"]
+            assert demo.json()["settings"]["max_detour_minutes"] == 60
+            assert demo.json()["settings"]["max_detour_ratio"] == 3.0
 
             resources = {
                 resource: await client.get(f"/api/scenarios/{scenario_id}/{resource}")
@@ -403,6 +426,11 @@ async def test_demo_plan_is_immediately_visible_editable_exportable_and_deletabl
                 "shifts": 3,
                 "requests": 6,
             }
+            assert all(
+                relation["max_detour_minutes"] == 60
+                and relation["max_detour_ratio"] == 3.0
+                for relation in resources["zone-relations"].json()
+            )
 
             generated = await client.post(
                 f"/api/scenarios/{scenario_id}/plans/generate",
@@ -491,3 +519,64 @@ async def test_multi_day_demo_is_created_separately_with_parallel_resources() ->
             for target_id in (scenario_id, original.json()["id"]):
                 deleted = await client.delete(f"/api/scenarios/{target_id}")
                 assert deleted.status_code == 204, deleted.text
+
+
+@pytest.mark.asyncio
+async def test_http_workload_generator_can_regenerate_one_day() -> None:
+    """The public command defaults to one day and replaces its prior generated workload."""
+
+    transport = ASGITransport(app=create_app())
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        scenario = await client.post("/api/scenarios", json={"name": "Generator API"})
+        assert scenario.status_code == 201
+        scenario_id = scenario.json()["id"]
+        try:
+            zone = await client.post(
+                f"/api/scenarios/{scenario_id}/zones",
+                json={
+                    "name": "Generator zone",
+                    "code": "GEN",
+                    "route_group": "CUSTOM",
+                    "geometry": _geometry(37.0, 55.0, 38.0, 56.0),
+                },
+            )
+            assert zone.status_code == 201
+            generated = await client.post(
+                f"/api/scenarios/{scenario_id}/generate-workload",
+                json={
+                    "start_date": "2026-08-24",
+                    "deliveries_per_day": 1,
+                    "pickups_per_day": 1,
+                    "seed": 24,
+                },
+            )
+            assert generated.status_code == 201, generated.text
+            assert generated.json()["created_requests"] == 2
+            assert generated.json()["replaced_requests"] == 0
+
+            regenerated = await client.post(
+                f"/api/scenarios/{scenario_id}/generate-workload",
+                json={
+                    "start_date": "2026-08-24",
+                    "days": 1,
+                    "deliveries_per_day": 2,
+                    "pickups_per_day": 1,
+                    "alternative_dates_count": 0,
+                    "replace_existing_generated": True,
+                    "seed": 25,
+                },
+            )
+            assert regenerated.status_code == 201, regenerated.text
+            assert regenerated.json()["created_requests"] == 3
+            assert regenerated.json()["created_deliveries"] == 2
+            assert regenerated.json()["created_pickups"] == 1
+            assert regenerated.json()["replaced_requests"] == 2
+
+            requests = await client.get(f"/api/scenarios/{scenario_id}/requests")
+            assert requests.status_code == 200
+            assert len(requests.json()) == 3
+            assert all(request["zone_id"] == zone.json()["id"] for request in requests.json())
+            assert all(len(request["date_options"]) == 1 for request in requests.json())
+        finally:
+            deleted = await client.delete(f"/api/scenarios/{scenario_id}")
+            assert deleted.status_code == 204, deleted.text

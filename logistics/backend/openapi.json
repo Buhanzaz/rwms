@@ -359,10 +359,46 @@
       },
       "ExportRequest": {
         "additionalProperties": false,
-        "description": "Source request record inside a scenario document.",
+        "description": "Source request record with optional upstream lineage for reproducible imports.",
         "properties": {
           "data": {
             "$ref": "#/components/schemas/LogisticsRequestCreate"
+          },
+          "external_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Id"
+          },
+          "external_payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Payload"
+          },
+          "external_version": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Version"
           },
           "id": {
             "format": "uuid",
@@ -380,6 +416,18 @@
               }
             ],
             "title": "Scheduled Date"
+          },
+          "source_system": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source System"
           },
           "zone_classification_status": {
             "$ref": "#/components/schemas/ZoneClassificationStatus"
@@ -4113,6 +4161,147 @@
         "title": "WarehouseUpdate",
         "type": "object"
       },
+      "WorkloadGenerationDailyCount": {
+        "additionalProperties": false,
+        "description": "Created source-request counts attributed to one primary date.",
+        "properties": {
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "deliveries": {
+            "title": "Deliveries",
+            "type": "integer"
+          },
+          "pickups": {
+            "title": "Pickups",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "date",
+          "deliveries",
+          "pickups"
+        ],
+        "title": "WorkloadGenerationDailyCount",
+        "type": "object"
+      },
+      "WorkloadGenerationResult": {
+        "additionalProperties": false,
+        "description": "Auditable summary of one workload generation command.",
+        "properties": {
+          "created_deliveries": {
+            "title": "Created Deliveries",
+            "type": "integer"
+          },
+          "created_pickups": {
+            "title": "Created Pickups",
+            "type": "integer"
+          },
+          "created_requests": {
+            "title": "Created Requests",
+            "type": "integer"
+          },
+          "daily_counts": {
+            "items": {
+              "$ref": "#/components/schemas/WorkloadGenerationDailyCount"
+            },
+            "title": "Daily Counts",
+            "type": "array"
+          },
+          "end_date": {
+            "format": "date",
+            "title": "End Date",
+            "type": "string"
+          },
+          "replaced_requests": {
+            "default": 0,
+            "title": "Replaced Requests",
+            "type": "integer"
+          },
+          "scenario_id": {
+            "format": "uuid",
+            "title": "Scenario Id",
+            "type": "string"
+          },
+          "seed": {
+            "title": "Seed",
+            "type": "integer"
+          },
+          "start_date": {
+            "format": "date",
+            "title": "Start Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scenario_id",
+          "seed",
+          "start_date",
+          "end_date",
+          "created_requests",
+          "created_deliveries",
+          "created_pickups",
+          "daily_counts"
+        ],
+        "title": "WorkloadGenerationResult",
+        "type": "object"
+      },
+      "WorkloadGeneratorInput": {
+        "additionalProperties": false,
+        "description": "Bounded deterministic request workload generated for one scenario horizon.",
+        "properties": {
+          "alternative_dates_count": {
+            "default": 0,
+            "maximum": 3.0,
+            "minimum": 0.0,
+            "title": "Alternative Dates Count",
+            "type": "integer"
+          },
+          "days": {
+            "default": 1,
+            "maximum": 31.0,
+            "minimum": 1.0,
+            "title": "Days",
+            "type": "integer"
+          },
+          "deliveries_per_day": {
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Deliveries Per Day",
+            "type": "integer"
+          },
+          "pickups_per_day": {
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Pickups Per Day",
+            "type": "integer"
+          },
+          "replace_existing_generated": {
+            "default": false,
+            "title": "Replace Existing Generated",
+            "type": "boolean"
+          },
+          "seed": {
+            "title": "Seed",
+            "type": "integer"
+          },
+          "start_date": {
+            "format": "date",
+            "title": "Start Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start_date",
+          "deliveries_per_day",
+          "pickups_per_day",
+          "seed"
+        ],
+        "title": "WorkloadGeneratorInput",
+        "type": "object"
+      },
       "ZoneClassificationStatus": {
         "description": "Result of authoritative server-side point classification.",
         "enum": [
@@ -4129,6 +4318,12 @@
           "code": {
             "$ref": "#/components/schemas/NonBlank"
           },
+          "delivery_price": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Delivery Price",
+            "type": "integer"
+          },
           "geometry": {
             "$ref": "#/components/schemas/GeoJsonGeometry"
           },
@@ -4139,6 +4334,12 @@
           },
           "name": {
             "$ref": "#/components/schemas/NonBlank"
+          },
+          "pickup_price": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Pickup Price",
+            "type": "integer"
           },
           "priority": {
             "default": 0,
@@ -4165,12 +4366,24 @@
           "code": {
             "$ref": "#/components/schemas/NonBlank"
           },
+          "delivery_price": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Delivery Price",
+            "type": "integer"
+          },
           "locked": {
             "title": "Locked",
             "type": "boolean"
           },
           "name": {
             "$ref": "#/components/schemas/NonBlank"
+          },
+          "pickup_price": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Pickup Price",
+            "type": "integer"
           },
           "priority": {
             "title": "Priority",
@@ -4252,6 +4465,10 @@
             "title": "Created At",
             "type": "string"
           },
+          "delivery_price": {
+            "title": "Delivery Price",
+            "type": "integer"
+          },
           "geometry": {
             "$ref": "#/components/schemas/GeoJsonGeometry"
           },
@@ -4267,6 +4484,10 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "pickup_price": {
+            "title": "Pickup Price",
+            "type": "integer"
           },
           "priority": {
             "title": "Priority",
@@ -4305,6 +4526,8 @@
           "geometry",
           "version",
           "priority",
+          "delivery_price",
+          "pickup_price",
           "locked",
           "created_at",
           "updated_at"
@@ -4543,6 +4766,18 @@
               }
             ]
           },
+          "delivery_price": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Price"
+          },
           "geometry": {
             "anyOf": [
               {
@@ -4562,6 +4797,18 @@
                 "type": "null"
               }
             ]
+          },
+          "pickup_price": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pickup Price"
           },
           "priority": {
             "anyOf": [
@@ -6453,6 +6700,60 @@
           }
         },
         "summary": "Generate Demo",
+        "tags": [
+          "scenarios"
+        ]
+      }
+    },
+    "/api/scenarios/{scenario_id}/generate-workload": {
+      "post": {
+        "description": "Generate or safely regenerate a deterministic workload inside current zones.",
+        "operationId": "generate_workload_api_scenarios__scenario_id__generate_workload_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scenario_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Scenario Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkloadGeneratorInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkloadGenerationResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Generate Workload",
         "tags": [
           "scenarios"
         ]
