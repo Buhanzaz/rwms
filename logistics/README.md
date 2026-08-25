@@ -219,9 +219,12 @@ it can take several minutes; later starts reuse `logistics-osrm-data`. No
 routing or map key is required.
 
 On the current VPS, Nginx publishes the workspace at
-<https://77-90-158-90.sslip.io/logistics/>. This path-based reverse proxy build
-uses `VITE_APP_BASE_PATH=/logistics/` and
-`VITE_API_BASE_URL=/logistics/api`; the backend remains loopback-only.
+<https://77-90-158-90.sslip.io/logistics-simulator/>. This path-based reverse
+proxy build uses `VITE_APP_BASE_PATH=/logistics-simulator/` and
+`VITE_API_BASE_URL=/logistics-simulator/api`; the backend remains loopback-only.
+The `/logistics/**` namespace remains owned by the primary RWMS panel and must
+not redirect to or be shadowed by the standalone simulator. The public Nginx
+locations are recorded in `deploy/nginx-public-path.conf`.
 
 ### VPS-only RWMS bridge
 
@@ -313,7 +316,7 @@ make openapi
 | `PLANNER_DEFAULT_SEED` | `20260822` | Default deterministic tie-break seed |
 | `VITE_MAP_STYLE_URL` | empty | Frontend build arg; optional MapLibre style, empty enables grid mode |
 | `VITE_API_BASE_URL` | `/api` | Frontend build arg for the same-origin browser API prefix |
-| `VITE_APP_BASE_PATH` | `/` | Vite base; use `/logistics/` on the VPS with API `/logistics/api` |
+| `VITE_APP_BASE_PATH` | `/` | Vite base; use `/logistics-simulator/` on the VPS with API `/logistics-simulator/api` |
 | `RWMS_SYNC_ENABLED` | `false` | Explicitly enables authenticated RWMS import/apply operations |
 | `RWMS_LOGISTICS_BASE_URL` | empty | Private base URL of the RWMS logistics-service planning boundary |
 | `RWMS_TOKEN_URL` | empty | Private OAuth2 token endpoint used for client credentials |

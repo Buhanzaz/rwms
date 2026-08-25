@@ -1,6 +1,12 @@
 # VPS-only overlay. It keeps local `docker compose up --build` self-contained
 # while connecting only the simulator backend to a persistent private bridge.
 services:
+  frontend:
+    build:
+      args:
+        VITE_API_BASE_URL: /logistics-simulator/api
+        VITE_APP_BASE_PATH: /logistics-simulator/
+
   backend:
     networks:
       default: {}
