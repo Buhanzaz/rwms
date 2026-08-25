@@ -26,6 +26,21 @@
   logistics date. A date outside the accepted options fails unless
   `add_if_missing=true`, which records an explicit soft whole-day agreement in
   the same transaction.
+- `POST /api/scenarios/{scenario_id}/vehicle-configurations` creates one
+  vehicle together with its complete set of operational axle-load profiles.
+  `PUT /api/vehicles/{vehicle_id}/configuration` row-locks and replaces both
+  parts atomically. Duplicate configuration types fail before mutation, so the
+  browser never coordinates a partial-save saga. The lower-level trailer and
+  individual load-profile CRUD remains available for catalog administration.
+- Request/task transport carries cargo length, width, height and mass. All four
+  values must be present together or absent together; the backend never fills a
+  missing physical value with a routing guess. The current RWMS planning read
+  contract has no physical cargo fields, so an imported request is explicitly
+  incomplete for safe routing until the operator supplies the tuple through
+  the request editor.
+- Every Valhalla-built route segment returns `routing_profile_snapshot`,
+  `routing_provider`, `osm_data_version` and `routed_at`. The snapshot is the
+  effective vehicle/trailer/cargo state used on that exact leg.
 - Mutable plan operations carry `expected_version`; stale writes return HTTP
   409 with code `PLAN_VERSION_CONFLICT`.
 - Validation and manual edits return the complete updated plan with structured
@@ -80,37 +95,35 @@ date makes that request eligible only for the selected day. Explicitly adding
 a negotiated date retains all prior options.
 
 The reset-style four-zone demo uses scenario-local detour limits of 60 minutes
-and a 3.0 ratio so both mock routing and the local Moscow OSRM graph produce a
-minimum-cycle plan without delivery-only returns. Mock routing preserves the
-exact illustrative two-delivery/two-pickup cycle; OSRM may choose a shorter
-equivalent grouping across the same two mixed cycles. New ordinary scenarios
-retain the 35-minute and 1.5-ratio defaults.
+and a 3.0 ratio so both mock routing and the local Moscow Valhalla graph produce
+a minimum-cycle plan without delivery-only returns. Its vehicles, trailers,
+cargo and axle profiles are complete enough for exact truck routing. Mock
+routing preserves the illustrative two-delivery/two-pickup cycle; Valhalla
+selects the truck-safe road equivalent. New ordinary scenarios retain the
+35-minute and 1.5-ratio defaults.
 
 `POST /api/scenarios/{scenario_id}/generate-workload` creates a deterministic
 test workload in the selected scenario. `days` defaults to one and
 `alternative_dates_count` defaults to zero; the supported ranges remain one to
 31 days, zero to ten deliveries and pickups per day, and zero to three
 additional accepted dates. Every additional date must fit inside the horizon.
-The command fails explicitly with `NO_ZONES` when no polygon exists; otherwise
-it samples strictly interior points and creates each request through the normal
-server-side classifier.
+The command also carries one positive cargo length, width, height and mass for
+the batch (defaults 6000×2400×2400 mm and 2500 kg). It fails explicitly with
+`NO_ZONES` when no polygon exists; otherwise it samples strictly interior
+points, snaps each through the configured road provider while retaining zone
+coverage, and creates each request through the normal server-side classifier.
 
-By default the command appends. With `replace_existing_generated=true`, it
-atomically removes only requests owned by the simulator generator whose
-priority-100 date is inside the selected horizon and returns their count as
-`replaced_requests`. Manual and RWMS requests are outside this selection.
-Tasks referenced by any saved route or unassigned-plan result fence the whole
-operation with `409 GENERATED_REQUESTS_ALREADY_PLANNED`; neither the old batch
-nor any plan is deleted. A zero/zero replacement therefore acts as an explicit
-safe clear only when the selected generated rows have no plan references.
-Repeating the same seed in an overlapping horizon without replacement fails
-with `409 GENERATED_WORKLOAD_ALREADY_EXISTS`; it never inserts a second set of
-identical points. Newly generated requests have stable source IDs so concurrent
-or retried inserts remain protected by the existing external-source uniqueness
-constraint. Scenario clone and JSON export/import preserve each request's
-optional `source_system`, `external_id`, `external_version` and
-`external_payload`; older documents without those additive fields remain
-valid.
+Every run is replacement-only for generator-owned, unplanned requests whose
+primary date lies in the selected horizon. It returns the removed count as
+`replaced_requests`; manual/RWMS requests and other dates are outside this
+selection. `DELETE /api/scenarios/{scenario_id}/generated-workload?date=...`
+performs the same ownership check for one exact date without generating a
+replacement. Tasks referenced by any saved route or unassigned-plan result
+fence either command with `409 GENERATED_REQUESTS_ALREADY_PLANNED`; no row is
+deleted. Newly generated requests have stable source IDs so concurrent/retried
+inserts remain protected by external-source uniqueness. Scenario clone and
+JSON export/import preserve source identity plus truck/trailer/profile/segment
+snapshots; older additive-field-free documents remain valid.
 
 `POST /api/scenarios/{scenario_id}/plans/generate` plans unscheduled requests
 whose `date_options` contain the requested date, plus scheduled requests whose

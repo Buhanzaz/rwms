@@ -1,6 +1,8 @@
 """Public deterministic planning contracts, heuristic, and validation helpers."""
 
 from .engine import (
+    CandidateRouteEvaluator,
+    CandidateRouteRejected,
     NullProgressPublisher,
     PlannerEngine,
     ProgressPublisher,
@@ -51,6 +53,8 @@ from .workload import (
 )
 
 __all__ = [
+    "CandidateRouteEvaluator",
+    "CandidateRouteRejected",
     "DriverShift",
     "HeuristicPlanner",
     "LogisticsRequest",

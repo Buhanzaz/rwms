@@ -667,10 +667,30 @@ export interface paths {
         put?: never;
         /**
          * Generate Workload
-         * @description Generate or safely regenerate a deterministic workload inside current zones.
+         * @description Replace and regenerate deterministic workload inside current zones.
          */
         post: operations["generate_workload_api_scenarios__scenario_id__generate_workload_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scenarios/{scenario_id}/generated-workload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Workload
+         * @description Delete generator-owned workload for one exact preferred date.
+         */
+        delete: operations["delete_workload_api_scenarios__scenario_id__generated_workload_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -778,6 +798,50 @@ export interface paths {
          * @description Create a non-overlapping scenario shift.
          */
         post: operations["create_shift_api_scenarios__scenario_id__shifts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scenarios/{scenario_id}/trailers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Trailers
+         * @description List scenario-owned trailers.
+         */
+        get: operations["list_trailers_api_scenarios__scenario_id__trailers_get"];
+        put?: never;
+        /**
+         * Create Trailer
+         * @description Create a scenario-owned trailer.
+         */
+        post: operations["create_trailer_api_scenarios__scenario_id__trailers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scenarios/{scenario_id}/vehicle-configurations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Vehicle Configuration
+         * @description Atomically create a vehicle and its operational axle-load profiles.
+         */
+        post: operations["create_vehicle_configuration_api_scenarios__scenario_id__vehicle_configurations_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -904,6 +968,58 @@ export interface paths {
         patch: operations["update_shift_api_shifts__shift_id__patch"];
         trace?: never;
     };
+    "/api/trailers/{trailer_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Trailer
+         * @description Read one trailer by UUID.
+         */
+        get: operations["get_trailer_api_trailers__trailer_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Trailer
+         * @description Delete a trailer while vehicle defaults are cleared by the database.
+         */
+        delete: operations["delete_trailer_api_trailers__trailer_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Trailer
+         * @description Update a trailer's label, availability, or physical limits.
+         */
+        patch: operations["update_trailer_api_trailers__trailer_id__patch"];
+        trace?: never;
+    };
+    "/api/vehicle-load-profiles/{profile_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Vehicle Load Profile
+         * @description Delete one operational axle-load profile.
+         */
+        delete: operations["delete_vehicle_load_profile_api_vehicle_load_profiles__profile_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Vehicle Load Profile
+         * @description Update one operational axle-load profile.
+         */
+        patch: operations["update_vehicle_load_profile_api_vehicle_load_profiles__profile_id__patch"];
+        trace?: never;
+    };
     "/api/vehicles/{vehicle_id}": {
         parameters: {
             query?: never;
@@ -926,6 +1042,50 @@ export interface paths {
          * @description Update a vehicle.
          */
         patch: operations["update_vehicle_api_vehicles__vehicle_id__patch"];
+        trace?: never;
+    };
+    "/api/vehicles/{vehicle_id}/configuration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Vehicle Configuration
+         * @description Atomically replace vehicle fields and its complete axle-profile set.
+         */
+        put: operations["update_vehicle_configuration_api_vehicles__vehicle_id__configuration_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vehicles/{vehicle_id}/load-profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Vehicle Load Profiles
+         * @description List configured operational peak axle loads for one vehicle.
+         */
+        get: operations["list_vehicle_load_profiles_api_vehicles__vehicle_id__load_profiles_get"];
+        put?: never;
+        /**
+         * Create Vehicle Load Profile
+         * @description Create one vehicle operational axle-load profile.
+         */
+        post: operations["create_vehicle_load_profile_api_vehicles__vehicle_id__load_profiles_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/warehouses/{warehouse_id}": {
@@ -1360,6 +1520,16 @@ export interface components {
             geometry: {
                 [key: string]: unknown;
             };
+            /** Osm Data Version */
+            osm_data_version?: string | null;
+            /** Routed At */
+            routed_at?: string | null;
+            /** Routing Profile Snapshot */
+            routing_profile_snapshot?: {
+                [key: string]: unknown;
+            } | null;
+            /** Routing Provider */
+            routing_provider?: string | null;
             /** Sequence */
             sequence: number;
             /** To Stop Sequence */
@@ -1434,6 +1604,18 @@ export interface components {
             request_id: string;
         };
         /**
+         * ExportTrailer
+         * @description Trailer record inside a reproducible scenario document.
+         */
+        ExportTrailer: {
+            data: components["schemas"]["TrailerCreate"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+        };
+        /**
          * ExportUnassignedTask
          * @description Unassigned task result inside an exported plan.
          */
@@ -1461,6 +1643,23 @@ export interface components {
              * Format: uuid
              */
             id: string;
+        };
+        /**
+         * ExportVehicleLoadProfile
+         * @description Vehicle operational axle-load profile inside a scenario document.
+         */
+        ExportVehicleLoadProfile: {
+            data: components["schemas"]["VehicleLoadProfileCreate"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Vehicle Id
+             * Format: uuid
+             */
+            vehicle_id: string;
         };
         /**
          * ExportWarehouse
@@ -1561,6 +1760,14 @@ export interface components {
              * @default
              */
             address_label: string;
+            /** Cargo Height Mm */
+            cargo_height_mm?: number | null;
+            /** Cargo Length Mm */
+            cargo_length_mm?: number | null;
+            /** Cargo Weight Kg */
+            cargo_weight_kg?: number | null;
+            /** Cargo Width Mm */
+            cargo_width_mm?: number | null;
             /** Date Options */
             date_options?: components["schemas"]["RequestDateOptionInput"][];
             /** Latitude */
@@ -1601,6 +1808,14 @@ export interface components {
         LogisticsRequestRead: {
             /** Address Label */
             address_label: string;
+            /** Cargo Height Mm */
+            cargo_height_mm?: number | null;
+            /** Cargo Length Mm */
+            cargo_length_mm?: number | null;
+            /** Cargo Weight Kg */
+            cargo_weight_kg?: number | null;
+            /** Cargo Width Mm */
+            cargo_width_mm?: number | null;
             /**
              * Created At
              * Format: date-time
@@ -1663,6 +1878,14 @@ export interface components {
         LogisticsRequestUpdate: {
             /** Address Label */
             address_label?: string | null;
+            /** Cargo Height Mm */
+            cargo_height_mm?: number | null;
+            /** Cargo Length Mm */
+            cargo_length_mm?: number | null;
+            /** Cargo Weight Kg */
+            cargo_weight_kg?: number | null;
+            /** Cargo Width Mm */
+            cargo_width_mm?: number | null;
             /** Date Options */
             date_options?: components["schemas"]["RequestDateOptionInput"][] | null;
             /** Latitude */
@@ -1757,6 +1980,14 @@ export interface components {
          * @description Persisted vehicle-sized planning part.
          */
         PlanningTaskRead: {
+            /** Cargo Height Mm */
+            cargo_height_mm?: number | null;
+            /** Cargo Length Mm */
+            cargo_length_mm?: number | null;
+            /** Cargo Weight Kg */
+            cargo_weight_kg?: number | null;
+            /** Cargo Width Mm */
+            cargo_width_mm?: number | null;
             /**
              * Id
              * Format: uuid
@@ -2060,6 +2291,16 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /** Osm Data Version */
+            osm_data_version?: string | null;
+            /** Routed At */
+            routed_at?: string | null;
+            /** Routing Profile Snapshot */
+            routing_profile_snapshot?: {
+                [key: string]: unknown;
+            } | null;
+            /** Routing Provider */
+            routing_provider?: string | null;
             /** Sequence */
             sequence: number;
             /**
@@ -2314,6 +2555,10 @@ export interface components {
             schema_version: 1;
             /** Shifts */
             shifts: components["schemas"]["ExportShift"][];
+            /** Trailers */
+            trailers?: components["schemas"]["ExportTrailer"][];
+            /** Vehicle Load Profiles */
+            vehicle_load_profiles?: components["schemas"]["ExportVehicleLoadProfile"][];
             /** Vehicles */
             vehicles: components["schemas"]["ExportVehicle"][];
             /** Warehouses */
@@ -2758,6 +3003,160 @@ export interface components {
             sequence: number;
         };
         /**
+         * TrailerCreate
+         * @description Input for a scenario-owned trailer and its optional physical limits.
+         */
+        TrailerCreate: {
+            /**
+             * Active
+             * @default true
+             */
+            active: boolean;
+            /** Axle Count */
+            axle_count?: number | null;
+            /** Height Mm */
+            height_mm?: number | null;
+            /** Length Mm */
+            length_mm?: number | null;
+            /** Max Axle Load Kg */
+            max_axle_load_kg?: number | null;
+            /** Max Cargo Height Mm */
+            max_cargo_height_mm?: number | null;
+            /** Max Cargo Length Mm */
+            max_cargo_length_mm?: number | null;
+            /** Max Cargo Weight Kg */
+            max_cargo_weight_kg?: number | null;
+            /** Max Cargo Width Mm */
+            max_cargo_width_mm?: number | null;
+            /** Max Gross Weight Kg */
+            max_gross_weight_kg?: number | null;
+            /** Max Platform Payload Kg */
+            max_platform_payload_kg?: number | null;
+            name: components["schemas"]["NonBlank"];
+            /**
+             * Notes
+             * @default
+             */
+            notes: string;
+            /** Payload Capacity Kg */
+            payload_capacity_kg?: number | null;
+            /** Platform Height From Ground Mm */
+            platform_height_from_ground_mm?: number | null;
+            /** Platform Length Mm */
+            platform_length_mm?: number | null;
+            /** Platform Width Mm */
+            platform_width_mm?: number | null;
+            registration_number: components["schemas"]["NonBlank"];
+            /** Tare Weight Kg */
+            tare_weight_kg?: number | null;
+            /** Width Mm */
+            width_mm?: number | null;
+        };
+        /**
+         * TrailerRead
+         * @description Persisted trailer representation.
+         */
+        TrailerRead: {
+            /**
+             * Active
+             * @default true
+             */
+            active: boolean;
+            /** Axle Count */
+            axle_count?: number | null;
+            /** Height Mm */
+            height_mm?: number | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Length Mm */
+            length_mm?: number | null;
+            /** Max Axle Load Kg */
+            max_axle_load_kg?: number | null;
+            /** Max Cargo Height Mm */
+            max_cargo_height_mm?: number | null;
+            /** Max Cargo Length Mm */
+            max_cargo_length_mm?: number | null;
+            /** Max Cargo Weight Kg */
+            max_cargo_weight_kg?: number | null;
+            /** Max Cargo Width Mm */
+            max_cargo_width_mm?: number | null;
+            /** Max Gross Weight Kg */
+            max_gross_weight_kg?: number | null;
+            /** Max Platform Payload Kg */
+            max_platform_payload_kg?: number | null;
+            name: components["schemas"]["NonBlank"];
+            /**
+             * Notes
+             * @default
+             */
+            notes: string;
+            /** Payload Capacity Kg */
+            payload_capacity_kg?: number | null;
+            /** Platform Height From Ground Mm */
+            platform_height_from_ground_mm?: number | null;
+            /** Platform Length Mm */
+            platform_length_mm?: number | null;
+            /** Platform Width Mm */
+            platform_width_mm?: number | null;
+            registration_number: components["schemas"]["NonBlank"];
+            /**
+             * Scenario Id
+             * Format: uuid
+             */
+            scenario_id: string;
+            /** Tare Weight Kg */
+            tare_weight_kg?: number | null;
+            /** Width Mm */
+            width_mm?: number | null;
+        };
+        /**
+         * TrailerUpdate
+         * @description Partial update of trailer identity, availability, and physical limits.
+         */
+        TrailerUpdate: {
+            /** Active */
+            active?: boolean | null;
+            /** Axle Count */
+            axle_count?: number | null;
+            /** Height Mm */
+            height_mm?: number | null;
+            /** Length Mm */
+            length_mm?: number | null;
+            /** Max Axle Load Kg */
+            max_axle_load_kg?: number | null;
+            /** Max Cargo Height Mm */
+            max_cargo_height_mm?: number | null;
+            /** Max Cargo Length Mm */
+            max_cargo_length_mm?: number | null;
+            /** Max Cargo Weight Kg */
+            max_cargo_weight_kg?: number | null;
+            /** Max Cargo Width Mm */
+            max_cargo_width_mm?: number | null;
+            /** Max Gross Weight Kg */
+            max_gross_weight_kg?: number | null;
+            /** Max Platform Payload Kg */
+            max_platform_payload_kg?: number | null;
+            name?: components["schemas"]["NonBlank"] | null;
+            /** Notes */
+            notes?: string | null;
+            /** Payload Capacity Kg */
+            payload_capacity_kg?: number | null;
+            /** Platform Height From Ground Mm */
+            platform_height_from_ground_mm?: number | null;
+            /** Platform Length Mm */
+            platform_length_mm?: number | null;
+            /** Platform Width Mm */
+            platform_width_mm?: number | null;
+            registration_number?: components["schemas"]["NonBlank"] | null;
+            /** Tare Weight Kg */
+            tare_weight_kg?: number | null;
+            /** Width Mm */
+            width_mm?: number | null;
+        };
+        /**
          * UnassignedTaskRead
          * @description Task with actionable assignment failure detail.
          */
@@ -2797,8 +3196,26 @@ export interface components {
             type: string;
         };
         /**
+         * VehicleConfigurationCreate
+         * @description Atomic command for a new vehicle and all operational axle-load profiles.
+         */
+        VehicleConfigurationCreate: {
+            /** Load Profiles */
+            load_profiles?: components["schemas"]["VehicleLoadProfileCreate"][];
+            vehicle: components["schemas"]["VehicleCreate"];
+        };
+        /**
+         * VehicleConfigurationUpdate
+         * @description Atomic replacement of vehicle fields and its complete axle-profile set.
+         */
+        VehicleConfigurationUpdate: {
+            /** Load Profiles */
+            load_profiles: components["schemas"]["VehicleLoadProfileCreate"][];
+            vehicle: components["schemas"]["VehicleUpdate"];
+        };
+        /**
          * VehicleCreate
-         * @description Input for a vehicle and its routing speeds.
+         * @description Input for a vehicle, routing speeds, and optional physical truck data.
          */
         VehicleCreate: {
             /**
@@ -2816,18 +3233,124 @@ export interface components {
              * @default 65
              */
             average_speed_region: number;
+            /** Axle Count */
+            axle_count?: number | null;
+            /** Can Use Trailer */
+            can_use_trailer?: boolean | null;
             /**
              * Capacity
              * @default 2
              */
             capacity: number;
+            /** Combined Length With Trailer Mm */
+            combined_length_with_trailer_mm?: number | null;
+            /** Coupling Length Mm */
+            coupling_length_mm?: number | null;
+            /** Default Trailer Id */
+            default_trailer_id?: string | null;
+            /** Height Mm */
+            height_mm?: number | null;
+            /**
+             * Height Safety Margin Mm
+             * @default 0
+             */
+            height_safety_margin_mm: number;
+            /** Is Hgv */
+            is_hgv?: boolean | null;
+            /** Length Mm */
+            length_mm?: number | null;
+            /** Manufacturer */
+            manufacturer?: string | null;
+            /** Max Axle Load Kg */
+            max_axle_load_kg?: number | null;
+            /** Max Cargo Height Mm */
+            max_cargo_height_mm?: number | null;
+            /** Max Cargo Length Mm */
+            max_cargo_length_mm?: number | null;
+            /** Max Cargo Weight Kg */
+            max_cargo_weight_kg?: number | null;
+            /** Max Cargo Width Mm */
+            max_cargo_width_mm?: number | null;
+            /** Max Gross Weight Kg */
+            max_gross_weight_kg?: number | null;
+            /** Max Platform Payload Kg */
+            max_platform_payload_kg?: number | null;
+            /** Model */
+            model?: string | null;
             name: components["schemas"]["NonBlank"];
             /**
              * Notes
              * @default
              */
             notes: string;
+            /** Payload Capacity Kg */
+            payload_capacity_kg?: number | null;
+            /** Platform Height From Ground Mm */
+            platform_height_from_ground_mm?: number | null;
+            /** Platform Length Mm */
+            platform_length_mm?: number | null;
+            /** Platform Width Mm */
+            platform_width_mm?: number | null;
             registration_number: components["schemas"]["NonBlank"];
+            /** Tare Weight Kg */
+            tare_weight_kg?: number | null;
+            /** Vehicle Type */
+            vehicle_type?: string | null;
+            /**
+             * Weight Safety Margin Kg
+             * @default 0
+             */
+            weight_safety_margin_kg: number;
+            /** Width Mm */
+            width_mm?: number | null;
+            /**
+             * Width Safety Margin Mm
+             * @default 0
+             */
+            width_safety_margin_mm: number;
+        };
+        /**
+         * VehicleLoadProfileCreate
+         * @description Input for one measured operational peak axle-load value.
+         */
+        VehicleLoadProfileCreate: {
+            configuration_type: components["schemas"]["VehicleLoadProfileType"];
+            /** Max Actual Axle Load Kg */
+            max_actual_axle_load_kg: number;
+        };
+        /**
+         * VehicleLoadProfileRead
+         * @description Persisted vehicle operational axle-load profile.
+         */
+        VehicleLoadProfileRead: {
+            configuration_type: components["schemas"]["VehicleLoadProfileType"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Max Actual Axle Load Kg */
+            max_actual_axle_load_kg: number;
+            /**
+             * Vehicle Id
+             * Format: uuid
+             */
+            vehicle_id: string;
+        };
+        /**
+         * VehicleLoadProfileType
+         * @description Operational vehicle states with explicitly measured peak axle loads.
+         * @enum {string}
+         */
+        VehicleLoadProfileType: "EMPTY_TRUCK" | "CARGO_ON_TRUCK" | "EMPTY_COMBINATION" | "CARGO_ON_TRUCK_WITH_TRAILER" | "CARGO_ON_TRAILER_WITH_TRAILER" | "TWO_CARGO_SPLIT";
+        /**
+         * VehicleLoadProfileUpdate
+         * @description Partial update of one vehicle operational axle-load profile.
+         */
+        VehicleLoadProfileUpdate: {
+            configuration_type?: components["schemas"]["VehicleLoadProfileType"] | null;
+            /** Max Actual Axle Load Kg */
+            max_actual_axle_load_kg?: number | null;
         };
         /**
          * VehicleRead
@@ -2849,28 +3372,91 @@ export interface components {
              * @default 65
              */
             average_speed_region: number;
+            /** Axle Count */
+            axle_count?: number | null;
+            /** Can Use Trailer */
+            can_use_trailer?: boolean | null;
             /**
              * Capacity
              * @default 2
              */
             capacity: number;
+            /** Combined Length With Trailer Mm */
+            combined_length_with_trailer_mm?: number | null;
+            /** Coupling Length Mm */
+            coupling_length_mm?: number | null;
+            /** Default Trailer Id */
+            default_trailer_id?: string | null;
+            /** Height Mm */
+            height_mm?: number | null;
+            /**
+             * Height Safety Margin Mm
+             * @default 0
+             */
+            height_safety_margin_mm: number;
             /**
              * Id
              * Format: uuid
              */
             id: string;
+            /** Is Hgv */
+            is_hgv?: boolean | null;
+            /** Length Mm */
+            length_mm?: number | null;
+            /** Manufacturer */
+            manufacturer?: string | null;
+            /** Max Axle Load Kg */
+            max_axle_load_kg?: number | null;
+            /** Max Cargo Height Mm */
+            max_cargo_height_mm?: number | null;
+            /** Max Cargo Length Mm */
+            max_cargo_length_mm?: number | null;
+            /** Max Cargo Weight Kg */
+            max_cargo_weight_kg?: number | null;
+            /** Max Cargo Width Mm */
+            max_cargo_width_mm?: number | null;
+            /** Max Gross Weight Kg */
+            max_gross_weight_kg?: number | null;
+            /** Max Platform Payload Kg */
+            max_platform_payload_kg?: number | null;
+            /** Model */
+            model?: string | null;
             name: components["schemas"]["NonBlank"];
             /**
              * Notes
              * @default
              */
             notes: string;
+            /** Payload Capacity Kg */
+            payload_capacity_kg?: number | null;
+            /** Platform Height From Ground Mm */
+            platform_height_from_ground_mm?: number | null;
+            /** Platform Length Mm */
+            platform_length_mm?: number | null;
+            /** Platform Width Mm */
+            platform_width_mm?: number | null;
             registration_number: components["schemas"]["NonBlank"];
             /**
              * Scenario Id
              * Format: uuid
              */
             scenario_id: string;
+            /** Tare Weight Kg */
+            tare_weight_kg?: number | null;
+            /** Vehicle Type */
+            vehicle_type?: string | null;
+            /**
+             * Weight Safety Margin Kg
+             * @default 0
+             */
+            weight_safety_margin_kg: number;
+            /** Width Mm */
+            width_mm?: number | null;
+            /**
+             * Width Safety Margin Mm
+             * @default 0
+             */
+            width_safety_margin_mm: number;
         };
         /**
          * VehicleUpdate
@@ -2883,12 +3469,66 @@ export interface components {
             average_speed_city?: number | null;
             /** Average Speed Region */
             average_speed_region?: number | null;
+            /** Axle Count */
+            axle_count?: number | null;
+            /** Can Use Trailer */
+            can_use_trailer?: boolean | null;
             /** Capacity */
             capacity?: number | null;
+            /** Combined Length With Trailer Mm */
+            combined_length_with_trailer_mm?: number | null;
+            /** Coupling Length Mm */
+            coupling_length_mm?: number | null;
+            /** Default Trailer Id */
+            default_trailer_id?: string | null;
+            /** Height Mm */
+            height_mm?: number | null;
+            /** Height Safety Margin Mm */
+            height_safety_margin_mm?: number | null;
+            /** Is Hgv */
+            is_hgv?: boolean | null;
+            /** Length Mm */
+            length_mm?: number | null;
+            /** Manufacturer */
+            manufacturer?: string | null;
+            /** Max Axle Load Kg */
+            max_axle_load_kg?: number | null;
+            /** Max Cargo Height Mm */
+            max_cargo_height_mm?: number | null;
+            /** Max Cargo Length Mm */
+            max_cargo_length_mm?: number | null;
+            /** Max Cargo Weight Kg */
+            max_cargo_weight_kg?: number | null;
+            /** Max Cargo Width Mm */
+            max_cargo_width_mm?: number | null;
+            /** Max Gross Weight Kg */
+            max_gross_weight_kg?: number | null;
+            /** Max Platform Payload Kg */
+            max_platform_payload_kg?: number | null;
+            /** Model */
+            model?: string | null;
             name?: components["schemas"]["NonBlank"] | null;
             /** Notes */
             notes?: string | null;
+            /** Payload Capacity Kg */
+            payload_capacity_kg?: number | null;
+            /** Platform Height From Ground Mm */
+            platform_height_from_ground_mm?: number | null;
+            /** Platform Length Mm */
+            platform_length_mm?: number | null;
+            /** Platform Width Mm */
+            platform_width_mm?: number | null;
             registration_number?: components["schemas"]["NonBlank"] | null;
+            /** Tare Weight Kg */
+            tare_weight_kg?: number | null;
+            /** Vehicle Type */
+            vehicle_type?: string | null;
+            /** Weight Safety Margin Kg */
+            weight_safety_margin_kg?: number | null;
+            /** Width Mm */
+            width_mm?: number | null;
+            /** Width Safety Margin Mm */
+            width_safety_margin_mm?: number | null;
         };
         /**
          * WarehouseCreate
@@ -3004,6 +3644,24 @@ export interface components {
             working_day_start?: string | null;
         };
         /**
+         * WorkloadDeletionResult
+         * @description Summary of an idempotent generated-workload deletion for one date.
+         */
+        WorkloadDeletionResult: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Deleted Requests */
+            deleted_requests: number;
+            /**
+             * Scenario Id
+             * Format: uuid
+             */
+            scenario_id: string;
+        };
+        /**
          * WorkloadGenerationDailyCount
          * @description Created source-request counts attributed to one primary date.
          */
@@ -3065,6 +3723,26 @@ export interface components {
              */
             alternative_dates_count: number;
             /**
+             * Cargo Height Mm
+             * @default 2400
+             */
+            cargo_height_mm: number;
+            /**
+             * Cargo Length Mm
+             * @default 6000
+             */
+            cargo_length_mm: number;
+            /**
+             * Cargo Weight Kg
+             * @default 2500
+             */
+            cargo_weight_kg: number;
+            /**
+             * Cargo Width Mm
+             * @default 2400
+             */
+            cargo_width_mm: number;
+            /**
              * Days
              * @default 1
              */
@@ -3073,11 +3751,6 @@ export interface components {
             deliveries_per_day: number;
             /** Pickups Per Day */
             pickups_per_day: number;
-            /**
-             * Replace Existing Generated
-             * @default false
-             */
-            replace_existing_generated: boolean;
             /** Seed */
             seed: number;
             /**
@@ -4659,6 +5332,39 @@ export interface operations {
             };
         };
     };
+    delete_workload_api_scenarios__scenario_id__generated_workload_delete: {
+        parameters: {
+            query: {
+                date: string;
+            };
+            header?: never;
+            path: {
+                scenario_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkloadDeletionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     generate_plan_api_scenarios__scenario_id__plans_generate_post: {
         parameters: {
             query?: never;
@@ -4879,6 +5585,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ShiftRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_trailers_api_scenarios__scenario_id__trailers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scenario_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrailerRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_trailer_api_scenarios__scenario_id__trailers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scenario_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrailerCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrailerRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_vehicle_configuration_api_scenarios__scenario_id__vehicle_configurations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scenario_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VehicleConfigurationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VehicleRead"];
                 };
             };
             /** @description Validation Error */
@@ -5220,6 +6027,165 @@ export interface operations {
             };
         };
     };
+    get_trailer_api_trailers__trailer_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trailer_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrailerRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_trailer_api_trailers__trailer_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trailer_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_trailer_api_trailers__trailer_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trailer_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrailerUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrailerRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_vehicle_load_profile_api_vehicle_load_profiles__profile_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_vehicle_load_profile_api_vehicle_load_profiles__profile_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VehicleLoadProfileUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VehicleLoadProfileRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_vehicle_api_vehicles__vehicle_id__delete: {
         parameters: {
             query?: never;
@@ -5271,6 +6237,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VehicleRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_vehicle_configuration_api_vehicles__vehicle_id__configuration_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vehicle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VehicleConfigurationUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VehicleRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_vehicle_load_profiles_api_vehicles__vehicle_id__load_profiles_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vehicle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VehicleLoadProfileRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_vehicle_load_profile_api_vehicles__vehicle_id__load_profiles_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vehicle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VehicleLoadProfileCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VehicleLoadProfileRead"];
                 };
             };
             /** @description Validation Error */

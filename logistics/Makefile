@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help up down logs ps reset-db test test-backend test-frontend typecheck lint openapi e2e
+.PHONY: help up down logs ps reset-db test test-backend test-frontend test-valhalla-truck typecheck lint openapi e2e
 
 help:
 	@awk 'BEGIN {FS = ":.*## "; printf "Logistics simulator commands:\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -27,6 +27,9 @@ test-backend: ## Run backend unit/property tests and static checks in the image.
 
 test-frontend: ## Run frontend unit tests, typecheck, lint and production build.
 	docker compose run --rm frontend-test sh -ec 'npm run test:run && npm run typecheck && npm run lint && npm run build'
+
+test-valhalla-truck: ## Build a disposable tagged OSM graph and verify real truck restrictions.
+	./scripts/test-valhalla-truck-graph.sh
 
 typecheck: ## Run both Python and TypeScript type checks.
 	docker compose run --rm backend-test mypy app

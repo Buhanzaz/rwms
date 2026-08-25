@@ -10,6 +10,7 @@ import type {
   Driver,
   LogisticsRequest,
   ScenarioWorkspace,
+  Trailer,
   Vehicle,
   Zone,
 } from '../src/domain/types';
@@ -82,6 +83,15 @@ const vehicle: Vehicle = {
   notes: '',
 };
 
+const trailer: Trailer = {
+  id: 'trailer-1', scenario_id: 'scenario-id', name: 'Прицеп 1', registration_number: 'ТР1234', active: true,
+  tare_weight_kg: 4000, max_gross_weight_kg: 10000, length_mm: 8000, width_mm: 2500, height_mm: 2000,
+  platform_length_mm: 6000, platform_width_mm: 2500, platform_height_from_ground_mm: 1000,
+  max_platform_payload_kg: 5000, payload_capacity_kg: 5000, axle_count: 2, max_axle_load_kg: 7000,
+  max_cargo_length_mm: 6500, max_cargo_width_mm: 2550, max_cargo_height_mm: 3000, max_cargo_weight_kg: 4000,
+  notes: '',
+};
+
 function requestFixture(overrides: Partial<LogisticsRequest>): LogisticsRequest {
   return {
     id: 'request-id',
@@ -126,6 +136,7 @@ function workspaceFixture(): ScenarioWorkspace {
     zone_relations: [],
     drivers,
     vehicles: [vehicle],
+    trailers: [trailer],
     shifts: [],
     requests: [],
   };
@@ -144,6 +155,7 @@ function inspectorProps(workspace: ScenarioWorkspace): ComponentProps<typeof Ins
     onGenerateDemo: () => undefined,
     onGenerateMultiDayDemo: () => undefined,
     onGenerateWorkload: () => undefined,
+    onDeleteGeneratedWorkload: () => undefined,
     onCloneScenario: () => undefined,
     onDeleteScenario: () => undefined,
     onExport: () => undefined,
@@ -166,6 +178,39 @@ function inspectorProps(workspace: ScenarioWorkspace): ComponentProps<typeof Ins
 
 afterEach(() => {
   useUiStore.setState({ section: 'SCENARIO' });
+});
+
+describe('scenario workload actions', () => {
+  it('exposes deletion of generated load as a separate scenario action', async () => {
+    const user = userEvent.setup();
+    const onDeleteGeneratedWorkload = vi.fn<ComponentProps<typeof Inspector>['onDeleteGeneratedWorkload']>();
+
+    render(<Inspector {...inspectorProps(workspaceFixture())} onDeleteGeneratedWorkload={onDeleteGeneratedWorkload} />);
+
+    await user.click(screen.getByRole('button', { name: 'Удалить нагрузку' }));
+    expect(onDeleteGeneratedWorkload).toHaveBeenCalledOnce();
+  });
+});
+
+describe('truck resource catalog', () => {
+  it('exposes create, edit, and delete actions for trailers next to vehicles', async () => {
+    const user = userEvent.setup();
+    const onCreate = vi.fn<ComponentProps<typeof Inspector>['onCreate']>();
+    const onEdit = vi.fn<ComponentProps<typeof Inspector>['onEdit']>();
+    const onDelete = vi.fn<ComponentProps<typeof Inspector>['onDelete']>();
+    useUiStore.setState({ section: 'VEHICLES' });
+
+    render(<Inspector {...inspectorProps(workspaceFixture())} onCreate={onCreate} onEdit={onEdit} onDelete={onDelete} />);
+    await user.click(screen.getByRole('button', { name: 'Добавить прицеп' }));
+    expect(onCreate).toHaveBeenCalledWith('trailer');
+
+    const trailerCard = screen.getByText('Прицеп 1').closest('article');
+    expect(trailerCard).not.toBeNull();
+    await user.click(within(trailerCard!).getByRole('button', { name: 'Изменить' }));
+    expect(onEdit).toHaveBeenCalledWith('trailer', trailer);
+    await user.click(within(trailerCard!).getByRole('button', { name: 'Удалить' }));
+    expect(onDelete).toHaveBeenCalledWith('trailer', trailer.id, trailer.name);
+  });
 });
 
 describe('zone editor', () => {

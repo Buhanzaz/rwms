@@ -23,7 +23,9 @@ from app.models import (
     RequestDateOption,
     RouteStop,
     Scenario,
+    Trailer,
     Vehicle,
+    VehicleLoadProfile,
     Warehouse,
     Zone,
     ZoneRelation,
@@ -41,7 +43,13 @@ from app.schemas.domain import (
     RwmsPlanningRequest,
     ShiftCreate,
     ShiftUpdate,
+    TrailerCreate,
+    TrailerUpdate,
+    VehicleConfigurationCreate,
+    VehicleConfigurationUpdate,
     VehicleCreate,
+    VehicleLoadProfileCreate,
+    VehicleLoadProfileUpdate,
     VehicleUpdate,
     WarehouseCreate,
     WarehouseUpdate,
@@ -53,6 +61,12 @@ from app.schemas.domain import (
 )
 
 RWMS_SOURCE_SYSTEM = "RWMS"
+CARGO_PHYSICAL_FIELDS = (
+    "cargo_length_mm",
+    "cargo_width_mm",
+    "cargo_height_mm",
+    "cargo_weight_kg",
+)
 
 
 def split_quantities(quantity: int, capacity: int = 2) -> list[int]:
@@ -321,6 +335,12 @@ async def create_vehicle(
     """Create a vehicle within one scenario."""
 
     await require_scenario(session, scenario_id)
+    await _validate_vehicle_trailer_assignment(
+        session,
+        scenario_id=scenario_id,
+        can_use_trailer=payload.can_use_trailer,
+        trailer_id=payload.default_trailer_id,
+    )
     entity = Vehicle(scenario_id=scenario_id, **payload.model_dump())
     session.add(entity)
     await session.flush()
@@ -333,7 +353,183 @@ async def update_vehicle(
     """Update vehicle availability, capacity, speeds, or labels."""
 
     entity = await get_required(session, Vehicle, vehicle_id, "vehicle")
+    values = payload.model_dump(exclude_unset=True)
+    await _validate_vehicle_trailer_assignment(
+        session,
+        scenario_id=entity.scenario_id,
+        can_use_trailer=values.get("can_use_trailer", entity.can_use_trailer),
+        trailer_id=values.get("default_trailer_id", entity.default_trailer_id),
+    )
     apply_update(entity, payload)
+    await session.flush()
+    return entity
+
+
+async def create_vehicle_configuration(
+    session: AsyncSession,
+    scenario_id: UUID,
+    payload: VehicleConfigurationCreate,
+) -> Vehicle:
+    """Create a vehicle and its complete axle-profile set in one transaction."""
+
+    entity = await create_vehicle(session, scenario_id, payload.vehicle)
+    session.add_all(
+        VehicleLoadProfile(vehicle_id=entity.id, **profile.model_dump(mode="json"))
+        for profile in payload.load_profiles
+    )
+    await session.flush()
+    return entity
+
+
+async def update_vehicle_configuration(
+    session: AsyncSession,
+    vehicle_id: UUID,
+    payload: VehicleConfigurationUpdate,
+) -> Vehicle:
+    """Replace vehicle fields and axle profiles atomically under a row lock."""
+
+    entity = await session.scalar(
+        select(Vehicle)
+        .where(Vehicle.id == vehicle_id)
+        .options(selectinload(Vehicle.load_profiles))
+        .with_for_update()
+    )
+    if entity is None:
+        raise not_found("vehicle", vehicle_id)
+    values = payload.vehicle.model_dump(exclude_unset=True)
+    await _validate_vehicle_trailer_assignment(
+        session,
+        scenario_id=entity.scenario_id,
+        can_use_trailer=values.get("can_use_trailer", entity.can_use_trailer),
+        trailer_id=values.get("default_trailer_id", entity.default_trailer_id),
+    )
+    apply_update(entity, payload.vehicle)
+    entity.load_profiles.clear()
+    await session.flush()
+    entity.load_profiles.extend(
+        VehicleLoadProfile(**profile.model_dump(mode="json"))
+        for profile in payload.load_profiles
+    )
+    await session.flush()
+    return entity
+
+
+async def _validate_vehicle_trailer_assignment(
+    session: AsyncSession,
+    *,
+    scenario_id: UUID,
+    can_use_trailer: object,
+    trailer_id: object,
+) -> None:
+    """Ensure a default trailer is explicitly supported and scenario-owned."""
+
+    if trailer_id is None:
+        return
+    if can_use_trailer is not True:
+        raise ApiError(
+            422,
+            "DEFAULT_TRAILER_REQUIRES_CAPABILITY",
+            "A default trailer requires can_use_trailer=true",
+        )
+    if not isinstance(trailer_id, UUID):
+        raise ApiError(422, "INVALID_TRAILER_ID", "default_trailer_id must be a UUID")
+    trailer = await get_required(session, Trailer, trailer_id, "trailer")
+    if trailer.scenario_id != scenario_id:
+        raise ApiError(
+            422,
+            "TRAILER_SCENARIO_MISMATCH",
+            "The default trailer must belong to the vehicle scenario",
+        )
+
+
+async def create_trailer(
+    session: AsyncSession, scenario_id: UUID, payload: TrailerCreate
+) -> Trailer:
+    """Create a trailer owned by one scenario."""
+
+    await require_scenario(session, scenario_id)
+    entity = Trailer(scenario_id=scenario_id, **payload.model_dump())
+    session.add(entity)
+    await session.flush()
+    return entity
+
+
+async def update_trailer(
+    session: AsyncSession, trailer_id: UUID, payload: TrailerUpdate
+) -> Trailer:
+    """Update trailer identity, availability, or physical specification."""
+
+    entity = await get_required(session, Trailer, trailer_id, "trailer")
+    apply_update(entity, payload)
+    await session.flush()
+    return entity
+
+
+async def list_vehicle_load_profiles(
+    session: AsyncSession, vehicle_id: UUID
+) -> list[VehicleLoadProfile]:
+    """List one vehicle's operational axle-load profiles in stable type order."""
+
+    await get_required(session, Vehicle, vehicle_id, "vehicle")
+    result = await session.scalars(
+        select(VehicleLoadProfile)
+        .where(VehicleLoadProfile.vehicle_id == vehicle_id)
+        .order_by(VehicleLoadProfile.configuration_type, VehicleLoadProfile.id)
+    )
+    return list(result)
+
+
+async def create_vehicle_load_profile(
+    session: AsyncSession,
+    vehicle_id: UUID,
+    payload: VehicleLoadProfileCreate,
+) -> VehicleLoadProfile:
+    """Create one exact operational axle-load value for a vehicle state."""
+
+    await get_required(session, Vehicle, vehicle_id, "vehicle")
+    duplicate = await session.scalar(
+        select(VehicleLoadProfile.id).where(
+            VehicleLoadProfile.vehicle_id == vehicle_id,
+            VehicleLoadProfile.configuration_type == payload.configuration_type.value,
+        )
+    )
+    if duplicate is not None:
+        raise ApiError(
+            409,
+            "VEHICLE_LOAD_PROFILE_DUPLICATE",
+            "This vehicle already has the requested operational load profile",
+        )
+    entity = VehicleLoadProfile(vehicle_id=vehicle_id, **payload.model_dump(mode="json"))
+    session.add(entity)
+    await session.flush()
+    return entity
+
+
+async def update_vehicle_load_profile(
+    session: AsyncSession,
+    profile_id: UUID,
+    payload: VehicleLoadProfileUpdate,
+) -> VehicleLoadProfile:
+    """Update an operational axle-load value without creating duplicate states."""
+
+    entity = await get_required(session, VehicleLoadProfile, profile_id, "vehicle_load_profile")
+    values = payload.model_dump(exclude_unset=True, mode="json")
+    configuration_type = values.get("configuration_type", entity.configuration_type)
+    duplicate = await session.scalar(
+        select(VehicleLoadProfile.id).where(
+            VehicleLoadProfile.vehicle_id == entity.vehicle_id,
+            VehicleLoadProfile.configuration_type == configuration_type,
+            VehicleLoadProfile.id != entity.id,
+        )
+    )
+    if duplicate is not None:
+        raise ApiError(
+            409,
+            "VEHICLE_LOAD_PROFILE_DUPLICATE",
+            "This vehicle already has the requested operational load profile",
+        )
+    for field, value in values.items():
+        setattr(entity, field, value)
     await session.flush()
     return entity
 
@@ -461,6 +657,10 @@ def _build_task(request: LogisticsRequest, part_number: int, quantity: int) -> P
         request=request,
         part_number=part_number,
         quantity=quantity,
+        cargo_length_mm=request.cargo_length_mm,
+        cargo_width_mm=request.cargo_width_mm,
+        cargo_height_mm=request.cargo_height_mm,
+        cargo_weight_kg=request.cargo_weight_kg,
         type=request.type,
         latitude=request.latitude,
         longitude=request.longitude,
@@ -657,7 +857,27 @@ async def update_request(
 
     entity = await get_request(session, request_id, for_update=True)
     changed = payload.model_dump(exclude_unset=True, exclude={"date_options"})
-    task_fields = {"type", "latitude", "longitude", "quantity", "service_minutes", "priority"}
+    effective_cargo = {
+        field: changed.get(field, getattr(entity, field)) for field in CARGO_PHYSICAL_FIELDS
+    }
+    supplied_cargo_values = tuple(effective_cargo.values())
+    if any(value is not None for value in supplied_cargo_values) and any(
+        value is None for value in supplied_cargo_values
+    ):
+        raise ApiError(
+            422,
+            "INCOMPLETE_CARGO_DIMENSIONS",
+            "Cargo dimensions and weight must be supplied or cleared together",
+        )
+    task_fields = {
+        "type",
+        "latitude",
+        "longitude",
+        "quantity",
+        "service_minutes",
+        "priority",
+        *CARGO_PHYSICAL_FIELDS,
+    }
     regenerate_tasks = bool(task_fields.intersection(changed))
     moved = "latitude" in changed or "longitude" in changed
     for field, value in changed.items():

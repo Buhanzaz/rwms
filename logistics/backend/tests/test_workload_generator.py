@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import date
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from geoalchemy2.shape import to_shape
@@ -16,6 +16,7 @@ from app.config import Settings
 from app.errors import ApiError
 from app.models import LogisticsRequest, RoutePlan, Scenario, UnassignedTask, Zone
 from app.models.domain import RequestStatus, RequestType, ZoneClassificationStatus
+from app.routing import GeoPoint, MockRoutingProvider, RoadSnapper, SnappedPoint
 from app.schemas.domain import (
     GeoJsonGeometry,
     LogisticsRequestCreate,
@@ -23,6 +24,7 @@ from app.schemas.domain import (
     ScenarioCreate,
     ScenarioSettings,
     WarehouseCreate,
+    WorkloadGenerationResult,
     WorkloadGeneratorInput,
     ZoneCreate,
 )
@@ -30,10 +32,44 @@ from app.services import catalog, scenarios
 from app.services.planner_runtime import RuntimePlannerFacade
 from app.services.workload_generator import (
     GENERATOR_SOURCE_SYSTEM,
+    delete_generated_workload,
     generate_scenario_workload,
 )
 
 pytestmark = pytest.mark.integration
+
+
+async def _generate_workload(
+    session: AsyncSession,
+    scenario_id: UUID,
+    payload: WorkloadGeneratorInput,
+    snapper: RoadSnapper | None = None,
+) -> WorkloadGenerationResult:
+    """Generate through the offline snapper unless a focused boundary fake is supplied."""
+
+    return await generate_scenario_workload(
+        session,
+        scenario_id,
+        payload,
+        snapper or MockRoutingProvider(),
+    )
+
+
+class StubRoadSnapper:
+    """Return configured road snaps while recording every sampled candidate."""
+
+    def __init__(self, results: tuple[SnappedPoint, ...]) -> None:
+        if not results:
+            raise ValueError("at least one snap result is required")
+        self._results = results
+        self.candidates: list[GeoPoint] = []
+
+    async def snap_point(self, point: GeoPoint) -> SnappedPoint:
+        """Return the next result, repeating the final result after exhaustion."""
+
+        self.candidates.append(point)
+        index = min(len(self.candidates) - 1, len(self._results) - 1)
+        return self._results[index]
 
 
 def test_generated_source_identity_uses_business_point_not_display_sequence() -> None:
@@ -239,7 +275,7 @@ async def test_generation_creates_exact_dated_classified_workload(
         seed=314159,
     )
 
-    result = await generate_scenario_workload(db_session, scenario.id, payload)
+    result = await _generate_workload(db_session, scenario.id, payload)
     requests = await catalog.list_requests(db_session, scenario.id)
 
     assert result.created_requests == len(requests) == 9
@@ -257,7 +293,6 @@ async def test_generation_creates_exact_dated_classified_workload(
     geometry = to_shape(zone.geometry)
     for request in requests:
         assert request.status == RequestStatus.READY
-        assert request.scheduled_date is None
         assert request.service_minutes == 37
         assert request.quantity in (1, 2)
         assert request.zone_id is not None
@@ -270,6 +305,7 @@ async def test_generation_creates_exact_dated_classified_workload(
         assert len(option_dates) == len(set(option_dates)) == 3
         assert set(option_dates) <= horizon
         primary = next(option for option in request.date_options if option.priority == 100)
+        assert request.scheduled_date == primary.date
         assert all(
             option.priority < 100
             for option in request.date_options
@@ -306,8 +342,8 @@ async def test_equal_seed_and_geometry_reproduce_business_payload(
         seed=271828,
     )
 
-    first_result = await generate_scenario_workload(db_session, first.id, payload)
-    second_result = await generate_scenario_workload(db_session, second.id, payload)
+    first_result = await _generate_workload(db_session, first.id, payload)
+    second_result = await _generate_workload(db_session, second.id, payload)
 
     assert first_result.model_dump(exclude={"scenario_id"}) == second_result.model_dump(
         exclude={"scenario_id"}
@@ -320,10 +356,10 @@ async def test_equal_seed_and_geometry_reproduce_business_payload(
 
 
 @pytest.mark.asyncio
-async def test_repeated_seed_requires_explicit_regeneration_without_adding_duplicates(
+async def test_repeated_seed_automatically_replaces_generated_workload(
     db_session: AsyncSession,
 ) -> None:
-    """A repeated deterministic run cannot masquerade as distinct customer work."""
+    """A same-day rerun replaces generator rows without an opt-in request flag."""
 
     scenario, _ = await _scenario_with_zone(db_session, name="Repeated seed")
     payload = WorkloadGeneratorInput(
@@ -335,24 +371,24 @@ async def test_repeated_seed_requires_explicit_regeneration_without_adding_dupli
         seed=20260822,
     )
 
-    await generate_scenario_workload(db_session, scenario.id, payload)
+    await _generate_workload(db_session, scenario.id, payload)
     original = await catalog.list_requests(db_session, scenario.id)
     original[0].notes = "Отредактированная оператором заметка"
     await db_session.flush()
 
-    with pytest.raises(ApiError) as failure:
-        await generate_scenario_workload(db_session, scenario.id, payload)
+    result = await _generate_workload(db_session, scenario.id, payload)
 
-    assert failure.value.status_code == 409
-    assert failure.value.code == "GENERATED_WORKLOAD_ALREADY_EXISTS"
-    assert failure.value.extra == {
-        "existing_requests": 4,
-        "seed": 20260822,
-        "start_date": "2026-10-20",
-        "end_date": "2026-10-20",
-    }
+    assert result.replaced_requests == 4
+    assert result.created_requests == 4
     remaining = await catalog.list_requests(db_session, scenario.id)
-    assert [request.id for request in remaining] == [request.id for request in original]
+    assert len(remaining) == 4
+    assert {request.id for request in remaining}.isdisjoint(
+        {request.id for request in original}
+    )
+    assert all(
+        request.notes == "Детерминированная нагрузка, seed=20260822"
+        for request in remaining
+    )
 
 
 @pytest.mark.asyncio
@@ -376,7 +412,7 @@ async def test_generation_requires_zone_without_creating_partial_requests(
     )
 
     with pytest.raises(ApiError) as failure:
-        await generate_scenario_workload(db_session, scenario.id, payload)
+        await _generate_workload(db_session, scenario.id, payload)
 
     assert failure.value.status_code == 422
     assert failure.value.code == "NO_ZONES"
@@ -399,7 +435,7 @@ async def test_zero_counts_are_valid_noop_with_daily_zero_metrics(
         seed=99,
     )
 
-    result = await generate_scenario_workload(db_session, scenario.id, payload)
+    result = await _generate_workload(db_session, scenario.id, payload)
 
     assert result.created_requests == 0
     assert result.created_deliveries == 0
@@ -415,7 +451,7 @@ async def test_one_day_regeneration_replaces_only_generated_requests(
     """One-day reruns replace prior generated rows while preserving manual scenario data."""
 
     scenario, _ = await _scenario_with_zone(db_session, name="One-day regeneration")
-    first_result = await generate_scenario_workload(
+    first_result = await _generate_workload(
         db_session,
         scenario.id,
         WorkloadGeneratorInput(
@@ -451,7 +487,7 @@ async def test_one_day_regeneration_replaces_only_generated_requests(
         ),
     )
 
-    result = await generate_scenario_workload(
+    result = await _generate_workload(
         db_session,
         scenario.id,
         WorkloadGeneratorInput(
@@ -460,7 +496,6 @@ async def test_one_day_regeneration_replaces_only_generated_requests(
             deliveries_per_day=1,
             pickups_per_day=2,
             alternative_dates_count=0,
-            replace_existing_generated=True,
             seed=2402,
         ),
     )
@@ -484,13 +519,190 @@ async def test_one_day_regeneration_replaces_only_generated_requests(
 
 
 @pytest.mark.asyncio
-async def test_regeneration_refuses_to_remove_generated_request_saved_in_plan(
+async def test_generation_keeps_neighboring_dates_isolated(
+    db_session: AsyncSession,
+) -> None:
+    """Generating or replacing one date leaves generated requests on another date intact."""
+
+    scenario, _ = await _scenario_with_zone(db_session, name="Isolated dates")
+    await _generate_workload(
+        db_session,
+        scenario.id,
+        WorkloadGeneratorInput(
+            start_date=date(2026, 12, 25),
+            deliveries_per_day=2,
+            pickups_per_day=0,
+            seed=251,
+        ),
+    )
+    await _generate_workload(
+        db_session,
+        scenario.id,
+        WorkloadGeneratorInput(
+            start_date=date(2026, 12, 26),
+            deliveries_per_day=1,
+            pickups_per_day=1,
+            seed=261,
+        ),
+    )
+    before = await catalog.list_requests(db_session, scenario.id)
+    next_day_ids = {
+        request.id
+        for request in before
+        if request.scheduled_date == date(2026, 12, 26)
+    }
+
+    result = await _generate_workload(
+        db_session,
+        scenario.id,
+        WorkloadGeneratorInput(
+            start_date=date(2026, 12, 25),
+            deliveries_per_day=0,
+            pickups_per_day=1,
+            seed=252,
+        ),
+    )
+    after = await catalog.list_requests(db_session, scenario.id)
+
+    assert result.replaced_requests == 2
+    assert Counter(request.scheduled_date for request in after) == Counter(
+        {date(2026, 12, 25): 1, date(2026, 12, 26): 2}
+    )
+    assert next_day_ids == {
+        request.id
+        for request in after
+        if request.scheduled_date == date(2026, 12, 26)
+    }
+
+
+@pytest.mark.asyncio
+async def test_delete_generated_workload_is_exact_and_idempotent(
+    db_session: AsyncSession,
+) -> None:
+    """Selected-day deletion preserves manual data and generated neighboring dates."""
+
+    scenario, _ = await _scenario_with_zone(db_session, name="Delete one workload")
+    for target_date, seed in (
+        (date(2026, 12, 25), 250),
+        (date(2026, 12, 26), 260),
+    ):
+        await _generate_workload(
+            db_session,
+            scenario.id,
+            WorkloadGeneratorInput(
+                start_date=target_date,
+                deliveries_per_day=1,
+                pickups_per_day=1,
+                seed=seed,
+            ),
+        )
+    manual = await catalog.create_request(
+        db_session,
+        scenario.id,
+        LogisticsRequestCreate(
+            type=RequestType.DELIVERY,
+            name="Ручная заявка 25",
+            address_label="Ручная точка",
+            latitude=55.2,
+            longitude=37.2,
+            quantity=1,
+            status=RequestStatus.READY,
+            date_options=[
+                RequestDateOptionInput(date=date(2026, 12, 25), priority=100)
+            ],
+        ),
+    )
+
+    deleted = await delete_generated_workload(
+        db_session,
+        scenario.id,
+        date(2026, 12, 25),
+    )
+    repeated = await delete_generated_workload(
+        db_session,
+        scenario.id,
+        date(2026, 12, 25),
+    )
+    remaining = await catalog.list_requests(db_session, scenario.id)
+
+    assert deleted.deleted_requests == 2
+    assert repeated.deleted_requests == 0
+    assert any(request.id == manual.id for request in remaining)
+    assert Counter(request.scheduled_date for request in remaining) == Counter(
+        {date(2026, 12, 26): 2, None: 1}
+    )
+
+
+@pytest.mark.asyncio
+async def test_generator_accepts_only_snapped_coordinates_covered_by_zone(
+    db_session: AsyncSession,
+) -> None:
+    """An outside road snap is retried and only an inside snap becomes a request."""
+
+    scenario, zone = await _scenario_with_zone(db_session, name="Road snaps")
+    snapper = StubRoadSnapper(
+        (
+            SnappedPoint(GeoPoint(39.0, 57.0), 25.0, "Вне зоны"),
+            SnappedPoint(GeoPoint(37.2, 55.2), 18.5, "Тестовая дорога"),
+        )
+    )
+
+    await _generate_workload(
+        db_session,
+        scenario.id,
+        WorkloadGeneratorInput(
+            start_date=date(2026, 12, 27),
+            deliveries_per_day=1,
+            pickups_per_day=0,
+            seed=270,
+        ),
+        snapper,
+    )
+    request = (await catalog.list_requests(db_session, scenario.id))[0]
+
+    assert len(snapper.candidates) == 2
+    assert (request.longitude, request.latitude) == (37.2, 55.2)
+    assert "дорога: Тестовая дорога" in request.address_label
+    assert to_shape(zone.geometry).covers(Point(request.longitude, request.latitude))
+
+
+@pytest.mark.asyncio
+async def test_generator_rejects_zone_without_a_routable_point(
+    db_session: AsyncSession,
+) -> None:
+    """A zone whose nearest road always lies outside fails explicitly after bounded retries."""
+
+    scenario, _ = await _scenario_with_zone(db_session, name="No road in zone")
+    snapper = StubRoadSnapper(
+        (SnappedPoint(GeoPoint(39.0, 57.0), 25.0, "Вне зоны"),)
+    )
+
+    with pytest.raises(ApiError) as failure:
+        await _generate_workload(
+            db_session,
+            scenario.id,
+            WorkloadGeneratorInput(
+                start_date=date(2026, 12, 28),
+                deliveries_per_day=1,
+                pickups_per_day=0,
+                seed=280,
+            ),
+            snapper,
+        )
+
+    assert failure.value.status_code == 422
+    assert failure.value.code == "NO_ROUTABLE_POINT_IN_ZONE"
+    assert len(snapper.candidates) == 24
+
+
+@pytest.mark.asyncio
+async def test_saved_plan_reference_blocks_regeneration_and_deletion(
     db_session: AsyncSession,
 ) -> None:
     """A saved plan reference fences regeneration before any generated row is removed."""
 
     scenario, _ = await _scenario_with_zone(db_session, name="Planned regeneration")
-    await generate_scenario_workload(
+    await _generate_workload(
         db_session,
         scenario.id,
         WorkloadGeneratorInput(
@@ -529,8 +741,22 @@ async def test_regeneration_refuses_to_remove_generated_request_saved_in_plan(
     )
     await db_session.flush()
 
+    with pytest.raises(ApiError) as deletion_failure:
+        await delete_generated_workload(
+            db_session,
+            scenario.id,
+            date(2026, 12, 25),
+        )
+
+    assert deletion_failure.value.status_code == 409
+    assert deletion_failure.value.code == "GENERATED_REQUESTS_ALREADY_PLANNED"
+    assert deletion_failure.value.extra == {
+        "route_stop_references": 0,
+        "unassigned_references": 1,
+    }
+
     with pytest.raises(ApiError) as failure:
-        await generate_scenario_workload(
+        await _generate_workload(
             db_session,
             scenario.id,
             WorkloadGeneratorInput(
@@ -538,7 +764,6 @@ async def test_regeneration_refuses_to_remove_generated_request_saved_in_plan(
                 days=1,
                 deliveries_per_day=2,
                 pickups_per_day=2,
-                replace_existing_generated=True,
                 seed=2502,
             ),
         )

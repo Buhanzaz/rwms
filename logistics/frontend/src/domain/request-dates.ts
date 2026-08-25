@@ -14,8 +14,6 @@ export function isRequestVisibleOnDate(request: LogisticsRequest, date: IsoDate)
 
 /** Returns all dates that should appear on the request date board. */
 export function requestPlanningDates(request: LogisticsRequest): IsoDate[] {
-  return [...new Set([
-    ...request.date_options.map((option) => option.date),
-    ...(request.scheduled_date ? [request.scheduled_date] : []),
-  ])].sort();
+  if (request.scheduled_date) return [request.scheduled_date];
+  return [...new Set(request.date_options.map((option) => option.date))].sort();
 }

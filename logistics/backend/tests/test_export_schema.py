@@ -40,6 +40,51 @@ def test_export_accepts_zero_based_depot_stop_and_segment_reference() -> None:
 
     assert stop.sequence == 0
     assert segment.from_stop_sequence == 0
+    assert segment.routing_profile_snapshot is None
+    assert segment.routing_provider is None
+    assert segment.osm_data_version is None
+    assert segment.routed_at is None
+
+
+def test_export_preserves_effective_truck_profile_metadata() -> None:
+    """A routed leg keeps the exact configuration and OSM version used for safety."""
+
+    moment = datetime(2026, 8, 25, 8, tzinfo=UTC)
+    snapshot = {
+        "vehicleId": str(uuid4()),
+        "trailerId": str(uuid4()),
+        "trailerAttached": True,
+        "cargoCount": 2,
+        "configurationType": "TWO_CARGO_SPLIT",
+        "effectiveHeightMeters": 3.7,
+        "effectiveWidthMeters": 2.5,
+        "effectiveLengthMeters": 18.5,
+        "actualWeightTons": 17.5,
+        "maxAxleLoadTons": 7.8,
+    }
+
+    segment = ExportRouteSegment(
+        sequence=1,
+        from_stop_sequence=0,
+        to_stop_sequence=1,
+        departure_at=moment,
+        arrival_at=moment,
+        distance_meters=1_000,
+        travel_seconds=120,
+        geometry={
+            "type": "LineString",
+            "coordinates": [[37.39, 55.75], [37.5, 55.8]],
+        },
+        routing_profile_snapshot=snapshot,
+        routing_provider="valhalla",
+        osm_data_version="moscow-2026-08-24",
+        routed_at=moment,
+    )
+
+    assert segment.routing_profile_snapshot == snapshot
+    assert segment.routing_provider == "valhalla"
+    assert segment.osm_data_version == "moscow-2026-08-24"
+    assert segment.routed_at == moment
 
 
 def test_old_request_export_without_scheduled_date_remains_valid() -> None:

@@ -169,8 +169,11 @@ describe('actual backend transport contract', () => {
       deliveries_per_day: 4,
       pickups_per_day: 4,
       alternative_dates_count: 2,
+      cargo_length_mm: 6000,
+      cargo_width_mm: 2400,
+      cargo_height_mm: 2400,
+      cargo_weight_kg: 2500,
       seed: 99,
-      replace_existing_generated: false,
     };
 
     const result = await api.generateWorkload('scenario-id', input);
@@ -181,6 +184,17 @@ describe('actual backend transport contract', () => {
     expect(result.created_requests).toBe(24);
     expect(result.replaced_requests).toBe(0);
     expect(result.daily_counts).toHaveLength(3);
+  });
+
+  it('deletes only generator-owned workload for the requested planning date', async () => {
+    const mock = fetchMock({ scenario_id: 'scenario-id', date: '2026-08-25', deleted_requests: 8 });
+
+    const result = await api.deleteGeneratedWorkload('scenario-id', '2026-08-25');
+
+    expect(mock.mock.calls[0]?.[0]).toBe('/api/scenarios/scenario-id/generated-workload?date=2026-08-25');
+    expect(mock.mock.calls[0]?.[1]?.method).toBe('DELETE');
+    expect(mock.mock.calls[0]?.[1]?.body).toBeUndefined();
+    expect(result).toEqual({ scenario_id: 'scenario-id', date: '2026-08-25', deleted_requests: 8 });
   });
 
   it('nests manual-change payload but leaves dedicated simulation bodies raw', async () => {

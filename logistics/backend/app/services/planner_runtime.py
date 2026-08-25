@@ -8,7 +8,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, fields, replace
 from datetime import date, datetime, timedelta
 from itertools import pairwise
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -47,6 +47,7 @@ from app.models import (
 from app.models import (
     UnassignedTask as DbUnassignedTask,
 )
+from app.models import Vehicle as DbVehicle
 from app.models import (
     Warehouse as DbWarehouse,
 )
@@ -75,7 +76,7 @@ from app.planner import (
     calculate_resource_activation_cost,
     validate_route_plan,
 )
-from app.planner.engine import NullProgressPublisher
+from app.planner.engine import CandidateRouteRejected, NullProgressPublisher
 from app.planner.heuristic import _build_relation_index
 from app.planner.models import PlannedLeg, ValidationIssue, ValidationWarningCode
 from app.routing import (
@@ -83,13 +84,27 @@ from app.routing import (
     MockRoutingProvider,
     OsrmRoutingProvider,
     RouteGeometry,
+    RoutingProfileIncompleteError,
     RoutingProvider,
+    RoutingProviderUnavailableError,
     RoutingSettings,
     TravelMatrix,
+    ValhallaRoutingProvider,
+)
+from app.routing.truck_profile import (
+    CargoDimensions,
+    OperationalAxleLoadProfile,
+    TrailerSpec,
+    TruckConfigurationType,
+    VehicleRoutingSpec,
 )
 from app.schemas.domain import CyclePatch, GeneratePlanRequest, ManualChangeRequest
 from app.services import plans as plan_service
+from app.services.truck_cycle_router import ExactTruckCycleRouter
 from app.simulation import DelayOverride, DriverUnavailableOverride, propagate_delays
+
+if TYPE_CHECKING:
+    from app.routing.truck_profile import EffectiveTruckProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,18 +135,20 @@ def request_is_available_on_date(
 
 
 class _CachedRoutingProvider:
-    """Bounded process-local matrix cache delegating geometry to the selected provider."""
+    """Bounded process-local cache partitioned by the effective truck profile."""
 
     def __init__(
         self,
         delegate: RoutingProvider,
         cache: OrderedDict[tuple[object, ...], TravelMatrix],
+        route_cache: OrderedDict[tuple[object, ...], RouteGeometry],
         scenario_fingerprint: str,
         max_entries: int,
         provider_cache_key: tuple[object, ...],
     ) -> None:
         self._delegate = delegate
         self._cache = cache
+        self._route_cache = route_cache
         self._scenario_fingerprint = scenario_fingerprint
         self._max_entries = max_entries
         self._provider_cache_key = provider_cache_key
@@ -140,6 +157,8 @@ class _CachedRoutingProvider:
         self,
         points: list[GeoPoint],
         departure_at: datetime | None,
+        *,
+        profile: EffectiveTruckProfile | None = None,
     ) -> TravelMatrix:
         """Return a cached matrix for equal snapshot, points, settings, and time bucket."""
 
@@ -153,13 +172,18 @@ class _CachedRoutingProvider:
             self._scenario_fingerprint,
             point_key,
             self._provider_cache_key,
+            profile.cache_key_data() if profile is not None else None,
             departure_bucket,
         )
         cached = self._cache.get(key)
         if cached is not None:
             self._cache.move_to_end(key)
             return cached
-        matrix = await self._delegate.get_matrix(points, departure_at)
+        matrix = await self._delegate.get_matrix(
+            points,
+            departure_at,
+            profile=profile,
+        )
         self._cache[key] = matrix
         self._cache.move_to_end(key)
         while len(self._cache) > self._max_entries:
@@ -170,10 +194,41 @@ class _CachedRoutingProvider:
         self,
         points: list[GeoPoint],
         departure_at: datetime | None,
+        *,
+        profile: EffectiveTruckProfile | None = None,
     ) -> RouteGeometry:
-        """Delegate route geometry; only the expensive all-pairs matrix is cached."""
+        """Cache exact geometry without sharing it across load configurations."""
 
-        return await self._delegate.get_route(points, departure_at)
+        departure_bucket = departure_at.isoformat() if departure_at is not None else None
+        point_key = tuple((point.lon, point.lat, point.is_city) for point in points)
+        key: tuple[object, ...] = (
+            self._scenario_fingerprint,
+            point_key,
+            self._provider_cache_key,
+            profile.cache_key_data() if profile is not None else None,
+            departure_bucket,
+        )
+        cached = self._route_cache.get(key)
+        if cached is not None:
+            self._route_cache.move_to_end(key)
+            return cached
+        route = await self._delegate.get_route(
+            points,
+            departure_at,
+            profile=profile,
+        )
+        self._route_cache[key] = route
+        self._route_cache.move_to_end(key)
+        while len(self._route_cache) > self._max_entries * 16:
+            self._route_cache.popitem(last=False)
+        return route
+
+    async def aclose(self) -> None:
+        """Close pooled connections owned by the wrapped runtime provider."""
+
+        close = getattr(self._delegate, "aclose", None)
+        if close is not None:
+            await close()
 
 
 class RuntimePlannerFacade:
@@ -186,6 +241,9 @@ class RuntimePlannerFacade:
         osrm_base_url: str = "http://osrm:5000",
         osrm_profile: str = "driving",
         osrm_timeout_seconds: float = 15.0,
+        valhalla_url: str = "http://valhalla:8002",
+        valhalla_timeout_seconds: float = 30.0,
+        osm_data_version: str = "unknown",
         matrix_cache_entries: int = 32,
     ) -> None:
         if matrix_cache_entries < 1:
@@ -194,8 +252,12 @@ class RuntimePlannerFacade:
         self._osrm_base_url = osrm_base_url
         self._osrm_profile = osrm_profile
         self._osrm_timeout_seconds = osrm_timeout_seconds
+        self._valhalla_url = valhalla_url
+        self._valhalla_timeout_seconds = valhalla_timeout_seconds
+        self._osm_data_version = osm_data_version
         self._matrix_cache_entries = matrix_cache_entries
         self._matrix_cache: OrderedDict[tuple[object, ...], TravelMatrix] = OrderedDict()
+        self._route_cache: OrderedDict[tuple[object, ...], RouteGeometry] = OrderedDict()
 
     async def generate_plan(
         self,
@@ -458,6 +520,8 @@ class RuntimePlannerFacade:
                 selectinload(Scenario.zones),
                 selectinload(Scenario.zone_relations),
                 selectinload(Scenario.vehicles),
+                selectinload(Scenario.vehicles).selectinload(DbVehicle.default_trailer),
+                selectinload(Scenario.vehicles).selectinload(DbVehicle.load_profiles),
                 selectinload(Scenario.shifts).selectinload(DbDriverShift.driver),
                 selectinload(Scenario.shifts).selectinload(DbDriverShift.vehicle),
                 selectinload(Scenario.requests).selectinload(
@@ -524,6 +588,17 @@ class RuntimePlannerFacade:
                 name=vehicle.name,
                 capacity=vehicle.capacity,
                 active=vehicle.active,
+                routing_spec=self._vehicle_routing_spec(vehicle),
+                default_trailer=self._trailer_spec(vehicle.default_trailer),
+                axle_load_profiles=tuple(
+                    OperationalAxleLoadProfile(
+                        configuration_type=TruckConfigurationType(
+                            profile.configuration_type
+                        ),
+                        max_actual_axle_load_kg=profile.max_actual_axle_load_kg,
+                    )
+                    for profile in vehicle.load_profiles
+                ),
             )
             for vehicle in sorted(scenario.vehicles, key=lambda item: str(item.id))
         )
@@ -673,6 +748,12 @@ class RuntimePlannerFacade:
             split_allowed=request.split_allowed,
             notes=request.notes,
             source_key=RuntimePlannerFacade._request_source_key(request),
+            cargo_dimensions=CargoDimensions(
+                length_mm=request.cargo_length_mm,
+                width_mm=request.cargo_width_mm,
+                height_mm=request.cargo_height_mm,
+                weight_kg=request.cargo_weight_kg,
+            ),
         )
 
     @staticmethod
@@ -761,6 +842,69 @@ class RuntimePlannerFacade:
             is_last_available_date=(
                 bool(available_dates) and planning_date == max(available_dates)
             ),
+            cargo_dimensions=CargoDimensions(
+                length_mm=task.cargo_length_mm,
+                width_mm=task.cargo_width_mm,
+                height_mm=task.cargo_height_mm,
+                weight_kg=task.cargo_weight_kg,
+            ),
+        )
+
+    @staticmethod
+    def _vehicle_routing_spec(vehicle: DbVehicle) -> VehicleRoutingSpec:
+        """Translate nullable persisted equipment values without inventing defaults."""
+
+        return VehicleRoutingSpec(
+            vehicle_id=vehicle.id,
+            is_hgv=vehicle.is_hgv,
+            tare_weight_kg=vehicle.tare_weight_kg,
+            max_gross_weight_kg=vehicle.max_gross_weight_kg,
+            length_mm=vehicle.length_mm,
+            width_mm=vehicle.width_mm,
+            height_mm=vehicle.height_mm,
+            axle_count=vehicle.axle_count,
+            max_axle_load_kg=vehicle.max_axle_load_kg,
+            payload_capacity_kg=vehicle.payload_capacity_kg,
+            platform_length_mm=vehicle.platform_length_mm,
+            platform_width_mm=vehicle.platform_width_mm,
+            platform_height_from_ground_mm=vehicle.platform_height_from_ground_mm,
+            max_platform_payload_kg=vehicle.max_platform_payload_kg,
+            max_cargo_length_mm=vehicle.max_cargo_length_mm,
+            max_cargo_width_mm=vehicle.max_cargo_width_mm,
+            max_cargo_height_mm=vehicle.max_cargo_height_mm,
+            max_cargo_weight_kg=vehicle.max_cargo_weight_kg,
+            can_use_trailer=vehicle.can_use_trailer,
+            combined_length_with_trailer_mm=vehicle.combined_length_with_trailer_mm,
+            coupling_length_mm=vehicle.coupling_length_mm,
+            height_safety_margin_mm=vehicle.height_safety_margin_mm,
+            width_safety_margin_mm=vehicle.width_safety_margin_mm,
+            weight_safety_margin_kg=vehicle.weight_safety_margin_kg,
+        )
+
+    @staticmethod
+    def _trailer_spec(trailer: Any | None) -> TrailerSpec | None:
+        """Translate an optional assigned trailer into the pure routing boundary."""
+
+        if trailer is None:
+            return None
+        return TrailerSpec(
+            trailer_id=trailer.id,
+            tare_weight_kg=trailer.tare_weight_kg,
+            max_gross_weight_kg=trailer.max_gross_weight_kg,
+            length_mm=trailer.length_mm,
+            width_mm=trailer.width_mm,
+            height_mm=trailer.height_mm,
+            platform_length_mm=trailer.platform_length_mm,
+            platform_width_mm=trailer.platform_width_mm,
+            platform_height_from_ground_mm=trailer.platform_height_from_ground_mm,
+            max_platform_payload_kg=trailer.max_platform_payload_kg,
+            payload_capacity_kg=trailer.payload_capacity_kg,
+            axle_count=trailer.axle_count,
+            max_axle_load_kg=trailer.max_axle_load_kg,
+            max_cargo_length_mm=trailer.max_cargo_length_mm,
+            max_cargo_width_mm=trailer.max_cargo_width_mm,
+            max_cargo_height_mm=trailer.max_cargo_height_mm,
+            max_cargo_weight_kg=trailer.max_cargo_weight_kg,
         )
 
     @staticmethod
@@ -823,16 +967,31 @@ class RuntimePlannerFacade:
         )
         session.add(run)
         await session.flush()
+        provider: _CachedRoutingProvider | None = None
         try:
             provider = self._provider(snapshot)
-            engine = HeuristicPlanner(provider)
+            candidate_provider = self._candidate_provider(snapshot)
+            route_evaluator = (
+                ExactTruckCycleRouter(
+                    provider,
+                    provider_name="valhalla",
+                    osm_data_version=self._osm_data_version,
+                    now=utc_now,
+                )
+                if self._routing_provider == "valhalla"
+                else None
+            )
+            if route_evaluator is not None:
+                self._assert_truck_verified_locked_cycles(locked_cycles)
+            engine = HeuristicPlanner(candidate_provider, route_evaluator)
             input_data = replace(snapshot.input_data, locked_cycles=locked_cycles)
             result = await engine.generate_plan(
                 input_data,
                 snapshot.settings,
                 NullProgressPublisher(),
             )
-            result = await self._attach_road_geometries(result, provider)
+            if route_evaluator is None:
+                result = await self._attach_road_geometries(result, provider)
             plan = await self._persist_result(session, snapshot, result)
             run.plan_id = plan.id
             run.status = (
@@ -857,7 +1016,11 @@ class RuntimePlannerFacade:
         except (ValueError, RuntimeError) as exc:
             run.status = OptimizationStatus.FAILED
             run.finished_at = utc_now()
-            run.error_message = str(exc)
+            code = getattr(exc, "code", None)
+            run.error_message = f"{code}: {exc}" if isinstance(code, str) else str(exc)
+        finally:
+            if provider is not None:
+                await provider.aclose()
         await session.flush()
         return run
 
@@ -880,6 +1043,14 @@ class RuntimePlannerFacade:
             )
             delegate = osrm_delegate
             provider_cache_key = ("osrm", *osrm_delegate.cache_key)
+        elif self._routing_provider == "valhalla":
+            valhalla_delegate = ValhallaRoutingProvider(
+                self._valhalla_url,
+                timeout_seconds=self._valhalla_timeout_seconds,
+                osm_data_version=self._osm_data_version,
+            )
+            delegate = valhalla_delegate
+            provider_cache_key = valhalla_delegate.cache_key
         else:
             raise ApiError(
                 503,
@@ -889,10 +1060,74 @@ class RuntimePlannerFacade:
         return _CachedRoutingProvider(
             delegate,
             self._matrix_cache,
+            self._route_cache,
             snapshot.scenario_fingerprint,
             self._matrix_cache_entries,
             provider_cache_key,
         )
+
+    def _candidate_provider(self, snapshot: _RuntimeSnapshot) -> _CachedRoutingProvider:
+        """Return a non-driving geometric prefilter for truck-safe candidate search."""
+
+        if self._routing_provider != "valhalla":
+            return self._provider(snapshot)
+        delegate = MockRoutingProvider(snapshot.routing_settings)
+        return _CachedRoutingProvider(
+            delegate,
+            self._matrix_cache,
+            self._route_cache,
+            snapshot.scenario_fingerprint,
+            self._matrix_cache_entries,
+            (
+                "truck-candidate-prefilter",
+                *tuple(asdict(snapshot.routing_settings).items()),
+            ),
+        )
+
+    @staticmethod
+    def _assert_truck_verified_locked_cycles(
+        locked_cycles: tuple[RouteCycle, ...],
+    ) -> None:
+        """Reject legacy locked cycles that have never passed exact truck routing.
+
+        A locked cycle must stay byte-for-byte stable during reoptimization.  Therefore
+        a legacy matrix/car cycle cannot be silently rerouted or accepted: the operator
+        must unlock it first so the normal exact Valhalla candidate flow can rebuild it.
+        """
+
+        missing: list[str] = []
+        required_snapshot_fields = {
+            "vehicleId",
+            "trailerAttached",
+            "cargoPlacements",
+            "configurationType",
+            "effectiveHeightMeters",
+            "effectiveWidthMeters",
+            "effectiveLengthMeters",
+            "actualWeightTons",
+            "maxAxleLoadTons",
+            "routingProvider",
+            "osmDataVersion",
+            "calculatedAt",
+        }
+        for cycle in locked_cycles:
+            if not cycle.legs:
+                missing.append(f"locked_cycle[{cycle.id}].legs")
+                continue
+            for index, leg in enumerate(cycle.legs, start=1):
+                prefix = f"locked_cycle[{cycle.id}].leg[{index}]"
+                snapshot = leg.routing_profile_snapshot
+                if snapshot is None:
+                    missing.append(f"{prefix}.routing_profile_snapshot")
+                    continue
+                for field_name in sorted(required_snapshot_fields - snapshot.keys()):
+                    missing.append(f"{prefix}.{field_name}")
+                if leg.routing_provider != "valhalla":
+                    missing.append(f"{prefix}.routing_provider")
+                if snapshot.get("routingProvider") != "valhalla":
+                    missing.append(f"{prefix}.routingProfile.routingProvider")
+        if missing:
+            raise RoutingProfileIncompleteError(missing)
 
     @staticmethod
     async def _attach_road_geometries(
@@ -1102,6 +1337,14 @@ class RuntimePlannerFacade:
                     distance_meters=leg.distance_meters,
                     travel_seconds=leg.travel_seconds,
                     geometry=from_shape(geometry_shape, srid=4326, extended=True),
+                    routing_profile_snapshot=(
+                        dict(leg.routing_profile_snapshot)
+                        if leg.routing_profile_snapshot is not None
+                        else None
+                    ),
+                    routing_provider=leg.routing_provider,
+                    osm_data_version=leg.osm_data_version,
+                    routed_at=leg.routed_at,
                 )
             )
         for line in core_cycle.explanation:
@@ -1221,6 +1464,10 @@ class RuntimePlannerFacade:
                     distance_meters=round(segment.distance_meters),
                     travel_seconds=segment.travel_seconds,
                     geometry=geometry_to_geojson(segment.geometry),
+                    routing_profile_snapshot=segment.routing_profile_snapshot,
+                    routing_provider=segment.routing_provider,
+                    osm_data_version=segment.osm_data_version,
+                    routed_at=segment.routed_at,
                 )
             )
         return RouteCycle(
@@ -1437,7 +1684,7 @@ class RuntimePlannerFacade:
             raise ApiError(422, "EMPTY_ROUTE_CYCLE", "A route cycle cannot be empty")
         all_tasks = sorted(snapshot.core_task_by_uuid.values(), key=lambda item: item.id)
         points = [snapshot.input_data.warehouse.point, *(task.point for task in all_tasks)]
-        provider = self._provider(snapshot)
+        provider = self._candidate_provider(snapshot)
         active_vehicle_ids = {
             vehicle.id for vehicle in snapshot.input_data.vehicles if vehicle.active
         }
@@ -1513,12 +1760,47 @@ class RuntimePlannerFacade:
                     ]
                 },
             )
-        return replace(
+        core_cycle = replace(
             candidate.cycle,
             id=str(cycle.id),
             locked=cycle.locked,
             manually_changed=True,
         )
+        if self._routing_provider == "valhalla":
+            exact_provider = self._provider(snapshot)
+            exact_router = ExactTruckCycleRouter(
+                exact_provider,
+                provider_name="valhalla",
+                osm_data_version=self._osm_data_version,
+                now=utc_now,
+            )
+            try:
+                core_cycle = await exact_router.route_candidate(
+                    core_cycle,
+                    tasks=tuple(tasks),
+                    vehicle=vehicle,
+                    shift=shift,
+                    settings=snapshot.settings,
+                )
+            except CandidateRouteRejected as exc:
+                raise ApiError(
+                    422,
+                    exc.reason_code.value,
+                    exc.detail,
+                    extra={"missing_fields": list(exc.missing_fields)},
+                ) from exc
+            except RoutingProfileIncompleteError as exc:
+                raise ApiError(
+                    422,
+                    exc.code,
+                    str(exc),
+                    extra={"missing_fields": list(exc.missing_fields)},
+                ) from exc
+            except RoutingProviderUnavailableError as exc:
+                raise ApiError(503, exc.code, str(exc)) from exc
+            finally:
+                await exact_provider.aclose()
+        return core_cycle
 
     @staticmethod
     def _cycle_tasks(

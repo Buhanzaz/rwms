@@ -38,6 +38,21 @@ class GeoPoint:
 
 
 @dataclass(frozen=True, slots=True)
+class SnappedPoint:
+    """A routable road point resolved from one arbitrary WGS84 coordinate."""
+
+    point: GeoPoint
+    distance_meters: float
+    name: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.distance_meters) or self.distance_meters < 0:
+            raise ValueError("snap distance must be a finite non-negative value")
+        if self.name is not None and (not self.name or len(self.name) > 300):
+            raise ValueError("snap name must be non-blank and at most 300 characters")
+
+
+@dataclass(frozen=True, slots=True)
 class TravelMetric:
     """Distance and travel duration for one ordered point pair."""
 

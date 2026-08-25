@@ -6,9 +6,14 @@ import type {
   PlanningSettings,
   RequestDateOption,
   RoutePlan,
+  RoutingCargoPlacementSnapshot,
+  RoutingProfileSnapshot,
   ScenarioWorkspace,
+  Trailer,
   UUID,
   Vehicle,
+  VehicleLoadConfigurationType,
+  VehicleLoadProfile,
   Warehouse,
   Zone,
   ZoneRelation,
@@ -137,8 +142,11 @@ export interface WorkloadGenerationInput {
   deliveries_per_day: number;
   pickups_per_day: number;
   alternative_dates_count: number;
+  cargo_length_mm: number;
+  cargo_width_mm: number;
+  cargo_height_mm: number;
+  cargo_weight_kg: number;
   seed: number;
-  replace_existing_generated: boolean;
 }
 
 /** Daily breakdown returned by the workload-generation endpoint. */
@@ -159,6 +167,13 @@ export interface WorkloadGenerationResult {
   created_pickups: number;
   replaced_requests: number;
   daily_counts: WorkloadGenerationDailyCount[];
+}
+
+/** Result of deleting generator-owned workload for one planning day. */
+export interface GeneratedWorkloadDeletionResult {
+  scenario_id: UUID;
+  date: string;
+  deleted_requests: number;
 }
 
 export interface ZoneCutoutResult {
@@ -182,6 +197,66 @@ export interface VehicleInput {
   average_speed_city: number;
   average_speed_region: number;
   notes: string;
+  vehicle_type?: string | null;
+  manufacturer?: string | null;
+  model?: string | null;
+  is_hgv?: boolean | null;
+  tare_weight_kg?: number | null;
+  max_gross_weight_kg?: number | null;
+  length_mm?: number | null;
+  width_mm?: number | null;
+  height_mm?: number | null;
+  axle_count?: number | null;
+  max_axle_load_kg?: number | null;
+  payload_capacity_kg?: number | null;
+  platform_length_mm?: number | null;
+  platform_width_mm?: number | null;
+  platform_height_from_ground_mm?: number | null;
+  max_platform_payload_kg?: number | null;
+  max_cargo_length_mm?: number | null;
+  max_cargo_width_mm?: number | null;
+  max_cargo_height_mm?: number | null;
+  max_cargo_weight_kg?: number | null;
+  can_use_trailer?: boolean | null;
+  default_trailer_id?: UUID | null;
+  combined_length_with_trailer_mm?: number | null;
+  coupling_length_mm?: number | null;
+  height_safety_margin_mm?: number;
+  width_safety_margin_mm?: number;
+  weight_safety_margin_kg?: number;
+}
+
+export interface TrailerInput {
+  name: string;
+  registration_number: string;
+  active: boolean;
+  tare_weight_kg: number | null;
+  max_gross_weight_kg: number | null;
+  length_mm: number | null;
+  width_mm: number | null;
+  height_mm: number | null;
+  platform_length_mm: number | null;
+  platform_width_mm: number | null;
+  platform_height_from_ground_mm: number | null;
+  max_platform_payload_kg: number | null;
+  payload_capacity_kg: number | null;
+  axle_count: number | null;
+  max_axle_load_kg: number | null;
+  max_cargo_length_mm: number | null;
+  max_cargo_width_mm: number | null;
+  max_cargo_height_mm: number | null;
+  max_cargo_weight_kg: number | null;
+  notes: string;
+}
+
+export interface VehicleLoadProfileInput {
+  configuration_type: VehicleLoadConfigurationType;
+  max_actual_axle_load_kg: number;
+}
+
+export interface VehicleConfigurationInput {
+  vehicle: VehicleInput;
+  load_profiles: VehicleLoadProfileInput[];
 }
 
 export interface ShiftInput {
@@ -202,6 +277,10 @@ export interface LogisticsRequestInput {
   latitude: number;
   longitude: number;
   quantity: number;
+  cargo_length_mm: number | null;
+  cargo_width_mm: number | null;
+  cargo_height_mm: number | null;
+  cargo_weight_kg: number | null;
   service_minutes: number;
   priority: number;
   status: LogisticsRequest['status'];
@@ -315,6 +394,166 @@ function normalizeRwmsApplyResult(value: unknown): RwmsApplyResult {
   };
 }
 
+const loadConfigurationTypes: readonly VehicleLoadConfigurationType[] = [
+  'EMPTY_TRUCK',
+  'CARGO_ON_TRUCK',
+  'EMPTY_COMBINATION',
+  'CARGO_ON_TRUCK_WITH_TRAILER',
+  'CARGO_ON_TRAILER_WITH_TRAILER',
+  'TWO_CARGO_SPLIT',
+];
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function finiteNumber(record: Record<string, unknown>, key: string): number | null {
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function parseCargoPlacement(value: unknown): RoutingCargoPlacementSnapshot | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const cargoId = record.cargoId;
+  const position = record.position;
+  const lengthMm = finiteNumber(record, 'lengthMm');
+  const widthMm = finiteNumber(record, 'widthMm');
+  const heightMm = finiteNumber(record, 'heightMm');
+  const weightKg = finiteNumber(record, 'weightKg');
+  if (
+    typeof cargoId !== 'string'
+    || (position !== 'TRUCK_PLATFORM' && position !== 'TRAILER_PLATFORM')
+    || lengthMm === null
+    || widthMm === null
+    || heightMm === null
+    || weightKg === null
+  ) return null;
+  return { cargoId, position, lengthMm, widthMm, heightMm, weightKg };
+}
+
+function parseRoutingProfileSnapshot(value: unknown): RoutingProfileSnapshot | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const vehicleId = record.vehicleId;
+  const trailerId = record.trailerId;
+  const configurationType = record.configurationType;
+  const placementsRaw = record.cargoPlacements;
+  const effectiveHeightMeters = finiteNumber(record, 'effectiveHeightMeters');
+  const effectiveWidthMeters = finiteNumber(record, 'effectiveWidthMeters');
+  const effectiveLengthMeters = finiteNumber(record, 'effectiveLengthMeters');
+  const actualWeightTons = finiteNumber(record, 'actualWeightTons');
+  const maxAxleLoadTons = finiteNumber(record, 'maxAxleLoadTons');
+  const axleCount = finiteNumber(record, 'axleCount');
+  const cargoCount = finiteNumber(record, 'cargoCount');
+  if (
+    typeof vehicleId !== 'string'
+    || (trailerId !== null && typeof trailerId !== 'string')
+    || typeof record.trailerAttached !== 'boolean'
+    || typeof record.isHgv !== 'boolean'
+    || typeof configurationType !== 'string'
+    || !loadConfigurationTypes.includes(configurationType as VehicleLoadConfigurationType)
+    || !Array.isArray(placementsRaw)
+    || effectiveHeightMeters === null
+    || effectiveWidthMeters === null
+    || effectiveLengthMeters === null
+    || actualWeightTons === null
+    || maxAxleLoadTons === null
+    || axleCount === null
+    || cargoCount === null
+  ) return null;
+  const cargoPlacements = placementsRaw.map(parseCargoPlacement);
+  if (cargoPlacements.some((placement) => placement === null)) return null;
+  const routingProvider = typeof record.routingProvider === 'string' ? record.routingProvider : null;
+  const osmDataVersion = typeof record.osmDataVersion === 'string' ? record.osmDataVersion : null;
+  const calculatedAt = typeof record.calculatedAt === 'string' ? record.calculatedAt : null;
+  return {
+    vehicleId,
+    trailerId,
+    trailerAttached: record.trailerAttached,
+    isHgv: record.isHgv,
+    cargoCount,
+    cargoPlacements: cargoPlacements as RoutingCargoPlacementSnapshot[],
+    configurationType: configurationType as VehicleLoadConfigurationType,
+    effectiveHeightMeters,
+    effectiveWidthMeters,
+    effectiveLengthMeters,
+    actualWeightTons,
+    maxAxleLoadTons,
+    axleCount,
+    routingProvider,
+    osmDataVersion,
+    calculatedAt,
+  };
+}
+
+interface SegmentDiagnostics {
+  routing_profile_snapshot: RoutingProfileSnapshot | null;
+  routing_provider: string | null;
+  osm_data_version: string | null;
+  routed_at: string | null;
+}
+
+function segmentDiagnostics(rawPlan: unknown): Map<UUID, SegmentDiagnostics> {
+  const result = new Map<UUID, SegmentDiagnostics>();
+  const cycles = asRecord(rawPlan)?.cycles;
+  if (!Array.isArray(cycles)) return result;
+  for (const cycle of cycles) {
+    const segments = asRecord(cycle)?.segments;
+    if (!Array.isArray(segments)) continue;
+    for (const segment of segments) {
+      const record = asRecord(segment);
+      if (!record || typeof record.id !== 'string') continue;
+      const snapshot = parseRoutingProfileSnapshot(record.routing_profile_snapshot);
+      result.set(record.id, {
+        routing_profile_snapshot: snapshot,
+        routing_provider: typeof record.routing_provider === 'string'
+          ? record.routing_provider
+          : snapshot?.routingProvider ?? null,
+        osm_data_version: typeof record.osm_data_version === 'string'
+          ? record.osm_data_version
+          : snapshot?.osmDataVersion ?? null,
+        routed_at: typeof record.routed_at === 'string'
+          ? record.routed_at
+          : snapshot?.calculatedAt ?? null,
+      });
+    }
+  }
+  return result;
+}
+
+function normalizeRoutePlanWithDiagnostics(raw: RawRoutePlan, workspace: ScenarioWorkspace): RoutePlan {
+  const normalized = normalizeRoutePlan(raw, workspace);
+  const diagnostics = segmentDiagnostics(raw);
+  return {
+    ...normalized,
+    driver_routes: normalized.driver_routes.map((route) => ({
+      ...route,
+      cycles: route.cycles.map((cycle) => ({
+        ...cycle,
+        legs: cycle.legs.map((leg) => {
+          const values = leg.id ? diagnostics.get(leg.id) : undefined;
+          return values ? { ...leg, ...values } : leg;
+        }),
+      })),
+    })),
+  };
+}
+
+function normalizeValidationWithDiagnostics(
+  value: unknown,
+  workspace: ScenarioWorkspace,
+  currentPlan: RoutePlan,
+) {
+  const normalized = normalizeValidationResult(value, workspace, currentPlan);
+  const rawSchedule = asRecord(value)?.updated_schedule;
+  if (!normalized.updated_schedule || !rawSchedule) return normalized;
+  const updatedSchedule = normalizeRoutePlanWithDiagnostics(rawSchedule as unknown as RawRoutePlan, workspace);
+  return { ...normalized, updated_schedule: updatedSchedule, updated_metrics: updatedSchedule.metrics };
+}
+
 export const api = {
   health: () => request<{ status: string }>('/health'),
 
@@ -333,6 +572,8 @@ export const api = {
     normalizeScenario(await request<RawScenario>('/scenarios/generate-multi-day-demo', { method: 'POST' })),
   generateWorkload: (scenarioId: UUID, input: WorkloadGenerationInput) =>
     request<WorkloadGenerationResult>(`/scenarios/${scenarioId}/generate-workload`, { method: 'POST', body: jsonBody(input) }),
+  deleteGeneratedWorkload: (scenarioId: UUID, date: string) =>
+    request<GeneratedWorkloadDeletionResult>(`/scenarios/${scenarioId}/generated-workload?date=${encodeURIComponent(date)}`, { method: 'DELETE' }),
   exportScenario: (id: UUID, includePlans = true) =>
     request<Record<string, unknown>>(`/scenarios/${id}/export?include_plans=${includePlans ? 'true' : 'false'}`, { method: 'POST' }),
   importScenario: async (payload: unknown) =>
@@ -382,7 +623,26 @@ export const api = {
     request<Vehicle>(`/scenarios/${scenarioId}/vehicles`, { method: 'POST', body: jsonBody(input) }),
   updateVehicle: (id: UUID, input: Partial<VehicleInput>) =>
     request<Vehicle>(`/vehicles/${id}`, { method: 'PATCH', body: jsonBody(input) }),
+  createVehicleConfiguration: (scenarioId: UUID, input: VehicleConfigurationInput) =>
+    request<Vehicle>(`/scenarios/${scenarioId}/vehicle-configurations`, { method: 'POST', body: jsonBody(input) }),
+  updateVehicleConfiguration: (id: UUID, input: VehicleConfigurationInput) =>
+    request<Vehicle>(`/vehicles/${id}/configuration`, { method: 'PUT', body: jsonBody(input) }),
   deleteVehicle: (id: UUID) => request<void>(`/vehicles/${id}`, { method: 'DELETE' }),
+
+  listTrailers: (scenarioId: UUID) => request<Trailer[]>(`/scenarios/${scenarioId}/trailers`),
+  getTrailer: (id: UUID) => request<Trailer>(`/trailers/${id}`),
+  createTrailer: (scenarioId: UUID, input: TrailerInput) =>
+    request<Trailer>(`/scenarios/${scenarioId}/trailers`, { method: 'POST', body: jsonBody(input) }),
+  updateTrailer: (id: UUID, input: Partial<TrailerInput>) =>
+    request<Trailer>(`/trailers/${id}`, { method: 'PATCH', body: jsonBody(input) }),
+  deleteTrailer: (id: UUID) => request<void>(`/trailers/${id}`, { method: 'DELETE' }),
+
+  listVehicleLoadProfiles: (vehicleId: UUID) => request<VehicleLoadProfile[]>(`/vehicles/${vehicleId}/load-profiles`),
+  createVehicleLoadProfile: (vehicleId: UUID, input: VehicleLoadProfileInput) =>
+    request<VehicleLoadProfile>(`/vehicles/${vehicleId}/load-profiles`, { method: 'POST', body: jsonBody(input) }),
+  updateVehicleLoadProfile: (id: UUID, input: Partial<VehicleLoadProfileInput>) =>
+    request<VehicleLoadProfile>(`/vehicle-load-profiles/${id}`, { method: 'PATCH', body: jsonBody(input) }),
+  deleteVehicleLoadProfile: (id: UUID) => request<void>(`/vehicle-load-profiles/${id}`, { method: 'DELETE' }),
 
   listShifts: (scenarioId: UUID) => request<DriverShift[]>(`/scenarios/${scenarioId}/shifts`),
   createShift: (scenarioId: UUID, input: ShiftInput) =>
@@ -440,25 +700,25 @@ export const api = {
       fallbackSettings,
     ),
   getPlan: async (id: UUID, workspace: ScenarioWorkspace) =>
-    normalizeRoutePlan(await request<RawRoutePlan>(`/plans/${id}`), workspace),
+    normalizeRoutePlanWithDiagnostics(await request<RawRoutePlan>(`/plans/${id}`), workspace),
   validatePlan: async (id: UUID, expectedVersion: number, workspace: ScenarioWorkspace, currentPlan: RoutePlan) =>
-    normalizeValidationResult(await request<unknown>(`/plans/${id}/validate`, {
+    normalizeValidationWithDiagnostics(await request<unknown>(`/plans/${id}/validate`, {
       method: 'POST',
       body: jsonBody({ expected_version: expectedVersion }),
     }), workspace, currentPlan),
   clonePlan: async (id: UUID, name: string | undefined, workspace: ScenarioWorkspace) =>
-    normalizeRoutePlan(
+    normalizeRoutePlanWithDiagnostics(
       await request<RawRoutePlan>(`/plans/${id}/clone`, { method: 'POST', body: jsonBody(name ? { name } : {}) }),
       workspace,
     ),
   confirmPlan: async (id: UUID, expectedVersion: number, acceptWarnings: boolean, workspace: ScenarioWorkspace) =>
-    normalizeRoutePlan(await request<RawRoutePlan>(`/plans/${id}/confirm`, {
+    normalizeRoutePlanWithDiagnostics(await request<RawRoutePlan>(`/plans/${id}/confirm`, {
       method: 'POST',
       body: jsonBody({ expected_version: expectedVersion, accept_warnings: acceptWarnings }),
     }), workspace),
   manualChange: async (planId: UUID, input: ManualChangeInput, workspace: ScenarioWorkspace, currentPlan: RoutePlan) => {
     const { expected_version, change_type, changed_by, reason, ...payload } = input;
-    return normalizeValidationResult(
+    return normalizeValidationWithDiagnostics(
       await request<unknown>(`/plans/${planId}/manual-change`, {
         method: 'POST',
         body: jsonBody({ expected_version, change_type, payload, reason, changed_by }),
@@ -472,7 +732,7 @@ export const api = {
     cycleId: UUID,
     input: { expected_version: number; sequence?: number; driver_shift_id?: UUID; locked?: boolean; reason: string },
     workspace: ScenarioWorkspace,
-  ) => normalizeRoutePlan(
+  ) => normalizeRoutePlanWithDiagnostics(
     await request<RawRoutePlan>(`/plans/${planId}/cycles/${cycleId}`, { method: 'PATCH', body: jsonBody(input) }),
     workspace,
   ),
@@ -484,7 +744,7 @@ export const api = {
     reason: string;
     persist: boolean;
   }, workspace: ScenarioWorkspace, currentPlan: RoutePlan) => request<unknown>(`/plans/${planId}/simulation/delay`, { method: 'POST', body: jsonBody(input) })
-    .then((value) => normalizeValidationResult(value, workspace, currentPlan)),
+    .then((value) => normalizeValidationWithDiagnostics(value, workspace, currentPlan)),
   markDriverUnavailable: (planId: UUID, input: {
     expected_version: number;
     driver_shift_id: UUID;
@@ -494,7 +754,7 @@ export const api = {
   }, workspace: ScenarioWorkspace, currentPlan: RoutePlan) => request<unknown>(`/plans/${planId}/simulation/driver-unavailable`, {
     method: 'POST',
     body: jsonBody(input),
-  }).then((value) => normalizeValidationResult(value, workspace, currentPlan)),
+  }).then((value) => normalizeValidationWithDiagnostics(value, workspace, currentPlan)),
 };
 
 export async function getScenarioWorkspace(scenarioId: UUID): Promise<ScenarioWorkspace> {

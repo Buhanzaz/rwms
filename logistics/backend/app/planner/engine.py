@@ -4,7 +4,50 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from .models import PlanningInput, PlanningResult, PlanningSettings, TraceEvent
+from .models import (
+    DriverShift,
+    PlanningInput,
+    PlanningResult,
+    PlanningSettings,
+    PlanningTask,
+    RouteCycle,
+    TraceEvent,
+    UnassignedReasonCode,
+    Vehicle,
+)
+
+
+class CandidateRouteRejected(RuntimeError):
+    """Reject one proposed assignment with a stable operator-facing reason."""
+
+    def __init__(
+        self,
+        reason_code: UnassignedReasonCode,
+        detail: str,
+        *,
+        missing_fields: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(detail)
+        self.reason_code = reason_code
+        self.detail = detail
+        self.missing_fields = missing_fields
+
+
+class CandidateRouteEvaluator(Protocol):
+    """Validate and reschedule a candidate using exact per-leg truck routes."""
+
+    async def route_candidate(
+        self,
+        cycle: RouteCycle,
+        *,
+        tasks: tuple[PlanningTask, ...],
+        vehicle: Vehicle,
+        shift: DriverShift,
+        settings: PlanningSettings,
+    ) -> RouteCycle:
+        """Return an exact safe cycle or raise ``CandidateRouteRejected``."""
+
+        ...
 
 
 class ProgressPublisher(Protocol):

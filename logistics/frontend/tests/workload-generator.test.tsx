@@ -25,9 +25,14 @@ describe('workload generator dialog', () => {
     expect(screen.getByLabelText('Доставок в день')).toHaveValue(4);
     expect(screen.getByLabelText('Вывозов в день')).toHaveValue(4);
     expect(screen.getByLabelText('Альтернативных дат')).toHaveValue(0);
+    expect(screen.getByLabelText('Длина груза, мм')).toHaveValue(6000);
+    expect(screen.getByLabelText('Ширина груза, мм')).toHaveValue(2400);
+    expect(screen.getByLabelText('Высота груза, мм')).toHaveValue(2400);
+    expect(screen.getByLabelText('Масса груза, кг')).toHaveValue(2500);
     expect(screen.getByLabelText('Seed')).toHaveValue(42);
-    expect(screen.getByRole('checkbox', { name: 'Перегенерировать выбранный период' })).not.toBeChecked();
-    expect(screen.getByText('Удаляются только созданные генератором незапланированные тестовые заявки.')).toBeVisible();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.getByText(/прежняя нагрузка генератора заменяется атомарно/)).toBeVisible();
+    expect(screen.getByText(/ручные и RWMS-заявки, а также другие даты не затрагиваются/)).toBeVisible();
     expect(screen.getByTestId('workload-preview')).toHaveTextContent('25 августа 2026 г. — 25 августа 2026 г.');
     expect(screen.getByTestId('workload-preview')).toHaveTextContent('Всего заявок8');
   });
@@ -63,7 +68,7 @@ describe('workload generator dialog', () => {
     await user.type(screen.getByLabelText('Альтернативных дат'), '3');
     await user.clear(screen.getByLabelText('Seed'));
     await user.type(screen.getByLabelText('Seed'), '77');
-    await user.click(screen.getByRole('button', { name: 'Сгенерировать нагрузку' }));
+    await user.click(screen.getByRole('button', { name: 'Сгенерировать и заменить нагрузку' }));
 
     await waitFor(() => expect(submit).toHaveBeenCalledOnce());
     expect(submit).toHaveBeenCalledWith({
@@ -72,25 +77,18 @@ describe('workload generator dialog', () => {
       deliveries_per_day: 2,
       pickups_per_day: 3,
       alternative_dates_count: 3,
+      cargo_length_mm: 6000,
+      cargo_width_mm: 2400,
+      cargo_height_mm: 2400,
+      cargo_weight_kg: 2500,
       seed: 77,
-      replace_existing_generated: false,
     });
   });
 
-  it('submits replacement intent and changes the submit action label', async () => {
-    const user = userEvent.setup();
-    const submit = vi.fn<(input: WorkloadGenerationInput) => Promise<void>>(() => Promise.resolve());
-    renderDialog(submit);
+  it('keeps the replacement action explicit for a one-day generation', () => {
+    renderDialog();
 
-    await user.click(screen.getByRole('checkbox', { name: 'Перегенерировать выбранный период' }));
-    expect(screen.getByRole('button', { name: 'Перегенерировать нагрузку' })).toBeVisible();
-    await user.click(screen.getByRole('button', { name: 'Перегенерировать нагрузку' }));
-
-    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
-    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
-      days: 1,
-      alternative_dates_count: 0,
-      replace_existing_generated: true,
-    }));
+    expect(screen.getByRole('button', { name: 'Сгенерировать и заменить нагрузку' })).toBeEnabled();
+    expect(screen.getByTestId('workload-preview')).toHaveTextContent('25 августа 2026 г. — 25 августа 2026 г.');
   });
 });

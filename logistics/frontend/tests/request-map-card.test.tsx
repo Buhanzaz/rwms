@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { isRequestVisibleOnDate } from '../src/domain/request-dates';
+import { isRequestVisibleOnDate, requestPlanningDates } from '../src/domain/request-dates';
 import type { LogisticsRequest, Zone } from '../src/domain/types';
 import { RequestMapCard, RequestMapPopup } from '../src/map/RequestMapCard';
 
@@ -234,5 +234,7 @@ describe('request planning date visibility', () => {
     const scheduled = { ...request, scheduled_date: '2026-08-26' };
     expect(isRequestVisibleOnDate(scheduled, '2026-08-25')).toBe(false);
     expect(isRequestVisibleOnDate(scheduled, '2026-08-26')).toBe(true);
+    expect(requestPlanningDates(scheduled)).toEqual(['2026-08-26']);
+    expect(requestPlanningDates(request)).toEqual(['2026-08-25', '2026-08-26']);
   });
 });

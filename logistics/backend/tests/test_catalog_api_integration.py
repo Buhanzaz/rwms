@@ -7,7 +7,9 @@ import os
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.api.dependencies import get_road_snapper
 from app.main import create_app
+from app.routing import MockRoutingProvider
 from app.services.planner_runtime import RuntimePlannerFacade
 
 pytestmark = [
@@ -27,6 +29,12 @@ def _geometry(west: float, south: float, east: float, north: float) -> dict[str,
             [[west, south], [east, south], [east, north], [west, north], [west, south]]
         ],
     }
+
+
+def _mock_snapper() -> MockRoutingProvider:
+    """Return the deterministic road-snap boundary for HTTP integration tests."""
+
+    return MockRoutingProvider()
 
 
 def _cutout_payload(
@@ -525,7 +533,9 @@ async def test_multi_day_demo_is_created_separately_with_parallel_resources() ->
 async def test_http_workload_generator_can_regenerate_one_day() -> None:
     """The public command defaults to one day and replaces its prior generated workload."""
 
-    transport = ASGITransport(app=create_app())
+    application = create_app()
+    application.dependency_overrides[get_road_snapper] = _mock_snapper
+    transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         scenario = await client.post("/api/scenarios", json={"name": "Generator API"})
         assert scenario.status_code == 201
@@ -562,7 +572,6 @@ async def test_http_workload_generator_can_regenerate_one_day() -> None:
                     "deliveries_per_day": 2,
                     "pickups_per_day": 1,
                     "alternative_dates_count": 0,
-                    "replace_existing_generated": True,
                     "seed": 25,
                 },
             )
@@ -577,6 +586,45 @@ async def test_http_workload_generator_can_regenerate_one_day() -> None:
             assert len(requests.json()) == 3
             assert all(request["zone_id"] == zone.json()["id"] for request in requests.json())
             assert all(len(request["date_options"]) == 1 for request in requests.json())
+            assert all(
+                request["scheduled_date"] == "2026-08-24"
+                for request in requests.json()
+            )
+
+            next_day = await client.post(
+                f"/api/scenarios/{scenario_id}/generate-workload",
+                json={
+                    "start_date": "2026-08-25",
+                    "deliveries_per_day": 1,
+                    "pickups_per_day": 1,
+                    "seed": 26,
+                },
+            )
+            assert next_day.status_code == 201, next_day.text
+            assert next_day.json()["replaced_requests"] == 0
+
+            deleted = await client.delete(
+                f"/api/scenarios/{scenario_id}/generated-workload",
+                params={"date": "2026-08-24"},
+            )
+            assert deleted.status_code == 200, deleted.text
+            assert deleted.json() == {
+                "scenario_id": scenario_id,
+                "date": "2026-08-24",
+                "deleted_requests": 3,
+            }
+            repeated_delete = await client.delete(
+                f"/api/scenarios/{scenario_id}/generated-workload",
+                params={"date": "2026-08-24"},
+            )
+            assert repeated_delete.status_code == 200, repeated_delete.text
+            assert repeated_delete.json()["deleted_requests"] == 0
+            remaining = await client.get(f"/api/scenarios/{scenario_id}/requests")
+            assert len(remaining.json()) == 2
+            assert all(
+                request["scheduled_date"] == "2026-08-25"
+                for request in remaining.json()
+            )
         finally:
             deleted = await client.delete(f"/api/scenarios/{scenario_id}")
             assert deleted.status_code == 204, deleted.text

@@ -9,7 +9,13 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
-from app.routing import GeoPoint, OsrmRoutingProvider, OsrmRoutingProviderError
+from app.routing import (
+    GeoPoint,
+    MockRoutingProvider,
+    OsrmRoutingProvider,
+    OsrmRoutingProviderError,
+    RoadSnapNotFoundError,
+)
 
 
 def _provider(handler: httpx.MockTransport) -> OsrmRoutingProvider:
@@ -48,6 +54,82 @@ def test_osrm_matrix_maps_directed_distance_and_duration() -> None:
     assert matrix.at(0, 1).travel_seconds == 131
     assert matrix.at(1, 0).distance_meters == 1376
     assert matrix.at(1, 0).travel_seconds == 150
+
+
+def test_osrm_nearest_returns_typed_sanitized_road_snap() -> None:
+    """Nearest parses OSRM coordinate order, distance, and a bounded clean road name."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.startswith("/nearest/v1/driving/37.6000000,55.7000000")
+        assert request.url.params["number"] == "1"
+        return httpx.Response(
+            200,
+            json={
+                "code": "Ok",
+                "waypoints": [
+                    {
+                        "location": [37.60025, 55.7005],
+                        "distance": 18.75,
+                        "name": "  Тестовая\n  дорога  ",
+                    }
+                ],
+            },
+        )
+
+    snapped = asyncio.run(
+        _provider(httpx.MockTransport(handler)).snap_point(
+            GeoPoint(37.6, 55.7, is_city=True)
+        )
+    )
+
+    assert snapped.point == GeoPoint(37.60025, 55.7005, is_city=True)
+    assert snapped.distance_meters == 18.75
+    assert snapped.name == "Тестовая дорога"
+
+
+def test_osrm_nearest_rejects_nonfinite_coordinates() -> None:
+    """Malformed nearest coordinates never enter generator persistence."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=(
+                b'{"code":"Ok","waypoints":['
+                b'{"location":[NaN,55.7],"distance":1.0,"name":"road"}]}'
+            ),
+            headers={"content-type": "application/json"},
+        )
+
+    with pytest.raises(OsrmRoutingProviderError, match="finite"):
+        asyncio.run(
+            _provider(httpx.MockTransport(handler)).snap_point(GeoPoint(37.6, 55.7))
+        )
+
+
+def test_osrm_nearest_maps_no_segment_to_narrow_snap_error() -> None:
+    """A missing nearby road can be retried without hiding OSRM infrastructure errors."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={"code": "NoSegment", "message": "No segment found"},
+        )
+
+    with pytest.raises(RoadSnapNotFoundError):
+        asyncio.run(
+            _provider(httpx.MockTransport(handler)).snap_point(GeoPoint(37.6, 55.7))
+        )
+
+
+def test_mock_snapper_is_deterministic_identity() -> None:
+    """Offline mode preserves its input instead of pretending to know a road graph."""
+
+    point = GeoPoint(37.6, 55.7, is_city=True)
+    snapped = asyncio.run(MockRoutingProvider().snap_point(point))
+
+    assert snapped.point == point
+    assert snapped.distance_meters == 0
+    assert snapped.name is None
 
 
 def test_osrm_large_matrix_is_partitioned_into_bounded_rectangular_tables() -> None:

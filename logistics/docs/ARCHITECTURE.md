@@ -10,8 +10,11 @@ flowchart LR
     Browser[React operator workspace] -->|same-origin /api| Nginx[Frontend Nginx]
     Nginx --> FastAPI[FastAPI application]
     FastAPI --> Planner[Deterministic heuristic planner]
-    Planner --> Routing[RoutingProvider]
-    Routing --> OSRM[Private OSRM / OpenStreetMap]
+    Planner --> Prefilter[Bounded geographic candidate prefilter]
+    Planner --> Routing[RoutingProvider per route leg]
+    Routing --> Profile[EffectiveTruckProfileCalculator]
+    Profile --> Valhalla[Private Valhalla truck / OpenStreetMap]
+    Routing -. explicit legacy development only .-> OSRM[Private OSRM car]
     Routing --> Mock[Explicit deterministic MockRoutingProvider]
     FastAPI --> PostGIS[(PostgreSQL + PostGIS)]
     FastAPI -. OAuth2 for planning sync/apply/status .-> Auth[RWMS auth-service]
@@ -21,9 +24,10 @@ flowchart LR
 
 The browser owns only editor and simulation presentation state. Scenario,
 zone membership, requests, planning results, explanations, manual audit and
-plan versions are backend facts. The private OSRM graph makes real driving
-routing keyless; the grid map and explicit mock router retain a fully offline
-test mode.
+plan versions are backend facts. Private Valhalla makes keyless truck routing
+depend on the exact vehicle/trailer/cargo state of each leg; the grid map and
+explicit mock router retain a fully offline deterministic test mode. Valhalla
+failure is explicit and never falls back to OSRM or passenger-car costing.
 
 This boundary retains independent ownership: it has its own Compose project
 name, PostGIS volume, Alembic history, OpenAPI document and generated browser
@@ -44,18 +48,28 @@ disabled by default and never exposes its client secret to the browser.
 - `backend/app/services/catalog.py` owns the atomic cutout command: it versions
   the source geometry and creates the independent inner zone in one transaction.
 - `backend/app/services/workload_generator.py` creates bounded, seed-stable
-  request workloads. Its explicit replacement mode locks and removes only
+  request workloads. Every command locks and removes only
   generator-owned, unplanned rows in the chosen horizon; manual/RWMS rows and
-  saved-plan references are fenced. Repeating one seed in an overlapping
-  horizon fails before insertion, and new rows use stable external source IDs.
+  saved-plan references are fenced. A separate idempotent delete command uses
+  the same date-scoped ownership and reference checks. New rows use stable
+  external source IDs and are explicitly scheduled to their preferred date, so
+  accepted alternatives never move them between planning days automatically.
   Planner projection additionally identifies legacy generator rows without an
   external ID by direction, exact point and primary logistics date rather than
   mutable display data, so renumbered legacy batches cannot revisit one point.
   Non-generator sources continue to use their authoritative external IDs.
-  It samples only inside current Polygon/MultiPolygon geometry and delegates
-  every create to the canonical catalog classifier.
-- `backend/app/routing` contains the provider protocol, the private OSRM HTTP
-  adapter and deterministic Haversine implementation.
+  It samples inside current Polygon/MultiPolygon geometry, asks the configured
+  routing boundary for the nearest driving point and accepts it only while the
+  snapped point remains covered by the selected zone. Every create still goes
+  through the canonical catalog classifier.
+- `backend/app/routing` contains the provider protocol, Valhalla truck adapter,
+  immutable effective-profile calculator, capability audit, explicit legacy
+  OSRM adapter and deterministic Haversine implementation.
+- `backend/app/services/truck_cycle_router.py` evolves cargo placement after
+  every stop, computes one profile per leg, asks Valhalla for exact geometry
+  and reschedules windows/shift finish from the returned travel time. Trailer
+  attachment changes only through load configuration, never as a side effect
+  of unloading its cargo.
 - `backend/app/planner` creates and validates delivery-before-pickup schedules
   per depot cycle: a loaded cycle may append pickups only after its deliveries,
   then a depot return allows the same shift to load a new independent cycle.
@@ -93,10 +107,10 @@ cannot delete or overwrite the scenario which an operator is currently testing.
   not silently degrade.
 - Workload generation uses the request-scoped transaction: any failed generated
   request rolls back the complete batch. A lock on the scenario row serializes
-  concurrent generator commands before duplicate detection. Append is the
-  default. Explicit regeneration replaces only generator-owned rows whose
-  priority-100 date is in the horizon and aborts before deletion when a task is
-  referenced by a saved route or unassigned-plan row.
+  concurrent generator commands. Generation is replacement-only: it replaces
+  generator-owned rows whose priority-100 date is in the horizon and aborts
+  before deletion when a task is referenced by a saved route or unassigned-plan
+  row. Date-scoped workload deletion uses the same transaction and fences.
 - Existing requests retain `zone_id` and `zone_version` after zone geometry
   changes. Reclassification is a separate explicit operation.
 - Zone delivery/pickup prices are non-negative integer-ruble simulator facts.
@@ -109,6 +123,17 @@ cannot delete or overwrite the scenario which an operator is currently testing.
   serialize instead of losing one operator's hole.
 - Planner and simulation functions use stable ordering and explicit seeds so a
   saved JSON scenario can reproduce a result.
+- Vehicles, trailers, cargo dimensions and operational axle profiles are
+  authoritative simulator facts. Missing physical inputs reject a candidate;
+  neither the planner nor adapter guesses height, mass or axle distribution.
+- The vehicle editor submits physical fields and the complete operational
+  axle-profile set to one backend command. The service row-locks updates and
+  replaces the profile set in the same transaction; the browser owns no
+  partial-save saga.
+- Every persisted route segment stores the effective profile, provider,
+  `OSM_DATA_VERSION` and calculation time. Route cache identity includes that
+  profile and data version, so one- and two-unit configurations cannot share a
+  result accidentally.
 - Temporary simulation delay and driver-unavailability overrides remain in the
   browser and are derived as pure timestamp functions. `persist=true` is the
   explicit audited mutation boundary.
@@ -184,9 +209,12 @@ resource before the hard shift end. Manual changes recalculate both objective
 components from the complete resulting plan.
 
 Candidate construction yields to the API event loop between assigned cycles.
-Selected road geometry is fetched with one complete-route call per depot cycle,
-at most four calls concurrently, and provider legs are mapped back without
-changing matrix-derived schedule metrics.
+In Valhalla mode the bounded geometric matrix only narrows combinations. Every
+candidate leg is then fetched with `costing=truck`; exact distance/duration
+replace the preliminary schedule before hard windows, shift end and score are
+accepted. A leg after a delivery or pickup is routed with its new mass and
+placement state. These exact requests are cached by endpoint, departure,
+provider/OSM versions and the complete effective profile.
 
 Manual editing currently supports validated task move/reorder, task lock at the
 API boundary and cycle lock. Reoptimization carries locked cycles into a new
@@ -195,12 +223,14 @@ cycle split/merge are not represented as completed work.
 
 ## Future adapters
 
-OSRM is selected by `ROUTING_PROVIDER=osrm` and runs only inside the Compose
-network. Its one-shot download/preparation containers own only the separate
-`logistics-osrm-data` volume; scenario facts remain in PostGIS. Another routing
-adapter implements the same matrix/route protocol and must not bypass domain
-validation. The current adapter keeps every Table request within OSRM's
-100-coordinate limit by splitting large directed matrices into rectangular
-source/destination blocks, then reconstructing the full matrix without a mock
-fallback. OR-Tools or CP-SAT can implement `PlannerEngine`, returning the same
-validated result contract, explanations and unassigned reasons.
+Valhalla 3.8.3 is selected by `ROUTING_PROVIDER=valhalla` and runs only inside
+the Compose network. The PBF and generated tiles live in separate routing
+volumes; scenario facts remain in PostGIS. The exact supported/partial/
+unsupported OSM tags are maintained in
+[`osm-truck-restrictions.md`](osm-truck-restrictions.md). OSRM remains available
+only through the `legacy-routing` Compose profile and explicit provider setting;
+it is not safe-truck routing and is never a fallback. Another safe provider must
+implement the same profile-aware matrix/route protocol, persist equivalent
+diagnostics and never bypass domain validation. OR-Tools or CP-SAT can implement
+`PlannerEngine`, returning the same validated result contract, explanations and
+unassigned reasons.

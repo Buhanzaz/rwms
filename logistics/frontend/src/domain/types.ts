@@ -144,6 +144,74 @@ export interface Vehicle {
   average_speed_city: number;
   average_speed_region: number;
   notes: string;
+  vehicle_type?: string | null;
+  manufacturer?: string | null;
+  model?: string | null;
+  is_hgv?: boolean | null;
+  tare_weight_kg?: number | null;
+  max_gross_weight_kg?: number | null;
+  length_mm?: number | null;
+  width_mm?: number | null;
+  height_mm?: number | null;
+  axle_count?: number | null;
+  max_axle_load_kg?: number | null;
+  payload_capacity_kg?: number | null;
+  platform_length_mm?: number | null;
+  platform_width_mm?: number | null;
+  platform_height_from_ground_mm?: number | null;
+  max_platform_payload_kg?: number | null;
+  max_cargo_length_mm?: number | null;
+  max_cargo_width_mm?: number | null;
+  max_cargo_height_mm?: number | null;
+  max_cargo_weight_kg?: number | null;
+  can_use_trailer?: boolean | null;
+  default_trailer_id?: UUID | null;
+  combined_length_with_trailer_mm?: number | null;
+  coupling_length_mm?: number | null;
+  height_safety_margin_mm?: number;
+  width_safety_margin_mm?: number;
+  weight_safety_margin_kg?: number;
+  load_profiles?: VehicleLoadProfile[];
+}
+
+export interface Trailer {
+  id: UUID;
+  scenario_id: UUID;
+  name: string;
+  registration_number: string;
+  active: boolean;
+  tare_weight_kg: number | null;
+  max_gross_weight_kg: number | null;
+  length_mm: number | null;
+  width_mm: number | null;
+  height_mm: number | null;
+  platform_length_mm: number | null;
+  platform_width_mm: number | null;
+  platform_height_from_ground_mm: number | null;
+  max_platform_payload_kg: number | null;
+  payload_capacity_kg: number | null;
+  axle_count: number | null;
+  max_axle_load_kg: number | null;
+  max_cargo_length_mm: number | null;
+  max_cargo_width_mm: number | null;
+  max_cargo_height_mm: number | null;
+  max_cargo_weight_kg: number | null;
+  notes: string;
+}
+
+export type VehicleLoadConfigurationType =
+  | 'EMPTY_TRUCK'
+  | 'CARGO_ON_TRUCK'
+  | 'EMPTY_COMBINATION'
+  | 'CARGO_ON_TRUCK_WITH_TRAILER'
+  | 'CARGO_ON_TRAILER_WITH_TRAILER'
+  | 'TWO_CARGO_SPLIT';
+
+export interface VehicleLoadProfile {
+  id: UUID;
+  vehicle_id: UUID;
+  configuration_type: VehicleLoadConfigurationType;
+  max_actual_axle_load_kg: number;
 }
 
 export interface DriverShift {
@@ -188,6 +256,10 @@ export interface LogisticsRequest {
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
   scheduled_date: IsoDate | null;
+  cargo_length_mm?: number | null;
+  cargo_width_mm?: number | null;
+  cargo_height_mm?: number | null;
+  cargo_weight_kg?: number | null;
   date_options: RequestDateOption[];
   tasks?: PlanningTask[];
   zone_status?: 'CURRENT' | 'STALE' | 'OUTSIDE_ZONES';
@@ -218,6 +290,40 @@ export interface RouteLeg {
   distance_meters: number;
   travel_seconds: number;
   geometry: Feature<LineString>;
+  routing_profile_snapshot?: RoutingProfileSnapshot | null;
+  routing_provider?: string | null;
+  osm_data_version?: string | null;
+  routed_at?: IsoDateTime | null;
+}
+
+export type CargoPlacementPosition = 'TRUCK_PLATFORM' | 'TRAILER_PLATFORM';
+
+export interface RoutingCargoPlacementSnapshot {
+  cargoId: string;
+  position: CargoPlacementPosition;
+  lengthMm: number;
+  widthMm: number;
+  heightMm: number;
+  weightKg: number;
+}
+
+export interface RoutingProfileSnapshot {
+  vehicleId: UUID;
+  trailerId: UUID | null;
+  trailerAttached: boolean;
+  isHgv: boolean;
+  cargoCount: number;
+  cargoPlacements: RoutingCargoPlacementSnapshot[];
+  configurationType: VehicleLoadConfigurationType;
+  effectiveHeightMeters: number;
+  effectiveWidthMeters: number;
+  effectiveLengthMeters: number;
+  actualWeightTons: number;
+  maxAxleLoadTons: number;
+  axleCount: number;
+  routingProvider?: string | null;
+  osmDataVersion?: string | null;
+  calculatedAt?: IsoDateTime | null;
 }
 
 export interface RouteStop {
@@ -385,6 +491,7 @@ export interface ScenarioWorkspace {
   zone_relations: ZoneRelation[];
   drivers: Driver[];
   vehicles: Vehicle[];
+  trailers?: Trailer[];
   shifts: DriverShift[];
   requests: LogisticsRequest[];
   plans?: RoutePlan[];

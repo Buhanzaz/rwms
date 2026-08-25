@@ -109,6 +109,17 @@ class StopType(StrEnum):
     DEPOT_RETURN = "DEPOT_RETURN"
 
 
+class VehicleLoadProfileType(StrEnum):
+    """Operational vehicle states with explicitly measured peak axle loads."""
+
+    EMPTY_TRUCK = "EMPTY_TRUCK"
+    CARGO_ON_TRUCK = "CARGO_ON_TRUCK"
+    EMPTY_COMBINATION = "EMPTY_COMBINATION"
+    CARGO_ON_TRUCK_WITH_TRAILER = "CARGO_ON_TRUCK_WITH_TRAILER"
+    CARGO_ON_TRAILER_WITH_TRAILER = "CARGO_ON_TRAILER_WITH_TRAILER"
+    TWO_CARGO_SPLIT = "TWO_CARGO_SPLIT"
+
+
 class Scenario(UuidPrimaryKeyMixin, TimestampMixin, Base):
     """Independent, reproducible logistics experiment and its configuration."""
 
@@ -136,6 +147,9 @@ class Scenario(UuidPrimaryKeyMixin, TimestampMixin, Base):
         back_populates="scenario", cascade="all, delete-orphan", passive_deletes=True
     )
     vehicles: Mapped[list[Vehicle]] = relationship(
+        back_populates="scenario", cascade="all, delete-orphan", passive_deletes=True
+    )
+    trailers: Mapped[list[Trailer]] = relationship(
         back_populates="scenario", cascade="all, delete-orphan", passive_deletes=True
     )
     shifts: Mapped[list[DriverShift]] = relationship(
@@ -282,8 +296,73 @@ class Driver(UuidPrimaryKeyMixin, Base):
     )
 
 
+class Trailer(UuidPrimaryKeyMixin, Base):
+    """Scenario-owned trailer whose physical limits participate in truck routing."""
+
+    __tablename__ = "trailers"
+    __table_args__ = (
+        UniqueConstraint(
+            "scenario_id", "registration_number", name="uq_trailers_scenario_registration"
+        ),
+        CheckConstraint(
+            "(tare_weight_kg IS NULL OR tare_weight_kg > 0) AND "
+            "(max_gross_weight_kg IS NULL OR max_gross_weight_kg > 0) AND "
+            "(length_mm IS NULL OR length_mm > 0) AND "
+            "(width_mm IS NULL OR width_mm > 0) AND "
+            "(height_mm IS NULL OR height_mm > 0) AND "
+            "(platform_length_mm IS NULL OR platform_length_mm > 0) AND "
+            "(platform_width_mm IS NULL OR platform_width_mm > 0) AND "
+            "(platform_height_from_ground_mm IS NULL OR platform_height_from_ground_mm > 0) AND "
+            "(max_platform_payload_kg IS NULL OR max_platform_payload_kg > 0) AND "
+            "(payload_capacity_kg IS NULL OR payload_capacity_kg > 0) AND "
+            "(axle_count IS NULL OR axle_count > 0) AND "
+            "(max_axle_load_kg IS NULL OR max_axle_load_kg > 0) AND "
+            "(max_cargo_length_mm IS NULL OR max_cargo_length_mm > 0) AND "
+            "(max_cargo_width_mm IS NULL OR max_cargo_width_mm > 0) AND "
+            "(max_cargo_height_mm IS NULL OR max_cargo_height_mm > 0) AND "
+            "(max_cargo_weight_kg IS NULL OR max_cargo_weight_kg > 0)",
+            name="positive_optional_routing_values",
+        ),
+        CheckConstraint(
+            "max_gross_weight_kg IS NULL OR tare_weight_kg IS NULL OR "
+            "max_gross_weight_kg >= tare_weight_kg",
+            name="gross_not_below_tare",
+        ),
+        Index("ix_trailers_scenario_active", "scenario_id", "active"),
+    )
+
+    scenario_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    registration_number: Mapped[str] = mapped_column(String(64), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    tare_weight_kg: Mapped[int | None] = mapped_column(Integer)
+    max_gross_weight_kg: Mapped[int | None] = mapped_column(Integer)
+    length_mm: Mapped[int | None] = mapped_column(Integer)
+    width_mm: Mapped[int | None] = mapped_column(Integer)
+    height_mm: Mapped[int | None] = mapped_column(Integer)
+    platform_length_mm: Mapped[int | None] = mapped_column(Integer)
+    platform_width_mm: Mapped[int | None] = mapped_column(Integer)
+    platform_height_from_ground_mm: Mapped[int | None] = mapped_column(Integer)
+    max_platform_payload_kg: Mapped[int | None] = mapped_column(Integer)
+    payload_capacity_kg: Mapped[int | None] = mapped_column(Integer)
+    axle_count: Mapped[int | None] = mapped_column(Integer)
+    max_axle_load_kg: Mapped[int | None] = mapped_column(Integer)
+    max_cargo_length_mm: Mapped[int | None] = mapped_column(Integer)
+    max_cargo_width_mm: Mapped[int | None] = mapped_column(Integer)
+    max_cargo_height_mm: Mapped[int | None] = mapped_column(Integer)
+    max_cargo_weight_kg: Mapped[int | None] = mapped_column(Integer)
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    scenario: Mapped[Scenario] = relationship(back_populates="trailers")
+    default_for_vehicles: Mapped[list[Vehicle]] = relationship(
+        back_populates="default_trailer", foreign_keys="Vehicle.default_trailer_id"
+    )
+
+
 class Vehicle(UuidPrimaryKeyMixin, Base):
-    """Cabin-carrying vehicle with capacity and deterministic speed settings."""
+    """Cabin-carrying vehicle with optional complete physical routing data."""
 
     __tablename__ = "vehicles"
     __table_args__ = (
@@ -293,7 +372,40 @@ class Vehicle(UuidPrimaryKeyMixin, Base):
         CheckConstraint("capacity BETWEEN 1 AND 2", name="valid_capacity"),
         CheckConstraint("average_speed_city > 0", name="positive_city_speed"),
         CheckConstraint("average_speed_region > 0", name="positive_region_speed"),
+        CheckConstraint(
+            "(tare_weight_kg IS NULL OR tare_weight_kg > 0) AND "
+            "(max_gross_weight_kg IS NULL OR max_gross_weight_kg > 0) AND "
+            "(length_mm IS NULL OR length_mm > 0) AND "
+            "(width_mm IS NULL OR width_mm > 0) AND "
+            "(height_mm IS NULL OR height_mm > 0) AND "
+            "(axle_count IS NULL OR axle_count > 0) AND "
+            "(max_axle_load_kg IS NULL OR max_axle_load_kg > 0) AND "
+            "(payload_capacity_kg IS NULL OR payload_capacity_kg > 0) AND "
+            "(platform_length_mm IS NULL OR platform_length_mm > 0) AND "
+            "(platform_width_mm IS NULL OR platform_width_mm > 0) AND "
+            "(platform_height_from_ground_mm IS NULL OR platform_height_from_ground_mm > 0) AND "
+            "(max_platform_payload_kg IS NULL OR max_platform_payload_kg > 0) AND "
+            "(max_cargo_length_mm IS NULL OR max_cargo_length_mm > 0) AND "
+            "(max_cargo_width_mm IS NULL OR max_cargo_width_mm > 0) AND "
+            "(max_cargo_height_mm IS NULL OR max_cargo_height_mm > 0) AND "
+            "(max_cargo_weight_kg IS NULL OR max_cargo_weight_kg > 0) AND "
+            "(combined_length_with_trailer_mm IS NULL OR "
+            "combined_length_with_trailer_mm > 0) AND "
+            "(coupling_length_mm IS NULL OR coupling_length_mm > 0)",
+            name="positive_optional_routing_values",
+        ),
+        CheckConstraint(
+            "max_gross_weight_kg IS NULL OR tare_weight_kg IS NULL OR "
+            "max_gross_weight_kg >= tare_weight_kg",
+            name="gross_not_below_tare",
+        ),
+        CheckConstraint(
+            "height_safety_margin_mm >= 0 AND width_safety_margin_mm >= 0 AND "
+            "weight_safety_margin_kg >= 0",
+            name="nonnegative_routing_safety_margins",
+        ),
         Index("ix_vehicles_scenario_active", "scenario_id", "active"),
+        Index("ix_vehicles_default_trailer_id", "default_trailer_id"),
     )
 
     scenario_id: Mapped[UUID] = mapped_column(
@@ -305,12 +417,71 @@ class Vehicle(UuidPrimaryKeyMixin, Base):
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     average_speed_city: Mapped[float] = mapped_column(Float, nullable=False, default=35)
     average_speed_region: Mapped[float] = mapped_column(Float, nullable=False, default=65)
+    vehicle_type: Mapped[str | None] = mapped_column(String(64))
+    manufacturer: Mapped[str | None] = mapped_column(String(100))
+    model: Mapped[str | None] = mapped_column(String(100))
+    is_hgv: Mapped[bool | None] = mapped_column(Boolean)
+    tare_weight_kg: Mapped[int | None] = mapped_column(Integer)
+    max_gross_weight_kg: Mapped[int | None] = mapped_column(Integer)
+    length_mm: Mapped[int | None] = mapped_column(Integer)
+    width_mm: Mapped[int | None] = mapped_column(Integer)
+    height_mm: Mapped[int | None] = mapped_column(Integer)
+    axle_count: Mapped[int | None] = mapped_column(Integer)
+    max_axle_load_kg: Mapped[int | None] = mapped_column(Integer)
+    payload_capacity_kg: Mapped[int | None] = mapped_column(Integer)
+    platform_length_mm: Mapped[int | None] = mapped_column(Integer)
+    platform_width_mm: Mapped[int | None] = mapped_column(Integer)
+    platform_height_from_ground_mm: Mapped[int | None] = mapped_column(Integer)
+    max_platform_payload_kg: Mapped[int | None] = mapped_column(Integer)
+    max_cargo_length_mm: Mapped[int | None] = mapped_column(Integer)
+    max_cargo_width_mm: Mapped[int | None] = mapped_column(Integer)
+    max_cargo_height_mm: Mapped[int | None] = mapped_column(Integer)
+    max_cargo_weight_kg: Mapped[int | None] = mapped_column(Integer)
+    can_use_trailer: Mapped[bool | None] = mapped_column(Boolean)
+    default_trailer_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("trailers.id", ondelete="SET NULL")
+    )
+    combined_length_with_trailer_mm: Mapped[int | None] = mapped_column(Integer)
+    coupling_length_mm: Mapped[int | None] = mapped_column(Integer)
+    height_safety_margin_mm: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    width_safety_margin_mm: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    weight_safety_margin_kg: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     scenario: Mapped[Scenario] = relationship(back_populates="vehicles")
+    default_trailer: Mapped[Trailer | None] = relationship(
+        back_populates="default_for_vehicles", foreign_keys=[default_trailer_id]
+    )
     shifts: Mapped[list[DriverShift]] = relationship(
         back_populates="vehicle", cascade="all, delete-orphan", passive_deletes=True
     )
+    load_profiles: Mapped[list[VehicleLoadProfile]] = relationship(
+        back_populates="vehicle",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="VehicleLoadProfile.configuration_type",
+    )
+
+
+class VehicleLoadProfile(UuidPrimaryKeyMixin, Base):
+    """Configured peak axle load for one vehicle and operational load state."""
+
+    __tablename__ = "vehicle_load_profiles"
+    __table_args__ = (
+        UniqueConstraint(
+            "vehicle_id", "configuration_type", name="uq_vehicle_load_profiles_configuration"
+        ),
+        CheckConstraint("max_actual_axle_load_kg > 0", name="positive_actual_axle_load"),
+        Index("ix_vehicle_load_profiles_vehicle_id", "vehicle_id"),
+    )
+
+    vehicle_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("vehicles.id", ondelete="CASCADE"), nullable=False
+    )
+    configuration_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    max_actual_axle_load_kg: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    vehicle: Mapped[Vehicle] = relationship(back_populates="load_profiles")
 
 
 class DriverShift(UuidPrimaryKeyMixin, Base):
@@ -363,6 +534,13 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint("quantity > 0", name="positive_quantity"),
         CheckConstraint("service_minutes >= 0", name="nonnegative_service"),
         CheckConstraint(
+            "(cargo_length_mm IS NULL AND cargo_width_mm IS NULL AND "
+            "cargo_height_mm IS NULL AND cargo_weight_kg IS NULL) OR "
+            "(cargo_length_mm > 0 AND cargo_width_mm > 0 AND "
+            "cargo_height_mm > 0 AND cargo_weight_kg > 0)",
+            name="complete_positive_cargo_dimensions",
+        ),
+        CheckConstraint(
             "external_version IS NULL OR external_version >= 0",
             name="nonnegative_external_version",
         ),
@@ -388,6 +566,10 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
     latitude: Mapped[float] = mapped_column(Float, nullable=False)
     longitude: Mapped[float] = mapped_column(Float, nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    cargo_length_mm: Mapped[int | None] = mapped_column(Integer)
+    cargo_width_mm: Mapped[int | None] = mapped_column(Integer)
+    cargo_height_mm: Mapped[int | None] = mapped_column(Integer)
+    cargo_weight_kg: Mapped[int | None] = mapped_column(Integer)
     service_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=RequestStatus.READY)
@@ -453,6 +635,13 @@ class PlanningTask(UuidPrimaryKeyMixin, Base):
         UniqueConstraint("request_id", "part_number", name="uq_planning_tasks_request_part"),
         CheckConstraint("quantity BETWEEN 1 AND 2", name="valid_quantity"),
         CheckConstraint("service_minutes >= 0", name="nonnegative_service"),
+        CheckConstraint(
+            "(cargo_length_mm IS NULL AND cargo_width_mm IS NULL AND "
+            "cargo_height_mm IS NULL AND cargo_weight_kg IS NULL) OR "
+            "(cargo_length_mm > 0 AND cargo_width_mm > 0 AND "
+            "cargo_height_mm > 0 AND cargo_weight_kg > 0)",
+            name="complete_positive_cargo_dimensions",
+        ),
         Index("ix_planning_tasks_zone_status", "zone_id", "status"),
     )
 
@@ -463,6 +652,10 @@ class PlanningTask(UuidPrimaryKeyMixin, Base):
     )
     part_number: Mapped[int] = mapped_column(Integer, nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    cargo_length_mm: Mapped[int | None] = mapped_column(Integer)
+    cargo_width_mm: Mapped[int | None] = mapped_column(Integer)
+    cargo_height_mm: Mapped[int | None] = mapped_column(Integer)
+    cargo_weight_kg: Mapped[int | None] = mapped_column(Integer)
     type: Mapped[str] = mapped_column(String(16), nullable=False)
     latitude: Mapped[float] = mapped_column(Float, nullable=False)
     longitude: Mapped[float] = mapped_column(Float, nullable=False)
@@ -666,6 +859,12 @@ class RouteSegment(UuidPrimaryKeyMixin, Base):
     geometry: Mapped[Any] = mapped_column(
         Geometry("LINESTRING", srid=4326, spatial_index=False), nullable=False
     )
+    routing_profile_snapshot: Mapped[dict[str, Any] | None] = mapped_column(
+        MutableDict.as_mutable(JSONB)
+    )
+    routing_provider: Mapped[str | None] = mapped_column(String(64))
+    osm_data_version: Mapped[str | None] = mapped_column(String(100))
+    routed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     route_cycle: Mapped[RouteCycle] = relationship(back_populates="segments")
     from_stop: Mapped[RouteStop] = relationship(foreign_keys=[from_stop_id])

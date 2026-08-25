@@ -40,6 +40,8 @@ services:
     restart: "no"
 
   osrm-prepare:
+    profiles:
+      - legacy-routing
     image: osrm/osrm-backend:v5.25.0
     user: "0:0"
     depends_on:
@@ -65,6 +67,8 @@ services:
     restart: "no"
 
   osrm:
+    profiles:
+      - legacy-routing
     image: osrm/osrm-backend:v5.25.0
     depends_on:
       osrm-prepare:
@@ -87,6 +91,53 @@ services:
       start_period: 15s
     restart: unless-stopped
 
+  valhalla-init:
+    image: alpine:3.21
+    user: "0:0"
+    depends_on:
+      osrm-download:
+        condition: service_completed_successfully
+    volumes:
+      - logistics-osrm-data:/osm-source:ro
+      - logistics-valhalla-data:/custom_files
+    entrypoint:
+      - /bin/sh
+      - -ec
+    command:
+      - |
+        test -s /osm-source/region.osm.pbf
+        ln -sfn /osm-source/region.osm.pbf /custom_files/region.osm.pbf
+        test -e /custom_files/region.osm.pbf
+    restart: "no"
+
+  valhalla:
+    image: ghcr.io/valhalla/valhalla-scripted:3.8.3
+    depends_on:
+      valhalla-init:
+        condition: service_completed_successfully
+    environment:
+      build_elevation: "False"
+      build_admins: "True"
+      build_time_zones: "True"
+      build_tar: "True"
+      force_rebuild: "False"
+      use_tiles_ignore_pbf: "False"
+      use_default_speeds_config: "False"
+      serve_tiles: "True"
+      server_threads: ${VALHALLA_SERVER_THREADS:-2}
+    volumes:
+      - logistics-osrm-data:/osm-source:ro
+      - logistics-valhalla-data:/custom_files
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl --fail --silent --show-error http://127.0.0.1:8002/status >/dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 30m
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
@@ -94,10 +145,14 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://logistics:logistics@db:5432/logistics}
-      ROUTING_PROVIDER: ${ROUTING_PROVIDER:-mock}
+      ROUTING_PROVIDER: ${ROUTING_PROVIDER:-valhalla}
       OSRM_BASE_URL: ${OSRM_BASE_URL:-http://osrm:5000}
       OSRM_PROFILE: ${OSRM_PROFILE:-driving}
       OSRM_TIMEOUT_SECONDS: ${OSRM_TIMEOUT_SECONDS:-15}
+      VALHALLA_URL: ${VALHALLA_URL:-http://valhalla:8002}
+      VALHALLA_ENABLED: ${VALHALLA_ENABLED:-true}
+      VALHALLA_TIMEOUT_SECONDS: ${VALHALLA_TIMEOUT_SECONDS:-30}
+      OSM_DATA_VERSION: ${OSM_DATA_VERSION:-unknown}
       DEFAULT_SCENARIO_TIMEZONE: ${DEFAULT_SCENARIO_TIMEZONE:-Europe/Moscow}
       PLANNER_DEFAULT_SEED: ${PLANNER_DEFAULT_SEED:-20260822}
       RWMS_SYNC_ENABLED: ${RWMS_SYNC_ENABLED:-false}
@@ -113,7 +168,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      osrm:
+      valhalla:
         condition: service_healthy
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
@@ -197,3 +252,4 @@ services:
 volumes:
   logistics-postgres:
   logistics-osrm-data:
+  logistics-valhalla-data:

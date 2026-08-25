@@ -10,7 +10,9 @@ from app.models import (
     Driver,
     DriverShift,
     RequestDateOption,
+    Trailer,
     Vehicle,
+    VehicleLoadProfile,
     Warehouse,
     Zone,
     ZoneRelation,
@@ -31,7 +33,15 @@ from app.schemas.domain import (
     ShiftCreate,
     ShiftRead,
     ShiftUpdate,
+    TrailerCreate,
+    TrailerRead,
+    TrailerUpdate,
+    VehicleConfigurationCreate,
+    VehicleConfigurationUpdate,
     VehicleCreate,
+    VehicleLoadProfileCreate,
+    VehicleLoadProfileRead,
+    VehicleLoadProfileUpdate,
     VehicleRead,
     VehicleUpdate,
     WarehouseCreate,
@@ -246,6 +256,21 @@ async def create_vehicle(scenario_id: UUID, payload: VehicleCreate, session: Ses
     return await service.create_vehicle(session, scenario_id, payload)
 
 
+@router.post(
+    "/scenarios/{scenario_id}/vehicle-configurations",
+    response_model=VehicleRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_vehicle_configuration(
+    scenario_id: UUID,
+    payload: VehicleConfigurationCreate,
+    session: SessionDep,
+) -> Vehicle:
+    """Atomically create a vehicle and its operational axle-load profiles."""
+
+    return await service.create_vehicle_configuration(session, scenario_id, payload)
+
+
 @router.patch("/vehicles/{vehicle_id}", response_model=VehicleRead)
 async def update_vehicle(vehicle_id: UUID, payload: VehicleUpdate, session: SessionDep) -> Vehicle:
     """Update a vehicle."""
@@ -253,11 +278,110 @@ async def update_vehicle(vehicle_id: UUID, payload: VehicleUpdate, session: Sess
     return await service.update_vehicle(session, vehicle_id, payload)
 
 
+@router.put("/vehicles/{vehicle_id}/configuration", response_model=VehicleRead)
+async def update_vehicle_configuration(
+    vehicle_id: UUID,
+    payload: VehicleConfigurationUpdate,
+    session: SessionDep,
+) -> Vehicle:
+    """Atomically replace vehicle fields and its complete axle-profile set."""
+
+    return await service.update_vehicle_configuration(session, vehicle_id, payload)
+
+
 @router.delete("/vehicles/{vehicle_id}", status_code=204)
 async def delete_vehicle(vehicle_id: UUID, session: SessionDep) -> Response:
     """Delete a vehicle not retained by plan history."""
 
     await service.delete_catalog_entity(session, Vehicle, vehicle_id, "vehicle")
+    return Response(status_code=204)
+
+
+@router.get("/scenarios/{scenario_id}/trailers", response_model=list[TrailerRead])
+async def list_trailers(scenario_id: UUID, session: SessionDep) -> object:
+    """List scenario-owned trailers."""
+
+    return await service.list_catalog(session, Trailer, scenario_id)
+
+
+@router.post(
+    "/scenarios/{scenario_id}/trailers",
+    response_model=TrailerRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_trailer(scenario_id: UUID, payload: TrailerCreate, session: SessionDep) -> Trailer:
+    """Create a scenario-owned trailer."""
+
+    return await service.create_trailer(session, scenario_id, payload)
+
+
+@router.get("/trailers/{trailer_id}", response_model=TrailerRead)
+async def get_trailer(trailer_id: UUID, session: SessionDep) -> Trailer:
+    """Read one trailer by UUID."""
+
+    return await get_required(session, Trailer, trailer_id, "trailer")
+
+
+@router.patch("/trailers/{trailer_id}", response_model=TrailerRead)
+async def update_trailer(trailer_id: UUID, payload: TrailerUpdate, session: SessionDep) -> Trailer:
+    """Update a trailer's label, availability, or physical limits."""
+
+    return await service.update_trailer(session, trailer_id, payload)
+
+
+@router.delete("/trailers/{trailer_id}", status_code=204)
+async def delete_trailer(trailer_id: UUID, session: SessionDep) -> Response:
+    """Delete a trailer while vehicle defaults are cleared by the database."""
+
+    await service.delete_catalog_entity(session, Trailer, trailer_id, "trailer")
+    return Response(status_code=204)
+
+
+@router.get(
+    "/vehicles/{vehicle_id}/load-profiles",
+    response_model=list[VehicleLoadProfileRead],
+)
+async def list_vehicle_load_profiles(
+    vehicle_id: UUID, session: SessionDep
+) -> list[VehicleLoadProfile]:
+    """List configured operational peak axle loads for one vehicle."""
+
+    return await service.list_vehicle_load_profiles(session, vehicle_id)
+
+
+@router.post(
+    "/vehicles/{vehicle_id}/load-profiles",
+    response_model=VehicleLoadProfileRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_vehicle_load_profile(
+    vehicle_id: UUID,
+    payload: VehicleLoadProfileCreate,
+    session: SessionDep,
+) -> VehicleLoadProfile:
+    """Create one vehicle operational axle-load profile."""
+
+    return await service.create_vehicle_load_profile(session, vehicle_id, payload)
+
+
+@router.patch("/vehicle-load-profiles/{profile_id}", response_model=VehicleLoadProfileRead)
+async def update_vehicle_load_profile(
+    profile_id: UUID,
+    payload: VehicleLoadProfileUpdate,
+    session: SessionDep,
+) -> VehicleLoadProfile:
+    """Update one operational axle-load profile."""
+
+    return await service.update_vehicle_load_profile(session, profile_id, payload)
+
+
+@router.delete("/vehicle-load-profiles/{profile_id}", status_code=204)
+async def delete_vehicle_load_profile(profile_id: UUID, session: SessionDep) -> Response:
+    """Delete one operational axle-load profile."""
+
+    await service.delete_catalog_entity(
+        session, VehicleLoadProfile, profile_id, "vehicle_load_profile"
+    )
     return Response(status_code=204)
 
 

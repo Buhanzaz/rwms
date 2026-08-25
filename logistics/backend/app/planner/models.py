@@ -7,9 +7,18 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from enum import StrEnum
 from math import isfinite
+from typing import TYPE_CHECKING
 
 from app.routing import GeoJsonLineString, GeoPoint
 from app.routing.models import require_aware
+
+if TYPE_CHECKING:
+    from app.routing.truck_profile import (
+        CargoDimensions,
+        OperationalAxleLoadProfile,
+        TrailerSpec,
+        VehicleRoutingSpec,
+    )
 
 
 class TaskType(StrEnum):
@@ -67,6 +76,16 @@ class UnassignedReasonCode(StrEnum):
     DUPLICATE_ASSIGNMENT_CONFLICT = "DUPLICATE_ASSIGNMENT_CONFLICT"
     NO_FEASIBLE_DELIVERY_PAIR = "NO_FEASIBLE_DELIVERY_PAIR"
     NO_FEASIBLE_PICKUP_PAIR = "NO_FEASIBLE_PICKUP_PAIR"
+    CARGO_TOO_HEAVY = "CARGO_TOO_HEAVY"
+    CARGO_TOO_LONG = "CARGO_TOO_LONG"
+    CARGO_TOO_WIDE = "CARGO_TOO_WIDE"
+    CARGO_TOO_HIGH = "CARGO_TOO_HIGH"
+    TRAILER_REQUIRED = "TRAILER_REQUIRED"
+    NO_COMPATIBLE_TRAILER = "NO_COMPATIBLE_TRAILER"
+    AXLE_LOAD_EXCEEDED = "AXLE_LOAD_EXCEEDED"
+    NO_SAFE_ROUTE = "NO_SAFE_ROUTE"
+    ROUTING_PROVIDER_UNAVAILABLE = "ROUTING_PROVIDER_UNAVAILABLE"
+    ROUTING_PROFILE_INCOMPLETE = "ROUTING_PROFILE_INCOMPLETE"
     UNKNOWN = "UNKNOWN"
 
 
@@ -179,6 +198,7 @@ class LogisticsRequest:
     split_allowed: bool = True
     notes: str = ""
     source_key: str | None = None
+    cargo_dimensions: CargoDimensions | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.created_at, "created_at")
@@ -211,6 +231,7 @@ class PlanningTask:
     selected_option: RequestDateOption
     remaining_date_count: int
     is_last_available_date: bool
+    cargo_dimensions: CargoDimensions | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.created_at, "created_at")
@@ -284,6 +305,9 @@ class Vehicle:
     name: str
     capacity: int = 2
     active: bool = True
+    routing_spec: VehicleRoutingSpec | None = None
+    default_trailer: TrailerSpec | None = None
+    axle_load_profiles: tuple[OperationalAxleLoadProfile, ...] = ()
 
     def __post_init__(self) -> None:
         if self.capacity < 1:
@@ -324,10 +348,15 @@ class PlannedLeg:
     distance_meters: int
     travel_seconds: int
     geometry: GeoJsonLineString
+    routing_profile_snapshot: Mapping[str, object] | None = None
+    routing_provider: str | None = None
+    osm_data_version: str | None = None
+    routed_at: datetime | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.departure_at, "departure_at")
         require_aware(self.arrival_at, "arrival_at")
+        require_aware(self.routed_at, "routed_at")
         if self.departure_at > self.arrival_at:
             raise ValueError("leg departure cannot be after arrival")
 

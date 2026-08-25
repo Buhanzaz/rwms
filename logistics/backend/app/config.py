@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from math import isfinite
 from urllib.parse import urlparse
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
@@ -42,6 +43,24 @@ class Settings(BaseSettings):
     osrm_timeout_seconds: float = Field(
         default=15.0,
         validation_alias=AliasChoices("LOGISTICS_OSRM_TIMEOUT_SECONDS", "OSRM_TIMEOUT_SECONDS"),
+    )
+    valhalla_url: str = Field(
+        default="http://valhalla:8002",
+        validation_alias=AliasChoices("LOGISTICS_VALHALLA_URL", "VALHALLA_URL"),
+    )
+    valhalla_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("LOGISTICS_VALHALLA_ENABLED", "VALHALLA_ENABLED"),
+    )
+    valhalla_timeout_seconds: float = Field(
+        default=30.0,
+        validation_alias=AliasChoices(
+            "LOGISTICS_VALHALLA_TIMEOUT_SECONDS", "VALHALLA_TIMEOUT_SECONDS"
+        ),
+    )
+    osm_data_version: str = Field(
+        default="unknown",
+        validation_alias=AliasChoices("LOGISTICS_OSM_DATA_VERSION", "OSM_DATA_VERSION"),
     )
     default_scenario_timezone: str = Field(
         default="Europe/Moscow",
@@ -118,8 +137,8 @@ class Settings(BaseSettings):
         """Accept only installed providers rather than silently falling back."""
 
         normalized = value.strip().lower()
-        if normalized not in {"mock", "osrm"}:
-            raise ValueError("ROUTING_PROVIDER must be either 'mock' or 'osrm'")
+        if normalized not in {"mock", "osrm", "valhalla"}:
+            raise ValueError("ROUTING_PROVIDER must be 'mock', 'osrm', or 'valhalla'")
         return normalized
 
     @field_validator("osrm_base_url")
@@ -151,6 +170,40 @@ class Settings(BaseSettings):
         if value <= 0:
             raise ValueError("OSRM_TIMEOUT_SECONDS must be positive")
         return value
+
+    @field_validator("valhalla_url")
+    @classmethod
+    def validate_valhalla_url(cls, value: str) -> str:
+        """Require an absolute internal Valhalla HTTP endpoint without URL parameters."""
+
+        normalized = value.strip().rstrip("/")
+        parsed = urlparse(normalized)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("VALHALLA_URL must be an absolute http(s) URL")
+        if parsed.query or parsed.fragment:
+            raise ValueError("VALHALLA_URL must not contain a query or fragment")
+        return normalized
+
+    @field_validator("valhalla_timeout_seconds")
+    @classmethod
+    def validate_valhalla_timeout(cls, value: float) -> float:
+        """Reject negative request deadlines while permitting an explicit zero deadline."""
+
+        if not isfinite(value) or value < 0:
+            raise ValueError("VALHALLA_TIMEOUT_SECONDS must be non-negative")
+        return value
+
+    @field_validator("osm_data_version")
+    @classmethod
+    def validate_osm_data_version(cls, value: str) -> str:
+        """Keep the operator-supplied tileset identity bounded and log-safe."""
+
+        normalized = value.strip()
+        if not normalized or len(normalized) > 128 or any(char.isspace() for char in normalized):
+            raise ValueError(
+                "OSM_DATA_VERSION must be non-blank, at most 128 characters, and contain no spaces"
+            )
+        return normalized
 
     @field_validator("rwms_logistics_base_url", "rwms_token_url")
     @classmethod
@@ -201,6 +254,14 @@ class Settings(BaseSettings):
             missing.append("RWMS_CLIENT_SECRET")
         if missing:
             raise ValueError("RWMS synchronization requires " + ", ".join(missing))
+        return self
+
+    @model_validator(mode="after")
+    def validate_enabled_valhalla_provider(self) -> Settings:
+        """Do not accept a selected truck provider that was explicitly disabled."""
+
+        if self.routing_provider == "valhalla" and not self.valhalla_enabled:
+            raise ValueError("ROUTING_PROVIDER=valhalla requires VALHALLA_ENABLED=true")
         return self
 
     @field_validator("default_scenario_timezone")

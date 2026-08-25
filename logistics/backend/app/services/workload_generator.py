@@ -22,10 +22,12 @@ from app.models import (
     Zone,
 )
 from app.models.domain import RequestStatus, RequestType
+from app.routing import GeoPoint, RoadSnapNotFoundError, RoadSnapper, SnappedPoint
 from app.schemas.domain import (
     LogisticsRequestCreate,
     RequestDateOptionInput,
     ScenarioSettings,
+    WorkloadDeletionResult,
     WorkloadGenerationDailyCount,
     WorkloadGenerationResult,
     WorkloadGeneratorInput,
@@ -33,6 +35,7 @@ from app.schemas.domain import (
 from app.services import catalog
 
 _POINT_ATTEMPTS = 256
+_ROAD_SNAP_ATTEMPTS = 24
 GENERATOR_SOURCE_SYSTEM = "SIMULATOR_GENERATOR"
 _LEGACY_GENERATOR_NOTES_PREFIX = "Детерминированная нагрузка, seed="
 _GENERATOR_EXTERNAL_ID_NAMESPACE = UUID("64bf4fc6-a798-4a4d-9d4a-75a10c708dbb")
@@ -73,6 +76,35 @@ def _point_inside_zone(rng: random.Random, zone: Zone) -> Point:
     if not component.contains(fallback):
         raise ValueError("zone has no strictly interior representative point")
     return fallback
+
+
+async def _routable_point_inside_zone(
+    rng: random.Random,
+    zone: Zone,
+    snapper: RoadSnapper,
+) -> SnappedPoint:
+    """Sample and snap a bounded number of candidates covered by the selected zone."""
+
+    geometry = to_shape(zone.geometry)
+    if not isinstance(geometry, (Polygon, MultiPolygon)):
+        raise ValueError("zone geometry must be Polygon or MultiPolygon")
+    for _ in range(_ROAD_SNAP_ATTEMPTS):
+        candidate = _point_inside_zone(rng, zone)
+        try:
+            snapped = await snapper.snap_point(
+                GeoPoint(lon=candidate.x, lat=candidate.y, is_city=True)
+            )
+        except RoadSnapNotFoundError:
+            continue
+        snapped_geometry = Point(snapped.point.lon, snapped.point.lat)
+        if geometry.covers(snapped_geometry):
+            return snapped
+    raise ApiError(
+        422,
+        "NO_ROUTABLE_POINT_IN_ZONE",
+        f"Не удалось найти доступную для автомобиля точку в зоне {zone.code}.",  # noqa: RUF001
+        extra={"zone_id": str(zone.id), "zone_code": zone.code},
+    )
 
 
 def _date_options(
@@ -164,61 +196,6 @@ async def _replace_generated_requests(
     return len(requests)
 
 
-async def _reject_repeated_seed_without_regeneration(
-    session: AsyncSession,
-    scenario_id: UUID,
-    horizon: tuple[date, ...],
-    seed: int,
-    deliveries_per_day: int,
-    pickups_per_day: int,
-) -> None:
-    """Prevent an identical generator run from creating duplicate customer stops."""
-
-    expected_external_ids = tuple(
-        _generated_external_id(seed, primary_date, request_type, sequence)
-        for primary_date in horizon
-        for request_type, count in (
-            (RequestType.DELIVERY, deliveries_per_day),
-            (RequestType.PICKUP, pickups_per_day),
-        )
-        for sequence in range(1, count + 1)
-    )
-    existing_count = int(
-        await session.scalar(
-            select(func.count(func.distinct(LogisticsRequest.id)))
-            .join(RequestDateOption)
-            .where(
-                LogisticsRequest.scenario_id == scenario_id,
-                LogisticsRequest.source_system == GENERATOR_SOURCE_SYSTEM,
-                or_(
-                    LogisticsRequest.external_id.in_(expected_external_ids),
-                    LogisticsRequest.notes
-                    == f"{_LEGACY_GENERATOR_NOTES_PREFIX}{seed}",
-                ),
-                RequestDateOption.priority == 100,
-                RequestDateOption.date.between(horizon[0], horizon[-1]),
-            )
-        )
-        or 0
-    )
-    if existing_count:
-        raise ApiError(
-            409,
-            "GENERATED_WORKLOAD_ALREADY_EXISTS",
-            (
-                "Нагрузка для того же seed уже существует в выбранном периоде. "
-                "Включите «Перегенерировать выбранный период», чтобы не создавать "
-                "повторные поездки в те же точки."
-            ),
-            extra={
-                "existing_requests": existing_count,
-                "seed": seed,
-                "start_date": horizon[0].isoformat(),
-                "end_date": horizon[-1].isoformat(),
-            },
-        )
-
-
 def _generated_external_id(
     seed: int,
     primary_date: date,
@@ -237,11 +214,12 @@ async def generate_scenario_workload(
     session: AsyncSession,
     scenario_id: UUID,
     payload: WorkloadGeneratorInput,
+    snapper: RoadSnapper,
 ) -> WorkloadGenerationResult:
-    """Generate or safely replace a deterministic workload through canonical creation."""
+    """Replace and regenerate deterministic dated workload through canonical creation."""
 
-    # The scenario row is the command fence. Without it, two concurrent runs can
-    # both pass duplicate detection before either inserts its stable source IDs.
+    # The scenario row serializes replacement and insertion so concurrent runs
+    # cannot interleave deletion with another command's stable source identities.
     scenario = await session.scalar(
         select(Scenario).where(Scenario.id == scenario_id).with_for_update()
     )
@@ -264,22 +242,11 @@ async def generate_scenario_workload(
     rng = random.Random(payload.seed)
     settings = ScenarioSettings.model_validate(scenario.settings)
     horizon = tuple(payload.start_date + timedelta(days=offset) for offset in range(payload.days))
-    replaced_requests = 0
-    if payload.replace_existing_generated:
-        replaced_requests = await _replace_generated_requests(
-            session,
-            scenario_id,
-            horizon,
-        )
-    elif payload.deliveries_per_day or payload.pickups_per_day:
-        await _reject_repeated_seed_without_regeneration(
-            session,
-            scenario_id,
-            horizon,
-            payload.seed,
-            payload.deliveries_per_day,
-            payload.pickups_per_day,
-        )
+    replaced_requests = await _replace_generated_requests(
+        session,
+        scenario_id,
+        horizon,
+    )
     created_deliveries = 0
     created_pickups = 0
     daily_counts: list[WorkloadGenerationDailyCount] = []
@@ -298,10 +265,12 @@ async def generate_scenario_workload(
         ):
             for sequence in range(1, count + 1):
                 zone = rng.choice(zones)
-                point = _point_inside_zone(rng, zone)
+                snapped = await _routable_point_inside_zone(rng, zone, snapper)
+                point = snapped.point
                 request_label = (
                     "Доставка" if request_type == RequestType.DELIVERY else "Вывоз"
                 )
+                road_label = f", дорога: {snapped.name}" if snapped.name else ""
                 generated_request = await catalog.create_request(
                     session,
                     scenario_id,
@@ -309,12 +278,16 @@ async def generate_scenario_workload(
                         type=request_type,
                         name=f"{request_label} {primary_date.isoformat()} №{sequence}",
                         address_label=(
-                            f"Сгенерированная точка {zone.code}: "
-                            f"{point.y:.6f}, {point.x:.6f}"
+                            f"Сгенерированная дорожная точка {zone.code}{road_label}: "
+                            f"{point.lat:.6f}, {point.lon:.6f}"
                         ),
-                        latitude=point.y,
-                        longitude=point.x,
+                        latitude=point.lat,
+                        longitude=point.lon,
                         quantity=rng.choice((1, 2)),
+                        cargo_length_mm=payload.cargo_length_mm,
+                        cargo_width_mm=payload.cargo_width_mm,
+                        cargo_height_mm=payload.cargo_height_mm,
+                        cargo_weight_kg=payload.cargo_weight_kg,
                         service_minutes=settings.default_service_minutes,
                         priority=0,
                         status=RequestStatus.READY,
@@ -335,6 +308,7 @@ async def generate_scenario_workload(
                     request_type,
                     sequence,
                 )
+                generated_request.scheduled_date = primary_date
                 if request_type == RequestType.DELIVERY:
                     created_deliveries += 1
                 else:
@@ -351,4 +325,28 @@ async def generate_scenario_workload(
         created_pickups=created_pickups,
         replaced_requests=replaced_requests,
         daily_counts=daily_counts,
+    )
+
+
+async def delete_generated_workload(
+    session: AsyncSession,
+    scenario_id: UUID,
+    target_date: date,
+) -> WorkloadDeletionResult:
+    """Atomically delete only generated requests whose preferred date matches exactly."""
+
+    scenario = await session.scalar(
+        select(Scenario).where(Scenario.id == scenario_id).with_for_update()
+    )
+    if scenario is None:
+        raise not_found("scenario", scenario_id)
+    deleted_requests = await _replace_generated_requests(
+        session,
+        scenario_id,
+        (target_date,),
+    )
+    return WorkloadDeletionResult(
+        scenario_id=scenario_id,
+        date=target_date,
+        deleted_requests=deleted_requests,
     )

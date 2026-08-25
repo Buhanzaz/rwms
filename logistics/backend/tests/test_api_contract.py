@@ -35,6 +35,7 @@ def test_openapi_is_served_under_api_and_contains_core_operations() -> None:
     assert "/api/requests/{request_id}/schedule" in paths
     assert "/api/zones/{zone_id}/cutouts" in paths
     assert "/api/scenarios/{scenario_id}/generate-workload" in paths
+    assert "/api/scenarios/{scenario_id}/generated-workload" in paths
     assert "/api/scenarios/{scenario_id}/plans/generate" in paths
     assert "/api/optimization-runs/{run_id}/stream" in paths
     assert "/api/plans/{plan_id}/simulation/delay" in paths
@@ -93,7 +94,6 @@ def test_workload_generator_contract_keeps_alternatives_inside_horizon() -> None
     )
     assert one_day.days == 1
     assert one_day.alternative_dates_count == 0
-    assert one_day.replace_existing_generated is False
 
     accepted = WorkloadGeneratorInput(
         start_date=date(2026, 8, 24),
@@ -101,11 +101,19 @@ def test_workload_generator_contract_keeps_alternatives_inside_horizon() -> None
         deliveries_per_day=10,
         pickups_per_day=0,
         alternative_dates_count=3,
-        replace_existing_generated=True,
         seed=42,
     )
     assert accepted.alternative_dates_count == 3
-    assert accepted.replace_existing_generated is True
+    with pytest.raises(ValidationError, match="replace_existing_generated"):
+        WorkloadGeneratorInput.model_validate(
+            {
+                "start_date": "2026-08-24",
+                "deliveries_per_day": 1,
+                "pickups_per_day": 1,
+                "replace_existing_generated": True,
+                "seed": 42,
+            }
+        )
     with pytest.raises(ValidationError, match="smaller than days"):
         WorkloadGeneratorInput(
             start_date=date(2026, 8, 24),

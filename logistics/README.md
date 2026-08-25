@@ -9,12 +9,13 @@ orders from the active RWMS `logistics-service` and apply a reviewed plan back.
 There is no customer checkout, billing, GPS tracking, 1C or Bitrix integration
 inside the simulator.
 
-The default deployment uses a private OSRM service built from OpenStreetMap
-road data for real driving distance, duration and route geometry, without API
-keys. It needs internet access only once to download the selected regional
-road extract. The default MapLibre style is OpenFreeMap/OpenStreetMap; if it
-cannot load, the editor falls back to its built-in coordinate grid while zone
-editing and saved-route simulation remain available.
+The default deployment uses a private Valhalla 3.8.3 service built from
+OpenStreetMap data and always requests `costing=truck`. Every road leg is
+calculated for the vehicle, attached trailer and cargo remaining on that exact
+leg. There is no silent car-route fallback. No API key is needed; internet is
+needed only to download the selected regional extract and optional map style.
+If the MapLibre style cannot load, the editor falls back to its coordinate grid
+while zone editing and saved-route simulation remain available.
 
 ## Interface
 
@@ -42,9 +43,11 @@ zones, manages directed relations, creates resources and requests, generates a
 plan, validates manual changes and replays vehicles at any timestamp. The
 built-in demo supplies four zones, three drivers, three capacity-two vehicles,
 shifts and compatible delivery/pickup tasks. It deliberately uses a 60-minute,
-3.0-ratio detour allowance so both mock routing and the local OSRM graph produce
+3.0-ratio detour allowance so both mock routing and the local Valhalla graph produce
 a minimum-cycle plan without delivery-only returns; ordinary scenarios keep the
-default 35-minute, 1.5-ratio policy.
+default 35-minute, 1.5-ratio policy. Demo vehicles also contain complete
+physical, platform, trailer and operational axle-load profiles, so their
+routes can be verified by Valhalla without invented dimensions.
 
 The **Test for 3 days** action creates a separate, non-destructive workload:
 six zones, exactly three simultaneously available vehicles/drivers, and three
@@ -62,14 +65,16 @@ pairing observable, this fixture uses a wider detour limit of 60 minutes and a
 
 ## Architecture
 
-This directory is a monorepo with six isolated runtime containers:
+This directory is a monorepo with isolated runtime containers:
 
 - `frontend/`: React, strict TypeScript, Vite, MapLibre GL JS, Terra Draw,
   TanStack Query, Zustand, React Hook Form/Zod and dnd-kit;
 - `backend/`: FastAPI, Pydantic, SQLAlchemy 2, GeoAlchemy2/Shapely and Alembic;
 - `db`: PostgreSQL with PostGIS and one simulator-only named volume.
-- `osrm-download` and `osrm-prepare`: one-shot download and MLD graph preparation;
-- `osrm`: private OpenStreetMap-backed driving router with no host port.
+- `osrm-download`: a one-shot PBF downloader shared read-only with Valhalla;
+- `valhalla-init` and `valhalla`: private tile preparation and truck routing;
+- legacy `osrm-prepare`/`osrm` exist only behind the explicit
+  `legacy-routing` Compose profile and are never a truck fallback.
 
 Nginx serves the production frontend and proxies same-origin `/api` and SSE to
 FastAPI. The browser never chooses authoritative request zones. The backend
@@ -88,7 +93,7 @@ logistics/
 │   ├── migrations/       simulator-owned Alembic/PostGIS history
 │   └── tests/            unit, property and database integration tests
 ├── docs/                 architecture and transport conventions
-├── docker-compose.yml    db, private OSRM, backend, frontend and test tools
+├── docker-compose.yml    db, private Valhalla, backend, frontend and test tools
 ├── Makefile
 ├── .env.example
 ├── README.md
@@ -171,6 +176,19 @@ the optimizer.
   end remains a hard constraint.
 - One driver can receive several warehouse-return cycles in one shift without
   the former artificial per-cycle imbalance penalty.
+- Before a candidate becomes a plan, the backend validates cargo fit, payload,
+  trailer availability and an operator-supplied axle-load profile. One unit is
+  placed on the truck; a second requires a compatible trailer and is placed on
+  it. Missing physical facts return `ROUTING_PROFILE_INCOMPLETE`; incompatible
+  cargo is rejected before any routing request.
+- Every leg gets a new `EffectiveTruckProfile`. Unloading changes actual mass
+  and cargo placement, but does not detach a trailer. Effective height includes
+  platform height, width includes the widest equipment/cargo, and combination
+  length uses the configured exact value or validated coupling calculation.
+  Saved segments retain the complete profile, provider and OSM data-version
+  snapshot used for the route.
+- Valhalla route failure returns `NO_SAFE_ROUTE`. The application never retries
+  with `auto`, OSRM or another passenger-car profile.
 - Manual drag-and-drop submits the expected plan version and is revalidated on
   the backend. The current editor moves tasks between cycles, reorders tasks
   within a cycle and locks whole cycles. A stale mutation returns
@@ -186,7 +204,7 @@ If no feasible cycle exists, the UI opens the unassigned reasons instead of
 claiming routes were built, and simulation remains unavailable until the plan
 contains at least one cycle.
 
-Every saved OSRM segment is shown on the map. Cycles receive separate colors,
+Every saved road segment is shown on the map. Cycles receive separate colors,
 the map fits the complete plan when it is opened, and the route legend selects
 an entire cycle including its return to the warehouse. Repeated depot segments
 therefore remain understandable instead of hiding later route legs.
@@ -213,10 +231,11 @@ docker compose up --build
 Open <http://localhost:5173>. The API documentation is available at
 <http://localhost:8000/api/docs> and its schema at
 <http://localhost:8000/api/openapi.json>. Compose binds both development ports
-to loopback only. OSRM is internal to the Compose network and has no host port.
-The first `up` downloads and prepares the configured OpenStreetMap extract, so
-it can take several minutes; later starts reuse `logistics-osrm-data`. No
-routing or map key is required.
+to loopback only. Valhalla is internal to the Compose network and has no host
+port. The first `up` downloads and builds the configured OpenStreetMap extract,
+so it can take tens of minutes for a regional graph; later starts reuse
+`logistics-osrm-data` and `logistics-valhalla-data`. No routing or map key is
+required.
 
 On the current VPS, Nginx publishes the workspace at
 <https://77-90-158-90.sslip.io/logistics-simulator/>. This path-based reverse
@@ -307,11 +326,14 @@ make openapi
 | `FRONTEND_PORT` | `5173` | Host port for the operator workspace |
 | `BACKEND_PORT` | `8000` | Host port for FastAPI and Swagger |
 | `DATABASE_URL` | Compose PostGIS URL | SQLAlchemy database connection |
-| `ROUTING_PROVIDER` | `osrm` | Routing adapter selector (`mock` remains available for deterministic tests) |
-| `OSRM_BASE_URL` | `http://osrm:5000` | Private OSRM service used when provider is `osrm` |
-| `OSRM_PROFILE` | `driving` | OSRM routing profile |
-| `OSRM_TIMEOUT_SECONDS` | `15` | Per-request OSRM timeout |
-| `OSRM_DATA_URL` | Central Federal District extract | One-time OpenStreetMap PBF download for the OSRM volume |
+| `ROUTING_PROVIDER` | `valhalla` | Runtime adapter; `mock` is test-only and `osrm` is an explicit legacy development option |
+| `VALHALLA_ENABLED` | `true` | Fails configuration if Valhalla is selected but disabled |
+| `VALHALLA_URL` | `http://valhalla:8002` | Private Valhalla endpoint; never exposed through Nginx |
+| `VALHALLA_TIMEOUT_SECONDS` | `30` | Deadline for one truck-routing request |
+| `VALHALLA_SERVER_THREADS` | `2` | Self-hosted Valhalla worker threads |
+| `OSM_DATA_VERSION` | configured extract identity | Immutable PBF/tile identity stored in route snapshots and cache keys |
+| `OSRM_DATA_URL` | Central Federal District extract | One-time OpenStreetMap PBF download shared with Valhalla |
+| `OSRM_BASE_URL`, `OSRM_PROFILE`, `OSRM_TIMEOUT_SECONDS` | legacy values | Used only with provider `osrm` and Compose profile `legacy-routing` |
 | `DEFAULT_SCENARIO_TIMEZONE` | `Europe/Moscow` | Timezone for new scenarios |
 | `PLANNER_DEFAULT_SEED` | `20260822` | Default deterministic tie-break seed |
 | `VITE_MAP_STYLE_URL` | empty | Frontend build arg; optional MapLibre style, empty enables grid mode |
@@ -372,34 +394,75 @@ claimed parts cannot be selected again; if the authoritative status cannot be
 read, shared publication is disabled instead of guessing from local state. The
 simulator releases its database transaction before this read-only RWMS call.
 
-## OSRM and OpenStreetMap routing
+## Valhalla and OpenStreetMap truck routing
 
-The default `ROUTING_PROVIDER=osrm` obtains the heuristic's full directed
-matrix from the private OSRM Table API. When a scenario exceeds OSRM's
-100-coordinate Table limit, the adapter requests bounded rectangular blocks
-and reassembles the exact directed matrix. After selection it makes one Route
-API request for each complete depot cycle, with at most four cycle requests in
-flight, then maps the returned leg geometries back to the saved segments. Thus
-route cards, map polylines and truck interpolation use the road graph rather
-than straight candidate lines without issuing one HTTP request per segment.
-OSRM currently has no live traffic feed: durations come from the prepared
-driving profile, not Yandex traffic. The graph for the Central Federal District
-covers the built-in Moscow demo. To select another region, set `OSRM_DATA_URL`,
-explicitly remove only the `logistics-osrm-data` volume, then start Compose
-again; this discards routing cache data but not the PostGIS scenario volume.
+The default `ROUTING_PROVIDER=valhalla` uses a bounded Haversine matrix only to
+prefilter candidate combinations. A candidate is not feasible until every leg
+has been independently requested from private Valhalla with `costing=truck`
+and the leg's `EffectiveTruckProfile`. Exact Valhalla distance and duration are
+then used to reschedule windows, shift finish and objective cost. The saved
+GeoJSON and profile snapshot power route cards, map lines, diagnostics and
+simulation.
 
-OpenStreetMap attribution remains visible through the MapLibre base style.
-Use OpenStreetMap-derived data under its applicable ODbL attribution and
-share-alike terms; do not expose the private OSRM service as a public router.
+The profile contains actual effective height, width, full combination length,
+gross weight, axle count and configured maximum actual axle load. It is derived
+from the persisted vehicle/trailer/platform/cargo placement state, not copied
+from a generic vehicle category. Cache identity includes endpoints, profile,
+departure time, provider version and `OSM_DATA_VERSION`. See the audited
+capability table in
+[`docs/osm-truck-restrictions.md`](docs/osm-truck-restrictions.md); unsupported
+conditional tags are explicitly identified there rather than claimed as safe.
+
+The graph has no live traffic feed: durations reflect the built OSM graph, not
+Yandex traffic. To change regions, update `OSRM_DATA_URL` and
+`OSM_DATA_VERSION`, then explicitly rebuild the routing-data volumes; this does
+not delete the separate PostGIS scenario volume. OpenStreetMap attribution
+remains visible through MapLibre. Do not expose the private router publicly.
+
+For a backwards-compatibility development run only, use
+`docker compose --profile legacy-routing up osrm`; selecting `osrm` does not
+provide truck safety and is never an automatic fallback.
 
 ## MockRoutingProvider
 
-The default provider needs no network. It computes Haversine distance, applies
+The explicit test provider needs no network. It computes Haversine distance, applies
 the scenario road factor, selects city/region average speed, applies a simple
 departure-time traffic multiplier and returns distances, durations, per-leg
 facts and GeoJSON LineStrings. Stable inputs and seed produce stable results.
 Matrix caching keys include points, routing settings, departure bucket and
 scenario version.
+
+## Vehicle, trailer and cargo configuration
+
+Open **Vehicles**, create or edit a vehicle and fill the **Truck routing**
+section: tare/gross mass, dimensions, axle capability, platform geometry,
+cargo limits and safety margins. Create a trailer in the same workspace,
+select it as the vehicle's default compatible trailer and enter either the
+exact combined length or the coupling length used to derive it. Finally provide
+the measured `maxActualAxleLoadKg` for every operational state used by the
+vehicle; the application deliberately never estimates it as total mass divided
+by axle count. The vehicle fields and complete axle-profile set are saved by one
+backend transaction, so a failed validation cannot leave a half-edited truck.
+
+The form previews one-unit and two-unit configurations before save. Generated
+requests use the cargo dimensions entered in **Request generator**; the manual
+request editor accepts the same complete length/width/height/weight tuple. The
+current RWMS planning contract does not expose those physical cargo fields, so
+a newly imported RWMS request remains explicitly
+`ROUTING_PROFILE_INCOMPLETE` until an operator enters the measured values; the
+simulator never guesses them. In a built plan, open a vehicle/cycle and expand
+**Route diagnostics** to see the immutable profile used on every leg. A legacy
+segment without a snapshot is visibly unverified and cannot stay locked during
+Valhalla reoptimization.
+
+The real-engine acceptance test builds a disposable tagged OSM graph and proves
+that a 9 m vehicle takes the short road while an 18 m combination avoids its
+`maxlength=12` restriction. The same graph checks height, width, gross weight,
+axle load and `hgv=no`:
+
+```bash
+make test-valhalla-truck
+```
 
 ## Heuristic planner
 
@@ -437,8 +500,8 @@ recreated at any time. Its primary mixed cycle is
 `depot -> delivery -> delivery -> pickup -> pickup -> depot` with the load
 sequence `2 -> 1 -> 0 -> 1 -> 2 -> 0`. This reproducibility fixture uses the
 scenario-local 60-minute/3.0 detour allowance described above. Mock routing
-reproduces that exact illustrative sequence; OSRM may choose a shorter equivalent
-pairing across the same two minimum mixed cycles. In either case every cycle
+reproduces that exact illustrative sequence; Valhalla selects the truck-safe
+equivalent on its OSM graph. In either case every cycle
 delivers before collecting, respects load `0..2`, and returns to the depot. The
 fixture does not change the defaults of newly created scenarios.
 
@@ -456,18 +519,26 @@ For a configurable workload, choose **Request generator** in the current
 scenario. It opens in one-day mode with no alternative dates. Set the first
 date, a one-to-31-day horizon, an exact daily count of zero-to-ten deliveries
 and zero-to-ten pickups, zero-to-three additional accepted dates per request,
-and a seed. Additional dates are selected only inside the horizon. A normal
-run appends data, but repeating the same seed in an overlapping period returns
-`409 GENERATED_WORKLOAD_ALREADY_EXISTS` instead of creating identical customer
-stops. **Regenerate selected period** first removes only unplanned
-requests previously owned by this generator whose preferred date falls inside
-the selected horizon, then creates the replacement batch in the same database
-transaction. Manual and RWMS requests are never selected. If any generated
-task is referenced by a saved plan, the command returns
+and a seed. Additional dates are selected only inside the horizon. Every run
+first removes only unplanned requests previously owned by this generator whose
+preferred date falls inside the selected horizon, then creates the replacement
+batch in the same database transaction. It never appends a second generated
+batch to the same date. Every generated request is explicitly assigned to its
+preferred date; alternative accepted dates remain visible for a later manual
+dispatcher decision but never move work to another day automatically. Manual
+and RWMS requests and generated requests for other dates are never selected.
+Use **Delete workload** to remove the generated workload of the date currently
+selected in the header without immediately creating a replacement. If any
+selected generated task is referenced by a saved plan, replacement or deletion
+returns
 `409 GENERATED_REQUESTS_ALREADY_PLANNED` without deleting anything. Every
-generated coordinate is inside a current Polygon or MultiPolygon before the
-normal backend classification creates the request and its transport parts.
-Equal geometry, inputs and seed reproduce the same business values.
+generated candidate starts inside a current Polygon or MultiPolygon. With
+Valhalla it is snapped through `/locate` and accepted only when the
+resulting road point is still covered by that zone; an unavailable in-zone road
+fails the complete atomic run with `422 NO_ROUTABLE_POINT_IN_ZONE`. The mock
+provider keeps the deterministic candidate for offline tests. Normal backend
+classification then creates the request and its transport parts. Equal
+geometry, routing graph, inputs and seed reproduce the same business values.
 New generated requests also receive stable source identities. Legacy repeated
 generator rows remain stored for plan history, but automatic planning schedules
 only their oldest logical source and reports the repeats as
@@ -501,10 +572,12 @@ This is an internal planning laboratory, not a production dispatch system. It
 has a local `local-admin` audit actor and no interactive production identity
 model, real traffic/GPS, embedded driver application, push messages, customer
 checkout or payment flows. Its optional machine-to-machine RWMS access is
-limited to the dedicated planning scope. OSRM uses static OpenStreetMap data
-and therefore does not model live traffic, road closures or vehicle-specific
-restrictions; Mock geometry is a straight GeoJSON polyline and remains
-available for deterministic tests.
+limited to the dedicated planning scope. Valhalla uses the pinned static OSM
+extract and therefore does not know live traffic or closures unless a separate
+feed is configured. Its supported and unsupported truck tags are documented;
+the system does not claim complete support for arbitrary conditional numeric
+restrictions. Mock geometry is a straight GeoJSON polyline and remains
+available only for deterministic tests.
 
 The delivered P1 subset includes persisted planner phases/candidate events,
 plan cloning and driver-unavailability simulation. The following extensions

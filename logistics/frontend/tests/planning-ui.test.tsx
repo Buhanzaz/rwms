@@ -71,6 +71,7 @@ function inspectorProps(plan: RoutePlan, simulation: SimulationDerivedState): Co
     onGenerateDemo: () => undefined,
     onGenerateMultiDayDemo: () => undefined,
     onGenerateWorkload: () => undefined,
+    onDeleteGeneratedWorkload: () => undefined,
     onCloneScenario: () => undefined,
     onDeleteScenario: () => undefined,
     onExport: () => undefined,
@@ -110,6 +111,32 @@ describe('built plan UI', () => {
     rerender(<PlanPanel plan={plan} timeZone="Europe/Moscow" showUnassignedOnly onSelectCycle={() => undefined} onSelectDriverRoute={() => undefined} onMove={() => undefined} onToggleLock={() => undefined} />);
     expect(screen.getByText(/временное окно 09:00–11:00/)).toBeVisible();
     expect(screen.getByText('увеличить временное окно')).toBeVisible();
+  });
+
+  it('renders the selected plan leg truck profile inside the route inspector', () => {
+    const plan = planFixture();
+    const cycle = plan.driver_routes[0]!.cycles[0]!;
+    cycle.legs = [{
+      id: 'leg-profile', from_stop_id: 's0', to_stop_id: 's1', departure_at: '2026-08-25T05:30:00Z', arrival_at: '2026-08-25T06:00:00Z',
+      distance_meters: 10000, travel_seconds: 1800,
+      geometry: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[37.6, 55.7], [37.6, 55.8]] } },
+      routing_provider: 'valhalla', osm_data_version: '2026-08-24', routed_at: '2026-08-25T05:20:00Z',
+      routing_profile_snapshot: {
+        vehicleId: 'vehicle', trailerId: null, trailerAttached: false, isHgv: true, cargoCount: 1,
+        cargoPlacements: [{ cargoId: 'cargo-1', position: 'TRUCK_PLATFORM', lengthMm: 6000, widthMm: 2400, heightMm: 2400, weightKg: 2500 }],
+        configurationType: 'CARGO_ON_TRUCK', effectiveHeightMeters: 3.95, effectiveWidthMeters: 2.5,
+        effectiveLengthMeters: 9, actualWeightTons: 18.2, maxAxleLoadTons: 7.8, axleCount: 3,
+      },
+    }];
+    const simulation: SimulationDerivedState = { timestamp: '2026-08-25T05:45:00Z', vehicles: [], events: [], completed_stop_ids: [], active_stop_ids: [], affected_task_ids: [], warnings: [] };
+    useUiStore.setState({ section: 'ROUTES' });
+
+    render(<Inspector {...inspectorProps(plan, simulation)} />);
+
+    expect(screen.getByRole('heading', { name: 'Диагностика грузовых маршрутов' })).toBeVisible();
+    expect(screen.getByText('груз на машине')).toBeVisible();
+    expect(screen.getByText('9.00 м')).toBeVisible();
+    expect(screen.getByText('valhalla')).toBeVisible();
   });
 });
 

@@ -1,11 +1,12 @@
 """Scenario lifecycle, clone, demo, and interchange endpoints."""
 
+from datetime import date
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Response, status
 
-from app.api.dependencies import SessionDep, SettingsDep
+from app.api.dependencies import RoadSnapperDep, SessionDep, SettingsDep
 from app.models import Scenario
 from app.repositories import get_required
 from app.schemas.domain import (
@@ -15,11 +16,15 @@ from app.schemas.domain import (
     ScenarioImportRequest,
     ScenarioRead,
     ScenarioUpdate,
+    WorkloadDeletionResult,
     WorkloadGenerationResult,
     WorkloadGeneratorInput,
 )
 from app.services import scenarios as service
-from app.services.workload_generator import generate_scenario_workload
+from app.services.workload_generator import (
+    delete_generated_workload,
+    generate_scenario_workload,
+)
 
 router = APIRouter(prefix="/scenarios", tags=["scenarios"])
 
@@ -114,10 +119,25 @@ async def generate_workload(
     scenario_id: UUID,
     payload: WorkloadGeneratorInput,
     session: SessionDep,
+    snapper: RoadSnapperDep,
 ) -> WorkloadGenerationResult:
-    """Generate or safely regenerate a deterministic workload inside current zones."""
+    """Replace and regenerate deterministic workload inside current zones."""
 
-    return await generate_scenario_workload(session, scenario_id, payload)
+    return await generate_scenario_workload(session, scenario_id, payload, snapper)
+
+
+@router.delete(
+    "/{scenario_id}/generated-workload",
+    response_model=WorkloadDeletionResult,
+)
+async def delete_workload(
+    scenario_id: UUID,
+    target_date: Annotated[date, Query(alias="date")],
+    session: SessionDep,
+) -> WorkloadDeletionResult:
+    """Delete generator-owned workload for one exact preferred date."""
+
+    return await delete_generated_workload(session, scenario_id, target_date)
 
 
 @router.post("/generate-multi-day-demo", response_model=ScenarioRead, status_code=201)

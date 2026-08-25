@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MultiPolygon, Polygon } from 'geojson';
-import { api, getScenarioWorkspace, optimizationStreamUrl, type ZoneInput } from '../api/client';
+import { api, ApiError, getScenarioWorkspace, optimizationStreamUrl, type ZoneInput } from '../api/client';
 import type {
   Driver,
   DriverShift,
@@ -22,6 +22,7 @@ import type {
   RouteCycle,
   RoutePlan,
   Scenario,
+  Trailer,
   UUID,
   ValidationResult,
   Vehicle,
@@ -40,6 +41,7 @@ import {
   SimulationOverrideDialog,
   WarehouseDialog,
   ZoneDialog,
+  type VehicleEditorInput,
 } from '../components/EntityDialogs';
 import { MapCanvas } from '../map/MapCanvas';
 import { isRequestVisibleOnDate } from '../domain/request-dates';
@@ -54,6 +56,7 @@ import { RwmsIntegrationDialog } from '../features/rwms/RwmsIntegrationDialog';
 import { WorkloadGeneratorDialog } from '../features/scenarios/WorkloadGeneratorDialog';
 import { saveZoneUpdate } from '../features/zones/zone-update';
 import { actionErrorFeedback } from './action-error';
+import { TrailerDialog } from '../features/trailers/TrailerDialog';
 
 type DialogState =
   | { kind: 'scenario'; value?: Scenario }
@@ -63,11 +66,13 @@ type DialogState =
   | { kind: 'zone-cutout'; sourceZone: Zone; geometry: Polygon; initialValues: Partial<Omit<ZoneInput, 'geometry'>> }
   | { kind: 'driver'; value?: Driver }
   | { kind: 'vehicle'; value?: Vehicle }
+  | { kind: 'trailer'; value?: Trailer }
   | { kind: 'shift'; value?: DriverShift }
   | { kind: 'request'; value?: LogisticsRequest; point?: { latitude: number; longitude: number }; requestType: 'DELIVERY' | 'PICKUP' }
   | { kind: 'relation'; from: Zone; to: Zone; value?: ZoneRelation }
-  | { kind: 'delete-entity'; entityKind: 'zone' | 'driver' | 'vehicle' | 'shift' | 'request'; id: UUID; label: string }
+  | { kind: 'delete-entity'; entityKind: 'zone' | 'driver' | 'vehicle' | 'trailer' | 'shift' | 'request'; id: UUID; label: string }
   | { kind: 'delete-scenario' }
+  | { kind: 'delete-generated-workload'; date: string }
   | { kind: 'reset-demo' }
   | { kind: 'reclassify-and-generate'; outsideCount: number; staleCount: number }
   | { kind: 'confirm-plan'; warnings: number }
@@ -125,6 +130,7 @@ export function App() {
   const importRef = useRef<HTMLInputElement>(null);
   const surfacedPlanIdRef = useRef<UUID | null>(null);
   const mode = useUiStore((state) => state.mode);
+  const section = useUiStore((state) => state.section);
   const sidebarsCollapsed = useUiStore((state) => state.sidebarsCollapsed);
   const setMode = useUiStore((state) => state.setMode);
   const setSection = useUiStore((state) => state.setSection);
@@ -145,6 +151,20 @@ export function App() {
   const simulationOverrides = useUiStore((state) => state.simulationOverrides);
   const addSimulationOverride = useUiStore((state) => state.addSimulationOverride);
   const clearSimulationOverrides = useUiStore((state) => state.clearSimulationOverrides);
+
+  const clearLocalPlanningState = useCallback(() => {
+    setPlanId(null);
+    setPlan(null);
+    setRunId(null);
+    setValidation(null);
+    surfacedPlanIdRef.current = null;
+    clearTrace();
+    clearSimulationOverrides();
+    setSimulationPlaying(false);
+    setSimulationTimestamp(null);
+    setMode('EDITOR');
+    setSelected(null);
+  }, [clearSimulationOverrides, clearTrace, setMode, setSelected, setSimulationPlaying, setSimulationTimestamp]);
 
   const selectPlanningDate = useCallback((date: string) => {
     setPlanningDate(date);
@@ -169,9 +189,9 @@ export function App() {
     queryFn: () => getScenarioWorkspace(scenarioId as UUID),
     enabled: Boolean(scenarioId),
   });
-  const workspace = workspaceQuery.data ?? null;
-  const workspaceScenarioId = workspace?.scenario.id;
-  const workspaceDefaultPlanningDate = workspace?.scenario.default_planning_date;
+  const baseWorkspace = workspaceQuery.data ?? null;
+  const workspaceScenarioId = baseWorkspace?.scenario.id;
+  const workspaceDefaultPlanningDate = baseWorkspace?.scenario.default_planning_date;
   useEffect(() => {
     if (workspaceDefaultPlanningDate) setPlanningDate(workspaceDefaultPlanningDate);
     setPlanId(null);
@@ -181,6 +201,37 @@ export function App() {
     clearTrace();
     clearSimulationOverrides();
   }, [clearSimulationOverrides, clearTrace, workspaceDefaultPlanningDate, workspaceScenarioId]);
+
+  const truckCatalogQuery = useQuery({
+    queryKey: ['truck-catalog', workspaceScenarioId, baseWorkspace?.scenario.updated_at],
+    queryFn: async () => {
+      const scenarioId = baseWorkspace!.scenario.id;
+      const trailers = await api.listTrailers(scenarioId);
+      const profileEntries = await Promise.all(baseWorkspace!.vehicles.map(async (vehicle) => [
+        vehicle.id,
+        await api.listVehicleLoadProfiles(vehicle.id),
+      ] as const));
+      return { trailers, profilesByVehicle: Object.fromEntries(profileEntries) };
+    },
+    enabled: Boolean(baseWorkspace && (
+      section === 'VEHICLES'
+      || dialog?.kind === 'vehicle'
+      || dialog?.kind === 'trailer'
+    )),
+  });
+  const workspace = useMemo(() => baseWorkspace ? {
+    ...baseWorkspace,
+    ...(truckCatalogQuery.data ? { trailers: truckCatalogQuery.data.trailers } : {}),
+    vehicles: baseWorkspace.vehicles.map((vehicle) => ({
+      ...vehicle,
+      ...(truckCatalogQuery.data ? { load_profiles: truckCatalogQuery.data.profilesByVehicle[vehicle.id] ?? [] } : {}),
+    })),
+  } : null, [baseWorkspace, truckCatalogQuery.data]);
+  useEffect(() => {
+    if (!truckCatalogQuery.error) return;
+    const feedback = actionErrorFeedback(truckCatalogQuery.error);
+    toast({ tone: 'error', title: 'Не удалось загрузить грузовые параметры', detail: feedback.detail ?? feedback.title });
+  }, [toast, truckCatalogQuery.error]);
 
   const planQuery = useQuery({
     queryKey: ['plan', planId, workspace?.scenario.updated_at],
@@ -286,7 +337,10 @@ export function App() {
 
   const refresh = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: ['scenarios'] });
-    if (scenarioId) await queryClient.invalidateQueries({ queryKey: ['workspace', scenarioId] });
+    if (scenarioId) {
+      await queryClient.invalidateQueries({ queryKey: ['workspace', scenarioId] });
+      await queryClient.invalidateQueries({ queryKey: ['truck-catalog', scenarioId] });
+    }
   }, [queryClient, scenarioId]);
 
   const execute = useCallback(async <T,>(operation: () => Promise<T>, success?: string): Promise<T> => {
@@ -296,7 +350,9 @@ export function App() {
       return result;
     } catch (error: unknown) {
       const { refreshPlan, ...message } = actionErrorFeedback(error);
-      toast(message);
+      toast(error instanceof ApiError && error.code
+        ? { ...message, detail: `${error.code}: ${message.detail}` }
+        : message);
       if (refreshPlan && planId) await queryClient.invalidateQueries({ queryKey: ['plan', planId] });
       throw error;
     }
@@ -308,6 +364,7 @@ export function App() {
     else if (kind === 'warehouse') setDialog({ kind: 'warehouse' });
     else if (kind === 'driver') setDialog({ kind: 'driver' });
     else if (kind === 'vehicle') setDialog({ kind: 'vehicle' });
+    else if (kind === 'trailer') setDialog({ kind: 'trailer' });
     else if (kind === 'shift') setDialog({ kind: 'shift' });
     else if (kind === 'request') setDialog({ kind: 'request', requestType: 'DELIVERY' });
   };
@@ -317,7 +374,15 @@ export function App() {
     else if (kind === 'warehouse') setDialog({ kind: 'warehouse', value: value as Warehouse });
     else if (kind === 'zone') setDialog({ kind: 'zone', value: value as Zone, geometry: (value as Zone).geometry });
     else if (kind === 'driver') setDialog({ kind: 'driver', value: value as Driver });
-    else if (kind === 'vehicle') setDialog({ kind: 'vehicle', value: value as Vehicle });
+    else if (kind === 'vehicle') {
+      if (workspace?.trailers === undefined) {
+        toast({ tone: 'info', title: 'Загружаем грузовые параметры', detail: 'Повторите открытие машины через секунду.' });
+        return;
+      }
+      const currentVehicle = workspace.vehicles.find((candidate) => candidate.id === value.id) ?? value as Vehicle;
+      setDialog({ kind: 'vehicle', value: currentVehicle });
+    }
+    else if (kind === 'trailer') setDialog({ kind: 'trailer', value: value as Trailer });
     else if (kind === 'shift') setDialog({ kind: 'shift', value: value as DriverShift });
     else if (kind === 'request') setDialog({ kind: 'request', value: value as LogisticsRequest, requestType: (value as LogisticsRequest).type });
   };
@@ -534,14 +599,15 @@ export function App() {
     await execute(async () => {
       const result = await api.generateWorkload(workspace.scenario.id, input);
       await refresh();
+      clearLocalPlanningState();
       selectPlanningDate(result.start_date);
       setDialog(null);
       toast({
         tone: 'success',
-        title: input.replace_existing_generated || result.replaced_requests > 0
-          ? `Нагрузка перегенерирована: ${result.created_requests} заявок`
+        title: result.replaced_requests > 0
+          ? `Нагрузка заменена: ${result.created_requests} заявок`
           : `Нагрузка создана: ${result.created_requests} заявок`,
-        detail: `${result.created_deliveries} доставок · ${result.created_pickups} вывозов · ${formatDate(result.start_date)}–${formatDate(result.end_date)}${result.replaced_requests > 0 ? ` · заменено заявок: ${result.replaced_requests}` : ''}`,
+        detail: `${result.created_deliveries} доставок · ${result.created_pickups} вывозов · ${formatDate(result.start_date)}–${formatDate(result.end_date)} · заменено прежних заявок: ${result.replaced_requests}`,
       });
     }, undefined).catch(() => undefined);
   };
@@ -632,6 +698,7 @@ export function App() {
           onGenerateDemo={() => setDialog({ kind: 'reset-demo' })}
           onGenerateMultiDayDemo={() => void generateMultiDayDemo()}
           onGenerateWorkload={() => setDialog({ kind: 'workload-generator' })}
+          onDeleteGeneratedWorkload={() => setDialog({ kind: 'delete-generated-workload', date: planningDate })}
           onCloneScenario={() => void execute(async () => { const clone = await api.cloneScenario(workspace.scenario.id, `${workspace.scenario.name} · копия`); await refresh(); setScenarioId(clone.id); }, 'Сценарий клонирован')}
           onDeleteScenario={() => setDialog({ kind: 'delete-scenario' })}
           onExport={() => void exportScenario()} onImport={() => importRef.current?.click()}
@@ -690,12 +757,46 @@ export function App() {
           setMapTool('SELECT');
         }, 'Вырез сохранён, внутренняя зона создана'); }}
       /> : null}
-      {dialog?.kind === 'driver' || dialog?.kind === 'vehicle' ? <CatalogDialog kind={dialog.kind} value={dialog.value} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => { if (dialog.kind === 'driver') { const value = input as Parameters<typeof api.createDriver>[1]; if (dialog.value) await api.updateDriver(dialog.value.id, value); else await api.createDriver(workspace.scenario.id, value); } else { const value = input as Parameters<typeof api.createVehicle>[1]; if (dialog.value) await api.updateVehicle(dialog.value.id, value); else await api.createVehicle(workspace.scenario.id, value); } await refresh(); setDialog(null); }, dialog.kind === 'driver' ? 'Водитель сохранён' : 'Машина сохранена'); }} /> : null}
+      {dialog?.kind === 'driver' || dialog?.kind === 'vehicle' ? <CatalogDialog kind={dialog.kind} value={dialog.value} trailers={workspace.trailers ?? []} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => {
+        if (dialog.kind === 'driver') {
+          const value = input as Parameters<typeof api.createDriver>[1];
+          if (dialog.value) await api.updateDriver(dialog.value.id, value);
+          else await api.createDriver(workspace.scenario.id, value);
+        } else {
+          const { load_profiles: loadProfiles, ...vehicleInput } = input as VehicleEditorInput;
+          const configuration = {
+            vehicle: vehicleInput,
+            load_profiles: loadProfiles.map(({ configuration_type, max_actual_axle_load_kg }) => ({
+              configuration_type,
+              max_actual_axle_load_kg,
+            })),
+          };
+          if (dialog.value) await api.updateVehicleConfiguration(dialog.value.id, configuration);
+          else await api.createVehicleConfiguration(workspace.scenario.id, configuration);
+        }
+        await refresh();
+        setDialog(null);
+      }, dialog.kind === 'driver' ? 'Водитель сохранён' : 'Машина и грузовые профили сохранены'); }} /> : null}
+      {dialog?.kind === 'trailer' ? <TrailerDialog trailer={dialog.value} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => {
+        if (dialog.value) await api.updateTrailer(dialog.value.id, input);
+        else await api.createTrailer(workspace.scenario.id, input);
+        await refresh();
+        setDialog(null);
+      }, 'Прицеп сохранён'); }} /> : null}
       {dialog?.kind === 'shift' ? <ShiftDialog shift={dialog.value} scenario={workspace.scenario} drivers={workspace.drivers} vehicles={workspace.vehicles} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => { if (dialog.value) await api.updateShift(dialog.value.id, input); else await api.createShift(workspace.scenario.id, input); await refresh(); setDialog(null); }, 'Смена сохранена'); }} /> : null}
       {dialog?.kind === 'request' ? <RequestDialog request={dialog.value} point={dialog.point} type={dialog.requestType} defaultDate={planningDate} busy={busy} onClose={() => { setDialog(null); setMapTool('SELECT'); }} onSubmit={async (input) => { await execute(async () => { if (dialog.value) await api.updateRequest(dialog.value.id, input); else await api.createRequest(workspace.scenario.id, input); await refresh(); setDialog(null); setMapTool('SELECT'); }, 'Заявка сохранена; зона определена backend'); }} /> : null}
       {dialog?.kind === 'relation' ? <RelationDialog fromZone={dialog.from} toZone={dialog.to} relation={dialog.value} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => { if (dialog.value) await api.updateZoneRelation(dialog.value.id, { relation_type: input.relation_type, delivery_pair_allowed: input.delivery_pair_allowed, pickup_allowed: input.pickup_allowed, max_detour_minutes: input.max_detour_minutes, max_detour_ratio: input.max_detour_ratio, penalty: input.penalty, is_bidirectional: input.is_bidirectional }); else await api.createZoneRelation(workspace.scenario.id, input); await refresh(); setDialog(null); }, 'Связь зон сохранена'); }} onDelete={dialog.value ? async () => { await execute(async () => { await api.deleteZoneRelation(dialog.value!.id); await refresh(); setDialog(null); }, 'Связь удалена'); } : undefined} /> : null}
-      {dialog?.kind === 'delete-entity' ? <ConfirmDialog title={`Удалить «${dialog.label}»?`} description="Действие изменит только текущий тестовый сценарий. Backend проверит ссылки и вернёт ошибку, если объект используется." confirmLabel="Удалить" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => { if (dialog.entityKind === 'zone') await api.deleteZone(dialog.id); else if (dialog.entityKind === 'driver') await api.deleteDriver(dialog.id); else if (dialog.entityKind === 'vehicle') await api.deleteVehicle(dialog.id); else if (dialog.entityKind === 'shift') await api.deleteShift(dialog.id); else await api.deleteRequest(dialog.id); await refresh(); setDialog(null); }, 'Объект удалён'); }} /> : null}
+      {dialog?.kind === 'delete-entity' ? <ConfirmDialog title={`Удалить «${dialog.label}»?`} description="Действие изменит только текущий тестовый сценарий. Backend проверит ссылки и вернёт ошибку, если объект используется." confirmLabel="Удалить" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => { if (dialog.entityKind === 'zone') await api.deleteZone(dialog.id); else if (dialog.entityKind === 'driver') await api.deleteDriver(dialog.id); else if (dialog.entityKind === 'vehicle') await api.deleteVehicle(dialog.id); else if (dialog.entityKind === 'trailer') await api.deleteTrailer(dialog.id); else if (dialog.entityKind === 'shift') await api.deleteShift(dialog.id); else await api.deleteRequest(dialog.id); await refresh(); setDialog(null); }, 'Объект удалён'); }} /> : null}
       {dialog?.kind === 'delete-scenario' ? <ConfirmDialog title={`Удалить сценарий «${workspace.scenario.name}»?`} description="Сценарий и его тестовые данные будут удалены. Это не затрагивает другие сценарии." confirmLabel="Удалить сценарий" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => { await api.deleteScenario(workspace.scenario.id); setDialog(null); setScenarioId(null); await refresh(); }, 'Сценарий удалён'); }} /> : null}
+      {dialog?.kind === 'delete-generated-workload' ? <ConfirmDialog title={`Удалить нагрузку за ${formatDate(dialog.date)}?`} description="Будут удалены только заявки, созданные генератором на эту дату. Ручные и RWMS-заявки, а также нагрузка других дат останутся без изменений. Если заявки уже входят в сохранённый план, сервер сохранит историю и отменит удаление." confirmLabel="Удалить нагрузку" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => {
+        const result = await api.deleteGeneratedWorkload(workspace.scenario.id, dialog.date);
+        await refresh();
+        if (dialog.date === planningDate) clearLocalPlanningState();
+        setDialog(null);
+        toast(result.deleted_requests > 0
+          ? { tone: 'success', title: `Удалено заявок: ${result.deleted_requests}`, detail: formatDate(result.date) }
+          : { tone: 'info', title: 'На выбранную дату нагрузки генератора нет', detail: formatDate(result.date) });
+      }, undefined).catch(() => undefined); }} /> : null}
       {dialog?.kind === 'reset-demo' ? <ConfirmDialog title={`Заменить данные сценария «${workspace.scenario.name}» демонстрационными?`} description="Склады, зоны, ресурсы, заявки и сохранённые планы только этого сценария будут удалены и созданы заново. Другие сценарии не изменятся." confirmLabel="Создать demo" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => { await api.generateDemo(workspace.scenario.id); await refresh(); setDialog(null); }, 'Demo scenario готов'); }} /> : null}
       {dialog?.kind === 'reclassify-and-generate' ? <ConfirmDialog title="Пересчитать зоны заявок перед построением?" description={`На ${formatDate(planningDate)}: без зоны — ${dialog.outsideCount}, с устаревшей версией — ${dialog.staleCount}. Это явное действие обновит принадлежность по текущим полигонам, затем сразу запустит построение маршрутов.`} confirmLabel="Пересчитать и построить" busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { setDialog(null); await startPlanGeneration(true); }} /> : null}
       {dialog?.kind === 'confirm-plan' ? <ConfirmDialog title="Подтвердить план с предупреждениями?" description={`Проверка не нашла жёстких ошибок, но осталось предупреждений: ${dialog.warnings}. Подтверждение будет явным.`} confirmLabel="Подтвердить с предупреждениями" busy={busy} onClose={() => setDialog(null)} onConfirm={() => confirmPlan(true)} /> : null}

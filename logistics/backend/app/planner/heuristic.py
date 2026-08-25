@@ -12,7 +12,7 @@ from hashlib import sha256
 
 from app.routing import GeoJsonLineString, RoutingProvider, TravelMatrix
 
-from .engine import ProgressPublisher
+from .engine import CandidateRouteEvaluator, CandidateRouteRejected, ProgressPublisher
 from .models import (
     DriverShift,
     LogisticsRequest,
@@ -143,8 +143,13 @@ class _TraceRecorder:
 class HeuristicPlanner:
     """Build deterministic depot cycles using bounded, explainable candidates."""
 
-    def __init__(self, routing_provider: RoutingProvider) -> None:
+    def __init__(
+        self,
+        routing_provider: RoutingProvider,
+        candidate_route_evaluator: CandidateRouteEvaluator | None = None,
+    ) -> None:
         self._routing = routing_provider
+        self._candidate_route_evaluator = candidate_route_evaluator
 
     async def generate_plan(
         self,
@@ -238,7 +243,7 @@ class HeuristicPlanner:
         task_by_id = {task.id: task for task in tasks}
         delivery_reference_cycles = tuple(cycles)
         delivery_reference_available = dict(available_at)
-        if evaluation_budget:
+        if evaluation_budget and self._candidate_route_evaluator is None:
             delivery_references = tuple(
                 self._project_delivery_plan(
                     remaining_deliveries=tuple(
@@ -276,6 +281,7 @@ class HeuristicPlanner:
             delivery_reference_cycles,
             task_by_id,
         )
+        route_rejections: dict[str, set[UnassignedReasonCode]] = {}
         delivery_phase_complete = False
         while remaining and active_shifts and not timed_out:
             # Candidate construction is CPU-bound. Yield once per assigned cycle so
@@ -345,7 +351,81 @@ class HeuristicPlanner:
                                 ),
                             },
                         )
-                    best = min(candidates, key=lambda candidate: candidate.selection_key)
+                    routed_candidates: list[_Candidate] = []
+                    for candidate in sorted(
+                        candidates,
+                        key=lambda item: item.selection_key,
+                    )[: settings.max_candidate_neighbors]:
+                        if self._candidate_route_evaluator is None:
+                            routed_candidates.append(candidate)
+                            continue
+                        try:
+                            routed_cycle = await self._candidate_route_evaluator.route_candidate(
+                                candidate.cycle,
+                                tasks=candidate.deliveries + candidate.pickups,
+                                vehicle=active_vehicles[shift.vehicle_id],
+                                shift=shift,
+                                settings=settings,
+                            )
+                        except CandidateRouteRejected as exc:
+                            for task_id in candidate.task_ids:
+                                route_rejections.setdefault(task_id, set()).add(
+                                    exc.reason_code
+                                )
+                            await trace.emit(
+                                TracePhase.BUILDING_CYCLES,
+                                TraceEventType.CANDIDATE_CYCLE_REJECTED,
+                                {
+                                    "driver_shift_id": shift.id,
+                                    "task_ids": sorted(candidate.task_ids),
+                                    "reason_code": exc.reason_code.value,
+                                    "missing_fields": list(exc.missing_fields),
+                                },
+                            )
+                            continue
+                        workload_penalty = incremental_shift_workload_cost(
+                            tuple(
+                                cycle
+                                for cycle in cycles
+                                if cycle.driver_shift_id == shift.id
+                            ),
+                            routed_cycle,
+                            shift,
+                            settings,
+                        )
+                        projected_utilization = shift_utilization_percent(
+                            (
+                                *(
+                                    cycle
+                                    for cycle in cycles
+                                    if cycle.driver_shift_id == shift.id
+                                ),
+                                routed_cycle,
+                            ),
+                            shift,
+                        )
+                        routed_candidates.append(
+                            replace(
+                                candidate,
+                                cycle=routed_cycle,
+                                selection_key=(
+                                    *candidate.selection_key[:-6],
+                                    routed_cycle.score
+                                    + candidate.resource_activation_penalty
+                                    + workload_penalty,
+                                    routed_cycle.planned_finish,
+                                    *candidate.selection_key[-4:],
+                                ),
+                                driver_workload_penalty=workload_penalty,
+                                projected_shift_utilization_percent=projected_utilization,
+                            )
+                        )
+                    if not routed_candidates:
+                        continue
+                    best = min(
+                        routed_candidates,
+                        key=lambda candidate: candidate.selection_key,
+                    )
                     best_per_shift.append(best)
                     await trace.emit(
                         TracePhase.BUILDING_CYCLES,
@@ -501,18 +581,25 @@ class HeuristicPlanner:
 
         await trace.start(TracePhase.LOCAL_SEARCH)
         cycle_ids_before_search = tuple(cycle.id for cycle in cycles)
-        cycles, local_iterations = self._local_improve(
-            cycles=cycles,
-            task_by_id={task.id: task for task in tasks},
-            shifts={shift.id: shift for shift in active_shifts},
-            warehouse=input_data.warehouse,
-            vehicles=active_vehicles,
-            matrix=matrix,
-            matrix_index=matrix_index,
-            zones=zone_by_id,
-            relations=relation_index,
-            settings=settings,
-        )
+        if self._candidate_route_evaluator is None:
+            cycles, local_iterations = self._local_improve(
+                cycles=cycles,
+                task_by_id={task.id: task for task in tasks},
+                shifts={shift.id: shift for shift in active_shifts},
+                warehouse=input_data.warehouse,
+                vehicles=active_vehicles,
+                matrix=matrix,
+                matrix_index=matrix_index,
+                zones=zone_by_id,
+                relations=relation_index,
+                settings=settings,
+            )
+        else:
+            # A local move is accepted only after full exact routing. The current
+            # local-search implementation is matrix-only, so truck-safe mode keeps
+            # the already evaluated primary assignment instead of fabricating a
+            # post-search route.
+            local_iterations = 0
         cycle_ids_after_search = tuple(cycle.id for cycle in cycles)
         if cycle_ids_after_search != cycle_ids_before_search:
             await trace.emit(
@@ -544,7 +631,12 @@ class HeuristicPlanner:
         final_unassigned = list(initial_unassigned)
         missing_resource_reason = _missing_resource_reason(input_data)
         for task in sorted(remaining.values(), key=_task_priority_key):
-            if missing_resource_reason:
+            if task.id in route_rejections:
+                reasons = tuple(
+                    sorted(route_rejections[task.id], key=lambda item: item.value)
+                )
+                nearest = None
+            elif missing_resource_reason:
                 reasons = missing_resource_reason
                 nearest = None
             else:
@@ -1631,6 +1723,7 @@ def split_request(
             selected_option=selected_option,
             remaining_date_count=remaining_date_count,
             is_last_available_date=is_last_available_date,
+            cargo_dimensions=request.cargo_dimensions,
         )
         for part_number, quantity in enumerate(quantities, start=1)
     )
@@ -2380,6 +2473,26 @@ def _unassigned_task(
         ),
         UnassignedReasonCode.NO_FEASIBLE_DELIVERY_PAIR: "Не найдена допустимая пара доставок.",
         UnassignedReasonCode.NO_FEASIBLE_PICKUP_PAIR: "Не найдена допустимая пара вывозов.",
+        UnassignedReasonCode.CARGO_TOO_HEAVY: "Груз превышает допустимую массу конфигурации.",
+        UnassignedReasonCode.CARGO_TOO_LONG: "Груз превышает допустимую длину платформы.",
+        UnassignedReasonCode.CARGO_TOO_WIDE: "Груз превышает допустимую ширину платформы.",
+        UnassignedReasonCode.CARGO_TOO_HIGH: "Груз превышает допустимую высоту конфигурации.",
+        UnassignedReasonCode.TRAILER_REQUIRED: "Для этой загрузки требуется прицеп.",
+        UnassignedReasonCode.NO_COMPATIBLE_TRAILER: (
+            "У машины нет совместимого прицепа для этой загрузки."
+        ),
+        UnassignedReasonCode.AXLE_LOAD_EXCEEDED: (
+            "Настроенная фактическая нагрузка на ось превышает допустимую."
+        ),
+        UnassignedReasonCode.NO_SAFE_ROUTE: (
+            "Для текущей конфигурации автомобиля безопасный грузовой маршрут не найден."
+        ),
+        UnassignedReasonCode.ROUTING_PROVIDER_UNAVAILABLE: (
+            "Сервис безопасной грузовой маршрутизации временно недоступен."
+        ),
+        UnassignedReasonCode.ROUTING_PROFILE_INCOMPLETE: (
+            "Для машины, прицепа или груза не заполнены обязательные параметры маршрутизации."
+        ),
         UnassignedReasonCode.UNKNOWN: "Не удалось построить допустимый рейс.",
     }
     recommendations: list[str] = []
@@ -2400,6 +2513,22 @@ def _unassigned_task(
         recommendations.append("Увеличьте допустимый крюк или оставьте отдельный pickup-only рейс.")
     if UnassignedReasonCode.ZONE_RELATION_BLOCKED in reasons:
         recommendations.append("Проверьте направленную связь между логистическими зонами.")
+    if UnassignedReasonCode.ROUTING_PROFILE_INCOMPLETE in reasons:
+        recommendations.append(
+            "Заполните физические параметры машины, груза, прицепа и осевой нагрузки."
+        )
+    if any(
+        reason in reasons
+        for reason in (
+            UnassignedReasonCode.TRAILER_REQUIRED,
+            UnassignedReasonCode.NO_COMPATIBLE_TRAILER,
+        )
+    ):
+        recommendations.append("Назначьте машине совместимый прицеп или разделите загрузку.")
+    if UnassignedReasonCode.NO_SAFE_ROUTE in reasons:
+        recommendations.append(
+            "Измените конфигурацию автопоезда или проверьте дорожные ограничения."
+        )
     return UnassignedTask(
         task=task,
         reason_codes=tuple(dict.fromkeys(reasons)) or (UnassignedReasonCode.UNKNOWN,),

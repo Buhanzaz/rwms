@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from math import isfinite
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import httpx
@@ -14,14 +15,23 @@ from .models import (
     GeoPoint,
     RouteGeometry,
     RouteLeg,
+    SnappedPoint,
     TravelMatrix,
     TravelMetric,
     require_aware,
 )
+from .provider import RoadSnapNotFoundError
+
+if TYPE_CHECKING:
+    from .truck_profile import EffectiveTruckProfile
 
 
 class OsrmRoutingProviderError(RuntimeError):
     """Report an unavailable, malformed, or infeasible OSRM routing response."""
+
+
+class OsrmRoadSnapNotFoundError(OsrmRoutingProviderError, RoadSnapNotFoundError):
+    """Preserve OSRM failure typing when no nearby road segment can be snapped."""
 
 
 class OsrmRoutingProvider:
@@ -59,14 +69,49 @@ class OsrmRoutingProvider:
 
         return (self.base_url, self.profile, self.timeout_seconds, self.max_table_points)
 
+    async def snap_point(self, point: GeoPoint) -> SnappedPoint:
+        """Resolve one coordinate to the nearest segment in OSRM's driving graph."""
+
+        payload = await self._request(
+            f"/nearest/v1/{self.profile}/{self._coordinates((point,))}",
+            {"number": "1"},
+        )
+        waypoints = self._sequence(payload.get("waypoints"), "waypoints")
+        if not waypoints or not isinstance(waypoints[0], Mapping):
+            raise OsrmRoadSnapNotFoundError("OSRM did not find a routable road segment")
+        waypoint = waypoints[0]
+        location = self._sequence(waypoint.get("location"), "waypoints[0].location")
+        if len(location) != 2:
+            raise OsrmRoutingProviderError(
+                "OSRM nearest waypoint location must contain longitude and latitude"
+            )
+        try:
+            snapped = GeoPoint(
+                lon=self._finite_number(location[0], "nearest longitude"),
+                lat=self._finite_number(location[1], "nearest latitude"),
+                is_city=point.is_city,
+            )
+        except ValueError as exc:
+            raise OsrmRoutingProviderError("OSRM returned an invalid nearest coordinate") from exc
+        return SnappedPoint(
+            point=snapped,
+            distance_meters=self._finite_nonnegative_number(
+                waypoint.get("distance"), "nearest distance"
+            ),
+            name=self._normalized_name(waypoint.get("name")),
+        )
+
     async def get_matrix(
         self,
         points: list[GeoPoint],
         departure_at: datetime | None,
+        *,
+        profile: EffectiveTruckProfile | None = None,
     ) -> TravelMatrix:
-        """Return OSRM's directed driving-distance and duration matrix."""
+        """Return OSRM's legacy driving matrix without claiming truck safety."""
 
         require_aware(departure_at, "departure_at")
+        del profile
         immutable_points = tuple(points)
         if not immutable_points:
             return TravelMatrix(points=(), rows=())
@@ -167,10 +212,13 @@ class OsrmRoutingProvider:
         self,
         points: list[GeoPoint],
         departure_at: datetime | None,
+        *,
+        profile: EffectiveTruckProfile | None = None,
     ) -> RouteGeometry:
-        """Return one OSRM driving route and per-leg GeoJSON suitable for simulation."""
+        """Return one legacy OSRM route without claiming truck restriction support."""
 
         require_aware(departure_at, "departure_at")
+        del profile
         immutable_points = tuple(points)
         if not immutable_points:
             raise ValueError("a route requires at least one point")
@@ -242,6 +290,10 @@ class OsrmRoutingProvider:
         if response.is_error:
             code = raw_payload.get("code") if isinstance(raw_payload, Mapping) else None
             message = raw_payload.get("message") if isinstance(raw_payload, Mapping) else None
+            if code == "NoSegment":
+                raise OsrmRoadSnapNotFoundError(
+                    "OSRM did not find a routable road segment"
+                )
             code_suffix = f", код {code}" if isinstance(code, str) else ""
             message_suffix = f": {message[:300]}" if isinstance(message, str) else ""
             raise OsrmRoutingProviderError(
@@ -252,6 +304,10 @@ class OsrmRoutingProvider:
             raise OsrmRoutingProviderError("OSRM returned a non-object JSON response")
         code = raw_payload.get("code")
         if code != "Ok":
+            if code == "NoSegment":
+                raise OsrmRoadSnapNotFoundError(
+                    "OSRM did not find a routable road segment"
+                )
             message = raw_payload.get("message")
             suffix = f": {message}" if isinstance(message, str) else ""
             raise OsrmRoutingProviderError(f"OSRM routing failed with code {code!r}{suffix}")
@@ -306,6 +362,35 @@ class OsrmRoutingProvider:
         if not isfinite(numeric) or numeric < 0:
             raise OsrmRoutingProviderError(f"OSRM {field} must be a finite non-negative number")
         return round(numeric)
+
+    @staticmethod
+    def _finite_number(value: object, field: str) -> float:
+        """Parse one finite OSRM coordinate without accepting booleans."""
+
+        if isinstance(value, bool) or not isinstance(value, (float, int)):
+            raise OsrmRoutingProviderError(f"OSRM {field} must be numeric")
+        numeric = float(value)
+        if not isfinite(numeric):
+            raise OsrmRoutingProviderError(f"OSRM {field} must be finite")
+        return numeric
+
+    @classmethod
+    def _finite_nonnegative_number(cls, value: object, field: str) -> float:
+        """Parse one finite non-negative OSRM scalar without rounding it."""
+
+        numeric = cls._finite_number(value, field)
+        if numeric < 0:
+            raise OsrmRoutingProviderError(f"OSRM {field} must be non-negative")
+        return numeric
+
+    @staticmethod
+    def _normalized_name(value: object) -> str | None:
+        """Sanitize an optional OSRM road name for bounded operator-facing display."""
+
+        if not isinstance(value, str):
+            return None
+        normalized = " ".join(value.split())[:300]
+        return normalized or None
 
     @classmethod
     def _leg_geometry(

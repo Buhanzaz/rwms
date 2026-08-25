@@ -7,23 +7,37 @@ from .models import (
     RouteGeometry,
     RouteLeg,
     RoutingSettings,
+    SnappedPoint,
     TravelMatrix,
     TravelMetric,
 )
 from .osrm import OsrmRoutingProvider, OsrmRoutingProviderError
-from .provider import RoutingProvider
+from .provider import RoadSnapNotFoundError, RoadSnapper, RoutingProvider
+from .valhalla import (
+    NoSafeRouteError,
+    RoutingProfileIncompleteError,
+    RoutingProviderUnavailableError,
+    ValhallaRoutingProvider,
+)
 
 __all__ = [
     "GeoJsonLineString",
     "GeoPoint",
     "MockRoutingProvider",
+    "NoSafeRouteError",
     "OsrmRoutingProvider",
     "OsrmRoutingProviderError",
+    "RoadSnapNotFoundError",
+    "RoadSnapper",
     "RouteGeometry",
     "RouteLeg",
+    "RoutingProfileIncompleteError",
     "RoutingProvider",
+    "RoutingProviderUnavailableError",
     "RoutingSettings",
+    "SnappedPoint",
     "TravelMatrix",
     "TravelMetric",
+    "ValhallaRoutingProvider",
     "haversine_distance_meters",
 ]

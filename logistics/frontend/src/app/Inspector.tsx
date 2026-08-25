@@ -25,6 +25,7 @@ import type {
   RoutePlan,
   ScenarioWorkspace,
   SimulationDerivedState,
+  Trailer,
   UUID,
   ValidationResult,
   Vehicle,
@@ -37,9 +38,10 @@ import { useUiStore, type MapTool } from '../stores/ui-store';
 import { formatDate, formatDistance, formatDuration, formatTime, nextDate } from '../utils/format';
 import { PlanPanel, type PlanMove } from '../features/planning/PlanPanel';
 import { SettingsEditor } from '../features/settings/SettingsEditor';
+import { RouteDiagnostics } from '../features/vehicles/RouteDiagnostics';
 
-export type EntityKind = 'scenario' | 'warehouse' | 'zone' | 'driver' | 'vehicle' | 'shift' | 'request';
-export type EditableEntity = ScenarioWorkspace['scenario'] | Warehouse | Zone | Driver | Vehicle | DriverShift | LogisticsRequest;
+export type EntityKind = 'scenario' | 'warehouse' | 'zone' | 'driver' | 'vehicle' | 'trailer' | 'shift' | 'request';
+export type EditableEntity = ScenarioWorkspace['scenario'] | Warehouse | Zone | Driver | Vehicle | Trailer | DriverShift | LogisticsRequest;
 
 interface InspectorProps {
   workspace: ScenarioWorkspace;
@@ -53,6 +55,7 @@ interface InspectorProps {
   onGenerateDemo: () => void;
   onGenerateMultiDayDemo: () => void;
   onGenerateWorkload: () => void;
+  onDeleteGeneratedWorkload: () => void;
   onCloneScenario: () => void;
   onDeleteScenario: () => void;
   onExport: () => void;
@@ -124,6 +127,7 @@ function ScenarioSection({ props }: { props: InspectorProps }) {
       <Button variant="primary" onClick={() => props.onGenerateDemo()} disabled={props.busy}><RefreshCw size={14} />Demo scenario</Button>
       <Button onClick={() => props.onGenerateMultiDayDemo()} disabled={props.busy}><CalendarRange size={14} />Тест на 3 дня</Button>
       <Button onClick={props.onGenerateWorkload} disabled={props.busy}><CalendarPlus size={14} />Сгенерировать нагрузку</Button>
+      <Button variant="danger" onClick={props.onDeleteGeneratedWorkload} disabled={props.busy}><Trash2 size={14} />Удалить нагрузку</Button>
       <Button onClick={() => props.onEdit('scenario', workspace.scenario)}><Edit3 size={14} />Изменить</Button>
       <Button onClick={props.onCloneScenario}><Copy size={14} />Клонировать</Button>
       <Button onClick={props.onExport}><Download size={14} />Экспорт JSON</Button>
@@ -169,14 +173,32 @@ function RelationSection({ props }: { props: InspectorProps }) {
 
 function CatalogSection({ props, kind }: { props: InspectorProps; kind: 'driver' | 'vehicle' }) {
   const values = kind === 'driver' ? props.workspace.drivers : props.workspace.vehicles;
+  const trailers = props.workspace.trailers;
   return <>
-    <h2 className="section-title">{kind === 'driver' ? 'Водители' : 'Машины'}</h2><p className="section-subtitle">{kind === 'driver' ? 'Группа — мягкое предпочтение при назначении.' : 'Вместимость измеряется в бытовках.'}</p>
-    <Button variant="primary" onClick={() => props.onCreate(kind)}><Plus size={14} />Добавить</Button><div className="divider" />
+    <h2 className="section-title">{kind === 'driver' ? 'Водители' : 'Машины'}</h2><p className="section-subtitle">{kind === 'driver' ? 'Группа — мягкое предпочтение при назначении.' : 'Вместимость и физическая конфигурация проверяются до безопасного расчёта каждого участка.'}</p>
+    <Button variant="primary" onClick={() => props.onCreate(kind)}><Plus size={14} />{kind === 'driver' ? 'Добавить' : 'Добавить машину'}</Button><div className="divider" />
     <div className="entity-list">{values.map((value) => {
       const driver = kind === 'driver' ? value as Driver : null;
       const vehicle = kind === 'vehicle' ? value as Vehicle : null;
-      return <EntityCard key={value.id} title={value.name} subtitle={driver ? `Группа ${driver.preferred_route_group || 'не задана'}` : `${vehicle?.registration_number} · вместимость ${vehicle?.capacity}`} badges={<Badge tone={value.active ? 'success' : 'neutral'}>{value.active ? 'активен' : 'выключен'}</Badge>} onClick={() => props.onSelect(kind, value.id)} onEdit={() => props.onEdit(kind, value)} onDelete={() => props.onDelete(kind, value.id, value.name)} />;
+      const physicalSummary = vehicle?.length_mm && vehicle.width_mm && vehicle.height_mm
+        ? ` · ${vehicle.length_mm}×${vehicle.width_mm}×${vehicle.height_mm} мм`
+        : vehicle ? ' · профиль не заполнен' : '';
+      return <EntityCard key={value.id} title={value.name} subtitle={driver ? `Группа ${driver.preferred_route_group || 'не задана'}` : `${vehicle?.registration_number} · вместимость ${vehicle?.capacity}${physicalSummary}`} badges={<Badge tone={value.active ? 'success' : 'neutral'}>{value.active ? 'активен' : 'выключен'}</Badge>} onClick={() => props.onSelect(kind, value.id)} onEdit={() => props.onEdit(kind, value)} onDelete={() => props.onDelete(kind, value.id, value.name)} />;
     })}</div>
+    {kind === 'vehicle' ? <>
+      <div className="divider" />
+      <div className="entity-card__row"><span><h3 className="section-title">Прицепы</h3><p className="section-subtitle">Прицеп не исчезает после разгрузки и остаётся частью автопоезда до отдельного отсоединения.</p></span><Button variant="primary" onClick={() => props.onCreate('trailer')}><Plus size={14} />Добавить прицеп</Button></div>
+      {trailers === undefined ? <p className="field__hint">Загружаем каталог прицепов и эксплуатационные профили…</p> : <div className="entity-list">{trailers.map((trailer) => <EntityCard
+        key={trailer.id}
+        title={trailer.name}
+        subtitle={`${trailer.registration_number || 'без номера'}${trailer.length_mm ? ` · длина ${trailer.length_mm} мм` : ' · физический профиль не заполнен'}`}
+        badges={<Badge tone={trailer.active ? 'success' : 'neutral'}>{trailer.active ? 'активен' : 'выключен'}</Badge>}
+        onClick={() => props.onEdit('trailer', trailer)}
+        onEdit={() => props.onEdit('trailer', trailer)}
+        onDelete={() => props.onDelete('trailer', trailer.id, trailer.name)}
+      />)}</div>}
+      {trailers?.length === 0 ? <EmptyState title="Прицепы не созданы" description="Добавьте совместимый прицеп, чтобы машина могла перевозить две бытовки." /> : null}
+    </> : null}
   </>;
 }
 
@@ -243,6 +265,15 @@ function SimulationDrivers({ props }: { props: InspectorProps }) {
 export function Inspector(props: InspectorProps) {
   const section = useUiStore((state) => state.section);
   const mode = useUiStore((state) => state.mode);
+  const selected = useUiStore((state) => state.selected);
+  const allCycles = props.plan?.driver_routes.flatMap((route) => route.cycles) ?? [];
+  const diagnosticCycles = selected?.kind === 'cycle'
+    ? allCycles.filter((cycle) => cycle.id === selected.id)
+    : selected?.kind === 'driver'
+      ? props.plan?.driver_routes
+        .filter((route) => route.driver_shift_id === selected.id || route.driver_id === selected.id)
+        .flatMap((route) => route.cycles) ?? []
+      : allCycles;
   let content: React.ReactNode;
   switch (section) {
     case 'SCENARIO': content = <ScenarioSection props={props} />; break;
@@ -253,7 +284,13 @@ export function Inspector(props: InspectorProps) {
     case 'VEHICLES': content = <CatalogSection props={props} kind="vehicle" />; break;
     case 'SHIFTS': content = <ShiftsSection props={props} />; break;
     case 'REQUESTS': content = <RequestsSection props={props} />; break;
-    case 'ROUTES': content = <><div className="entity-card__row"><span><h2 className="section-title">Маршруты</h2><p className="section-subtitle">Нажмите водителя, чтобы выделить все его рейсы на карте; цикл — чтобы выделить один рейс.</p></span>{props.plan ? <Button size="sm" onClick={props.onClonePlan}><Copy size={13} />Клон</Button> : null}</div>{props.plan ? <><Metrics metrics={props.plan.metrics} /><div className="divider" /></> : null}{mode === 'SIMULATION' && props.simulation ? <><SimulationDrivers props={props} /><div className="divider" /></> : null}<PlanPanel plan={props.plan} timeZone={props.workspace.scenario.timezone} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} /></>; break;
+    case 'ROUTES': content = <>
+      <div className="entity-card__row"><span><h2 className="section-title">Маршруты</h2><p className="section-subtitle">Нажмите водителя, чтобы выделить все его рейсы на карте; цикл — чтобы выделить один рейс.</p></span>{props.plan ? <Button size="sm" onClick={props.onClonePlan}><Copy size={13} />Клон</Button> : null}</div>
+      {props.plan ? <><Metrics metrics={props.plan.metrics} /><div className="divider" /></> : null}
+      {mode === 'SIMULATION' && props.simulation ? <><SimulationDrivers props={props} /><div className="divider" /></> : null}
+      <PlanPanel plan={props.plan} timeZone={props.workspace.scenario.timezone} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} />
+      {diagnosticCycles.length ? <><div className="divider" /><RouteDiagnostics cycles={diagnosticCycles} timeZone={props.workspace.scenario.timezone} /></> : null}
+    </>; break;
     case 'UNASSIGNED': content = <PlanPanel plan={props.plan} timeZone={props.workspace.scenario.timezone} showUnassignedOnly onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} />; break;
     case 'SETTINGS': content = <SettingsEditor settings={props.workspace.scenario.settings} busy={props.busy} onSave={props.onSaveSettings} />; break;
   }

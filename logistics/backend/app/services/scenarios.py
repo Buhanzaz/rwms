@@ -28,8 +28,10 @@ from app.models import (
     RouteSegment,
     RouteStop,
     Scenario,
+    Trailer,
     UnassignedTask,
     Vehicle,
+    VehicleLoadProfile,
     Warehouse,
     Zone,
     ZoneRelation,
@@ -46,8 +48,10 @@ from app.schemas.domain import (
     ExportRouteStop,
     ExportShift,
     ExportTaskReference,
+    ExportTrailer,
     ExportUnassignedTask,
     ExportVehicle,
+    ExportVehicleLoadProfile,
     ExportWarehouse,
     ExportZone,
     GeoJsonGeometry,
@@ -58,12 +62,117 @@ from app.schemas.domain import (
     ScenarioSettings,
     ScenarioUpdate,
     ShiftCreate,
+    TrailerCreate,
     VehicleCreate,
+    VehicleLoadProfileCreate,
     WarehouseCreate,
     ZoneCreate,
     ZoneRelationCreate,
 )
 from app.services.catalog import create_request
+
+_DEMO_CARGO_DIMENSIONS = {
+    "cargo_length_mm": 6_000,
+    "cargo_width_mm": 2_400,
+    "cargo_height_mm": 2_400,
+    "cargo_weight_kg": 2_500,
+}
+
+
+async def _create_demo_vehicle_bundle(
+    session: AsyncSession,
+    *,
+    scenario_id: UUID,
+    index: int,
+    name: str,
+    registration_number: str,
+    notes: str,
+) -> Vehicle:
+    """Create one complete test truck, its own trailer, and observed axle profiles."""
+
+    trailer = Trailer(
+        scenario_id=scenario_id,
+        name=f"Прицеп {index}",
+        registration_number=f"ПР{index:02d}ТЕСТ",  # noqa: RUF001 - test plate
+        active=True,
+        tare_weight_kg=3_500,
+        max_gross_weight_kg=10_000,
+        length_mm=8_000,
+        width_mm=2_500,
+        height_mm=1_600,
+        platform_length_mm=6_500,
+        platform_width_mm=2_500,
+        platform_height_from_ground_mm=900,
+        max_platform_payload_kg=5_000,
+        payload_capacity_kg=5_000,
+        axle_count=2,
+        max_axle_load_kg=8_000,
+        max_cargo_length_mm=6_500,
+        max_cargo_width_mm=2_500,
+        max_cargo_height_mm=2_600,
+        max_cargo_weight_kg=5_000,
+        notes="Тестовый прицеп для второй бытовки.",
+    )
+    session.add(trailer)
+    await session.flush()
+    vehicle = Vehicle(
+        scenario_id=scenario_id,
+        name=name,
+        registration_number=registration_number,
+        capacity=2,
+        active=True,
+        average_speed_city=35,
+        average_speed_region=65,
+        vehicle_type="PLATFORM_TRUCK",
+        manufacturer="Demo",
+        model="Cabin carrier",
+        is_hgv=True,
+        tare_weight_kg=9_000,
+        max_gross_weight_kg=18_000,
+        length_mm=9_200,
+        width_mm=2_500,
+        height_mm=3_200,
+        axle_count=2,
+        max_axle_load_kg=9_000,
+        payload_capacity_kg=6_000,
+        platform_length_mm=6_500,
+        platform_width_mm=2_500,
+        platform_height_from_ground_mm=1_200,
+        max_platform_payload_kg=6_000,
+        max_cargo_length_mm=6_500,
+        max_cargo_width_mm=2_500,
+        max_cargo_height_mm=2_600,
+        max_cargo_weight_kg=5_000,
+        can_use_trailer=True,
+        default_trailer_id=trailer.id,
+        combined_length_with_trailer_mm=18_500,
+        coupling_length_mm=1_300,
+        height_safety_margin_mm=100,
+        width_safety_margin_mm=0,
+        weight_safety_margin_kg=0,
+        notes=notes,
+    )
+    session.add(vehicle)
+    await session.flush()
+    axle_loads = {
+        "EMPTY_TRUCK": 6_000,
+        "CARGO_ON_TRUCK": 7_500,
+        "EMPTY_COMBINATION": 6_500,
+        "CARGO_ON_TRUCK_WITH_TRAILER": 7_500,
+        "CARGO_ON_TRAILER_WITH_TRAILER": 7_000,
+        "TWO_CARGO_SPLIT": 7_800,
+    }
+    session.add_all(
+        [
+            VehicleLoadProfile(
+                vehicle_id=vehicle.id,
+                configuration_type=configuration_type,
+                max_actual_axle_load_kg=max_axle_load_kg,
+            )
+            for configuration_type, max_axle_load_kg in axle_loads.items()
+        ]
+    )
+    return vehicle
 
 
 def scenario_create_values(payload: ScenarioCreate, settings: Settings) -> dict[str, Any]:
@@ -136,6 +245,8 @@ def _scenario_graph_statement(scenario_id: UUID, *, include_plans: bool) -> Any:
         selectinload(Scenario.zone_relations),
         selectinload(Scenario.drivers),
         selectinload(Scenario.vehicles),
+        selectinload(Scenario.vehicles).selectinload(Vehicle.load_profiles),
+        selectinload(Scenario.trailers),
         selectinload(Scenario.shifts),
         selectinload(Scenario.requests).selectinload(LogisticsRequest.date_options),
         selectinload(Scenario.requests).selectinload(LogisticsRequest.tasks),
@@ -195,6 +306,10 @@ def _export_route_segment(
         distance_meters=segment.distance_meters,
         travel_seconds=segment.travel_seconds,
         geometry=geometry_to_geojson(segment.geometry),
+        routing_profile_snapshot=segment.routing_profile_snapshot,
+        routing_provider=segment.routing_provider,
+        osm_data_version=segment.osm_data_version,
+        routed_at=segment.routed_at,
     )
 
 
@@ -283,6 +398,10 @@ async def export_scenario(
                     latitude=request.latitude,
                     longitude=request.longitude,
                     quantity=request.quantity,
+                    cargo_length_mm=request.cargo_length_mm,
+                    cargo_width_mm=request.cargo_width_mm,
+                    cargo_height_mm=request.cargo_height_mm,
+                    cargo_weight_kg=request.cargo_weight_kg,
                     service_minutes=request.service_minutes,
                     priority=request.priority,
                     status=request.status,
@@ -346,6 +465,19 @@ async def export_scenario(
             ExportVehicle(id=item.id, data=VehicleCreate.model_validate(item))
             for item in scenario.vehicles
         ],
+        trailers=[
+            ExportTrailer(id=item.id, data=TrailerCreate.model_validate(item))
+            for item in scenario.trailers
+        ],
+        vehicle_load_profiles=[
+            ExportVehicleLoadProfile(
+                id=profile.id,
+                vehicle_id=vehicle.id,
+                data=VehicleLoadProfileCreate.model_validate(profile),
+            )
+            for vehicle in scenario.vehicles
+            for profile in vehicle.load_profiles
+        ],
         shifts=[
             ExportShift(id=item.id, data=ShiftCreate.model_validate(item))
             for item in scenario.shifts
@@ -397,6 +529,7 @@ async def import_scenario(
     warehouse_ids: dict[UUID, UUID] = {}
     zone_ids: dict[UUID, UUID] = {}
     driver_ids: dict[UUID, UUID] = {}
+    trailer_ids: dict[UUID, UUID] = {}
     vehicle_ids: dict[UUID, UUID] = {}
     shift_ids: dict[UUID, UUID] = {}
     tasks: dict[tuple[UUID, int], UUID] = {}
@@ -431,11 +564,35 @@ async def import_scenario(
         session.add(driver)
         await session.flush()
         driver_ids[driver_item.id] = driver.id
+    for trailer_item in document.trailers:
+        trailer = Trailer(scenario_id=scenario.id, **trailer_item.data.model_dump())
+        session.add(trailer)
+        await session.flush()
+        trailer_ids[trailer_item.id] = trailer.id
     for vehicle_item in document.vehicles:
-        vehicle = Vehicle(scenario_id=scenario.id, **vehicle_item.data.model_dump())
+        values = vehicle_item.data.model_dump(exclude={"default_trailer_id"})
+        default_trailer_id = vehicle_item.data.default_trailer_id
+        vehicle = Vehicle(
+            scenario_id=scenario.id,
+            default_trailer_id=(
+                _mapped(trailer_ids, default_trailer_id, "vehicle default trailer")
+                if default_trailer_id is not None
+                else None
+            ),
+            **values,
+        )
         session.add(vehicle)
         await session.flush()
         vehicle_ids[vehicle_item.id] = vehicle.id
+    for profile_item in document.vehicle_load_profiles:
+        session.add(
+            VehicleLoadProfile(
+                vehicle_id=_mapped(
+                    vehicle_ids, profile_item.vehicle_id, "vehicle load profile"
+                ),
+                **profile_item.data.model_dump(),
+            )
+        )
     for shift_item in document.shifts:
         values = shift_item.data.model_dump(exclude={"driver_id", "vehicle_id"})
         shift = DriverShift(
@@ -613,6 +770,7 @@ async def _clear_scenario_data(session: AsyncSession, scenario_id: UUID) -> None
         Zone,
         Driver,
         Vehicle,
+        Trailer,
         Warehouse,
     ):
         await session.execute(delete(model).where(model.scenario_id == scenario_id))
@@ -708,17 +866,15 @@ async def reset_demo_scenario(session: AsyncSession, scenario_id: UUID) -> Scena
             active=True,
             notes="",
         )
-        vehicle = Vehicle(
+        vehicle = await _create_demo_vehicle_bundle(
+            session,
             scenario_id=scenario.id,
+            index=index,
             name=f"Машина {index}",
             registration_number=f"А{index}23БВ",  # noqa: RUF001 - Russian plate label
-            capacity=2,
-            active=True,
-            average_speed_city=35,
-            average_speed_region=65,
-            notes="",
+            notes="Полный профиль truck-routing для демонстрационного сценария.",
         )
-        session.add_all([driver, vehicle])
+        session.add(driver)
         await session.flush()
         session.add(
             DriverShift(
@@ -762,6 +918,7 @@ async def reset_demo_scenario(session: AsyncSession, scenario_id: UUID) -> Scena
                 latitude=latitude,
                 longitude=longitude,
                 quantity=quantity,
+                **_DEMO_CARGO_DIMENSIONS,
                 service_minutes=service_minutes,
                 priority=priority,
                 status="READY",
@@ -886,17 +1043,15 @@ async def create_multi_day_demo_scenario(session: AsyncSession, settings: Settin
             active=True,
             notes="Одна из трёх параллельных смен многодневного стенда.",
         )
-        vehicle = Vehicle(
+        vehicle = await _create_demo_vehicle_bundle(
+            session,
             scenario_id=scenario.id,
+            index=index + 10,
             name=f"Тестовая машина {index}",
             registration_number=f"T{index}28MC",
-            capacity=2,
-            active=True,
-            average_speed_city=35,
-            average_speed_region=65,
-            notes="Вместимость: две бытовки.",
+            notes="Вместимость две бытовки; заполнен безопасный грузовой профиль.",
         )
-        session.add_all([driver, vehicle])
+        session.add(driver)
         drivers.append(driver)
         vehicles.append(vehicle)
     await session.flush()
@@ -1040,6 +1195,7 @@ async def create_multi_day_demo_scenario(session: AsyncSession, settings: Settin
                 latitude=latitude,
                 longitude=longitude,
                 quantity=quantity,
+                **_DEMO_CARGO_DIMENSIONS,
                 service_minutes=30,
                 priority=priority,
                 status="READY",

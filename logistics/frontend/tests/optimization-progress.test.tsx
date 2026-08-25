@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
@@ -71,7 +71,7 @@ function jsonResponse(value: unknown): Response {
   return new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }
 
-function installFetchRouter(options: { requestOutside?: boolean } = {}) {
+function installFetchRouter(options: { requestOutside?: boolean; deletedRequests?: number } = {}) {
   let reclassified = false;
   const routeFetch = (input: RequestInfo | URL, init?: RequestInit): Response => {
     const url = typeof input === 'string'
@@ -124,6 +124,9 @@ function installFetchRouter(options: { requestOutside?: boolean } = {}) {
         date_options: [{ id: 'date-id', request_id: 'request-id', date: '2026-08-25', priority: 1, window_start: null, window_end: null, is_hard: false }],
         tasks: [],
       }]);
+    }
+    if (url === '/api/scenarios/scenario-id/generated-workload?date=2026-08-25' && method === 'DELETE') {
+      return jsonResponse({ scenario_id: 'scenario-id', date: '2026-08-25', deleted_requests: options.deletedRequests ?? 1 });
     }
     if (url === '/api/scenarios/scenario-id/reclassify-requests' && method === 'POST') {
       reclassified = true;
@@ -215,5 +218,40 @@ describe('optimization progress', () => {
       expect.objectContaining({ method: 'POST' }),
     ));
     expect(await screen.findByTestId('optimization-progress')).toBeVisible();
+  });
+});
+
+describe('generated workload deletion', () => {
+  it('confirms the selected date and waits for the scenario workspace refresh', async () => {
+    const fetchMock = installFetchRouter({ deletedRequests: 1 });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const user = userEvent.setup();
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+
+    await user.click(await screen.findByRole('button', { name: 'Удалить нагрузку' }));
+    const dialog = screen.getByRole('dialog', { name: 'Удалить нагрузку за 25 августа 2026 г.?' });
+    expect(dialog).toHaveTextContent('Ручные и RWMS-заявки, а также нагрузка других дат останутся без изменений.');
+    await user.click(within(dialog).getByRole('button', { name: 'Удалить нагрузку' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scenarios/scenario-id/generated-workload?date=2026-08-25',
+      expect.objectContaining({ method: 'DELETE' }),
+    ));
+    expect(await screen.findByText('Удалено заявок: 1')).toBeVisible();
+    expect(screen.queryByRole('dialog', { name: /Удалить нагрузку за/ })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([input]) => input === '/api/scenarios/scenario-id').length).toBeGreaterThan(1);
+  });
+
+  it('reports a clear neutral result when the day has no generator workload', async () => {
+    installFetchRouter({ deletedRequests: 0 });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const user = userEvent.setup();
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+
+    await user.click(await screen.findByRole('button', { name: 'Удалить нагрузку' }));
+    const dialog = screen.getByRole('dialog', { name: 'Удалить нагрузку за 25 августа 2026 г.?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Удалить нагрузку' }));
+
+    expect(await screen.findByText('На выбранную дату нагрузки генератора нет')).toBeVisible();
   });
 });

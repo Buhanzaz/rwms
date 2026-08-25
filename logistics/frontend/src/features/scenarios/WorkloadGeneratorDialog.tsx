@@ -3,7 +3,7 @@ import { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import type { WorkloadGenerationInput } from '../../api/client';
-import { Button, CheckboxField, Field, Modal } from '../../components/ui';
+import { Button, Field, Modal } from '../../components/ui';
 import { formatDate, nextDate } from '../../utils/format';
 
 const workloadSchema = z.object({
@@ -12,8 +12,11 @@ const workloadSchema = z.object({
   deliveries_per_day: z.number().int('Укажите целое число').min(0, 'Минимум 0').max(10, 'Максимум 10 доставок в день'),
   pickups_per_day: z.number().int('Укажите целое число').min(0, 'Минимум 0').max(10, 'Максимум 10 вывозов в день'),
   alternative_dates_count: z.number().int('Укажите целое число').min(0, 'Минимум 0').max(3, 'Максимум 3 альтернативы'),
+  cargo_length_mm: z.number().int('Укажите целое число').min(1, 'Укажите длину груза').max(30_000, 'Максимум 30 м'),
+  cargo_width_mm: z.number().int('Укажите целое число').min(1, 'Укажите ширину груза').max(10_000, 'Максимум 10 м'),
+  cargo_height_mm: z.number().int('Укажите целое число').min(1, 'Укажите высоту груза').max(10_000, 'Максимум 10 м'),
+  cargo_weight_kg: z.number().int('Укажите целое число').min(1, 'Укажите массу груза').max(100_000, 'Максимум 100 т'),
   seed: z.number().int('Seed должен быть целым числом'),
-  replace_existing_generated: z.boolean(),
 }).superRefine((values, context) => {
   if (values.alternative_dates_count > values.days - 1) {
     context.addIssue({
@@ -49,8 +52,11 @@ export function WorkloadGeneratorDialog({ planningDate, seed, busy, onClose, onS
       deliveries_per_day: 4,
       pickups_per_day: 4,
       alternative_dates_count: 0,
+      cargo_length_mm: 6_000,
+      cargo_width_mm: 2_400,
+      cargo_height_mm: 2_400,
+      cargo_weight_kg: 2_500,
       seed,
-      replace_existing_generated: false,
     },
   });
   const values = watch();
@@ -75,7 +81,7 @@ export function WorkloadGeneratorDialog({ planningDate, seed, busy, onClose, onS
     <Modal
       wide
       title="Сгенерировать рабочую нагрузку"
-      description="Добавит воспроизводимые доставки и вывозы в текущий сценарий; удаление возможно только для созданных генератором незапланированных тестовых заявок."
+      description="Создаст воспроизводимые доставки и вывозы. Для выбранного дня или периода прежняя нагрузка генератора заменяется атомарно; ручные и RWMS-заявки, а также другие даты не затрагиваются."
       onClose={onClose}
     >
       <form className="form-grid" onSubmit={handleSubmit((values) => onSubmit(values))}>
@@ -86,14 +92,14 @@ export function WorkloadGeneratorDialog({ planningDate, seed, busy, onClose, onS
         <Field label="Альтернативных дат" type="number" min="0" max="3" {...register('alternative_dates_count', { valueAsNumber: true })} error={errors.alternative_dates_count?.message} hint="Не больше дней минус один" />
         <Field label="Seed" type="number" step="1" {...register('seed', { valueAsNumber: true })} error={errors.seed?.message} />
 
-        <div className="span-2">
-          <CheckboxField
-            label="Перегенерировать выбранный период"
-            checked={values.replace_existing_generated}
-            onChange={(checked) => setValue('replace_existing_generated', checked, { shouldDirty: true, shouldValidate: true })}
-          />
-          <p className="field__hint">Удаляются только созданные генератором незапланированные тестовые заявки.</p>
+        <div className="span-2 section-heading">
+          <strong>Параметры одной грузовой единицы</strong>
+          <small>Генератор сохранит эти фактические габариты и массу в каждой заявке.</small>
         </div>
+        <Field label="Длина груза, мм" type="number" min="1" max="30000" {...register('cargo_length_mm', { valueAsNumber: true })} error={errors.cargo_length_mm?.message} />
+        <Field label="Ширина груза, мм" type="number" min="1" max="10000" {...register('cargo_width_mm', { valueAsNumber: true })} error={errors.cargo_width_mm?.message} />
+        <Field label="Высота груза, мм" type="number" min="1" max="10000" {...register('cargo_height_mm', { valueAsNumber: true })} error={errors.cargo_height_mm?.message} />
+        <Field label="Масса груза, кг" type="number" min="1" max="100000" {...register('cargo_weight_kg', { valueAsNumber: true })} error={errors.cargo_weight_kg?.message} />
 
         <div className="span-2 detail-grid" data-testid="workload-preview">
           <div className="detail-item"><small>Горизонт</small><strong>{endDate ? `${formatDate(values.start_date)} — ${formatDate(endDate)}` : 'Укажите период'}</strong></div>
@@ -104,7 +110,7 @@ export function WorkloadGeneratorDialog({ planningDate, seed, busy, onClose, onS
 
         <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}>
           <Button type="button" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary" disabled={busy}>{busy ? 'Генерируем…' : values.replace_existing_generated ? 'Перегенерировать нагрузку' : 'Сгенерировать нагрузку'}</Button>
+          <Button type="submit" variant="primary" disabled={busy}>{busy ? 'Генерируем…' : 'Сгенерировать и заменить нагрузку'}</Button>
         </div>
       </form>
     </Modal>

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from hashlib import sha256
 from itertools import pairwise
 from math import asin, cos, radians, sin, sqrt
+from typing import TYPE_CHECKING
 
 from .models import (
     GeoJsonLineString,
@@ -13,10 +14,14 @@ from .models import (
     RouteGeometry,
     RouteLeg,
     RoutingSettings,
+    SnappedPoint,
     TravelMatrix,
     TravelMetric,
     require_aware,
 )
+
+if TYPE_CHECKING:
+    from .truck_profile import EffectiveTruckProfile
 
 EARTH_RADIUS_METERS = 6_371_008.8
 
@@ -38,14 +43,22 @@ class MockRoutingProvider:
     def __init__(self, settings: RoutingSettings | None = None) -> None:
         self.settings = settings or RoutingSettings()
 
+    async def snap_point(self, point: GeoPoint) -> SnappedPoint:
+        """Treat the input as routable in deterministic offline grid mode."""
+
+        return SnappedPoint(point=point, distance_meters=0.0)
+
     async def get_matrix(
         self,
         points: list[GeoPoint],
         departure_at: datetime | None,
+        *,
+        profile: EffectiveTruckProfile | None = None,
     ) -> TravelMatrix:
         """Build a complete matrix without network access."""
 
         require_aware(departure_at, "departure_at")
+        del profile
         immutable_points = tuple(points)
         rows: list[tuple[TravelMetric, ...]] = []
         for from_point in immutable_points:
@@ -61,10 +74,13 @@ class MockRoutingProvider:
         self,
         points: list[GeoPoint],
         departure_at: datetime | None,
+        *,
+        profile: EffectiveTruckProfile | None = None,
     ) -> RouteGeometry:
         """Route through points in input order and expose each straight leg."""
 
         require_aware(departure_at, "departure_at")
+        del profile
         if not points:
             raise ValueError("a route requires at least one point")
         if len(points) == 1:

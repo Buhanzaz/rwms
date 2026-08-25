@@ -30,13 +30,17 @@ describe('application states', () => {
 });
 
 describe('request editor', () => {
-  it('keeps the server zone read-only and supports multiple date windows', async () => {
+  it('keeps the server zone read-only and submits complete cargo dimensions with multiple date windows', async () => {
     const user = userEvent.setup();
     const submit = vi.fn<(input: LogisticsRequestInput) => Promise<void>>(() => Promise.resolve());
     render(<RequestDialog type="DELIVERY" point={{ latitude: 55.7, longitude: 37.6 }} defaultDate="2026-08-25" busy={false} onClose={() => undefined} onSubmit={submit} />);
     expect(screen.getByText(/Зону определит backend/)).toBeVisible();
     expect(screen.queryByLabelText(/zone_id/i)).not.toBeInTheDocument();
     await user.type(screen.getByLabelText('Название / номер'), 'Заявка 142');
+    await user.type(screen.getByLabelText('Длина бытовки, мм'), '6000');
+    await user.type(screen.getByLabelText('Ширина бытовки, мм'), '2400');
+    await user.type(screen.getByLabelText('Высота бытовки, мм'), '2400');
+    await user.type(screen.getByLabelText('Масса бытовки, кг'), '2500');
     await user.click(screen.getByRole('button', { name: 'Дата' }));
     expect(screen.getAllByLabelText('Дата')).toHaveLength(2);
     fireEvent.change(screen.getAllByLabelText('Дата')[1]!, { target: { value: '2026-08-26' } });
@@ -44,7 +48,19 @@ describe('request editor', () => {
     await waitFor(() => expect(submit).toHaveBeenCalledOnce());
     const submitted = submit.mock.calls[0]?.[0];
     expect(submitted).not.toHaveProperty('zone_id');
+    expect(submitted).toMatchObject({ cargo_length_mm: 6000, cargo_width_mm: 2400, cargo_height_mm: 2400, cargo_weight_kg: 2500 });
     expect(submitted?.date_options).toHaveLength(2);
+  });
+
+  it('does not submit a partial cargo routing profile', async () => {
+    const user = userEvent.setup();
+    const submit = vi.fn<(input: LogisticsRequestInput) => Promise<void>>(() => Promise.resolve());
+    render(<RequestDialog type="PICKUP" point={{ latitude: 55.7, longitude: 37.6 }} defaultDate="2026-08-25" busy={false} onClose={() => undefined} onSubmit={submit} />);
+    await user.type(screen.getByLabelText('Название / номер'), 'Вывоз 98');
+    await user.type(screen.getByLabelText('Длина бытовки, мм'), '6000');
+    await user.click(screen.getByRole('button', { name: 'Сохранить заявку' }));
+    expect(await screen.findByText('Укажите все четыре параметра груза или оставьте все поля пустыми')).toBeVisible();
+    expect(submit).not.toHaveBeenCalled();
   });
 });
 

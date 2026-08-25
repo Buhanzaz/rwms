@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="rwms-logistics-tests">
+  <node id="0" lat="55.000000" lon="36.998000" version="1" />
+  <node id="1" lat="55.000000" lon="37.000000" version="1" />
+  <node id="2" lat="55.000000" lon="37.010000" version="1" />
+  <node id="3" lat="55.000000" lon="37.020000" version="1" />
+  <node id="4" lat="55.010000" lon="37.000000" version="1" />
+  <node id="5" lat="55.010000" lon="37.020000" version="1" />
+  <node id="6" lat="55.000000" lon="37.022000" version="1" />
+
+  <way id="90" version="1">
+    <nd ref="0" />
+    <nd ref="1" />
+    <tag k="highway" v="primary" />
+    <tag k="name" v="Origin unrestricted stub" />
+    <tag k="maxspeed" v="50" />
+  </way>
+
+  <way id="100" version="1">
+    <nd ref="1" />
+    <nd ref="2" />
+    <nd ref="3" />
+    <tag k="highway" v="primary" />
+    <tag k="name" v="Short restricted road" />
+    <tag k="maxspeed" v="50" />
+    <tag k="maxlength" v="12" />
+  </way>
+
+  <way id="200" version="1">
+    <nd ref="1" />
+    <nd ref="4" />
+    <nd ref="5" />
+    <nd ref="3" />
+    <tag k="highway" v="primary" />
+    <tag k="name" v="Long unrestricted road" />
+    <tag k="maxspeed" v="50" />
+  </way>
+
+  <way id="300" version="1">
+    <nd ref="3" />
+    <nd ref="6" />
+    <tag k="highway" v="primary" />
+    <tag k="name" v="Destination unrestricted stub" />
+    <tag k="maxspeed" v="50" />
+  </way>
+
+  <!-- Height component: the direct middle edge is limited to 3.9 m. -->
+  <node id="1000" lat="55.030000" lon="36.998000" version="1" />
+  <node id="1001" lat="55.030000" lon="37.000000" version="1" />
+  <node id="1002" lat="55.030000" lon="37.010000" version="1" />
+  <node id="1003" lat="55.030000" lon="37.020000" version="1" />
+  <node id="1004" lat="55.040000" lon="37.000000" version="1" />
+  <node id="1005" lat="55.040000" lon="37.020000" version="1" />
+  <node id="1006" lat="55.030000" lon="37.022000" version="1" />
+  <way id="1090" version="1"><nd ref="1000" /><nd ref="1001" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /></way>
+  <way id="1100" version="1"><nd ref="1001" /><nd ref="1002" /><nd ref="1003" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /><tag k="maxheight" v="3.9" /></way>
+  <way id="1200" version="1"><nd ref="1001" /><nd ref="1004" /><nd ref="1005" /><nd ref="1003" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /></way>
+  <way id="1300" version="1"><nd ref="1003" /><nd ref="1006" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /></way>
+
+  <!-- Weight component: the direct middle edge is limited to 20 metric tons. -->
+  <node id="2000" lat="55.060000" lon="36.998000" version="1" />
+  <node id="2001" lat="55.060000" lon="37.000000" version="1" />
+  <node id="2002" lat="55.060000" lon="37.010000" version="1" />
+  <node id="2003" lat="55.060000" lon="37.020000" version="1" />
+  <node id="2004" lat="55.070000" lon="37.000000" version="1" />
+  <node id="2005" lat="55.070000" lon="37.020000" version="1" />
+  <node id="2006" lat="55.060000" lon="37.022000" version="1" />
+  <way id="2090" version="1"><nd ref="2000" /><nd ref="2001" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /></way>
+  <way id="2100" version="1"><nd ref="2001" /><nd ref="2002" /><nd ref="2003" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /><tag k="maxweight" v="20" /></way>
+  <way id="2200" version="1"><nd ref="2001" /><nd ref="2004" /><nd ref="2005" /><nd ref="2003" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /></way>
+  <way id="2300" version="1"><nd ref="2003" /><nd ref="2006" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /></way>
+
+  <!-- Width component: the direct middle edge is limited to 2.5 m. -->
+  <node id="3000" lat="55.090000" lon="36.998000" version="1" />
+  <node id="3001" lat="55.090000" lon="37.000000" version="1" />
+  <node id="3002" lat="55.090000" lon="37.010000" version="1" />
+  <node id="3003" lat="55.090000" lon="37.020000" version="1" />
+  <node id="3004" lat="55.100000" lon="37.000000" version="1" />
+  <node id="3005" lat="55.100000" lon="37.020000" version="1" />
+  <node id="3006" lat="55.090000" lon="37.022000" version="1" />
+  <way id="3090" version="1"><nd ref="3000" /><nd ref="3001" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /></way>
+  <way id="3100" version="1"><nd ref="3001" /><nd ref="3002" /><nd ref="3003" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /><tag k="maxwidth" v="2.5" /></way>
+  <way id="3200" version="1"><nd ref="3001" /><nd ref="3004" /><nd ref="3005" /><nd ref="3003" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /></way>
+  <way id="3300" version="1"><nd ref="3003" /><nd ref="3006" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /></way>
+
+  <!-- Axle component: the direct middle edge is limited to 8 metric tons. -->
+  <node id="4000" lat="55.120000" lon="36.998000" version="1" />
+  <node id="4001" lat="55.120000" lon="37.000000" version="1" />
+  <node id="4002" lat="55.120000" lon="37.010000" version="1" />
+  <node id="4003" lat="55.120000" lon="37.020000" version="1" />
+  <node id="4004" lat="55.130000" lon="37.000000" version="1" />
+  <node id="4005" lat="55.130000" lon="37.020000" version="1" />
+  <node id="4006" lat="55.120000" lon="37.022000" version="1" />
+  <way id="4090" version="1"><nd ref="4000" /><nd ref="4001" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /></way>
+  <way id="4100" version="1"><nd ref="4001" /><nd ref="4002" /><nd ref="4003" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /><tag k="maxaxleload" v="8" /></way>
+  <way id="4200" version="1"><nd ref="4001" /><nd ref="4004" /><nd ref="4005" /><nd ref="4003" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /></way>
+  <way id="4300" version="1"><nd ref="4003" /><nd ref="4006" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /></way>
+
+  <!-- HGV component: the direct middle edge is forbidden to trucks. -->
+  <node id="5000" lat="55.150000" lon="36.998000" version="1" />
+  <node id="5001" lat="55.150000" lon="37.000000" version="1" />
+  <node id="5002" lat="55.150000" lon="37.010000" version="1" />
+  <node id="5003" lat="55.150000" lon="37.020000" version="1" />
+  <node id="5004" lat="55.160000" lon="37.000000" version="1" />
+  <node id="5005" lat="55.160000" lon="37.020000" version="1" />
+  <node id="5006" lat="55.150000" lon="37.022000" version="1" />
+  <way id="5090" version="1"><nd ref="5000" /><nd ref="5001" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /></way>
+  <way id="5100" version="1"><nd ref="5001" /><nd ref="5002" /><nd ref="5003" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /><tag k="hgv" v="no" /></way>
+  <way id="5200" version="1"><nd ref="5001" /><nd ref="5004" /><nd ref="5005" /><nd ref="5003" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /></way>
+  <way id="5300" version="1"><nd ref="5003" /><nd ref="5006" /><tag k="highway" v="primary" /><tag k="maxspeed" v="50" /></way>
+</osm>

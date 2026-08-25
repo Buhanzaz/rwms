@@ -7,7 +7,10 @@ import type {
   DriverShift,
   LogisticsRequest,
   Scenario,
+  Trailer,
+  UUID,
   Vehicle,
+  VehicleLoadConfigurationType,
   Warehouse,
   Zone,
   ZoneRelation,
@@ -18,12 +21,14 @@ import type {
   ScenarioCreateInput,
   ShiftInput,
   VehicleInput,
+  VehicleLoadProfileInput,
   WarehouseInput,
   ZoneInput,
 } from '../api/client';
 import { DEFAULT_PLANNING_SETTINGS } from '../domain/defaults';
 import { Button, CheckboxField, Field, Modal, SelectField } from './ui';
 import { dateInTimeZone, localDateTimeToIso } from '../utils/format';
+import { TruckConfigurationPreview } from '../features/vehicles/TruckConfigurationPreview';
 
 const scenarioSchema = z.object({
   name: z.string().trim().min(2, 'Введите название'),
@@ -186,6 +191,25 @@ export function ZoneDialog({ zone, geometry, initialValues, title, description, 
   );
 }
 
+const nullablePositiveInteger = z.number().int().positive('Укажите положительное значение').nullable();
+const nullableBoolean = z.boolean().nullable();
+const loadConfigurationTypes = [
+  'EMPTY_TRUCK',
+  'CARGO_ON_TRUCK',
+  'EMPTY_COMBINATION',
+  'CARGO_ON_TRUCK_WITH_TRAILER',
+  'CARGO_ON_TRAILER_WITH_TRAILER',
+  'TWO_CARGO_SPLIT',
+] as const satisfies readonly VehicleLoadConfigurationType[];
+const loadProfileLabels: Record<VehicleLoadConfigurationType, string> = {
+  EMPTY_TRUCK: 'Пустая машина',
+  CARGO_ON_TRUCK: 'Одна бытовка на машине',
+  EMPTY_COMBINATION: 'Машина + пустой прицеп',
+  CARGO_ON_TRUCK_WITH_TRAILER: 'Бытовка на машине + пустой прицеп',
+  CARGO_ON_TRAILER_WITH_TRAILER: 'Бытовка на прицепе',
+  TWO_CARGO_SPLIT: 'Две бытовки: машина + прицеп',
+};
+
 const catalogSchema = z.object({
   name: z.string().trim().min(1, 'Введите название'),
   external_worker_id: optionalUuidSchema,
@@ -196,32 +220,148 @@ const catalogSchema = z.object({
   average_speed_region: z.number().positive(),
   notes: z.string(),
   active: z.boolean(),
+  vehicle_type: z.string(),
+  manufacturer: z.string(),
+  model: z.string(),
+  is_hgv: nullableBoolean,
+  tare_weight_kg: nullablePositiveInteger,
+  max_gross_weight_kg: nullablePositiveInteger,
+  length_mm: nullablePositiveInteger,
+  width_mm: nullablePositiveInteger,
+  height_mm: nullablePositiveInteger,
+  axle_count: nullablePositiveInteger,
+  max_axle_load_kg: nullablePositiveInteger,
+  payload_capacity_kg: nullablePositiveInteger,
+  platform_length_mm: nullablePositiveInteger,
+  platform_width_mm: nullablePositiveInteger,
+  platform_height_from_ground_mm: nullablePositiveInteger,
+  max_platform_payload_kg: nullablePositiveInteger,
+  max_cargo_length_mm: nullablePositiveInteger,
+  max_cargo_width_mm: nullablePositiveInteger,
+  max_cargo_height_mm: nullablePositiveInteger,
+  max_cargo_weight_kg: nullablePositiveInteger,
+  can_use_trailer: nullableBoolean,
+  default_trailer_id: z.string(),
+  combined_length_with_trailer_mm: nullablePositiveInteger,
+  coupling_length_mm: nullablePositiveInteger,
+  height_safety_margin_mm: z.number().int().min(0),
+  width_safety_margin_mm: z.number().int().min(0),
+  weight_safety_margin_kg: z.number().int().min(0),
+  preview_cargo_length_mm: nullablePositiveInteger,
+  preview_cargo_width_mm: nullablePositiveInteger,
+  preview_cargo_height_mm: nullablePositiveInteger,
+  preview_cargo_weight_kg: nullablePositiveInteger,
+  load_profiles: z.array(z.object({
+    id: z.string().optional(),
+    configuration_type: z.enum(loadConfigurationTypes),
+    max_actual_axle_load_kg: nullablePositiveInteger,
+  })),
 });
 type CatalogValues = z.infer<typeof catalogSchema>;
 
-export function CatalogDialog({ kind, value, busy, onClose, onSubmit }: {
+export interface EditableVehicleLoadProfileInput extends VehicleLoadProfileInput {
+  id?: UUID;
+}
+
+export interface VehicleEditorInput extends VehicleInput {
+  load_profiles: EditableVehicleLoadProfileInput[];
+}
+
+const optionalNumber = (value: unknown): number | null => typeof value !== 'string' || value.trim() === '' ? null : Number(value);
+const optionalNumberRegistration = () => ({ setValueAs: optionalNumber } as const);
+const optionalBoolean = (value: unknown): boolean | null => value === 'true' ? true : value === 'false' ? false : null;
+
+export function CatalogDialog({ kind, value, trailers = [], busy, onClose, onSubmit }: {
   kind: 'driver' | 'vehicle';
   value?: Driver | Vehicle | undefined;
+  trailers?: Trailer[];
   busy: boolean;
   onClose: () => void;
-  onSubmit: (input: DriverInput | VehicleInput) => Promise<void>;
+  onSubmit: (input: DriverInput | VehicleEditorInput) => Promise<void>;
 }) {
   const driver = kind === 'driver' ? value as Driver | undefined : undefined;
   const vehicle = kind === 'vehicle' ? value as Vehicle | undefined : undefined;
+  const existingProfiles = vehicle?.load_profiles ?? [];
   const { register, handleSubmit, watch, setValue, formState: { errors } } = useForm<CatalogValues>({
     resolver: zodResolver(catalogSchema),
     defaultValues: {
       name: value?.name ?? '', external_worker_id: driver?.external_worker_id ?? '', preferred_route_group: driver?.preferred_route_group ?? '', registration_number: vehicle?.registration_number ?? '',
       capacity: vehicle?.capacity ?? 2, average_speed_city: vehicle?.average_speed_city ?? 35, average_speed_region: vehicle?.average_speed_region ?? 65,
       notes: value?.notes ?? '', active: value?.active ?? true,
+      vehicle_type: vehicle?.vehicle_type ?? '', manufacturer: vehicle?.manufacturer ?? '', model: vehicle?.model ?? '', is_hgv: vehicle?.is_hgv ?? null,
+      tare_weight_kg: vehicle?.tare_weight_kg ?? null, max_gross_weight_kg: vehicle?.max_gross_weight_kg ?? null,
+      length_mm: vehicle?.length_mm ?? null, width_mm: vehicle?.width_mm ?? null, height_mm: vehicle?.height_mm ?? null,
+      axle_count: vehicle?.axle_count ?? null, max_axle_load_kg: vehicle?.max_axle_load_kg ?? null, payload_capacity_kg: vehicle?.payload_capacity_kg ?? null,
+      platform_length_mm: vehicle?.platform_length_mm ?? null, platform_width_mm: vehicle?.platform_width_mm ?? null,
+      platform_height_from_ground_mm: vehicle?.platform_height_from_ground_mm ?? null, max_platform_payload_kg: vehicle?.max_platform_payload_kg ?? null,
+      max_cargo_length_mm: vehicle?.max_cargo_length_mm ?? null, max_cargo_width_mm: vehicle?.max_cargo_width_mm ?? null,
+      max_cargo_height_mm: vehicle?.max_cargo_height_mm ?? null, max_cargo_weight_kg: vehicle?.max_cargo_weight_kg ?? null,
+      can_use_trailer: vehicle?.can_use_trailer ?? null, default_trailer_id: vehicle?.default_trailer_id ?? '',
+      combined_length_with_trailer_mm: vehicle?.combined_length_with_trailer_mm ?? null, coupling_length_mm: vehicle?.coupling_length_mm ?? null,
+      height_safety_margin_mm: vehicle?.height_safety_margin_mm ?? 0, width_safety_margin_mm: vehicle?.width_safety_margin_mm ?? 0,
+      weight_safety_margin_kg: vehicle?.weight_safety_margin_kg ?? 0,
+      preview_cargo_length_mm: null, preview_cargo_width_mm: null, preview_cargo_height_mm: null, preview_cargo_weight_kg: null,
+      load_profiles: loadConfigurationTypes.map((configurationType) => {
+        const existing = existingProfiles.find((profile) => profile.configuration_type === configurationType);
+        return { ...(existing ? { id: existing.id } : {}), configuration_type: configurationType, max_actual_axle_load_kg: existing?.max_actual_axle_load_kg ?? null };
+      }),
     },
   });
-  const active = watch('active');
-  const submit = (values: CatalogValues) => kind === 'driver'
-    ? onSubmit({ name: values.name, external_worker_id: values.external_worker_id || null, preferred_route_group: values.preferred_route_group, notes: values.notes, active: values.active })
-    : onSubmit({ name: values.name, registration_number: values.registration_number, capacity: values.capacity, active: values.active, average_speed_city: values.average_speed_city, average_speed_region: values.average_speed_region, notes: values.notes });
+  const values = watch();
+  const active = values.active;
+  const canUseTrailer = values.can_use_trailer;
+  const selectedTrailer = trailers.find((trailer) => trailer.id === values.default_trailer_id) ?? null;
+  const previewProfiles = values.load_profiles.flatMap((profile) => profile.max_actual_axle_load_kg === null ? [] : [{
+    id: profile.id ?? `preview-${profile.configuration_type}`,
+    vehicle_id: vehicle?.id ?? 'preview-vehicle',
+    configuration_type: profile.configuration_type,
+    max_actual_axle_load_kg: profile.max_actual_axle_load_kg,
+  }]);
+  const submit = (formValues: CatalogValues) => kind === 'driver'
+    ? onSubmit({ name: formValues.name, external_worker_id: formValues.external_worker_id || null, preferred_route_group: formValues.preferred_route_group, notes: formValues.notes, active: formValues.active })
+    : onSubmit({
+      name: formValues.name,
+      registration_number: formValues.registration_number,
+      capacity: formValues.capacity,
+      active: formValues.active,
+      average_speed_city: formValues.average_speed_city,
+      average_speed_region: formValues.average_speed_region,
+      notes: formValues.notes,
+      vehicle_type: formValues.vehicle_type.trim() || null,
+      manufacturer: formValues.manufacturer.trim() || null,
+      model: formValues.model.trim() || null,
+      is_hgv: formValues.is_hgv,
+      tare_weight_kg: formValues.tare_weight_kg,
+      max_gross_weight_kg: formValues.max_gross_weight_kg,
+      length_mm: formValues.length_mm,
+      width_mm: formValues.width_mm,
+      height_mm: formValues.height_mm,
+      axle_count: formValues.axle_count,
+      max_axle_load_kg: formValues.max_axle_load_kg,
+      payload_capacity_kg: formValues.payload_capacity_kg,
+      platform_length_mm: formValues.platform_length_mm,
+      platform_width_mm: formValues.platform_width_mm,
+      platform_height_from_ground_mm: formValues.platform_height_from_ground_mm,
+      max_platform_payload_kg: formValues.max_platform_payload_kg,
+      max_cargo_length_mm: formValues.max_cargo_length_mm,
+      max_cargo_width_mm: formValues.max_cargo_width_mm,
+      max_cargo_height_mm: formValues.max_cargo_height_mm,
+      max_cargo_weight_kg: formValues.max_cargo_weight_kg,
+      can_use_trailer: formValues.can_use_trailer,
+      default_trailer_id: formValues.default_trailer_id || null,
+      combined_length_with_trailer_mm: formValues.combined_length_with_trailer_mm,
+      coupling_length_mm: formValues.coupling_length_mm,
+      height_safety_margin_mm: formValues.height_safety_margin_mm,
+      width_safety_margin_mm: formValues.width_safety_margin_mm,
+      weight_safety_margin_kg: formValues.weight_safety_margin_kg,
+      load_profiles: formValues.load_profiles.flatMap((profile) => profile.max_actual_axle_load_kg === null ? [] : [{
+        ...(profile.id ? { id: profile.id } : {}),
+        configuration_type: profile.configuration_type,
+        max_actual_axle_load_kg: profile.max_actual_axle_load_kg,
+      }]),
+    });
   return (
-    <Modal title={`${value ? 'Изменить' : 'Добавить'} ${kind === 'driver' ? 'водителя' : 'машину'}`} onClose={onClose}>
+    <Modal wide={kind === 'vehicle'} title={`${value ? 'Изменить' : 'Добавить'} ${kind === 'driver' ? 'водителя' : 'машину'}`} onClose={onClose}>
       <form className="form-grid" onSubmit={handleSubmit(submit)}>
         <Field className="span-2" label="Название" {...register('name')} error={errors.name?.message} />
         {kind === 'driver' ? <>
@@ -238,6 +378,91 @@ export function CatalogDialog({ kind, value, busy, onClose, onSubmit }: {
           <Field label="Вместимость" type="number" min="1" {...register('capacity', { valueAsNumber: true })} error={errors.capacity?.message} hint="Допустимо 1–2 бытовки" />
           <Field label="Скорость в городе" type="number" {...register('average_speed_city', { valueAsNumber: true })} />
           <Field label="Скорость в области" type="number" {...register('average_speed_region', { valueAsNumber: true })} />
+
+          <details className="span-2" open>
+            <summary><strong>Грузовая маршрутизация · машина</strong></summary>
+            <p className="field__hint">Заполняйте фактические данные из документов. Если критическое значение неизвестно, оставьте поле пустым — безопасный маршрут не будет выдуман.</p>
+            <div className="form-grid" style={{ marginTop: 10 }}>
+              <Field label="Тип транспорта" {...register('vehicle_type')} />
+              <SelectField label="Грузовой автомобиль" {...register('is_hgv', { setValueAs: optionalBoolean })}><option value="">Не указано</option><option value="true">Да</option><option value="false">Нет</option></SelectField>
+              <Field label="Производитель" {...register('manufacturer')} />
+              <Field label="Модель" {...register('model')} />
+              <Field label="Собственная масса машины, кг" type="number" min="1" {...register('tare_weight_kg', optionalNumberRegistration())} error={errors.tare_weight_kg?.message} />
+              <Field label="Максимальная полная масса машины, кг" type="number" min="1" {...register('max_gross_weight_kg', optionalNumberRegistration())} error={errors.max_gross_weight_kg?.message} />
+              <Field label="Длина машины, мм" type="number" min="1" {...register('length_mm', optionalNumberRegistration())} error={errors.length_mm?.message} />
+              <Field label="Ширина машины, мм" type="number" min="1" {...register('width_mm', optionalNumberRegistration())} error={errors.width_mm?.message} />
+              <Field label="Высота машины, мм" type="number" min="1" {...register('height_mm', optionalNumberRegistration())} error={errors.height_mm?.message} />
+              <Field label="Количество осей машины" type="number" min="1" {...register('axle_count', optionalNumberRegistration())} error={errors.axle_count?.message} />
+              <Field label="Допустимая нагрузка на ось машины, кг" type="number" min="1" {...register('max_axle_load_kg', optionalNumberRegistration())} error={errors.max_axle_load_kg?.message} />
+              <Field label="Грузоподъёмность машины, кг" type="number" min="1" {...register('payload_capacity_kg', optionalNumberRegistration())} error={errors.payload_capacity_kg?.message} />
+            </div>
+          </details>
+
+          <details className="span-2" open>
+            <summary><strong>Платформа и допустимый груз</strong></summary>
+            <div className="form-grid" style={{ marginTop: 10 }}>
+              <Field label="Длина платформы машины, мм" type="number" min="1" {...register('platform_length_mm', optionalNumberRegistration())} error={errors.platform_length_mm?.message} />
+              <Field label="Ширина платформы машины, мм" type="number" min="1" {...register('platform_width_mm', optionalNumberRegistration())} error={errors.platform_width_mm?.message} />
+              <Field label="Высота платформы машины от земли, мм" type="number" min="1" {...register('platform_height_from_ground_mm', optionalNumberRegistration())} error={errors.platform_height_from_ground_mm?.message} />
+              <Field label="Максимальная масса на платформе машины, кг" type="number" min="1" {...register('max_platform_payload_kg', optionalNumberRegistration())} error={errors.max_platform_payload_kg?.message} />
+              <Field label="Максимальная длина груза на машине, мм" type="number" min="1" {...register('max_cargo_length_mm', optionalNumberRegistration())} error={errors.max_cargo_length_mm?.message} />
+              <Field label="Максимальная ширина груза на машине, мм" type="number" min="1" {...register('max_cargo_width_mm', optionalNumberRegistration())} error={errors.max_cargo_width_mm?.message} />
+              <Field label="Максимальная высота груза на машине, мм" type="number" min="1" {...register('max_cargo_height_mm', optionalNumberRegistration())} error={errors.max_cargo_height_mm?.message} />
+              <Field label="Максимальная масса груза на машине, кг" type="number" min="1" {...register('max_cargo_weight_kg', optionalNumberRegistration())} error={errors.max_cargo_weight_kg?.message} />
+            </div>
+          </details>
+
+          <details className="span-2" open>
+            <summary><strong>Прицеп и запасы безопасности</strong></summary>
+            <div className="form-grid" style={{ marginTop: 10 }}>
+              <SelectField label="Машина может использовать прицеп" {...register('can_use_trailer', { setValueAs: optionalBoolean })}><option value="">Не указано</option><option value="true">Да</option><option value="false">Нет</option></SelectField>
+              <SelectField label="Основной прицеп" disabled={canUseTrailer !== true} {...register('default_trailer_id')}><option value="">Не назначен</option>{trailers.map((trailer) => <option key={trailer.id} value={trailer.id}>{trailer.name} · {trailer.registration_number || 'без номера'}</option>)}</SelectField>
+              <Field label="Точная полная длина автопоезда, мм" type="number" min="1" {...register('combined_length_with_trailer_mm', optionalNumberRegistration())} error={errors.combined_length_with_trailer_mm?.message} />
+              <Field label="Длина сцепки, мм" type="number" min="1" {...register('coupling_length_mm', optionalNumberRegistration())} error={errors.coupling_length_mm?.message} hint="Используется только если точная полная длина не задана" />
+              <Field label="Запас по высоте, мм" type="number" min="0" {...register('height_safety_margin_mm', { valueAsNumber: true })} error={errors.height_safety_margin_mm?.message} />
+              <Field label="Запас по ширине, мм" type="number" min="0" {...register('width_safety_margin_mm', { valueAsNumber: true })} error={errors.width_safety_margin_mm?.message} />
+              <Field label="Запас по массе, кг" type="number" min="0" {...register('weight_safety_margin_kg', { valueAsNumber: true })} error={errors.weight_safety_margin_kg?.message} />
+            </div>
+          </details>
+
+          <details className="span-2" open>
+            <summary><strong>Фактические осевые нагрузки</strong></summary>
+            <p className="field__hint">Это проверенные эксплуатационные значения для каждой конфигурации. Система не делит общую массу на количество осей.</p>
+            <div className="form-grid" style={{ marginTop: 10 }}>
+              {values.load_profiles.map((profile, index) => <Field key={profile.configuration_type} label={`${loadProfileLabels[profile.configuration_type]}, кг`} type="number" min="1" {...register(`load_profiles.${index}.max_actual_axle_load_kg`, optionalNumberRegistration())} error={errors.load_profiles?.[index]?.max_actual_axle_load_kg?.message} />)}
+            </div>
+          </details>
+
+          <details className="span-2" open>
+            <summary><strong>Бытовка для предпросмотра</strong></summary>
+            <p className="field__hint">Эти четыре поля не сохраняются. В реальном рейсе размеры и масса берутся из назначенной заявки.</p>
+            <div className="form-grid" style={{ marginTop: 10 }}>
+              <Field label="Длина бытовки для предпросмотра, мм" type="number" min="1" {...register('preview_cargo_length_mm', optionalNumberRegistration())} />
+              <Field label="Ширина бытовки для предпросмотра, мм" type="number" min="1" {...register('preview_cargo_width_mm', optionalNumberRegistration())} />
+              <Field label="Высота бытовки для предпросмотра, мм" type="number" min="1" {...register('preview_cargo_height_mm', optionalNumberRegistration())} />
+              <Field label="Масса бытовки для предпросмотра, кг" type="number" min="1" {...register('preview_cargo_weight_kg', optionalNumberRegistration())} />
+            </div>
+          </details>
+
+          <TruckConfigurationPreview
+            vehicle={{
+              length_mm: values.length_mm,
+              width_mm: values.width_mm,
+              height_mm: values.height_mm,
+              tare_weight_kg: values.tare_weight_kg,
+              platform_length_mm: values.platform_length_mm,
+              platform_height_from_ground_mm: values.platform_height_from_ground_mm,
+              can_use_trailer: values.can_use_trailer === true,
+              combined_length_with_trailer_mm: values.combined_length_with_trailer_mm,
+              coupling_length_mm: values.coupling_length_mm,
+              height_safety_margin_mm: values.height_safety_margin_mm,
+              width_safety_margin_mm: values.width_safety_margin_mm,
+              weight_safety_margin_kg: values.weight_safety_margin_kg,
+            }}
+            trailer={selectedTrailer}
+            cargo={{ length_mm: values.preview_cargo_length_mm, width_mm: values.preview_cargo_width_mm, height_mm: values.preview_cargo_height_mm, weight_kg: values.preview_cargo_weight_kg }}
+            profiles={previewProfiles}
+          />
         </>}
         <label className="field span-2"><span className="field__label">Заметки</span><textarea className="input" {...register('notes')} /></label>
         <div className="span-2"><CheckboxField label="Активен" checked={active} onChange={(checked) => setValue('active', checked)} /></div>
@@ -294,8 +519,12 @@ const dateOptionSchema = z.object({ date: z.string().date(), priority: z.number(
 const requestSchema = z.object({
   type: z.enum(['DELIVERY', 'PICKUP']), name: z.string().trim().min(1, 'Введите название'), address_label: z.string(), latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180),
   quantity: z.number().int().positive(), service_minutes: z.number().int().min(0), priority: z.number().int(), status: z.enum(['DRAFT', 'READY', 'PLANNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'UNASSIGNED']),
+  cargo_length_mm: nullablePositiveInteger, cargo_width_mm: nullablePositiveInteger, cargo_height_mm: nullablePositiveInteger, cargo_weight_kg: nullablePositiveInteger,
   split_allowed: z.boolean(), notes: z.string(), date_options: z.array(dateOptionSchema).min(1, 'Добавьте хотя бы одну дату'),
-});
+}).refine((value) => {
+  const cargoValues = [value.cargo_length_mm, value.cargo_width_mm, value.cargo_height_mm, value.cargo_weight_kg];
+  return cargoValues.every((cargoValue) => cargoValue === null) || cargoValues.every((cargoValue) => cargoValue !== null);
+}, { message: 'Укажите все четыре параметра груза или оставьте все поля пустыми', path: ['cargo_weight_kg'] });
 type RequestValues = z.infer<typeof requestSchema>;
 
 export function RequestDialog({ request, point, type, defaultDate, busy, onClose, onSubmit }: {
@@ -306,6 +535,8 @@ export function RequestDialog({ request, point, type, defaultDate, busy, onClose
     defaultValues: {
       type: request?.type ?? type, name: request?.name ?? '', address_label: request?.address_label ?? '', latitude: point?.latitude ?? request?.latitude ?? 55.75, longitude: point?.longitude ?? request?.longitude ?? 37.62,
       quantity: request?.quantity ?? 1, service_minutes: request?.service_minutes ?? 30, priority: request?.priority ?? 0, status: request?.status ?? 'READY', split_allowed: request?.split_allowed ?? true, notes: request?.notes ?? '',
+      cargo_length_mm: request?.cargo_length_mm ?? null, cargo_width_mm: request?.cargo_width_mm ?? null,
+      cargo_height_mm: request?.cargo_height_mm ?? null, cargo_weight_kg: request?.cargo_weight_kg ?? null,
       date_options: request?.date_options.map((option) => ({ date: option.date, priority: option.priority, window_start: option.window_start, window_end: option.window_end, is_hard: option.is_hard })) ?? [{ date: defaultDate, priority: 1, window_start: null, window_end: null, is_hard: false }],
     },
   });
@@ -322,6 +553,11 @@ export function RequestDialog({ request, point, type, defaultDate, busy, onClose
         <Field label="Долгота" type="number" step="any" {...register('longitude', { valueAsNumber: true })} error={errors.longitude?.message} />
         <Field label="Количество бытовок" type="number" min="1" {...register('quantity', { valueAsNumber: true })} />
         <Field label="Обслуживание, мин" type="number" min="0" {...register('service_minutes', { valueAsNumber: true })} />
+        <div className="span-2 entity-card__row"><strong>Фактические параметры одной бытовки</strong><span className="field__hint">Без полного набора безопасный грузовой маршрут не рассчитывается</span></div>
+        <Field label="Длина бытовки, мм" type="number" min="1" {...register('cargo_length_mm', optionalNumberRegistration())} error={errors.cargo_length_mm?.message} />
+        <Field label="Ширина бытовки, мм" type="number" min="1" {...register('cargo_width_mm', optionalNumberRegistration())} error={errors.cargo_width_mm?.message} />
+        <Field label="Высота бытовки, мм" type="number" min="1" {...register('cargo_height_mm', optionalNumberRegistration())} error={errors.cargo_height_mm?.message} />
+        <Field label="Масса бытовки, кг" type="number" min="1" {...register('cargo_weight_kg', optionalNumberRegistration())} error={errors.cargo_weight_kg?.message} />
         <Field label="Приоритет" type="number" {...register('priority', { valueAsNumber: true })} />
         <div className="field"><span className="field__label">Разбиение</span><CheckboxField label="Разрешить части по вместимости" checked={splitAllowed} onChange={(checked) => setValue('split_allowed', checked)} /></div>
         <label className="field span-2"><span className="field__label">Заметки</span><textarea className="input" {...register('notes')} /></label>

@@ -77,6 +77,9 @@ app = create_app(
         osrm_base_url=runtime_settings.osrm_base_url,
         osrm_profile=runtime_settings.osrm_profile,
         osrm_timeout_seconds=runtime_settings.osrm_timeout_seconds,
+        valhalla_url=runtime_settings.valhalla_url,
+        valhalla_timeout_seconds=runtime_settings.valhalla_timeout_seconds,
+        osm_data_version=runtime_settings.osm_data_version,
     )
 )
 

@@ -28,6 +28,7 @@ from app.models.domain import (
     RequestType,
     StopType,
     TaskStatus,
+    VehicleLoadProfileType,
     ZoneClassificationStatus,
 )
 
@@ -154,7 +155,10 @@ class WorkloadGeneratorInput(ApiModel):
     deliveries_per_day: int = Field(ge=0, le=10)
     pickups_per_day: int = Field(ge=0, le=10)
     alternative_dates_count: int = Field(default=0, ge=0, le=3)
-    replace_existing_generated: bool = False
+    cargo_length_mm: int = Field(default=6_000, gt=0)
+    cargo_width_mm: int = Field(default=2_400, gt=0)
+    cargo_height_mm: int = Field(default=2_400, gt=0)
+    cargo_weight_kg: int = Field(default=2_500, gt=0)
     seed: int
 
     @model_validator(mode="after")
@@ -186,6 +190,14 @@ class WorkloadGenerationResult(ApiModel):
     created_pickups: int
     replaced_requests: int = 0
     daily_counts: list[WorkloadGenerationDailyCount]
+
+
+class WorkloadDeletionResult(ApiModel):
+    """Summary of an idempotent generated-workload deletion for one date."""
+
+    scenario_id: UUID
+    date: date
+    deleted_requests: int
 
 
 class CloneRequest(ApiModel):
@@ -417,7 +429,7 @@ class DriverRead(DriverCreate):
 
 
 class VehicleCreate(ApiModel):
-    """Input for a vehicle and its routing speeds."""
+    """Input for a vehicle, routing speeds, and optional physical truck data."""
 
     name: NonBlank
     registration_number: NonBlank
@@ -425,7 +437,42 @@ class VehicleCreate(ApiModel):
     active: bool = True
     average_speed_city: float = Field(default=35, gt=0)
     average_speed_region: float = Field(default=65, gt=0)
+    vehicle_type: str | None = None
+    manufacturer: str | None = None
+    model: str | None = None
+    is_hgv: bool | None = None
+    tare_weight_kg: int | None = Field(default=None, gt=0)
+    max_gross_weight_kg: int | None = Field(default=None, gt=0)
+    length_mm: int | None = Field(default=None, gt=0)
+    width_mm: int | None = Field(default=None, gt=0)
+    height_mm: int | None = Field(default=None, gt=0)
+    axle_count: int | None = Field(default=None, gt=0)
+    max_axle_load_kg: int | None = Field(default=None, gt=0)
+    payload_capacity_kg: int | None = Field(default=None, gt=0)
+    platform_length_mm: int | None = Field(default=None, gt=0)
+    platform_width_mm: int | None = Field(default=None, gt=0)
+    platform_height_from_ground_mm: int | None = Field(default=None, gt=0)
+    max_platform_payload_kg: int | None = Field(default=None, gt=0)
+    max_cargo_length_mm: int | None = Field(default=None, gt=0)
+    max_cargo_width_mm: int | None = Field(default=None, gt=0)
+    max_cargo_height_mm: int | None = Field(default=None, gt=0)
+    max_cargo_weight_kg: int | None = Field(default=None, gt=0)
+    can_use_trailer: bool | None = None
+    default_trailer_id: UUID | None = None
+    combined_length_with_trailer_mm: int | None = Field(default=None, gt=0)
+    coupling_length_mm: int | None = Field(default=None, gt=0)
+    height_safety_margin_mm: int = Field(default=0, ge=0)
+    width_safety_margin_mm: int = Field(default=0, ge=0)
+    weight_safety_margin_kg: int = Field(default=0, ge=0)
     notes: str = ""
+
+    @model_validator(mode="after")
+    def validate_trailer_configuration(self) -> VehicleCreate:
+        """Reject contradictory trailer settings while allowing incomplete profiles."""
+
+        if self.default_trailer_id is not None and self.can_use_trailer is False:
+            raise ValueError("default_trailer_id requires can_use_trailer")
+        return self
 
 
 class VehicleUpdate(ApiModel):
@@ -437,6 +484,33 @@ class VehicleUpdate(ApiModel):
     active: bool | None = None
     average_speed_city: float | None = Field(default=None, gt=0)
     average_speed_region: float | None = Field(default=None, gt=0)
+    vehicle_type: str | None = None
+    manufacturer: str | None = None
+    model: str | None = None
+    is_hgv: bool | None = None
+    tare_weight_kg: int | None = Field(default=None, gt=0)
+    max_gross_weight_kg: int | None = Field(default=None, gt=0)
+    length_mm: int | None = Field(default=None, gt=0)
+    width_mm: int | None = Field(default=None, gt=0)
+    height_mm: int | None = Field(default=None, gt=0)
+    axle_count: int | None = Field(default=None, gt=0)
+    max_axle_load_kg: int | None = Field(default=None, gt=0)
+    payload_capacity_kg: int | None = Field(default=None, gt=0)
+    platform_length_mm: int | None = Field(default=None, gt=0)
+    platform_width_mm: int | None = Field(default=None, gt=0)
+    platform_height_from_ground_mm: int | None = Field(default=None, gt=0)
+    max_platform_payload_kg: int | None = Field(default=None, gt=0)
+    max_cargo_length_mm: int | None = Field(default=None, gt=0)
+    max_cargo_width_mm: int | None = Field(default=None, gt=0)
+    max_cargo_height_mm: int | None = Field(default=None, gt=0)
+    max_cargo_weight_kg: int | None = Field(default=None, gt=0)
+    can_use_trailer: bool | None = None
+    default_trailer_id: UUID | None = None
+    combined_length_with_trailer_mm: int | None = Field(default=None, gt=0)
+    coupling_length_mm: int | None = Field(default=None, gt=0)
+    height_safety_margin_mm: int | None = Field(default=None, ge=0)
+    width_safety_margin_mm: int | None = Field(default=None, ge=0)
+    weight_safety_margin_kg: int | None = Field(default=None, ge=0)
     notes: str | None = None
 
 
@@ -445,6 +519,122 @@ class VehicleRead(VehicleCreate):
 
     id: UUID
     scenario_id: UUID
+
+
+class TrailerCreate(ApiModel):
+    """Input for a scenario-owned trailer and its optional physical limits."""
+
+    name: NonBlank
+    registration_number: NonBlank
+    active: bool = True
+    tare_weight_kg: int | None = Field(default=None, gt=0)
+    max_gross_weight_kg: int | None = Field(default=None, gt=0)
+    length_mm: int | None = Field(default=None, gt=0)
+    width_mm: int | None = Field(default=None, gt=0)
+    height_mm: int | None = Field(default=None, gt=0)
+    platform_length_mm: int | None = Field(default=None, gt=0)
+    platform_width_mm: int | None = Field(default=None, gt=0)
+    platform_height_from_ground_mm: int | None = Field(default=None, gt=0)
+    max_platform_payload_kg: int | None = Field(default=None, gt=0)
+    payload_capacity_kg: int | None = Field(default=None, gt=0)
+    axle_count: int | None = Field(default=None, gt=0)
+    max_axle_load_kg: int | None = Field(default=None, gt=0)
+    max_cargo_length_mm: int | None = Field(default=None, gt=0)
+    max_cargo_width_mm: int | None = Field(default=None, gt=0)
+    max_cargo_height_mm: int | None = Field(default=None, gt=0)
+    max_cargo_weight_kg: int | None = Field(default=None, gt=0)
+    notes: str = ""
+
+
+class TrailerUpdate(ApiModel):
+    """Partial update of trailer identity, availability, and physical limits."""
+
+    name: NonBlank | None = None
+    registration_number: NonBlank | None = None
+    active: bool | None = None
+    tare_weight_kg: int | None = Field(default=None, gt=0)
+    max_gross_weight_kg: int | None = Field(default=None, gt=0)
+    length_mm: int | None = Field(default=None, gt=0)
+    width_mm: int | None = Field(default=None, gt=0)
+    height_mm: int | None = Field(default=None, gt=0)
+    platform_length_mm: int | None = Field(default=None, gt=0)
+    platform_width_mm: int | None = Field(default=None, gt=0)
+    platform_height_from_ground_mm: int | None = Field(default=None, gt=0)
+    max_platform_payload_kg: int | None = Field(default=None, gt=0)
+    payload_capacity_kg: int | None = Field(default=None, gt=0)
+    axle_count: int | None = Field(default=None, gt=0)
+    max_axle_load_kg: int | None = Field(default=None, gt=0)
+    max_cargo_length_mm: int | None = Field(default=None, gt=0)
+    max_cargo_width_mm: int | None = Field(default=None, gt=0)
+    max_cargo_height_mm: int | None = Field(default=None, gt=0)
+    max_cargo_weight_kg: int | None = Field(default=None, gt=0)
+    notes: str | None = None
+
+
+class TrailerRead(TrailerCreate):
+    """Persisted trailer representation."""
+
+    id: UUID
+    scenario_id: UUID
+
+
+class VehicleLoadProfileCreate(ApiModel):
+    """Input for one measured operational peak axle-load value."""
+
+    configuration_type: VehicleLoadProfileType
+    max_actual_axle_load_kg: int = Field(gt=0)
+
+
+class VehicleLoadProfileUpdate(ApiModel):
+    """Partial update of one vehicle operational axle-load profile."""
+
+    configuration_type: VehicleLoadProfileType | None = None
+    max_actual_axle_load_kg: int | None = Field(default=None, gt=0)
+
+
+class VehicleLoadProfileRead(VehicleLoadProfileCreate):
+    """Persisted vehicle operational axle-load profile."""
+
+    id: UUID
+    vehicle_id: UUID
+
+
+class VehicleConfigurationCreate(ApiModel):
+    """Atomic command for a new vehicle and all operational axle-load profiles."""
+
+    vehicle: VehicleCreate
+    load_profiles: list[VehicleLoadProfileCreate] = Field(default_factory=list)
+
+    @field_validator("load_profiles")
+    @classmethod
+    def validate_unique_configuration_types(
+        cls, value: list[VehicleLoadProfileCreate]
+    ) -> list[VehicleLoadProfileCreate]:
+        """Reject duplicate operational states before entering a transaction."""
+
+        types = [profile.configuration_type for profile in value]
+        if len(types) != len(set(types)):
+            raise ValueError("load_profiles must contain unique configuration types")
+        return value
+
+
+class VehicleConfigurationUpdate(ApiModel):
+    """Atomic replacement of vehicle fields and its complete axle-profile set."""
+
+    vehicle: VehicleUpdate
+    load_profiles: list[VehicleLoadProfileCreate]
+
+    @field_validator("load_profiles")
+    @classmethod
+    def validate_unique_configuration_types(
+        cls, value: list[VehicleLoadProfileCreate]
+    ) -> list[VehicleLoadProfileCreate]:
+        """Reject duplicate operational states before deleting the old set."""
+
+        types = [profile.configuration_type for profile in value]
+        if len(types) != len(set(types)):
+            raise ValueError("load_profiles must contain unique configuration types")
+        return value
 
 
 class ShiftCreate(ApiModel):
@@ -545,12 +735,30 @@ class LogisticsRequestCreate(ApiModel):
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
     quantity: int = Field(gt=0)
+    cargo_length_mm: int | None = Field(default=None, gt=0)
+    cargo_width_mm: int | None = Field(default=None, gt=0)
+    cargo_height_mm: int | None = Field(default=None, gt=0)
+    cargo_weight_kg: int | None = Field(default=None, gt=0)
     service_minutes: int = Field(default=30, ge=0)
     priority: int = 0
     status: RequestStatus = RequestStatus.READY
     split_allowed: bool = True
     notes: str = ""
     date_options: list[RequestDateOptionInput] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_cargo_dimensions(self) -> LogisticsRequestCreate:
+        """Require a complete positive physical cargo tuple or no tuple at all."""
+
+        values = (
+            self.cargo_length_mm,
+            self.cargo_width_mm,
+            self.cargo_height_mm,
+            self.cargo_weight_kg,
+        )
+        if any(value is not None for value in values) and any(value is None for value in values):
+            raise ValueError("cargo dimensions and weight must be supplied together")
+        return self
 
     @field_validator("date_options")
     @classmethod
@@ -574,6 +782,10 @@ class LogisticsRequestUpdate(ApiModel):
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     quantity: int | None = Field(default=None, gt=0)
+    cargo_length_mm: int | None = Field(default=None, gt=0)
+    cargo_width_mm: int | None = Field(default=None, gt=0)
+    cargo_height_mm: int | None = Field(default=None, gt=0)
+    cargo_weight_kg: int | None = Field(default=None, gt=0)
     service_minutes: int | None = Field(default=None, ge=0)
     priority: int | None = None
     status: RequestStatus | None = None
@@ -589,6 +801,10 @@ class PlanningTaskRead(ApiModel):
     request_id: UUID
     part_number: int
     quantity: int
+    cargo_length_mm: int | None = None
+    cargo_width_mm: int | None = None
+    cargo_height_mm: int | None = None
+    cargo_weight_kg: int | None = None
     type: RequestType
     latitude: float
     longitude: float
@@ -611,6 +827,10 @@ class LogisticsRequestRead(ApiModel):
     latitude: float
     longitude: float
     quantity: int
+    cargo_length_mm: int | None = None
+    cargo_width_mm: int | None = None
+    cargo_height_mm: int | None = None
+    cargo_weight_kg: int | None = None
     service_minutes: int
     priority: int
     status: RequestStatus
@@ -904,6 +1124,10 @@ class RouteSegmentRead(ApiModel):
     distance_meters: float
     travel_seconds: int
     geometry: dict[str, Any]
+    routing_profile_snapshot: dict[str, Any] | None = None
+    routing_provider: str | None = None
+    osm_data_version: str | None = None
+    routed_at: AwareDatetime | None = None
 
 
 class RouteCycleRead(ApiModel):
@@ -1093,6 +1317,21 @@ class ExportVehicle(ApiModel):
     data: VehicleCreate
 
 
+class ExportTrailer(ApiModel):
+    """Trailer record inside a reproducible scenario document."""
+
+    id: UUID
+    data: TrailerCreate
+
+
+class ExportVehicleLoadProfile(ApiModel):
+    """Vehicle operational axle-load profile inside a scenario document."""
+
+    id: UUID
+    vehicle_id: UUID
+    data: VehicleLoadProfileCreate
+
+
 class ExportShift(ApiModel):
     """Driver shift record inside a scenario document."""
 
@@ -1161,6 +1400,10 @@ class ExportRouteSegment(ApiModel):
     distance_meters: float = Field(ge=0)
     travel_seconds: int = Field(ge=0)
     geometry: dict[str, Any]
+    routing_profile_snapshot: dict[str, Any] | None = None
+    routing_provider: str | None = None
+    osm_data_version: str | None = None
+    routed_at: AwareDatetime | None = None
 
 
 class ExportRouteCycle(ApiModel):
@@ -1223,6 +1466,8 @@ class ScenarioExportDocument(ApiModel):
     zone_relations: list[ExportRelation]
     drivers: list[ExportDriver]
     vehicles: list[ExportVehicle]
+    trailers: list[ExportTrailer] = Field(default_factory=list)
+    vehicle_load_profiles: list[ExportVehicleLoadProfile] = Field(default_factory=list)
     shifts: list[ExportShift]
     requests: list[ExportRequest]
     plans: list[ExportRoutePlan] = Field(default_factory=list)
