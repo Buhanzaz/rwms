@@ -535,6 +535,34 @@ After a runtime code task, update only the affected running test services on
 the VPS when the environment is available, then inspect their status and logs.
 Documentation-only tasks require no service restart.
 
+### VPS Build And Test Process Cleanup
+
+The VPS is a shared runtime host, not a persistent build workstation. A task
+must not leave compiler daemons, emulators, browsers or local test servers
+consuming CPU, RAM or swap after its last check.
+
+- Record `free -h` and the relevant process baseline before a memory-intensive
+  build or emulator run. On the VPS, invoke Gradle with `--no-daemon` and a
+  bounded worker count such as `--max-workers=2`; Kotlin/Android builds also use
+  `-Pkotlin.compiler.execution.strategy=in-process` unless the project proves
+  that mode unsupported. A justified exception must include an explicit daemon
+  cleanup step.
+- Put cleanup in a `finally`/trap-equivalent path so it runs after success,
+  failure, timeout or interruption. Stop every emulator/QEMU, browser, local
+  test server and compiler process started by the task, then confirm both its
+  PID and its tool-visible registration (for example `adb devices`) are gone.
+- Before `./gradlew --stop` or terminating a `GradleDaemon` or
+  `KotlinCompileDaemon`, verify that no active Gradle client uses it and that it
+  belongs to the completed task. Never kill a concurrent build or a process
+  that predates the task. Stop an idle task-owned daemon through its owning
+  Gradle wrapper first; terminate a remaining Kotlin daemon only when its
+  initiator marker and parentage prove it is the task's orphan.
+- At handoff, rerun `free -h` plus a focused `ps`/`jps` check and report the
+  before/after `MemAvailable`, swap activity and every remaining task-owned
+  process. A build or Android task is not complete while one remains. Do not
+  delete shared Gradle caches, drop Linux page cache or cycle swap merely to
+  improve displayed numbers; those actions require a separate safety reason.
+
 ### Publication Guard For Uncommitted Work
 
 Never treat a successful build, a new file timestamp, or an HTTP 200 as proof

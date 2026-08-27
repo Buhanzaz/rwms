@@ -4,6 +4,148 @@ Use this file only for unresolved contradictions or product decisions that
 block a safe implementation. This is not a backlog and does not authorize
 work.
 
+## Retiring Simulator Requests Missing From A Full RWMS Feed
+
+- Status: `Open`
+- Affected owner and consumers: logistics-service as rental-demand owner;
+  standalone `logistics/` simulator as a read projection and planner; saved
+  route plans and later apply commands.
+- Requested behavior: a synchronized simulator scenario must stop planning an
+  order after it is assigned, cancelled or otherwise disappears from the
+  logistics-owned still-unplanned demand feed.
+- Conflicting contract or invariant: the canonical planning response is named
+  a complete warehouse/date demand snapshot, but it contains only the current
+  still-unplanned remainder and no tombstone or removal reason. The simulator
+  currently upserts returned order IDs and leaves an absent local request
+  `READY`. Deleting it would break saved-plan references and erase history;
+  retaining it as active leaves planner state stale. A later apply fails at
+  the authoritative logistics fence, but that does not correct the local
+  projection.
+- Evidence:
+  [`planning feed contract`](../../contracts/openapi/logistics-service.yaml),
+  [`simulator synchronization`](../../logistics/backend/app/integrations/rwms_sync.py),
+  and
+  [`simulator request aggregate`](../../logistics/backend/app/models/domain.py).
+- Smallest decision needed: define whether omission from a successful complete
+  refresh is an authoritative inactive transition, and specify how existing
+  unassigned tasks, saved plan members and history are retained or invalidated.
+  If omission is not sufficient evidence, extend the canonical feed with a
+  lifecycle/tombstone fact and update both producer and consumer together.
+- Resolution and date: none.
+
+## Clearing Published Simulator Capacity On Local Lifecycle Changes
+
+- Status: `Open`
+- Affected owner and consumers: standalone `logistics/` simulator as capacity
+  publisher; logistics-service as the active warehouse projection owner;
+  CustomerApp slot searches.
+- Requested behavior: the active anonymous generated-delivery snapshot must
+  stop constraining a warehouse after its linked scenario is deleted, reset or
+  relinked.
+- Conflicting contract or invariant: logistics owns a full-replacement
+  projection keyed by warehouse and keeps it active until another accepted
+  replacement. The simulator republishes after generated-workload changes, but
+  scenario deletion, demo reset and an `external_warehouse_id` relink currently
+  have no durable clear receipt. If publication is disabled or temporarily
+  unavailable after the local mutation, the last successful capacity can
+  remain active indefinitely. Silently deleting local evidence or making a
+  best-effort browser call would violate recovery and ownership rules.
+- Evidence:
+  [`capacity replacement contract`](../../contracts/openapi/logistics-service.yaml),
+  [`simulator capacity projection`](../../logistics/backend/app/services/capacity_projection.py),
+  [`scenario lifecycle API`](../../logistics/backend/app/api/scenarios.py),
+  [`scenario lifecycle owner`](../../logistics/backend/app/services/scenarios.py),
+  and
+  [`warehouse link editor`](../../logistics/frontend/src/components/EntityDialogs.tsx).
+- Smallest decision needed: either fail closed and refuse delete/reset/relink
+  until an empty replacement is acknowledged, or persist a server-side local
+  clear intent/receipt and permit the lifecycle mutation only with an explicit
+  retry/recovery state. A projection TTL would instead be a separate canonical
+  logistics contract change.
+- Resolution and date: none.
+
+## Guaranteed Alice/SpeechKit Voice Search In CustomerApp
+
+- Status: `Open`
+- Affected owner and consumers: CustomerApp delivery search, a future
+  credential-owning backend boundary, and Yandex Cloud SpeechKit.
+- Requested behavior: make the map search microphone a guaranteed Yandex Alice
+  voice recognizer rather than depending on the recognizer installed on the
+  Android device.
+- Conflicting contract or invariant: SpeechKit authorization needs a Yandex
+  Cloud API key or IAM token. Embedding that service credential in a public APK
+  would disclose it, while no approved RWMS backend proxy, audio retention
+  policy, consent text, rate limit or failure contract currently exists.
+  CustomerApp therefore safely invokes the Android system Russian speech
+  activity, requests no microphone permission, stores no audio, and sends only
+  the returned text through its existing Yandex geocoder.
+- Evidence:
+  [`delivery voice entry`](../../client-app/app/src/main/java/dev/buhanzaz/rwms/client/ui/DeliveryFlowScreens.kt),
+  [`Android manifest`](../../client-app/app/src/main/AndroidManifest.xml),
+  and
+  [`CustomerApp dependency boundary`](../../client-app/README.md).
+- Smallest decision needed: approve the backend owner and public contract for
+  streaming audio, provision a restricted SpeechKit credential there, and
+  define consent, retention, quota and fallback behavior. The credential must
+  never enter CustomerApp or its download artifact.
+- Resolution and date: none. On 2026-08-27 the device-recognizer fallback was
+  implemented without adding an APK secret or audio storage.
+
+## Non-Expiring Cabin Presentation Versus Current Media Generation
+
+- Status: `Open`
+- Affected owner and consumers: media-service as retained-object and scoped-read
+  owner; logistics-service as public cabin-presentation owner; public panel
+  presentation viewers.
+- Requested behavior: a created cabin-photo presentation is an immutable,
+  non-expiring snapshot whose exact image URLs remain readable.
+- Conflicting contract or invariant: logistics freezes only
+  `{mediaId,generation}` and proxies every later image read to media-service.
+  The private media operation currently authorizes only a `READY` asset's exact
+  current generation. A later soft delete or generation advance therefore
+  makes the non-expiring public URL return `404`, even though media retains the
+  immutable object and variant rows. Allowing arbitrary historical reads would
+  broaden media authorization and cannot be inferred from retention alone.
+- Evidence:
+  [`logistics public presentation contract`](../../contracts/openapi/logistics-service.yaml),
+  [`media private presentation contract`](../../contracts/openapi/media-service.yaml),
+  [`logistics presentation proxy`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/photo/CabinPhotoPresentationService.java),
+  and
+  [`media variant read`](../../services/media-service/internal/persistence/cabin_photo_library.go).
+- Smallest decision needed: either authorize the exact historically frozen
+  generation only when it is named by a valid logistics presentation, with a
+  durable owner-proof boundary, or weaken the public contract so a presentation
+  remains structurally immutable but its images are readable only while those
+  media generations are current.
+- Resolution and date: none.
+
+## Retiring The Former Saint Petersburg Warehouse
+
+- Status: `Open`
+- Affected owner and consumers: warehouse-service as warehouse-lifecycle owner;
+  asset-service and every operational owner retaining the former warehouse UUID.
+- Requested behavior: remove the former `СПБ` after making the active `СПБ2`
+  identity the canonical `СПБ` warehouse.
+- Conflicting contract or invariant: the former UUID has durable asset and
+  operation references and is already `DRAINING`. Warehouse identity is an
+  opaque historical reference, and the canonical lifecycle permits
+  `DRAINING -> INACTIVE` only after every contract-defined owner confirms
+  readiness. Physical row deletion or reassignment of its assets would bypass
+  those owners and make retained history unresolvable.
+- Evidence:
+  [`warehouse-service contract`](../../contracts/openapi/warehouse-service.yaml),
+  [`warehouse lifecycle`](runtime-flows.md#warehouse-lifecycle-coordination),
+  [`WarehouseService`](../../services/warehouse-service/src/main/java/dev/buhanzaz/rwms/warehouse/service/WarehouseService.java),
+  and [`asset-service contract`](../../contracts/openapi/asset-service.yaml).
+- Smallest decision needed: decide whether the former warehouse's remaining
+  property must be transferred through supported workflows, completed in
+  place, or retired by a separately designed audited process before owner
+  readiness may complete.
+- Resolution and date: none. On 2026-08-26 the old identity was renamed
+  `СПБ (выводится)` and left non-active in `DRAINING`; the active `СПБ2`
+  identity was renamed `СПБ`. No warehouse, asset or historical row was
+  deleted or reassigned.
+
 ## Cabin Creation With Durable Photo Completion
 
 - Status: `Open`
@@ -248,6 +390,52 @@ work.
   model.
 - Resolution and date: none. Kafka retention alone is not an acceptable
   archive or reconciliation source.
+
+## Stable Identity For Canonical Repair Phases
+
+- Status: `Open`
+- Affected owner and consumers: maintenance-service, task-board-service, repair
+  catalogue administrators, panel, ManagerApp and WorkerApp.
+- Requested behavior: the six canonical ordinary repair phases must retain
+  their order if a physical queue is renamed or localized.
+- Conflicting contract or invariant: both owners currently recognize a phase
+  by the normalized Russian queue display name. Physical `queueId` correctly
+  owns stage grouping, but it does not declare whether that queue is SES,
+  welding, exterior, interior, electrical or plumbing. Silently replacing the
+  names with locally invented IDs would change catalogue and route meaning.
+- Evidence:
+  [`RepairPhaseSequence.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/RepairPhaseSequence.java),
+  [`RepairRoutePhaseOrder.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/RepairRoutePhaseOrder.java), and
+  [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml).
+- Smallest decision needed: approve one stable phase code and its owning
+  contract, including how existing physical queues receive that code and how
+  unknown/custom queues are ordered.
+- Resolution and date: none. Current exact names remain supported; this repair
+  task does not rename phases or infer a new identity.
+
+## Common Fence For Every Primary Repair Creator
+
+- Status: `Open`
+- Affected owner and consumers: maintenance-service direct repair, estimate,
+  inventory publication, legacy inventory upsert and pre-start replacement
+  workflows.
+- Requested behavior: concurrent creators for one rental item must not produce
+  unintended competing active PRIMARY repair chains.
+- Conflicting contract or invariant: direct/direct creation is serialized on
+  the maintenance-owned rental-item fact and exact retries replay, but other
+  PRIMARY creators do not all use that fence. A global partial unique index is
+  invalid because the durable pre-start replacement saga intentionally keeps a
+  compensated predecessor and its successor non-terminal before finalizing the
+  replacement.
+- Evidence:
+  [`MaintenanceRepairUseCases.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceRepairUseCases.java),
+  [`InventoryPublicationPrestartReplacementUseCases.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryPublicationPrestartReplacementUseCases.java), and
+  [`V49`](../../services/maintenance-service/src/main/resources/db/migration/V49__repair_acceptance_and_creation_indexes.sql).
+- Smallest decision needed: approve one common creator-fence protocol and the
+  explicit durable replacement exception, including treatment of already
+  duplicated active roots.
+- Resolution and date: none. V49 adds lookup indexes only and rewrites no data;
+  the narrow direct/direct and lost-response paths are protected now.
 
 ## Worker And Driver Invalidation Replay Semantics
 

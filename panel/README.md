@@ -15,6 +15,12 @@ Russian version: [README.ru.md](README.ru.md).
 - Interactive sign-in uses the gateway's OIDC flow. The panel accepts the
   human `USER` principal; the gateway and owning service still enforce every
   role and warehouse-access check. Hiding a UI control is not authorization.
+- `CUSTOMER` is a recognized human role only so user administration, order
+  actors and dossier history can render truthful labels. It remains ineligible
+  for ManagerApp and receives no panel order or warehouse command affordance;
+  the supported customer workflow is the separate CustomerApp. See the
+  [auth model](src/features/auth/auth-model.ts), [user model](src/features/settings/users/model/users.ts)
+  and [order permissions](src/features/orders/permissions/orders-permissions.ts).
 - The Vite proxy is a local-development convenience only. Production browser
   requests remain same-origin and must be served behind the public gateway.
 
@@ -140,27 +146,36 @@ contexts and screens are usable.
   `SMALL`, an opened gallery or work workspace requests `MEDIUM`, and the
   fullscreen viewer requests `LARGE` only on demand. See the
   [creation uploader](src/features/rental-items/rental-item-creation-photo-uploader.tsx).
-  A cabin detail carousel reads the media-service cabin-cover
-  projection across retained archive associations; its photo archive still
-  lists every historical folder. If that
-  auxiliary cover projection fails while owner media loaded successfully, the
-  detail falls back to those loaded photos and does not report the whole photo
-  service unavailable. Warehouse cards, booking cards and the passport
-  carousel count the complete retained archive and put the current explicit
-  cover first in the bounded preview; archive folders preserve their own stable
-  association order. The client also applies
-  this ordering to an older media response whose cover appears later. The
-  passport Photo tab lists retained media-owned folders before their photos and
+  A cabin detail carousel reads only the media-service active gallery folder;
+  its photo archive still lists every historical folder. If that authoritative
+  active-folder projection fails while archive media loaded successfully, the
+  detail reports the photo service unavailable instead of mixing folders as a
+  fallback. Warehouse cards, booking cards and the passport carousel count and
+  show only the active latest batch, with its explicit cover first and stable
+  association order. Their fullscreen shortcut is constrained to that same
+  batch; it never reintroduces older archive folders. The client also applies
+  this ordering defensively when a cover appears later in the bounded response.
+  The passport Photo tab lists retained media-owned folders before their photos and
   shows source, occurrence time, actor and photo count on each folder. It reads
   every `INVENTORY`/`MEDIA` dossier page independently from History-tab filters;
   unavailable provenance stays explicitly unknown instead of being guessed.
   The archive also follows every media cursor instead of stopping after the
   first 100 associations. The folder ID comes from the media-owned CABIN
   association, so consolidated legacy photos open together while inventory and
-  later upload batches remain separate; selecting a cover changes ordering but
-  never removes another folder from the passport carousel or archive.
+  later upload batches remain separate. Older folders remain available from the
+  photo archive but never enter the passport or warehouse-card carousel.
   Repair task details keep the task's aggregate media, each work line's source
   media, and task-board result evidence in separate exact-reference galleries.
+  Each authoritative acceptance refresh follows every database-backed
+  maintenance page, reads one task-board snapshot, resolves the represented
+  repair IDs through bounded batches, hydrates at most eight exact fallbacks
+  concurrently, and reuses the synchronized task-board cabin number. It falls
+  back to the asset-owned item read only when that task-board number is absent,
+  avoiding an unbounded per-row request fan-out without changing domain
+  ownership. The list and an opened exact repair poll independently every 15
+  seconds. The opened repair remains actionable only when its exact acceptance
+  projection supplies `readyAt`; another list-page failure therefore cannot
+  hide valid work, while an unresolved child rework still closes the action.
   Only each work-line gallery uses a compact carousel with an in-image photo count and
   always-visible previous/next controls; aggregate and result-evidence
   galleries keep the standard shared presentation. For a synchronized repair,
@@ -187,6 +202,11 @@ contexts and screens are usable.
   compact list style and description–quantity text, work comments open on demand, and each work source set stays in its
   smaller line carousel. On the interactive acceptance page, the write-off and acceptance/rework
   actions are rendered in the header beside the Back button rather than below the queue details.
+  Starting rework stores only the source warehouse, repair identity, version and selected lineage
+  identities in the URL. A reload fetches the authoritative source again and rejects a malformed,
+  moved, stale or no-longer-pending intent instead of trusting browser navigation state. Direct and
+  rework drafts also retain one opaque creation idempotency key for their entire lifetime and every
+  transport retry.
   These controls change presentation only and do not create browser-owned repair or media state.
   They do not substitute the cabin gallery. Inventory folders use the inventory
   dossier activity for their source, occurrence time, and actor labels. See the
@@ -195,15 +215,19 @@ contexts and screens are usable.
   feature](src/features/media/).
 - A cabin detail with edit access and at least one READY image places `Создать
   представление` directly beside the photo count. The version-fenced,
-  idempotent logistics command freezes the current READY photo set; after a
-  successful response the panel starts copying the absolute public link and
+  idempotent logistics command freezes only the READY photo set from the
+  media-owned active (latest current) gallery folder; older folders remain in
+  the passport archive and are not mixed into a newly created presentation.
+  After a successful response the panel starts copying the absolute public link and
   immediately opens its `/photos/{token}` route. That route is outside the
   authenticated React subtree and renders the cabin number, dimensions,
   finishing, category, characteristics, nullable linoleum, creation time, photo
   count and immutable image grid. It has no RWMS brand. A photo opens at full
   viewport size with 1x-5x button/wheel/pinch zoom, drag panning and
   previous/next controls. Left/Right always changes the photo, including while
-  zoomed; Up/Down can pan a zoomed photo. It never exposes warehouse, status, rental type,
+  zoomed; Up/Down can pan a zoomed photo. The public page owns viewport-height
+  vertical scrolling, so every row remains reachable even though the global
+  application shell keeps the document body fixed. It never exposes warehouse, status, rental type,
   client, passport, actor, version or storage-locator fields. See
   the [photo-presentation client](src/features/rental-items/cabin-photo-presentations-api.ts)
   [public page](src/features/rental-items/public-cabin-photo-presentation-page.tsx),
@@ -248,13 +272,21 @@ contexts and screens are usable.
   displayed as not specified and is never backfilled in the browser. See the
   [logistics OpenAPI](../contracts/openapi/logistics-service.yaml) and the
   [client feature](src/features/clients/).
-- A writable cabin dossier offers `Отгрузка задним числом` for `FREE` and the supported repair
-  statuses, plus `Возврат задним числом` for `RENTED`. Its modal reuses the rental-client chooser:
+- A writable cabin dossier offers `Отгрузка задним числом` for `FREE`, `RENTED` and the supported
+  repair statuses, plus `Возврат задним числом` for `RENTED`. For an already rented cabin with no
+  shipment document, that shipment command restores the missing client/date provenance without
+  repeating the physical asset transition. Once the imported shipment exists, the same action
+  edits its client and date under the document version instead of creating another document. Its
+  modal reuses the rental-client chooser:
   a new client is created first with a separate stable idempotency key, then the fenced historical
   logistics command is retried with its own key. The UI never submits a driver or a route, and it
   refreshes only the affected cabin, logistics and dossier queries after acceptance. See the
   [dossier page](src/features/rental-items/rental-item-detail-page.tsx) and
   [historical-movement dialog](src/features/rental-items/historical-rental-movement-dialog.tsx).
+  When no live logistics shipment exists, that dossier labels an imported
+  passport as `Отгружена` only when both its shipment date and non-blank tenant
+  are present. Any live logistics document remains authoritative over those
+  legacy passport facts.
 - Booking requests 50 cabins per server page and defers text before it becomes
   a query. It does not poll the full catalogue on a timer, card grids size to
   their actual compact content, and each card initially loads one preview;

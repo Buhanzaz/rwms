@@ -10,6 +10,7 @@ Primary evidence:
 - [`service-catalog.md`](service-catalog.md)
 - [`panel/package.json`](../../panel/package.json)
 - [`app/README.md`](../../app/README.md)
+- [`client-app/README.md`](../../client-app/README.md)
 - [`worker-app/README.md`](../../worker-app/README.md)
 - [`driver-app/README.md`](../../driver-app/README.md)
 
@@ -19,6 +20,7 @@ Primary evidence:
 flowchart LR
     Panel[Web panel] --> Gateway[API gateway]
     Manager[Manager Android app] --> Gateway
+    Customer[Customer Android app] --> Gateway
     Worker[Worker Android app] --> Gateway
     Driver[Driver Android app] --> Gateway
     Simulator[Standalone logistics simulator] -. OAuth2 planning boundary .-> Auth
@@ -36,7 +38,10 @@ flowchart LR
 
 The gateway is a stateless transport edge. It does not aggregate business
 responses or own workflow state. Each downstream service validates its token
-and owns its commands.
+and owns its commands. Anonymous customer registration is forwarded through
+the same edge, but auth-service owns its cookie/header CSRF check. The gateway
+deliberately keeps no source-address rate-limit store; production ingress must
+throttle that anonymous surface before enabling it publicly.
 
 Long-lived SSE routes remain transport-only. The gateway bounds their
 concurrency, relays the producer's bytes with Servlet asynchronous I/O, flushes
@@ -46,6 +51,8 @@ producing service; the gateway does not create domain events or retain stream
 state.
 
 Evidence:
+[`gateway registration boundary`](../../services/api-gateway-service/README.md),
+[`auth registration owner`](../../services/auth-service/src/main/java/dev/buhanzaz/rwms/auth/service/CustomerRegistrationService.java),
 [`SseProxyHandler.java`](../../services/api-gateway-service/src/main/java/dev/buhanzaz/rwms/gateway/config/SseProxyHandler.java),
 [`GatewaySseConcurrencyIntegrationTest.java`](../../services/api-gateway-service/src/test/java/dev/buhanzaz/rwms/gateway/GatewaySseConcurrencyIntegrationTest.java).
 
@@ -62,38 +69,55 @@ the same renderer-neutral evaluator to Master Setup and ordinary CAD. See the
 
 `logistics/` is a separate React/FastAPI/PostGIS planning and simulation
 deployable with its own schema, zones and route plans. A private Valhalla truck
-graph is built from the pinned OpenStreetMap PBF; a one-shot Osmium importer
-atomically derives the same-version PostGIS truck-restriction overlay before
-the backend starts. That overlay is diagnostic only: per-leg Valhalla truck
+graph is built from a source-manifested Central plus Northwestern Federal
+District OpenStreetMap PBF set; a one-shot Osmium importer atomically derives a
+deduplicated same-version PostGIS truck-restriction overlay before the backend
+starts. That overlay is diagnostic only: per-leg Valhalla truck
 costing remains the route-safety authority. The simulator never reads an RWMS
 service database. Its optional integration is disabled by
 default; when enabled, the backend authenticates as the dedicated
 `logistics-planner` client with sole scope `logistics.planning`, imports a
 warehouse/date-bounded minimal order feed from `logistics-service`, and applies
 only an explicitly reviewed exact plan version. Unassigned parts remain hidden
-unless the operator explicitly selects a future delivery for the qualified
+unless the operator explicitly selects a future `RWMS`-sourced delivery for the qualified
 warehouse-driver pool. A bounded status read returns only planner-created
 assignment/task ownership, allowing the simulator to show who claimed a shared
-part without task-board or database access. RWMS remains the owner of orders,
+part without task-board or database access. Loading a linked workspace first
+refreshes the current 31-day RWMS horizon, so changing simulator scenarios does
+not erase a real request; confirmed CustomerApp demand retains its hard exact
+time window and persisted one-to-four-hour travel ring. A second opt-in publishes
+one anonymous active generated-delivery snapshot per warehouse into
+logistics-service; immutable command receipts prevent delayed retries from
+restoring an older accepted revision. A simulator-wide monotonic
+`sourceGeneration` also rejects a never-accepted stale request and distinguishes
+an intentional `A -> B -> A` regeneration from that delayed retry. Replacing capacity changes slot feasibility but
+never deletes a real booking. Generated pickups remain simulator backhaul and generated/manual
+tasks are never exported as RWMS assignments. The numeric ring ranks
+multi-point candidates against the depot matrix. Visual contours originate at
+depots and each driver's latest delivery point, remain display-only, and exact
+directed truck legs remain authoritative. RWMS remains the owner of orders,
 shipments, driver identities and assignment validation. See the
 [`simulator architecture`](../../logistics/docs/ARCHITECTURE.md),
-[`planning controller`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/planning/api/PlanningIntegrationController.java)
-and
-[`RWMS adapter`](../../logistics/backend/app/integrations/rwms.py).
+[`planning controller`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/planning/api/PlanningIntegrationController.java),
+[`capacity owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/capacity/service/ScenarioCapacitySnapshotService.java),
+[`V60`](../../services/logistics-service/src/main/resources/db/migration/V60__customer_scenario_capacity_projection.sql),
+[`RWMS adapter`](../../logistics/backend/app/integrations/rwms.py), and
+[`route-front contours`](../../logistics/frontend/src/map/TravelTimeContours.ts).
 
 ### Android release surfaces
 
 `downloads-site/` is a static aggregate page at `/downloads/`; it has no
 Android package identity, OAuth client, database or mutable release state. It
-renders three cards from the separate ManagerApp, DriverApp and WorkerApp
+renders four cards from the separate ManagerApp, CustomerApp, DriverApp and WorkerApp
 release records and links only to their immutable versioned APK URLs. The
 aggregate page never copies an APK between application-owned roots. Nginx
-serves the Manager, Driver and Worker artefacts from separate filesystem roots;
+serves the Manager, Customer, Driver and Worker artefacts from separate filesystem roots;
 each release record supplies the exact public URL, package identity, version
 and SHA-256 before its card can render.
 
 Evidence:
 [`aggregate builder`](../../downloads-site/scripts/build-site.mjs),
+[`CustomerApp release record`](../../client-download-site/release.json),
 [`DriverApp release record`](../../driver-download-site/release.json),
 [`ManagerApp release record`](../../manager-download-site/release.json), and
 [`WorkerApp release record`](../../worker-download-site/release.json).
@@ -144,7 +168,7 @@ Evidence:
 
 ## Client Boundaries
 
-- `panel/`, `app/`, `worker-app/` and `driver-app/` use the public gateway.
+- `panel/`, `app/`, `client-app/`, `worker-app/` and `driver-app/` use the public gateway.
 - The standalone logistics simulator is not an interactive gateway client. Its
   backend alone uses the private OAuth-protected planning operations; its
   browser calls only the simulator's same-origin API.
@@ -175,6 +199,30 @@ and
 
 ### Android transport contract boundary
 
+CustomerApp is an independent Android 11+ package and OAuth client. It uses
+anonymous CSRF-protected registration through the delegated `/auth/**` route,
+PKCE S256 login as `rwms-customer-android`, and only the public
+`/api/logistics/customer/v1/**` rental boundary. Its encrypted session is local
+client state; profiles, availability, holds, furniture balances, delivery slots
+and bookings remain authoritative in auth-, asset- and logistics-service. It
+also retains one non-authoritative warehouse/inquiry/create-key pointer: an
+uncertain inquiry create reuses that key in-process or after recreation and
+then reloads the authoritative cart rather than storing a cart projection. It
+has no cabin-dossier or internal-service route. Its focused delivery UI is a
+four-destination Navigation 3 flow: a full-screen Yandex vector map, grouped
+server dates, exact server slots, and held-slot rental confirmation. The map
+toggles only the third-party-permitted vector/raster base layers and enables
+zoom and recenter controls but no satellite/hybrid, route, traffic or weather
+layer. Yandex MapKit Full is a client-only rendering/geocoding dependency: its
+API key comes from a protected build file outside the repository, while an
+address edit, map tap, speech result or manual coordinate edit invalidates the
+previous address-to-point confirmation before another server slot search. The
+optional Russian voice path delegates capture to the installed Android speech
+recognition activity, requests no microphone permission and retains no audio;
+a guaranteed Alice/SpeechKit path still requires a separately approved secure
+backend credential boundary. Logistics still derives profile and cabin count
+from its own session/cart and owns every capacity decision.
+
 Manager, worker and driver Retrofit declarations are executable inventories
 rather than implicit conventions. The manager inventory contains 62 methods:
 60 fixed public-gateway routes plus two media-only dynamic URLs whose callers
@@ -191,6 +239,12 @@ its established `explicitNulls = false` behavior. No client may call an
 internal/private service path or a direct service origin.
 
 Evidence:
+[`CustomerApp API`](../../client-app/app/src/main/java/dev/buhanzaz/rwms/client/data/CustomerApi.kt),
+[`CustomerApp auth`](../../client-app/app/src/main/java/dev/buhanzaz/rwms/client/auth/CustomerAuth.kt),
+[`CustomerApp recovery pointer`](../../client-app/app/src/main/java/dev/buhanzaz/rwms/client/data/CustomerWorkflowStore.kt),
+[`CustomerApp delivery destinations`](../../client-app/app/src/main/java/dev/buhanzaz/rwms/client/ui/DeliveryFlowScreens.kt),
+[`CustomerApp map adapter`](../../client-app/app/src/main/java/dev/buhanzaz/rwms/client/ui/YandexDeliveryMap.kt),
+[`CustomerApp build boundary`](../../client-app/app/build.gradle.kts),
 [`manager contract boundary`](../../app/src/test/java/dev/buhanzaz/rwms/manager/network/RwmsApiContractBoundaryTest.kt),
 [`worker contract boundary`](../../worker-app/core-network/src/test/java/dev/buhanzaz/rwms/worker/core/network/WorkerGatewayApiContractBoundaryTest.kt),
 [`driver contract boundary`](../../driver-app/core-network/src/test/java/dev/buhanzaz/rwms/driver/core/network/DriverGatewayApiContractBoundaryTest.kt),

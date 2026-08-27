@@ -18,6 +18,20 @@ Adding a required downstream capability advances that client's revision so the
 stored registration and previously issued tokens cannot silently retain an
 older permission set.
 
+Customer self-registration is an auth-owned anonymous but CSRF-protected
+command. It serializes the normalized login before BCrypt and atomically creates
+one active `USER/CUSTOMER` identity plus its credential, projection, event and
+outbox fact, with no warehouse grant or manager entitlement. The public PKCE
+client `rwms-customer-android` can mint only `customer.rental`; a CUSTOMER token
+cannot be minted through panel/manager clients, and a non-customer cannot use
+the customer client. This identity is separate from the logistics customer
+profile created after login.
+
+CSRF protects that anonymous command from cross-site submission; it is not an
+abuse quota. Because the public gateway is stateless and owns no request-ledger
+database, source-address throttling remains a production-ingress obligation,
+not auth or domain state.
+
 The panel keeps its one-time OIDC state and PKCE transaction in browser
 `sessionStorage`. A duplicate delivery or remount of the same callback must
 share the first callback exchange rather than attempting to consume the state a
@@ -29,6 +43,8 @@ long-lived browser storage.
 
 Evidence: [`services/auth-service/`](../../services/auth-service/),
 [`auth-service.yaml`](../../contracts/openapi/auth-service.yaml),
+[`CustomerRegistrationService`](../../services/auth-service/src/main/java/dev/buhanzaz/rwms/auth/service/CustomerRegistrationService.java),
+[`AuthorizationServerConfiguration`](../../services/auth-service/src/main/java/dev/buhanzaz/rwms/auth/config/AuthorizationServerConfiguration.java),
 [`auth-provider.tsx`](../../panel/src/features/auth/auth-provider.tsx).
 
 ### Warehouses
@@ -160,8 +176,9 @@ plan unchanged. Started or completed historical routes remain immutable, and tas
 only for those rows. Worker detail aggregates
 all work, material, comment and source-media snapshots from that complete historical segment,
 while its duration, countdown and KPI budget cover only unfinished members. TAKE assigns the
-representative once. Worker feed cardinality counts physical queues for maintenance, so the
-displayed `Этап X/Y` denominator never counts those retained content rows as extra subtasks. Its
+representative once. The raw route row remains `routeIndex`; the displayed package uses
+`routeStepIndex` and `routeStepCount`. Those package coordinates count maximal consecutive
+same-queue segments, so they collapse A-A but do not collapse A-B-A across the intervening queue. Its
 version-fenced COMPLETE atomically closes the representative plus later
 unfinished shadow members, records audit facts for each and publishes their existing completion
 events. A different queue starts a different package, and non-maintenance sources remain
@@ -361,9 +378,21 @@ capital work stays `QUEUED/NOT_READY` on the active capital route. A frozen
 capital and creates or reuses `CAPITAL_TO_PRODUCTION`; recalculation cannot clear
 the choice. Explicit no-movement capital work creates no driver task.
 Inventory-origin acceptance and rework require task-board execution proof, so a
-publication-created repair cannot enter either surface directly. Reapplication
-also restores legacy publication-completed capital rows to the active capital
-route.
+publication-created repair cannot enter either surface directly. The proof is
+stage-complete: at least one stage exists and every stage is `DONE` with its
+queue entry, task-board version, completion event and completion time. The
+database-paged acceptance read also excludes a source while any child rework is
+still active or awaiting acceptance. Reapplication also restores legacy
+publication-completed capital rows to the active capital route.
+
+A direct-repair create performs remote routing admission outside its final
+transaction, then locks the maintenance-owned rental-item fact, rereads the
+exact idempotency receipt and checks for an active PRIMARY root before writing.
+This serializes direct/direct lost-response retries without placing a global
+unique constraint on repair rows. Such a constraint is currently invalid:
+pre-start inventory replacement intentionally holds a non-terminal predecessor
+and successor until its durable saga advances. A common fence across every
+PRIMARY creator remains an explicit unresolved design decision.
 
 Evidence: [`services/maintenance-service/`](../../services/maintenance-service/),
 [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml),
@@ -490,9 +519,11 @@ media-service cabin folder, applies one persisted plan-wide logistics outcome pe
 reapplication generation and finally
 calls maintenance for either the reviewed work or an explicit no-work cleanup.
 Media keeps every older association and MinIO object as an archive. Its public
-cabin-cover projection counts all retained archive images and puts the current
-canonical cover first; folder boundaries stay on the archive list, while the
-private logistics presentation remains current-folder scoped. Logistics
+cabin-cover projection counts and previews only the active latest folder and
+puts that folder's canonical cover first; folder boundaries and older batches
+stay on the full archive list. The passport, warehouse cards and private
+logistics presentation therefore share the same current-folder boundary and
+never mix batches. Logistics
 supersedes active rental/document lines and their cancellable tasks;
 maintenance supersedes non-terminal estimates, repairs, task/driver effects and
 leases before materializing the selected repair/capital-repair successor, or
@@ -682,6 +713,43 @@ Evidence: [`services/inventory-service/`](../../services/inventory-service/),
 driver work and their orchestration. It persists its workflow/reconciliation
 state and calls other owners through versioned, idempotent boundaries.
 
+The CustomerApp boundary accepts only the exact `USER/CUSTOMER`,
+`customer.rental`, `rwms-customer-android` token combination. One auth subject
+creates one individual/legal logistics profile and selects an explicitly
+available warehouse. Availability is the intersection of warehouse-service's
+active identities and logistics' fail-closed delivery-depot registry. Each
+enabled UUID has independent route-origin coordinates, and the selected UUID is
+immutable for the logistics-owned rental session. Asset-service remains
+authoritative for `FREE` status, own-session holds, photos, equipment
+catalogue/balances and hold conversion. The card projection is least privilege,
+deliberately has no cabin-dossier transition and omits nullable legacy facts
+instead of failing the complete page.
+
+Customer delivery capacity is offered only in fixed warehouse-local windows
+`09:00-12:00`, `12:00-15:00` and `15:00-18:00`. Logistics asks private Valhalla
+for directed truck road time from the selected depot, stores
+`ceil(oneWayTravelSeconds / 3600)` as the
+travel-hour ring and rejects points outside the supported one-to-four-hour
+bands. It evaluates the complete local day rather than each window in isolation.
+One driver may serve several points across different hard windows, wait when
+early, return to the depot to reload and start another cycle; the final depot
+return must fit the configured workday plus bounded overtime. Directed matrix
+legs, truck cabin capacity, service duration, held/confirmed customer demand,
+the current anonymous generated-delivery snapshot and active dated
+shipment/transfer work all participate. Existing date-only shipment/transfer
+conservatively reserves one driver for its whole day. A return does not reserve
+a whole driver because pickups are scheduled as backhaul after priority
+deliveries.
+Remaining capacity is found by inserting additional cabins at the candidate
+point/window into that same multi-driver schedule. Offered, held,
+checkout-pending and confirmed capacity is durable and version-fenced. A cart
+composition change detaches its previous slot. After a downstream booking
+receipt is durable, `CHECKOUT_PENDING` continues consuming capacity until
+terminal confirmation or release. Checkout reuses the ordinary saved-order
+transition and creates stable per-cabin furniture tasks; a transport retry of
+the same intent resumes with the original domain idempotency key instead of
+creating a second order.
+
 A warehouse-card historical rental command is a logistics-owned factual import,
 not an asset-status edit. It creates one normal, `historicalRentalImport`
 shipment or return document for a visible client, a current cabin-version fence
@@ -691,9 +759,24 @@ repair becomes system-completed and eligible pre-start capital/movement work is
 cancelled with `Автоматически закрыто в связи с отгрузкой.`; started or stale
 work remains a conflict for reconciliation. Maintenance releases the fenced
 cabin to `FREE`, then logistics performs its ordinary shipment lease and
-`RENTED` effect. An imported return instead enters the ordinary fenced intake
+`RENTED` effect. When maintenance instead proves that a repair-free cabin is
+already `RENTED`, it returns `ALREADY_RENTED` with the unchanged asset version;
+logistics reaches `SHIPPED` without another lease, status transition, hold or
+driver effect. An imported return instead enters the ordinary fenced intake
 from `RENTED` to `INSPECTION_REQUIRED`, so estimates and repairs retain their
 existing owners and commands.
+
+The historical command writes the exact `CREATE_HISTORICAL_RENTAL_MOVEMENT`
+operation into logistics' durable idempotency receipt. The Java invariant and
+the database check admit the same value; V57 changes only that allow-list and
+does not rewrite documents or receipts. The version-fenced public correction
+command writes `UPDATE_HISTORICAL_RENTAL_MOVEMENT`, admitted by V58, and changes
+only the client snapshot/reference and warehouse-local physical date of the
+same imported shipment. It never creates another document or replays physical
+effects. In the absence of a live logistics
+shipment, the panel may label legacy passport facts `Отгружена` only when both
+shipment date and a non-blank tenant exist. This is a read-only compatibility
+projection; any live logistics document remains authoritative.
 
 Rental counterparties are logistics domain records, not OAuth clients. Every
 new client has a normalized required phone and an authenticated responsible
@@ -712,9 +795,10 @@ the server advertises exactly the warehouse-local dates `today+2` through
 `today+5`, and confirmation accepts one to four dates only from that advertised
 set. These are requestable preferences, not a capacity reservation or promise.
 `REPLACEMENT` advertises no dates and accepts none. Desired-delivery windows remain order-owned
-read state: legacy physical time columns can retain old values but no public
-command or projection exposes them. A draft can save without client delivery
-facts, but rental shipment creation requires the confirmed address, primary
+read state: legacy physical time columns can retain old values, while the
+dedicated CustomerApp projection exposes only its confirmed exact slot. A
+draft can save without client delivery facts, but rental shipment creation
+requires the confirmed address, primary
 phone and desired day. Wishes remain advisory: actual document `scheduledDate`
 is separate and may fall outside it.
 
@@ -754,8 +838,12 @@ extension action.
 A cabin photo presentation is a logistics-owned public capability, not a new
 media owner or a mutable cabin projection. Creation requires warehouse EDIT,
 the current asset-owned cabin version and a subject-scoped idempotency key.
-Logistics freezes the ordered set of one to 100 READY media IDs and generations
-plus the cabin-number snapshot; exact replay returns the same record and
+Media returns the full logical active-folder image count separately from its
+bounded READY references. Logistics freezes the ordered set of one to 100
+media IDs and generations plus the cabin-number snapshot only when those two
+cardinalities are equal; a processing gap or an over-100 folder fails closed.
+Older folders remain in the full CABIN archive and are excluded from a newly
+created presentation. Exact replay returns the same record and
 different bytes under the same key conflict. The signed public token and stored
 row do not expire. Anonymous metadata exposes only cabin number, creation time
 and presentation-scoped photo URLs, while every SMALL/LARGE byte read must match
@@ -766,12 +854,42 @@ state and reveals no warehouse, client, passport or object-storage locator.
 The optional standalone simulator boundary does not move order ownership.
 With exact machine scope `logistics.planning`, it may read only a
 warehouse/date-bounded feed of saved, not-yet-shipped cabin units plus minimal
-client/address/coordinate/date facts. Applying a reviewed exact plan version
+client/address/coordinate/date facts. Loading a linked scenario first refreshes
+the current 31-day RWMS horizon, so changing scenarios cannot erase a real
+request. A confirmed CustomerApp date also carries its hard exact window and
+source one-to-four-hour ring. The simulator persists and displays that band and
+uses depot-matrix band overflow plus band spread to rank equal-priority
+multi-point candidates. The hard window and exact Valhalla legs remain the route
+authority. Applying a reviewed exact plan version
 reuses the logistics shipment transition, checks current order versions and
 non-overlapping unit identities, and returns all applied/rejected parts under a
 stable idempotency key. Automatic assignments on the warehouse-local current
 day or next day are rejected; urgent additions on those dates remain a manual
 logistics action. The simulator has no RWMS database access.
+
+When separately enabled, the simulator publishes one complete active
+generated-delivery capacity snapshot for exactly one linked warehouse after
+the local generator/delete transaction commits. Logistics-service replaces
+that anonymous projection idempotently and keeps it separate from real slots
+and orders. The generator mutation and its simulator-wide monotonic capacity
+generation commit together; `sourceGeneration` also enters the source revision,
+so a new prior-shaped workload cannot be mistaken for a delayed old command
+and RWMS rejects an older generation that had never previously succeeded.
+Generated pickups never enter the snapshot. Assignment apply
+accepts only tasks sourced from `RWMS`; generated and manual tasks remain
+simulator-owned even when assigned inside a scenario plan.
+Migration `20260827_0012` preserves the selected complete window of an existing
+generator delivery while making it hard; generator pickups become the
+all-workday `09:00-18:00` backhaul. Manual and RWMS requests are untouched.
+
+Opening a linked simulator workspace refreshes each linked warehouse from the
+current UTC day through day +30 (31 inclusive calendar dates) before listing
+requests. Stable source identity and upsert semantics make real RWMS demand
+reappear after a scenario change rather than being deleted with
+scenario-generated workload. The imported exact window is a hard planner
+constraint; the persisted source hour ring participates in candidate
+construction, while every route remains subject to exact Valhalla, capacity
+and shift feasibility.
 
 The simulator planner globally ranks delivery urgency independently from pickup
 urgency. Delivery-before-pickup is a hard invariant inside each depot cycle,
@@ -784,16 +902,60 @@ hard-date, last-date and total delivery coverage. If a mixed draft covers less,
 it restores that reference before scheduling pickup-only work. A nearby pickup
 is reattached only when a full reschedule of the affected shift suffix preserves
 all deliveries and hard constraints. Compact route-rank buckets bound dense
-equal-priority evaluation.
+equal-priority evaluation. Within an equal business-priority bucket, imported
+CustomerApp work first minimizes depot-matrix travel beyond its source ring and
+then ring spread, so compatible points form multi-stop driver cycles before
+distance tie-breaks. Missing ring metadata remains compatible with manual and
+legacy requests and never fabricates an isochrone.
+The visual map asks for one-to-four-hour contours from depots and each driver's
+latest delivery point, excluding pickup and depot-return stops. Exact directed
+matrix legs from the driver's current delivery frontier, not polygon
+containment, determine the next delivery and offered slot.
+The private graph is one source-manifested union of the Central and Northwestern
+Federal District extracts; the derived restriction overlay deduplicates any OSM
+object shared by their boundaries under the same `OSM_DATA_VERSION`. Switching
+the visible scenario fits its own warehouses/zones once and does not alter any
+persisted scenario geometry or subsequent operator pan/zoom.
 Capacity, hard windows, shift end and blocked directed zone transitions remain
 infeasible. This simulator-only planning rule does not change RWMS order or
 assignment ownership.
 
+A simulator customer stop's `planned_arrival` is its actual service start.
+When a later window would create idle time, the heuristic first shifts the
+complete routed prefix at the warehouse while preserving every earlier window.
+Only the scenario-bounded residual wait may remain between customer stops
+(`max_customer_wait_minutes`, 120 by default). A larger forced gap makes that
+combination infeasible so the tasks can be assigned to separate warehouse
+cycles. Exact Valhalla legs use the resulting actual departure timestamps.
+The simulator timeline starts at the earliest assigned shift, keeping every
+pre-cycle warehouse wait seekable as `WAITING_SHIFT` at the depot.
+
+Every simulator READY request eligible for the selected day now requires two
+explicit dispatcher facts before planning: one positive service window on that
+accepted date and whether a truck with its trailer can reach the address. A
+negative answer converts automatic transport parts to one cabin each and makes
+every trailer-attached cycle visiting that address infeasible; a positive
+answer admits that address configuration but cannot override the effective
+truck profile or Valhalla/OSM road restrictions. The Plan page may request an
+explicit one/two-cabin split and move a task between driver cycles, but the
+backend remains the owner of the full capacity, ordering, window, shift,
+overlap and truck-route validation before any versioned edit is accepted.
+
+Confirming a valid simulator plan creates one idempotent local test-message log
+per assigned source request. It aggregates split visits and records the plan
+date, agreed window, assigned quantity, arrival, driver and vehicle. Passport
+details are included only by an explicit request preference; missing details
+for any assigned driver reject confirmation before plan status or logs change.
+No SMS, messenger, push provider or production RWMS notification is invoked.
+When saved plans are selected for scenario export, their simulated records are
+retained and atomically remapped to the imported source requests.
+
 The simulator can append a bounded deterministic workload to an existing test
 scenario, including a one-day horizon with no alternatives. Its explicit
 regeneration command atomically replaces only simulator-generator requests
-whose preferred date is in the horizon; it never selects manual/RWMS requests
-and refuses to delete any generated task referenced by a saved plan. A seed
+whose preferred date is in the horizon and first removes every saved plan for
+those exact planning dates; it never selects manual/RWMS requests or plans on
+other dates. A seed
 controls interior point placement, request quantities and alternative dates,
 all of which remain inside the operator-selected date horizon; request creation
 still passes through the authoritative PostGIS classifier. Repeating one seed
@@ -805,8 +967,11 @@ logistics date rather than mutable display sequence, note or quantity only for
 legacy generator rows without a stable external ID;
 manual and RWMS requests remain distinct by authoritative source identity even
 when they share an address. Scenario clone and JSON export/import preserve the
-optional source system, external identity, source version and payload. Large
-private-OSRM matrices are reconstructed from bounded directed Table blocks rather than
+optional source system, external identity, source version and payload.
+Generated deliveries have deterministic hard windows round-robin
+`09:00-12:00`, `12:00-15:00`, `15:00-18:00`; generated pickups have
+`09:00-18:00` and remain return-leg work.
+Large private-OSRM matrices are reconstructed from bounded directed Table blocks rather than
 falling back to mock distances. Simulator zones own independent non-negative
 whole-ruble delivery and pickup prices. Those prices survive clone/import/export
 and are currently explanatory operator data, not a planner feasibility or RWMS
@@ -858,6 +1023,9 @@ Evidence: [`services/logistics-service/`](../../services/logistics-service/),
 [`LogisticsExternalAttemptClaimService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/service/LogisticsExternalAttemptClaimService.java),
 [`V40__bounded_logistics_external_attempt_claims.sql`](../../services/logistics-service/src/main/resources/db/migration/V40__bounded_logistics_external_attempt_claims.sql),
 [`OrderClientService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/OrderClientService.java),
+[`CustomerController.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/api/CustomerController.java),
+[`CustomerDeliverySlotService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/service/CustomerDeliverySlotService.java),
+[`CustomerCheckoutService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/service/CustomerCheckoutService.java),
 [`PresentationBookingService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/PresentationBookingService.java),
 [`ClientDeliveryDatePolicy.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/ClientDeliveryDatePolicy.java),
 [`RentalInquiryCabinSelectionStore.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/RentalInquiryCabinSelectionStore.java),
@@ -869,6 +1037,8 @@ Evidence: [`services/logistics-service/`](../../services/logistics-service/),
 [`CabinPhotoPresentationTokenService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/photo/CabinPhotoPresentationTokenService.java),
 [`V47__order_contacts_windows_and_inquiry_target.sql`](../../services/logistics-service/src/main/resources/db/migration/V47__order_contacts_windows_and_inquiry_target.sql),
 [`V54__historical_rental_documents.sql`](../../services/logistics-service/src/main/resources/db/migration/V54__historical_rental_documents.sql),
+[`V59__customer_app_booking_and_delivery_slots.sql`](../../services/logistics-service/src/main/resources/db/migration/V59__customer_app_booking_and_delivery_slots.sql),
+[`simulator workspace client`](../../logistics/frontend/src/api/client.ts),
 and
 [`V55__cabin_photo_presentations.sql`](../../services/logistics-service/src/main/resources/db/migration/V55__cabin_photo_presentations.sql).
 
@@ -891,6 +1061,18 @@ manually move an ordinary scheduled task into Current; only
 `CAPITAL_TO_PRODUCTION` may be inserted there manually. A completed repair's
 removal movement is inserted before ordinary Current work but after all leading
 pinned cards.
+
+The board's `currentDate` is authoritative warehouse-local time. Its public
+date columns never precede that value: an overdue active task-board column is
+folded into the current-date column without hiding or duplicating cards, and
+public movement/capital scheduling rejects a past target. A bounded relay pass
+may reopen only a generic dependency-failure `RECONCILIATION_REQUIRED` row
+after reading the matching authoritative task-board task. It may bind an
+already-created remote registration whose response was lost, then resumes only
+the owner-reported lane/status. Compensation and business reconciliation codes
+remain terminal, while a full bounded page advances the next-pass cursor to
+prevent their rows from starving later recoverable work. This recovery changes
+no domain owner and does not rewrite data directly.
 
 Each newly scheduled shipment, return or transfer persists one logistics-owned
 driver intent for the whole document, with a stable order trip number,
