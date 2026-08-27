@@ -13,6 +13,7 @@ import dev.buhanzaz.rwms.manager.network.RentalItemDto
 import dev.buhanzaz.rwms.manager.network.RoutingSnapshotDto
 import dev.buhanzaz.rwms.manager.network.TaskEvidenceDto
 import dev.buhanzaz.rwms.manager.network.TaskSyncSnapshotDto
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class AcceptanceMediaPoliciesTest {
@@ -35,15 +36,98 @@ class AcceptanceMediaPoliciesTest {
 
         val collection = acceptanceCabinMedia(repair, estimate)
 
-        assertThat(collection.items.map { it.reference.mediaId })
+        assertThat(collection.items.map { it.reference.mediaId }.distinct())
             .containsExactly("cover-media", "second-media")
             .inOrder()
         assertThat(collection.items.map(AcceptanceScopedMedia::ownerType).distinct())
-            .containsExactly("MAINTENANCE_ESTIMATE")
+            .containsExactly("TASK_BOARD_ENTRY", "MAINTENANCE_ESTIMATE")
+            .inOrder()
         assertThat(collection.items.map(AcceptanceScopedMedia::ownerId).distinct())
-            .containsExactly("estimate-1")
+            .containsExactly("entry-1", "estimate-1")
+            .inOrder()
         assertThat(collection.items.map(AcceptanceScopedMedia::context).distinct())
-            .containsExactly("ESTIMATE")
+            .containsExactly("WORK_RESULT", "ESTIMATE")
+            .inOrder()
+    }
+
+    @Test
+    fun `inventory cabin photos use the authoritative finding owner scope`() {
+        val repair = repair(
+            origin = "INVENTORY",
+            inventorySource = InventorySourceReferenceDto(
+                inventoryId = "inventory-1",
+                findingId = "finding-1",
+                sourceRevision = 4,
+                planFingerprint = "plan",
+                sourceFingerprint = "source",
+            ),
+            mediaReferences = listOf(
+                MediaReferenceDto("inspection-1", 1),
+                MediaReferenceDto("inspection-2", 3),
+            ),
+        )
+
+        val collection = acceptanceCabinMedia(repair, linkedEstimate = null)
+
+        assertThat(collection.items.map { it.reference.mediaId }.distinct())
+            .containsExactly("inspection-1", "inspection-2")
+            .inOrder()
+        assertThat(collection.items.filter { it.reference.mediaId == "inspection-1" })
+            .containsExactly(
+                AcceptanceScopedMedia(
+                    MediaReferenceDto("inspection-1", 1),
+                    "TASK_BOARD_ENTRY",
+                    "entry-1",
+                    "WORK_RESULT",
+                ),
+                AcceptanceScopedMedia(
+                    MediaReferenceDto("inspection-1", 1),
+                    "INVENTORY_FINDING",
+                    "finding-1",
+                    "INSPECTION",
+                ),
+            ).inOrder()
+    }
+
+    @Test
+    fun `inventory repair without legacy source reads general photos through every task entry`() {
+        val general = MediaReferenceDto("general-photo", 1)
+        val workPhoto = MediaReferenceDto("work-photo", 1)
+        val base = repair(
+            origin = "INVENTORY",
+            inventorySource = null,
+            mediaReferences = listOf(general, workPhoto),
+        )
+        val repair = base.copy(
+            plan = base.plan.copy(
+                stages = listOf(
+                    stage(
+                        id = "stage-1",
+                        order = 0,
+                        taskBoardEntryId = "entry-1",
+                    ),
+                    stage(
+                        id = "stage-2",
+                        order = 1,
+                        taskBoardEntryId = "entry-2",
+                        workLines = listOf(
+                            workLine("work-1", mediaReferences = listOf(workPhoto)),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val collection = acceptanceCabinMedia(repair, linkedEstimate = null)
+
+        assertThat(collection.items.map(AcceptanceScopedMedia::reference).distinct())
+            .containsExactly(general)
+        assertThat(collection.items.map(AcceptanceScopedMedia::ownerType))
+            .containsExactly("TASK_BOARD_ENTRY", "TASK_BOARD_ENTRY", "MAINTENANCE_REPAIR")
+            .inOrder()
+        assertThat(collection.items.map(AcceptanceScopedMedia::ownerId))
+            .containsExactly("entry-1", "entry-2", "repair-1")
+            .inOrder()
     }
 
     @Test
@@ -61,22 +145,18 @@ class AcceptanceMediaPoliciesTest {
         val directCollection = acceptanceCabinMedia(direct, null)
         val reworkCollection = acceptanceCabinMedia(rework, null)
 
-        assertThat(directCollection.items.single()).isEqualTo(
-            AcceptanceScopedMedia(
-                MediaReferenceDto("direct-media", 3),
-                "MAINTENANCE_REPAIR",
-                "repair-1",
-                "REPAIR",
-            ),
-        )
-        assertThat(reworkCollection.items.single()).isEqualTo(
-            AcceptanceScopedMedia(
-                MediaReferenceDto("rework-media", 4),
-                "MAINTENANCE_REPAIR",
-                "rework-1",
-                "REPAIR",
-            ),
-        )
+        assertThat(directCollection.items.map(AcceptanceScopedMedia::ownerType))
+            .containsExactly("TASK_BOARD_ENTRY", "MAINTENANCE_REPAIR")
+            .inOrder()
+        assertThat(directCollection.items.map(AcceptanceScopedMedia::ownerId))
+            .containsExactly("entry-1", "repair-1")
+            .inOrder()
+        assertThat(reworkCollection.items.map(AcceptanceScopedMedia::ownerType))
+            .containsExactly("TASK_BOARD_ENTRY", "MAINTENANCE_REPAIR")
+            .inOrder()
+        assertThat(reworkCollection.items.map(AcceptanceScopedMedia::ownerId))
+            .containsExactly("entry-1", "rework-1")
+            .inOrder()
     }
 
     @Test
@@ -213,11 +293,7 @@ class AcceptanceMediaPoliciesTest {
                 number = "БЫТ-001",
                 status = "WAITING_REPAIR_CHECK",
             ),
-            cabinPhotos = AcceptanceMediaCollection(
-                title = "Фото бытовки",
-                items = emptyList(),
-                emptyMessage = "Нет фото",
-            ),
+            reviewMedia = emptyReviewMedia(),
         )
 
         assertThat(editor.hasAcceptanceEvidence()).isFalse()
@@ -247,7 +323,7 @@ class AcceptanceMediaPoliciesTest {
                 number = "БЫТ-001",
                 status = "WAITING_REPAIR_CHECK",
             ),
-            cabinPhotos = AcceptanceMediaCollection("Фото бытовки", emptyList(), "Нет фото"),
+            reviewMedia = emptyReviewMedia(),
         )
 
         assertThat(editor.hasAcceptedAllWorkLines()).isFalse()
@@ -257,6 +333,80 @@ class AcceptanceMediaPoliciesTest {
             editor.copy(acceptedWorkLineIds = setOf(first.id, second.id)).hasAcceptedAllWorkLines(),
         ).isTrue()
     }
+
+    @Test
+    fun `acceptance review groups never mix work sources with stage result evidence`() {
+        val first = workLine(
+            id = "work-1",
+            mediaReferences = listOf(MediaReferenceDto("source-1", 2)),
+        )
+        val second = workLine(id = "work-2")
+        val repair = repair(
+            mediaReferences = listOf(MediaReferenceDto("cabin-1", 1)),
+        ).copy(
+            plan = RepairPlanDto(
+                repairId = "repair-1",
+                repairVersion = 5,
+                stages = listOf(
+                    stage(
+                        workLines = listOf(first, second),
+                        evidence = listOf(
+                            evidence(
+                                evidenceId = "evidence-1",
+                                entryId = "entry-1",
+                                mediaId = "result-1",
+                                generation = 3,
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val sources = acceptanceReviewMediaSources(repair, linkedEstimate = null)
+
+        assertThat(sources.cabin.items.map { it.reference.mediaId }.distinct())
+            .containsExactly("cabin-1")
+        assertThat(
+            sources.workByStageId.getValue("stage-1").getValue("work-1").items
+                .map { it.reference.mediaId },
+        )
+            .containsExactly("source-1")
+        assertThat(sources.workByStageId.getValue("stage-1").getValue("work-2").items)
+            .isEmpty()
+        assertThat(
+            sources.resultByStageId.getValue("stage-1").items.map { it.reference.mediaId },
+        )
+            .containsExactly("result-1")
+    }
+
+    @Test
+    fun `acceptance media snapshot is created only when every referenced photo is downloaded`() {
+        val repair = repair(
+            mediaReferences = listOf(MediaReferenceDto("cabin-1", 1)),
+        )
+        val sources = acceptanceReviewMediaSources(repair, linkedEstimate = null)
+        val request = acceptanceReviewDownloads(sources).single()
+        val complete = completeAcceptanceReviewMedia(
+            sources = sources,
+            downloaded = listOf(
+                ScopedMediaResult(request.reference, "file://cabin-1"),
+            ),
+        )
+
+        assertThat(complete.cabin.photoUris).containsExactly("file://cabin-1")
+        val failure = assertThrows(IllegalStateException::class.java) {
+            completeAcceptanceReviewMedia(sources, downloaded = emptyList())
+        }
+        assertThat(failure).hasMessageThat()
+            .isEqualTo("Не удалось загрузить все фотографии ремонта. Повторите открытие карточки")
+    }
+
+    private fun emptyReviewMedia() = AcceptanceReviewMediaState(
+        cabin = AcceptanceInlineMediaState("Фото бытовки", emptyList()),
+        workByStageId = emptyMap(),
+        resultByStageId = emptyMap(),
+    )
 
     private fun repair(
         id: String = "repair-1",
@@ -289,13 +439,15 @@ class AcceptanceMediaPoliciesTest {
     )
 
     private fun stage(
+        id: String = "stage-1",
+        order: Int = 0,
         evidence: List<TaskEvidenceDto> = emptyList(),
         workLines: List<EstimateLineDto> = emptyList(),
         taskBoardEntryId: String? = "entry-1",
     ): RepairStageDto = RepairStageDto(
-        id = "stage-1",
+        id = id,
         kind = "REPAIR_WORK",
-        order = 0,
+        order = order,
         state = "DONE",
         routing = RoutingSnapshotDto("queue-1", "Ремонт", "REPAIR"),
         workLines = workLines,

@@ -206,7 +206,6 @@ internal class ManagerWorkspaceCoordinator(
                         repairTaskBoard = null,
                         acceptanceRepairs = emptyList(),
                         acceptanceEditor = null,
-                        acceptanceGallery = null,
                         maintenanceCatalogNodes = emptyList(),
                         maintenanceCatalogLinks = emptyList(),
                         maintenanceCatalogRefreshAvailable = false,

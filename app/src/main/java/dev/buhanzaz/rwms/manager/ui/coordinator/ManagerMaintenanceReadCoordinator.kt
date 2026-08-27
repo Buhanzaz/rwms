@@ -2,10 +2,13 @@ package dev.buhanzaz.rwms.manager.ui
 
 import dev.buhanzaz.rwms.manager.media.MediaOwner
 import dev.buhanzaz.rwms.manager.media.retryMediaReadAfterOwnerProof
+import dev.buhanzaz.rwms.manager.network.AcceptanceProjectionPageDto
 import dev.buhanzaz.rwms.manager.network.EstimateDto
+import dev.buhanzaz.rwms.manager.network.EstimatePageDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.RentalItemDto
 import dev.buhanzaz.rwms.manager.network.RepairDto
+import dev.buhanzaz.rwms.manager.network.RepairPageDto
 import dev.buhanzaz.rwms.manager.network.RwmsBackend
 import dev.buhanzaz.rwms.manager.uploads.AcceptanceUploadCommand
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadArea
@@ -17,6 +20,68 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+
+/** Collapses repeated references while retaining every owner proof that can authorize the read. */
+internal fun acceptanceReviewDownloads(
+    sources: AcceptanceReviewMediaSources,
+): List<ScopedMediaDownload> {
+    val collections = buildList {
+        add(sources.cabin)
+        sources.workByStageId.values.forEach { addAll(it.values) }
+        addAll(sources.resultByStageId.values)
+    }
+    return collections
+        .flatMap(AcceptanceMediaCollection::items)
+        .groupBy(AcceptanceScopedMedia::reference)
+        .map { (reference, mediaItems) ->
+            ScopedMediaDownload(
+                reference = reference,
+                scopes = mediaItems.map { mediaItem ->
+                    MaintenanceMediaScope(
+                        ownerType = mediaItem.ownerType,
+                        ownerId = mediaItem.ownerId,
+                        context = mediaItem.context,
+                    )
+                }.distinct(),
+            )
+        }
+}
+
+/**
+ * Restores acceptance slider boundaries only from a complete downloaded snapshot.
+ * A missing referenced photo aborts opening the editor instead of presenting a misleading partial
+ * repair history.
+ */
+internal fun completeAcceptanceReviewMedia(
+    sources: AcceptanceReviewMediaSources,
+    downloaded: List<ScopedMediaResult>,
+): AcceptanceReviewMediaState {
+    val expected = acceptanceReviewDownloads(sources).map(ScopedMediaDownload::reference)
+    val uriByReference = downloaded.associate { result -> result.reference to result.uri }
+    check(expected.all(uriByReference::containsKey)) {
+        "Не удалось загрузить все фотографии ремонта. Повторите открытие карточки"
+    }
+
+    fun resolve(collection: AcceptanceMediaCollection): AcceptanceInlineMediaState {
+        val references = collection.items
+            .map(AcceptanceScopedMedia::reference)
+            .distinct()
+        return AcceptanceInlineMediaState(
+            title = collection.title,
+            photoUris = references.map { reference -> uriByReference.getValue(reference) },
+        )
+    }
+
+    return AcceptanceReviewMediaState(
+        cabin = resolve(sources.cabin),
+        workByStageId = sources.workByStageId.mapValues { (_, byWorkId) ->
+            byWorkId.mapValues { (_, collection) -> resolve(collection) }
+        },
+        resultByStageId = sources.resultByStageId.mapValues { (_, collection) ->
+            resolve(collection)
+        },
+    )
+}
 
 /**
  * Defines manager UI state or presentation policy; server state and command authorization remain authoritative.
@@ -113,61 +178,27 @@ internal class ManagerMaintenanceReadCoordinator(
             .filter { media -> media.status == "READY" && media.generation > 0 }
             .sortedBy { media -> media.sortOrder }
             .map { media -> MediaReferenceDto(media.id, media.generation) }
+        val reviewMedia = loadAcceptanceReviewMedia(
+            sources = acceptanceReviewMediaSources(repair, linkedEstimate),
+            warehouseId = warehouseId,
+        )
         mutableState.update { current ->
             current.copy(
                 maintenanceAssetLabels = current.maintenanceAssetLabels + (asset.id to asset.number),
                 acceptanceEditor = MaintenanceAcceptanceEditorState(
                     repair = repair,
                     asset = asset,
-                    cabinPhotos = acceptanceCabinMedia(repair, linkedEstimate),
+                    reviewMedia = reviewMedia,
                     readyMedia = readyAcceptanceMedia,
                 ),
-                acceptanceGallery = null,
             )
         }
     }
 
     fun closeAcceptance() {
         mutableState.update {
-            it.copy(
-                acceptanceEditor = null,
-                acceptanceGallery = null,
-            )
+            it.copy(acceptanceEditor = null)
         }
-    }
-
-    fun openAcceptanceCabinPhotos() = command {
-        val editor = requireNotNull(mutableState.value.acceptanceEditor) {
-            "Откройте ремонт для приёмки"
-        }
-        loadAcceptanceGallery(editor.repair.id, editor.cabinPhotos)
-    }
-
-    fun openAcceptanceStagePhotos(stageId: String) = command {
-        val editor = requireNotNull(mutableState.value.acceptanceEditor) {
-            "Откройте ремонт для приёмки"
-        }
-        val stage = editor.repair.plan.stages.firstOrNull { it.id == stageId }
-            ?: throw IllegalStateException("Этап ремонта больше не найден")
-        loadAcceptanceGallery(editor.repair.id, acceptanceStageMedia(stage))
-    }
-
-    fun openAcceptanceWorkSourcePhotos(stageId: String, workLineId: String) = command {
-        val editor = requireNotNull(mutableState.value.acceptanceEditor) {
-            "Откройте ремонт для приёмки"
-        }
-        val stage = editor.repair.plan.stages.firstOrNull { it.id == stageId }
-            ?: throw IllegalStateException("Этап ремонта больше не найден")
-        val work = stage.workLines.firstOrNull { line -> line.id == workLineId }
-            ?: throw IllegalStateException("Работа больше не найдена в этапе")
-        loadAcceptanceGallery(
-            editor.repair.id,
-            acceptanceWorkSourceMedia(editor.repair, stage, work),
-        )
-    }
-
-    fun closeAcceptanceGallery() {
-        mutableState.update { it.copy(acceptanceGallery = null) }
     }
 
     fun editAcceptanceComment(value: String) {
@@ -263,49 +294,111 @@ internal class ManagerMaintenanceReadCoordinator(
         onSaved()
     }
 
-    private suspend fun loadAcceptanceGallery(
-        repairId: String,
-        collection: AcceptanceMediaCollection,
-    ) {
-        val warehouseId = requireWarehouseId()
-        if (mutableState.value.acceptanceEditor?.repair?.id != repairId) return
-        val uniqueItems = collection.items.distinctBy { media ->
-            listOf(
-                media.ownerType,
-                media.ownerId,
-                media.context,
-                media.reference.mediaId,
-                media.reference.generation.toString(),
-            ).joinToString(":")
-        }
-        val requests = uniqueItems.map { media ->
-            ScopedMediaDownload(
-                reference = media.reference,
-                scopes = listOf(
-                    MaintenanceMediaScope(
-                        ownerType = media.ownerType,
-                        ownerId = media.ownerId,
-                        context = media.context,
-                    ),
+    /**
+     * Downloads one de-duplicated owner-scoped preview set, then restores the cabin, per-work and
+     * per-stage boundaries used by the acceptance screen.
+     */
+    private suspend fun loadAcceptanceReviewMedia(
+        sources: AcceptanceReviewMediaSources,
+        warehouseId: String,
+    ): AcceptanceReviewMediaState {
+        val requests = acceptanceReviewDownloads(sources)
+        return completeAcceptanceReviewMedia(
+            sources = sources,
+            downloaded = loadScopedPhotoUris(requests, warehouseId),
+        )
+    }
+
+    /**
+     * Traverses every estimate page after the conditionally read page zero. Cached combined pages
+     * are sliced back to their first server page before live tail pages are refreshed.
+     */
+    private suspend fun loadCompleteEstimatePage(
+        warehouseId: String,
+        first: EstimatePageDto,
+    ): EstimatePageDto {
+        val items = collectManagerPages(first.firstManagerPageSlice()) { page ->
+            conditionalRead(
+                response = backend.api.estimates(
+                    warehouseId = warehouseId,
+                    page = page,
+                    size = first.size,
                 ),
-            )
-        }
-        val photoUris = loadScopedPhotoUris(requests, warehouseId)
-            .map(ScopedMediaResult::uri)
-        if (mutableState.value.acceptanceEditor?.repair?.id != repairId) return
-        mutableState.update {
-            it.copy(
-                acceptanceGallery = AcceptanceGalleryState(
-                    title = collection.title,
-                    photoUris = photoUris,
-                    emptyMessage = if (uniqueItems.isNotEmpty() && photoUris.isEmpty()) {
-                        "Фотографии есть, но сейчас не загрузились. Проверьте связь с сервером и повторите."
-                    } else {
-                        collection.emptyMessage
-                    },
+                cachedValue = null,
+                cachedEtag = null,
+                missingCacheMessage = "RWMS не вернул страницу смет",
+            ).value.managerPageSlice()
+        }.distinctBy(EstimateDto::id)
+        return first.copy(
+            items = items,
+            page = 0,
+            totalElements = items.size.toLong(),
+        )
+    }
+
+    /**
+     * Traverses every repair page after the conditionally read page zero while retaining the
+     * first page's validator for the combined local snapshot.
+     */
+    private suspend fun loadCompleteRepairPage(
+        warehouseId: String,
+        first: RepairPageDto,
+    ): RepairPageDto {
+        val items = collectManagerPages(first.firstManagerPageSlice()) { page ->
+            conditionalRead(
+                response = backend.api.repairs(
+                    warehouseId = warehouseId,
+                    page = page,
+                    size = first.size,
                 ),
-            )
-        }
+                cachedValue = null,
+                cachedEtag = null,
+                missingCacheMessage = "RWMS не вернул страницу ремонтов",
+            ).value.managerPageSlice()
+        }.distinctBy(RepairDto::id)
+        return first.copy(
+            items = items,
+            page = 0,
+            totalElements = items.size.toLong(),
+        )
+    }
+
+    /** Reads all active capital-repair pages with one sequential tail request at a time. */
+    private suspend fun loadCompleteCapitalRepairPage(
+        warehouseId: String,
+        first: RepairPageDto,
+    ): RepairPageDto {
+        val items = collectManagerPages(first.firstManagerPageSlice()) { page ->
+            backend.api.activeCapitalRepairs(
+                warehouseId = warehouseId,
+                page = page,
+                size = first.size,
+            ).managerPageSlice()
+        }.distinctBy(RepairDto::id)
+        return first.copy(
+            items = items,
+            page = 0,
+            totalElements = items.size.toLong(),
+        )
+    }
+
+    /** Reads every actionable acceptance projection page in its server-defined order. */
+    private suspend fun loadPendingAcceptancePages(
+        warehouseId: String,
+    ): List<dev.buhanzaz.rwms.manager.network.AcceptanceProjectionDto> {
+        val first = backend.api.acceptance(
+            warehouseId = warehouseId,
+            size = MANAGER_MAINTENANCE_PAGE_SIZE,
+            state = "PENDING",
+        )
+        return collectManagerPages(first.managerPageSlice()) { page ->
+            backend.api.acceptance(
+                warehouseId = warehouseId,
+                page = page,
+                size = first.size,
+                state = "PENDING",
+            ).managerPageSlice()
+        }.distinctBy { projection -> projection.repairId }
     }
 
     override suspend fun refreshMaintenance(force: Boolean) {
@@ -317,38 +410,45 @@ internal class ManagerMaintenanceReadCoordinator(
             val refreshed = try {
                 coroutineScope {
                     val estimatesRequest = async {
-                        backend.api.estimates(
-                            warehouseId = warehouseId,
-                            size = 200,
-                            ifNoneMatch = if (force) null else cached?.estimatesEtag,
+                        val first = conditionalRead(
+                            response = backend.api.estimates(
+                                warehouseId = warehouseId,
+                                size = MANAGER_MAINTENANCE_PAGE_SIZE,
+                                ifNoneMatch = if (force) null else cached?.estimatesEtag,
+                            ),
+                            cachedValue = cached?.estimates,
+                            cachedEtag = cached?.estimatesEtag,
+                            missingCacheMessage =
+                                "Сервер подтвердил старую смету, которой нет на телефоне",
                         )
+                        first.copy(value = loadCompleteEstimatePage(warehouseId, first.value))
                     }
                     val repairsRequest = async {
-                        backend.api.repairs(
-                            warehouseId = warehouseId,
-                            size = 200,
-                            ifNoneMatch = if (force) null else cached?.repairsEtag,
+                        val first = conditionalRead(
+                            response = backend.api.repairs(
+                                warehouseId = warehouseId,
+                                size = MANAGER_MAINTENANCE_PAGE_SIZE,
+                                ifNoneMatch = if (force) null else cached?.repairsEtag,
+                            ),
+                            cachedValue = cached?.repairs,
+                            cachedEtag = cached?.repairsEtag,
+                            missingCacheMessage =
+                                "Сервер подтвердил старый ремонт, которого нет на телефоне",
                         )
+                        first.copy(value = loadCompleteRepairPage(warehouseId, first.value))
                     }
                     val capitalRepairsRequest = async {
-                        backend.api.activeCapitalRepairs(
+                        val first = backend.api.activeCapitalRepairs(
                             warehouseId = warehouseId,
-                            size = 200,
+                            size = MANAGER_MAINTENANCE_PAGE_SIZE,
                         )
+                        loadCompleteCapitalRepairPage(warehouseId, first)
                     }
-                    val estimates = conditionalRead(
-                        response = estimatesRequest.await(),
-                        cachedValue = cached?.estimates,
-                        cachedEtag = cached?.estimatesEtag,
-                        missingCacheMessage = "Сервер подтвердил старую смету, которой нет на телефоне",
+                    Triple(
+                        estimatesRequest.await(),
+                        repairsRequest.await(),
+                        capitalRepairsRequest.await(),
                     )
-                    val repairs = conditionalRead(
-                        response = repairsRequest.await(),
-                        cachedValue = cached?.repairs,
-                        cachedEtag = cached?.repairsEtag,
-                        missingCacheMessage = "Сервер подтвердил старый ремонт, которого нет на телефоне",
-                    )
-                    Triple(estimates, repairs, capitalRepairsRequest.await())
                 }
             } catch (failure: Throwable) {
                 if (cached?.capitalRepairs != null && canUseCachedReadAfter(failure)) {
@@ -454,20 +554,18 @@ internal class ManagerMaintenanceReadCoordinator(
 
     override suspend fun refreshAcceptance() {
         val warehouseId = requireWarehouseId()
-        val projections = backend.api.acceptance(
-            warehouseId = warehouseId,
-            size = 200,
-        ).items
-        val repairs = coroutineScope {
-            projections
-                .filter { projection ->
-                    projection.executionState == "COMPLETED" &&
-                        projection.acceptanceState == "PENDING"
+        val projections = loadPendingAcceptancePages(warehouseId)
+        val repairs = mapInBoundedBatches(
+            values = projections,
+            parallelism = MANAGER_ACCEPTANCE_DETAIL_PARALLELISM,
+        ) { projection ->
+            backend.api.repair(projection.repairId, warehouseId).also { repair ->
+                check(repair.id == projection.repairId && repair.warehouseId == warehouseId) {
+                    "RWMS вернул ремонт вне запрошенной приёмки"
                 }
-                .map { projection ->
-                    async { backend.api.repair(projection.repairId, warehouseId) }
-                }
-                .map { request -> request.await() }
+            }
+        }.filter { repair ->
+            repair.executionState == "COMPLETED" && repair.acceptanceState == "PENDING"
         }
         val labels = resolveMaintenanceAssetLabels(repairs.map(RepairDto::rentalItemId))
         if (mutableState.value.selectedWarehouseId != warehouseId) return
@@ -479,17 +577,20 @@ internal class ManagerMaintenanceReadCoordinator(
                 acceptanceRepairs = repairs,
                 maintenanceAssetLabels = current.maintenanceAssetLabels + labels,
                 acceptanceEditor = retainedEditor,
-                acceptanceGallery = current.acceptanceGallery.takeIf { retainedEditor != null },
             )
         }
     }
 
+    /** Resolves display labels in stable bounded batches without making asset state authoritative. */
     internal suspend fun resolveMaintenanceAssetLabels(ids: List<String>): Map<String, String> =
-        ids.distinct().associateWith { itemId ->
-            backend.api.rentalItem(itemId).number.also { number ->
+        mapInBoundedBatches(
+            values = ids.distinct(),
+            parallelism = MANAGER_ASSET_LABEL_PARALLELISM,
+        ) { itemId ->
+            itemId to backend.api.rentalItem(itemId).number.also { number ->
                 require(number.isNotBlank()) { "Сервис не вернул номер бытовки" }
             }
-        }
+        }.toMap()
 
     override suspend fun maintenanceRentalItem(
         rentalItemId: String,
@@ -502,6 +603,38 @@ internal class ManagerMaintenanceReadCoordinator(
         return item
     }
 }
+
+/** Converts a live estimate response page to the pagination policy's neutral boundary. */
+private fun EstimatePageDto.managerPageSlice(): ManagerPageSlice<EstimateDto> = ManagerPageSlice(
+    items = items,
+    page = page,
+    size = size,
+    totalElements = totalElements,
+)
+
+/** Restores page zero from a cached combined estimate snapshot before refreshing live tail pages. */
+private fun EstimatePageDto.firstManagerPageSlice(): ManagerPageSlice<EstimateDto> =
+    managerPageSlice().copy(items = items.take(size))
+
+/** Converts a live repair response page to the pagination policy's neutral boundary. */
+private fun RepairPageDto.managerPageSlice(): ManagerPageSlice<RepairDto> = ManagerPageSlice(
+    items = items,
+    page = page,
+    size = size,
+    totalElements = totalElements,
+)
+
+/** Restores page zero from a cached combined repair snapshot before refreshing live tail pages. */
+private fun RepairPageDto.firstManagerPageSlice(): ManagerPageSlice<RepairDto> =
+    managerPageSlice().copy(items = items.take(size))
+
+/** Converts one acceptance response page to the pagination policy's neutral boundary. */
+private fun AcceptanceProjectionPageDto.managerPageSlice() = ManagerPageSlice(
+    items = items,
+    page = page,
+    size = size,
+    totalElements = totalElements,
+)
 
 /**
  * Keeps every calculated CAPITAL repair out of the ordinary table while the separate list uses
@@ -518,3 +651,7 @@ internal fun splitMaintenanceRepairLists(
     }
     return ordinary to activeCapitalRepairs
 }
+
+private const val MANAGER_MAINTENANCE_PAGE_SIZE = 200
+private const val MANAGER_ACCEPTANCE_DETAIL_PARALLELISM = 4
+private const val MANAGER_ASSET_LABEL_PARALLELISM = 4

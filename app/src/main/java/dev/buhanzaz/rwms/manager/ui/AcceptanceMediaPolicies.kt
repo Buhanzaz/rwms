@@ -6,9 +6,7 @@ import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.RepairDto
 import dev.buhanzaz.rwms.manager.network.RepairStageDto
 
-/**
- * Defines manager UI state or presentation policy; server state and command authorization remain authoritative.
- */
+/** One immutable media reference paired with the owner scope that authorizes its preview read. */
 data class AcceptanceScopedMedia(
     val reference: MediaReferenceDto,
     val ownerType: String,
@@ -16,13 +14,33 @@ data class AcceptanceScopedMedia(
     val context: String,
 )
 
-/**
- * Defines manager UI state or presentation policy; server state and command authorization remain authoritative.
- */
+/** Names one ordered owner-scoped group before previews are downloaded. */
 data class AcceptanceMediaCollection(
     val title: String,
     val items: List<AcceptanceScopedMedia>,
-    val emptyMessage: String,
+)
+
+/**
+ * Groups the exact owner-scoped references rendered during one acceptance review.
+ * Work photos remain nested by stage so a reference can never leak into another work card.
+ */
+data class AcceptanceReviewMediaSources(
+    val cabin: AcceptanceMediaCollection,
+    val workByStageId: Map<String, Map<String, AcceptanceMediaCollection>>,
+    val resultByStageId: Map<String, AcceptanceMediaCollection>,
+)
+
+/** Holds one complete locally cached preview set for an inline acceptance slider. */
+data class AcceptanceInlineMediaState(
+    val title: String,
+    val photoUris: List<String>,
+)
+
+/** Contains all inline media resolved for one immutable acceptance editor snapshot. */
+data class AcceptanceReviewMediaState(
+    val cabin: AcceptanceInlineMediaState,
+    val workByStageId: Map<String, Map<String, AcceptanceInlineMediaState>>,
+    val resultByStageId: Map<String, AcceptanceInlineMediaState>,
 )
 
 /**
@@ -41,6 +59,7 @@ internal fun MaintenanceAcceptanceEditorState.hasAcceptedAllWorkLines(): Boolean
     return workLineIds.all(acceptedWorkLineIds::contains)
 }
 
+/** Resolves only the planned media references attached to one exact work line. */
 internal fun acceptanceWorkSourceMedia(
     repair: RepairDto,
     stage: RepairStageDto,
@@ -70,16 +89,22 @@ internal fun acceptanceWorkSourceMedia(
         )
     }
     return AcceptanceMediaCollection(
-        title = "Фото до: ${work.description}",
+        title = "Фото к работе: ${work.description}",
         items = work.mediaReferences
             .distinctBy(MediaReferenceDto::mediaId)
             .map { reference ->
                 AcceptanceScopedMedia(reference, owner.first, owner.second, owner.third)
             },
-        emptyMessage = "Для этой работы исходные фотографии не добавлены.",
     )
 }
 
+/**
+ * Resolves general task photos without duplicating media attached to a particular work line.
+ *
+ * Completed task-board entries are tried first because they carry the same source-media grants
+ * used by WorkerApp. The original maintenance owner remains a fallback for capital work that has
+ * not produced a task-board entry.
+ */
 internal fun acceptanceCabinMedia(
     repair: RepairDto,
     linkedEstimate: EstimateDto?,
@@ -100,24 +125,46 @@ internal fun acceptanceCabinMedia(
         ownerId = estimate.id
         context = "ESTIMATE"
         references = estimate.mediaReferences
+    } else if (repair.origin == "INVENTORY" && repair.inventorySource != null) {
+        ownerType = "INVENTORY_FINDING"
+        ownerId = repair.inventorySource.findingId
+        context = "INSPECTION"
+        references = repair.mediaReferences
     } else {
         ownerType = "MAINTENANCE_REPAIR"
         ownerId = repair.id
         context = "REPAIR"
         references = repair.mediaReferences
     }
+    val workMediaIds = repair.plan.stages
+        .asSequence()
+        .flatMap { stage -> stage.workLines.asSequence() }
+        .flatMap { work -> work.mediaReferences.asSequence() }
+        .map(MediaReferenceDto::mediaId)
+        .toSet()
+    val taskBoardScopes = repair.plan.stages
+        .sortedBy(RepairStageDto::order)
+        .mapNotNull { stage -> stage.taskSync?.taskBoardEntryId }
+        .distinct()
+        .map { entryId -> Triple("TASK_BOARD_ENTRY", entryId, "WORK_RESULT") }
+    val scopes = (taskBoardScopes + Triple(ownerType, ownerId, context)).distinct()
     return AcceptanceMediaCollection(
         title = "Фото бытовки",
-        items = references.map { reference ->
-            AcceptanceScopedMedia(reference, ownerType, ownerId, context)
-        },
-        emptyMessage = "Фото бытовки при создании сметы или ремонта отсутствуют.",
+        items = references
+            .filterNot { reference -> reference.mediaId in workMediaIds }
+            .distinctBy(MediaReferenceDto::mediaId)
+            .flatMap { reference ->
+                scopes.map { scope ->
+                    AcceptanceScopedMedia(reference, scope.first, scope.second, scope.third)
+                }
+            },
     )
 }
 
+/** Resolves only worker result evidence projected onto the exact completed repair stage. */
 internal fun acceptanceStageMedia(stage: RepairStageDto): AcceptanceMediaCollection =
     AcceptanceMediaCollection(
-        title = "Фото после: этап ${stage.order + 1}",
+        title = "Фото этапа ${stage.order + 1}",
         items = stage.evidence
             .map { evidence ->
                 AcceptanceScopedMedia(
@@ -139,5 +186,20 @@ internal fun acceptanceStageMedia(stage: RepairStageDto): AcceptanceMediaCollect
                     media.reference.generation.toString(),
                 ).joinToString(":")
             },
-        emptyMessage = "Для этого этапа фотографии результата работы не добавлены.",
     )
+
+/** Builds review groups without mixing general, per-work, or worker result evidence. */
+internal fun acceptanceReviewMediaSources(
+    repair: RepairDto,
+    linkedEstimate: EstimateDto?,
+): AcceptanceReviewMediaSources = AcceptanceReviewMediaSources(
+    cabin = acceptanceCabinMedia(repair, linkedEstimate),
+    workByStageId = repair.plan.stages.associate { stage ->
+        stage.id to stage.workLines.associate { work ->
+            work.id to acceptanceWorkSourceMedia(repair, stage, work)
+        }
+    },
+    resultByStageId = repair.plan.stages.associate { stage ->
+        stage.id to acceptanceStageMedia(stage)
+    },
+)

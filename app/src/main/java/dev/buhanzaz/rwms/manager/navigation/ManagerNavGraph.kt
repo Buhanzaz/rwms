@@ -650,10 +650,6 @@ private fun AuthenticatedManagerNavGraph(
                         launchSingleTop = true
                     }
                 },
-                onOpenCabinPhotos = viewModel::openAcceptanceCabinPhotos,
-                onOpenStagePhotos = viewModel::openAcceptanceStagePhotos,
-                onOpenWorkSourcePhotos = viewModel::openAcceptanceWorkSourcePhotos,
-                onCloseGallery = viewModel::closeAcceptanceGallery,
                 onAccept = { viewModel.acceptMaintenanceRepair {} },
                 onAcceptWork = viewModel::acceptAcceptanceWork,
                 onReworkWork = { repairId, workLineId ->

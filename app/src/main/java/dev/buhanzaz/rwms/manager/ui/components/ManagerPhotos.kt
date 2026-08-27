@@ -17,6 +17,7 @@ import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -33,6 +34,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -44,6 +46,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +63,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -77,6 +81,7 @@ import coil3.request.ImageRequest
 import java.io.File
 import java.util.Locale
 import java.util.UUID
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -192,17 +197,19 @@ private fun ManagerPhotoCamera(
     )
 }
 
+/** Renders one local image or a non-playing video marker with caller-owned semantics. */
 @Composable
 fun ManagerPhotoPreview(
     photoUri: String,
     modifier: Modifier = Modifier,
+    contentDescription: String = "Фотография",
 ) {
     if (isManagerVideoUri(photoUri)) {
         Box(
             modifier = modifier
                 .clip(RoundedCornerShape(8.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                .semantics { contentDescription = "Видео" },
+                .semantics { this.contentDescription = "$contentDescription · Видео" },
             contentAlignment = Alignment.Center,
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -214,7 +221,7 @@ fun ManagerPhotoPreview(
     }
     AsyncImage(
         model = managerPhotoImageModel(photoUri),
-        contentDescription = "Фотография",
+        contentDescription = contentDescription,
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant),
@@ -338,6 +345,113 @@ internal fun managerPhotoGalleryInitialPage(initialIndex: Int, photoCount: Int):
     val centerPage = Int.MAX_VALUE / 2
     val normalizedInitialIndex = initialIndex.coerceIn(0, photoCount - 1)
     return centerPage - managerPhotoGalleryLogicalIndex(centerPage, photoCount) + normalizedInitialIndex
+}
+
+/**
+ * Displays server-authorized photo previews inline with WorkerApp-equivalent swipe, arrows and a
+ * compact counter. An empty list intentionally emits no placeholder or photo action.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun ManagerInlinePhotoPager(
+    photoUris: List<String>,
+    contentDescription: String,
+    onOpen: (index: Int) -> Unit,
+    testTag: String,
+    modifier: Modifier = Modifier,
+) {
+    if (photoUris.isEmpty()) return
+    val pagerState = rememberPagerState(pageCount = { photoUris.size })
+    val scope = rememberCoroutineScope()
+    BoxWithConstraints(modifier = modifier.fillMaxWidth().testTag(testTag)) {
+        val pagerHeight = (maxWidth * 0.75f).coerceAtMost(320.dp)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(pagerHeight)
+                .clip(RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize(),
+            ) { page ->
+                ManagerPhotoPreview(
+                    photoUri = photoUris[page],
+                    contentDescription = "$contentDescription ${page + 1}",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable { onOpen(page) },
+                )
+            }
+            InlinePagerArrow(
+                symbol = "‹",
+                contentDescription = "Предыдущее фото",
+                enabled = pagerState.currentPage > 0,
+                onClick = {
+                    scope.launch {
+                        pagerState.animateScrollToPage(pagerState.currentPage - 1)
+                    }
+                },
+                modifier = Modifier.align(Alignment.CenterStart),
+            )
+            InlinePagerArrow(
+                symbol = "›",
+                contentDescription = "Следующее фото",
+                enabled = pagerState.currentPage < photoUris.lastIndex,
+                onClick = {
+                    scope.launch {
+                        pagerState.animateScrollToPage(pagerState.currentPage + 1)
+                    }
+                },
+                modifier = Modifier.align(Alignment.CenterEnd),
+            )
+            Surface(
+                modifier = Modifier.align(Alignment.BottomCenter).padding(8.dp),
+                color = Color.Black.copy(alpha = 0.56f),
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                Text(
+                    text = "${pagerState.currentPage + 1}/${photoUris.size}",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+            }
+        }
+    }
+}
+
+/** Provides one accessible 56dp previous/next target over an inline photo pager. */
+@Composable
+private fun InlinePagerArrow(
+    symbol: String,
+    contentDescription: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier
+            .size(56.dp)
+            .semantics { this.contentDescription = contentDescription },
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+            shape = CircleShape,
+        ) {
+            Box(modifier = Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                Text(
+                    text = symbol,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 40.sp,
+                    lineHeight = 40.sp,
+                )
+            }
+        }
+    }
 }
 
 private fun Modifier.managerPhotoSwipeDownToDismiss(

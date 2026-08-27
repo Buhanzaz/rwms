@@ -105,6 +105,40 @@ scoped aggregate snapshot with its ETag for fail-soft recovery. See
 and
 [`RwmsApi.kt`](src/main/java/dev/buhanzaz/rwms/manager/network/RwmsApi.kt).
 
+Maintenance refresh traverses every server-advertised page of estimates,
+ordinary repairs, and active capital repairs. Page zero retains its ETag and
+cache fallback semantics, while tail pages are read sequentially. Acceptance
+requests every server-filtered `PENDING` page and hydrates repair details in
+stable projection order with at most four requests in flight.
+
+Acceptance review resolves one complete owner-authorized preview snapshot before
+the repair editor becomes visible and keeps three presentation scopes separate.
+The cabin header matches WorkerApp's general source set: it removes every
+work-line `mediaReferences` item from the aggregate references and tries the
+ordered stage `TASK_BOARD_ENTRY`/`WORK_RESULT` proofs before the original
+estimate, inventory-finding or repair proof. This remains valid for a completed
+inventory repair whose historical response no longer carries `inventorySource`.
+A work card embeds only that work line's planned `mediaReferences`; if it has
+none, the card goes directly to the “Accepted” and “Rework” controls. The end of
+a stage embeds only the worker result photos projected in that stage's
+`evidence`. Streaming bodies are copied on the IO dispatcher into a complete
+app-private cache file; a verified copy fallback handles Android devices that
+refuse the final same-directory rename. A cached preview or original is reused
+only after its public content endpoint freshly authorizes the exact owner, media
+identity, generation, warehouse, and context. Bounded striped promotion locks
+preserve an already complete immutable cache file when a concurrent copy fails. If any
+referenced photo still cannot be resolved, the editor is not published with a
+partial slider. Empty scopes render no photo button, warning or placeholder.
+Every slider has arrows and a counter, and tapping a frame opens the same set at
+that exact index in the full-screen viewer. The separate acceptance-photo
+capture remains mandatory because the canonical accept command requires at
+least one acceptance media reference. See
+[`MaintenanceAcceptanceScreen.kt`](src/main/java/dev/buhanzaz/rwms/manager/ui/screens/MaintenanceAcceptanceScreen.kt),
+[`AcceptanceMediaPolicies.kt`](src/main/java/dev/buhanzaz/rwms/manager/ui/AcceptanceMediaPolicies.kt),
+[`ManagerMaintenanceReadCoordinator.kt`](src/main/java/dev/buhanzaz/rwms/manager/ui/coordinator/ManagerMaintenanceReadCoordinator.kt),
+and
+[`maintenance-service.yaml`](../contracts/openapi/maintenance-service.yaml).
+
 When a work is first added from the maintenance catalog, newly captured,
 gallery-picked, and reused condition photos are rendered immediately as
 removable thumbnails, matching the edit flow. The work-photo block has three
@@ -217,8 +251,11 @@ it does not invent a successful command while offline. Problem Details are
 mapped to user-visible errors by the shared backend client. A terminal
 authentication failure clears the unusable session; a temporary refresh outage
 does not. A `409 Conflict` requires the screen to refresh/rebase the server
-version before retrying. Before a durable first inventory inspection is sent,
-the worker rereads its active finding, then its session fence, and persists a
+version before retrying. Streamed preview and original response bodies are
+copied into the app-private cache on the IO dispatcher before a local URI is
+exposed to Compose; the UI dispatcher never reads a streaming network body.
+Before a durable first inventory inspection is sent, the worker rereads its
+active finding, then its session fence, and persists a
 newer finding revision when a live asset-status/snapshot update advanced it
 during media upload. If that preflight still receives the inventory service's
 `409 INVENTORY_VERSION_CONFLICT` with detail `Inventory revision is stale`, it

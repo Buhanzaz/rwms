@@ -26,19 +26,30 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.buhanzaz.rwms.manager.network.EstimateLineDto
 import dev.buhanzaz.rwms.manager.network.RepairDto
 import dev.buhanzaz.rwms.manager.network.RepairStageDto
+import dev.buhanzaz.rwms.manager.ui.AcceptanceInlineMediaState
 import dev.buhanzaz.rwms.manager.ui.MaintenanceAcceptanceEditorState
 import dev.buhanzaz.rwms.manager.ui.ManagerUiState
 import dev.buhanzaz.rwms.manager.ui.repairSourceLabel
 import dev.buhanzaz.rwms.manager.ui.hasAcceptanceEvidence
 import dev.buhanzaz.rwms.manager.ui.hasAcceptedAllWorkLines
 import dev.buhanzaz.rwms.manager.ui.components.EmptyState
+import dev.buhanzaz.rwms.manager.ui.components.ManagerInlinePhotoPager
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPanel
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPhotoGalleryDialog
 import dev.buhanzaz.rwms.manager.ui.components.ManagerScreenScaffold
+
+/** Keeps the exact tapped slider and index while the acceptance viewer is open. */
+private data class AcceptanceFullscreenGallery(
+    val title: String,
+    val photoUris: List<String>,
+    val initialIndex: Int,
+)
 
 /** Presents repairs awaiting acceptance and the accept-or-rework decision for each stage. */
 @Composable
@@ -50,10 +61,6 @@ fun MaintenanceAcceptanceScreen(
     onCloseDetail: () -> Unit,
     onEditComment: (String) -> Unit,
     onOpenPhotos: () -> Unit,
-    onOpenCabinPhotos: () -> Unit,
-    onOpenStagePhotos: (String) -> Unit,
-    onOpenWorkSourcePhotos: (String, String) -> Unit,
-    onCloseGallery: () -> Unit,
     onAccept: () -> Unit,
     onAcceptWork: (String) -> Unit,
     onReworkWork: (String, String) -> Unit,
@@ -62,6 +69,9 @@ fun MaintenanceAcceptanceScreen(
         if (uiState.selectedWarehouseId != null) onLoad()
     }
     val editor = uiState.acceptanceEditor
+    var fullscreenGallery by remember(editor?.repair?.id) {
+        mutableStateOf<AcceptanceFullscreenGallery?>(null)
+    }
     val navigateBack = if (editor == null) onBack else onCloseDetail
     BackHandler(enabled = editor != null, onBack = navigateBack)
     ManagerScreenScaffold(
@@ -82,9 +92,13 @@ fun MaintenanceAcceptanceScreen(
                 busy = uiState.busy,
                 onEditComment = onEditComment,
                 onOpenPhotos = onOpenPhotos,
-                onOpenCabinPhotos = onOpenCabinPhotos,
-                onOpenStagePhotos = onOpenStagePhotos,
-                onOpenWorkSourcePhotos = onOpenWorkSourcePhotos,
+                onOpenMedia = { media, initialIndex ->
+                    fullscreenGallery = AcceptanceFullscreenGallery(
+                        title = media.title,
+                        photoUris = media.photoUris,
+                        initialIndex = initialIndex,
+                    )
+                },
                 onAccept = onAccept,
                 onAcceptWork = onAcceptWork,
                 onReworkWork = { workLineId -> onReworkWork(editor.repair.id, workLineId) },
@@ -92,24 +106,13 @@ fun MaintenanceAcceptanceScreen(
             )
         }
     }
-    uiState.acceptanceGallery?.let { gallery ->
-        if (gallery.photoUris.isEmpty()) {
-            AlertDialog(
-                onDismissRequest = onCloseGallery,
-                title = { Text(gallery.title) },
-                text = { Text(gallery.emptyMessage) },
-                confirmButton = {
-                    TextButton(onClick = onCloseGallery) { Text("Понятно") }
-                },
-            )
-        } else {
-            ManagerPhotoGalleryDialog(
-                photoUris = gallery.photoUris,
-                initialIndex = 0,
-                title = gallery.title,
-                onDismiss = onCloseGallery,
-            )
-        }
+    fullscreenGallery?.let { gallery ->
+        ManagerPhotoGalleryDialog(
+            photoUris = gallery.photoUris,
+            initialIndex = gallery.initialIndex,
+            title = gallery.title,
+            onDismiss = { fullscreenGallery = null },
+        )
     }
 }
 
@@ -130,7 +133,7 @@ private fun AcceptanceList(
         return
     }
     LazyColumn(
-        modifier = modifier,
+        modifier = modifier.testTag("acceptance-list"),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -162,9 +165,7 @@ private fun AcceptanceDetails(
     busy: Boolean,
     onEditComment: (String) -> Unit,
     onOpenPhotos: () -> Unit,
-    onOpenCabinPhotos: () -> Unit,
-    onOpenStagePhotos: (String) -> Unit,
-    onOpenWorkSourcePhotos: (String, String) -> Unit,
+    onOpenMedia: (AcceptanceInlineMediaState, Int) -> Unit,
     onAccept: () -> Unit,
     onAcceptWork: (String) -> Unit,
     onReworkWork: (String) -> Unit,
@@ -175,7 +176,7 @@ private fun AcceptanceDetails(
     val canAccept = editor.hasAcceptanceEvidence() && allWorkLinesAccepted
     var acceptConfirmationOpen by remember(repair.id) { mutableStateOf(false) }
     LazyColumn(
-        modifier = modifier,
+        modifier = modifier.testTag("acceptance-details"),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -193,11 +194,13 @@ private fun AcceptanceDetails(
                     repairSourceLabel(repair.origin, repair.sourceParty),
                 )
                 AcceptanceInfoRow("Статус", "Ожидает приёмки")
-                FilledTonalButton(
-                    onClick = onOpenCabinPhotos,
+                AcceptanceMediaSlider(
+                    media = editor.reviewMedia.cabin,
+                    contentDescription = "Фото бытовки",
+                    testTag = "acceptance-cabin-photo-pager",
                     enabled = !busy,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Просмотр фото бытовки") }
+                    onOpen = onOpenMedia,
+                )
             }
         }
         items(repair.plan.stages.sortedBy(RepairStageDto::order), key = RepairStageDto::id) { stage ->
@@ -205,10 +208,9 @@ private fun AcceptanceDetails(
                 stage = stage,
                 enabled = !busy,
                 acceptedWorkLineIds = editor.acceptedWorkLineIds,
-                onOpenAfterPhotos = { onOpenStagePhotos(stage.id) },
-                onOpenSourcePhotos = { workLineId ->
-                    onOpenWorkSourcePhotos(stage.id, workLineId)
-                },
+                workMediaById = editor.reviewMedia.workByStageId[stage.id].orEmpty(),
+                resultMedia = editor.reviewMedia.resultByStageId[stage.id],
+                onOpenMedia = onOpenMedia,
                 onAcceptWork = onAcceptWork,
                 onReworkWork = onReworkWork,
             )
@@ -288,8 +290,9 @@ private fun AcceptanceStage(
     stage: RepairStageDto,
     enabled: Boolean,
     acceptedWorkLineIds: Set<String>,
-    onOpenAfterPhotos: () -> Unit,
-    onOpenSourcePhotos: (String) -> Unit,
+    workMediaById: Map<String, AcceptanceInlineMediaState>,
+    resultMedia: AcceptanceInlineMediaState?,
+    onOpenMedia: (AcceptanceInlineMediaState, Int) -> Unit,
     onAcceptWork: (String) -> Unit,
     onReworkWork: (String) -> Unit,
 ) {
@@ -313,11 +316,10 @@ private fun AcceptanceStage(
             stage.workLines.forEach { work ->
                 AcceptanceWorkLine(
                     line = work,
-                    afterPhotoCount = stage.evidence.size,
+                    sourceMedia = workMediaById[work.id],
                     accepted = work.id in acceptedWorkLineIds,
                     enabled = enabled,
-                    onOpenSourcePhotos = { onOpenSourcePhotos(work.id) },
-                    onOpenAfterPhotos = onOpenAfterPhotos,
+                    onOpenMedia = onOpenMedia,
                     onAccept = { onAcceptWork(work.id) },
                     onRework = { onReworkWork(work.id) },
                 )
@@ -333,71 +335,83 @@ private fun AcceptanceStage(
                 style = MaterialTheme.typography.bodySmall,
             )
         }
-        FilledTonalButton(
-            onClick = onOpenAfterPhotos,
-            enabled = enabled,
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("Фото после этапа: ${stage.evidence.size}") }
+        resultMedia?.let { media ->
+            AcceptanceMediaSlider(
+                media = media,
+                label = "Фото этапа ${stage.order + 1}",
+                contentDescription = "Фото этапа ${stage.order + 1}",
+                testTag = "acceptance-stage-photo-pager-${stage.id}",
+                enabled = enabled,
+                onOpen = onOpenMedia,
+            )
+        }
     }
 }
 
 @Composable
 private fun AcceptanceWorkLine(
     line: EstimateLineDto,
-    afterPhotoCount: Int,
+    sourceMedia: AcceptanceInlineMediaState?,
     accepted: Boolean,
     enabled: Boolean,
-    onOpenSourcePhotos: () -> Unit,
-    onOpenAfterPhotos: () -> Unit,
+    onOpenMedia: (AcceptanceInlineMediaState, Int) -> Unit,
     onAccept: () -> Unit,
     onRework: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         AcceptanceLine("Работа", line)
+        sourceMedia?.let { media ->
+            AcceptanceMediaSlider(
+                media = media,
+                label = "Фото к работе",
+                contentDescription = "Фото к работе ${line.description}",
+                testTag = "acceptance-work-photo-pager-${line.id}",
+                enabled = enabled,
+                onOpen = onOpenMedia,
+            )
+        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            FilledTonalButton(
-                onClick = onOpenSourcePhotos,
+            Button(
+                onClick = onAccept,
                 enabled = enabled,
                 modifier = Modifier.weight(1f),
-            ) { Text("Фото до: ${line.mediaReferences.size}") }
-            FilledTonalButton(
-                onClick = onOpenAfterPhotos,
-                enabled = enabled,
-                modifier = Modifier.weight(1f),
-            ) { Text("Фото после: $afterPhotoCount") }
-        }
-        if (accepted) {
-            Text(
-                "Решение: Принято",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-            )
+            ) { Text(if (accepted) "✓ Принято" else "Принято") }
             OutlinedButton(
                 onClick = onRework,
                 enabled = enabled,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.weight(1f),
             ) { Text("Переделать") }
-        } else {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Button(
-                    onClick = onAccept,
-                    enabled = enabled,
-                    modifier = Modifier.weight(1f),
-                ) { Text("Принято") }
-                OutlinedButton(
-                    onClick = onRework,
-                    enabled = enabled,
-                    modifier = Modifier.weight(1f),
-                ) { Text("Переделать") }
-            }
         }
     }
+}
+
+/** Renders one inline review slider only when its complete local snapshot contains photos. */
+@Composable
+private fun AcceptanceMediaSlider(
+    media: AcceptanceInlineMediaState,
+    contentDescription: String,
+    testTag: String,
+    enabled: Boolean,
+    onOpen: (AcceptanceInlineMediaState, Int) -> Unit,
+    label: String? = null,
+) {
+    if (media.photoUris.isEmpty()) return
+    label?.let {
+        Text(
+            text = it,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+    ManagerInlinePhotoPager(
+        photoUris = media.photoUris,
+        contentDescription = contentDescription,
+        onOpen = { index -> if (enabled) onOpen(media, index) },
+        testTag = testTag,
+    )
 }
 
 @Composable

@@ -757,7 +757,9 @@ class RwmsApiHttpContractTest {
         val estimates = captureRequest { api.estimates(warehouseId) }
         val estimate = captureRequest { api.estimate(estimateId, warehouseId) }
         val repairs = captureRequest { api.repairs(warehouseId) }
-        val acceptance = captureRequest { api.acceptance(warehouseId, size = 200) }
+        val acceptance = captureRequest {
+            api.acceptance(warehouseId, size = 200, state = "PENDING")
+        }
         val repair = captureRequest { api.repair(repairId, warehouseId) }
         val rentalItem = captureRequest { api.rentalItem(rentalItemId) }
 
@@ -780,7 +782,7 @@ class RwmsApiHttpContractTest {
             "/api/maintenance/v1/repairs?warehouseId=$warehouseId&page=0&size=100",
         )
         acceptance.assertPublicSameOriginPath(
-            "/api/maintenance/v1/acceptance?warehouseId=$warehouseId&page=0&size=200",
+            "/api/maintenance/v1/acceptance?warehouseId=$warehouseId&page=0&size=200&state=PENDING",
         )
         repair.assertPublicSameOriginPath(
             "/api/maintenance/v1/repairs/$repairId?warehouseId=$warehouseId",

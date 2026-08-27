@@ -334,7 +334,6 @@ internal class ManagerMaintenanceEditorCoordinator(
         mutableState.update { current ->
             current.copy(
                 acceptanceEditor = null,
-                acceptanceGallery = null,
                 maintenanceAssetLabels = current.maintenanceAssetLabels + (asset.id to asset.number),
                 maintenanceEditor = selectedCandidate?.let(editor::toggleReworkCandidate) ?: editor,
             )

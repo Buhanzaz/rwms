@@ -85,7 +85,6 @@ data class ManagerUiState(
     val repairTaskBoard: TaskBoardSnapshotDto? = null,
     val acceptanceRepairs: List<RepairDto> = emptyList(),
     val acceptanceEditor: MaintenanceAcceptanceEditorState? = null,
-    val acceptanceGallery: AcceptanceGalleryState? = null,
     val assetSearch: String = "",
     val assetSearchResults: List<RentalItemDto> = emptyList(),
     val assetSearchBusy: Boolean = false,
@@ -217,27 +216,19 @@ data class MaintenanceFurnitureEditorState(
 )
 
 /**
- * Defines manager UI state or presentation policy; server state and command authorization remain authoritative.
+ * Holds one pending repair, its resolved inline review media and the manager's local decisions.
+ * The maintenance command and its required acceptance evidence remain server-authoritative.
  */
 data class MaintenanceAcceptanceEditorState(
     val repair: RepairDto,
     val asset: RentalItemDto,
-    val cabinPhotos: AcceptanceMediaCollection,
+    val reviewMedia: AcceptanceReviewMediaState,
     /** Local review state; the server decision remains the existing accept/rework command flow. */
     val acceptedWorkLineIds: Set<String> = emptySet(),
     val comment: String = "",
     val photoUris: List<String> = emptyList(),
     val readyMedia: List<MediaReferenceDto> = emptyList(),
     val idempotencyKey: String = UUID.randomUUID().toString(),
-)
-
-/**
- * Defines manager UI state or presentation policy; server state and command authorization remain authoritative.
- */
-data class AcceptanceGalleryState(
-    val title: String,
-    val photoUris: List<String>,
-    val emptyMessage: String,
 )
 
 
@@ -645,17 +636,6 @@ class ManagerViewModel(
         maintenanceReadCoordinator.openAcceptance(repairId)
 
     fun closeAcceptance() = maintenanceReadCoordinator.closeAcceptance()
-
-    fun openAcceptanceCabinPhotos() =
-        maintenanceReadCoordinator.openAcceptanceCabinPhotos()
-
-    fun openAcceptanceStagePhotos(stageId: String) =
-        maintenanceReadCoordinator.openAcceptanceStagePhotos(stageId)
-
-    fun openAcceptanceWorkSourcePhotos(stageId: String, workLineId: String) =
-        maintenanceReadCoordinator.openAcceptanceWorkSourcePhotos(stageId, workLineId)
-
-    fun closeAcceptanceGallery() = maintenanceReadCoordinator.closeAcceptanceGallery()
 
     fun editAcceptanceComment(value: String) =
         maintenanceReadCoordinator.editAcceptanceComment(value)

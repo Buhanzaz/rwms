@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.manager.ui
 
+import android.util.Log
 import dev.buhanzaz.rwms.manager.media.MediaDownloader
 import dev.buhanzaz.rwms.manager.media.retryMediaReadAfterOwnerProof
 import dev.buhanzaz.rwms.manager.network.InventoryFindingDto
@@ -7,6 +8,7 @@ import dev.buhanzaz.rwms.manager.network.MediaAssetDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.RwmsBackend
 import dev.buhanzaz.rwms.manager.uploads.readyOwnerMediaAssetsById
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
@@ -67,8 +69,9 @@ private data class ScopedDownloadedPhoto(
 )
 
 /**
- * Resolves and downloads media through owner-scoped public API calls. It bounds parallel downloads
- * so an editor with historical photos cannot monopolize a weak mobile connection.
+ * Resolves and downloads media through owner-scoped public API calls. It bounds both owner-proof
+ * lookups and content downloads so an editor with historical photos cannot monopolize a weak
+ * mobile connection.
  */
 internal class ManagerMediaCoordinator(
     private val backend: RwmsBackend,
@@ -115,22 +118,31 @@ internal class ManagerMediaCoordinator(
     ): List<ScopedMediaResult> {
         if (requests.isEmpty()) return emptyList()
         val allScopes = requests.flatMap(ScopedMediaDownload::scopes).distinct()
-        val assetsByScope = coroutineScope {
-            allScopes.map { scope ->
-                async {
-                    scope to runCatching {
-                        retryMediaReadAfterOwnerProof {
-                            backend.api.ownerMedia(
-                                ownerType = scope.ownerType,
-                                ownerId = scope.ownerId,
-                                warehouseId = warehouseId,
-                                context = scope.context,
-                            )
-                        }.items
-                    }.getOrNull()
-                }
-            }.map { lookup -> lookup.await() }.toMap()
-        }
+        val assetsByScope = mapInBoundedBatches(
+            values = allScopes,
+            parallelism = MANAGER_OWNER_PROOF_PARALLELISM,
+        ) { scope ->
+            val assets = try {
+                retryMediaReadAfterOwnerProof {
+                    backend.api.ownerMedia(
+                        ownerType = scope.ownerType,
+                        ownerId = scope.ownerId,
+                        warehouseId = warehouseId,
+                        context = scope.context,
+                    )
+                }.items
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (failure: Exception) {
+                Log.w(
+                    MANAGER_MEDIA_LOG_TAG,
+                    "Owner proof failed for ${scope.ownerType}:${scope.ownerId}",
+                    failure,
+                )
+                null
+            }
+            scope to assets
+        }.toMap()
         // Do not start every historical original/preview at once. A supplement can contain many
         // photos; a small bound avoids saturating a weak mobile connection and turning a single
         // transient failure into a partially loaded editor.
@@ -196,20 +208,29 @@ internal class ManagerMediaCoordinator(
                     ?.firstOrNull()
             }
             if (preview != null) {
-                runCatching {
+                try {
                     mediaDownloader.downloadVariant(
                         mediaId = currentReference.mediaId,
                         generation = currentReference.generation,
                         contentPath = preview.contentPath,
                     )
-                }.getOrNull()?.let { uri ->
+                } catch (failure: CancellationException) {
+                    throw failure
+                } catch (failure: Exception) {
+                    Log.w(
+                        MANAGER_MEDIA_LOG_TAG,
+                        "Variant cache failed for ${currentReference.mediaId} via ${scope.ownerType}",
+                        failure,
+                    )
+                    null
+                }?.let { uri ->
                     return ScopedDownloadedPhoto(
                         reference = currentReference,
                         uri = uri,
                     )
                 }
             }
-            runCatching {
+            try {
                 mediaDownloader.downloadOriginal(
                     mediaId = currentReference.mediaId,
                     generation = currentReference.generation,
@@ -219,7 +240,16 @@ internal class ManagerMediaCoordinator(
                     context = scope.context,
                     expectedContentType = asset?.contentType,
                 )
-            }.getOrNull()?.let { uri ->
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (failure: Exception) {
+                Log.w(
+                    MANAGER_MEDIA_LOG_TAG,
+                    "Original cache failed for ${currentReference.mediaId} via ${scope.ownerType}",
+                    failure,
+                )
+                null
+            }?.let { uri ->
                 return ScopedDownloadedPhoto(
                     reference = currentReference,
                     uri = uri,
@@ -231,3 +261,5 @@ internal class ManagerMediaCoordinator(
 }
 
 private const val MANAGER_PHOTO_DOWNLOAD_PARALLELISM = 3
+private const val MANAGER_OWNER_PROOF_PARALLELISM = 4
+private const val MANAGER_MEDIA_LOG_TAG = "ManagerMedia"
