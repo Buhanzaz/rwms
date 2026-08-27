@@ -514,6 +514,12 @@ describe("DossierActivityRegister", () => {
       })
     ).toBe("Администратор WMS — ivanov")
     expect(formatDossierActorLabel(actor, undefined)).toBe("Пользователь")
+    expect(
+      formatDossierActorLabel(actor, {
+        ...baseDisplay,
+        globalRole: "CUSTOMER",
+      })
+    ).toBe("Клиент — Иванов Иван")
   })
 
   it("keeps PARTIAL visible for an empty filtered page", () => {

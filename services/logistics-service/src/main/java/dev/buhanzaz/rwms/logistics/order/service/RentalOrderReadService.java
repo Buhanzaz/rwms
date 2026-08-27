@@ -60,7 +60,13 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 class RentalOrderReadService {
   private static final Set<String> ORDER_ACTOR_ROLES =
-      Set.of("SYSTEM_ADMIN", "WMS_ADMIN", "WAREHOUSE_MANAGER", "RENTAL_MANAGER", "VIEWER");
+      Set.of(
+          "SYSTEM_ADMIN",
+          "WMS_ADMIN",
+          "WAREHOUSE_MANAGER",
+          "RENTAL_MANAGER",
+          "CUSTOMER",
+          "VIEWER");
 
   private final RentalOrderRepository orders;
   private final OrderAuditEventRepository auditEvents;

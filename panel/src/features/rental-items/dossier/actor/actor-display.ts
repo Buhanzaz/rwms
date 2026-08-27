@@ -17,6 +17,7 @@ const globalRoleLabels: Record<UserGlobalRole, string> = {
   WMS_ADMIN: "Администратор WMS",
   WAREHOUSE_MANAGER: "Руководитель склада",
   RENTAL_MANAGER: "Менеджер аренды",
+  CUSTOMER: "Клиент",
   VIEWER: "Наблюдатель",
 }
 

@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -7,12 +13,14 @@ import type { OrderClientChoice } from "@/features/orders/components/order-clien
 
 const clientsApi = vi.hoisted(() => ({
   createClient: vi.fn(),
+  getClient: vi.fn(),
   createClientIdempotencyKey: vi.fn(
     () => "11111111-1111-4111-8111-111111111111"
   ),
 }))
 const movementsApi = vi.hoisted(() => ({
   createHistoricalRentalMovement: vi.fn(),
+  updateHistoricalRentalShipment: vi.fn(),
   createHistoricalRentalMovementIdempotencyKey: vi.fn(
     () => "22222222-2222-4222-8222-222222222222"
   ),
@@ -109,7 +117,15 @@ const rentalItem = {
   tags: [],
 }
 
-function renderDialog(kind: "SHIPMENT" | "RETURN") {
+function renderDialog(
+  kind: "SHIPMENT" | "RETURN",
+  existingShipment: {
+    id: string
+    version: number
+    clientId: string | null
+    scheduledDate: string | null
+  } | null = null
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
@@ -125,6 +141,7 @@ function renderDialog(kind: "SHIPMENT" | "RETURN") {
           accessToken="access-token"
           actorId="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
           responsibleManagerDisplayName="Мария Менеджер"
+          existingShipment={existingShipment}
           onOpenChange={vi.fn()}
           onCreated={onCreated}
         />
@@ -134,12 +151,32 @@ function renderDialog(kind: "SHIPMENT" | "RETURN") {
 }
 
 beforeEach(() => {
+  clientsApi.getClient.mockResolvedValue({
+    id: "33333333-3333-4333-8333-333333333333",
+    type: "LEGAL_ENTITY",
+    displayName: "ООО Петров",
+    phone: "+79990000000",
+    contactPerson: "Пётр Петров",
+    email: null,
+    responsibleManagerId: "44444444-4444-4444-8444-444444444444",
+    responsibleManagerDisplayName: "Менеджер",
+    comment: null,
+    source: null,
+    additionalContacts: [],
+    version: 1,
+    createdAt: "2026-08-01T00:00:00Z",
+    updatedAt: "2026-08-01T00:00:00Z",
+  })
   clientsApi.createClient.mockResolvedValue({
     id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
   })
   movementsApi.createHistoricalRentalMovement.mockResolvedValue({
     id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
     version: 3,
+  })
+  movementsApi.updateHistoricalRentalShipment.mockResolvedValue({
+    id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    version: 6,
   })
 })
 
@@ -154,20 +191,19 @@ describe("HistoricalRentalMovementDialog", () => {
     const { onCreated } = renderDialog("SHIPMENT")
 
     expect(
-      screen.getByText(
-        "Автоматически закрыто в связи с отгрузкой.",
-        { exact: false }
-      )
+      screen.getByText("Автоматически закрыто в связи с отгрузкой.", {
+        exact: false,
+      })
     ).toBeTruthy()
     await user.click(
-      screen.getByRole("button", { name: "Выбрать существующего клиента" })
+      await screen.findByRole("button", {
+        name: "Выбрать существующего клиента",
+      })
     )
     fireEvent.change(screen.getByLabelText("Дата отгрузки"), {
       target: { value: "2026-08-02" },
     })
-    await user.click(
-      screen.getByRole("button", { name: "Создать отгрузку" })
-    )
+    await user.click(screen.getByRole("button", { name: "Создать отгрузку" }))
 
     await waitFor(() =>
       expect(movementsApi.createHistoricalRentalMovement).toHaveBeenCalledWith({
@@ -209,7 +245,9 @@ describe("HistoricalRentalMovementDialog", () => {
     })
     await user.click(screen.getByRole("button", { name: "Создать возврат" }))
 
-    await waitFor(() => expect(clientsApi.createClient).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(clientsApi.createClient).toHaveBeenCalledTimes(1)
+    )
     expect(clientsApi.createClient).toHaveBeenCalledWith({
       accessToken: "access-token",
       idempotencyKey: "11111111-1111-4111-8111-111111111111",
@@ -235,5 +273,45 @@ describe("HistoricalRentalMovementDialog", () => {
         })
       )
     )
+  })
+
+  it("edits the existing historical shipment instead of creating a duplicate", async () => {
+    const user = userEvent.setup()
+    renderDialog("SHIPMENT", {
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      version: 5,
+      clientId: "33333333-3333-4333-8333-333333333333",
+      scheduledDate: "2026-08-01",
+    })
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Изменить отгрузку задним числом",
+      })
+    ).toBeTruthy()
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Выбрать существующего клиента",
+      })
+    )
+    fireEvent.change(screen.getByLabelText("Дата отгрузки"), {
+      target: { value: "2026-07-31" },
+    })
+    await user.click(screen.getByRole("button", { name: "Сохранить отгрузку" }))
+
+    await waitFor(() =>
+      expect(movementsApi.updateHistoricalRentalShipment).toHaveBeenCalledWith({
+        accessToken: "access-token",
+        documentId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        idempotencyKey: "22222222-2222-4222-8222-222222222222",
+        input: {
+          expectedVersion: 5,
+          rentalItemId: rentalItem.id,
+          clientId: "33333333-3333-4333-8333-333333333333",
+          occurredOn: "2026-07-31",
+        },
+      })
+    )
+    expect(movementsApi.createHistoricalRentalMovement).not.toHaveBeenCalled()
   })
 })

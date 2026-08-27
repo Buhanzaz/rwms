@@ -157,6 +157,61 @@ class DriverTaskWorkflowStore {
   }
 
   /**
+   * Returns a task-board identity only for legacy-generic or task-board-stage dependency failures
+   * that can be proved again from the authoritative remote task. Effect and compensation codes stay
+   * terminal until their owning workflow resolves them.
+   */
+  public Optional<UUID> recoverableReconciliationExternalTaskId(UUID taskId) {
+    DriverLogisticsTask task =
+        tasks.findById(taskId).orElseThrow(LogisticsNotFoundException::new);
+    if (task.getState() != DriverTaskState.RECONCILIATION_REQUIRED
+        || !isRecoverableDependencyReconciliation(task.getFailureCode())) {
+      return Optional.empty();
+    }
+    return Optional.of(task.getExternalTaskId());
+  }
+
+  /**
+   * Restores a recoverable task-board dependency checkpoint only after a matching authoritative
+   * snapshot has been read. The existing aggregate transition then resumes scheduled, current,
+   * finalizing or cancelled recovery without inventing local status.
+   */
+  @Transactional
+  public void confirmReconciliationStatus(
+      UUID taskId, LogisticsDependencyGateway.DriverBoardTask board) {
+    DriverLogisticsTask task = locked(taskId);
+    if (task.getState() != DriverTaskState.RECONCILIATION_REQUIRED
+        || !isRecoverableDependencyReconciliation(task.getFailureCode())) {
+      return;
+    }
+    requireBoardTask(task, board);
+    synchronizeGroupedDocumentDate(task, board);
+    if (task.getTaskBoardTaskId() == null) {
+      task.registerBoardTask(
+          board.taskId(),
+          board.taskVersion(),
+          board.entryId(),
+          board.entryStatus(),
+          board.lane(),
+          board.doneAt());
+    }
+    task.observeBoardTask(
+        board.taskId(),
+        board.taskVersion(),
+        board.entryId(),
+        board.entryStatus(),
+        board.scheduledDate(),
+        board.lane(),
+        board.status(),
+        board.doneAt());
+    task.observeAudience(
+        board.driverAudience().mode(),
+        board.driverAudience().workerId(),
+        board.driverAudience().workerName());
+    tasks.saveAndFlush(task);
+  }
+
+  /**
    * Locks and verifies the owning grouped document before a public board move calls task-board. The
    * surrounding move transaction retains this lock until the remote receipt and local date
    * projection are confirmed together.
@@ -409,9 +464,34 @@ class DriverTaskWorkflowStore {
 
   @Transactional
   public void recordFailure(UUID taskId, LogisticsDependencyException exception) {
+    recordFailure(taskId, exception, null);
+  }
+
+  /**
+   * Records a dependency failure with the workflow stage that can authoritatively reconcile it.
+   * Only register/status/evidence failures are recoverable from a task-board snapshot; media and
+   * maintenance effects retain their own terminal checkpoint instead of being falsely reopened.
+   */
+  @Transactional
+  public void recordFailure(Work work, LogisticsDependencyException exception) {
+    String stage =
+        switch (work) {
+          case RegisterWork ignored -> "TASK_BOARD";
+          case StatusWork ignored -> "TASK_BOARD";
+          case EvidenceWork ignored -> "TASK_BOARD";
+          case CoverWork ignored -> "COVER_EFFECT";
+          case RepairPlaceEffectWork ignored -> "REPAIR_PLACE_EFFECT";
+          case ManualReservationReleaseWork ignored -> "REPAIR_PLACE_EFFECT";
+        };
+    recordFailure(workTaskId(work), exception, stage);
+  }
+
+  private void recordFailure(
+      UUID taskId, LogisticsDependencyException exception, String stage) {
     DriverLogisticsTask task = locked(taskId);
     if (task.getState().isTerminal()) return;
-    String code = "DEPENDENCY_" + exception.kind().name();
+    String code =
+        (stage == null ? "" : stage + "_") + "DEPENDENCY_" + exception.kind().name();
     if (exception.kind() == LogisticsDependencyException.FailureKind.CONFIGURATION
         || exception.kind() == LogisticsDependencyException.FailureKind.PERMANENT_REJECTION) {
       task.requireReconciliation(code);
@@ -425,6 +505,24 @@ class DriverTaskWorkflowStore {
   private static long transientRetryDelaySeconds(int retryCount) {
     int boundedRetryCount = Math.min(Math.max(retryCount, 0), MAX_TRANSIENT_RETRY_COUNT);
     return Math.min(1L << boundedRetryCount, MAX_TRANSIENT_RETRY_DELAY_SECONDS);
+  }
+
+  private static boolean isRecoverableDependencyReconciliation(String failureCode) {
+    return "DEPENDENCY_CONFIGURATION".equals(failureCode)
+        || "DEPENDENCY_PERMANENT_REJECTION".equals(failureCode)
+        || "TASK_BOARD_DEPENDENCY_CONFIGURATION".equals(failureCode)
+        || "TASK_BOARD_DEPENDENCY_PERMANENT_REJECTION".equals(failureCode);
+  }
+
+  private static UUID workTaskId(Work work) {
+    return switch (work) {
+      case RegisterWork value -> value.taskId();
+      case StatusWork value -> value.taskId();
+      case EvidenceWork value -> value.taskId();
+      case CoverWork value -> value.taskId();
+      case RepairPlaceEffectWork value -> value.taskId();
+      case ManualReservationReleaseWork value -> value.taskId();
+    };
   }
 
   private Optional<Work> finalizingWork(DriverLogisticsTask task) {
@@ -510,6 +608,7 @@ class DriverTaskWorkflowStore {
     return OffsetDateTime.now(ZoneOffset.UTC);
   }
 
+  /** One exact persisted workflow stage selected for a remote relay attempt. */
   sealed interface Work
       permits RegisterWork,
           StatusWork,
@@ -518,6 +617,7 @@ class DriverTaskWorkflowStore {
           RepairPlaceEffectWork,
           ManualReservationReleaseWork {}
 
+  /** Task-board registration payload frozen from a logistics-owned driver task. */
   record RegisterWork(
       UUID taskId,
       UUID warehouseId,
@@ -531,10 +631,13 @@ class DriverTaskWorkflowStore {
       LogisticsDependencyGateway.DriverTaskAudience driverAudience)
       implements Work {}
 
+  /** Status lookup used only to reconcile an already registered task-board identity. */
   record StatusWork(UUID taskId, UUID externalTaskId) implements Work {}
 
+  /** Completion-evidence lookup for a task whose task-board card is already done. */
   record EvidenceWork(UUID taskId, UUID externalTaskId) implements Work {}
 
+  /** Asset cover effect that follows task-board completion evidence. */
   record CoverWork(
       UUID taskId,
       UUID cabinId,
@@ -543,10 +646,12 @@ class DriverTaskWorkflowStore {
       boolean groupedShipment)
       implements Work {}
 
+  /** Maintenance repair-place effect performed after the driver task is final. */
   record RepairPlaceEffectWork(
       UUID taskId, UUID warehouseId, UUID repairId, long expectedVersion, String transition)
       implements Work {}
 
+  /** Maintenance reservation release compensation for cancelled manual work. */
   record ManualReservationReleaseWork(
       UUID taskId, UUID warehouseId, UUID repairId, UUID allocationId, long expectedVersion)
       implements Work {}

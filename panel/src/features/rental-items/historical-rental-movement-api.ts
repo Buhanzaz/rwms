@@ -17,6 +17,14 @@ export type CreateHistoricalRentalMovementInput = {
   occurredOn: string
 }
 
+/** Version-fenced correction of one existing historical rental shipment. */
+export type UpdateHistoricalRentalShipmentInput = {
+  expectedVersion: number
+  rentalItemId: string
+  clientId: string
+  occurredOn: string
+}
+
 /** Minimal verified document identity returned after a historical fact is accepted. */
 export type HistoricalRentalMovementDocument = {
   id: string
@@ -65,6 +73,26 @@ export async function createHistoricalRentalMovement(params: {
       headers: { "Idempotency-Key": params.idempotencyKey },
       body: JSON.stringify(params.input),
     })
+  )
+}
+
+/** Corrects one historical shipment document without replaying its physical effects. */
+export async function updateHistoricalRentalShipment(params: {
+  accessToken: string
+  documentId: string
+  idempotencyKey: string
+  input: UpdateHistoricalRentalShipmentInput
+}): Promise<HistoricalRentalMovementDocument> {
+  return parseDocument(
+    await bearerRequest<unknown>(
+      params.accessToken,
+      `${endpoint()}/${encodeURIComponent(params.documentId)}`,
+      {
+        method: "PUT",
+        headers: { "Idempotency-Key": params.idempotencyKey },
+        body: JSON.stringify(params.input),
+      }
+    )
   )
 }
 

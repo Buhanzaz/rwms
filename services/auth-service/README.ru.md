@@ -54,7 +54,7 @@ Auth-service владеет:
 ## Как работают вход и выпуск токена
 
 ```text
-Panel / manager app / WorkerApp / DriverApp
+Panel / manager app / ClientApp / WorkerApp / DriverApp
           |
           | Authorization Code + PKCE через public /auth/**
           v
@@ -90,10 +90,20 @@ query-free HTTPS `/auth/worker/callback` и получает `worker.tasks`;
 в памяти, поэтому ни один Android manifest не открывает custom-scheme или App
 Link receiver. Оба client ID выбирают login surface для worker credentials.
 
+ClientApp сначала получает CSRF cookie/header pair через `GET /api/auth/csrf`,
+а затем вызывает `POST /api/customer/v1/registrations`. Регистрация атомарно
+создаёт активного пользователя `CUSTOMER`, его private encoded credential,
+начальный authorization fact и outbox row. Учётная запись не имеет warehouse
+grants, manager-mobile access или rental-manager entitlement. Она может
+использовать только `rwms-customer-android` с query-free HTTPS callback
+`/auth/customer/callback` и единственным бизнес-scope `customer.rental`; другие
+пользователи не могут применять этот client.
+
 User access и ID tokens содержат канонические claims `sub`,
 `preferred_username`, `principal_type=USER`, `global_role` и camel-case
-`rentalAccess`. Источником истины для точной формы claims и endpoint остаётся
-публичный контракт, а не этот README.
+`rentalAccess`, а также managed `client_id`, выпустивший токен. Источником истины
+для точной формы claims и endpoint остаётся публичный контракт, а не этот
+README.
 
 ## Публичный API и правила доступа
 
@@ -104,6 +114,8 @@ authorization endpoints остаются standards-based.
 
 | Публичный endpoint | Назначение | Правило доступа |
 | --- | --- | --- |
+| `GET /api/auth/csrf` | Получение CSRF cookie/header pair для регистрации | Анонимное чтение. |
+| `POST /api/customer/v1/registrations` | Создание customer-only credential и authorization stream | Анонимно с точной CSRF cookie/header pair; логин из 3–64 portable символов, пароль из 8–128 символов и совпадающее подтверждение. |
 | `GET /api/admin/users` | Список администрируемых пользователей | USER JWT с `SYSTEM_ADMIN` или `WMS_ADMIN`. |
 | `POST /api/admin/users` | Создание администрируемого пользователя | Та же роль; только `SYSTEM_ADMIN` может создать `SYSTEM_ADMIN` account. |
 | `GET /api/admin/users/{id}` | Чтение administrative user projection | USER JWT с `SYSTEM_ADMIN` или `WMS_ADMIN`. |
@@ -138,6 +150,12 @@ warehouse accesses используют optimistic concurrency. `409` означ
 - Последнего active `SYSTEM_ADMIN` нельзя отключить, понизить или удалить;
   non-system administrator не может создать или управлять system-admin account.
 - Имя пользователя не может конфликтовать с зарезервированным OAuth client ID.
+- Case-insensitive self-registration одного логина сериализуется
+  transaction-scoped advisory lock до password hashing и unique writes.
+  Stateless gateway не реализует source-address rate limiting; до включения
+  анонимной регистрации production ingress обязан обеспечить abuse throttling.
+- Пользователи `CUSTOMER` и `rwms-customer-android` взаимно изолированы от всех
+  остальных user clients при authorization-code и refresh-token exchange.
 
 Так durable access invariants находятся там, где владелец credentials и токенов
 может обеспечить их в транзакции, а не зависят от UI-проверки или дублирования
@@ -160,10 +178,12 @@ Security-relevant изменение конфигурации или секре�
 сохраняют корректное состояние, а осмысленная revision делает security change
 проверяемым и не позволяет случайно реактивировать client при rollback деплоя.
 
-Managed mobile inventory включает USER-only manager client и два указанных
-WORKER-only WorkerApp/DriverApp clients. Изменение callback, scope или principal
-type требует собственной revision и согласованного client release; refresh
-token одного mobile client нельзя обменять через client ID другого.
+Managed mobile inventory включает USER-only manager client, CUSTOMER-only
+ClientApp client и два указанных WORKER-only WorkerApp/DriverApp clients.
+Customer client требует S256 PKCE, access token на пять минут и rotating refresh
+token на 30 дней. Изменение callback, scope или principal type требует
+собственной revision и согласованного client release; refresh token одного
+mobile client нельзя обменять через client ID другого.
 
 Managed machine client `inventory-service` запрашивает ровно один downstream
 scope на токен. Revision 5 добавила `media.inventory` для передачи фотографий
@@ -262,6 +282,8 @@ local issuer `http://localhost:9000`; production использует gateway is
 - `AUTH_DB_URL`, `AUTH_DB_USERNAME` и `AUTH_DB_PASSWORD` с non-loopback
   PostgreSQL endpoint и отдельными deployment credentials;
 - public HTTPS issuer/base, allowed origins и registered redirect URIs;
+- `CUSTOMER_ORIGIN` и `CUSTOMER_REDIRECT_URI` как same-origin HTTPS значения,
+  причём последнее оканчивается query-free путём `/auth/customer/callback`;
 - `WORKER_ORIGIN`, `WORKER_REDIRECT_URI`, `WORKER_POST_LOGOUT_REDIRECT_URI`,
   `DRIVER_ORIGIN`, `DRIVER_REDIRECT_URI` и
   `DRIVER_POST_LOGOUT_REDIRECT_URI`: same-origin HTTPS значения с отдельными

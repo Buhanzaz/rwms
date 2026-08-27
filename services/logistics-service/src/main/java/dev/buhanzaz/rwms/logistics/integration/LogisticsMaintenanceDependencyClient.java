@@ -72,11 +72,11 @@ final class LogisticsMaintenanceDependencyClient {
         || !warehouseId.equals(response.warehouseId())
         || !rentalItemId.equals(response.rentalItemId())
         || response.rentalItemVersion() < 0
-        || !"FREE".equals(response.rentalItemStatus())
+        || !Set.of("FREE", "RENTED").contains(response.rentalItemStatus())
         || response.closedRepairIds() == null
         || response.closedRepairIds().stream().anyMatch(java.util.Objects::isNull)
         || response.closedRepairIds().size() != Set.copyOf(response.closedRepairIds()).size()
-        || !Set.of("NOT_REQUIRED", "CLOSED").contains(response.outcome())) {
+        || !validHistoricalShipmentClosureCombination(response)) {
       throw malformed("Maintenance-service returned invalid historical shipment closure truth");
     }
     return new HistoricalShipmentRepairClosure(
@@ -87,6 +87,14 @@ final class LogisticsMaintenanceDependencyClient {
         response.rentalItemStatus(),
         List.copyOf(response.closedRepairIds()),
         response.outcome());
+  }
+
+  private static boolean validHistoricalShipmentClosureCombination(
+      HistoricalShipmentRepairClosureResponse response) {
+    if ("RENTED".equals(response.rentalItemStatus())) {
+      return "ALREADY_RENTED".equals(response.outcome()) && response.closedRepairIds().isEmpty();
+    }
+    return Set.of("NOT_REQUIRED", "CLOSED").contains(response.outcome());
   }
 
   TransferRepairArrivalPreflight preflightTransferArrival(

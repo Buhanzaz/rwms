@@ -9,6 +9,7 @@ describe("manager app role eligibility", () => {
     ["WMS_ADMIN", true],
     ["WAREHOUSE_MANAGER", true],
     ["RENTAL_MANAGER", false],
+    ["CUSTOMER", false],
     ["VIEWER", false],
   ] satisfies [UserGlobalRole, boolean][])(
     "maps %s to %s",

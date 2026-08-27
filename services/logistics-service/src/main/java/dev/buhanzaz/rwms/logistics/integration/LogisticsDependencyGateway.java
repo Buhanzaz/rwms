@@ -561,6 +561,22 @@ public interface LogisticsDependencyGateway {
     throw unavailable("Cabin catalog is not configured");
   }
 
+  /** Reads only cabins bookable by one inquiry, including that inquiry's own live holds. */
+  default CabinCatalogPage readCustomerCabinCatalog(
+      UUID warehouseId,
+      UUID holdScopeId,
+      String query,
+      String cabinType,
+      String finish,
+      String dimensions,
+      String category,
+      Boolean linoleum,
+      List<String> characteristics,
+      int page,
+      int size) {
+    throw unavailable("Customer cabin catalog is not configured");
+  }
+
   /**
    * Sends the exact prepared asset request with its derived downstream idempotency key.
    * Implementations must not deserialize and rebuild {@code exactRequestBody} before sending it.
@@ -1386,11 +1402,14 @@ public interface LogisticsDependencyGateway {
     }
   }
 
+  /** One bounded READY/current-generation media reference from the active cabin gallery. */
   record CabinMediaPhoto(
       UUID mediaId, long generation, int sortOrder, List<String> availableVariants) {}
 
-  record CabinMediaSnapshot(UUID cabinId, List<CabinMediaPhoto> photos) {}
+  /** Complete logical photo count plus the bounded READY photo metadata returned by media-service. */
+  record CabinMediaSnapshot(UUID cabinId, long photoCount, List<CabinMediaPhoto> photos) {}
 
+  /** Sanitized private media bytes and their validated response content type. */
   record MediaContent(byte[] bytes, String contentType) {}
 
   private static LogisticsDependencyException unavailable(String message) {

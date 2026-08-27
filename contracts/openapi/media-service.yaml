@@ -336,8 +336,10 @@ paths:
         Requires only a SERVICE JWT with sub=client_id=logistics-service,
         audience rwms-services and exactly media.logistics. This private,
         read-only projection returns active canonical CABIN owner bindings and
-        only READY current-generation IMAGE assets in their canonical photo
-        associations. Each photo
+        the full logical, runtime-available IMAGE count beside at most one
+        hundred READY current-generation assets from each cabin photo library's
+        active gallery folder. Older retained folders remain archive-only and
+        are not mixed into this snapshot. Each photo
         contains just an opaque media ID, generation, sort order and the
         SMALL/LARGE variants currently available for a later private stream;
         it never exposes a browser route, object-store locator, signed URL,
@@ -643,14 +645,14 @@ paths:
       description: >-
         Requires USER, rwms.read and warehouse VIEW. The service returns only
         cabins with a current canonical media owner binding. photoCount and
-        previews include retained associations from every CABIN archive folder;
-        folder boundaries remain available from the CABIN archive list.
-        photoCount counts logical non-deleted IMAGE associations, never derived
-        variant rows. previews contains at most 100 READY images with exactly
-        one SMALL variant per logical image; the canonical cover is first and
-        the remaining archive images retain stable association order. cover is
-        resolved only through the canonical pointer and never by a
-        sort-order fallback.
+        previews include only retained associations from the canonical active
+        CABIN gallery folder; prior folders remain available from the complete
+        CABIN archive list. photoCount counts logical non-deleted IMAGE
+        associations, never derived variant rows. previews contains at most 100
+        READY images with exactly one SMALL variant per logical image; the
+        canonical cover is first and the remaining active-folder images retain
+        stable association order. cover is resolved only through the canonical
+        pointer and never by a sort-order fallback.
       requestBody:
         required: true
         content:
@@ -1189,7 +1191,7 @@ components:
     CabinPresentationSnapshot:
       type: object
       additionalProperties: false
-      required: [cabinId, coverMediaId, photos]
+      required: [cabinId, coverMediaId, photoCount, photos]
       properties:
         cabinId: { type: string, format: uuid }
         coverMediaId:
@@ -1197,8 +1199,13 @@ components:
           oneOf:
             - { type: string, format: uuid }
             - { type: 'null' }
+        photoCount:
+          description: Full count of logical, non-deleted and non-quarantined IMAGE associations in the active gallery folder, including images that are not READY yet; zero when there is no active folder. It can exceed the bounded photos array so consumers can reject incomplete or oversized immutable presentations.
+          type: integer
+          format: int64
+          minimum: 0
         photos:
-          description: READY current-generation CABIN IMAGE assets with at least one available private presentation variant; the canonical cover is first and the remaining images retain stable association order.
+          description: Up to one hundred READY current-generation CABIN IMAGE assets from the active gallery folder with at least one available private presentation variant; the canonical cover is first and the remaining images retain stable association order. Older retained folders are excluded.
           type: array
           maxItems: 100
           items: { $ref: '#/components/schemas/CabinPresentationPhoto' }
@@ -1496,7 +1503,7 @@ components:
       properties:
         cabinId: { type: string, format: uuid }
         photoCount:
-          description: Number of logical, non-deleted IMAGE associations in the complete retained CABIN archive.
+          description: Number of logical, non-deleted IMAGE associations in the canonical active CABIN gallery folder.
           type: integer
           minimum: 1
         cover:
@@ -1505,7 +1512,7 @@ components:
             - { $ref: '#/components/schemas/CabinCoverVariant' }
             - { type: 'null' }
         previews:
-          description: Up to 100 READY, non-deleted archive images with one exact SMALL variant each; the canonical cover is first and the remaining images retain stable association order.
+          description: Up to 100 READY, non-deleted images from the canonical active CABIN gallery folder with one exact SMALL variant each; the canonical cover is first and the remaining images retain stable association order.
           type: array
           maxItems: 100
           uniqueItems: true

@@ -26,6 +26,7 @@ const document: ShipmentDocument = {
   driverSnapshot: "Иванов Иван",
   driverWorkerId: DRIVER_WORKER_ID,
   clientId: CLIENT_ID,
+  historicalRentalImport: false,
   equipmentMovementTaskId: null,
   scheduledDate: null,
   rentalOrderId: RENTAL_ORDER_ID,

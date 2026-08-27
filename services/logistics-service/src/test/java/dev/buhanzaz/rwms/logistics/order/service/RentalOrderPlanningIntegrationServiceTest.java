@@ -14,6 +14,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentView;
+import dev.buhanzaz.rwms.logistics.customer.service.CustomerDeliverySlotStore;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
@@ -74,9 +75,19 @@ class RentalOrderPlanningIntegrationServiceTest {
   private final RentalOrderService rentalOrders = mock(RentalOrderService.class);
   private final LogisticsWarehouseLifecycle lifecycle = mock(LogisticsWarehouseLifecycle.class);
   private final LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
+  private final CustomerDeliverySlotStore customerDeliverySlots =
+      mock(CustomerDeliverySlotStore.class);
   private final RentalOrderPlanningIntegrationService service =
       new RentalOrderPlanningIntegrationService(
-          orders, reads, lines, documents, driverTasks, rentalOrders, lifecycle, dependencies);
+          orders,
+          reads,
+          lines,
+          documents,
+          driverTasks,
+          rentalOrders,
+          lifecycle,
+          dependencies,
+          customerDeliverySlots);
 
   private final RentalOrder order = mock(RentalOrder.class);
 

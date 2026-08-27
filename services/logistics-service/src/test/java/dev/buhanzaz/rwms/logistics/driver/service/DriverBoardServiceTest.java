@@ -479,6 +479,75 @@ class DriverBoardServiceTest {
   }
 
   @Test
+  void boardMergesOverdueScheduledWorkIntoTheWarehouseCurrentDate() {
+    DriverLogisticsTask overdue = scheduledTask();
+    DriverLogisticsTask current = scheduledTask();
+    LogisticsDependencyGateway.DriverBoardTask overdueBoardTask =
+        boardTask(overdue, 3, 4, "SCHEDULED", 0, today.minusDays(1));
+    LogisticsDependencyGateway.DriverBoardTask currentBoardTask =
+        boardTask(current, 1, 2, "SCHEDULED", 0, today);
+    when(tasks.findAllByWarehouseIdOrderByCreatedAtAscIdAsc(warehouseId))
+        .thenReturn(java.util.List.of(overdue, current));
+    when(dependencies.readDriverBoard(warehouseId))
+        .thenReturn(
+            new LogisticsDependencyGateway.DriverBoardSnapshot(
+                warehouseId,
+                UUID.randomUUID(),
+                0,
+                java.util.List.of(),
+                java.util.List.of(
+                    new LogisticsDependencyGateway.DriverBoardDateColumn(
+                        today.minusDays(1), java.util.List.of(overdueBoardTask)),
+                    new LogisticsDependencyGateway.DriverBoardDateColumn(
+                        today, java.util.List.of(currentBoardTask)))));
+    when(dependencies.readRepairPlaces(warehouseId)).thenReturn(repairPlaces());
+    when(dependencies.readCapitalRepairs(warehouseId, 0, 200))
+        .thenReturn(
+            new LogisticsDependencyGateway.CapitalRepairPage(java.util.List.of(), 0, 200, 0));
+    when(tripProjection.boardDetails(any())).thenReturn(java.util.Map.of());
+
+    var response = service.board(warehouseId);
+
+    assertThat(response.currentDate()).isEqualTo(today);
+    assertThat(response.dates())
+        .singleElement()
+        .satisfies(
+            column -> {
+              assertThat(column.date()).isEqualTo(today);
+              assertThat(column.tasks()).hasSize(2);
+              assertThat(column.tasks())
+                  .allSatisfy(card -> assertThat(card.scheduledDate()).isEqualTo(today));
+            });
+  }
+
+  @Test
+  void boardMoveRejectsAPastWarehouseDateBeforeCallingTheRemoteMove() {
+    DriverLogisticsTask task = transferTask();
+    LogisticsDependencyGateway.DriverBoardTask current =
+        boardTask(task, 1, 0, "SCHEDULED", 0);
+    when(tasks.findForUpdateByExternalTaskId(task.getExternalTaskId()))
+        .thenReturn(Optional.of(task));
+    when(dependencies.readDriverTask(task.getExternalTaskId())).thenReturn(current);
+
+    assertThatThrownBy(
+            () ->
+                service.move(
+                    task.getExternalTaskId(),
+                    new MoveDriverBoardTaskRequest(
+                        warehouseId,
+                        1L,
+                        0L,
+                        DriverBoardLane.SCHEDULED,
+                        today.minusDays(1),
+                        0)))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("не может быть в прошлом");
+
+    verify(dependencies, never())
+        .moveDriverTask(any(), any(Long.class), any(Long.class), any(), any(), any(Integer.class), any());
+  }
+
+  @Test
   void boardHidesReservedDeliveriesFromPhysicalRepairPlaces() {
     DriverLogisticsTask task = scheduledTask();
     UUID allocationId = UUID.randomUUID();

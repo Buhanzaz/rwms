@@ -13,6 +13,7 @@ import (
 type CabinPresentationSnapshotRecord struct {
 	CabinID      uuid.UUID
 	CoverMediaID *uuid.UUID
+	PhotoCount   int64
 	Photos       []CabinPresentationPhotoRecord
 }
 
@@ -30,11 +31,15 @@ type CabinPresentationPhotoRecord struct {
 
 // ReadCabinPresentationSnapshots returns a stable, bounded read projection for
 // an exact set of cabin IDs. Only active, current CABIN owner bindings and
-// READY image assets at their current generation across every retained gallery
-// folder participate. The owner bindings are share-locked through consume so a
+// image associations are counted when they belong to the library's active
+// gallery folder, while only READY assets at their current generation are
+// returned as photos. The owner bindings are share-locked through consume so a
 // concurrent revocation cannot race a presentation snapshot. Each photo list
 // puts the canonical cover first and then preserves the remaining association
-// order; selecting a cover never hides older folders.
+// order, capped at one hundred photos per cabin. Consumers can compare the full
+// logical PhotoCount with the returned list and fail closed on processing gaps
+// or overflow. A library without an active folder produces a zero count and an
+// empty photo list while retained archive folders remain untouched.
 func (repository *Repository) ReadCabinPresentationSnapshots(
 	ctx context.Context,
 	warehouseID uuid.UUID,
@@ -120,57 +125,93 @@ func (repository *Repository) ReadCabinPresentationSnapshots(
 	}
 
 	rows, err = tx.Query(ctx, `/* media_logistics_cabin_presentation_photos */
-		with ready_photos as materialized (
+		with image_assets as materialized (
 			select photo.cabin_id::text as cabin_id,asset.media_id,
-				asset.current_generation,photo.sort_order as association_sort_order,
-				photo.attached_at,(asset.media_id=library.cover_media_id) as is_cover,
-				bool_or(variant.variant='SMALL') as has_small,
-				bool_or(variant.variant='LARGE') as has_large
+				asset.current_generation,photo.media_generation,
+				asset.processing_status,photo.sort_order as association_sort_order,
+				photo.attached_at,(asset.media_id=library.cover_media_id) as is_cover
 			from media_cabin_photo photo
 			join media_cabin_photo_library library on library.cabin_id=photo.cabin_id
 			join media_asset asset on asset.media_id=photo.media_id
-			join media_variant variant on variant.media_id=asset.media_id
-				 and variant.generation=asset.current_generation
+			where photo.warehouse_id=$1 and photo.cabin_id::text=any($2::text[])
+			  and photo.gallery_folder_id=library.active_gallery_folder_id
+			  and asset.media_kind='IMAGE' and asset.deleted_at is null
+			  and media_asset_is_available(asset.media_id)
+		), counts as (
+			select cabin_id,count(*)::bigint as photo_count
+			from image_assets
+			group by cabin_id
+		), ready_photos as materialized (
+			select image.cabin_id,image.media_id,image.current_generation,
+				image.association_sort_order,image.attached_at,image.is_cover,
+				bool_or(variant.variant='SMALL') as has_small,
+				bool_or(variant.variant='LARGE') as has_large
+			from image_assets image
+			join media_variant variant on variant.media_id=image.media_id
+				 and variant.generation=image.current_generation
 				 and variant.variant in ('SMALL','LARGE')
 				 and variant.object_version_id<>''
-			where photo.warehouse_id=$1 and photo.cabin_id::text=any($2::text[])
-			  and photo.media_generation=asset.current_generation
-			  and asset.media_kind='IMAGE' and asset.processing_status='READY'
-			  and asset.current_generation>0 and asset.deleted_at is null
-			  and media_asset_is_available(asset.media_id)
-			group by photo.cabin_id,asset.media_id,asset.current_generation,photo.sort_order,
-				photo.attached_at,library.cover_media_id
-		)
-		select cabin_id,media_id,current_generation,
+			where image.media_generation=image.current_generation
+			  and image.processing_status='READY' and image.current_generation>0
+			group by image.cabin_id,image.media_id,image.current_generation,
+				image.association_sort_order,image.attached_at,image.is_cover
+		), ranked_photos as (
+			select cabin_id,media_id,current_generation,
 			(row_number() over (
 				partition by cabin_id
 				order by is_cover desc,association_sort_order,attached_at,media_id
 			)-1)::bigint as presentation_sort_order,
 			is_cover,has_small,has_large
-		from ready_photos
-		order by array_position($2::text[], cabin_id),is_cover desc,
-			association_sort_order,attached_at,media_id`,
+			from ready_photos
+		)
+		select counts.cabin_id,counts.photo_count,ranked.media_id,
+			ranked.current_generation,ranked.presentation_sort_order,
+			ranked.is_cover,ranked.has_small,ranked.has_large
+		from counts
+		left join ranked_photos ranked on ranked.cabin_id=counts.cabin_id
+		 and ranked.presentation_sort_order<100
+		order by array_position($2::text[], counts.cabin_id),
+			ranked.presentation_sort_order nulls last`,
 		warehouseID, authorized)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var ownerID string
-		var photo CabinPresentationPhotoRecord
-		var isCover bool
-		if err := rows.Scan(&ownerID, &photo.MediaID, &photo.Generation, &photo.SortOrder,
-			&isCover,
-			&photo.HasSmall, &photo.HasLarge); err != nil {
+		var photoCount int64
+		var mediaID *uuid.UUID
+		var generation *int
+		var sortOrder *int64
+		var isCover, hasSmall, hasLarge *bool
+		if err := rows.Scan(&ownerID, &photoCount, &mediaID, &generation, &sortOrder,
+			&isCover, &hasSmall, &hasLarge); err != nil {
 			rows.Close()
 			return err
 		}
 		index, found := byCabinID[ownerID]
-		if !found || photo.MediaID == uuid.Nil || photo.Generation <= 0 || (!photo.HasSmall && !photo.HasLarge) {
+		if !found || photoCount < 0 {
 			rows.Close()
 			return ErrConflict
 		}
+		records[index].PhotoCount = photoCount
+		if mediaID == nil {
+			if generation != nil || sortOrder != nil || isCover != nil || hasSmall != nil || hasLarge != nil {
+				rows.Close()
+				return ErrConflict
+			}
+			continue
+		}
+		if generation == nil || sortOrder == nil || isCover == nil || hasSmall == nil || hasLarge == nil ||
+			*mediaID == uuid.Nil || *generation <= 0 || (!*hasSmall && !*hasLarge) {
+			rows.Close()
+			return ErrConflict
+		}
+		photo := CabinPresentationPhotoRecord{
+			MediaID: *mediaID, Generation: *generation, SortOrder: *sortOrder,
+			HasSmall: *hasSmall, HasLarge: *hasLarge,
+		}
 		records[index].Photos = append(records[index].Photos, photo)
-		if isCover {
+		if *isCover {
 			copyOfMediaID := photo.MediaID
 			records[index].CoverMediaID = &copyOfMediaID
 		}

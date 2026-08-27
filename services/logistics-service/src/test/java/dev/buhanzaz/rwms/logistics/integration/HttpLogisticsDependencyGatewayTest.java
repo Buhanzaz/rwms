@@ -137,6 +137,42 @@ class HttpLogisticsDependencyGatewayTest {
   }
 
   @Test
+  void malformedCabinMediaSnapshotCollectionsBecomeNormalizedDependencyFailures() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    UUID mediaId = UUID.randomUUID();
+    List<String> malformedResponses =
+        List.of(
+            "{\"items\":null}",
+            "{\"items\":[null]}",
+            "{\"items\":[{\"cabinId\":\"%s\",\"photoCount\":1,\"photos\":null}]}"
+                .formatted(cabinId),
+            """
+            {"items":[{"cabinId":"%s","photoCount":1,"photos":[{
+              "mediaId":"%s","generation":1,"sortOrder":0,"availableVariants":null
+            }]}]}
+            """
+                .formatted(cabinId, mediaId));
+
+    for (String response : malformedResponses) {
+      server
+          .expect(
+              requestTo(
+                  "http://media.test/api/internal/media/v1/logistics/cabin-presentations/snapshots"))
+          .andExpect(method(HttpMethod.POST))
+          .andExpect(header("Authorization", "Bearer test-media.logistics"))
+          .andRespond(withSuccess(response, MediaType.APPLICATION_JSON));
+
+      assertThatThrownBy(
+              () -> gateway.readCabinMediaSnapshots(warehouseId, List.of(cabinId)))
+          .isInstanceOf(LogisticsDependencyException.class)
+          .hasMessageContaining("invalid cabin media");
+      server.verify();
+      server.reset();
+    }
+  }
+
+  @Test
   void usesTheExactAssetScopeAndTypedReturnLeasePayload() {
     UUID key = UUID.randomUUID();
     UUID assetId = UUID.randomUUID();

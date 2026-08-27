@@ -159,6 +159,7 @@ class ManagerMobileAccessIntegrationTest {
     private static Stream<Arguments> rolesOutsideManagerMobilePolicy() {
         return Stream.of(
                 Arguments.of(UserGlobalRole.RENTAL_MANAGER),
+                Arguments.of(UserGlobalRole.CUSTOMER),
                 Arguments.of(UserGlobalRole.VIEWER));
     }
 

@@ -22,6 +22,56 @@ document/workflow state, но не агрегатами кабин, оборуд
 используют определённые контрактом `Idempotency-Key` и expected-version field/parameter; callers
 должны обработать канонический конфликт, а не отправлять изменившийся retry.
 
+### Граница бронирования CustomerApp
+
+Выделенная граница `/api/logistics/customer/v1/**` принимает только JWT типа `USER` с ролью
+`CUSTOMER`, scope `customer.rental` и client identity `rwms-customer-android`. Клиент создаёт один
+профиль физического или юридического лица, выбирает явно доступный склад и работает с принадлежащей
+logistics rental session. Склад доступен, только пока warehouse-service считает его активным, а в
+logistics включена запись delivery-depot с его UUID. У каждой записи свои координаты, поэтому
+ответ склада передаёт тот же origin в CustomerApp: начальная камера карты и маршрут слота
+начинаются на выбранном в session складе. Доступность и holds бытовок, фотографии и
+положительные остатки мебели остаются во владении asset-service; клиентский каталог отдаёт только
+бытовки `FREE` либо уже удерживаемые той же session и никогда не открывает паспорт бытовки. Nullable
+legacy-факты паспорта пропускаются в least-privilege карточке вместо падения всей страницы каталога.
+Каждый изменяющий шаг использует idempotency key и определённый контрактом version fence профиля,
+session, asset или slot. При первом создании профиля и inquiry-session берётся transaction-scoped
+advisory lock до поиска unique-строки, поэтому конкурентные первые запросы сходятся и не превращают
+database uniqueness constraint в API-ошибку. См.
+[`CustomerController`](src/main/java/dev/buhanzaz/rwms/logistics/customer/api/CustomerController.java),
+[`CustomerAuthorizer`](src/main/java/dev/buhanzaz/rwms/logistics/customer/security/CustomerAuthorizer.java)
+и [`V59`](src/main/resources/db/migration/V59__customer_app_booking_and_delivery_slots.sql).
+
+Предложения доставки используют фиксированные warehouse-local окна `09:00-12:00`, `12:00-15:00`
+и `15:00-18:00`. [`CustomerDeliverySlotService`](src/main/java/dev/buhanzaz/rwms/logistics/customer/service/CustomerDeliverySlotService.java)
+сохраняет предложенную и удержанную ёмкость и через private Valhalla truck matrix рассчитывает
+точное дорожное время и внешний часовой круг `ceil(travelSeconds / 3600)`. Поддерживаются только круги от одного
+до четырёх часов. Для каждой локальной даты запрашивается одна направленная matrix, общая для трёх
+окон. Допустимость учитывает весь локальный рабочий день: настроенное число водителей, вместимость
+грузовика в бытовках, время обслуживания, удержанные/checkout-pending/подтверждённые клиентские
+окна, анонимную нагрузку сгенерированных доставок и активные датированные
+shipment/transfer. Возвраты только с датой не резервируют водителя на весь день: забор остаётся
+обратной загрузкой после приоритетных доставок. Один водитель может посетить несколько точек в
+разных окнах, продолжая путь от предыдущей точки доставки, дождаться раннего окна, вернуться на
+склад за дозагрузкой и продолжить, но обязан вернуться на склад до конца настроенного рабочего дня
+с ограниченной переработкой. Каждая дозагрузка занимает настроенное складское время
+(`LOGISTICS_CUSTOMER_DEPOT_RELOAD_MINUTES`, по умолчанию 30 минут). Авторитетны направленные времена пути и конец каждого жёсткого
+окна; активная shipment или transfer только с датой консервативно резервирует одного водителя на
+весь день, кроме order shipment, уже представленной точным подтверждённым CustomerApp slot. Остаточная ёмкость — это дополнительная нагрузка бытовок
+в той же точке/окне, которую ещё примет тот же дневной план, а не арифметически свободное место в машинах. Любое изменение бытовок или
+мебели отвязывает старый slot от корзины. Расчёт маршрута идёт вне database transaction; финальная
+hold transaction блокирует корзину, offer и текущую локальную нагрузку под warehouse/day и scenario
+advisory locks и принимает маршрут, только если canonical workload fingerprint не изменился.
+Checkout заменяет `HELD` на долговечную ёмкость `CHECKOUT_PENDING` со стабильным command key до
+любого remote presentation/booking call, затем атомарно привязывает durable booking receipt.
+Terminal-результат подтверждает или освобождает эту ёмкость. Checkout создаёт
+обычный сохранённый rental order и детерминированные furniture tasks по каждой бытовке. Transport
+retry с тем же intent повторно использует исходный domain idempotency key и восстанавливает
+потерянный ответ в
+[`CustomerCheckoutService`](src/main/java/dev/buhanzaz/rwms/logistics/customer/service/CustomerCheckoutService.java),
+а не browser rollback. Scheduled recovery за один проход обрабатывает старейший детерминированный
+batch не более чем из 100 pending-корзин.
+
 Команды shipment и return несут необязательный opaque `driverWorkerId` task-board вместе с
 историческим display snapshot; logistics никогда не выводит identity из имени. Команды transfer не
 содержат identity водителя и остаются общей работой `WAREHOUSE_DRIVERS`: назначение конкретного
@@ -38,11 +88,24 @@ document/workflow state, но не агрегатами кабин, оборуд
 Она создаёт обычный logistics document, строку, событие и durable effect attempts. Импортированная
 отгрузка сначала просит maintenance завершить допустимый обычный ремонт либо отменить допустимую
 работу капремонта/перемещения с комментарием
-`Автоматически закрыто в связи с отгрузкой.`, а затем выполняет обычный fenced shipment effect.
+`Автоматически закрыто в связи с отгрузкой.`. Освобождённая бытовка `FREE` затем проходит обычный
+fenced shipment effect. Если maintenance доказывает, что бытовка уже `RENTED` и закрывать ремонт не
+нужно, logistics синхронизирует наблюдаемую версию и завершает импортированный документ как
+`SHIPPED` без захвата lease и повторения asset/stock effects.
 Импортированный возврат проходит обычный fenced return-intake и достигает
 `INSPECTION_REQUIRED`, поэтому смета и ремонт остаются обычной maintenance-owned работой. Факт
 документа `historicalRentalImport` не допускает такой импорт в driver planning и ручные команды
 жизненного цикла shipment/return.
+Команда сохраняет `CREATE_HISTORICAL_RENTAL_MOVEMENT` в той же durable-таблице
+идемпотентности, что и остальные создания документов. Принятый response замораживается как JSON до
+продолжения обычной document saga, поэтому exact lost-response retry возвращает исходные
+version/state до обращения к warehouse lifecycle или времени. Domain validator и ограничение БД
+разрешают именно эту операцию.
+`PUT /api/logistics/v1/historical-rental-movements/{documentId}` исправляет клиента и
+warehouse-local дату того же пользовательского shipment под версией документа и отдельным
+idempotency key. Он обновляет client snapshots документа и строки под одним следующим aggregate
+event, сохраняет собственный immutable response, не создаёт ещё один документ и не повторяет
+driver, lease, stock или asset effects.
 
 Worker-задача перемещения оборудования остаётся принятой Task Board и после операционного дедлайна.
 Если авторитетное время `DONE` наступило в дедлайн резерва или позднее, логистика фиксирует
@@ -68,6 +131,20 @@ Public board и detail задания показывают всю ходку: о
 После принятого task-board перемещения до старта logistics обновляет дату owning document в recovery
 boundary, сохраняет его дату и пожелания клиента; shipment, return и transfer используют
 одинаковое групповое поведение.
+
+Публичная доска водителей показывает только текущие и будущие даты в часовом поясе склада.
+Просроченная активная карточка task-board включается в сегодняшнюю колонку, а публичные команды
+перемещения и планирования капремонта отклоняют дату раньше этого же warehouse-local дня. Отдельно
+relay каждые 30 секунд перепроверяет не более 100 строк `RECONCILIATION_REQUIRED`, только если их
+checkpoint относится к общей legacy-ошибке либо stage-specific task-board dependency
+configuration/permanent rejection. Ошибки регистрации, статуса и evidence получают
+`TASK_BOARD_DEPENDENCY_*`; cover- и maintenance-effects получают `COVER_EFFECT_DEPENDENCY_*` и
+`REPAIR_PLACE_EFFECT_DEPENDENCY_*` и не могут быть открыты заново по task-board snapshot. Совпавший
+авторитетный снимок task-board привязывает уже созданную remote-регистрацию при потерянном ответе
+либо восстанавливает существующий scheduled, current, finalizing или cancelled workflow.
+Compensation и остальные бизнес-коды reconciliation остаются терминальными и этим проходом не
+открываются повторно. После полной страницы bounded cursor переходит дальше, поэтому сохранённые
+бизнес-строки не могут навсегда скрыть более позднее восстанавливаемое задание.
 
 `GET` и `PUT /api/logistics/v1/warehouses/{warehouseId}/shipment-task-settings` владеют
 warehouse-scoped максимумом бытовок в одной новой сгруппированной ходке. Лениво создаваемое значение по
@@ -127,9 +204,9 @@ confirmation отдаёт четыре warehouse-local даты со второ�
 четырёх дат только из этого списка. Это пожелания клиента, а не заранее зарезервированная ёмкость
 маршрута. Draft можно
 сохранить без delivery facts, но создание отгрузки требует адрес, основной телефон и хотя бы одну
-желаемую дату. Фактическое расписание документа —
-его `scheduledDate`; публичные команды и проекции не содержат времени суток. Человекочитаемый телефон
-нормализуется в canonical E.164.
+желаемую дату. Обычное manager-расписание документа — его `scheduledDate` и не содержит времени
+суток; единственным источником подтверждённого точного окна является выделенная CustomerApp-граница
+выше. Человекочитаемый телефон нормализуется в canonical E.164.
 
 `CreateRentalInquiryRequest` может указывать существующий draft или сохранённый, но ещё редактируемый
 заказ. Assistant inquiry сохраняет conversation ID; manual inquiry использует ту же сущность без
@@ -159,8 +236,11 @@ confirmation отдаёт четыре warehouse-local даты со второ�
 Отдельный симулятор маршрутов интегрируется только через private-границу
 `/api/internal/logistics/v1/planning/**` и exact service token `logistics-planner` с единственным
 scope `logistics.planning`. Ограниченный feed передаёт identity/version сохранённого заказа,
-адрес/координаты, ещё не включённые в отгрузки ID бытовок и все подтверждённые клиентом даты; номера
-телефонов и мебель не передаются. Применение плана повторно использует существующую idempotent
+адрес/координаты, ещё не включённые в отгрузки ID бытовок и все подтверждённые клиентом даты; у
+подтверждённого CustomerApp-бронирования дополнительно передаются точные `windowStart`, `windowEnd`
+и `travelZoneHours`. Симулятор сохраняет эту исходную полосу от одного до четырёх часов и использует её при построении многоточечных
+кандидатов, но решающими остаются точные сегменты маршрута и жёсткое окно. Номера телефонов и мебель не передаются. Применение плана повторно использует
+существующую idempotent
 команду rental shipment с exact version заказа, конкретными бытовками и opaque worker ID task-board.
 Автоматическое применение отклоняет сегодня и завтра, а существующая manager-команда остаётся
 осознанным ручным override. Отдельно логист может выбрать нераспределённую будущую доставку и явно
@@ -169,6 +249,24 @@ scope `logistics.planning`. Ограниченный feed передаёт ident
 может перечитать только статусы созданных планировщиком назначений за один склад/день, поэтому после
 claim общая доставка показывается с авторитетным водителем; обычные ручные документы и контакты
 клиента исключены. Симулятор никогда не читает и не пишет базу RWMS напрямую.
+
+`PUT /api/internal/logistics/v1/planning/capacity-snapshots/{scenarioId}` атомарно заменяет один
+активный анонимный снимок симулятора для склада. Команда содержит только координаты, жёсткие
+локальные окна доставки, количество бытовок и время обслуживания; identity заказа, клиента,
+бытовки или водителя не передаётся. Точное повторение защищено idempotency key и 64-символьной
+source revision. V60 хранит проекцию и неизменяемые результаты принятых команд, поэтому запоздалый
+retry уже принятой старой ревизии возвращает исходный ответ и не заменяет более новую ёмкость.
+Обязательный монотонный для всего симулятора `sourceGeneration` отклоняет старую команду, которая
+раньше ещё не была принята. Identity receipt включает generation вместе с revision, поэтому
+допустимая последовательность ревизий `A -> B -> A` в трёх возрастающих generations применяет
+третий snapshot, а команда первого generation по-прежнему повторяет свой immutable result. Реальные слоты
+доставки хранятся отдельно, поэтому замена или
+очистка сценария никогда не удаляет и не меняет реальное бронирование. Сгенерированные доставки
+ограничивают маршрутизацию слотов CustomerApp, а сгенерированные вывозы — нет. Apply назначений
+принимает только доставки с источником `RWMS`, поэтому сгенерированные и ручные задания остаются
+внутри симулятора. См.
+[`ScenarioCapacitySnapshotService`](src/main/java/dev/buhanzaz/rwms/logistics/customer/capacity/service/ScenarioCapacitySnapshotService.java)
+и [`V60`](src/main/resources/db/migration/V60__customer_scenario_capacity_projection.sql).
 
 Replacement повторно использует те же presentation/booking или прямую команду заказа. Warehouse
 manager может заменить только запрошенные бытовки до старта с точным количеством client selection;
@@ -248,7 +346,14 @@ signed presentation token, его revision и current viewability. Media access 
 idempotency key. Logistics повторно проверяет доступ к складу и asset-owned fence бытовки через
 отдельный asset photo-presentation snapshot, затем замораживает габариты, отделку, категорию,
 упорядоченные названия характеристик, nullable-линолеум и по порядку от одного до 100 READY image
-ID/generation, после чего возвращает бессрочный signed public path. Anonymous metadata и SMALL/LARGE
+ID/generation из активной gallery folder media-service, после чего возвращает
+бессрочный signed public path. Старые сохранённые gallery folders остаются в
+CABIN archive и не смешиваются в новом immutable-представлении. Media также возвращает полный
+логический `photoCount` неудалённых IMAGE associations активной folder, включая processing entries.
+Создание fail-closed, если count вне `1..100` или не совпадает с ограниченным списком
+READY/current-generation: 101-е логическое изображение или незавершённая обработка не создадут
+тихо усечённое presentation. READY-позиции должны быть уникальными и непрерывными `0..N-1`;
+duplicate или gapped order fail-closed. Anonymous metadata и SMALL/LARGE
 media reads ограничены маршрутами `/api/logistics/public/v1/cabin-photo-presentations/{token}/**`;
 ответ содержит только номер бытовки, эти пять allowlisted display fields, время создания и
 неизменяемые ссылки на фото. В нём никогда нет warehouse, status, rental type или unrestricted
@@ -278,7 +383,7 @@ port. Его неизменённый constructor собирает шесть ow
 | `RentalInquiryCabinSelectionStore` | Locked PREPARE/COMPLETE/REJECTED/EXPIRED transactions selection receipt, exact-byte retry и frozen-response replay |
 | `RentalInquiryCabinCatalogService` | Ограниченный facts-only cabin lookup с authorization inquiry, warehouse и owner |
 | `LogisticsDocumentService` | Стабильный facade return/shipment/transfer и rental-order hooks над семью точными owners |
-| `HistoricalRentalMovementCoordinator` | Приём одной исторической отгрузки/возврата одной бытовки и клиента; создаёт обычные документы и durable owner effects без водителя и browser-owned saga |
+| `HistoricalRentalMovementCoordinator` | Приём одной исторической отгрузки/возврата одной бытовки и клиента плюс version-fenced исправление существующего импортированного shipment; создаёт обычные документы и durable owner effects без водителя и browser-owned saga |
 | `CabinPhotoPresentationService`, `CabinPhotoPresentationStore`, `CabinPhotoPresentationTokenService` | Version-fenced неизменяемый snapshot READY-фото, exact idempotent replay и бессрочная signed public capability без общего media proxy и приватных данных бытовки |
 | Coordinators документов return, shipment и transfer | Независимые document state machines с исходным порядком transaction и recovery |
 | `DocumentDriverTaskPlanner` | Одно idempotent document-owned задание с упорядоченными участниками-бытовками на каждую новую запланированную shipment, return или transfer; ожидающие legacy line tasks сходятся в группу, а начатые блокируют replanning |
@@ -468,6 +573,17 @@ Migration
 получают пустой объект и поэтому остаются читаемыми с null/empty public metadata; миграция не
 обращается к asset-service, не переписывает membership фотографий и не создаёт live mutable projection.
 
+Миграция
+[`V57__historical_rental_movement_idempotency.sql`](src/main/resources/db/migration/V57__historical_rental_movement_idempotency.sql)
+разрешает `CREATE_HISTORICAL_RENTAL_MOVEMENT` и добавляет nullable object-shaped `response_json` в
+существующий command receipt. Для старых семейств команд поле остаётся nullable; receipt и logistics
+document не переписываются, все ранее разрешённые операции сохраняются.
+
+Миграция
+[`V58__historical_rental_movement_update_idempotency.sql`](src/main/resources/db/migration/V58__historical_rental_movement_update_idempotency.sql)
+добавляет `UPDATE_HISTORICAL_RENTAL_MOVEMENT` в ту же проверку и требует immutable response JSON
+для обеих historical operations. Она не переписывает исторические receipts, documents, lines или events.
+
 Logistics вместе фиксирует facts, projection checkpoints и transactional outbox. Kafka delivery —
 at-least-once: aggregate IDs являются record keys, event IDs — dedupe identities, а consumers хранят
 local replay/version-gap handling. Durable stores и relays восстанавливают external attempts, owner
@@ -548,6 +664,18 @@ Kafka settings и, в production, `LOGISTICS_DEPENDENCIES_ENABLED` с
 
 Секрет presentation token должен иметь не менее 32 символов, а production отклоняет известный local
 default. Основной API использует stateless OAuth2/JWT; dev auth bypass ограничен профилем `dev`.
+
+Клиентская доставка fail-closed, пока не заданы `LOGISTICS_CUSTOMER_DELIVERY_ENABLED=true`, private
+`LOGISTICS_CUSTOMER_VALHALLA_URL` и хотя бы один включённый индексированный depot. Текущие две
+позиции реестра используют `LOGISTICS_CUSTOMER_DEPOT_0_*` и `LOGISTICS_CUSTOMER_DEPOT_1_*`; для
+каждой обязательны `ENABLED=true`, `WAREHOUSE_ID`, `LATITUDE` и `LONGITUDE`. Выключенные позиции
+игнорируются, а пустой реестр, повтор UUID склада или неверные координаты приводят к fail-closed.
+Прежние single-depot настройки `LOGISTICS_CUSTOMER_WAREHOUSE_ID`,
+`LOGISTICS_CUSTOMER_DEPOT_LATITUDE` и `LOGISTICS_CUSTOMER_DEPOT_LONGITUDE` больше не читаются.
+`LOGISTICS_CUSTOMER_DRIVER_COUNT`, `LOGISTICS_CUSTOMER_TRUCK_CABIN_CAPACITY`, время обслуживания,
+горизонт бронирования, сроки offer/hold и размеры/массы грузовика задают модель ёмкости; точные
+имена и defaults находятся в `application.yaml`. Valhalla должна оставаться private и в Compose
+логистического симулятора публикуется на host только через loopback.
 
 ## Наблюдаемость и эксплуатация
 

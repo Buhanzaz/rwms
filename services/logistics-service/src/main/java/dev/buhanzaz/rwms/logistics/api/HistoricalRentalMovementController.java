@@ -3,6 +3,8 @@ package dev.buhanzaz.rwms.logistics.api;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateHistoricalRentalMovementRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.HistoricalRentalMovementKind;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentView;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.UpdateHistoricalRentalShipmentRequest;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
 import dev.buhanzaz.rwms.logistics.order.security.OrderAuthorizer;
@@ -14,6 +16,7 @@ import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.Admi
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -22,7 +25,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -58,6 +63,9 @@ public class HistoricalRentalMovementController {
     orderAccess.requireWarehouseEdit(actor, request.warehouseId());
     OrderClient client = clients.required(actor, request.clientId());
     UUID subjectId = logisticsAccess.subjectId(jwt);
+    LogisticsDocumentService.CreateResult replay =
+        documents.replayHistoricalRentalMovement(subjectId, idempotencyKey, request);
+    if (replay != null) return response(replay, HttpStatus.CREATED);
     var admission =
         warehouseLifecycle.prepareDocument(
             subjectId,
@@ -73,8 +81,43 @@ public class HistoricalRentalMovementController {
             request,
             client.getDisplayName(),
             admission);
+    return response(result, HttpStatus.CREATED);
+  }
+
+  @PutMapping("/{documentId}")
+  public ResponseEntity<LogisticsDocumentView> updateShipment(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID documentId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody UpdateHistoricalRentalShipmentRequest request,
+      HttpServletRequest servletRequest) {
+    LogisticsDocumentView current = documents.get(documentId, LogisticsDocumentType.SHIPMENT);
+    logisticsAccess.requireEdit(jwt, current.warehouseId());
+    var actor = orderAccess.writeActor(jwt);
+    orderAccess.requireWarehouseEdit(actor, current.warehouseId());
+    OrderClient client = clients.required(actor, request.clientId());
+    UUID subjectId = logisticsAccess.subjectId(jwt);
+    LogisticsDocumentService.CreateResult replay =
+        documents.replayHistoricalRentalShipmentUpdate(
+            subjectId, idempotencyKey, documentId, request);
+    if (replay != null) return response(replay, HttpStatus.OK);
+    LocalDate warehouseToday = warehouseLifecycle.currentLocalDate(current.warehouseId());
+    LogisticsDocumentService.CreateResult result =
+        documents.updateHistoricalRentalShipment(
+            subjectId,
+            idempotencyKey,
+            correlationId(servletRequest),
+            documentId,
+            request,
+            client.getDisplayName(),
+            warehouseToday);
+    return response(result, HttpStatus.OK);
+  }
+
+  private static ResponseEntity<LogisticsDocumentView> response(
+      LogisticsDocumentService.CreateResult result, HttpStatus createdStatus) {
     ResponseEntity.BodyBuilder response =
-        ResponseEntity.status(result.replayed() ? HttpStatus.OK : HttpStatus.CREATED)
+        ResponseEntity.status(result.replayed() ? HttpStatus.OK : createdStatus)
             .eTag(Long.toString(result.response().version()));
     if (result.replayed()) response.header("Idempotency-Replayed", "true");
     return response.body(result.response());

@@ -146,7 +146,7 @@
       "properties": {
         "subjectId": {"type": "string", "format": "uuid"},
         "active": {"type": "boolean"},
-        "globalRole": {"enum": ["SYSTEM_ADMIN", "WMS_ADMIN", "WAREHOUSE_MANAGER", "RENTAL_MANAGER", "VIEWER"]},
+        "globalRole": {"enum": ["SYSTEM_ADMIN", "WMS_ADMIN", "WAREHOUSE_MANAGER", "RENTAL_MANAGER", "CUSTOMER", "VIEWER"]},
         "profileRevision": {"type": "string", "format": "uuid"},
         "warehouseAccess": {"type": "array", "items": {"$ref": "#/$defs/warehouseGrant"}}
       }

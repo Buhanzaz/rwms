@@ -153,7 +153,7 @@ public class RentalInquiry {
 
   private static String requireRole(String value) {
     if (!java.util.Set.of(
-            "SYSTEM_ADMIN", "WMS_ADMIN", "WAREHOUSE_MANAGER", "RENTAL_MANAGER", "VIEWER")
+            "SYSTEM_ADMIN", "WMS_ADMIN", "WAREHOUSE_MANAGER", "RENTAL_MANAGER", "CUSTOMER", "VIEWER")
         .contains(value)) {
       throw new IllegalArgumentException("managerRole is invalid");
     }

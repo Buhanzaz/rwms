@@ -22,7 +22,7 @@ describe("orders permissions", () => {
     }
   )
 
-  it.each(["RENTAL_MANAGER", "VIEWER"] as const)(
+  it.each(["RENTAL_MANAGER", "CUSTOMER", "VIEWER"] as const)(
     "does not allow %s to view all bookings",
     (role) => {
       expect(canViewAllOrders(user(role))).toBe(false)

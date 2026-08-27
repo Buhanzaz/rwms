@@ -2,14 +2,19 @@ package dev.buhanzaz.rwms.logistics.service;
 
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateHistoricalRentalMovementRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.HistoricalRentalMovementKind;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentView;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.UpdateHistoricalRentalShipmentRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsTargetService;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventStore;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import java.time.LocalDate;
@@ -30,6 +35,8 @@ import org.springframework.stereotype.Service;
 class HistoricalRentalMovementCoordinator {
   private static final String CREATE_HISTORICAL_RENTAL_MOVEMENT =
       "CREATE_HISTORICAL_RENTAL_MOVEMENT";
+  private static final String UPDATE_HISTORICAL_RENTAL_MOVEMENT =
+      "UPDATE_HISTORICAL_RENTAL_MOVEMENT";
 
   private final LogisticsDocumentRepository documentRepository;
   private final LogisticsDocumentLineRepository lineRepository;
@@ -38,6 +45,44 @@ class HistoricalRentalMovementCoordinator {
   private final LogisticsDocumentIdempotency idempotency;
   private final LogisticsDocumentReadProjection readProjection;
   private final LogisticsDocumentAttemptWriter attemptWriter;
+  private final LogisticsTransactionLock transactionLock;
+
+  /** Returns the exact successful create receipt before any warehouse dependency is consulted. */
+  LogisticsDocumentCommandResult replayCreate(
+      UUID subjectId,
+      UUID idempotencyKey,
+      CreateHistoricalRentalMovementRequest request) {
+    if (subjectId == null || idempotencyKey == null || request == null) {
+      throw new IllegalArgumentException("Historical rental replay identity is required");
+    }
+    LogisticsDocumentView replay =
+        idempotency.replayResponse(
+            subjectId,
+            idempotencyKey,
+            CREATE_HISTORICAL_RENTAL_MOVEMENT,
+            checksum(request),
+            LogisticsDocumentView.class);
+    return replay == null ? null : new LogisticsDocumentCommandResult(replay, true);
+  }
+
+  /** Returns the exact successful correction receipt before warehouse-time lookup is attempted. */
+  LogisticsDocumentCommandResult replayUpdate(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID documentId,
+      UpdateHistoricalRentalShipmentRequest request) {
+    if (subjectId == null || idempotencyKey == null || documentId == null || request == null) {
+      throw new IllegalArgumentException("Historical rental update replay identity is required");
+    }
+    LogisticsDocumentView replay =
+        idempotency.replayResponse(
+            subjectId,
+            idempotencyKey,
+            UPDATE_HISTORICAL_RENTAL_MOVEMENT,
+            updateChecksum(documentId, request),
+            LogisticsDocumentView.class);
+    return replay == null ? null : new LogisticsDocumentCommandResult(replay, true);
+  }
 
   LogisticsDocumentCommandResult create(
       UUID subjectId,
@@ -95,13 +140,88 @@ class HistoricalRentalMovementCoordinator {
       beginHistoricalReturn(document, line);
     }
     warehouseAdmission.enqueue(document, document.getWarehouseId(), admission);
+    LogisticsDocumentCommandResult result = result(document, false);
     idempotency.remember(
         subjectId,
         idempotencyKey,
         CREATE_HISTORICAL_RENTAL_MOVEMENT,
         checksum,
-        document);
-    return result(document, false);
+        document,
+        result.response());
+    return result;
+  }
+
+  LogisticsDocumentCommandResult updateShipment(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      UUID documentId,
+      UpdateHistoricalRentalShipmentRequest request,
+      String clientSnapshot,
+      LocalDate warehouseToday) {
+    requireUpdate(
+        subjectId,
+        idempotencyKey,
+        correlationId,
+        documentId,
+        request,
+        clientSnapshot,
+        warehouseToday);
+    String checksum = updateChecksum(documentId, request);
+    idempotency.acquireLock(subjectId, UPDATE_HISTORICAL_RENTAL_MOVEMENT, idempotencyKey);
+    LogisticsDocument replay =
+        idempotency.replay(
+            subjectId, idempotencyKey, UPDATE_HISTORICAL_RENTAL_MOVEMENT, checksum);
+    if (replay != null) return result(replay, true);
+
+    transactionLock.acquire(historicalShipmentLock(request.rentalItemId()));
+    LogisticsDocument document =
+        documentRepository.findForUpdate(documentId).orElseThrow(LogisticsNotFoundException::new);
+    List<LogisticsDocumentLine> lines =
+        lineRepository.findAllByDocument_IdOrderByLineNumber(documentId);
+    if (document.getDocumentType() != LogisticsDocumentType.SHIPMENT
+        || !document.isHistoricalRentalImport()
+        || lines.size() != 1
+        || !request.rentalItemId().equals(lines.getFirst().getAssetId())) {
+      throw new LogisticsConflictException(
+          "Only the matching historical rental shipment can be edited");
+    }
+    if (document.getVersion() != request.expectedVersion()) {
+      throw new LogisticsConflictException("Historical rental shipment changed; reload and retry");
+    }
+    if (request.occurredOn().isAfter(warehouseToday)) {
+      throw new LogisticsConflictException("Historical rental operation date cannot be in the future");
+    }
+
+    boolean documentChanged =
+        document.correctHistoricalRentalShipment(
+            request.clientId(), clientSnapshot, request.occurredOn());
+    boolean lineChanged = lines.getFirst().correctHistoricalShipmentTenantSnapshot(clientSnapshot);
+    if (lineChanged) {
+      lineRepository.saveAndFlush(lines.getFirst());
+    }
+    if (documentChanged || lineChanged) {
+      if (lineChanged && !documentChanged) {
+        document.touchHistoricalRentalShipmentCorrection();
+      }
+      document = documentRepository.saveAndFlush(document);
+      eventStore.append(
+          document,
+          lines.size(),
+          correlationId,
+          subjectId,
+          correctionEvent(document.getState()),
+          "HISTORICAL_RENTAL_IMPORT_CORRECTED");
+    }
+    LogisticsDocumentCommandResult result = result(document, false);
+    idempotency.remember(
+        subjectId,
+        idempotencyKey,
+        UPDATE_HISTORICAL_RENTAL_MOVEMENT,
+        checksum,
+        document,
+        result.response());
+    return result;
   }
 
   private void beginHistoricalShipment(LogisticsDocument document, LogisticsDocumentLine line) {
@@ -188,6 +308,33 @@ class HistoricalRentalMovementCoordinator {
             request.occurredOn().toString()));
   }
 
+  private static String updateChecksum(
+      UUID documentId, UpdateHistoricalRentalShipmentRequest request) {
+    return LogisticsCommandChecksum.sha256(
+        UPDATE_HISTORICAL_RENTAL_MOVEMENT,
+        List.of(
+            documentId.toString(),
+            Long.toString(request.expectedVersion()),
+            request.rentalItemId().toString(),
+            request.clientId().toString(),
+            request.occurredOn().toString()));
+  }
+
+  private static LogisticsEventType correctionEvent(LogisticsDocumentState state) {
+    return switch (state) {
+      case DRAFT -> LogisticsEventType.SHIPMENT_DRAFT_UPDATED;
+      case PREPARING -> LogisticsEventType.SHIPMENT_PREPARATION_STARTED;
+      case AWAITING_CONFIRMATION -> LogisticsEventType.SHIPMENT_PLANNED;
+      case CONFIRMING_PREPARATION -> LogisticsEventType.SHIPMENT_CONFIRMATION_STARTED;
+      case SHIPPED -> LogisticsEventType.SHIPMENT_PREPARATION_CONFIRMED;
+      default -> throw new LogisticsConflictException("Historical rental shipment is not editable");
+    };
+  }
+
+  private static String historicalShipmentLock(UUID rentalItemId) {
+    return "historical-rental-shipment\u001f" + rentalItemId;
+  }
+
   private static void require(
       CreateHistoricalRentalMovementRequest request,
       UUID subjectId,
@@ -211,6 +358,32 @@ class HistoricalRentalMovementCoordinator {
         || clientSnapshot.isBlank()
         || clientSnapshot.trim().length() > 512) {
       throw new IllegalArgumentException("Historical rental movement request is incomplete");
+    }
+  }
+
+  private static void requireUpdate(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      UUID documentId,
+      UpdateHistoricalRentalShipmentRequest request,
+      String clientSnapshot,
+      LocalDate warehouseToday) {
+    if (subjectId == null
+        || idempotencyKey == null
+        || correlationId == null
+        || documentId == null
+        || request == null
+        || request.expectedVersion() == null
+        || request.expectedVersion() < 0
+        || request.rentalItemId() == null
+        || request.clientId() == null
+        || request.occurredOn() == null
+        || warehouseToday == null
+        || clientSnapshot == null
+        || clientSnapshot.isBlank()
+        || clientSnapshot.trim().length() > 512) {
+      throw new IllegalArgumentException("Historical rental shipment update is incomplete");
     }
   }
 

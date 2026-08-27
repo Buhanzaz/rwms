@@ -49,6 +49,9 @@ public record OAuthClientProperties(List<Client> clients) {
             "rwms.read",
             "rwms.write",
             "warehouse.read");
+    public static final String CUSTOMER_ANDROID_CLIENT_ID = "rwms-customer-android";
+    static final Set<String> CUSTOMER_ANDROID_SCOPES =
+            Set.of("openid", "profile", "offline_access", "customer.rental");
     static final String INVENTORY_AUDIENCE = "rwms-services";
     static final String INVENTORY_SECRET_ENVIRONMENT = "INVENTORY_CLIENT_SECRET";
     static final Set<String> INVENTORY_SCOPES =
@@ -228,6 +231,16 @@ public record OAuthClientProperties(List<Client> clients) {
          */
         boolean managerAndroidClient() {
             return MANAGER_ANDROID_CLIENT_ID.equals(clientId);
+        }
+
+        /**
+         * Identifies the customer Android public client so its isolated scope and redirect contract
+         * can be enforced during provisioning.
+         *
+         * @return whether this is the reserved customer Android client
+         */
+        boolean customerAndroidClient() {
+            return CUSTOMER_ANDROID_CLIENT_ID.equals(clientId);
         }
 
         @Override

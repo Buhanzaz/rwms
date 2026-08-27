@@ -1,17 +1,18 @@
 # RWMS Downloads
 
-`downloads-site/` — публичная общая посадочная страница трёх Android-клиентов.
+`downloads-site/` — публичная общая посадочная страница четырёх Android-клиентов.
 Она не владеет APK и не копирует их:
 
 - `manager-download-site/release.json` владеет записью релиза ManagerApp;
 - `driver-download-site/release.json` владеет записью релиза DriverApp;
-- `worker-download-site/release.json` владеет записью релиза WorkerApp.
+- `worker-download-site/release.json` владеет записью релиза WorkerApp;
+- `client-download-site/release.json` владеет записью релиза CustomerApp.
 
 Страница доступна по адресу
 `https://77-90-158-90.sslip.io/downloads/`. Каждая карточка ссылается только
 на неизменяемый URL версии APK из записи владельца. Nginx отдаёт эти APK из
-разных каталогов, поэтому артефакт Manager, Driver или Worker никогда не
-копируется в каталог релиза другого приложения.
+разных каталогов, поэтому артефакт Manager, Driver, Worker или Customer никогда
+не копируется в каталог релиза другого приложения.
 
 ## Сборка и проверка
 
@@ -20,7 +21,7 @@ RWMS_DOWNLOADS_SITE_OUTPUT=/tmp/rwms-downloads-site npm run build
 RWMS_DOWNLOADS_SITE_OUTPUT=/tmp/rwms-downloads-site npm run verify
 ```
 
-Сборка проверяет, что опубликованы ровно три ожидаемые package identity. Она
+Сборка проверяет, что опубликованы ровно четыре ожидаемые package identity. Она
 закрыто завершается с ошибкой, если запись ожидает публикации, некорректна, не
 содержит SHA-256 или указывает на изменяемый/неверсионный URL. `verify`
 проверяет созданный HTML и неизменяемые ссылки; он не выдумывает метаданные
@@ -33,8 +34,8 @@ APK.
    SHA-256 и неизменяемый URL.
 3. Сгенерируйте эту страницу во временный каталог и проверьте её.
 4. Атомарно замените только `/var/www/rwms-app-downloads/` созданной
-   статической страницей; APK Driver положите только в
-   `/var/www/rwms-driver-download/`.
+   статической страницей; APK Driver и Customer положите только в их отдельные
+   каталоги `/var/www/rwms-driver-download/` и `/var/www/rwms-client-download/`.
 5. Проверьте и перезагрузите Nginx, затем запросите страницу и каждый
    неизменяемый URL APK, сопоставив SHA-256 ответа.
 

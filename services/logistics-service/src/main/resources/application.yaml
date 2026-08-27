@@ -161,6 +161,41 @@ rwms:
       dev-auth-bypass: ${LOGISTICS_DEV_AUTH_BYPASS:false}
     client-presentation:
       token-secret: ${CLIENT_PRESENTATION_TOKEN_SECRET:rwms-local-client-presentation-secret-change-me}
+    customer:
+      booking-reconcile-delay: ${LOGISTICS_CUSTOMER_BOOKING_RECONCILE_DELAY:2s}
+      booking-reconcile-initial-delay: ${LOGISTICS_CUSTOMER_BOOKING_RECONCILE_INITIAL_DELAY:3s}
+      delivery:
+        enabled: ${LOGISTICS_CUSTOMER_DELIVERY_ENABLED:false}
+        depots:
+          - enabled: ${LOGISTICS_CUSTOMER_DEPOT_0_ENABLED:false}
+            warehouse-id: ${LOGISTICS_CUSTOMER_DEPOT_0_WAREHOUSE_ID:00000000-0000-0000-0000-000000000000}
+            depot-latitude: ${LOGISTICS_CUSTOMER_DEPOT_0_LATITUDE:0}
+            depot-longitude: ${LOGISTICS_CUSTOMER_DEPOT_0_LONGITUDE:0}
+          - enabled: ${LOGISTICS_CUSTOMER_DEPOT_1_ENABLED:false}
+            warehouse-id: ${LOGISTICS_CUSTOMER_DEPOT_1_WAREHOUSE_ID:00000000-0000-0000-0000-000000000000}
+            depot-latitude: ${LOGISTICS_CUSTOMER_DEPOT_1_LATITUDE:0}
+            depot-longitude: ${LOGISTICS_CUSTOMER_DEPOT_1_LONGITUDE:0}
+        valhalla-base-url: ${LOGISTICS_CUSTOMER_VALHALLA_URL:http://127.0.0.1:8002}
+        connect-timeout: ${LOGISTICS_CUSTOMER_VALHALLA_CONNECT_TIMEOUT:2s}
+        read-timeout: ${LOGISTICS_CUSTOMER_VALHALLA_READ_TIMEOUT:10s}
+        driver-count: ${LOGISTICS_CUSTOMER_DRIVER_COUNT:2}
+        truck-cabin-capacity: ${LOGISTICS_CUSTOMER_TRUCK_CABIN_CAPACITY:2}
+        depot-reload-minutes: ${LOGISTICS_CUSTOMER_DEPOT_RELOAD_MINUTES:30}
+        workday-start: ${LOGISTICS_CUSTOMER_WORKDAY_START:09:00}
+        workday-end: ${LOGISTICS_CUSTOMER_WORKDAY_END:18:00}
+        max-overtime: ${LOGISTICS_CUSTOMER_MAX_OVERTIME:2h}
+        max-travel-zone-hours: ${LOGISTICS_CUSTOMER_MAX_TRAVEL_ZONE_HOURS:4}
+        service-minutes: ${LOGISTICS_CUSTOMER_SERVICE_MINUTES:30}
+        earliest-delivery-days: ${LOGISTICS_CUSTOMER_EARLIEST_DELIVERY_DAYS:2}
+        booking-horizon-days: ${LOGISTICS_CUSTOMER_BOOKING_HORIZON_DAYS:14}
+        offer-lifetime: ${LOGISTICS_CUSTOMER_OFFER_LIFETIME:10m}
+        hold-lifetime: ${LOGISTICS_CUSTOMER_HOLD_LIFETIME:15m}
+        truck-height-meters: ${LOGISTICS_CUSTOMER_TRUCK_HEIGHT_METERS:4.0}
+        truck-width-meters: ${LOGISTICS_CUSTOMER_TRUCK_WIDTH_METERS:2.55}
+        truck-length-meters: ${LOGISTICS_CUSTOMER_TRUCK_LENGTH_METERS:12.0}
+        truck-weight-tons: ${LOGISTICS_CUSTOMER_TRUCK_WEIGHT_TONS:18.0}
+        truck-axle-load-tons: ${LOGISTICS_CUSTOMER_TRUCK_AXLE_LOAD_TONS:10.0}
+        truck-axle-count: ${LOGISTICS_CUSTOMER_TRUCK_AXLE_COUNT:3}
     rental-inquiry:
       outbox-enabled: ${LOGISTICS_RENTAL_INQUIRY_OUTBOX_ENABLED:true}
       outbox-delay: ${LOGISTICS_RENTAL_INQUIRY_OUTBOX_DELAY:1s}

@@ -300,9 +300,11 @@ func insertCabinCoverFact(
 }
 
 // associateProcessedCabinImage makes direct CABIN uploads/imports participate
-// in the canonical gallery. Direct photos in one folder choose the earliest
-// stable gallery position as cover, independently of READY completion order;
-// an explicit cover from another source or folder is never replaced implicitly.
+// in the canonical gallery. A newer READY direct-upload folder becomes active,
+// while a delayed completion from an older folder cannot reclaim the pointer.
+// Within the selected folder the earliest READY association is the cover,
+// independently of processing completion order. Reprocessing a non-direct
+// current cover refreshes its generation fact without changing either pointer.
 func (repository *Repository) associateProcessedCabinImage(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -316,13 +318,12 @@ func (repository *Repository) associateProcessedCabinImage(
 	var cabinID, associationWarehouseID, galleryFolderID uuid.UUID
 	var associatedEntryID *uuid.UUID
 	var associationSource string
-	var associationSortOrder int64
-	var associationAttachedAt time.Time
+	var previousAssociationGeneration int
 	err := tx.QueryRow(ctx, `select cabin_id,warehouse_id,task_board_entry_id,gallery_folder_id,
-		association_source,sort_order,attached_at
+		association_source,media_generation
 		from media_cabin_photo where media_id=$1 for update`, asset.ID).
 		Scan(&cabinID, &associationWarehouseID, &associatedEntryID, &galleryFolderID,
-			&associationSource, &associationSortOrder, &associationAttachedAt)
+			&associationSource, &previousAssociationGeneration)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if asset.OwnerType != OwnerTypeCabin {
 			return nil
@@ -334,8 +335,6 @@ func (repository *Repository) associateProcessedCabinImage(
 		associationWarehouseID = asset.WarehouseID
 		galleryFolderID = asset.FolderID
 		associationSource = "DIRECT"
-		associationSortOrder = asset.SortOrder
-		associationAttachedAt = asset.CreatedAt
 		_, err = tx.Exec(ctx, `insert into media_cabin_photo (
 			cabin_id,media_id,warehouse_id,media_generation,task_board_entry_id,
 			association_source,gallery_folder_id,sort_order,attached_at)
@@ -354,79 +353,168 @@ func (repository *Repository) associateProcessedCabinImage(
 		}
 	}
 	var currentCover *uuid.UUID
+	var activeFolder *uuid.UUID
+	var libraryWarehouseID uuid.UUID
 	var version int64
-	err = tx.QueryRow(ctx, `select cover_media_id,version
+	err = tx.QueryRow(ctx, `select warehouse_id,cover_media_id,active_gallery_folder_id,version
 		from media_cabin_photo_library where cabin_id=$1 for update`,
-		cabinID).Scan(&currentCover, &version)
+		cabinID).Scan(&libraryWarehouseID, &currentCover, &activeFolder, &version)
 	if errors.Is(err, pgx.ErrNoRows) {
-		version = 1
+		version = 0
+		libraryWarehouseID = associationWarehouseID
 		if _, err := tx.Exec(ctx, `insert into media_cabin_photo_library (
 			cabin_id,warehouse_id,cover_media_id,version,updated_at,active_gallery_folder_id)
-			values ($1,$2,$3,1,$4,$5)`, cabinID, associationWarehouseID, asset.ID, now,
-			galleryFolderID); err != nil {
+			values ($1,$2,null,0,$3,null)`, cabinID, associationWarehouseID, now); err != nil {
 			return translateConstraint(err)
 		}
 	} else if err != nil {
 		return err
-	} else if currentCover == nil {
-		version++
-		if _, err := tx.Exec(ctx, `update media_cabin_photo_library
-			set cover_media_id=$2,version=$3,updated_at=$4,active_gallery_folder_id=$5
-			where cabin_id=$1`, cabinID, asset.ID, version, now, galleryFolderID); err != nil {
-			return err
+	}
+	if libraryWarehouseID != associationWarehouseID {
+		return ErrConflict
+	}
+	var desiredCover uuid.UUID
+	var desiredGeneration int
+	var desiredEntryID *uuid.UUID
+	if associationSource != "DIRECT" {
+		if currentCover == nil || activeFolder == nil || *currentCover != asset.ID ||
+			*activeFolder != galleryFolderID || previousAssociationGeneration == asset.Generation {
+			return nil
 		}
-	} else if *currentCover == asset.ID {
-		// Reprocessing keeps the current cover projection fresh.
-		version++
-		if _, err := tx.Exec(ctx, `update media_cabin_photo_library
-			set version=$2,updated_at=$3 where cabin_id=$1`, cabinID, version, now); err != nil {
-			return err
-		}
+		desiredCover = asset.ID
+		desiredGeneration = asset.Generation
+		desiredEntryID = associatedEntryID
 	} else {
-		var currentSource string
-		var currentFolderID uuid.UUID
-		var currentSortOrder int64
-		var currentAttachedAt time.Time
-		err := tx.QueryRow(ctx, `select association_source,gallery_folder_id,sort_order,attached_at
-			from media_cabin_photo where cabin_id=$1 and media_id=$2`, cabinID, *currentCover).
-			Scan(&currentSource, &currentFolderID, &currentSortOrder, &currentAttachedAt)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrConflict
-		}
+		var incomingLatest time.Time
+		var found bool
+		desiredCover, desiredGeneration, desiredEntryID, incomingLatest, found, err =
+			selectReadyCabinFolderCover(ctx, tx, cabinID, galleryFolderID)
 		if err != nil {
 			return err
 		}
-		incomingComesFirst := associationSortOrder < currentSortOrder ||
-			(associationSortOrder == currentSortOrder && associationAttachedAt.Before(currentAttachedAt)) ||
-			(associationSortOrder == currentSortOrder && associationAttachedAt.Equal(currentAttachedAt) &&
-				asset.ID.String() < currentCover.String())
-		if associationSource != "DIRECT" || currentSource != "DIRECT" ||
-			galleryFolderID != currentFolderID || !incomingComesFirst {
+		if !found {
 			return nil
 		}
-		version++
-		if _, err := tx.Exec(ctx, `update media_cabin_photo_library
-			set cover_media_id=$2,version=$3,updated_at=$4,active_gallery_folder_id=$5
-			where cabin_id=$1`, cabinID, asset.ID, version, now, galleryFolderID); err != nil {
-			return err
+		selectIncomingFolder := activeFolder == nil || *activeFolder == galleryFolderID
+		if !selectIncomingFolder {
+			activeLatest, activeFound, activeErr :=
+				selectCabinFolderLatestAttachedAt(ctx, tx, cabinID, *activeFolder)
+			if activeErr != nil {
+				return activeErr
+			}
+			if !activeFound {
+				return ErrConflict
+			}
+			selectIncomingFolder = incomingLatest.After(activeLatest) ||
+				(incomingLatest.Equal(activeLatest) && galleryFolderID.String() > activeFolder.String())
 		}
+		if !selectIncomingFolder {
+			return nil
+		}
+	}
+	pointerChanged := currentCover == nil || activeFolder == nil ||
+		*currentCover != desiredCover || *activeFolder != galleryFolderID
+	coverGenerationChanged := !pointerChanged && desiredCover == asset.ID &&
+		previousAssociationGeneration != asset.Generation
+	if !pointerChanged && !coverGenerationChanged {
+		return nil
+	}
+	var previousMediaID *uuid.UUID
+	if currentCover != nil {
+		copyOfCurrent := *currentCover
+		previousMediaID = &copyOfCurrent
+	}
+	newVersion := version + 1
+	updated, err := tx.Exec(ctx, `update media_cabin_photo_library
+		set warehouse_id=$2,cover_media_id=$3,version=$4,updated_at=$5,
+			active_gallery_folder_id=$6
+		where cabin_id=$1 and version=$7`, cabinID, associationWarehouseID,
+		desiredCover, newVersion, now, galleryFolderID, version)
+	if err != nil {
+		return translateConstraint(err)
+	}
+	if updated.RowsAffected() != 1 {
+		return ErrConflict
 	}
 	_, err = tx.Exec(ctx, `insert into media_cabin_cover_history (
 		cabin_id,version,warehouse_id,previous_media_id,cover_media_id,
 		task_board_entry_id,idempotency_key,changed_at)
-	values ($1,$2,$3,$4,$5,$6,null,$7)`, cabinID, version, associationWarehouseID,
-		currentCover, asset.ID, associatedEntryID, now)
+	values ($1,$2,$3,$4,$5,$6,null,$7)`, cabinID, newVersion, associationWarehouseID,
+		previousMediaID, desiredCover, desiredEntryID, now)
 	if err != nil {
 		return translateConstraint(err)
 	}
 	record := CabinCoverChangeRecord{
-		CabinID: cabinID, WarehouseID: associationWarehouseID, MediaID: asset.ID,
-		Generation: asset.Generation, Version: version, ChangedAt: now,
+		CabinID: cabinID, WarehouseID: associationWarehouseID, MediaID: desiredCover,
+		Generation: desiredGeneration, Version: newVersion, ChangedAt: now,
 	}
-	if associatedEntryID != nil {
-		record.TaskBoardEntryID = *associatedEntryID
+	if desiredEntryID != nil {
+		record.TaskBoardEntryID = *desiredEntryID
 	}
-	return insertCabinCoverFact(ctx, tx, record, currentCover, correlationID)
+	return insertCabinCoverFact(ctx, tx, record, previousMediaID, correlationID)
+}
+
+// selectReadyCabinFolderCover returns one folder's deterministic earliest
+// READY, current-generation, non-deleted, available image together with the
+// newest retained association timestamp used to order gallery folders. Folder
+// recency deliberately includes images that are still processing so completion
+// order cannot make an older upload batch appear newer.
+func selectReadyCabinFolderCover(
+	ctx context.Context,
+	tx pgx.Tx,
+	cabinID, galleryFolderID uuid.UUID,
+) (uuid.UUID, int, *uuid.UUID, time.Time, bool, error) {
+	var mediaID uuid.UUID
+	var generation int
+	var taskBoardEntryID *uuid.UUID
+	var latestAttachedAt time.Time
+	err := tx.QueryRow(ctx, `select photo.media_id,asset.current_generation,
+		photo.task_board_entry_id,(
+			select max(folder_photo.attached_at)
+			from media_cabin_photo folder_photo
+			where folder_photo.cabin_id=photo.cabin_id
+			  and folder_photo.gallery_folder_id=photo.gallery_folder_id
+		)
+		from media_cabin_photo photo
+		join media_asset asset on asset.media_id=photo.media_id
+		where photo.cabin_id=$1 and photo.gallery_folder_id=$2
+		  and photo.media_generation=asset.current_generation
+		  and asset.media_kind='IMAGE' and asset.processing_status='READY'
+		  and asset.current_generation>0 and asset.deleted_at is null
+		  and media_asset_is_available(asset.media_id)
+		order by photo.sort_order,photo.attached_at,photo.media_id
+		limit 1`, cabinID, galleryFolderID).
+		Scan(&mediaID, &generation, &taskBoardEntryID, &latestAttachedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, 0, nil, time.Time{}, false, nil
+	}
+	if err != nil {
+		return uuid.Nil, 0, nil, time.Time{}, false, err
+	}
+	return mediaID, generation, taskBoardEntryID, latestAttachedAt, true, nil
+}
+
+// selectCabinFolderLatestAttachedAt returns the immutable recency fence for a
+// retained CABIN gallery folder, including associations whose processing has
+// not completed yet. A selected library folder without an association is a
+// persistence invariant violation and callers fail closed.
+func selectCabinFolderLatestAttachedAt(
+	ctx context.Context,
+	tx pgx.Tx,
+	cabinID, galleryFolderID uuid.UUID,
+) (time.Time, bool, error) {
+	var latestAttachedAt time.Time
+	err := tx.QueryRow(ctx, `select max(attached_at)
+		from media_cabin_photo
+		where cabin_id=$1 and gallery_folder_id=$2
+		having count(*)>0`, cabinID, galleryFolderID).Scan(&latestAttachedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return latestAttachedAt, true, nil
 }
 
 func readCabinPhotoAssets(

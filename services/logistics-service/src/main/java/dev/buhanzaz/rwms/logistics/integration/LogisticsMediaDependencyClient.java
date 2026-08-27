@@ -7,6 +7,7 @@ import static dev.buhanzaz.rwms.logistics.integration.LogisticsOAuthHttpTranspor
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
@@ -177,21 +178,43 @@ final class LogisticsMediaDependencyClient {
             MEDIA_SCOPE,
             "Dependency returned an empty response",
             DEFAULT);
+    if (response == null || response.items() == null) {
+      throw malformed("Media-service returned an invalid cabin media snapshot batch");
+    }
     return response.items().stream()
-        .map(
-            item ->
-                new CabinMediaSnapshot(
-                    item.cabinId(),
-                    item.photos().stream()
-                        .map(
-                            photo ->
-                                new CabinMediaPhoto(
-                                    photo.mediaId(),
-                                    photo.generation(),
-                                    photo.sortOrder(),
-                                    List.copyOf(photo.availableVariants())))
-                        .toList()))
+        .map(LogisticsMediaDependencyClient::mapCabinMediaSnapshot)
         .toList();
+  }
+
+  /** Converts one complete dependency item without allowing partial JSON to escape as an NPE. */
+  private static CabinMediaSnapshot mapCabinMediaSnapshot(CabinMediaSnapshotResponse item) {
+    if (item == null
+        || item.cabinId() == null
+        || item.photoCount() < 0
+        || item.photos() == null) {
+      throw malformed("Media-service returned an invalid cabin media snapshot");
+    }
+    return new CabinMediaSnapshot(
+        item.cabinId(),
+        item.photoCount(),
+        item.photos().stream().map(LogisticsMediaDependencyClient::mapCabinMediaPhoto).toList());
+  }
+
+  /** Copies one READY photo only after validating every collection needed by the service layer. */
+  private static CabinMediaPhoto mapCabinMediaPhoto(CabinMediaPhotoResponse photo) {
+    if (photo == null
+        || photo.mediaId() == null
+        || photo.generation() < 1
+        || photo.sortOrder() < 0
+        || photo.availableVariants() == null
+        || photo.availableVariants().stream().anyMatch(Objects::isNull)) {
+      throw malformed("Media-service returned invalid cabin media photo metadata");
+    }
+    return new CabinMediaPhoto(
+        photo.mediaId(),
+        photo.generation(),
+        photo.sortOrder(),
+        List.copyOf(photo.availableVariants()));
   }
 
   MediaContent readCabinPresentationMedia(
@@ -302,7 +325,8 @@ final class LogisticsMediaDependencyClient {
       UUID mediaId, long generation, int sortOrder, List<String> availableVariants) {}
 
   /** Presentation media snapshot for one cabin. */
-  private record CabinMediaSnapshotResponse(UUID cabinId, List<CabinMediaPhotoResponse> photos) {}
+  private record CabinMediaSnapshotResponse(
+      UUID cabinId, long photoCount, List<CabinMediaPhotoResponse> photos) {}
 
   /** Batch wrapper for cabin media snapshots returned by media-service. */
   private record CabinMediaSnapshotsResponse(List<CabinMediaSnapshotResponse> items) {}

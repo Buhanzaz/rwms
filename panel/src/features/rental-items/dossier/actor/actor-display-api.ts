@@ -10,6 +10,7 @@ const USER_GLOBAL_ROLES: UserGlobalRole[] = [
   "WMS_ADMIN",
   "WAREHOUSE_MANAGER",
   "RENTAL_MANAGER",
+  "CUSTOMER",
   "VIEWER",
 ]
 

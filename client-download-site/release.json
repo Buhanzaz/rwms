@@ -1,0 +1,13 @@
+{
+  "applicationName": "RWMS Клиент",
+  "packageName": "dev.buhanzaz.rwms.client",
+  "versionCode": 5,
+  "versionName": "0.1.4",
+  "status": "published",
+  "minimumAndroidVersion": "Android 11",
+  "publicGateway": "https://77-90-158-90.sslip.io",
+  "artifactPath": "/downloads/rwms-customer-0.1.4.apk",
+  "downloadUrl": "https://77-90-158-90.sslip.io/downloads/rwms-customer-0.1.4.apk",
+  "sha256": "ba27a178101fb28e58168264f4f109778b084747dff336456b0d1d442683ffb0",
+  "publishedAt": "2026-08-27"
+}

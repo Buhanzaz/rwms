@@ -11,6 +11,7 @@ const releases = await Promise.all(
     resolve(rootDirectory, "../manager-download-site/release.json"),
     resolve(rootDirectory, "../driver-download-site/release.json"),
     resolve(rootDirectory, "../worker-download-site/release.json"),
+    resolve(rootDirectory, "../client-download-site/release.json"),
   ].map(async (filePath) => JSON.parse(await readFile(filePath, "utf8"))),
 );
 
@@ -27,12 +28,13 @@ for (const release of releases) {
 }
 
 assert(
-  (page.match(/class="app-card"/g) ?? []).length === 3,
-  "The Downloads page must contain exactly three application cards.",
+  (page.match(/class="app-card"/g) ?? []).length === 4,
+  "The Downloads page must contain exactly four application cards.",
 );
 assert(!page.includes('href="/downloads/rwms-manager-app-debug.apk"'), "The page must not link a mutable ManagerApp alias.");
 assert(!page.includes('href="/downloads/rwms-worker.apk"'), "The page must not link a mutable WorkerApp alias.");
 assert(!page.includes('href="/downloads/rwms-driver.apk"'), "The page must not link a mutable DriverApp alias.");
+assert(!page.includes('href="/downloads/rwms-customer.apk"'), "The page must not link a mutable CustomerApp alias.");
 
 function assert(condition, message) {
   if (!condition) {

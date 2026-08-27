@@ -62,6 +62,9 @@ class LogisticsFlywayMigrationIntegrationTest {
             "client_presentation",
             "client_presentation_item",
             "consumer_aggregate_checkpoint",
+            "customer_scenario_capacity_command_receipt",
+            "customer_scenario_capacity_job",
+            "customer_scenario_capacity_snapshot",
             "driver_logistics_task",
             "driver_logistics_task_member",
             "equipment_movement_task",
@@ -138,6 +141,22 @@ class LogisticsFlywayMigrationIntegrationTest {
                 Integer.class))
         .isEqualTo(4);
     assertThat(toRegclass("uk_logistics_document_inventory_source")).isNotNull();
+    assertThat(toRegclass("uk_customer_scenario_capacity_snapshot_warehouse")).isNotNull();
+    assertThat(toRegclass("idx_customer_scenario_capacity_command_revision")).isNotNull();
+    assertThat(toRegclass("idx_customer_scenario_capacity_job_date")).isNotNull();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from information_schema.columns
+                where table_schema='public'
+                  and table_name in (
+                    'customer_scenario_capacity_snapshot',
+                    'customer_scenario_capacity_command_receipt')
+                  and column_name='source_generation'
+                """,
+                Integer.class))
+        .isEqualTo(2);
     assertThat(
             constraintDefinition(
                 "inventory_outcome_receipt_asset",
@@ -2700,6 +2719,125 @@ class LogisticsFlywayMigrationIntegrationTest {
                     "update cabin_photo_presentation set metadata_snapshot_json='[]'::jsonb where id=?",
                     presentationId))
         .hasMessageContaining("ck_cabin_photo_presentation_metadata_snapshot");
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v57AdmitsHistoricalRentalMovementIdempotencyAndValidatesJpa() {
+    Flyway beforeV57 = configuration(MIGRATIONS).target("56").load();
+    assertThat(beforeV57.migrate().migrationsExecuted).isEqualTo(56);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select pg_get_constraintdef(oid)
+                from pg_constraint
+                where conname='ck_logistics_idempotency_operation'
+                """,
+                String.class))
+        .doesNotContain("CREATE_HISTORICAL_RENTAL_MOVEMENT");
+
+    Flyway upgraded = configuration(MIGRATIONS).target("57").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select pg_get_constraintdef(oid)
+                from pg_constraint
+                where conname='ck_logistics_idempotency_operation'
+                """,
+                String.class))
+        .contains("CREATE_HISTORICAL_RENTAL_MOVEMENT");
+    assertThat(
+            jdbc.queryForObject(
+                "select is_nullable from information_schema.columns where table_schema='public'"
+                    + " and table_name='logistics_idempotency_record' and column_name='response_json'",
+                String.class))
+        .isEqualTo("YES");
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v58AdmitsHistoricalRentalMovementUpdateIdempotencyAndValidatesJpa() {
+    Flyway beforeV58 = configuration(MIGRATIONS).target("57").load();
+    assertThat(beforeV58.migrate().migrationsExecuted).isEqualTo(57);
+    assertThat(logisticsConstraintDefinition("ck_logistics_idempotency_operation"))
+        .contains("CREATE_HISTORICAL_RENTAL_MOVEMENT")
+        .doesNotContain("UPDATE_HISTORICAL_RENTAL_MOVEMENT");
+
+    Flyway upgraded = configuration(MIGRATIONS).target("58").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(logisticsConstraintDefinition("ck_logistics_idempotency_operation"))
+        .contains(
+            "CREATE_HISTORICAL_RENTAL_MOVEMENT",
+            "UPDATE_HISTORICAL_RENTAL_MOVEMENT");
+    assertThat(logisticsConstraintDefinition("ck_logistics_historical_idempotency_response"))
+        .contains(
+            "CREATE_HISTORICAL_RENTAL_MOVEMENT",
+            "UPDATE_HISTORICAL_RENTAL_MOVEMENT",
+            "response_json IS NOT NULL");
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v59AddsCustomerBookingStateAndExpandsOnlyRequiredActorRoles() {
+    Flyway beforeV59 = configuration(MIGRATIONS).target("58").load();
+    assertThat(beforeV59.migrate().migrationsExecuted).isEqualTo(58);
+    assertThat(toRegclass("customer_profile")).isNull();
+    assertThat(constraintDefinition("rental_order", "ck_rental_order_creator_role"))
+        .doesNotContain("CUSTOMER");
+
+    Flyway upgraded = configuration(MIGRATIONS).target("59").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(tableNames())
+        .contains("customer_profile", "customer_rental_session", "customer_delivery_slot");
+    assertThat(constraintDefinition("rental_order", "ck_rental_order_creator_role"))
+        .contains("CUSTOMER");
+    assertThat(constraintDefinition("rental_inquiry", "ck_rental_inquiry_manager_role"))
+        .contains("CUSTOMER");
+    assertThat(
+            constraintDefinition(
+                "rental_inquiry_selection_receipt",
+                "ck_rental_inquiry_selection_receipt_actor_role"))
+        .contains("CUSTOMER");
+    assertThat(toRegclass("uk_customer_delivery_slot_confirmed_order")).isNotNull();
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v56ToV60UpgradeAddsImmutableReceiptsAndIsolatedScenarioCapacityThenValidatesJpa() {
+    Flyway beforeV57 = configuration(MIGRATIONS).target("56").load();
+    assertThat(beforeV57.migrate().migrationsExecuted).isEqualTo(56);
+    assertThat(toRegclass("customer_profile")).isNull();
+    assertThat(toRegclass("customer_scenario_capacity_snapshot")).isNull();
+
+    Flyway upgraded = configuration(MIGRATIONS).target("60").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(4);
+    upgraded.validate();
+
+    assertThat(tableNames())
+        .contains(
+            "customer_profile",
+            "customer_delivery_slot",
+            "customer_scenario_capacity_snapshot",
+            "customer_scenario_capacity_command_receipt",
+            "customer_scenario_capacity_job");
+    assertThat(
+            jdbc.queryForObject(
+                "select pg_get_indexdef(to_regclass('idx_customer_scenario_capacity_command_revision'))",
+                String.class))
+        .contains(
+            "warehouse_id",
+            "source_scenario_id",
+            "source_generation",
+            "source_revision");
+    assertThat(logisticsConstraintDefinition("ck_logistics_historical_idempotency_response"))
+        .contains("response_json IS NOT NULL");
     assertJpaValidationStarts();
   }
 

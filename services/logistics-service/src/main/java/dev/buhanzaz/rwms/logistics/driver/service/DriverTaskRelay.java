@@ -34,11 +34,14 @@ class DriverTaskRelay {
           DriverTaskState.SCHEDULED,
           DriverTaskState.CURRENT,
           DriverTaskState.FINALIZING);
+  private static final List<DriverTaskState> RECONCILIATION_STATES =
+      List.of(DriverTaskState.RECONCILIATION_REQUIRED);
 
   private final DriverLogisticsTaskRepository tasks;
   private final DriverTaskProcessor processor;
   private final DriverQueueScheduler scheduler;
   private final LogisticsDependencyGateway dependencies;
+  private int reconciliationPageNumber;
 
   @Scheduled(
       fixedDelayString = "${rwms.logistics.driver-queue.relay-delay:1s}",
@@ -62,6 +65,31 @@ class DriverTaskRelay {
         scheduler.reconcileAndPromote(warehouse.id());
       } catch (RuntimeException exception) {
         log.warn("Driver queue {} scheduling pass failed", warehouse.id(), exception);
+      }
+    }
+  }
+
+  /**
+   * Rechecks bounded dependency-failure reconciliation rows against task-board. A confirmed remote
+   * task can safely resume its durable local workflow; business reconciliation codes remain
+   * terminal and are never reopened by this recovery pass.
+   */
+  @Scheduled(
+      fixedDelayString = "${rwms.logistics.driver-queue.reconciliation-delay:30s}",
+      initialDelayString = "${rwms.logistics.driver-queue.reconciliation-initial-delay:2s}")
+  void reconcile() {
+    int pageNumber = reconciliationPageNumber;
+    List<UUID> taskIds =
+        tasks.findDueIds(
+            RECONCILIATION_STATES,
+            OffsetDateTime.now(ZoneOffset.UTC),
+            PageRequest.of(pageNumber, MAX_TASKS_PER_PASS));
+    reconciliationPageNumber = taskIds.size() == MAX_TASKS_PER_PASS ? pageNumber + 1 : 0;
+    for (UUID taskId : taskIds) {
+      try {
+        processor.reconcileFromTaskBoard(taskId);
+      } catch (RuntimeException exception) {
+        log.warn("Driver task {} reconciliation pass failed", taskId, exception);
       }
     }
   }

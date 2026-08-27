@@ -165,6 +165,7 @@ public class PresentationUnitHold {
                 "WMS_ADMIN",
                 "WAREHOUSE_MANAGER",
                 "RENTAL_MANAGER",
+                "CUSTOMER",
                 "VIEWER")
             .contains(value)) {
       throw new IllegalArgumentException("actorRole is invalid");

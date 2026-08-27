@@ -250,14 +250,23 @@ return/shipment/transfer. Все они авторизуются по local owne
 внутри media-service.
 
 `POST /api/media/v1/cabin-covers` возвращает ограниченную warehouse batch.
-`photoCount` учитывает все сохранённые логические изображения архива. В
-`previews` не более 100 READY изображений всего архива: сначала явная
-каноническая обложка, затем остальные изображения в стабильном association
-order; на каждое логическое изображение приходится ровно один `SMALL` variant.
-Границы папок остаются в CABIN archive read. Приватный logistics snapshot
-включает все сохранённые READY изображения из этих folders, использует тот же
-cover-first presentation order и возвращает позиции с нуля. Выбор обложки
-меняет порядок, но не состав. MEDIUM, LARGE, ORIGINAL и
+`photoCount` и не более 100 READY `previews` охватывают только логические
+изображения из `media_cabin_photo_library.active_gallery_folder_id`: сначала
+идёт явная каноническая обложка, затем остальные изображения в стабильном
+association order, по одному `SMALL` variant на логическое изображение.
+Приватный logistics snapshot использует ту же границу активной папки,
+возвращает полный логический `photoCount` и не более 100 READY-ссылок с
+позициями от нуля. Счётчик включает ещё обрабатываемые изображения текущей
+папки, поэтому consumer может отклонить неполное или слишком большое immutable
+представление вместо фиксации обрезанного списка. Библиотека без активной папки
+возвращает нулевой счётчик и не даёт текущих фотографий. Более новая direct upload batch
+атомарно становится активной после готовности первого изображения, а её
+детерминированное минимальное READY-фото по
+`(sortOrder, attachedAt, mediaId)` становится обложкой даже при завершении
+обработки не по порядку. Новизна папки фиксируется по самому позднему
+сохранённому association timestamp, включая ещё обрабатываемые изображения,
+поэтому задержавшаяся старая партия не может вернуть указатель. Старые папки
+сохраняются со своими границами в полном CABIN archive. MEDIUM, LARGE, ORIGINAL и
 координаты object storage публичная projection не выдаёт. CABIN owner read через
 `GET /api/media/v1/assets` остаётся полным архивом: его projected `folderId`
 берётся из CABIN association, поэтому фотографии инвентаризации образуют одну
@@ -329,10 +338,10 @@ backfill-ит association folders из `media_asset.folder_id`, активную
 существующего cover и добавляет inventory receipt, watermark и source-audit
 state. Миграция не обновляет и не удаляет `media_asset`, `media_variant` или
 данные object store. В полном CABIN archive inventory associations используют
-derived folder; текущие cover/previews и logistics current presentation
-включают все сохранённые READY folders и ставят явную обложку первой.
-Существующие direct и task-evidence associations остаются в истории, а выбор
-task evidence также выбирает его собственную association folder.
+derived folder; текущие cover/previews и private logistics presentation
+включают только активную папку и ставят её явную обложку первой. Существующие
+direct и task-evidence associations остаются в истории, а выбор task evidence
+также выбирает его собственную association folder.
 [`V17__consolidate_legacy_cabin_photo_folders.sql`](db/migration/V17__consolidate_legacy_cabin_photo_folders.sql)
 объединяет только дорефакторинговые `BACKFILL` associations в одну legacy folder
 на бытовку; границы inventory и runtime folders не меняются.
@@ -476,11 +485,15 @@ event/outbox/Kafka consumer и не вызывает object storage.
 
 `POST /api/internal/media/v1/logistics/cabin-presentations/snapshots` использует
 ту же точную SERVICE identity/scope. Он принимает от одного до ста уникальных
-CABIN ID одного warehouse и возвращает только current canonical bindings и
-все сохранённые READY/current images из всех folders как references
-`{mediaId,generation,sortOrder,availableVariants}`, начиная с обложки. Нет
-browser path, object-store coordinates, signed URL, filename, MIME type или
-processing data.
+CABIN ID одного warehouse и возвращает только current canonical bindings,
+полный логический `photoCount` активной папки и не более 100
+READY/current-generation images как references
+`{mediaId,generation,sortOrder,availableVariants}`, начиная с обложки.
+`photoCount` также включает runtime-доступные изображения, которые ещё
+обрабатываются, поэтому неполный или слишком большой набор виден явно. У
+library без активной папки счётчик равен нулю, а список `photos` пуст. Старые
+папки доступны только через полный CABIN archive. Нет browser path,
+object-store coordinates, signed URL, filename, MIME type или processing data.
 
 `GET /api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content`
 — парный private byte stream. `variant` ровно `SMALL` или `LARGE`; в запросе
@@ -525,8 +538,9 @@ go build -trimpath -o /tmp/rwms-media-service ./cmd/media-service
 ```
 
 Проверка миграций выполняется отдельно Flyway и PostgreSQL и должна покрыть
-clean install V1-to-V16, upgrade V12-to-V13-to-V14-to-V15-to-V16, V13-to-V14
-reader backfill, upgrade membership constraint V14-to-V15, additive upgrade
-V16 для image bundles, повторный запуск, checksum drift и непустую базу без
-истории. Проверки MinIO должны использовать versioned local/test bucket;
-Kafka-проверки — канонические topics и broker acknowledgements.
+clean install V1-to-V17, upgrade V12-to-V13-to-V14-to-V15-to-V16-to-V17,
+V13-to-V14 reader backfill, upgrade membership constraint V14-to-V15,
+additive upgrade V16 для image bundles, V17 consolidation legacy folders,
+повторный запуск, checksum drift и непустую базу без истории. Проверки MinIO
+должны использовать versioned local/test bucket; Kafka-проверки — канонические
+topics и broker acknowledgements.

@@ -23,6 +23,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.MountableFile;
 
+/** Proves that an adopted V2 schema upgrades without losing its pre-adoption business facts. */
 @SpringBootTest
 @ActiveProfiles("test")
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
@@ -51,7 +52,7 @@ class AuthAdoptedV2JpaValidationIntegrationTest {
     }
 
     @Test
-    void bootStartsWithJpaValidationAndLeavesAdoptedVersionTwoRowsUntouched() {
+    void bootStartsWithJpaValidationAndPreservesAdoptedVersionTwoFacts() {
         assertThat(entityManagerFactory.isOpen()).isTrue();
         assertThat(retainedDigests(jdbc)).containsExactlyInAnyOrderEntriesOf(beforeStartup);
         assertThat(jdbc.queryForObject(
@@ -60,6 +61,11 @@ class AuthAdoptedV2JpaValidationIntegrationTest {
                 .isOne();
         assertThat(jdbc.queryForObject("select count(*) from auth_subject", Integer.class)).isOne();
         assertThat(jdbc.queryForObject("select count(*) from user_warehouse_access", Integer.class)).isOne();
+        assertThat(jdbc.queryForMap(
+                        "select version, mobile_app_access, rental_access from auth_subject"))
+                .containsEntry("version", 5)
+                .containsEntry("mobile_app_access", false)
+                .containsEntry("rental_access", false);
     }
 
     @AfterAll
@@ -147,7 +153,11 @@ class AuthAdoptedV2JpaValidationIntegrationTest {
 
     private static Map<String, String> retainedDigests(JdbcTemplate jdbc) {
         return Map.of(
-                "auth_subject", digest(jdbc, "auth_subject"),
+                "auth_subject", digestQuery(
+                        jdbc,
+                        "select id, principal_type, username, password_hash, first_name, last_name, "
+                                + "email, time_zone_id, global_role, external_worker_id, warehouse_id, "
+                                + "active, created_at from auth_subject"),
                 "user_warehouse_access", digest(jdbc, "user_warehouse_access"),
                 "rwms_schema_history", digest(jdbc, "rwms_schema_history"),
                 "databasechangelog", digest(jdbc, "databasechangelog"),
@@ -155,11 +165,15 @@ class AuthAdoptedV2JpaValidationIntegrationTest {
     }
 
     private static String digest(JdbcTemplate jdbc, String table) {
+        return digestQuery(jdbc, "select * from " + table);
+    }
+
+    private static String digestQuery(JdbcTemplate jdbc, String query) {
         return jdbc.queryForObject(
                 "select md5(coalesce(string_agg(to_jsonb(row_value)::text, '|' "
-                        + "order by to_jsonb(row_value)::text), '')) from "
-                        + table
-                        + " row_value",
+                        + "order by to_jsonb(row_value)::text), '')) from ("
+                        + query
+                        + ") row_value",
                 String.class);
     }
 

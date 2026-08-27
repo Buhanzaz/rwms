@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.logistics;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -22,6 +23,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.service.LogisticsExternalAttemptClaimService;
+import dev.buhanzaz.rwms.logistics.service.ShipmentProcessor;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -88,6 +91,8 @@ class OrderApiIntegrationTest {
   @Autowired MockMvc mvc;
   @Autowired ObjectMapper objectMapper;
   @Autowired JdbcTemplate jdbc;
+  @Autowired LogisticsExternalAttemptClaimService externalAttemptClaims;
+  @Autowired ShipmentProcessor shipmentProcessor;
   @MockitoBean LogisticsDependencyGateway dependencies;
 
   private final Map<UUID, LinkedHashMap<UUID, LogisticsDependencyGateway.OrderUnitReservation>>
@@ -109,6 +114,7 @@ class OrderApiIntegrationTest {
           driver_logistics_task,
           logistics_warehouse_admission_intent,
           warehouse_operation_mark_outbox,
+          logistics_document,
           rental_order_command_receipt,
           rental_order_audit_event,
           rental_order,
@@ -271,6 +277,219 @@ class OrderApiIntegrationTest {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.totalElements").value(1));
     assertThat(jdbc.queryForObject("select count(*) from order_client", Long.class)).isOne();
+  }
+
+  @Test
+  void administratorCreatesHistoricalShipmentForPastDateWithoutDriverTask() throws Exception {
+    MvcResult clientResult =
+        mvc.perform(
+                post("/api/logistics/v1/clients")
+                    .header("Idempotency-Key", UUID.randomUUID())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(
+                        """
+                        {
+                          "clientType": "LEGAL_ENTITY",
+                          "displayName": "АО АПАТИТ",
+                          "phone": "%s",
+                          "contactPerson": "Контактное лицо"
+                        }
+                        """
+                            .formatted(nextTestPhone()))
+                    .with(admin()))
+            .andExpect(status().isCreated())
+            .andReturn();
+    UUID clientId = UUID.fromString(json(clientResult).get("id").stringValue());
+    UUID idempotencyKey = UUID.randomUUID();
+    String historicalShipmentBody =
+        """
+        {
+          "warehouseId": "%s",
+          "rentalItemId": "%s",
+          "expectedRentalItemVersion": 7,
+          "clientId": "%s",
+          "kind": "SHIPMENT",
+          "occurredOn": "2023-05-17"
+        }
+        """
+            .formatted(WAREHOUSE_1, UNIT_1, clientId);
+
+    var historicalShipment =
+        mvc.perform(
+            post("/api/logistics/v1/historical-rental-movements")
+                .header("Idempotency-Key", idempotencyKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(historicalShipmentBody)
+                .with(admin()));
+    assertThat(historicalShipment.andReturn().getResolvedException()).isNull();
+    historicalShipment
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.state").value("PREPARING"))
+        .andExpect(jsonPath("$.scheduledDate").value("2023-05-17"))
+        .andExpect(jsonPath("$.historicalRentalImport").value(true))
+        .andExpect(jsonPath("$.driverSnapshot").doesNotExist())
+        .andExpect(jsonPath("$.driverWorkerId").doesNotExist());
+    UUID documentId =
+        UUID.fromString(json(historicalShipment.andReturn()).get("id").stringValue());
+    long creationVersion = json(historicalShipment.andReturn()).get("version").longValue();
+
+    mvc.perform(
+            post("/api/logistics/v1/historical-rental-movements")
+                .header("Idempotency-Key", idempotencyKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(historicalShipmentBody)
+                .with(admin()))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.state").value("PREPARING"))
+        .andExpect(jsonPath("$.scheduledDate").value("2023-05-17"))
+        .andExpect(jsonPath("$.historicalRentalImport").value(true));
+
+    when(dependencies.closeHistoricalShipment(
+            any(), eq(documentId), eq(WAREHOUSE_1), eq(UNIT_1)))
+        .thenReturn(
+            new LogisticsDependencyGateway.HistoricalShipmentRepairClosure(
+                documentId,
+                WAREHOUSE_1,
+                UNIT_1,
+                7,
+                "RENTED",
+                List.of(),
+                "ALREADY_RENTED"));
+    assertThat(
+            LogisticsExternalAttemptTestClaims.drainShipment(
+                externalAttemptClaims, shipmentProcessor))
+        .isOne();
+
+    MvcResult shipped =
+        mvc.perform(get("/api/logistics/v1/shipments/{documentId}", documentId).with(admin()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.id").value(documentId.toString()))
+            .andExpect(jsonPath("$.state").value("SHIPPED"))
+            .andExpect(jsonPath("$.partySnapshot").value("АО АПАТИТ"))
+            .andExpect(jsonPath("$.scheduledDate").value("2023-05-17"))
+            .andReturn();
+    long shippedVersion = json(shipped).get("version").longValue();
+
+    mvc.perform(
+            post("/api/logistics/v1/historical-rental-movements")
+                .header("Idempotency-Key", idempotencyKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(historicalShipmentBody)
+                .with(admin()))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.version").value(creationVersion))
+        .andExpect(jsonPath("$.state").value("PREPARING"));
+    verify(dependencies, never()).readRentalItemSnapshot(UNIT_1);
+    verify(dependencies, never())
+        .acquireOperationLease(any(), any(), any(), anyLong(), any(), any());
+    verify(dependencies, never())
+        .applyFencedEffect(
+            any(),
+            any(),
+            any(),
+            anyLong(),
+            any(),
+            anyLong(),
+            any(),
+            any(),
+            any(),
+            any());
+
+    UUID replacementClientId =
+        createClient(MANAGER_1, "manager-one", "ООО Исправленный клиент");
+    UUID updateKey = UUID.randomUUID();
+    String updateBody =
+        """
+        {
+          "expectedVersion": %d,
+          "rentalItemId": "%s",
+          "clientId": "%s",
+          "occurredOn": "2023-05-16"
+        }
+        """
+            .formatted(shippedVersion, UNIT_1, replacementClientId);
+    mvc.perform(
+            put("/api/logistics/v1/historical-rental-movements/{documentId}", documentId)
+                .header("Idempotency-Key", updateKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(updateBody)
+                .with(admin()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.id").value(documentId.toString()))
+        .andExpect(jsonPath("$.state").value("SHIPPED"))
+        .andExpect(jsonPath("$.clientId").value(replacementClientId.toString()))
+        .andExpect(jsonPath("$.partySnapshot").value("ООО Исправленный клиент"))
+        .andExpect(jsonPath("$.scheduledDate").value("2023-05-16"));
+    when(dependencies.warehouseTimeZoneAt(eq(WAREHOUSE_1), any(OffsetDateTime.class)))
+        .thenThrow(
+            new dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException(
+                dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException.FailureKind.TRANSIENT,
+                "warehouse time is unavailable after the accepted update"));
+    mvc.perform(
+            put("/api/logistics/v1/historical-rental-movements/{documentId}", documentId)
+                .header("Idempotency-Key", updateKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(updateBody)
+                .with(admin()))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.id").value(documentId.toString()));
+
+    assertThat(
+            jdbc.queryForObject(
+                "select tenant_snapshot from logistics_document_line where document_id=?",
+                String.class,
+                documentId))
+        .isEqualTo("ООО Исправленный клиент");
+
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from logistics_idempotency_record
+                where operation_name='CREATE_HISTORICAL_RENTAL_MOVEMENT'
+                  and idempotency_key=?
+                """,
+                Long.class,
+                idempotencyKey))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from logistics_idempotency_record
+                where operation_name='UPDATE_HISTORICAL_RENTAL_MOVEMENT'
+                  and idempotency_key=?
+                """,
+                Long.class,
+                updateKey))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from logistics_document d
+                join logistics_document_line l on l.document_id=d.id
+                where d.document_type='SHIPMENT'
+                  and d.historical_rental_import=true
+                  and l.asset_id=?
+                """,
+                Long.class,
+                UNIT_1))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from logistics_external_attempt
+                where operation_type='SHIPMENT_HISTORICAL_MAINTENANCE_CLOSE'
+                """,
+                Long.class))
+        .isOne();
+    assertThat(jdbc.queryForObject("select count(*) from driver_logistics_task", Long.class))
+        .isZero();
   }
 
   @Test

@@ -478,6 +478,127 @@ class DriverTaskWorkflowStoreTest {
   }
 
   @Test
+  void coverEffectRejectionCannotBeReopenedFromAnUnrelatedTaskBoardSnapshot() {
+    UUID taskId = UUID.randomUUID();
+    DriverLogisticsTask task = repairDelivery(taskId);
+    when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
+    when(tasks.findById(taskId)).thenReturn(Optional.of(task));
+
+    store.recordFailure(
+        new DriverTaskWorkflowStore.CoverWork(
+            taskId, task.getCabinId(), UUID.randomUUID(), UUID.randomUUID(), false),
+        new LogisticsDependencyException(
+            LogisticsDependencyException.FailureKind.PERMANENT_REJECTION,
+            "media ownership rejected the cover"));
+
+    assertThat(task.getState()).isEqualTo(DriverTaskState.RECONCILIATION_REQUIRED);
+    assertThat(task.getFailureCode())
+        .isEqualTo("COVER_EFFECT_DEPENDENCY_PERMANENT_REJECTION");
+    assertThat(store.recoverableReconciliationExternalTaskId(taskId)).isEmpty();
+  }
+
+  @Test
+  void genericDependencyReconciliationResumesFromAMatchingActiveBoardTask() {
+    UUID taskId = UUID.randomUUID();
+    DriverLogisticsTask task = repairDelivery(taskId);
+    UUID boardTaskId = UUID.randomUUID();
+    UUID entryId = UUID.randomUUID();
+    task.registerBoardTask(boardTaskId, 1, entryId, "WAITING", "SCHEDULED", null);
+    when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
+    when(tasks.findById(taskId)).thenReturn(Optional.of(task));
+    store.recordFailure(
+        taskId,
+        new LogisticsDependencyException(
+            LogisticsDependencyException.FailureKind.PERMANENT_REJECTION,
+            "temporary remote rejection"));
+    LocalDate recoveredDate = LocalDate.now(ZoneOffset.UTC);
+    LogisticsDependencyGateway.DriverBoardTask board =
+        new LogisticsDependencyGateway.DriverBoardTask(
+            boardTaskId,
+            2,
+            task.getWarehouseId(),
+            task.getExternalTaskId(),
+            "Доставить бытовку",
+            task.getUnitNumber(),
+            "Доставить бытовку",
+            new LogisticsDependencyGateway.DriverTaskAudience(
+                DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null),
+            "ACTIVE",
+            recoveredDate,
+            "SCHEDULED",
+            task.getPriority(),
+            false,
+            null,
+            entryId,
+            2,
+            "WAITING",
+            0);
+
+    assertThat(store.recoverableReconciliationExternalTaskId(taskId))
+        .contains(task.getExternalTaskId());
+    store.confirmReconciliationStatus(taskId, board);
+
+    assertThat(task.getState()).isEqualTo(DriverTaskState.SCHEDULED);
+    assertThat(task.getFailureCode()).isNull();
+    assertThat(task.getScheduledDate()).isEqualTo(recoveredDate);
+    verify(tasks, times(2)).saveAndFlush(task);
+  }
+
+  @Test
+  void registrationReconciliationBindsAnAlreadyCreatedRemoteTask() {
+    UUID taskId = UUID.randomUUID();
+    DriverLogisticsTask task = repairDelivery(taskId);
+    UUID boardTaskId = UUID.randomUUID();
+    UUID entryId = UUID.randomUUID();
+    when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
+    store.recordFailure(
+        taskId,
+        new LogisticsDependencyException(
+            LogisticsDependencyException.FailureKind.CONFIGURATION,
+            "registration response was not retained"));
+    LocalDate recoveredDate = LocalDate.now(ZoneOffset.UTC);
+    LogisticsDependencyGateway.DriverBoardTask board =
+        new LogisticsDependencyGateway.DriverBoardTask(
+            boardTaskId,
+            3,
+            task.getWarehouseId(),
+            task.getExternalTaskId(),
+            "Доставить бытовку",
+            task.getUnitNumber(),
+            "Доставить бытовку",
+            new LogisticsDependencyGateway.DriverTaskAudience(
+                DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null),
+            "ACTIVE",
+            recoveredDate,
+            "SCHEDULED",
+            task.getPriority(),
+            false,
+            null,
+            entryId,
+            4,
+            "WAITING",
+            0);
+
+    store.confirmReconciliationStatus(taskId, board);
+
+    assertThat(task.getState()).isEqualTo(DriverTaskState.SCHEDULED);
+    assertThat(task.getTaskBoardTaskId()).isEqualTo(boardTaskId);
+    assertThat(task.getTaskBoardEntryId()).isEqualTo(entryId);
+    assertThat(task.getScheduledDate()).isEqualTo(recoveredDate);
+    assertThat(task.getFailureCode()).isNull();
+  }
+
+  @Test
+  void businessReconciliationIsNeverReopenedByTheDependencyRecoveryPass() {
+    UUID taskId = UUID.randomUUID();
+    DriverLogisticsTask task = repairDelivery(taskId);
+    task.requireReconciliation("MAINTENANCE_COMPENSATION_GUARD_UNKNOWN");
+    when(tasks.findById(taskId)).thenReturn(Optional.of(task));
+
+    assertThat(store.recoverableReconciliationExternalTaskId(taskId)).isEmpty();
+  }
+
+  @Test
   void groupedShipmentCompletesOnlyAfterEveryCabinCoverAndRetriesTheSameMemberSafely() {
     UUID taskId = UUID.randomUUID();
     UUID firstCabinId = UUID.randomUUID();

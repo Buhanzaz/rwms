@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import jakarta.persistence.LockModeType;
 import java.time.OffsetDateTime;
+import java.time.LocalDate;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -121,6 +122,46 @@ public interface DriverLogisticsTaskRepository extends JpaRepository<DriverLogis
 
   @EntityGraph(attributePaths = "members")
   List<DriverLogisticsTask> findAllByWarehouseIdOrderByCreatedAtAscIdAsc(UUID warehouseId);
+
+  /**
+   * Counts active date-only transport work that must conservatively reserve one driver for the
+   * whole day until the planner supplies an exact service window.
+   */
+  long countByWarehouseIdAndScheduledDateAndKindInAndStateNotIn(
+      UUID warehouseId,
+      LocalDate scheduledDate,
+      Collection<DriverTaskKind> kinds,
+      Collection<DriverTaskState> excludedStates);
+
+  /**
+   * Counts conservative whole-day delivery reservations while excluding a rental-order shipment
+   * already represented by an exact CustomerApp route slot.
+   */
+  @Query(
+      """
+      select count(task)
+      from DriverLogisticsTask task
+      where task.warehouseId = :warehouseId
+        and task.scheduledDate = :scheduledDate
+        and task.kind in (
+          dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind.SHIPMENT,
+          dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind.TRANSFER)
+        and task.state not in (
+          dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState.COMPLETED,
+          dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState.CANCELLED)
+        and not exists (
+          select document.id
+          from LogisticsDocument document, CustomerDeliverySlot slot
+          where task.sourceType = dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType.LOGISTICS_DOCUMENT
+            and document.id = task.sourceId
+            and document.rentalOrderId = slot.orderId
+            and slot.state in (
+              dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotState.CHECKOUT_PENDING,
+              dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotState.CONFIRMED))
+      """)
+  long countWholeDayDeliveryReservations(
+      @Param("warehouseId") UUID warehouseId,
+      @Param("scheduledDate") LocalDate scheduledDate);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select task from DriverLogisticsTask task where task.id = :id")

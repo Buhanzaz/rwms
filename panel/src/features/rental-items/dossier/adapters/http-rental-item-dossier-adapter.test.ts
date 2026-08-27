@@ -133,8 +133,8 @@ describe("dossier-service HTTP adapter", () => {
 
   it("accepts an older response that has no task-evidence-photo field", async () => {
     const response = dossierResponse()
-    const { taskEvidencePhotos: _ignored, ...legacyActivity } =
-      response.activities[0]!
+    const legacyActivity = { ...response.activities[0]! }
+    Reflect.deleteProperty(legacyActivity, "taskEvidencePhotos")
     const legacyResponse = { ...response, activities: [legacyActivity] }
     fetchMock.mockResolvedValue(jsonResponse(legacyResponse))
 

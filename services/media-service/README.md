@@ -250,13 +250,22 @@ the live warehouse, revision and active state. There is no proof TTL: activity
 is determined by the binding checkpoint and quarantine state.
 
 `POST /api/media/v1/cabin-covers` returns a bounded warehouse batch. Its
-`photoCount` covers every retained logical archive image; `previews` contains
-at most 100 READY archive images, with the explicit canonical cover first and
-the remaining images in stable association order, and exactly one `SMALL`
-variant per logical image. Folder boundaries stay in the CABIN archive read.
-The private logistics snapshot includes every retained READY image across those
-folders, uses the same cover-first presentation order and returns zero-based
-presentation positions. Selecting a cover changes ordering, not membership.
+`photoCount` and at most 100 READY `previews` cover only the logical images in
+`media_cabin_photo_library.active_gallery_folder_id`, with the explicit
+canonical cover first, the remaining images in stable association order and
+exactly one `SMALL` variant per logical image. The private logistics snapshot
+uses that same active-folder boundary, returns the full logical `photoCount`
+and at most 100 READY references with zero-based presentation positions. The
+count includes current-folder images that are still processing, so a consumer
+can reject an incomplete or oversized immutable presentation instead of
+freezing a truncated list. A library without an active folder produces a zero
+count and no current photos. A newer direct upload batch atomically becomes active when
+its first image is READY, and its deterministic lowest
+`(sortOrder, attachedAt, mediaId)` READY image becomes the cover even when
+processing completes out of order. Folder recency is fenced by the newest
+retained association timestamp, including images that are still processing, so
+a delayed older batch cannot reclaim the pointer. Older folders remain retained
+with their boundaries in the full CABIN archive.
 MEDIUM, LARGE, ORIGINAL and object-store locations are never returned by the
 public projection. A CABIN owner read through `GET /api/media/v1/assets`
 remains the full archive: its projected `folderId` comes from the CABIN
@@ -330,7 +339,7 @@ active folder from the existing cover, and adds inventory receipt, watermark
 and source-audit state. It does not update or delete `media_asset`,
 `media_variant` or object-store data. Inventory associations use the derived
 folder in the full CABIN archive. Current cover/previews and the private
-logistics presentation include every retained READY folder and put the explicit
+logistics presentation include only the active folder and put its explicit
 cover first. Existing direct and task-evidence associations stay in history,
 and selecting task evidence also selects its own association folder.
 [`V17__consolidate_legacy_cabin_photo_folders.sql`](db/migration/V17__consolidate_legacy_cabin_photo_folders.sql)
@@ -474,10 +483,15 @@ storage call is made.
 `POST /api/internal/media/v1/logistics/cabin-presentations/snapshots` uses the
 same exact SERVICE identity and scope. It accepts one to one hundred unique
 CABIN IDs for one warehouse and returns only current canonical bindings plus
-every retained READY/current image across all folders as
+the full logical active-folder `photoCount` and at most 100
+READY/current-generation images as
 `{mediaId,generation,sortOrder,availableVariants}` references, with the cover
-first. No browser path, object-store coordinate, signed URL, filename, MIME
-type or processing data is returned.
+first. `photoCount` also includes runtime-available images that are still
+processing, which makes an incomplete or oversized set explicit. A library
+without an active folder returns zero and an empty `photos` list. Older folders
+remain available only through the full CABIN archive. No
+browser path, object-store coordinate, signed URL, filename, MIME type or
+processing data is returned.
 
 `GET /api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content`
 is the paired private byte stream. `variant` is exactly `SMALL` or `LARGE`; the
@@ -522,8 +536,9 @@ go build -trimpath -o /tmp/rwms-media-service ./cmd/media-service
 ```
 
 Migration verification must run separately with Flyway and PostgreSQL and
-cover clean V1-to-V16 install, V12-to-V13-to-V14-to-V15-to-V16 upgrade,
+cover clean V1-to-V17 install, V12-to-V13-to-V14-to-V15-to-V16-to-V17 upgrade,
 V13-to-V14 reader backfill, V14-to-V15 membership-constraint upgrade, the
-additive V16 image-bundle upgrade, repeat, checksum drift and non-empty
-unversioned rejection. MinIO integration checks must use a versioned local/test
-bucket; Kafka checks must use the canonical topics and broker acknowledgements.
+additive V16 image-bundle upgrade, V17 legacy-folder consolidation, repeat,
+checksum drift and non-empty unversioned rejection. MinIO integration checks
+must use a versioned local/test bucket; Kafka checks must use the canonical
+topics and broker acknowledgements.

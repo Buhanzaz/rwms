@@ -8,6 +8,7 @@ vi.mock("@/lib/gateway-config", () => ({
 
 import {
   createHistoricalRentalMovement,
+  updateHistoricalRentalShipment,
 } from "@/features/rental-items/historical-rental-movement-api"
 
 const WAREHOUSE_ID = "11111111-1111-4111-8111-111111111111"
@@ -86,5 +87,44 @@ describe("historical rental movement API", () => {
         },
       })
     ).rejects.toThrow("некорректный документ")
+  })
+
+  it("puts a version-fenced correction into the existing historical shipment", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: DOCUMENT_ID, version: 6 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      updateHistoricalRentalShipment({
+        accessToken: "access-token",
+        documentId: DOCUMENT_ID,
+        idempotencyKey: IDEMPOTENCY_KEY,
+        input: {
+          expectedVersion: 5,
+          rentalItemId: RENTAL_ITEM_ID,
+          clientId: CLIENT_ID,
+          occurredOn: "2026-07-31",
+        },
+      })
+    ).resolves.toEqual({ id: DOCUMENT_ID, version: 6 })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(url).pathname).toBe(
+      `/api/logistics/v1/historical-rental-movements/${DOCUMENT_ID}`
+    )
+    expect(init.method).toBe("PUT")
+    expect(new Headers(init.headers).get("Idempotency-Key")).toBe(
+      IDEMPOTENCY_KEY
+    )
+    expect(JSON.parse(String(init.body))).toEqual({
+      expectedVersion: 5,
+      rentalItemId: RENTAL_ITEM_ID,
+      clientId: CLIENT_ID,
+      occurredOn: "2026-07-31",
+    })
   })
 })

@@ -39,7 +39,13 @@ import org.hibernate.proxy.HibernateProxy;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class RentalInquirySelectionReceipt {
   private static final Set<String> ACTOR_ROLES =
-      Set.of("SYSTEM_ADMIN", "WMS_ADMIN", "WAREHOUSE_MANAGER", "RENTAL_MANAGER", "VIEWER");
+      Set.of(
+          "SYSTEM_ADMIN",
+          "WMS_ADMIN",
+          "WAREHOUSE_MANAGER",
+          "RENTAL_MANAGER",
+          "CUSTOMER",
+          "VIEWER");
 
   @Id
   @GeneratedValue(strategy = GenerationType.UUID)

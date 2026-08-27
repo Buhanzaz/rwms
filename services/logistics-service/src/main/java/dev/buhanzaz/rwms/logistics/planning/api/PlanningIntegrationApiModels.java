@@ -1,12 +1,17 @@
 package dev.buhanzaz.rwms.logistics.planning.api;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -21,8 +26,22 @@ public final class PlanningIntegrationApiModels {
     WAREHOUSE_DRIVERS
   }
 
-  /** One client-approved delivery day exported to the route planner. */
-  public record PlanningDateOption(LocalDate date, int priority, boolean isHard) {}
+  /**
+   * One client-approved delivery day exported to the route planner. CustomerApp bookings carry a
+   * hard fixed window and their depot travel-time ring; manager-entered date-only choices omit it.
+   */
+  public record PlanningDateOption(
+      LocalDate date,
+      int priority,
+      boolean isHard,
+      LocalTime windowStart,
+      LocalTime windowEnd,
+      Integer travelZoneHours) {
+    /** Preserves the existing date-only constructor for non-customer planning sources. */
+    public PlanningDateOption(LocalDate date, int priority, boolean isHard) {
+      this(date, priority, isHard, null, null, null);
+    }
+  }
 
   /** One unscheduled rental-order remainder exported without contact or furniture details. */
   public record PlanningRequestResponse(
@@ -44,6 +63,51 @@ public final class PlanningIntegrationApiModels {
       String timeZone,
       OffsetDateTime generatedAt,
       List<PlanningRequestResponse> requests) {}
+
+  /** One anonymous simulator delivery that consumes an exact CustomerApp route window. */
+  public record PlanningCapacityJobRequest(
+      @NotNull UUID sourceJobId,
+      @NotNull LocalDate deliveryDate,
+      @NotNull @DecimalMin("-90.0") @DecimalMax("90.0") @Digits(integer = 2, fraction = 6)
+          BigDecimal latitude,
+      @NotNull @DecimalMin("-180.0") @DecimalMax("180.0") @Digits(integer = 3, fraction = 6)
+          BigDecimal longitude,
+      @Min(1) int cabinCount,
+      @NotNull LocalTime windowStart,
+      @NotNull LocalTime windowEnd,
+      @Min(1) int serviceMinutes) {
+    public PlanningCapacityJobRequest {
+      if (windowStart != null && windowEnd != null && !windowStart.isBefore(windowEnd)) {
+        throw new IllegalArgumentException("Planning capacity window is invalid");
+      }
+    }
+  }
+
+  /** Complete replacement of one warehouse's active, simulator-only capacity projection. */
+  public record ReplacePlanningCapacitySnapshotRequest(
+      @NotNull UUID warehouseId,
+      @Min(1) long sourceGeneration,
+      @NotBlank @Pattern(regexp = "[0-9a-f]{64}") String sourceRevision,
+      @NotNull @Size(max = 1_000) List<@NotNull @Valid PlanningCapacityJobRequest> jobs) {
+    public ReplacePlanningCapacitySnapshotRequest {
+      if (jobs != null
+          && jobs.stream().map(PlanningCapacityJobRequest::sourceJobId).distinct().count()
+              != jobs.size()) {
+        throw new IllegalArgumentException("Planning capacity source job IDs must be unique");
+      }
+    }
+  }
+
+  /** Applied active-capacity revision returned to the standalone simulator. */
+  public record PlanningCapacitySnapshotResponse(
+      UUID warehouseId,
+      UUID sourceScenarioId,
+      long sourceGeneration,
+      long version,
+      String sourceRevision,
+      int jobCount,
+      boolean replayed,
+      OffsetDateTime updatedAt) {}
 
   /** One planner-selected shipment bound to an exact order version and concrete cabins. */
   public record PlanningAssignmentRequest(

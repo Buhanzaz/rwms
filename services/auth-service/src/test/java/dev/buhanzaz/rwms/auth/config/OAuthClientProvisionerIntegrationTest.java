@@ -423,6 +423,55 @@ class OAuthClientProvisionerIntegrationTest {
     }
 
     @Test
+    void customerAndroidClientRejectsPrivilegeRedirectAndTokenPolicyDriftBeforeMutation() {
+        List<OAuthClientProperties.Client> invalidConfigurations = List.of(
+                customerClient(
+                        Set.of("openid", "profile", "offline_access", "customer.rental", "rwms.read"),
+                        Set.of("https://localhost/auth/customer/callback"),
+                        Set.of("https://localhost"),
+                        Duration.ofMinutes(5),
+                        Duration.ofDays(30),
+                        false),
+                customerClient(
+                        OAuthClientProperties.CUSTOMER_ANDROID_SCOPES,
+                        Set.of("http://localhost/auth/customer/callback"),
+                        Set.of("http://localhost"),
+                        Duration.ofMinutes(5),
+                        Duration.ofDays(30),
+                        false),
+                customerClient(
+                        OAuthClientProperties.CUSTOMER_ANDROID_SCOPES,
+                        Set.of("https://localhost/auth/customer/callback"),
+                        Set.of("https://localhost"),
+                        Duration.ofMinutes(15),
+                        Duration.ofDays(30),
+                        false),
+                customerClient(
+                        OAuthClientProperties.CUSTOMER_ANDROID_SCOPES,
+                        Set.of("https://localhost/auth/customer/callback"),
+                        Set.of("https://localhost"),
+                        Duration.ofMinutes(5),
+                        Duration.ofDays(30),
+                        true));
+
+        invalidConfigurations.forEach(configuration -> assertThatThrownBy(() -> provisioner(configuration).run(null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("rwms-customer-android"));
+        assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isZero();
+
+        provisioner(customerClient(
+                        OAuthClientProperties.CUSTOMER_ANDROID_SCOPES,
+                        Set.of("https://localhost/auth/customer/callback"),
+                        Set.of("https://localhost"),
+                        Duration.ofMinutes(5),
+                        Duration.ofDays(30),
+                        false))
+                .run(null);
+        assertThat(repository.findByClientId(OAuthClientProperties.CUSTOMER_ANDROID_CLIENT_ID))
+                .isNotNull();
+    }
+
+    @Test
     void sameRevisionRejectsConfigurationAndSecretDrift() throws Exception {
         provisioner(serviceClient(true, 1, "secret-one", false)).run(null);
 
@@ -772,6 +821,35 @@ class OAuthClientProvisionerIntegrationTest {
                 true,
                 secretEnvironment,
                 developmentSecret,
+                false);
+    }
+
+    private OAuthClientProperties.Client customerClient(
+            Set<String> scopes,
+            Set<String> redirectUris,
+            Set<String> allowedOrigins,
+            Duration accessTokenTtl,
+            Duration refreshTokenTtl,
+            boolean reuseRefreshTokens) {
+        return new OAuthClientProperties.Client(
+                OAuthClientProperties.CUSTOMER_ANDROID_CLIENT_ID,
+                "RWMS Customer",
+                true,
+                1,
+                Set.of("none"),
+                Set.of("authorization_code", "refresh_token"),
+                redirectUris,
+                Set.of(),
+                scopes,
+                true,
+                Set.of(PrincipalType.USER),
+                Set.of("rwms-services"),
+                allowedOrigins,
+                accessTokenTtl,
+                refreshTokenTtl,
+                reuseRefreshTokens,
+                null,
+                null,
                 false);
     }
 

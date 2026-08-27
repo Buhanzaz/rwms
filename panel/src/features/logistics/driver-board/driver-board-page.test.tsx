@@ -582,6 +582,56 @@ describe("DriverBoardPage", () => {
     expect(screen.getByLabelText(/^Задания на .*2 августа/i)).toBeTruthy()
   })
 
+  it("floors stale date columns to today and prevents selecting a past filter", async () => {
+    const overdue = card("00000000-0000-4000-8000-000000000048", {
+      scheduledDate: "2026-08-01",
+      unitNumber: "БТ-ПРОСРОЧЕНА",
+    })
+    renderPage({
+      ...board,
+      currentDate: "2026-08-02",
+      dates: [{ date: "2026-08-01", tasks: [overdue] }, board.dates[1]!],
+    })
+
+    expect(
+      await screen.findByTestId(`scheduled-task-${overdue.externalTaskId}`)
+    ).toBeTruthy()
+    expect(screen.queryByLabelText(/^Задания на .*1 августа/i)).toBeNull()
+    expect(screen.getByLabelText(/^Задания на .*2 августа/i)).toBeTruthy()
+    const dateFilter = screen.getByLabelText("Дата заданий")
+    expect(dateFilter.getAttribute("min")).toBe("2026-08-02")
+
+    fireEvent.change(dateFilter, { target: { value: "2026-08-01" } })
+
+    expect((dateFilter as HTMLInputElement).value).toBe("")
+  })
+
+  it("does not send a drag command to a past date", async () => {
+    renderPage()
+    await screen.findByTestId(`scheduled-task-${SECOND_EXTERNAL_ID}`)
+    const dragData = dndMocks.sortableData.get(
+      `driver-task:${SECOND_EXTERNAL_ID}`
+    )
+    expect(dragData).toBeDefined()
+
+    act(() => {
+      dndMocks.onDragStart?.({ active: { data: { current: dragData } } })
+      dndMocks.onDragEnd?.({
+        active: { data: { current: dragData } },
+        over: {
+          data: {
+            current: { type: "scheduled-date", date: "2026-07-31" },
+          },
+        },
+      })
+    })
+
+    expect(
+      await screen.findByText("Нельзя перенести задание на прошедшую дату.")
+    ).toBeTruthy()
+    expect(apiMocks.moveDriverBoardTask).not.toHaveBeenCalled()
+  })
+
   it("loads an ordered capital plan only after expansion and shows both line columns", async () => {
     const actor = userEvent.setup()
     renderPage()
@@ -1282,22 +1332,31 @@ describe("DriverBoardPage", () => {
     })
   })
 
-  it("renders every server-provided current movement instead of truncating the lane", async () => {
-    const anotherCurrent = card("00000000-0000-4000-8000-000000000011", {
-      driverTaskId: "00000000-0000-4000-8000-000000000110",
-      unitNumber: "БТ-002",
-      kind: "DELIVER_TO_REPAIR",
-      workflowState: "CURRENT",
-      lane: "CURRENT",
-    })
-    renderPage({ ...board, current: [...board.current, anotherCurrent] })
+  it("renders and scrolls every current movement when the lane contains more than six cabins", async () => {
+    const additionalCurrent = Array.from({ length: 7 }, (_, index) =>
+      card(`00000000-0000-4000-8000-0000000000${index + 11}`, {
+        driverTaskId: `00000000-0000-4000-8000-0000000001${index + 10}`,
+        unitNumber: `БТ-${String(index + 2).padStart(3, "0")}`,
+        kind: "DELIVER_TO_REPAIR",
+        workflowState: "CURRENT",
+        lane: "CURRENT",
+        position: index + 1,
+      })
+    )
+    renderPage({ ...board, current: [...board.current, ...additionalCurrent] })
 
     expect(
       await screen.findByTestId(`current-task-${CURRENT_EXTERNAL_ID}`)
     ).toBeTruthy()
-    expect(
-      screen.getByTestId(`current-task-${anotherCurrent.externalTaskId}`)
-    ).toBeTruthy()
+    for (const current of additionalCurrent) {
+      expect(
+        screen.getByTestId(`current-task-${current.externalTaskId}`)
+      ).toBeTruthy()
+    }
+    const scrollRegion = screen.getByTestId("driver-current-task-scroll")
+    expect(scrollRegion.classList.contains("min-h-0")).toBe(true)
+    expect(scrollRegion.classList.contains("overflow-y-auto")).toBe(true)
+    expect(scrollRegion.classList.contains("overscroll-contain")).toBe(true)
   })
 
   it("pins a movement through the shared task-board rule", async () => {

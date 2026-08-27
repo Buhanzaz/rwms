@@ -1512,6 +1512,71 @@ paths:
           content: { application/json: { schema: { $ref: '#/components/schemas/CabinCatalogPage' } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/internal/asset/v1/logistics/customer-cabin-catalog:
+    get:
+      operationId: readCustomerCabinCatalog
+      description: >-
+        Requires SERVICE logistics-service with exactly asset.logistics. Returns a stable bounded
+        page of FREE cabins that are currently bookable for one customer inquiry. The inquiry's
+        own live presentation holds remain visible; active order reservations, operation leases
+        and holds belonging to other scopes are excluded. Structured filters use
+        case-insensitive normalized exact matching and every supplied characteristic must be
+        present. This read expires due holds but never creates, renews or releases a live hold.
+      parameters:
+        - { $ref: '#/components/parameters/WarehouseIdQuery' }
+        - name: holdScopeId
+          in: query
+          required: true
+          description: Customer rental-inquiry ID whose current live holds remain visible.
+          schema: { type: string, format: uuid }
+        - name: query
+          in: query
+          required: false
+          schema: { type: string, maxLength: 255 }
+        - name: cabinType
+          in: query
+          required: false
+          schema: { type: string, maxLength: 255 }
+        - name: finish
+          in: query
+          required: false
+          schema: { type: string, maxLength: 255 }
+        - name: dimensions
+          in: query
+          required: false
+          schema: { type: string, maxLength: 255 }
+        - name: category
+          in: query
+          required: false
+          schema: { type: string, maxLength: 255 }
+        - name: linoleum
+          in: query
+          required: false
+          schema: { type: boolean }
+        - name: characteristics
+          in: query
+          required: false
+          style: form
+          explode: true
+          schema:
+            type: array
+            maxItems: 20
+            uniqueItems: true
+            items: { type: string, minLength: 1, maxLength: 255 }
+        - name: page
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: size
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Currently bookable cabin page for the inquiry scope.
+          content: { application/json: { schema: { $ref: '#/components/schemas/CabinCatalogPage' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/internal/asset/v1/logistics/cabin-searches:
     post:
       operationId: searchPresentationCabins
@@ -2404,7 +2469,7 @@ components:
         locationKind: { $ref: '#/components/schemas/BalanceLocationKind' }
     OrderActorRole:
       type: string
-      enum: [SYSTEM_ADMIN, WMS_ADMIN, WAREHOUSE_MANAGER, RENTAL_MANAGER, VIEWER]
+      enum: [SYSTEM_ADMIN, WMS_ADMIN, WAREHOUSE_MANAGER, RENTAL_MANAGER, CUSTOMER, VIEWER]
     OrderActorRequest:
       type: object
       additionalProperties: false

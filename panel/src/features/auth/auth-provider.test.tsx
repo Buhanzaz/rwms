@@ -389,6 +389,35 @@ describe("AuthProvider refresh-token renewal", () => {
     expect(getCurrentUser).not.toHaveBeenCalled()
   })
 
+  it("publishes an authorization redirect failure instead of leaving the UI loading", async () => {
+    oidc.manager.getUser.mockResolvedValue(null)
+    oidc.manager.signinRedirect.mockRejectedValue(
+      new Error("OIDC metadata недоступны")
+    )
+    const actions: { current: AuthContextValue | null } = { current: null }
+
+    render(
+      <AuthProvider>
+        <AuthActionsProbe
+          onActionsChanged={(next) => (actions.current = next)}
+        />
+      </AuthProvider>
+    )
+
+    await waitFor(() => expect(actions.current?.status).toBe("unauthenticated"))
+
+    await act(async () => {
+      await actions.current!.beginLogin("/acceptance?acceptanceId=repair-1")
+    })
+
+    await waitFor(() =>
+      expect(actions.current?.error).toBe("OIDC metadata недоступны")
+    )
+    expect(oidc.manager.signinRedirect).toHaveBeenCalledWith({
+      state: { returnTo: "/acceptance?acceptanceId=repair-1" },
+    })
+  })
+
   it("exchanges an authorization callback only once when it is delivered twice", async () => {
     oidc.manager.getUser.mockResolvedValue(null)
     oidc.manager.signinRedirectCallback.mockResolvedValue(

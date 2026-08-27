@@ -11,13 +11,13 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
-import java.sql.Types;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /**
  * Durably fences a logistics command by subject, operation, request digest and Idempotency-Key to prevent replayed effects.
@@ -46,7 +46,7 @@ public class LogisticsIdempotencyRecord {
   @Column(name = "idempotency_key", nullable = false)
   private UUID idempotencyKey;
 
-  @JdbcTypeCode(Types.CHAR)
+  @JdbcTypeCode(SqlTypes.CHAR)
   @Column(name = "request_sha256", nullable = false, length = 64)
   private String requestSha256;
 
@@ -59,6 +59,10 @@ public class LogisticsIdempotencyRecord {
 
   @Column(name = "response_document_version", nullable = false)
   private long responseDocumentVersion;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "response_json", columnDefinition = "jsonb")
+  private String responseJson;
 
   @Column(name = "created_at", nullable = false)
   private OffsetDateTime createdAt;
@@ -74,12 +78,36 @@ public class LogisticsIdempotencyRecord {
       LogisticsDocument document,
       OffsetDateTime createdAt,
       OffsetDateTime expiresAt) {
+    return create(
+        subjectId,
+        operationName,
+        idempotencyKey,
+        requestSha256,
+        document,
+        null,
+        createdAt,
+        expiresAt);
+  }
+
+  /**
+   * Creates a command receipt with an optional immutable transport response. Historical rental
+   * commands require that response so a delayed retry cannot observe a later document version.
+   */
+  public static LogisticsIdempotencyRecord create(
+      UUID subjectId,
+      String operationName,
+      UUID idempotencyKey,
+      String requestSha256,
+      LogisticsDocument document,
+      String responseJson,
+      OffsetDateTime createdAt,
+      OffsetDateTime expiresAt) {
     if (subjectId == null || idempotencyKey == null || document == null) {
       throw new IllegalArgumentException("Idempotency ownership fields are required");
     }
     if (operationName == null
         || !operationName.matches(
-            "(CREATE_(RETURN|SHIPMENT|RENTAL_ORDER_SHIPMENT|TRANSFER)|REGISTER_RETURN|ACCEPT_RETURN|REQUEST_RETURN_ESTIMATE|START_RETURN_ESTIMATES|PLAN_SHIPMENT|CONFIRM_SHIPMENT|CANCEL_SHIPMENT|DEPART_TRANSFER_LINE|ARRIVE_TRANSFER_LINE|CANCEL_TRANSFER|RECONCILE_DOCUMENT)")) {
+            "(CREATE_(RETURN|SHIPMENT|RENTAL_ORDER_SHIPMENT|HISTORICAL_RENTAL_MOVEMENT|TRANSFER)|UPDATE_HISTORICAL_RENTAL_MOVEMENT|REGISTER_RETURN|ACCEPT_RETURN|REQUEST_RETURN_ESTIMATE|START_RETURN_ESTIMATES|PLAN_SHIPMENT|CONFIRM_SHIPMENT|CANCEL_SHIPMENT|DEPART_TRANSFER_LINE|ARRIVE_TRANSFER_LINE|CANCEL_TRANSFER|RECONCILE_DOCUMENT)")) {
       throw new IllegalArgumentException("Unsupported idempotency operation");
     }
     if (requestSha256 == null || !requestSha256.matches("[0-9a-f]{64}")) {
@@ -95,6 +123,7 @@ public class LogisticsIdempotencyRecord {
     record.requestSha256 = requestSha256;
     record.document = document;
     record.responseDocumentVersion = document.getVersion();
+    record.responseJson = responseJson;
     record.createdAt = createdAt;
     record.expiresAt = expiresAt;
     return record;

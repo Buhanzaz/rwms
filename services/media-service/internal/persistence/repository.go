@@ -1675,11 +1675,13 @@ func readOwnerAssets(
 }
 
 // ReadCabinCovers returns one warehouse-scoped cover projection per requested
-// cabin. The count covers every retained logical archive image, never derived
-// variants. Previews contain at most one exact SMALL variant per READY image,
-// put the explicit canonical cover first, and are bounded to 100 images. Cabin
+// cabin. The count covers retained logical images only in the canonical active
+// gallery folder, never derived variants or older archive folders. Previews
+// contain at most one exact SMALL variant per READY active-folder image, put
+// the explicit canonical cover first, and are bounded to 100 images. Cabin
 // bindings are share-locked for the complete projection callback so a
-// concurrent owner revocation cannot race the read.
+// concurrent owner revocation cannot race the read. The complete retained
+// folder archive remains available through the CABIN asset list.
 func (repository *Repository) ReadCabinCovers(
 	ctx context.Context,
 	warehouseID uuid.UUID,
@@ -1754,6 +1756,7 @@ func (repository *Repository) ReadCabinCovers(
 			  on library.cabin_id=photo.cabin_id
 			join media_asset asset on asset.media_id=photo.media_id
 			where photo.warehouse_id=$1 and photo.cabin_id::text=any($2::text[])
+			  and photo.gallery_folder_id=library.active_gallery_folder_id
 			  and asset.media_kind='IMAGE' and asset.deleted_at is null
 			  and media_asset_is_available(asset.media_id)
 		), counts as (

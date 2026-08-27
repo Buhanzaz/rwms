@@ -138,6 +138,19 @@ class ShipmentWorkflowStore {
                 closure.rentalItemStatus(),
                 closure.outcome())),
         completedAt);
+    if ("RENTED".equals(closure.rentalItemStatus())) {
+      document.confirmAlreadyRentedHistoricalShipment();
+      documentRepository.saveAndFlush(document);
+      documents.completeRentalOrderShipment(document);
+      eventStore.append(
+          document,
+          lineCount(document),
+          document.getCorrelationId(),
+          document.getRequestedBySubjectId(),
+          LogisticsEventType.SHIPMENT_PREPARATION_CONFIRMED,
+          "ALREADY_RENTED_HISTORICAL_IMPORT");
+      return;
+    }
     createAttemptIfMissing(
         document,
         line,
@@ -747,13 +760,21 @@ class ShipmentWorkflowStore {
         || !document.getWarehouseId().equals(closure.warehouseId())
         || !line.getAssetId().equals(closure.rentalItemId())
         || closure.rentalItemVersion() < line.getAssetVersion()
-        || !"FREE".equals(closure.rentalItemStatus())
         || closure.closedRepairIds() == null
         || closure.closedRepairIds().stream().anyMatch(java.util.Objects::isNull)
         || closure.closedRepairIds().size() != Set.copyOf(closure.closedRepairIds()).size()
-        || !Set.of("NOT_REQUIRED", "CLOSED").contains(closure.outcome())) {
+        || !validHistoricalMaintenanceClosureCombination(closure)) {
       throw malformed("Maintenance-service returned malformed historical shipment closure truth");
     }
+  }
+
+  private static boolean validHistoricalMaintenanceClosureCombination(
+      LogisticsDependencyGateway.HistoricalShipmentRepairClosure closure) {
+    if ("RENTED".equals(closure.rentalItemStatus())) {
+      return "ALREADY_RENTED".equals(closure.outcome()) && closure.closedRepairIds().isEmpty();
+    }
+    return "FREE".equals(closure.rentalItemStatus())
+        && Set.of("NOT_REQUIRED", "CLOSED").contains(closure.outcome());
   }
 
   private static void requireShippedSnapshot(

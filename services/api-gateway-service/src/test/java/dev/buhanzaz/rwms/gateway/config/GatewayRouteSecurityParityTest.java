@@ -599,6 +599,15 @@ class GatewayRouteSecurityParityTest {
     assertThat(requirements).as("security for %s", label).hasSize(1);
     assertThat(requirements.getFirst()).as("security for %s", label).isInstanceOf(Map.class);
     Map<?, ?> requirement = (Map<?, ?>) requirements.getFirst();
+    if (requirement.keySet().equals(Set.of("csrfCookie", "csrfHeader"))) {
+      assertCsrfScheme(
+          securitySchemes, requirement, "csrfCookie", "cookie", "XSRF-TOKEN", label);
+      assertCsrfScheme(
+          securitySchemes, requirement, "csrfHeader", "header", "X-XSRF-TOKEN", label);
+      // CSRF is enforced by auth-service after /auth is stripped; the stateless edge intentionally
+      // treats this delegated operation as anonymous rather than duplicating token state.
+      return SecurityRequirement.ANONYMOUS;
+    }
     assertThat(requirement.size()).as("security scheme count for %s", label).isEqualTo(1);
     Object schemeName = requirement.keySet().iterator().next();
     assertThat(schemeName).as("security scheme name for %s", label).isInstanceOf(String.class);
@@ -613,6 +622,21 @@ class GatewayRouteSecurityParityTest {
         .as("bearer format for %s", label)
         .isEqualTo("JWT");
     return SecurityRequirement.BEARER_JWT;
+  }
+
+  /** Validates one half of the exact cookie-plus-header CSRF requirement delegated to auth-service. */
+  private static void assertCsrfScheme(
+      Map<String, Object> securitySchemes,
+      Map<?, ?> requirement,
+      String scheme,
+      String location,
+      String name,
+      String label) {
+    assertThat(requirement.get(scheme)).as("CSRF scopes for %s", label).isEqualTo(List.of());
+    Map<String, Object> definition = map(securitySchemes.get(scheme));
+    assertThat(definition.get("type")).as("CSRF type for %s", label).isEqualTo("apiKey");
+    assertThat(definition.get("in")).as("CSRF location for %s", label).isEqualTo(location);
+    assertThat(definition.get("name")).as("CSRF name for %s", label).isEqualTo(name);
   }
 
   private static Map<RouteKey, String> specialRoutes() {

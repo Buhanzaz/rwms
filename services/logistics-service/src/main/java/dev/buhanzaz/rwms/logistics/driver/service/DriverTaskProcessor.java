@@ -44,6 +44,24 @@ public class DriverTaskProcessor {
     throw new IllegalStateException("Driver task did not reach a stable local state");
   }
 
+  /**
+   * Reconciles a terminal dependency-failure checkpoint from task-board's authoritative snapshot.
+   * A failed read leaves the checkpoint untouched for the next bounded relay pass.
+   *
+   * @param taskId durable logistics task identity
+   */
+  public void reconcileFromTaskBoard(UUID taskId) {
+    if (taskId == null) throw new IllegalArgumentException("taskId is required");
+    Optional<UUID> externalTaskId = store.recoverableReconciliationExternalTaskId(taskId);
+    if (externalTaskId.isEmpty()) return;
+    try {
+      store.confirmReconciliationStatus(
+          taskId, dependencies.readDriverTask(externalTaskId.orElseThrow()));
+    } catch (RuntimeException exception) {
+      log.warn("Driver task {} reconciliation remains pending", taskId, exception);
+    }
+  }
+
   private void execute(DriverTaskWorkflowStore.Work work) {
     try {
       if (work instanceof DriverTaskWorkflowStore.RegisterWork value) {
@@ -109,12 +127,12 @@ public class DriverTaskProcessor {
       }
       throw new IllegalStateException("Unsupported driver workflow item");
     } catch (LogisticsDependencyException exception) {
-      store.recordFailure(taskId(work), exception);
+      store.recordFailure(work, exception);
     } catch (RuntimeException exception) {
       UUID taskId = taskId(work);
       log.warn("Driver task {} produced an unexpected workflow error", taskId, exception);
       store.recordFailure(
-          taskId,
+          work,
           new LogisticsDependencyException(
               LogisticsDependencyException.FailureKind.TRANSIENT,
               "Driver task dependency outcome is unknown",

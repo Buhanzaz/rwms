@@ -78,6 +78,21 @@ class DriverTaskProcessorTest {
                 ("driver-task:cover:" + taskId).getBytes(StandardCharsets.UTF_8)));
   }
 
+  @Test
+  void reconciliationUsesTheAuthoritativeTaskBoardSnapshot() {
+    UUID taskId = UUID.randomUUID();
+    UUID externalTaskId = UUID.randomUUID();
+    LogisticsDependencyGateway.DriverBoardTask board =
+        mock(LogisticsDependencyGateway.DriverBoardTask.class);
+    when(store.recoverableReconciliationExternalTaskId(taskId))
+        .thenReturn(Optional.of(externalTaskId));
+    when(dependencies.readDriverTask(externalTaskId)).thenReturn(board);
+
+    processor.reconcileFromTaskBoard(taskId);
+
+    verify(store).confirmReconciliationStatus(taskId, board);
+  }
+
   private static LogisticsDependencyGateway.CabinCoverChange coverChange(
       UUID cabinId, UUID entryId, UUID mediaId) {
     return new LogisticsDependencyGateway.CabinCoverChange(

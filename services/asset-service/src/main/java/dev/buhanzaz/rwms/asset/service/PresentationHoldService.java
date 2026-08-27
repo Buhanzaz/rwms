@@ -61,6 +61,7 @@ public class PresentationHoldService {
           "WMS_ADMIN",
           "WAREHOUSE_MANAGER",
           "RENTAL_MANAGER",
+          "CUSTOMER",
           "VIEWER");
   private static final Set<RentalItemStatus> RENTABLE_STATUSES =
       Set.of(RentalItemStatus.FREE);
@@ -171,6 +172,76 @@ public class PresentationHoldService {
         result.getSize(),
         result.getTotalElements(),
         result.getTotalPages());
+  }
+
+  /**
+   * Returns one stable page of cabins that are currently rentable by a customer inquiry. The
+   * inquiry's own live presentation holds remain visible while order reservations, operation
+   * leases and every other presentation scope are excluded. Structured filters are exact after
+   * whitespace/case normalization; every requested characteristic must be present.
+   */
+  @Transactional
+  public CabinCatalogPage customerCatalog(
+      UUID warehouseId,
+      UUID holdScopeId,
+      String query,
+      String cabinType,
+      String finish,
+      String dimensions,
+      String category,
+      Boolean linoleum,
+      List<String> characteristics,
+      int page,
+      int size) {
+    UUID requiredWarehouseId = Objects.requireNonNull(warehouseId, "warehouseId");
+    UUID requiredHoldScopeId = Objects.requireNonNull(holdScopeId, "holdScopeId");
+    validateCustomerCatalogRequest(
+        query, cabinType, finish, dimensions, category, characteristics, page, size);
+    List<String> requiredCharacteristics = normalizedCharacteristics(characteristics);
+    OffsetDateTime timestamp = now();
+    holds.expireDue(timestamp);
+    List<RentalItem> available =
+        availableItems(requiredWarehouseId, requiredHoldScopeId, timestamp, false);
+    Map<UUID, CabinCompositionService.CabinComposition> compositions =
+        cabinComposition.compositionsFor(available);
+    List<RentalItem> matches =
+        available.stream()
+            .filter(
+                item ->
+                    matchesCustomerQuery(
+                        item, compositions.get(item.getId()), query))
+            .filter(
+                item ->
+                    matches(
+                        name(compositions.get(item.getId()).rentalType()), cabinType))
+            .filter(
+                item ->
+                    matches(
+                        name(compositions.get(item.getId()).finishing()), finish))
+            .filter(
+                item ->
+                    matches(
+                        name(compositions.get(item.getId()).dimensions()), dimensions))
+            .filter(item -> matches(item.getCategory(), category))
+            .filter(item -> linoleum == null || linoleum.equals(item.getLinoleum()))
+            .filter(
+                item ->
+                    containsAllCharacteristics(
+                        compositions.get(item.getId()).characteristics(),
+                        requiredCharacteristics))
+            .toList();
+    long offset = (long) page * size;
+    int from = (int) Math.min(offset, matches.size());
+    int to = Math.min(from + size, matches.size());
+    long totalPages =
+        matches.isEmpty() ? 0 : (matches.size() + (long) size - 1) / size;
+    return new CabinCatalogPage(
+        requiredWarehouseId,
+        matches.subList(from, to).stream().map(this::snapshot).toList(),
+        page,
+        size,
+        matches.size(),
+        totalPages);
   }
 
   /**
@@ -948,6 +1019,79 @@ public class PresentationHoldService {
             .map(CabinCatalogValueResponse::name)
             .map(PresentationHoldService::normalizeCharacteristics)
             .anyMatch(value -> value.contains(expected));
+  }
+
+  private static boolean containsAllCharacteristics(
+      List<CabinCatalogValueResponse> actual, List<String> requested) {
+    if (requested.isEmpty()) return true;
+    Set<String> available =
+        actual.stream()
+            .map(CabinCatalogValueResponse::name)
+            .map(PresentationHoldService::normalizeCharacteristics)
+            .filter(value -> !value.isEmpty())
+            .collect(Collectors.toSet());
+    return available.containsAll(requested);
+  }
+
+  private static boolean matchesCustomerQuery(
+      RentalItem item,
+      CabinCompositionService.CabinComposition composition,
+      String query) {
+    String needle = normalize(query);
+    if (needle.isEmpty()) return true;
+    if (needle.equals("линолеум") || needle.equals("с линолеумом")) {
+      return Boolean.TRUE.equals(item.getLinoleum());
+    }
+    if (needle.equals("без линолеума")) {
+      return Boolean.FALSE.equals(item.getLinoleum());
+    }
+    return java.util.stream.Stream.of(
+            item.getNumber(),
+            name(composition.rentalType()),
+            name(composition.finishing()),
+            name(composition.dimensions()),
+            item.getCategory())
+        .filter(Objects::nonNull)
+        .map(PresentationHoldService::normalize)
+        .anyMatch(value -> value.contains(needle))
+        || composition.characteristics().stream()
+            .map(CabinCatalogValueResponse::name)
+            .map(PresentationHoldService::normalizeCharacteristics)
+            .anyMatch(value -> value.contains(needle));
+  }
+
+  private static List<String> normalizedCharacteristics(List<String> values) {
+    if (values == null) return List.of();
+    return values.stream()
+        .map(PresentationHoldService::normalizeCharacteristics)
+        .distinct()
+        .toList();
+  }
+
+  private static void validateCustomerCatalogRequest(
+      String query,
+      String cabinType,
+      String finish,
+      String dimensions,
+      String category,
+      List<String> characteristics,
+      int page,
+      int size) {
+    if (page < 0 || size < 1 || size > 100) {
+      throw new IllegalArgumentException("Invalid customer cabin catalog page request");
+    }
+    for (String value : new String[] {query, cabinType, finish, dimensions, category}) {
+      if (value != null && value.length() > 255) {
+        throw new IllegalArgumentException("Customer cabin catalog filter is too long");
+      }
+    }
+    if (characteristics == null) return;
+    if (characteristics.size() > 20
+        || new HashSet<>(characteristics).size() != characteristics.size()
+        || characteristics.stream()
+            .anyMatch(value -> value == null || value.isBlank() || value.length() > 255)) {
+      throw new IllegalArgumentException("Customer cabin characteristics filter is invalid");
+    }
   }
 
   private static String name(CabinCatalogValueResponse value) {

@@ -82,7 +82,7 @@ export function PublicCabinPhotoPresentationPage() {
   ].filter((detail): detail is [string, string] => detail[1] !== null)
 
   return (
-    <main className="min-h-svh bg-muted/30 text-foreground">
+    <main className="h-svh overflow-y-auto bg-muted/30 text-foreground">
       <header className="border-b bg-background/95 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-5 sm:px-6 lg:px-8">
           <div className="min-w-0">
@@ -179,7 +179,7 @@ export function PublicCabinPhotoPresentationPage() {
 
 function PhotoPresentationSkeleton() {
   return (
-    <main className="min-h-svh bg-muted/30">
+    <main className="h-svh overflow-y-auto bg-muted/30">
       <header className="border-b bg-background">
         <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-5 sm:px-6 lg:px-8">
           <Skeleton className="h-7 w-72 max-w-full" />
@@ -203,7 +203,7 @@ function PhotoPresentationState({
   description: string
 }) {
   return (
-    <main className="flex min-h-svh items-center justify-center bg-muted/30 p-6">
+    <main className="flex h-svh items-center justify-center overflow-y-auto bg-muted/30 p-6">
       <div className="flex max-w-md flex-col items-center gap-3 text-center">
         <div className="flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
           <HugeiconsIcon

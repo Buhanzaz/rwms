@@ -3,6 +3,7 @@ export type OrdersModuleRole =
   | "WMS_ADMIN"
   | "WAREHOUSE_MANAGER"
   | "RENTAL_MANAGER"
+  | "CUSTOMER"
   | "VIEWER"
 
 export type OrdersModuleUser = {

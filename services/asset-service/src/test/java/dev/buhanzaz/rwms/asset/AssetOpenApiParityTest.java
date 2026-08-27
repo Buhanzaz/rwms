@@ -89,6 +89,7 @@ class AssetOpenApiParityTest {
         "/api/internal/asset/v1/logistics/orders/{orderId}/equipment-movement-plan",
         "/api/internal/asset/v1/logistics/rental-items/{rentalItemId}/furniture-movement-plan",
         "/api/internal/asset/v1/logistics/cabin-catalog",
+        "/api/internal/asset/v1/logistics/customer-cabin-catalog",
         "/api/internal/asset/v1/inventory/assets/{assetId}",
         "/api/internal/asset/v1/inventory/captures",
         "/api/internal/asset/v1/inventory/captures/{captureId}",
@@ -202,7 +203,12 @@ class AssetOpenApiParityTest {
             "equipmentId", "equipmentName", "quantity", "locationKind");
     assertThat(list(child(schemas, "OrderActorRole").get("enum")))
         .containsExactly(
-            "SYSTEM_ADMIN", "WMS_ADMIN", "WAREHOUSE_MANAGER", "RENTAL_MANAGER", "VIEWER");
+            "SYSTEM_ADMIN",
+            "WMS_ADMIN",
+            "WAREHOUSE_MANAGER",
+            "RENTAL_MANAGER",
+            "CUSTOMER",
+            "VIEWER");
     assertThat(list(child(schemas, "ReserveOrderUnitRequest").get("required")))
         .containsExactly(
             "warehouseId",
@@ -285,6 +291,39 @@ class AssetOpenApiParityTest {
     assertThat(map(list(child(cabinCatalog, "get").get("parameters")).get(1)))
         .containsEntry("name", "query")
         .containsEntry("required", true);
+    Map<String, Object> customerCabinCatalog =
+        child(paths, "/api/internal/asset/v1/logistics/customer-cabin-catalog");
+    Map<String, Object> customerCatalogGet = child(customerCabinCatalog, "get");
+    assertThat(customerCatalogGet.get("operationId"))
+        .isEqualTo("readCustomerCabinCatalog");
+    List<Object> customerCatalogParameters = list(customerCatalogGet.get("parameters"));
+    assertThat(customerCatalogParameters)
+        .extracting(parameter -> map(parameter).getOrDefault("name", map(parameter).get("$ref")))
+        .containsExactly(
+            "#/components/parameters/WarehouseIdQuery",
+            "holdScopeId",
+            "query",
+            "cabinType",
+            "finish",
+            "dimensions",
+            "category",
+            "linoleum",
+            "characteristics",
+            "page",
+            "size");
+    assertThat(map(customerCatalogParameters.get(1)))
+        .containsEntry("name", "holdScopeId")
+        .containsEntry("required", true);
+    Map<String, Object> characteristicsParameter = map(customerCatalogParameters.get(8));
+    assertThat(characteristicsParameter)
+        .containsEntry("style", "form")
+        .containsEntry("explode", true);
+    assertThat(child(characteristicsParameter, "schema"))
+        .containsEntry("type", "array")
+        .containsEntry("maxItems", 20)
+        .containsEntry("uniqueItems", true);
+    assertThat(child(customerCatalogGet, "responses").keySet())
+        .containsExactlyInAnyOrder("200", "400", "403");
     assertThat(list(child(schemas, "CabinCatalogPage").get("required")))
         .containsExactly("warehouseId", "content", "page", "size", "totalElements", "totalPages");
     assertThat(list(child(schemas, "AvailableCabin").get("required")))

@@ -369,6 +369,56 @@ final class LogisticsAssetOrderPresentationDependencyClient {
         response.totalPages());
   }
 
+  /** Reads the asset-owned customer availability projection without acquiring a new hold. */
+  CabinCatalogPage readCustomerCabinCatalog(
+      UUID warehouseId,
+      UUID holdScopeId,
+      String query,
+      String cabinType,
+      String finish,
+      String dimensions,
+      String category,
+      Boolean linoleum,
+      List<String> characteristics,
+      int page,
+      int size) {
+    UriComponentsBuilder uri =
+        UriComponentsBuilder.fromUriString(assetBase + "/customer-cabin-catalog")
+            .queryParam("warehouseId", warehouseId)
+            .queryParam("holdScopeId", holdScopeId)
+            .queryParam("query", query == null ? "" : query)
+            .queryParam("page", page)
+            .queryParam("size", size);
+    if (cabinType != null) uri.queryParam("cabinType", cabinType);
+    if (finish != null) uri.queryParam("finish", finish);
+    if (dimensions != null) uri.queryParam("dimensions", dimensions);
+    if (category != null) uri.queryParam("category", category);
+    if (linoleum != null) uri.queryParam("linoleum", linoleum);
+    if (characteristics != null) {
+      characteristics.forEach(value -> uri.queryParam("characteristics", value));
+    }
+    CabinCatalogPageResponse response =
+        transport.get(
+            uri.build().encode().toUriString(),
+            CabinCatalogPageResponse.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE,
+            "Dependency returned an empty customer cabin catalog",
+            DEFAULT);
+    if (response.content() == null) {
+      throw malformed("Asset-service returned an invalid customer cabin catalog page");
+    }
+    return new CabinCatalogPage(
+        response.warehouseId(),
+        response.content().stream()
+            .map(LogisticsAssetOrderPresentationDependencyClient::catalogCabin)
+            .toList(),
+        response.page(),
+        response.size(),
+        response.totalElements(),
+        response.totalPages());
+  }
+
   CabinSearchResult searchAvailableCabins(UUID downstreamIdempotencyKey, String exactRequestBody) {
     CabinSearchResponse response =
         transport.postExactJson(

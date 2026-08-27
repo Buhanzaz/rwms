@@ -100,6 +100,13 @@ public final class LogisticsApiModels {
       @NotNull HistoricalRentalMovementKind kind,
       @NotNull LocalDate occurredOn) {}
 
+  /** Version-fenced correction of one already recorded historical rental shipment. */
+  public record UpdateHistoricalRentalShipmentRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotNull UUID rentalItemId,
+      @NotNull UUID clientId,
+      @NotNull LocalDate occurredOn) {}
+
   public record ShipmentPlanRequest(
       @NotBlank @Size(max = 512) String driverSnapshot,
       UUID driverWorkerId,

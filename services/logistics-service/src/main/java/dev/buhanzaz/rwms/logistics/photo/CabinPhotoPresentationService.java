@@ -220,11 +220,20 @@ public class CabinPhotoPresentationService {
         || snapshots.getFirst().photos() == null) {
       throw dependencyMismatch("Media-service returned a mismatched cabin photo snapshot");
     }
-    List<LogisticsDependencyGateway.CabinMediaPhoto> source = snapshots.getFirst().photos();
-    if (source.size() > MAXIMUM_PHOTOS) {
+    LogisticsDependencyGateway.CabinMediaSnapshot snapshot = snapshots.getFirst();
+    List<LogisticsDependencyGateway.CabinMediaPhoto> source = snapshot.photos();
+    if (snapshot.photoCount() < 0) {
+      throw dependencyMismatch("Media-service returned an invalid cabin photo count");
+    }
+    if (snapshot.photoCount() > MAXIMUM_PHOTOS || source.size() > MAXIMUM_PHOTOS) {
       throw conflict(
           "CABIN_PHOTO_LIMIT_EXCEEDED",
           "Для одного фото-представления доступно не более 100 фотографий");
+    }
+    if (snapshot.photoCount() != source.size()) {
+      throw conflict(
+          "CABIN_PHOTO_PROCESSING_INCOMPLETE",
+          "Не все фотографии готовы для представления; повторите позже");
     }
     Set<String> identities = new HashSet<>();
     List<CabinPhotoPresentationPhotoSnapshot> photos = new ArrayList<>(source.size());
@@ -260,6 +269,12 @@ public class CabinPhotoPresentationService {
     photos.sort(
         Comparator.comparingInt(CabinPhotoPresentationPhotoSnapshot::sortOrder)
             .thenComparing(photo -> photo.mediaId().toString()));
+    for (int index = 0; index < photos.size(); index++) {
+      if (photos.get(index).sortOrder() != index) {
+        throw dependencyMismatch(
+            "Media-service returned non-contiguous cabin photo presentation positions");
+      }
+    }
     if (photos.isEmpty()) {
       throw conflict(
           "CABIN_PHOTOS_EMPTY", "У бытовки нет готовых фотографий для представления");

@@ -10,6 +10,8 @@ public enum UserGlobalRole {
     WAREHOUSE_MANAGER,
     /** Manager responsible for rental operations. */
     RENTAL_MANAGER,
+    /** Customer using only the dedicated rental application boundary. */
+    CUSTOMER,
     /** Read-only interactive user. */
     VIEWER;
 

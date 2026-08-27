@@ -254,6 +254,25 @@ function orderCards(cards: DriverBoardCard[]) {
     )
 }
 
+function currentAndFutureDateColumns(board: DriverBoard) {
+  const grouped = new Map<string, DriverBoardCard[]>()
+  for (const column of board.dates
+    .slice()
+    .sort((left, right) => left.date.localeCompare(right.date))) {
+    const effectiveDate =
+      column.date < board.currentDate ? board.currentDate : column.date
+    const tasks = grouped.get(effectiveDate) ?? []
+    tasks.push(
+      ...column.tasks.map((card) => ({
+        ...card,
+        scheduledDate: effectiveDate,
+      }))
+    )
+    grouped.set(effectiveDate, tasks)
+  }
+  return [...grouped.entries()].map(([date, tasks]) => ({ date, tasks }))
+}
+
 function isTaskMovable(card: DriverBoardCard) {
   return card.taskStatus === "ACTIVE" && card.entryStatus === "WAITING"
 }
@@ -1295,7 +1314,11 @@ function CurrentColumn({
           ) : null}
         </div>
       </header>
-      <div className="min-h-44 flex-1 rounded-xl border border-dashed p-2">
+      <div
+        data-testid="driver-current-task-scroll"
+        aria-label="Список текущих заданий"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-xl border border-dashed p-2"
+      >
         <SortableContext
           items={currentTasks.map(
             (card) => `driver-task:${card.externalTaskId}`
@@ -1920,26 +1943,34 @@ export function DriverBoardPage() {
   })
 
   const board = boardQuery.data
+  const dateColumns = useMemo(
+    () => (board ? currentAndFutureDateColumns(board) : []),
+    [board]
+  )
+  const effectiveSelectedScheduledDate =
+    board && selectedScheduledDate >= board.currentDate
+      ? selectedScheduledDate
+      : ""
   const nonEmptyDates = useMemo(
     () =>
-      board?.dates
+      dateColumns
         .map((column) => ({
           ...column,
           allTasks: orderCards(column.tasks),
           tasks: orderCards(column.tasks.filter(isMovementTask)),
         }))
         .filter((column) => column.tasks.length > 0)
-        .sort((left, right) => left.date.localeCompare(right.date)) ?? [],
-    [board?.dates]
+        .sort((left, right) => left.date.localeCompare(right.date)),
+    [dateColumns]
   )
   const displayedDates = useMemo(
     () =>
-      selectedScheduledDate
+      effectiveSelectedScheduledDate
         ? nonEmptyDates.filter(
-            (column) => column.date === selectedScheduledDate
+            (column) => column.date === effectiveSelectedScheduledDate
           )
         : nonEmptyDates,
-    [nonEmptyDates, selectedScheduledDate]
+    [effectiveSelectedScheduledDate, nonEmptyDates]
   )
   const disabled =
     !canEdit ||
@@ -1957,6 +1988,10 @@ export function DriverBoardPage() {
     rawTargetIndex: number
   ) {
     if (!board || disabled) return
+    if (targetDate < board.currentDate) {
+      setCommandError(new Error("Нельзя перенести задание на прошедшую дату."))
+      return
+    }
     if (
       targetLane === "CURRENT" &&
       item.lane === "SCHEDULED" &&
@@ -1973,13 +2008,13 @@ export function DriverBoardPage() {
       item.lane === "CURRENT"
         ? orderCards(board.current)
         : orderCards(
-            board.dates.find((column) => column.date === item.date)?.tasks ?? []
+            dateColumns.find((column) => column.date === item.date)?.tasks ?? []
           )
     const targetCards =
       targetLane === "CURRENT"
         ? orderCards(board.current)
         : orderCards(
-            board.dates.find((column) => column.date === targetDate)?.tasks ??
+            dateColumns.find((column) => column.date === targetDate)?.tasks ??
               []
           )
     const resolvedSourceIndex = sourceCards.findIndex(
@@ -2016,6 +2051,12 @@ export function DriverBoardPage() {
     targetIndex: number
   ) {
     if (!board || disabled) return
+    if (targetDate < board.currentDate) {
+      setCommandError(
+        new Error("Нельзя поставить капитальный ремонт на прошедшую дату.")
+      )
+      return
+    }
     scheduleCapitalMutation.mutate({
       repair,
       targetDate,
@@ -2064,7 +2105,7 @@ export function DriverBoardPage() {
           ? overData.date
           : null
       if (!targetDate) return
-      const targetColumn = board?.dates.find(
+      const targetColumn = dateColumns.find(
         (column) => column.date === targetDate
       )
       const targetIndex =
@@ -2121,7 +2162,7 @@ export function DriverBoardPage() {
         ? overData.date
         : null
     if (!targetDate) return
-    const targetColumn = board?.dates.find(
+    const targetColumn = dateColumns.find(
       (column) => column.date === targetDate
     )
     let targetIndex =
@@ -2175,7 +2216,11 @@ export function DriverBoardPage() {
             variant="outline"
             onClick={() => void boardQuery.refetch()}
           >
-            <HugeiconsIcon icon={RefreshIcon} data-icon="inline-start" />
+            <HugeiconsIcon
+              icon={RefreshIcon}
+              data-icon="inline-start"
+              aria-hidden="true"
+            />
             Повторить
           </Button>
         </AlertAction>
@@ -2197,14 +2242,20 @@ export function DriverBoardPage() {
             id="driver-board-date-filter"
             type="date"
             className="w-auto"
-            value={selectedScheduledDate}
-            onChange={(event) => setSelectedScheduledDate(event.target.value)}
+            min={board.currentDate}
+            value={effectiveSelectedScheduledDate}
+            onChange={(event) => {
+              const value = event.target.value
+              if (!value || value >= board.currentDate) {
+                setSelectedScheduledDate(value)
+              }
+            }}
           />
           <Button
             type="button"
             size="sm"
             variant="outline"
-            disabled={!selectedScheduledDate}
+            disabled={!effectiveSelectedScheduledDate}
             onClick={() => setSelectedScheduledDate("")}
           >
             Все даты
@@ -2217,7 +2268,11 @@ export function DriverBoardPage() {
             disabled={disabled}
             onClick={() => setManualMovementOpen(true)}
           >
-            <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+            <HugeiconsIcon
+              icon={Add01Icon}
+              data-icon="inline-start"
+              aria-hidden="true"
+            />
             Создать перемещение
           </Button>
         ) : (
@@ -2295,7 +2350,7 @@ export function DriverBoardPage() {
         onClose={() => setDatePickerItem(null)}
         onConfirm={(date) => {
           if (!datePickerItem) return
-          const targetColumn = board.dates.find(
+          const targetColumn = dateColumns.find(
             (column) => column.date === date
           )
           const targetIndex = targetColumn?.tasks.length ?? 0

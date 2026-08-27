@@ -324,6 +324,24 @@ public class LogisticsDocumentLine {
     assetVersion = nextAssetVersion;
   }
 
+  /**
+   * Corrects the client display snapshot of the same imported shipment as its owning document.
+   * The physical cabin identity, asset fence and already-started effects remain unchanged.
+   */
+  public boolean correctHistoricalShipmentTenantSnapshot(String nextTenantSnapshot) {
+    if (!document.isHistoricalRentalImport()
+        || document.getDocumentType() != LogisticsDocumentType.SHIPMENT) {
+      throw new IllegalStateException("Only a historical shipment line can be corrected");
+    }
+    String requiredTenantSnapshot = optionalSnapshot(nextTenantSnapshot);
+    if (requiredTenantSnapshot == null) {
+      throw new IllegalArgumentException("tenantSnapshot is required");
+    }
+    if (Objects.equals(tenantSnapshot, requiredTenantSnapshot)) return false;
+    tenantSnapshot = requiredTenantSnapshot;
+    return true;
+  }
+
   /** Replaces an unstarted rental-order line after an asset-side atomic cabin swap. */
   public void replaceRentalItem(
       UUID expectedOldRentalItemId, UUID replacementRentalItemId, long replacementAssetVersion) {

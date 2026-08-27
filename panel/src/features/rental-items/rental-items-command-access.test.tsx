@@ -61,6 +61,9 @@ const photoPresentationApi = vi.hoisted(() => ({
   create: vi.fn(),
 }))
 
+const shipmentApi = vi.hoisted(() => ({ listShipments: vi.fn() }))
+const returnApi = vi.hoisted(() => ({ listReturns: vi.fn() }))
+
 vi.mock("@/features/auth/use-auth", () => ({
   useAuth: () => ({
     status: "authenticated",
@@ -130,6 +133,16 @@ vi.mock("@/features/media/media-service", () => ({
 
 vi.mock("@/features/rental-items/cabin-photo-presentations-api", () => ({
   createCabinPhotoPresentation: photoPresentationApi.create,
+}))
+
+vi.mock("@/features/logistics/shipments/api", () => ({
+  SHIPMENTS_QUERY_KEY: ["logistics-shipments"],
+  listShipments: shipmentApi.listShipments,
+}))
+
+vi.mock("@/features/logistics/returns/api", () => ({
+  RETURNS_QUERY_KEY: ["logistics-returns"],
+  listReturns: returnApi.listReturns,
 }))
 
 vi.mock("@/features/write-offs/property-disposition-create-dialog", () => ({
@@ -372,6 +385,8 @@ beforeEach(() => {
     createdAt: "2026-08-24T12:00:00Z",
     publicPath: "/photos/public-photo-token",
   })
+  shipmentApi.listShipments.mockResolvedValue([])
+  returnApi.listReturns.mockResolvedValue([])
   propertyDispositionDialog.render.mockClear()
 })
 
@@ -782,6 +797,83 @@ describe("rental item command access", () => {
     }
   })
 
+  it("allows a rented cabin without logistics facts to restore a past shipment", async () => {
+    authState.level = "EDIT"
+    assetApi.getAssetRentalItem.mockResolvedValue(
+      rentalItem({ status: "RENTED", shipmentDate: null, tenant: null })
+    )
+    const user = userEvent.setup()
+    renderDetail(`/warehouse/${RENTAL_ITEM_ID}`)
+
+    const action = await screen.findByRole("button", {
+      name: "Отгрузка задним числом",
+    })
+    await waitFor(() => expect(shipmentApi.listShipments).toHaveBeenCalled())
+    expect(action.hasAttribute("disabled")).toBe(false)
+    await user.click(action)
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Создать отгрузку задним числом",
+      })
+    ).toBeTruthy()
+  })
+
+  it("edits the existing historical shipment for a rented cabin instead of creating another", async () => {
+    authState.level = "EDIT"
+    assetApi.getAssetRentalItem.mockResolvedValue(
+      rentalItem({ status: "RENTED", shipmentDate: null, tenant: null })
+    )
+    shipmentApi.listShipments.mockResolvedValue([
+      {
+        id: "77777777-7777-4777-8777-777777777777",
+        version: 6,
+        documentType: "SHIPMENT",
+        state: "SHIPPED",
+        warehouseId: WAREHOUSE_ID,
+        destinationWarehouseId: null,
+        partySnapshot: "ООО Клиент",
+        driverSnapshot: null,
+        driverWorkerId: null,
+        clientId: "88888888-8888-4888-8888-888888888888",
+        historicalRentalImport: true,
+        equipmentMovementTaskId: null,
+        scheduledDate: "2026-08-01",
+        rentalOrderId: null,
+        rentalShipmentId: null,
+        lines: [
+          {
+            id: "99999999-9999-4999-8999-999999999999",
+            version: 1,
+            lineNumber: 1,
+            assetId: RENTAL_ITEM_ID,
+            assetVersion: 1,
+            state: "DEPARTED",
+            tenantSnapshot: "ООО Клиент",
+            rentalOrderId: null,
+            inventoryShipmentFurniture: null,
+          },
+        ],
+        createdAt: "2026-08-01T10:00:00Z",
+        updatedAt: "2026-08-01T10:00:00Z",
+      },
+    ])
+    const user = userEvent.setup()
+    renderDetail(`/warehouse/${RENTAL_ITEM_ID}`)
+
+    const action = await screen.findByRole("button", {
+      name: "Изменить отгрузку задним числом",
+    })
+    expect(action.hasAttribute("disabled")).toBe(false)
+    await user.click(action)
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Изменить отгрузку задним числом",
+      })
+    ).toBeTruthy()
+  })
+
   it("reserves service-backed contents controls for MANAGE access", async () => {
     authState.level = "MANAGE"
     renderDetail(`/warehouse/${RENTAL_ITEM_ID}`)
@@ -871,7 +963,7 @@ describe("rental item command access", () => {
     )
   })
 
-  it("keeps every retained photo visible in the cabin passport across folders", async () => {
+  it("shows only the active latest folder in the cabin passport carousel", async () => {
     const coverMediaId = "66666666-6666-4666-8666-666666666666"
     const archivedMediaId = "77777777-7777-4777-8777-777777777777"
     mediaApi.listOwnerMedia.mockResolvedValue({
@@ -929,7 +1021,7 @@ describe("rental item command access", () => {
       items: [
         {
           cabinId: RENTAL_ITEM_ID,
-          photoCount: 2,
+          photoCount: 1,
           cover: {
             mediaId: coverMediaId,
             generation: 1,
@@ -946,8 +1038,9 @@ describe("rental item command access", () => {
 
     renderDetail(`/warehouse/${RENTAL_ITEM_ID}`)
 
-    expect(await screen.findByAltText("Фото 1 из 2")).toBeTruthy()
-    expect(screen.getByAltText("Фото 2 из 2")).toBeTruthy()
+    expect(await screen.findByAltText("Фото 1 из 1")).toBeTruthy()
+    expect(screen.queryByAltText("Фото 2 из 2")).toBeNull()
+    expect(screen.queryByAltText("archive.jpg")).toBeNull()
   })
 
   it("creates, copies and immediately opens an immutable photo presentation", async () => {

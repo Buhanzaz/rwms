@@ -443,6 +443,12 @@ func TestLogisticsCabinPresentationContractIsPrivateAndOpaque(t *testing.T) {
 	if got := stringAt(t, snapshot, "operationId"); got != "readLogisticsCabinPresentationSnapshots" {
 		t.Fatalf("snapshot operationId = %q", got)
 	}
+	snapshotDescription := stringAt(t, snapshot, "description")
+	for _, required := range []string{"active gallery folder", "Older retained folders", "one hundred"} {
+		if !strings.Contains(snapshotDescription, required) {
+			t.Errorf("snapshot description does not contain %q: %s", required, snapshotDescription)
+		}
+	}
 	content := objectAt(t, objectAt(t, paths,
 		"/api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content"), "get")
 	if got := stringAt(t, content, "operationId"); got != "getLogisticsCabinPresentationVariantContent" {
@@ -485,6 +491,25 @@ func TestLogisticsCabinPresentationContractIsPrivateAndOpaque(t *testing.T) {
 	}
 	if got := stringSliceAt(t, objectAt(t, variants, "items"), "enum"); !equalStrings(got, []string{"SMALL", "LARGE"}) {
 		t.Fatalf("availableVariants enum = %#v", got)
+	}
+	snapshotProperties := objectAt(t, objectAt(t, schemas, "CabinPresentationSnapshot"), "properties")
+	snapshotRequired := stringSliceAt(t, objectAt(t, schemas, "CabinPresentationSnapshot"), "required")
+	if !equalStrings(snapshotRequired, []string{"cabinId", "coverMediaId", "photoCount", "photos"}) {
+		t.Fatalf("cabin presentation required fields = %#v", snapshotRequired)
+	}
+	photoCount := objectAt(t, snapshotProperties, "photoCount")
+	if photoCount["type"] != "integer" || photoCount["format"] != "int64" || photoCount["minimum"] != 0 {
+		t.Fatalf("cabin presentation photoCount contract = %#v", photoCount)
+	}
+	photos := objectAt(t, snapshotProperties, "photos")
+	if photos["maxItems"] != 100 {
+		t.Fatalf("cabin presentation photo bound = %#v", photos["maxItems"])
+	}
+	photosDescription := stringAt(t, photos, "description")
+	for _, required := range []string{"active gallery folder", "Older retained folders"} {
+		if !strings.Contains(photosDescription, required) {
+			t.Errorf("presentation photos description does not contain %q: %s", required, photosDescription)
+		}
 	}
 }
 

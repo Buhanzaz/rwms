@@ -75,6 +75,11 @@ function integer(value: unknown): number {
   return value as number
 }
 
+function boolean(value: unknown): boolean {
+  if (typeof value !== "boolean") invalidResponse()
+  return value
+}
+
 function timestamp(value: unknown): string {
   const candidate = text(value)
   if (!candidate || !Number.isFinite(Date.parse(candidate))) invalidResponse()
@@ -223,6 +228,9 @@ export function parseShipmentDocument(value: unknown): ShipmentDocument {
         ? null
         : nullableUuid(source.driverWorkerId),
     clientId: nullableUuid(source.clientId),
+    ...(source.historicalRentalImport === undefined
+      ? {}
+      : { historicalRentalImport: boolean(source.historicalRentalImport) }),
     equipmentMovementTaskId: nullableUuid(source.equipmentMovementTaskId),
     scheduledDate: nullableLocalDate(source.scheduledDate),
     rentalOrderId: nullableUuid(source.rentalOrderId),

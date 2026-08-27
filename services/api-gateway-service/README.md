@@ -100,17 +100,22 @@ replacement for the owning service's OpenAPI contract.
 
 | Public entry point | Private target/path treatment | Important restriction |
 | --- | --- | --- |
-| `/auth/**` | auth-service; `/auth` is removed before forwarding | `/auth/callback` is panel-owned; `/auth/api/internal/**` is never forwarded. |
+| `/auth/**` | auth-service; `/auth` is removed before forwarding | `/auth/callback` is panel-owned; `/auth/api/internal/**` is never forwarded. Customer CSRF bootstrap/registration remain anonymous at this stateless edge and are cookie-plus-header protected by auth-service after forwarding. |
 | `/api/task-board/**` | task-board-service; external prefix becomes downstream `/api/**` | Internal paths are denied. WorkerApp and DriverApp event streams have separate SSE routes and exact scopes. |
 | `/api/warehouse/**` | configured warehouse-service target, unchanged | Internal paths are denied; the current route is reserved for the W1 warehouse API. |
 | `/api/asset/**` | asset-service, unchanged | Internal paths are denied. HTML-import commit uses a dedicated handler. |
 | `/api/maintenance/**` | maintenance-service, unchanged | Internal paths are denied. |
 | `/api/media/**` | media-service, unchanged | Internal and private paths are denied. Source/variant upload content and SSE use dedicated handlers. |
 | `/api/inventory/**` | inventory-service, unchanged | Internal and private paths are denied. Completed-outcome recalculation uses a dedicated 60-second handler; every other inventory request keeps the ordinary timeout. |
-| `/api/logistics/**` | logistics-service, unchanged | Internal and private paths are denied; the explicitly public client-presentation path is an exception to normal authentication. |
+| `/api/logistics/**` | logistics-service, unchanged | Internal and private paths are denied; the explicitly public client-presentation path is an exception to normal authentication. CustomerApp routes remain authenticated and logistics enforces their exact CUSTOMER/client/scope combination. |
 | `/api/assistant/**` | assistant-service, unchanged | Internal and private paths are denied. Conversation turns use a dedicated streaming handler. |
 | `/api/dossier/**` | dossier-service, unchanged | `GET` only: dossier is a read projection and receives no public command route. |
 | `/api/analytics/v1/**` | analytics-service; external prefix becomes downstream `/api/v1/**` | Authenticated `GET` only. |
+
+The gateway remains stateless and does not keep a source-address rate-limit
+store. Production ingress must throttle the anonymous customer-registration
+surface; CSRF protection prevents cross-site submission but is not abuse
+throttling.
 
 The dedicated routes are intentionally more specific than their general service
 routes:
@@ -242,7 +247,9 @@ inventory-recalculation/assistant route precedence, unambiguous exclusion of the
 command from the generic inventory route, zero routing for every canonical internal operation and reserved
 private/internal alias, and the real edge security classification. All public domain operations
 require Bearer authentication except the four explicitly anonymous logistics client-presentation
-operations.
+operations. The delegated auth partition separately validates both Bearer and the exact
+`csrfCookie + csrfHeader` OpenAPI requirement; CSRF remains an auth-service check rather than
+duplicated state in the gateway.
 
 Run the focused gate from the repository root:
 

@@ -57,8 +57,6 @@ import {
   RETURNS_QUERY_KEY,
   listReturns,
 } from "@/features/logistics/returns/api"
-import type { ReturnDocument } from "@/features/logistics/returns/model"
-import type { ShipmentDocument } from "@/features/logistics/shipments/model"
 import { getOrder } from "@/features/orders/api/orders-api"
 import { AddContentsDialog } from "@/features/rental-items/add-contents-dialog"
 import {
@@ -87,14 +85,13 @@ import {
   updateAssetRentalItemStatus,
 } from "@/features/rental-items/api/asset-rental-items-api"
 import { createCabinPhotoPresentation } from "@/features/rental-items/cabin-photo-presentations-api"
-import {
-  HistoricalRentalMovementDialog,
-} from "@/features/rental-items/historical-rental-movement-dialog"
+import { HistoricalRentalMovementDialog } from "@/features/rental-items/historical-rental-movement-dialog"
 import type { HistoricalRentalMovementKind } from "@/features/rental-items/historical-rental-movement-api"
 import {
   CharacteristicTags,
   EmptyDossierRegister,
 } from "@/features/rental-items/rental-item-detail-support"
+import { rentalLifecycleLabel } from "@/features/rental-items/rental-item-lifecycle"
 import { RentalItemPassportDialog } from "@/features/rental-items/rental-item-passport-dialog"
 import { MoveContentsToRentalItemDialog } from "@/features/rental-items/move-contents-to-rental-item-dialog"
 import { MoveContentsToStockDialog } from "@/features/rental-items/move-contents-to-stock-dialog"
@@ -200,27 +197,6 @@ function formatDateTime(value: string | null) {
   }).format(date)
 }
 
-function isDateDue(value: string | null) {
-  return Boolean(value && value <= new Date().toISOString().slice(0, 10))
-}
-
-function rentalLifecycleLabel(
-  shipment: ShipmentDocument | null,
-  rentalReturn: ReturnDocument | null,
-  returnDate: string | null
-) {
-  if (rentalReturn?.state === "ACCEPTED") return "Возвращено"
-  if (rentalReturn && rentalReturn.state !== "DRAFT")
-    return "Возврат в процессе"
-  if (shipment?.state === "SHIPPED" && isDateDue(returnDate)) {
-    return "Требует возврата"
-  }
-  if (shipment?.state === "SHIPPED") return "Отгружено"
-  if (shipment?.state === "DRAFT") return "Ожидает отгрузки"
-  if (shipment) return "В процессе отгрузки"
-  return "Не отгружена"
-}
-
 function formatCurrency(value: number | null) {
   if (value === null) return "—"
   return new Intl.NumberFormat("ru-RU", {
@@ -308,6 +284,7 @@ function DossierActions({
   canEdit,
   onAddPhoto,
   onEditPassport,
+  historicalShipmentMode,
   onCreateHistoricalShipment,
   onCreateHistoricalReturn,
   onSaved,
@@ -317,6 +294,7 @@ function DossierActions({
   canEdit: boolean
   onAddPhoto: () => void
   onEditPassport: () => void
+  historicalShipmentMode: "CREATE" | "EDIT" | null
   onCreateHistoricalShipment: () => void
   onCreateHistoricalReturn: () => void
   onSaved: (value: RentalItemDto) => void
@@ -373,12 +351,6 @@ function DossierActions({
     "WRITTEN_OFF",
     "LOST",
   ].includes(rentalItem.status)
-  const historicalShipmentAllowed = [
-    "FREE",
-    "REPAIR",
-    "WAITING_REPAIR_CHECK",
-    "CAPITAL_REPAIR",
-  ].includes(rentalItem.status)
 
   function createRepair() {
     navigate("/repairs?create=1", {
@@ -409,18 +381,20 @@ function DossierActions({
         <Button
           size="sm"
           variant="outline"
-          disabled={!historicalShipmentAllowed}
+          disabled={historicalShipmentMode === null}
           title={
-            rentalItem.status === "RENTED"
-              ? "Для арендованной бытовки оформите возврат."
-              : !historicalShipmentAllowed
-                ? "Историческая отгрузка доступна для свободной бытовки или бытовки в ремонте."
-                : undefined
+            historicalShipmentMode === null
+              ? rentalItem.status === "RENTED"
+                ? "Сначала дождитесь данных логистики по текущей аренде."
+                : "Историческая отгрузка доступна для свободной, арендованной или находящейся в ремонте бытовки."
+              : undefined
           }
           onClick={onCreateHistoricalShipment}
         >
           <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-          Отгрузка задним числом
+          {historicalShipmentMode === "EDIT"
+            ? "Изменить отгрузку задним числом"
+            : "Отгрузка задним числом"}
         </Button>
         <Button
           size="sm"
@@ -612,9 +586,9 @@ export function RentalItemDetailPage() {
   const activeOrderReservation = rentalItem?.activeOrderReservation ?? null
   const hasRentalLifecycle = Boolean(
     activeOrderReservation ||
-      rentalItem?.shipmentDate ||
-      rentalItem?.tenant ||
-      rentalItem?.status === "RENTED"
+    rentalItem?.shipmentDate ||
+    rentalItem?.tenant ||
+    rentalItem?.status === "RENTED"
   )
   const shipmentsQuery = useQuery({
     queryKey: [...SHIPMENTS_QUERY_KEY, rentalItem?.warehouseId ?? "none"],
@@ -650,6 +624,33 @@ export function RentalItemDetailPage() {
       .sort((left, right) =>
         right.updatedAt.localeCompare(left.updatedAt)
       )[0] ?? null
+  const editableHistoricalShipment =
+    rentalOrderShipment?.historicalRentalImport === true &&
+    !["CONFLICT", "RECONCILIATION_REQUIRED", "CANCELLED"].includes(
+      rentalOrderShipment.state
+    )
+      ? rentalOrderShipment
+      : null
+  const historicalShipmentSourceStatus = [
+    "FREE",
+    "RENTED",
+    "REPAIR",
+    "WAITING_REPAIR_CHECK",
+    "CAPITAL_REPAIR",
+  ].includes(rentalItem?.status ?? "")
+  const rentedShipmentContextReady =
+    rentalItem?.status !== "RENTED" || shipmentsQuery.isSuccess
+  const currentNormalShipmentBlocksRecovery =
+    rentalItem?.status === "RENTED" &&
+    rentalOrderShipment !== null &&
+    rentalOrderShipment.historicalRentalImport !== true
+  const historicalShipmentMode = editableHistoricalShipment
+    ? "EDIT"
+    : historicalShipmentSourceStatus &&
+        rentedShipmentContextReady &&
+        !currentNormalShipmentBlocksRecovery
+      ? "CREATE"
+      : null
   const relatedOrderId =
     activeOrderReservation?.orderId ??
     rentalOrderShipment?.rentalOrderId ??
@@ -670,11 +671,16 @@ export function RentalItemDetailPage() {
     rentalItem?.shipmentDate ??
     null
   const effectiveTenant =
-    activeOrderReservation?.tenantSnapshot ?? rentalItem?.tenant ?? null
+    activeOrderReservation?.tenantSnapshot ??
+    rentalOrderShipment?.partySnapshot ??
+    rentalItem?.tenant ??
+    null
   const rentalLifecycle = rentalLifecycleLabel(
-    rentalOrderShipment,
-    rentalOrderReturn,
-    rentalTerm?.returnDate ?? null
+    rentalOrderShipment?.state ?? null,
+    rentalOrderReturn?.state ?? null,
+    rentalTerm?.returnDate ?? null,
+    rentalItem?.shipmentDate ?? null,
+    rentalItem?.tenant ?? null
   )
   const dossierPages = dossierQuery.data?.pages
   const dossierActivities =
@@ -896,7 +902,7 @@ export function RentalItemDetailPage() {
       <section className="shrink-0 overflow-hidden rounded-lg border bg-card">
         <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(22rem,26rem)] xl:grid-cols-[minmax(0,1fr)_minmax(26rem,30rem)]">
           <PhotoCarousel
-            photos={media.archivePhotos}
+            photos={media.photos}
             item={rentalItem}
             loading={media.isLoading}
             photoCount={media.logicalPhotoCount}
@@ -925,10 +931,13 @@ export function RentalItemDetailPage() {
               canEdit={canEditRentalItem}
               onAddPhoto={() => setPhotoUploadOpen(true)}
               onEditPassport={() => setPassportEditOpen(true)}
+              historicalShipmentMode={historicalShipmentMode}
               onCreateHistoricalShipment={() =>
                 setHistoricalMovementKind("SHIPMENT")
               }
-              onCreateHistoricalReturn={() => setHistoricalMovementKind("RETURN")}
+              onCreateHistoricalReturn={() =>
+                setHistoricalMovementKind("RETURN")
+              }
               onSaved={setRentalItem}
             />
             {historicalMovementKind && currentUser ? (
@@ -940,6 +949,11 @@ export function RentalItemDetailPage() {
                 actorId={currentUser.id}
                 responsibleManagerDisplayName={
                   currentUser.displayName || currentUser.id
+                }
+                existingShipment={
+                  historicalMovementKind === "SHIPMENT"
+                    ? editableHistoricalShipment
+                    : null
                 }
                 onOpenChange={(nextOpen) => {
                   if (!nextOpen) setHistoricalMovementKind(null)
@@ -1029,7 +1043,7 @@ export function RentalItemDetailPage() {
                   variant={
                     rentalLifecycle === "Требует возврата"
                       ? "destructive"
-                      : rentalLifecycle === "Отгружено" ||
+                      : rentalLifecycle === "Отгружена" ||
                           rentalLifecycle === "Возвращено"
                         ? "secondary"
                         : "outline"
@@ -1148,7 +1162,7 @@ export function RentalItemDetailPage() {
                       variant={
                         rentalLifecycle === "Требует возврата"
                           ? "destructive"
-                          : rentalLifecycle === "Отгружено" ||
+                          : rentalLifecycle === "Отгружена" ||
                               rentalLifecycle === "Возвращено"
                             ? "secondary"
                             : "outline"

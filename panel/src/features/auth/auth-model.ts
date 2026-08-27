@@ -3,6 +3,7 @@ export type UserGlobalRole =
   | "WMS_ADMIN"
   | "WAREHOUSE_MANAGER"
   | "RENTAL_MANAGER"
+  | "CUSTOMER"
   | "VIEWER"
 
 export type WarehouseAccessLevel = "VIEW" | "EDIT" | "MANAGE"

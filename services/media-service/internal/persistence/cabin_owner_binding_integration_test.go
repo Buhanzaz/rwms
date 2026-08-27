@@ -67,18 +67,18 @@ func TestMigratedCabinOwnerBindingsAuthorizeOnlyTheirCanonicalWarehouseIntegrati
 		func(records []CabinCoverRecord) error {
 			uploadingCovers = records
 			return nil
-		}); err != nil || len(uploadingCovers) != 1 ||
-		uploadingCovers[0].PhotoCount != 1 || uploadingCovers[0].Variant != nil ||
-		len(uploadingCovers[0].Previews) != 0 {
+		}); err != nil || len(uploadingCovers) != 0 {
 		t.Fatalf("ReadCabinCovers(uploading) = %#v, %v", uploadingCovers, err)
 	}
 	secondCommand := createCommand(cabinID, warehouseID, media.KindImage, 1)
 	secondCommand.OwnerType = OwnerTypeCabin
+	secondCommand.FolderID = command.FolderID
 	if _, replayed, err := repository.CreateUpload(ctx, secondCommand); err != nil || replayed {
 		t.Fatalf("CreateUpload(second migrated cabin image) = replayed:%v error:%v", replayed, err)
 	}
 	withoutSmallCommand := createCommand(cabinID, warehouseID, media.KindImage, 2)
 	withoutSmallCommand.OwnerType = OwnerTypeCabin
+	withoutSmallCommand.FolderID = command.FolderID
 	if _, replayed, err := repository.CreateUpload(ctx, withoutSmallCommand); err != nil || replayed {
 		t.Fatalf("CreateUpload(image without SMALL) = replayed:%v error:%v", replayed, err)
 	}
@@ -160,6 +160,7 @@ func TestMigratedCabinOwnerBindingsAuthorizeOnlyTheirCanonicalWarehouseIntegrati
 			presentationSnapshots = records
 			return nil
 		}); err != nil || len(presentationSnapshots) != 1 || presentationSnapshots[0].CabinID != cabinID ||
+		presentationSnapshots[0].PhotoCount != 3 ||
 		len(presentationSnapshots[0].Photos) != 2 ||
 		presentationSnapshots[0].Photos[0].MediaID != command.MediaID ||
 		presentationSnapshots[0].Photos[0].Generation != 1 || presentationSnapshots[0].Photos[0].SortOrder != 0 ||

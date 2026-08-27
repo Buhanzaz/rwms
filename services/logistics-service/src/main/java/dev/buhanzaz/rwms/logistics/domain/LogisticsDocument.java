@@ -465,6 +465,49 @@ public class LogisticsDocument {
     return true;
   }
 
+  /**
+   * Corrects the client and physical date of a user-entered historical shipment without replaying
+   * any asset, stock, lease, or driver effect.
+   */
+  public boolean correctHistoricalRentalShipment(
+      UUID nextClientId, String nextPartySnapshot, LocalDate nextOccurredOn) {
+    if (!historicalRentalImport
+        || documentType != LogisticsDocumentType.SHIPMENT
+        || !Set.of(
+                LogisticsDocumentState.DRAFT,
+                LogisticsDocumentState.PREPARING,
+                LogisticsDocumentState.AWAITING_CONFIRMATION,
+                LogisticsDocumentState.CONFIRMING_PREPARATION,
+                LogisticsDocumentState.SHIPPED)
+            .contains(state)) {
+      throw new IllegalStateException("Historical rental shipment is not editable");
+    }
+    UUID requiredClientId = Objects.requireNonNull(nextClientId, "clientId");
+    String requiredPartySnapshot = requiredSnapshot(nextPartySnapshot, "partySnapshot");
+    LocalDate requiredOccurredOn = Objects.requireNonNull(nextOccurredOn, "occurredOn");
+    if (Objects.equals(clientId, requiredClientId)
+        && Objects.equals(partySnapshot, requiredPartySnapshot)
+        && Objects.equals(scheduledDate, requiredOccurredOn)) {
+      return false;
+    }
+    clientId = requiredClientId;
+    partySnapshot = requiredPartySnapshot;
+    scheduledDate = requiredOccurredOn;
+    touch();
+    return true;
+  }
+
+  /**
+   * Advances the aggregate fence when recovery corrects only the imported line snapshot. This
+   * keeps the line change and its document event at the same next aggregate version.
+   */
+  public void touchHistoricalRentalShipmentCorrection() {
+    if (!historicalRentalImport || documentType != LogisticsDocumentType.SHIPMENT) {
+      throw new IllegalStateException("Only a historical rental shipment can be corrected");
+    }
+    touch();
+  }
+
   /** Bumps the draft document projection when its order-backed lines changed. */
   public void touchRentalOrderDraft() {
     if (documentType != LogisticsDocumentType.SHIPMENT
@@ -728,6 +771,24 @@ public class LogisticsDocument {
         LogisticsDocumentType.SHIPMENT,
         LogisticsDocumentState.CONFIRMING_PREPARATION,
         LogisticsDocumentState.SHIPPED);
+  }
+
+  /**
+   * Completes an imported shipment whose physical departure is already reflected by the
+   * asset-owned {@code RENTED} state. No lease, hold, or second asset transition is fabricated.
+   */
+  public void confirmAlreadyRentedHistoricalShipment() {
+    if (!historicalRentalImport
+        || documentType != LogisticsDocumentType.SHIPMENT
+        || state != LogisticsDocumentState.PREPARING
+        || driverSnapshot != null
+        || driverWorkerId != null
+        || scheduledDate == null) {
+      throw new IllegalStateException(
+          "Only a preparing historical shipment may confirm an already rented cabin");
+    }
+    state = LogisticsDocumentState.SHIPPED;
+    touch();
   }
 
   public void beginShipmentCancellation() {

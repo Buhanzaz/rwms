@@ -37,7 +37,8 @@ import org.springframework.stereotype.Service;
  * receiving days, delivery facts and the initial term to the converted cabins. A replacement delegates
  * one ordered same-order batch without changing either. Pending effects are retried from the
  * existing booking receipt; only terminal rejection releases holds and allows a manager to publish
- * the next presentation revision.
+ * the next presentation revision. CustomerApp confirmations additionally save the resulting order
+ * before completion so they enter the real planning feed without a manager-side browser saga.
  */
 @Service
 @RequiredArgsConstructor
@@ -128,7 +129,11 @@ public class PresentationBookingService {
               rentalOrders.create(
                   actor,
                   context.booking().getId(),
-                  new CreateOrderRequest(context.inquiry().getClient().getId(), null, null, null));
+                  new CreateOrderRequest(
+                      context.inquiry().getClient().getId(),
+                      null,
+                      context.inquiry().getClient().getPhone(),
+                      null));
           OrderDetailResponse order = created.response();
           orderId = order.id();
           if (order.warehouseId() == null) {
@@ -166,7 +171,8 @@ public class PresentationBookingService {
                 composition);
         requireCompleteConversion(context, holdScopeId, orderId, converted);
         try {
-          rentalOrders.applyPresentationSelection(
+          RentalOrderService.MutationResult applied =
+              rentalOrders.applyPresentationSelection(
               actor,
               orderId,
               context.booking().getId(),
@@ -179,6 +185,15 @@ public class PresentationBookingService {
               context.longitude(),
               normalAdditionalContacts(context),
               context.legacyDesiredDeliveryTimes());
+          if ("CUSTOMER".equals(actor.role())
+              && applied.response().status() == RentalOrderStatus.DRAFT) {
+            rentalOrders.save(
+                actor,
+                orderId,
+                applied.response().version(),
+                deterministic("customer-order-save:" + context.booking().getId()),
+                context.booking().getId());
+          }
         } catch (RuntimeException exception) {
           throw new LogisticsDependencyException(
               LogisticsDependencyException.FailureKind.TRANSIENT,

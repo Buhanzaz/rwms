@@ -13,6 +13,8 @@ import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiMod
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.RejectedPlanningAssignment;
 
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
+import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlot;
+import dev.buhanzaz.rwms.logistics.customer.service.CustomerDeliverySlotStore;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
@@ -73,6 +75,7 @@ public class RentalOrderPlanningIntegrationService {
   private final RentalOrderService rentalOrders;
   private final LogisticsWarehouseLifecycle warehouseLifecycle;
   private final LogisticsDependencyGateway dependencies;
+  private final CustomerDeliverySlotStore customerDeliverySlots;
 
   /** Returns saved orders with at least one still-unplanned cabin and an eligible requested date. */
   public PlanningRequestFeedResponse feed(
@@ -82,9 +85,13 @@ public class RentalOrderPlanningIntegrationService {
     String timeZone =
         dependencies.warehouseTimeZoneAt(warehouseId, generatedAt).timeZone();
     ZoneId.of(timeZone);
+    List<RentalOrder> candidates =
+        orders.findAllPlanningCandidates(warehouseId, RentalOrderStatus.SAVED);
+    Map<UUID, CustomerDeliverySlot> slotsByOrder =
+        customerDeliverySlots.confirmedForOrders(
+            candidates.stream().map(RentalOrder::getId).toList());
     List<PlanningRequestResponse> result = new ArrayList<>();
-    for (RentalOrder order :
-        orders.findAllPlanningCandidates(warehouseId, RentalOrderStatus.SAVED)) {
+    for (RentalOrder order : candidates) {
       List<LocalDate> approvedDates =
           order.getDesiredDeliveryWindows().stream()
               .filter(window -> window.getStartDate().equals(window.getEndDate()))
@@ -93,10 +100,22 @@ public class RentalOrderPlanningIntegrationService {
               .sorted()
               .toList();
       List<PlanningDateOption> options = new ArrayList<>();
+      CustomerDeliverySlot customerSlot = slotsByOrder.get(order.getId());
       for (int index = 0; index < approvedDates.size(); index++) {
         LocalDate date = approvedDates.get(index);
         if (!date.isBefore(dateFrom) && !date.isAfter(dateTo)) {
-          options.add(new PlanningDateOption(date, index, approvedDates.size() == 1));
+          if (customerSlot != null && customerSlot.getDeliveryDate().equals(date)) {
+            options.add(
+                new PlanningDateOption(
+                    date,
+                    index,
+                    true,
+                    customerSlot.getWindowStart(),
+                    customerSlot.getWindowEnd(),
+                    customerSlot.getTravelZoneHours()));
+          } else {
+            options.add(new PlanningDateOption(date, index, approvedDates.size() == 1));
+          }
         }
       }
       if (options.isEmpty()) continue;

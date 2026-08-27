@@ -12,6 +12,7 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnPickupRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentPlanRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.StartReturnEstimatesRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferArrivalPreflightView;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.UpdateHistoricalRentalShipmentRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
@@ -163,6 +164,57 @@ public class LogisticsDocumentService {
             request,
             clientSnapshot,
             admission));
+  }
+
+  /**
+   * Reads an exact successful historical create before a retry opens a new warehouse admission.
+   * Returns {@code null} when the command has not completed locally.
+   */
+  @Transactional(readOnly = true)
+  public CreateResult replayHistoricalRentalMovement(
+      UUID subjectId,
+      UUID idempotencyKey,
+      CreateHistoricalRentalMovementRequest request) {
+    LogisticsDocumentCommandResult replay =
+        historicalRentalMovementCoordinator.replayCreate(subjectId, idempotencyKey, request);
+    return replay == null ? null : result(replay);
+  }
+
+  /** Corrects one imported shipment fact without repeating its physical side effects. */
+  @Transactional
+  public CreateResult updateHistoricalRentalShipment(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      UUID documentId,
+      UpdateHistoricalRentalShipmentRequest request,
+      String clientSnapshot,
+      LocalDate warehouseToday) {
+    return result(
+        historicalRentalMovementCoordinator.updateShipment(
+            subjectId,
+            idempotencyKey,
+            correlationId,
+            documentId,
+            request,
+            clientSnapshot,
+            warehouseToday));
+  }
+
+  /**
+   * Reads an exact successful historical correction before a retry resolves warehouse-local time.
+   * Returns {@code null} when no durable receipt exists.
+   */
+  @Transactional(readOnly = true)
+  public CreateResult replayHistoricalRentalShipmentUpdate(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID documentId,
+      UpdateHistoricalRentalShipmentRequest request) {
+    LogisticsDocumentCommandResult replay =
+        historicalRentalMovementCoordinator.replayUpdate(
+            subjectId, idempotencyKey, documentId, request);
+    return replay == null ? null : result(replay);
   }
 
   @Transactional

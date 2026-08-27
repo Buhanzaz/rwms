@@ -98,17 +98,22 @@ API gateway: проверка host/headers, CORS, JWT, route policy, observabili
 
 | Публичная точка входа | Приватный target / обработка пути | Важное ограничение |
 | --- | --- | --- |
-| `/auth/**` | `auth-service`; `/auth` удаляется перед пересылкой | `/auth/callback` принадлежит panel; `/auth/api/internal/**` никогда не пересылается. |
+| `/auth/**` | `auth-service`; `/auth` удаляется перед пересылкой | `/auth/callback` принадлежит panel; `/auth/api/internal/**` никогда не пересылается. CSRF bootstrap/registration клиента остаются анонимными на stateless edge и после forwarding защищаются в auth-service парой cookie+header. |
 | `/api/task-board/**` | `task-board-service`; внешний префикс меняется на downstream `/api/**` | Internal-пути запрещены. Потоки событий WorkerApp и DriverApp имеют отдельные SSE-маршруты и точные scopes. |
 | `/api/warehouse/**` | настроенный target `warehouse-service`, путь без изменений | Internal-пути запрещены; текущий маршрут зарезервирован для warehouse API W1. |
 | `/api/asset/**` | `asset-service`, путь без изменений | Internal-пути запрещены. HTML-import commit обслуживает отдельный handler. |
 | `/api/maintenance/**` | `maintenance-service`, путь без изменений | Internal-пути запрещены. |
 | `/api/media/**` | `media-service`, путь без изменений | Internal- и private-пути запрещены. Source/variant upload content и SSE используют отдельные handlers. |
 | `/api/inventory/**` | `inventory-service`, путь без изменений | Internal- и private-пути запрещены. Пересчёт завершённого результата использует отдельный handler с тайм-аутом 60 секунд; все остальные inventory-запросы сохраняют обычный тайм-аут. |
-| `/api/logistics/**` | `logistics-service`, путь без изменений | Internal- и private-пути запрещены; явно публичный client-presentation — исключение из обычной аутентификации. |
+| `/api/logistics/**` | `logistics-service`, путь без изменений | Internal- и private-пути запрещены; явно публичный client-presentation — исключение из обычной аутентификации. CustomerApp routes остаются аутентифицированными, а logistics проверяет точную комбинацию CUSTOMER/client/scope. |
 | `/api/assistant/**` | `assistant-service`, путь без изменений | Internal- и private-пути запрещены. Turns диалога использует отдельный streaming handler. |
 | `/api/dossier/**` | `dossier-service`, путь без изменений | Только `GET`: dossier является read-проекцией и не имеет публичного command route. |
 | `/api/analytics/v1/**` | `analytics-service`; внешний префикс меняется на downstream `/api/v1/**` | Только аутентифицированный `GET`. |
+
+Gateway остаётся stateless и не хранит source-address rate-limit state.
+Production ingress должен ограничивать анонимный customer-registration surface:
+CSRF-защита предотвращает cross-site submission, но не является abuse
+throttling.
 
 Специальные маршруты намеренно имеют приоритет над общими маршрутами сервиса:
 
@@ -237,7 +242,9 @@ target, public issuer/base URI и разрешённый panel origin.
 команды пересчёта из общего inventory-маршрута, нулевую маршрутизацию каждой канонической
 internal-операции и зарезервированного private/internal alias, а также реальную edge security
 classification. Все публичные domain-операции требуют Bearer-аутентификацию, кроме четырёх явно
-анонимных logistics client-presentation операций.
+анонимных logistics client-presentation операций. Отдельный auth-раздел проверяет и Bearer, и
+точное OpenAPI-требование `csrfCookie + csrfHeader`; CSRF остаётся проверкой auth-service и не
+дублирует state в gateway.
 
 Запуск focused gate из корня репозитория:
 

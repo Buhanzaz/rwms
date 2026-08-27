@@ -774,6 +774,33 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   }
 
   @Override
+  public CabinCatalogPage readCustomerCabinCatalog(
+      UUID warehouseId,
+      UUID holdScopeId,
+      String query,
+      String cabinType,
+      String finish,
+      String dimensions,
+      String category,
+      Boolean linoleum,
+      List<String> characteristics,
+      int page,
+      int size) {
+    return assetOrderPresentation.readCustomerCabinCatalog(
+        warehouseId,
+        holdScopeId,
+        query,
+        cabinType,
+        finish,
+        dimensions,
+        category,
+        linoleum,
+        characteristics,
+        page,
+        size);
+  }
+
+  @Override
   public CabinSearchResult searchAvailableCabins(
       UUID downstreamIdempotencyKey, String exactRequestBody) {
     return assetOrderPresentation.searchAvailableCabins(downstreamIdempotencyKey, exactRequestBody);

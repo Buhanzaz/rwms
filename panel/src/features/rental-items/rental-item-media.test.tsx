@@ -445,7 +445,7 @@ beforeEach(() => {
 })
 
 describe("rental item media", () => {
-  it("keeps owner photos available when the cabin cover projection fails", async () => {
+  it("does not mix archive folders when the active-folder projection fails", async () => {
     media.listOwnerMedia.mockResolvedValue({
       items: [
         {
@@ -487,10 +487,10 @@ describe("rental item media", () => {
     renderHarness()
 
     await waitFor(() =>
-      expect(screen.getByTestId("photo-count").textContent).toBe("1")
+      expect(screen.getByTestId("media-error").textContent).toBe("true")
     )
+    expect(screen.getByTestId("photo-count").textContent).toBe("0")
     expect(screen.getByTestId("folder-count").textContent).toBe("1")
-    expect(screen.getByTestId("media-error").textContent).toBe("false")
     expect(screen.getByTestId("media-loading").textContent).toBe("false")
     expect(media.listCabinCovers).toHaveBeenCalledTimes(1)
   })

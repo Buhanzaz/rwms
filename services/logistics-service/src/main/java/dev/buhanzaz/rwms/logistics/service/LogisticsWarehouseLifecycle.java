@@ -104,6 +104,17 @@ public class LogisticsWarehouseLifecycle {
         store.evidencedDriverTaskReplay(actorSubjectId, idempotencyKey).orElse(null));
   }
 
+  /** Reads the authoritative warehouse-local calendar date without opening an operation intent. */
+  public LocalDate currentLocalDate(UUID warehouseId) {
+    if (warehouseId == null) {
+      throw new IllegalArgumentException("warehouseId is required");
+    }
+    OffsetDateTime occurredAt = OffsetDateTime.now(ZoneOffset.UTC);
+    LogisticsDependencyGateway.WarehouseTimeZone timeZone =
+        dependencies.warehouseTimeZoneAt(warehouseId, occurredAt);
+    return occurredAt.toInstant().atZone(ZoneId.of(timeZone.timeZone())).toLocalDate();
+  }
+
   private AdmissionTicket prepare(
       UUID ownerId,
       String operationName,

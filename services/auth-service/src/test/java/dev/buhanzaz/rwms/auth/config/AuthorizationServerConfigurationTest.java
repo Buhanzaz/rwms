@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
 import dev.buhanzaz.rwms.auth.domain.PrincipalType;
+import dev.buhanzaz.rwms.auth.domain.UserGlobalRole;
 import dev.buhanzaz.rwms.platform.kafka.RwmsKafkaProperties;
 import java.time.Duration;
 import java.util.List;
@@ -40,6 +41,28 @@ class AuthorizationServerConfigurationTest {
                         "unconfigured-client", PrincipalType.USER, clients))
                 .isInstanceOf(OAuth2AuthenticationException.class)
                 .hasMessageContaining("unconfigured-client");
+    }
+
+    @Test
+    void customerRoleAndCustomerClientAreMutuallyExclusiveWithOtherUserClients() {
+        assertThatCode(() -> configuration.validateCustomerClientRole(
+                        OAuthClientProperties.CUSTOMER_ANDROID_CLIENT_ID,
+                        UserGlobalRole.CUSTOMER))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> configuration.validateCustomerClientRole(
+                        OAuthClientProperties.MANAGER_ANDROID_CLIENT_ID,
+                        UserGlobalRole.WMS_ADMIN))
+                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> configuration.validateCustomerClientRole(
+                        OAuthClientProperties.CUSTOMER_ANDROID_CLIENT_ID,
+                        UserGlobalRole.WMS_ADMIN))
+                .isInstanceOf(OAuth2AuthenticationException.class)
+                .hasMessageContaining("isolated");
+        assertThatThrownBy(() -> configuration.validateCustomerClientRole(
+                        "rwms-panel",
+                        UserGlobalRole.CUSTOMER))
+                .isInstanceOf(OAuth2AuthenticationException.class)
+                .hasMessageContaining("isolated");
     }
 
     @Test

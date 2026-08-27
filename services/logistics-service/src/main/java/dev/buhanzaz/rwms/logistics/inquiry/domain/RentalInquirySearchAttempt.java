@@ -51,6 +51,7 @@ public class RentalInquirySearchAttempt {
           "WMS_ADMIN",
           "WAREHOUSE_MANAGER",
           "RENTAL_MANAGER",
+          "CUSTOMER",
           "VIEWER");
 
   @Id

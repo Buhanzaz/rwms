@@ -38,6 +38,7 @@ class LogisticsContractFoundationTest {
             "/api/logistics/v1/returns/{documentId}/register",
             "/api/logistics/v1/returns/{documentId}/start-estimates",
             "/api/logistics/v1/historical-rental-movements",
+            "/api/logistics/v1/historical-rental-movements/{documentId}",
             "/api/logistics/v1/shipments",
             "/api/logistics/v1/shipments/{documentId}",
             "/api/logistics/v1/shipments/{documentId}/furniture-readiness",
@@ -54,6 +55,7 @@ class LogisticsContractFoundationTest {
             "/api/logistics/v1/admin/warehouse-operation-marks/{operationId}/recovery",
             "/api/internal/logistics/v1/planning/requests",
             "/api/internal/logistics/v1/planning/assignments",
+            "/api/internal/logistics/v1/planning/capacity-snapshots/{scenarioId}",
             "/api/internal/logistics/v1/maintenance/return-arrivals/{rentalItemId}",
             "/api/internal/logistics/v1/maintenance/driver-tasks",
             "/api/internal/logistics/v1/maintenance/driver-tasks/repairs/{repairId}",
@@ -199,6 +201,13 @@ class LogisticsContractFoundationTest {
     Map<String, Object> historicalMovementPost = child(historicalMovement, "post");
     assertThat(historicalMovementPost.get("operationId"))
         .isEqualTo("createHistoricalRentalMovement");
+    Map<String, Object> historicalMovementUpdate =
+        child(
+            child(child(document, "paths"),
+                "/api/logistics/v1/historical-rental-movements/{documentId}"),
+            "put");
+    assertThat(historicalMovementUpdate.get("operationId"))
+        .isEqualTo("updateHistoricalRentalShipment");
     Map<String, Object> historicalMovementRequest =
         child(schemas, "CreateHistoricalRentalMovementRequest");
     assertThat(historicalMovementRequest.get("required"))
@@ -217,7 +226,13 @@ class LogisticsContractFoundationTest {
             "expectedRentalItemVersion",
             "clientId",
             "kind",
-            "occurredOn")
+            "occurredOn");
+    Map<String, Object> historicalShipmentUpdate =
+        child(schemas, "UpdateHistoricalRentalShipmentRequest");
+    assertThat(historicalShipmentUpdate.get("required"))
+        .isEqualTo(List.of("expectedVersion", "rentalItemId", "clientId", "occurredOn"));
+    assertThat(child(historicalShipmentUpdate, "properties"))
+        .containsOnlyKeys("expectedVersion", "rentalItemId", "clientId", "occurredOn")
         .doesNotContainKeys("driverSnapshot", "driverWorkerId", "scheduledDate");
     assertThat(child(child(child(schemas, "CabinSearchRequest"), "properties"), "groups"))
         .containsEntry("maxItems", 20);
@@ -281,6 +296,160 @@ class LogisticsContractFoundationTest {
   }
 
   @Test
+  void customerAppContractFreezesOwnedCartSlotsAndCheckoutBoundary() throws Exception {
+    Map<String, Object> document = openApi();
+    Map<String, Object> paths = child(document, "paths");
+    Map<String, Object> schemas = child(child(document, "components"), "schemas");
+
+    assertThat(paths)
+        .containsKeys(
+            "/api/logistics/customer/v1/profile",
+            "/api/logistics/customer/v1/warehouses",
+            "/api/logistics/customer/v1/inquiries",
+            "/api/logistics/customer/v1/inquiries/{inquiryId}",
+            "/api/logistics/customer/v1/inquiries/{inquiryId}/facets",
+            "/api/logistics/customer/v1/inquiries/{inquiryId}/cabins",
+            "/api/logistics/customer/v1/inquiries/{inquiryId}/selection",
+            "/api/logistics/customer/v1/inquiries/{inquiryId}/equipment",
+            "/api/logistics/customer/v1/inquiries/{inquiryId}/cart",
+            "/api/logistics/customer/v1/inquiries/{inquiryId}/cabins/{cabinId}/photos/{mediaId}",
+            "/api/logistics/customer/v1/delivery-slots/search",
+            "/api/logistics/customer/v1/delivery-slots/{slotId}/hold",
+            "/api/logistics/customer/v1/inquiries/{inquiryId}/checkout",
+            "/api/logistics/customer/v1/bookings");
+    assertThat(schemas)
+        .containsKeys(
+            "CreateCustomerProfileRequest",
+            "CustomerProfile",
+            "CustomerWarehouse",
+            "CreateCustomerInquiryRequest",
+            "CustomerInquiry",
+            "CustomerCabin",
+            "CustomerCabinPhoto",
+            "CustomerCabinPage",
+            "ReplaceCustomerCabinsRequest",
+            "CustomerCabinSelection",
+            "CustomerEquipmentAvailability",
+            "CustomerCabinEquipmentSelection",
+            "ReplaceCustomerEquipmentRequest",
+            "CustomerEquipmentSelection",
+            "CustomerCart",
+            "CustomerDeliverySlotSearchRequest",
+            "CustomerDeliverySlot",
+            "HoldCustomerDeliverySlotRequest",
+            "HeldCustomerDeliverySlot",
+            "CustomerCheckoutRequest",
+            "CustomerBooking");
+
+    Map<String, Object> customerWarehouse = child(schemas, "CustomerWarehouse");
+    assertThat(customerWarehouse.get("required"))
+        .isEqualTo(
+            List.of(
+                "id",
+                "name",
+                "city",
+                "address",
+                "timezone",
+                "depotLatitude",
+                "depotLongitude"));
+    assertThat(child(customerWarehouse, "properties"))
+        .containsKeys("depotLatitude", "depotLongitude");
+
+    Map<String, Object> createInquiry =
+        child(child(paths, "/api/logistics/customer/v1/inquiries"), "post");
+    Map<String, Object> replaceSelection =
+        child(
+            child(paths, "/api/logistics/customer/v1/inquiries/{inquiryId}/selection"),
+            "put");
+    Map<String, Object> checkout =
+        child(
+            child(paths, "/api/logistics/customer/v1/inquiries/{inquiryId}/checkout"),
+            "post");
+    for (Map<String, Object> operation : List.of(createInquiry, replaceSelection, checkout)) {
+      assertThat((List<?>) operation.get("parameters"))
+          .anySatisfy(
+              parameter ->
+                  assertThat(parameter)
+                      .isEqualTo(Map.of("$ref", "#/components/parameters/IdempotencyKey")));
+      assertThat(child(operation, "responses")).containsKeys("409", "503");
+    }
+    assertThat(child(createInquiry, "responses")).containsKey("201");
+    assertThat(child(replaceSelection, "responses")).containsKey("200");
+    assertThat(child(checkout, "responses")).containsKey("200");
+    Map<String, Object> slotSearch =
+        child(child(paths, "/api/logistics/customer/v1/delivery-slots/search"), "post");
+    assertThat(child(slotSearch, "responses")).containsKey("422");
+
+    Map<String, Object> hold =
+        child(child(paths, "/api/logistics/customer/v1/delivery-slots/{slotId}/hold"), "post");
+    assertThat((List<?>) hold.get("parameters"))
+        .anySatisfy(
+            parameter ->
+                assertThat(parameter)
+                    .isEqualTo(
+                        Map.of(
+                            "$ref",
+                            "#/components/parameters/ExpectedCustomerDeliverySlotVersion")));
+    assertThat(child(hold, "responses"))
+        .containsKeys("200", "400", "401", "403", "404", "409", "422", "503");
+    assertThat(
+            child(
+                child(child(child(hold, "requestBody"), "content"), "application/json"),
+                "schema"))
+        .isEqualTo(Map.of("$ref", "#/components/schemas/HoldCustomerDeliverySlotRequest"));
+
+    Map<String, Object> cabinList =
+        child(child(paths, "/api/logistics/customer/v1/inquiries/{inquiryId}/cabins"), "get");
+    assertThat(cabinList.get("description").toString())
+        .contains("FREE")
+        .contains("no dossier/passport");
+    Map<String, Object> cabinProperties = child(child(schemas, "CustomerCabin"), "properties");
+    assertThat(cabinProperties)
+        .containsKeys(
+            "accountingNo",
+            "type",
+            "finish",
+            "dimensions",
+            "category",
+            "linoleum",
+            "characteristics",
+            "facts",
+            "photos")
+        .doesNotContainKeys("passportUrl", "dossierUrl", "warehouseId", "status");
+
+    Map<String, Object> deliverySlot = child(schemas, "CustomerDeliverySlot");
+    assertThat(child(deliverySlot, "properties"))
+        .containsKeys(
+            "date",
+            "start",
+            "end",
+            "travelZoneHours",
+            "capacityRemaining",
+            "expiresAt",
+            "state");
+    assertThat(child(child(deliverySlot, "properties"), "state"))
+        .containsEntry(
+            "enum", List.of("OFFERED", "HELD", "CHECKOUT_PENDING", "CONFIRMED", "RELEASED"));
+    Map<String, Object> checkoutRequest = child(schemas, "CustomerCheckoutRequest");
+    assertThat(checkoutRequest.get("required"))
+        .isEqualTo(List.of("expectedVersion", "slotId", "slotVersion", "rentalMonths"));
+    assertThat(child(child(checkoutRequest, "properties"), "rentalMonths"))
+        .containsEntry("minimum", 1)
+        .containsEntry("maximum", 120);
+
+    Map<String, Object> photo =
+        child(
+            child(
+                paths,
+                "/api/logistics/customer/v1/inquiries/{inquiryId}/cabins/{cabinId}/photos/{mediaId}"),
+            "get");
+    assertThat(child(child(child(photo, "responses"), "200"), "content"))
+        .containsKey("image/*");
+    assertThat(child(child(child(photo, "responses"), "200"), "headers"))
+        .containsKey("X-Content-Type-Options");
+  }
+
+  @Test
   void orderUnitReplacementRouteMatchesTheCanonicalExplicitReplacePath() throws Exception {
     String path = "/api/logistics/v1/orders/{orderId}/units/{unitId}/replace";
     Map<String, Object> operation = child(child(child(openApi(), "paths"), path), "post");
@@ -323,6 +492,24 @@ class LogisticsContractFoundationTest {
             "acceptUndamagedReturn",
             "startReturnEstimates",
             "createHistoricalRentalMovement",
+            "updateHistoricalRentalShipment",
+            "getCustomerProfile",
+            "createCustomerProfile",
+            "listCustomerWarehouses",
+            "createCustomerInquiry",
+            "getCustomerInquiry",
+            "getCustomerCabinFacets",
+            "listCustomerCabins",
+            "getCustomerCabinSelection",
+            "replaceCustomerCabinSelection",
+            "listCustomerEquipment",
+            "replaceCustomerEquipment",
+            "getCustomerCart",
+            "getCustomerCabinPhoto",
+            "searchCustomerDeliverySlots",
+            "holdCustomerDeliverySlot",
+            "checkoutCustomerInquiry",
+            "listCustomerBookings",
             "listShipments",
             "createShipment",
             "getShipment",
@@ -359,6 +546,7 @@ class LogisticsContractFoundationTest {
             "getRoutePlanningRequests",
             "getRoutePlanningAssignmentStatuses",
             "applyRoutePlanningAssignments",
+            "replaceRoutePlanningCapacitySnapshot",
             "getDriverBoard",
             "moveDriverBoardTask",
             "returnDriverTaskToCapitalRepairs",
@@ -646,6 +834,49 @@ class LogisticsContractFoundationTest {
         .doesNotContainKeys("address", "clientName", "contactPhone");
     assertThat(child(child(status, "properties"), "driverAudienceMode").get("enum"))
         .isEqualTo(List.of("ASSIGNED_DRIVER", "WAREHOUSE_DRIVERS"));
+  }
+
+  @Test
+  void plannerCapacityContractCarriesOnlyAnonymousDeliveryFacts() throws Exception {
+    Map<String, Object> document = openApi();
+    Map<String, Object> endpoint =
+        child(
+            child(document, "paths"),
+            "/api/internal/logistics/v1/planning/capacity-snapshots/{scenarioId}");
+    Map<String, Object> put = child(endpoint, "put");
+    assertThat(put.get("operationId")).isEqualTo("replaceRoutePlanningCapacitySnapshot");
+    assertThat((List<?>) put.get("parameters"))
+        .anySatisfy(
+            parameter ->
+                assertThat(parameter)
+                    .isEqualTo(Map.of("$ref", "#/components/parameters/IdempotencyKey")));
+
+    Map<String, Object> schemas = child(child(document, "components"), "schemas");
+    Map<String, Object> job = child(schemas, "PlanningCapacityJob");
+    assertThat(child(job, "properties"))
+        .containsOnlyKeys(
+            "sourceJobId",
+            "deliveryDate",
+            "latitude",
+            "longitude",
+            "cabinCount",
+            "windowStart",
+            "windowEnd",
+            "serviceMinutes")
+        .doesNotContainKeys("orderId", "clientName", "cabinId", "driverWorkerId");
+    assertThat(child(schemas, "ReplacePlanningCapacitySnapshotRequest").get("required"))
+        .isEqualTo(List.of("warehouseId", "sourceGeneration", "sourceRevision", "jobs"));
+    Map<String, Object> dateOptionProperties =
+        child(child(schemas, "PlanningDateOption"), "properties");
+    for (String property : List.of("windowStart", "windowEnd", "travelZoneHours")) {
+      assertThat(child(dateOptionProperties, property))
+          .containsEntry(
+              "type",
+              property.equals("travelZoneHours")
+                  ? List.of("integer", "null")
+                  : List.of("string", "null"))
+          .doesNotContainKey("nullable");
+    }
   }
 
   @Test

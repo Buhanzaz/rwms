@@ -102,6 +102,38 @@ public class RentalInquiryService {
     return mapper.toResponse(inquiry);
   }
 
+  /**
+   * Creates or replays a customer-owned inquiry and atomically locks it to the selected warehouse.
+   * CustomerApp never relies on the manager search flow to establish this ownership fence.
+   */
+  @Transactional
+  public RentalInquiryResponse createCustomer(
+      OrderActor actor, UUID idempotencyKey, UUID clientId, UUID warehouseId) {
+    if (actor == null
+        || !"CUSTOMER".equals(actor.role())
+        || idempotencyKey == null
+        || clientId == null
+        || warehouseId == null) {
+      throw new IllegalArgumentException(
+          "Customer actor, client, warehouse and Idempotency-Key are required");
+    }
+    access.requireWarehouseEdit(actor, warehouseId);
+    RentalInquiryResponse created =
+        create(
+            actor,
+            idempotencyKey,
+            new CreateRentalInquiryRequest(null, clientId, null, null));
+    RentalInquiry inquiry = requiredOwned(actor, created.id());
+    if (inquiry.getWarehouseId() != null && !warehouseId.equals(inquiry.getWarehouseId())) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "INQUIRY_WAREHOUSE_LOCKED",
+          "Idempotency-Key уже связан с другим складом");
+    }
+    inquiry.selectWarehouse(warehouseId, now());
+    return mapper.toResponse(inquiries.saveAndFlush(inquiry));
+  }
+
   public RentalInquiryResponse get(OrderActor actor, UUID inquiryId) {
     return mapper.toResponse(requiredOwned(actor, inquiryId));
   }

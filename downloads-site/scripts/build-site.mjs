@@ -9,6 +9,7 @@ const releaseLocations = [
   ["manager", resolve(rootDirectory, "../manager-download-site/release.json")],
   ["driver", resolve(rootDirectory, "../driver-download-site/release.json")],
   ["worker", resolve(rootDirectory, "../worker-download-site/release.json")],
+  ["customer", resolve(rootDirectory, "../client-download-site/release.json")],
 ];
 const expectedApps = {
   manager: {
@@ -33,6 +34,14 @@ const expectedApps = {
     title: "Приложение работника",
     audience: "Складские задания, работы и фотоотчёты.",
     icon: "W",
+    testBuild: false,
+  },
+  customer: {
+    packageName: "dev.buhanzaz.rwms.client",
+    prefix: "rwms-customer-",
+    title: "Приложение клиента",
+    audience: "Выбор свободной бытовки, мебели, доставки и доступного временного слота.",
+    icon: "C",
     testBuild: false,
   },
 };

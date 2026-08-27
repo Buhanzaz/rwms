@@ -303,11 +303,7 @@ export function useRentalItemMedia({
           null)
       : null
   }, [currentCover?.previews, currentCoverMediaId, readyImages])
-  const logicalPhotoCount =
-    currentCover?.photoCount ??
-    (query.data?.items ?? []).filter(
-      (asset) => asset.kind === "IMAGE" && asset.status !== "DELETED"
-    ).length
+  const logicalPhotoCount = currentCover?.photoCount ?? 0
   const assetSignatures = useMemo(
     () =>
       new Map(readyImages.map((asset) => [asset.id, assetSignature(asset)])),
@@ -480,12 +476,9 @@ export function useRentalItemMedia({
   }, [activeLoadedVariants, actorDisplays, dossierActivities, readyImages])
 
   const photos = useMemo(() => {
-    const currentPhotos = coverQuery.error
-      ? allPhotos
-      : currentFolderId === null
-        ? coverQuery.data
-          ? []
-          : allPhotos
+    const currentPhotos =
+      coverQuery.error || !coverQuery.data || currentFolderId === null
+        ? []
         : allPhotos.filter((photo) => photo.folderId === currentFolderId)
     return orderPhotosWithCoverFirst(currentPhotos, currentCoverMediaId)
   }, [
@@ -628,8 +621,9 @@ export function useRentalItemMedia({
   return {
     assets: query.data?.items ?? [],
     logicalPhotoCount,
-    error: query.error,
-    isLoading: query.isLoading || !initialVariantsLoaded,
+    error: query.error ?? coverQuery.error,
+    isLoading:
+      query.isLoading || coverQuery.isLoading || !initialVariantsLoaded,
     isUploading: uploadMutation.isPending,
     photos,
     archivePhotos,

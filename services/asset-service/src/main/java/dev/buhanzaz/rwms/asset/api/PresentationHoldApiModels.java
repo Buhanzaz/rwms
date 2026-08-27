@@ -30,7 +30,7 @@ public final class PresentationHoldApiModels {
           @Size(max = 32)
           @Pattern(
               regexp =
-                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|VIEWER)$")
+                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|CUSTOMER|VIEWER)$")
           String actorRole) {}
 
   /** Exact presentation selection replacement with expiry, actor and optional source scope. */
@@ -43,7 +43,7 @@ public final class PresentationHoldApiModels {
           @Size(max = 32)
           @Pattern(
               regexp =
-                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|VIEWER)$")
+                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|CUSTOMER|VIEWER)$")
           String actorRole,
       UUID sourceHoldScopeId) {}
 
@@ -62,7 +62,7 @@ public final class PresentationHoldApiModels {
           @Size(max = 32)
           @Pattern(
               regexp =
-                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|VIEWER)$")
+                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|CUSTOMER|VIEWER)$")
           String actorRole,
       @Size(max = 100)
           List<@NotNull @Valid OrderUnitEquipmentRequirements> units) {
@@ -145,7 +145,7 @@ public final class PresentationHoldApiModels {
           @Size(max = 32)
           @Pattern(
               regexp =
-                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|VIEWER)$")
+                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|CUSTOMER|VIEWER)$")
           String actorRole,
       @NotNull @Size(min = 1, max = 20) List<@NotNull @Valid CabinSearchGroup> groups,
       @Pattern(regexp = "^(APPEND|REPLACE)$") String resultMode) {

@@ -1,10 +1,5 @@
-import {
-  useCallback,
-  useRef,
-  useState,
-  type FormEvent,
-} from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useCallback, useRef, useState, type FormEvent } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Loading03Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { toast } from "sonner"
@@ -30,6 +25,7 @@ import {
   CLIENTS_QUERY_KEY,
   createClient,
   createClientIdempotencyKey,
+  getClient,
 } from "@/features/clients/api/clients-api"
 import {
   clientNeedsContactPerson,
@@ -47,6 +43,7 @@ import {
   createHistoricalRentalMovementIdempotencyKey,
   type HistoricalRentalMovementDocument,
   type HistoricalRentalMovementKind,
+  updateHistoricalRentalShipment,
 } from "@/features/rental-items/historical-rental-movement-api"
 
 function localDateInputValue() {
@@ -85,9 +82,10 @@ function validateNewClient(choice: OrderClientChoice) {
 }
 
 /**
- * Collects one historical rental shipment or return without exposing a driver or route planner.
+ * Collects or corrects one historical rental movement without exposing a driver or route planner.
  * A new client is persisted first with its own retry key, then the logistics command is retried
- * with a stable, independent key until its response is known.
+ * with a stable, independent key until its response is known. Corrections keep the existing
+ * shipment identity and never replay physical effects.
  */
 export function HistoricalRentalMovementDialog({
   open,
@@ -96,6 +94,7 @@ export function HistoricalRentalMovementDialog({
   accessToken,
   actorId,
   responsibleManagerDisplayName,
+  existingShipment = null,
   onOpenChange,
   onCreated,
 }: {
@@ -105,6 +104,12 @@ export function HistoricalRentalMovementDialog({
   accessToken: string
   actorId: string
   responsibleManagerDisplayName: string
+  existingShipment?: {
+    id: string
+    version: number
+    clientId: string | null
+    scheduledDate: string | null
+  } | null
   onOpenChange: (open: boolean) => void
   onCreated: (document: HistoricalRentalMovementDocument) => void
 }) {
@@ -114,8 +119,20 @@ export function HistoricalRentalMovementDialog({
   const movementIdempotencyKey = useRef<string | null>(null)
   const createdClientId = useRef<string | null>(null)
   const [choice, setChoice] = useState<OrderClientChoice | null>(null)
-  const [occurredOn, setOccurredOn] = useState(localDateInputValue)
+  const [occurredOn, setOccurredOn] = useState(
+    () => existingShipment?.scheduledDate ?? localDateInputValue()
+  )
   const [errorText, setErrorText] = useState<string | null>(null)
+  const isEditing = kind === "SHIPMENT" && existingShipment !== null
+  const existingClientQuery = useQuery({
+    queryKey: [
+      ...CLIENTS_QUERY_KEY,
+      "detail",
+      existingShipment?.clientId ?? "none",
+    ],
+    queryFn: () => getClient(accessToken, existingShipment!.clientId!),
+    enabled: Boolean(open && isEditing && existingShipment?.clientId),
+  })
 
   const movementMutation = useMutation({
     mutationFn: async () => {
@@ -150,10 +167,24 @@ export function HistoricalRentalMovementDialog({
         clientId = client.id
       }
       if (choice.kind === "new") clientId = createdClientId.current
-      if (!clientId) throw new Error("Не удалось определить клиента для операции.")
+      if (!clientId)
+        throw new Error("Не удалось определить клиента для операции.")
 
       movementIdempotencyKey.current ??=
         createHistoricalRentalMovementIdempotencyKey()
+      if (isEditing) {
+        return updateHistoricalRentalShipment({
+          accessToken,
+          documentId: existingShipment!.id,
+          idempotencyKey: movementIdempotencyKey.current,
+          input: {
+            expectedVersion: existingShipment!.version,
+            rentalItemId: rentalItem.id,
+            clientId,
+            occurredOn,
+          },
+        })
+      }
       return createHistoricalRentalMovement({
         accessToken,
         idempotencyKey: movementIdempotencyKey.current,
@@ -170,7 +201,9 @@ export function HistoricalRentalMovementDialog({
     onSuccess: async (document) => {
       await queryClient.invalidateQueries({ queryKey: CLIENTS_QUERY_KEY })
       toast.success(
-        `Историческая ${movementLabel(kind)} создана и передана в логистику.`
+        isEditing
+          ? "Историческая отгрузка обновлена."
+          : `Историческая ${movementLabel(kind)} создана и передана в логистику.`
       )
       onCreated(document)
     },
@@ -223,25 +256,40 @@ export function HistoricalRentalMovementDialog({
       >
         <DialogHeader>
           <DialogTitle>
-            Создать {movementLabel(kind)} задним числом
+            {isEditing ? "Изменить" : "Создать"} {movementLabel(kind)} задним
+            числом
           </DialogTitle>
           <DialogDescription>
-            Будет создан реальный документ логистики для бытовки {rentalItem.number}.
-            Водитель и маршрут для такой операции не указываются.
+            {isEditing
+              ? `Будут исправлены клиент и дата существующей отгрузки бытовки ${rentalItem.number}. Физическая отгрузка повторно не выполняется.`
+              : `Будет создан реальный документ логистики для бытовки ${rentalItem.number}. Водитель и маршрут для такой операции не указываются.`}
           </DialogDescription>
         </DialogHeader>
         {open ? (
           <form noValidate onSubmit={submit}>
             <FieldGroup>
-              <OrderClientChooser
-                accessToken={accessToken}
-                actorId={actorId}
-                idPrefix={`historical-rental-${kind.toLowerCase()}`}
-                responsibleManagerDisplayName={responsibleManagerDisplayName}
-                portalContainer={contentRef}
-                newClientCreationContext="до создания исторической операции"
-                onChange={handleChoice}
-              />
+              {isEditing &&
+              existingShipment?.clientId &&
+              existingClientQuery.isLoading ? (
+                <FieldDescription>Загрузка текущего клиента…</FieldDescription>
+              ) : (
+                <OrderClientChooser
+                  key={existingClientQuery.data?.id ?? "historical-client"}
+                  accessToken={accessToken}
+                  actorId={actorId}
+                  idPrefix={`historical-rental-${kind.toLowerCase()}`}
+                  responsibleManagerDisplayName={responsibleManagerDisplayName}
+                  portalContainer={contentRef}
+                  initialClient={existingClientQuery.data ?? null}
+                  newClientCreationContext="до сохранения исторической операции"
+                  onChange={handleChoice}
+                />
+              )}
+              {existingClientQuery.isError ? (
+                <FieldError>
+                  Текущий клиент не загрузился. Выберите клиента заново.
+                </FieldError>
+              ) : null}
 
               <Field>
                 <FieldLabel htmlFor="historical-rental-occurred-on">
@@ -291,7 +339,11 @@ export function HistoricalRentalMovementDialog({
                 </Button>
                 <Button
                   type="submit"
-                  disabled={choice === null || movementMutation.isPending}
+                  disabled={
+                    choice === null ||
+                    movementMutation.isPending ||
+                    existingClientQuery.isLoading
+                  }
                 >
                   {movementMutation.isPending ? (
                     <HugeiconsIcon
@@ -301,8 +353,12 @@ export function HistoricalRentalMovementDialog({
                     />
                   ) : null}
                   {movementMutation.isPending
-                    ? "Создание…"
-                    : `Создать ${movementLabel(kind)}`}
+                    ? isEditing
+                      ? "Сохранение…"
+                      : "Создание…"
+                    : isEditing
+                      ? "Сохранить отгрузку"
+                      : `Создать ${movementLabel(kind)}`}
                 </Button>
               </DialogFooter>
             </FieldGroup>

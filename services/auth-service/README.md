@@ -54,7 +54,7 @@ workflow engine or a shared database for product state.
 ## How sign-in and token issuance work
 
 ```text
-Panel / manager app / WorkerApp / DriverApp
+Panel / manager app / ClientApp / WorkerApp / DriverApp
           |
           | Authorization Code + PKCE through public /auth/**
           v
@@ -90,10 +90,19 @@ query-free HTTPS `/auth/worker/callback` and receives `worker.tasks`;
 Location in memory, so neither Android manifest exposes a custom-scheme or App
 Link receiver. Both client IDs select the worker credential login surface.
 
+ClientApp first obtains a CSRF cookie/header pair from `GET /api/auth/csrf` and
+submits `POST /api/customer/v1/registrations`. Registration creates one active
+`CUSTOMER` user, its private encoded credential, initial authorization fact,
+and outbox row atomically. The account has no warehouse grants, manager-mobile
+access, or rental-manager entitlement. It can use only `rwms-customer-android`,
+whose query-free HTTPS callback is `/auth/customer/callback` and whose only
+business scope is `customer.rental`; other users cannot use that client.
+
 User access and ID tokens include the canonical claims `sub`,
 `preferred_username`, `principal_type=USER`, `global_role`, and camel-case
-`rentalAccess`. The public contract, not this README, is authoritative for the
-exact claim and endpoint shape.
+`rentalAccess`, plus the managed `client_id` that minted the token. The public
+contract, not this README, is authoritative for the exact claim and endpoint
+shape.
 
 ## Public API and access rules
 
@@ -104,6 +113,8 @@ authorization endpoints are standards-based.
 
 | Public endpoint | Purpose | Access rule |
 | --- | --- | --- |
+| `GET /api/auth/csrf` | Bootstrap the registration CSRF cookie/header pair | Anonymous read. |
+| `POST /api/customer/v1/registrations` | Create a customer-only credential and authorization stream | Anonymous with the exact CSRF cookie/header pair; login 3–64 portable characters, password 8–128 characters, and matching confirmation. |
 | `GET /api/admin/users` | List administrable users | USER JWT with `SYSTEM_ADMIN` or `WMS_ADMIN`. |
 | `POST /api/admin/users` | Create an administrable user | Same role; only `SYSTEM_ADMIN` may create a `SYSTEM_ADMIN` account. |
 | `GET /api/admin/users/{id}` | Read one administrative user projection | USER JWT with `SYSTEM_ADMIN` or `WMS_ADMIN`. |
@@ -140,6 +151,13 @@ update preserves its current persisted value.
   non-system administrator cannot create or manage a system-administrator
   account.
 - Incoming names cannot collide with reserved OAuth client identifiers.
+- Case-insensitive self-registration of one login is serialized with a
+  transaction-scoped advisory lock before password hashing and unique writes.
+  The stateless gateway does not implement source-address rate limiting;
+  production ingress must provide abuse throttling before anonymous
+  registration is enabled.
+- `CUSTOMER` users and `rwms-customer-android` are mutually exclusive with all
+  other user clients during authorization-code and refresh-token exchange.
 
 These rules put durable access invariants where the credential and token owner
 can enforce them transactionally, rather than relying on UI checks or every
@@ -163,10 +181,12 @@ This is preferable to recreating clients at every startup: stable client IDs
 preserve valid state, while a deliberate revision makes security changes
 reviewable and prevents accidental reactivation after a deployment rollback.
 
-The managed mobile inventory includes the USER-only manager client plus the two
-WORKER-only WorkerApp/DriverApp clients above. Changing a callback, scope, or
+The managed mobile inventory includes the USER-only manager client, the
+CUSTOMER-only ClientApp client, and the two WORKER-only WorkerApp/DriverApp
+clients above. The customer client requires S256 PKCE, a five-minute access
+token and a rotating 30-day refresh token. Changing a callback, scope, or
 principal type requires its own revision and coordinated client release; one
-mobile client's refresh token cannot be exchanged through the other client ID.
+mobile client's refresh token cannot be exchanged through another client ID.
 
 The managed `inventory-service` machine client requests exactly one downstream
 scope per token. Revision 5 added `media.inventory` for the completed-inventory
@@ -268,6 +288,8 @@ Provide at least:
 - `AUTH_DB_URL`, `AUTH_DB_USERNAME`, and `AUTH_DB_PASSWORD` with a non-loopback
   PostgreSQL endpoint and deployment-specific credentials;
 - a public HTTPS issuer/base, allowed origins, and registered redirect URIs;
+- `CUSTOMER_ORIGIN` and `CUSTOMER_REDIRECT_URI` as same-origin HTTPS values,
+  with the latter ending in the query-free `/auth/customer/callback` path;
 - `WORKER_ORIGIN`, `WORKER_REDIRECT_URI`, `WORKER_POST_LOGOUT_REDIRECT_URI`,
   `DRIVER_ORIGIN`, `DRIVER_REDIRECT_URI`, and
   `DRIVER_POST_LOGOUT_REDIRECT_URI`, all same-origin HTTPS values with dedicated

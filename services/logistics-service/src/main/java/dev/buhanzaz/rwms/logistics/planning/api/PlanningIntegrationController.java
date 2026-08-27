@@ -1,10 +1,13 @@
 package dev.buhanzaz.rwms.logistics.planning.api;
 
+import dev.buhanzaz.rwms.logistics.customer.capacity.service.ScenarioCapacitySnapshotService;
 import dev.buhanzaz.rwms.logistics.order.service.RentalOrderPlanningIntegrationService;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.ApplyPlanningAssignmentsRequest;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.ApplyPlanningAssignmentsResponse;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningAssignmentStatusResponse;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacitySnapshotResponse;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningRequestFeedResponse;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.ReplacePlanningCapacitySnapshotRequest;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
@@ -16,6 +19,8 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -30,6 +35,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class PlanningIntegrationController {
   private final LogisticsAuthorizer access;
   private final RentalOrderPlanningIntegrationService planning;
+  private final ScenarioCapacitySnapshotService capacitySnapshots;
 
   /** Exports one warehouse's unscheduled delivery demand for a bounded date range. */
   @GetMapping("/requests")
@@ -60,5 +66,16 @@ public class PlanningIntegrationController {
       @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
     access.requirePlanningIntegration(jwt);
     return planning.assignmentStatuses(warehouseId, date);
+  }
+
+  /** Replaces the active anonymous simulator capacity used only by CustomerApp slot searches. */
+  @PutMapping("/capacity-snapshots/{scenarioId}")
+  public PlanningCapacitySnapshotResponse replaceCapacitySnapshot(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID scenarioId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody ReplacePlanningCapacitySnapshotRequest request) {
+    access.requirePlanningIntegration(jwt);
+    return capacitySnapshots.replace(scenarioId, idempotencyKey, request);
   }
 }

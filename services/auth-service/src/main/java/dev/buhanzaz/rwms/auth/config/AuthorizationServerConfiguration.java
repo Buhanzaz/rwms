@@ -8,6 +8,7 @@ import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
 import com.nimbusds.jose.jwk.source.JWKSource;
 import com.nimbusds.jose.proc.SecurityContext;
 import dev.buhanzaz.rwms.auth.domain.PrincipalType;
+import dev.buhanzaz.rwms.auth.domain.UserGlobalRole;
 import dev.buhanzaz.rwms.auth.eventing.AuthSubjectCredentialStore;
 import dev.buhanzaz.rwms.auth.eventing.AuthSubjectProfileStore;
 import dev.buhanzaz.rwms.auth.repository.AuthSubjectRepository;
@@ -296,7 +297,8 @@ public class AuthorizationServerConfiguration {
         String clientId = context.getRegisteredClient().getClientId();
         if (!OAuthClientProperties.WORKER_ANDROID_CLIENT_ID.equals(clientId)
                 && !OAuthClientProperties.DRIVER_ANDROID_CLIENT_ID.equals(clientId)
-                && !OAuthClientProperties.MANAGER_ANDROID_CLIENT_ID.equals(clientId)) {
+                && !OAuthClientProperties.MANAGER_ANDROID_CLIENT_ID.equals(clientId)
+                && !OAuthClientProperties.CUSTOMER_ANDROID_CLIENT_ID.equals(clientId)) {
             return;
         }
         OAuth2AuthorizationCodeRequestAuthenticationToken authentication =
@@ -472,8 +474,11 @@ public class AuthorizationServerConfiguration {
     }
 
     /**
-     * Serves a readable CSRF token cookie for same-origin browser clients before state-changing form
-     * or logout traffic.
+     * Serves a readable CSRF token cookie and protects anonymous customer registration.
+     *
+     * <p>Only the token bootstrap read and exact registration mutation are anonymous. Registration
+     * therefore requires the cookie/header pair obtained from the bootstrap endpoint, while every
+     * other API remains in the bearer-only chain.
      *
      * @param http security builder for the CSRF bootstrap endpoint
      * @return dedicated CSRF bootstrap filter chain
@@ -484,8 +489,11 @@ public class AuthorizationServerConfiguration {
     SecurityFilterChain csrfBootstrapChain(HttpSecurity http) throws Exception {
         var csrf = CookieCsrfTokenRepository.withHttpOnlyFalse();
         csrf.setCookiePath("/");
-        http.securityMatcher("/api/auth/csrf")
-                .authorizeHttpRequests(authorize -> authorize.anyRequest().permitAll())
+        http.securityMatcher("/api/auth/csrf", "/api/customer/v1/registrations")
+                .authorizeHttpRequests(authorize -> authorize
+                        .requestMatchers(HttpMethod.GET, "/api/auth/csrf").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/customer/v1/registrations").permitAll()
+                        .anyRequest().denyAll())
                 .csrf(configurer -> configurer.csrfTokenRepository(csrf))
                 .cors(Customizer.withDefaults());
         return http.build();
@@ -671,9 +679,9 @@ public class AuthorizationServerConfiguration {
             if (accessToken) {
                 context.getClaims().audience(List.copyOf(client.audiences()));
             }
+            context.getClaims().claim("client_id", clientId);
             if (AuthorizationGrantType.CLIENT_CREDENTIALS.equals(context.getAuthorizationGrantType())) {
                 context.getClaims().claim("principal_type", "SERVICE");
-                context.getClaims().claim("client_id", clientId);
                 return;
             }
             boolean authorizationCode =
@@ -707,6 +715,7 @@ public class AuthorizationServerConfiguration {
             }
             validateClientPrincipal(
                     clientId, subject.getPrincipalType(), oauthClients);
+            validateCustomerClientRole(clientId, subject.getGlobalRole());
             if (OAuthClientProperties.MANAGER_ANDROID_CLIENT_ID.equals(clientId)
                     && (subject.getPrincipalType() != PrincipalType.USER
                             || !subject.getGlobalRole().isManagerAppEligible()
@@ -914,6 +923,27 @@ public class AuthorizationServerConfiguration {
             throw new OAuth2AuthenticationException(
                     new OAuth2Error("access_denied"),
                     "Principal type cannot use OAuth client " + clientId,
+                    null);
+        }
+    }
+
+    /**
+     * Keeps customer accounts and the customer OAuth client mutually exclusive.
+     *
+     * <p>A CUSTOMER subject cannot obtain panel or manager scopes, and an administrative USER
+     * cannot exchange an authorization code or refresh token through the customer client.
+     *
+     * @param clientId registered OAuth client identifier
+     * @param globalRole authoritative user role, or {@code null} for non-user subjects
+     * @throws OAuth2AuthenticationException when the customer boundary would be crossed
+     */
+    void validateCustomerClientRole(String clientId, UserGlobalRole globalRole) {
+        boolean customerClient = OAuthClientProperties.CUSTOMER_ANDROID_CLIENT_ID.equals(clientId);
+        boolean customerRole = globalRole == UserGlobalRole.CUSTOMER;
+        if (customerClient != customerRole) {
+            throw new OAuth2AuthenticationException(
+                    new OAuth2Error("access_denied"),
+                    "Customer accounts and customer OAuth client are isolated",
                     null);
         }
     }

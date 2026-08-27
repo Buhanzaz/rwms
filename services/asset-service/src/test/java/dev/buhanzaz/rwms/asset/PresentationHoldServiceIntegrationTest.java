@@ -19,10 +19,12 @@ import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsEquipmentMovementPurp
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.TransferEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateStatusRequest;
+import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.ReserveOrderUnitRequest;
+import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.ActorInput;
+import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinAvailabilityRequest;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinSearchGroup;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinSearchRequest;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinSearchResponse;
-import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinAvailabilityRequest;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.ConvertPresentationHoldsRequest;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.PresentationHoldView;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.ReplacePresentationHoldsRequest;
@@ -43,6 +45,7 @@ import dev.buhanzaz.rwms.asset.service.AssetNotFoundException;
 import dev.buhanzaz.rwms.asset.service.OrderUnitReservationConflictException;
 import dev.buhanzaz.rwms.asset.service.PresentationHoldService;
 import dev.buhanzaz.rwms.asset.service.RentalAvailabilityInvalidationPublisher;
+import jakarta.validation.Validator;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -90,6 +93,7 @@ class PresentationHoldServiceIntegrationTest {
   @Autowired OrderUnitReservationRepository orderReservations;
   @Autowired OperationLeaseRepository operationLeases;
   @Autowired JdbcTemplate jdbc;
+  @Autowired Validator validator;
 
   @DynamicPropertySource
   static void properties(DynamicPropertyRegistry registry) {
@@ -413,6 +417,178 @@ class PresentationHoldServiceIntegrationTest {
         .extracting(cabin -> cabin.id())
         .containsExactly(sale.id());
     assertThat(presentationHolds.holds(UUID.randomUUID()).holds()).isEmpty();
+  }
+
+  @Test
+  void customerCatalogKeepsOwnHoldsAndFiltersEveryUnavailableFenceBeforeStablePaging() {
+    UUID actorSubjectId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID holdScopeId = UUID.randomUUID();
+    RentalItemResponse available =
+        freeRental(
+            actorSubjectId,
+            warehouseId,
+            "CUSTOMER-AVAILABLE",
+            CATEGORY_NEW,
+            List.of(CHARACTERISTIC_ELECTRICS_KK, plasticWindow().getFirst()),
+            true);
+    RentalItemResponse ownHold =
+        freeRental(
+            actorSubjectId,
+            warehouseId,
+            "CUSTOMER-OWN-HOLD",
+            CATEGORY_NEW,
+            List.of(CHARACTERISTIC_ELECTRICS_KK, plasticWindow().getFirst()),
+            true);
+    RentalItemResponse wrongCharacteristics =
+        freeRental(
+            actorSubjectId,
+            warehouseId,
+            "CUSTOMER-WRONG-CHARACTERISTICS",
+            CATEGORY_NEW,
+            plasticWindow(),
+            true);
+    RentalItemResponse otherHold =
+        freeRental(actorSubjectId, warehouseId, "CUSTOMER-OTHER-HOLD", CATEGORY_NEW);
+    RentalItemResponse reserved =
+        freeRental(actorSubjectId, warehouseId, "CUSTOMER-RESERVED", CATEGORY_NEW);
+    RentalItemResponse leased =
+        freeRental(actorSubjectId, warehouseId, "CUSTOMER-LEASED", CATEGORY_NEW);
+    RentalItemResponse nonFree =
+        freeRental(actorSubjectId, warehouseId, "CUSTOMER-NON-FREE", CATEGORY_NEW);
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    presentationHolds.replace(
+        UUID.randomUUID(),
+        holdScopeId,
+        new ReplacePresentationHoldsRequest(
+            warehouseId,
+            List.of(ownHold.id()),
+            now.plusMinutes(30),
+            actorSubjectId,
+            "CUSTOMER",
+            null));
+    presentationHolds.replace(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        replaceRequest(
+            warehouseId, List.of(otherHold.id()), now.plusMinutes(30), actorSubjectId));
+    orderReservations.saveAndFlush(
+        OrderUnitReservation.create(
+            UUID.randomUUID(),
+            reserved.id(),
+            warehouseId,
+            actorSubjectId,
+            "CUSTOMER"));
+    operationLeases.saveAndFlush(
+        OperationLease.acquire(
+            leased.id(),
+            "TEST",
+            UUID.randomUUID().toString(),
+            1,
+            UUID.randomUUID(),
+            now,
+            now.plusMinutes(30)));
+    assets.updateStatus(
+        nonFree.id(), new UpdateStatusRequest(nonFree.version(), RentalItemStatus.SALE));
+
+    var firstPage =
+        presentationHolds.customerCatalog(
+            warehouseId,
+            holdScopeId,
+            null,
+            " бк-1 ",
+            "двп",
+            "2.4X6",
+            " новая ",
+            true,
+            List.of(" ЭЛЕКТРИКА КК ", "пластиковое окно"),
+            0,
+            1);
+    var secondPage =
+        presentationHolds.customerCatalog(
+            warehouseId,
+            holdScopeId,
+            null,
+            "БК-1",
+            "ДВП",
+            "2.4x6",
+            CATEGORY_NEW,
+            true,
+            List.of("Электрика КК", "Пластиковое окно"),
+            1,
+            1);
+
+    assertThat(firstPage.totalElements()).isEqualTo(2);
+    assertThat(firstPage.totalPages()).isEqualTo(2);
+    assertThat(firstPage.content()).extracting(cabin -> cabin.id()).containsExactly(available.id());
+    assertThat(secondPage.content()).extracting(cabin -> cabin.id()).containsExactly(ownHold.id());
+    assertThat(
+            presentationHolds
+                .customerCatalog(
+                    warehouseId,
+                    holdScopeId,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    0,
+                    100)
+                .content())
+        .extracting(cabin -> cabin.id())
+        .contains(available.id(), ownHold.id(), wrongCharacteristics.id())
+        .doesNotContain(otherHold.id(), reserved.id(), leased.id(), nonFree.id());
+    assertThat(
+            presentationHolds
+                .customerCatalog(
+                    warehouseId,
+                    holdScopeId,
+                    "customer-available",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    0,
+                    20)
+                .content())
+        .extracting(cabin -> cabin.id())
+        .containsExactly(available.id());
+    assertThat(presentationHolds.holds(holdScopeId, actorSubjectId, "CUSTOMER").holds())
+        .singleElement()
+        .extracting(PresentationHoldView::rentalItemId)
+        .isEqualTo(ownHold.id());
+    assertThat(validator.validate(new ActorInput(actorSubjectId, "CUSTOMER"))).isEmpty();
+    assertThat(
+            validator.validate(
+                new ReserveOrderUnitRequest(
+                    warehouseId,
+                    available.id(),
+                    UUID.randomUUID(),
+                    "Customer tenant",
+                    null,
+                    actorSubjectId,
+                    "CUSTOMER")))
+        .isEmpty();
+    assertThatThrownBy(
+            () ->
+                presentationHolds.customerCatalog(
+                    warehouseId,
+                    holdScopeId,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    List.of("Пластиковое окно", "Пластиковое окно"),
+                    0,
+                    20))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("characteristics");
   }
 
   @Test

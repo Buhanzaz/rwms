@@ -37,12 +37,12 @@ function RentalItemPhotoDialogContent({
   })
   const photos = useMemo(
     () =>
-      media.archivePhotos.map((photo, index) => ({
+      media.photos.map((photo, index) => ({
         id: photo.id,
         src: photo.variants?.large?.url ?? photo.url,
-        alt: `Бытовка ${item.number}, фото ${index + 1} из ${media.archivePhotos.length}`,
+        alt: `Бытовка ${item.number}, фото ${index + 1} из ${media.photos.length}`,
       })),
-    [item.number, media.archivePhotos]
+    [item.number, media.photos]
   )
   const visibleActiveIndex = activePhotoIndex ?? internalActiveIndex
 

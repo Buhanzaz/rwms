@@ -53,6 +53,8 @@ export type ShipmentDocument = {
   driverSnapshot: string | null
   driverWorkerId: string | null
   clientId: string | null
+  /** Present on current gateway responses; omitted only by older compatible projections. */
+  historicalRentalImport?: boolean
   equipmentMovementTaskId: string | null
   scheduledDate: string | null
   rentalOrderId: string | null

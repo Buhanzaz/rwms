@@ -122,8 +122,10 @@ paths:
         Creates one real past rental shipment or return from a warehouse cabin card. The command
         requires an existing visible rental client, a non-future warehouse-local date and the
         current cabin version; it never accepts a driver. An imported shipment first closes or
-        cancels eligible maintenance work through a durable server-side saga, while an imported
-        return enters the ordinary fenced return-intake and estimate flow.
+        cancels eligible maintenance work through a durable server-side saga. If the repair-free
+        cabin is already RENTED, the saga records the missing provenance as SHIPPED without
+        repeating lease, hold or asset effects. An imported return enters the ordinary fenced
+        return-intake and estimate flow.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -139,6 +141,32 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/historical-rental-movements/{documentId}:
+    parameters:
+      - $ref: "#/components/parameters/DocumentId"
+    put:
+      operationId: updateHistoricalRentalShipment
+      description: >-
+        Corrects the client and past physical date of one existing user-entered historical
+        shipment. The document version and cabin identity are fenced; no driver, lease, stock
+        reservation or asset status transition is repeated.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateHistoricalRentalShipmentRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/CreatedDocument" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/shipments:
     get:
@@ -649,6 +677,37 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/internal/logistics/v1/planning/capacity-snapshots/{scenarioId}:
+    put:
+      operationId: replaceRoutePlanningCapacitySnapshot
+      description: >-
+        Atomically replaces one warehouse's active anonymous simulator-capacity projection.
+        The payload contains only generated delivery coordinates, local windows, service duration,
+        and cabin count; it never creates or changes an RWMS order, shipment, cabin, client, or
+        driver. The latest explicitly published scenario revision constrains CustomerApp slot
+        searches alongside real confirmed workload. Requires the exact SERVICE identity
+        logistics-planner, audience rwms-services, and sole scope logistics.planning.
+      parameters:
+        - name: scenarioId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReplacePlanningCapacitySnapshotRequest" }
+      responses:
+        "200":
+          description: Applied active projection or an exact idempotent replay.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanningCapacitySnapshotResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/internal/logistics/v1/maintenance/return-arrivals/{rentalItemId}:
     parameters:
       - name: rentalItemId
@@ -910,7 +969,9 @@ paths:
         Returns the warehouse's dedicated driver queue with the warehouse-local
         current date, an ordered CURRENT lane, finite ordered non-empty date
         columns, factual repair-place capacity and active capital repairs not
-        yet moved to production.
+        yet moved to production. Every returned date column is current or
+        future relative to currentDate; overdue active cards are folded into
+        the current-date column while durable task-board recovery converges.
       parameters:
         - $ref: "#/components/parameters/WarehouseIdQuery"
       responses:
@@ -936,7 +997,8 @@ paths:
         calendar date, or manually adds a scheduled capital-to-production
         movement to CURRENT. Ordinary logistics movements enter CURRENT only
         through the capacity-aware scheduler. The task-board versions are
-        mandatory; already-running tasks are rejected.
+        mandatory; already-running tasks are rejected. targetDate cannot
+        precede the warehouse-local currentDate.
       requestBody:
         required: true
         content:
@@ -1018,7 +1080,8 @@ paths:
         Creates or replays the single capital-to-production movement directly
         in a selected calendar date and queue position. The logistics service
         owns registration and insertion; the browser never promotes and moves
-        the repair as two commands.
+        the repair as two commands. The selected date cannot precede the
+        warehouse-local current date.
       requestBody:
         required: true
         content:
@@ -2111,6 +2174,384 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/ApiProblem" }
+  /api/logistics/customer/v1/profile:
+    get:
+      operationId: getCustomerProfile
+      description: >-
+        Returns the one-time logistics profile owned by the authenticated CustomerApp subject.
+        Requires a USER JWT issued to rwms-customer-android with customer.rental scope.
+      responses:
+        "200":
+          description: Current customer profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerProfile" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createCustomerProfile
+      description: >-
+        Creates the authenticated subject's immutable customer identity link and its
+        logistics-owned rental-client projection. A subject can create this profile only once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCustomerProfileRequest" }
+      responses:
+        "201":
+          description: New customer profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerProfile" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/customer/v1/warehouses:
+    get:
+      operationId: listCustomerWarehouses
+      description: Lists only active warehouses explicitly enabled for CustomerApp delivery.
+      responses:
+        "200":
+          description: Delivery-enabled warehouses.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CustomerWarehouse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/customer/v1/inquiries:
+    post:
+      operationId: createCustomerInquiry
+      description: Starts a customer-owned rental inquiry and version-fenced cart.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCustomerInquiryRequest" }
+      responses:
+        "201":
+          description: New inquiry and cart identity.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerInquiry" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/customer/v1/inquiries/{inquiryId}:
+    parameters:
+      - $ref: "#/components/parameters/InquiryId"
+    get:
+      operationId: getCustomerInquiry
+      description: Returns only an inquiry owned by the authenticated CustomerApp subject.
+      responses:
+        "200":
+          description: Current inquiry and cart fence.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerInquiry" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/logistics/customer/v1/inquiries/{inquiryId}/facets:
+    parameters:
+      - $ref: "#/components/parameters/InquiryId"
+    get:
+      operationId: getCustomerCabinFacets
+      description: Returns exact asset-owned facet values for the inquiry warehouse.
+      responses:
+        "200":
+          description: Exact currently available cabin facets.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CabinFacets" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/customer/v1/inquiries/{inquiryId}/cabins:
+    parameters:
+      - $ref: "#/components/parameters/InquiryId"
+    get:
+      operationId: listCustomerCabins
+      description: >-
+        Returns one bounded page of currently bookable cabin cards. The result contains only FREE
+        cabins or cabins held by this inquiry and exposes no dossier/passport navigation route.
+      parameters:
+        - name: query
+          in: query
+          schema: { type: string, maxLength: 255 }
+        - name: cabinType
+          in: query
+          schema: { type: string, maxLength: 255 }
+        - name: finish
+          in: query
+          schema: { type: string, maxLength: 255 }
+        - name: dimensions
+          in: query
+          schema: { type: string, maxLength: 255 }
+        - name: category
+          in: query
+          schema: { type: string, maxLength: 255 }
+        - name: linoleum
+          in: query
+          schema: { type: boolean }
+        - name: characteristics
+          in: query
+          style: form
+          explode: true
+          schema:
+            type: array
+            maxItems: 20
+            items: { type: string, maxLength: 255 }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: size
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        "200":
+          description: Current filtered cabin page.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerCabinPage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/customer/v1/inquiries/{inquiryId}/selection:
+    parameters:
+      - $ref: "#/components/parameters/InquiryId"
+    get:
+      operationId: getCustomerCabinSelection
+      description: Returns current authoritative cabin holds without extending their lifetime.
+      responses:
+        "200":
+          description: Current selected cabin holds.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerCabinSelection" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+    put:
+      operationId: replaceCustomerCabinSelection
+      description: Replaces the complete cabin hold set under idempotency and cart-version fences.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReplaceCustomerCabinsRequest" }
+      responses:
+        "200":
+          description: Updated authoritative cabin holds and cart version.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerCabinSelection" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/customer/v1/inquiries/{inquiryId}/equipment:
+    parameters:
+      - $ref: "#/components/parameters/InquiryId"
+    get:
+      operationId: listCustomerEquipment
+      description: Lists only active furniture positions with positive stock at the inquiry warehouse.
+      responses:
+        "200":
+          description: Current positive furniture availability.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CustomerEquipmentAvailability" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+    put:
+      operationId: replaceCustomerEquipment
+      description: Replaces the complete per-cabin furniture intent under the cart version fence.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReplaceCustomerEquipmentRequest" }
+      responses:
+        "200":
+          description: Persisted furniture intent and resulting cart version.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerEquipmentSelection" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/customer/v1/inquiries/{inquiryId}/cart:
+    parameters:
+      - $ref: "#/components/parameters/InquiryId"
+    get:
+      operationId: getCustomerCart
+      description: Returns authoritative held cabins, furniture intent and selected delivery slot.
+      responses:
+        "200":
+          description: Complete current cart projection.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerCart" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/customer/v1/inquiries/{inquiryId}/cabins/{cabinId}/photos/{mediaId}:
+    parameters:
+      - $ref: "#/components/parameters/InquiryId"
+      - $ref: "#/components/parameters/CabinId"
+      - $ref: "#/components/parameters/MediaId"
+    get:
+      operationId: getCustomerCabinPhoto
+      description: >-
+        Streams one exact current image generation through logistics after verifying customer,
+        inquiry and cabin visibility; object-store and media-service locators are never exposed.
+      parameters:
+        - name: generation
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: variant
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 64 }
+      responses:
+        "200":
+          description: Authorized no-store cabin image.
+          headers:
+            X-Content-Type-Options:
+              required: true
+              schema: { type: string, const: nosniff }
+          content:
+            image/*:
+              schema: { type: string, format: binary }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/customer/v1/delivery-slots/search:
+    post:
+      operationId: searchCustomerDeliverySlots
+      description: >-
+        Calculates and persists only currently feasible fixed delivery windows using truck travel
+        times, one-hour travel zones, configured drivers and existing held/confirmed workload.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CustomerDeliverySlotSearchRequest" }
+      responses:
+        "200":
+          description: Current feasible delivery-slot offers.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CustomerDeliverySlot" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/customer/v1/delivery-slots/{slotId}/hold:
+    parameters:
+      - $ref: "#/components/parameters/CustomerDeliverySlotId"
+    post:
+      operationId: holdCustomerDeliverySlot
+      description: Rechecks route capacity and holds one offer under slot and cart version fences.
+      parameters:
+        - $ref: "#/components/parameters/ExpectedCustomerDeliverySlotVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HoldCustomerDeliverySlotRequest" }
+      responses:
+        "200":
+          description: Held slot and the cart version containing its identity.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HeldCustomerDeliverySlot" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/customer/v1/inquiries/{inquiryId}/checkout:
+    parameters:
+      - $ref: "#/components/parameters/InquiryId"
+    post:
+      operationId: checkoutCustomerInquiry
+      description: >-
+        Idempotently converts current cabin holds, furniture intent and a held route window into
+        one durable rental booking and saved real order. Pending and rejected outcomes are
+        represented by the response status field and can be reconciled by replay.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CustomerCheckoutRequest" }
+      responses:
+        "200":
+          description: Current durable booking outcome, including pending or rejected state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerBooking" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/customer/v1/bookings:
+    get:
+      operationId: listCustomerBookings
+      description: Lists durable booking outcomes owned by the authenticated CustomerApp subject.
+      responses:
+        "200":
+          description: Current customer's booking outcomes.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CustomerBooking" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/{documentType}/{documentId}/reconcile:
     parameters:
       - $ref: "#/components/parameters/DocumentTypePath"
@@ -2203,6 +2644,16 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    CustomerDeliverySlotId:
+      name: slotId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ExpectedCustomerDeliverySlotVersion:
+      name: expectedSlotVersion
+      in: query
+      required: true
+      schema: { type: integer, format: int64, minimum: 0 }
     PublicPresentationToken:
       name: token
       in: path
@@ -2234,6 +2685,268 @@ components:
       required: true
       schema: { type: string, minLength: 1, maxLength: 64 }
   schemas:
+    CustomerEntityType:
+      type: string
+      enum: [INDIVIDUAL, LEGAL]
+    CreateCustomerProfileRequest:
+      type: object
+      additionalProperties: false
+      required: [entityType, phone]
+      properties:
+        entityType: { $ref: "#/components/schemas/CustomerEntityType" }
+        firstName: { type: [string, "null"], maxLength: 255 }
+        lastName: { type: [string, "null"], maxLength: 255 }
+        companyName: { type: [string, "null"], maxLength: 512 }
+        phone: { type: string, minLength: 1, maxLength: 32 }
+        email: { type: [string, "null"], maxLength: 320 }
+        additionalInfo: { type: [string, "null"], maxLength: 2000 }
+      oneOf:
+        - properties:
+            entityType: { const: INDIVIDUAL }
+            companyName: { type: [string, "null"], maxLength: 0 }
+            firstName: { type: string, minLength: 1, maxLength: 255 }
+            lastName: { type: string, minLength: 1, maxLength: 255 }
+          required: [firstName, lastName]
+        - properties:
+            entityType: { const: LEGAL }
+            companyName: { type: string, minLength: 1, maxLength: 512 }
+          required: [companyName]
+    CustomerProfile:
+      type: object
+      additionalProperties: false
+      required:
+        [id, version, entityType, firstName, lastName, companyName, phone, email, additionalInfo]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        entityType: { $ref: "#/components/schemas/CustomerEntityType" }
+        firstName: { type: [string, "null"] }
+        lastName: { type: [string, "null"] }
+        companyName: { type: [string, "null"] }
+        phone: { type: string }
+        email: { type: [string, "null"] }
+        additionalInfo: { type: [string, "null"] }
+    CustomerWarehouse:
+      type: object
+      additionalProperties: false
+      required: [id, name, city, address, timezone, depotLatitude, depotLongitude]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        city: { type: [string, "null"] }
+        address: { type: [string, "null"] }
+        timezone: { type: string }
+        depotLatitude: { type: number, minimum: -90, maximum: 90 }
+        depotLongitude: { type: number, minimum: -180, maximum: 180 }
+    CreateCustomerInquiryRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId]
+      properties:
+        warehouseId: { type: string, format: uuid }
+    CustomerInquiry:
+      type: object
+      additionalProperties: false
+      required: [inquiryId, warehouseId, selectionVersion, state]
+      properties:
+        inquiryId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        selectionVersion: { type: integer, format: int64, minimum: 0 }
+        state:
+          type: string
+          enum: [ACTIVE, SELECTION_PENDING, CHECKOUT_PENDING, BOOKED]
+    CustomerCabinPhoto:
+      type: object
+      additionalProperties: false
+      required: [photoId, generation, thumbnailUrl, url]
+      properties:
+        photoId: { type: string, format: uuid }
+        generation: { type: integer, format: int64, minimum: 1 }
+        thumbnailUrl: { type: string, minLength: 1 }
+        url: { type: string, minLength: 1 }
+    CustomerCabin:
+      type: object
+      additionalProperties: false
+      required:
+        [unitId, version, accountingNo, type, finish, dimensions, category, linoleum, characteristics, facts, photos]
+      properties:
+        unitId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        accountingNo: { type: string }
+        type: { type: [string, "null"] }
+        finish: { type: [string, "null"] }
+        dimensions: { type: [string, "null"] }
+        category: { type: [string, "null"] }
+        linoleum: { type: [boolean, "null"] }
+        characteristics:
+          type: array
+          items: { type: string }
+        facts:
+          type: object
+          additionalProperties: true
+        photos:
+          type: array
+          items: { $ref: "#/components/schemas/CustomerCabinPhoto" }
+    CustomerCabinPage:
+      type: object
+      additionalProperties: false
+      required: [content, page, size, totalElements, totalPages]
+      properties:
+        content:
+          type: array
+          items: { $ref: "#/components/schemas/CustomerCabin" }
+        page: { type: integer, format: int64, minimum: 0 }
+        size: { type: integer, format: int64, minimum: 1, maximum: 100 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
+        totalPages: { type: integer, format: int64, minimum: 0 }
+    ReplaceCustomerCabinsRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, cabinUnitIds]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        cabinUnitIds:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+    CustomerCabinSelection:
+      type: object
+      additionalProperties: false
+      required: [version, expiresAt, cabins]
+      properties:
+        version: { type: integer, format: int64, minimum: 0 }
+        expiresAt: { type: [string, "null"], format: date-time }
+        cabins:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/CustomerCabin" }
+    CustomerEquipmentAvailability:
+      type: object
+      additionalProperties: false
+      required: [inventoryItemId, name, category, availableQuantity, maximumPerCabin]
+      properties:
+        inventoryItemId: { type: string, format: uuid }
+        name: { type: string }
+        category: { type: [string, "null"] }
+        availableQuantity: { type: integer, format: int64, minimum: 1 }
+        maximumPerCabin: { type: [integer, "null"], minimum: 1 }
+    CustomerCabinEquipmentSelection:
+      type: object
+      additionalProperties: false
+      required: [cabinUnitId, inventoryItemId, quantity]
+      properties:
+        cabinUnitId: { type: string, format: uuid }
+        inventoryItemId: { type: string, format: uuid }
+        quantity: { type: integer, format: int64, minimum: 1 }
+    ReplaceCustomerEquipmentRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, selections]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        selections:
+          type: array
+          maxItems: 500
+          items: { $ref: "#/components/schemas/CustomerCabinEquipmentSelection" }
+    CustomerEquipmentSelection:
+      type: object
+      additionalProperties: false
+      required: [version, selections]
+      properties:
+        version: { type: integer, format: int64, minimum: 0 }
+        selections:
+          type: array
+          maxItems: 500
+          items: { $ref: "#/components/schemas/CustomerCabinEquipmentSelection" }
+    CustomerCart:
+      type: object
+      additionalProperties: false
+      required: [inquiryId, warehouseId, version, state, cabins, equipment, deliverySlotId]
+      properties:
+        inquiryId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        state:
+          type: string
+          enum: [ACTIVE, SELECTION_PENDING, CHECKOUT_PENDING, BOOKED]
+        cabins:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/CustomerCabin" }
+        equipment:
+          type: array
+          maxItems: 500
+          items: { $ref: "#/components/schemas/CustomerCabinEquipmentSelection" }
+        deliverySlotId: { type: [string, "null"], format: uuid }
+    CustomerDeliverySlotSearchRequest:
+      type: object
+      additionalProperties: false
+      required: [inquiryId, address, latitude, longitude]
+      properties:
+        inquiryId: { type: string, format: uuid }
+        address: { type: string, minLength: 1, maxLength: 1000 }
+        latitude:
+          type: number
+          minimum: -90
+          maximum: 90
+          multipleOf: 0.000001
+        longitude:
+          type: number
+          minimum: -180
+          maximum: 180
+          multipleOf: 0.000001
+    CustomerDeliverySlot:
+      type: object
+      additionalProperties: false
+      required:
+        [slotId, version, date, start, end, travelZoneHours, capacityRemaining, expiresAt, state]
+      properties:
+        slotId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        date: { type: string, format: date }
+        start: { type: string, format: time }
+        end: { type: string, format: time }
+        travelZoneHours: { type: integer, minimum: 1, maximum: 4 }
+        capacityRemaining: { type: integer, minimum: 0 }
+        expiresAt: { type: string, format: date-time }
+        state:
+          type: string
+          enum: [OFFERED, HELD, CHECKOUT_PENDING, CONFIRMED, RELEASED]
+    HoldCustomerDeliverySlotRequest:
+      type: object
+      additionalProperties: false
+      required: [inquiryId, expectedVersion]
+      properties:
+        inquiryId: { type: string, format: uuid }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+    HeldCustomerDeliverySlot:
+      type: object
+      additionalProperties: false
+      required: [cartVersion, slot]
+      properties:
+        cartVersion: { type: integer, format: int64, minimum: 0 }
+        slot: { $ref: "#/components/schemas/CustomerDeliverySlot" }
+    CustomerCheckoutRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, slotId, slotVersion, rentalMonths]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        slotId: { type: string, format: uuid }
+        slotVersion: { type: integer, format: int64, minimum: 0 }
+        rentalMonths: { type: integer, format: int64, minimum: 1, maximum: 120 }
+    CustomerBooking:
+      type: object
+      additionalProperties: false
+      required: [bookingId, orderId, status, errorCode, inquiryId, slotId]
+      properties:
+        bookingId: { type: [string, "null"], format: uuid }
+        orderId: { type: [string, "null"], format: uuid }
+        status: { type: string, enum: [PENDING, COMPLETED, REJECTED] }
+        errorCode: { type: [string, "null"] }
+        inquiryId: { type: string, format: uuid }
+        slotId: { type: [string, "null"], format: uuid }
     PlanningDateOption:
       type: object
       additionalProperties: false
@@ -2242,6 +2955,19 @@ components:
         date: { type: string, format: date }
         priority: { type: integer, minimum: 0 }
         isHard: { type: boolean }
+        windowStart:
+          type: [string, "null"]
+          format: time
+          description: Exact fixed CustomerApp delivery-window start; absent for date-only choices.
+        windowEnd:
+          type: [string, "null"]
+          format: time
+          description: Exact fixed CustomerApp delivery-window end; absent for date-only choices.
+        travelZoneHours:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 4
+          description: Source depot-to-customer Valhalla band in supported one-hour rings; exact capacity also evaluates each driver's current route front before offering a window.
     PlanningRequest:
       type: object
       additionalProperties: false
@@ -2281,6 +3007,56 @@ components:
         requests:
           type: array
           items: { $ref: "#/components/schemas/PlanningRequest" }
+    PlanningCapacityJob:
+      type: object
+      additionalProperties: false
+      required:
+        [sourceJobId, deliveryDate, latitude, longitude, cabinCount, windowStart, windowEnd, serviceMinutes]
+      properties:
+        sourceJobId: { type: string, format: uuid }
+        deliveryDate: { type: string, format: date }
+        latitude: { type: number, format: double, minimum: -90, maximum: 90 }
+        longitude: { type: number, format: double, minimum: -180, maximum: 180 }
+        cabinCount: { type: integer, minimum: 1 }
+        windowStart: { type: string, format: time }
+        windowEnd: { type: string, format: time }
+        serviceMinutes: { type: integer, minimum: 1 }
+    ReplacePlanningCapacitySnapshotRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, sourceGeneration, sourceRevision, jobs]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        sourceGeneration:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Monotonic simulator-wide publication generation. A lower generation can be replayed
+            only when its exact successful command receipt already exists; otherwise it is stale.
+        sourceRevision:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        jobs:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/PlanningCapacityJob" }
+    PlanningCapacitySnapshotResponse:
+      type: object
+      additionalProperties: false
+      required:
+        [warehouseId, sourceScenarioId, sourceGeneration, version, sourceRevision, jobCount, replayed, updatedAt]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        sourceScenarioId: { type: string, format: uuid }
+        sourceGeneration: { type: integer, format: int64, minimum: 1 }
+        version: { type: integer, format: int64, minimum: 0 }
+        sourceRevision:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        jobCount: { type: integer, minimum: 0 }
+        replayed: { type: boolean }
+        updatedAt: { type: string, format: date-time }
     PlanningAssignment:
       type: object
       additionalProperties: false
@@ -3298,7 +4074,10 @@ components:
         [warehouseId, currentDate, queueId, queueVersion, repairPlaceCount, usedRepairPlaceCount, occupiedRepairPlaceCount, availableRepairPlaceCount, inboundRepairPlaceAvailable, automaticRefillDelayMinutes, repairPlacesOverCapacity, repairPlaces, current, dates, capitalRepairs]
       properties:
         warehouseId: { type: string, format: uuid }
-        currentDate: { type: string, format: date }
+        currentDate:
+          type: string
+          format: date
+          description: Authoritative current calendar date in the warehouse time zone.
         queueId: { type: string, format: uuid }
         queueVersion: { type: integer, format: int64, minimum: 0 }
         repairPlaceCount: { type: integer, minimum: 1 }
@@ -3334,6 +4113,10 @@ components:
           items: { $ref: "#/components/schemas/DriverBoardCard" }
         dates:
           type: array
+          description: >-
+            Ordered non-empty current and future columns. Any overdue active
+            task-board card is represented under currentDate, never under a
+            past date.
           items: { $ref: "#/components/schemas/DriverBoardDateColumn" }
         capitalRepairs:
           type: array
@@ -3347,7 +4130,10 @@ components:
         expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
         expectedEntryVersion: { type: integer, format: int64, minimum: 0 }
         targetLane: { type: string, enum: [SCHEDULED, CURRENT] }
-        targetDate: { type: string, format: date }
+        targetDate:
+          type: string
+          format: date
+          description: Must be on or after the warehouse-local current date.
         targetIndex: { type: integer, minimum: 0 }
     PromoteCapitalRepairRequest:
       type: object
@@ -3361,7 +4147,10 @@ components:
       required: [warehouseId, targetDate, targetIndex]
       properties:
         warehouseId: { type: string, format: uuid }
-        targetDate: { type: string, format: date }
+        targetDate:
+          type: string
+          format: date
+          description: Must be on or after the warehouse-local current date.
         targetIndex: { type: integer, minimum: 0 }
     ReturnCapitalRepairRequest:
       type: object
@@ -3518,6 +4307,18 @@ components:
           type: string
           format: date
           description: Past or current warehouse-local physical operation date.
+    UpdateHistoricalRentalShipmentRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, rentalItemId, clientId, occurredOn]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        rentalItemId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        occurredOn:
+          type: string
+          format: date
+          description: Corrected past or current warehouse-local physical shipment date.
     ShipmentPlanRequest:
       type: object
       additionalProperties: false

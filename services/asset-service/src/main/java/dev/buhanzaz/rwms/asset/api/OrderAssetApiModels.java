@@ -26,7 +26,7 @@ public final class OrderAssetApiModels {
           @Size(max = 32)
           @Pattern(
               regexp =
-                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|VIEWER)$")
+                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|CUSTOMER|VIEWER)$")
           String actorRole) {}
 
   public record ReserveOrderUnitRequest(
@@ -40,7 +40,7 @@ public final class OrderAssetApiModels {
           @Size(max = 32)
           @Pattern(
               regexp =
-                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|VIEWER)$")
+                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|CUSTOMER|VIEWER)$")
           String actorRole) {}
 
   public record OrderEquipmentRequirement(
@@ -59,7 +59,7 @@ public final class OrderAssetApiModels {
           @Size(max = 32)
           @Pattern(
               regexp =
-                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|VIEWER)$")
+                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|CUSTOMER|VIEWER)$")
               String actorRole,
       @NotNull @Size(max = 100) List<@NotNull @Valid OrderUnitEquipmentRequirements> units) {}
 
@@ -129,7 +129,7 @@ public final class OrderAssetApiModels {
           @Size(max = 32)
           @Pattern(
               regexp =
-                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|VIEWER)$")
+                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|CUSTOMER|VIEWER)$")
           String actorRole,
       @NotNull @Size(min = 1, max = 100)
           List<@NotNull @Valid OrderUnitEquipmentRequirements> units,

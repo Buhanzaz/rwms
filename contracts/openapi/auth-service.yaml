@@ -13,17 +13,61 @@ security:
 x-rwms-user-token-claims:
   type: object
   additionalProperties: true
-  required: [sub, preferred_username, principal_type, global_role, rentalAccess]
+  required: [sub, preferred_username, principal_type, global_role, rentalAccess, client_id]
   properties:
     sub: { type: string, format: uuid }
     preferred_username: { type: string }
     principal_type: { type: string, const: USER }
     global_role: { $ref: '#/components/schemas/UserGlobalRole' }
+    client_id:
+      type: string
+      description: Managed OAuth client that minted this access token or ID token.
     rentalAccess:
       type: boolean
       description: >-
         Exact camel-case JWT claim emitted for every user access token and ID token.
 paths:
+  /api/auth/csrf:
+    get:
+      operationId: getAuthCsrfToken
+      summary: Bootstrap the CSRF cookie/header pair
+      description: >-
+        Anonymous bootstrap used before customer registration. The response sets
+        XSRF-TOKEN and returns the exact token and header names that must accompany
+        the registration POST.
+      security: []
+      responses:
+        '200':
+          description: Current CSRF token metadata; XSRF-TOKEN is also set as a cookie.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CsrfToken' }
+  /api/customer/v1/registrations:
+    post:
+      operationId: registerCustomer
+      summary: Register a customer-only account
+      description: >-
+        Anonymous but CSRF-protected. Creates an active USER with global_role
+        CUSTOMER, no warehouse grants, and no manager or rental-manager
+        entitlement. The account can mint tokens only through
+        rwms-customer-android with the customer.rental scope.
+      security:
+        - csrfCookie: []
+          csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CustomerRegistrationRequest' }
+      responses:
+        '201':
+          description: Customer account created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CustomerRegistration' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/CsrfForbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/admin/users:
     get:
       operationId: listAdminUsers
@@ -129,6 +173,14 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+    csrfCookie:
+      type: apiKey
+      in: cookie
+      name: XSRF-TOKEN
+    csrfHeader:
+      type: apiKey
+      in: header
+      name: X-XSRF-TOKEN
   parameters:
     UserId:
       name: id
@@ -138,7 +190,7 @@ components:
   schemas:
     UserGlobalRole:
       type: string
-      enum: [SYSTEM_ADMIN, WMS_ADMIN, WAREHOUSE_MANAGER, RENTAL_MANAGER, VIEWER]
+      enum: [SYSTEM_ADMIN, WMS_ADMIN, WAREHOUSE_MANAGER, RENTAL_MANAGER, CUSTOMER, VIEWER]
     PrincipalType:
       type: string
       enum: [USER, WORKER]
@@ -170,6 +222,33 @@ components:
       properties:
         warehouseId: { type: string, format: uuid }
         level: { $ref: '#/components/schemas/WarehouseAccessLevel' }
+    CsrfToken:
+      type: object
+      additionalProperties: false
+      required: [token, parameterName, headerName]
+      properties:
+        token: { type: string, minLength: 1 }
+        parameterName: { type: string, minLength: 1 }
+        headerName: { type: string, const: X-XSRF-TOKEN }
+    CustomerRegistrationRequest:
+      type: object
+      additionalProperties: false
+      required: [username, password, passwordConfirmation]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 64
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+        password: { type: string, minLength: 8, maxLength: 128, writeOnly: true }
+        passwordConfirmation: { type: string, minLength: 8, maxLength: 128, writeOnly: true }
+    CustomerRegistration:
+      type: object
+      additionalProperties: false
+      required: [subjectId, username]
+      properties:
+        subjectId: { type: string, format: uuid }
+        username: { type: string, minLength: 3, maxLength: 64 }
     AdminUser:
       type: object
       additionalProperties: false
@@ -270,9 +349,12 @@ components:
     Forbidden:
       description: Authenticated caller lacks the required role or principal type.
       content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }
+    CsrfForbidden:
+      description: CSRF cookie/header pair is missing or invalid.
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }
     NotFound:
       description: User does not exist.
       content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }
     Conflict:
-      description: Stale version or a protected SYSTEM_ADMIN invariant.
+      description: Login conflict, stale version, or a protected SYSTEM_ADMIN invariant.
       content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }

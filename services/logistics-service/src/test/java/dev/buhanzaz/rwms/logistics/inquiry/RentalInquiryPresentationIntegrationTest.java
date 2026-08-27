@@ -217,6 +217,7 @@ class RentalInquiryPresentationIntegrationTest {
                       id ->
                           new LogisticsDependencyGateway.CabinMediaSnapshot(
                               id,
+                              1,
                               List.of(
                                   new LogisticsDependencyGateway.CabinMediaPhoto(
                                       PHOTO, 1, 0, List.of("SMALL", "LARGE")))))
@@ -2903,6 +2904,52 @@ class RentalInquiryPresentationIntegrationTest {
         .isInstanceOfSatisfying(
             OrderProblemException.class,
             problem -> assertThat(problem.code()).isEqualTo("INQUIRY_ARCHIVED"));
+  }
+
+  @Test
+  void customerInquiryAtomicallyBindsWarehouseAndReplaysOnlyTheSameChoice() {
+    OrderDetailResponse draft = createDraftOrder();
+    OrderActor customer =
+        new OrderActor(
+            MANAGER,
+            "CUSTOMER",
+            "Клиент",
+            Set.of(WAREHOUSE),
+            Set.of(WAREHOUSE),
+            false,
+            false,
+            true,
+            true);
+    UUID idempotencyKey = UUID.randomUUID();
+
+    RentalInquiryResponse created =
+        inquiries.createCustomer(customer, idempotencyKey, draft.client().id(), WAREHOUSE);
+    RentalInquiryResponse replayed =
+        inquiries.createCustomer(customer, idempotencyKey, draft.client().id(), WAREHOUSE);
+
+    assertThat(created.warehouseId()).isEqualTo(WAREHOUSE);
+    assertThat(replayed.id()).isEqualTo(created.id());
+    OrderActor changedWarehouse =
+        new OrderActor(
+            MANAGER,
+            "CUSTOMER",
+            "Клиент",
+            Set.of(OTHER_WAREHOUSE),
+            Set.of(OTHER_WAREHOUSE),
+            false,
+            false,
+            true,
+            true);
+    assertThatThrownBy(
+            () ->
+                inquiries.createCustomer(
+                    changedWarehouse,
+                    idempotencyKey,
+                    draft.client().id(),
+                    OTHER_WAREHOUSE))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            failure -> assertThat(failure.code()).isEqualTo("INQUIRY_WAREHOUSE_LOCKED"));
   }
 
   @Test

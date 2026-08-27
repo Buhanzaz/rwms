@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.auth.config;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -305,6 +306,10 @@ public class OAuthClientProvisioner implements ApplicationRunner {
             validateManagerAndroidClientContract(
                     client, authenticationMethods, grantTypes);
         }
+        if (client.customerAndroidClient()) {
+            validateCustomerAndroidClientContract(
+                    client, authenticationMethods, grantTypes);
+        }
         if (!client.enabled()) {
             return;
         }
@@ -442,6 +447,61 @@ public class OAuthClientProvisioner implements ApplicationRunner {
             throw new IllegalStateException(
                     "rwms-manager-android redirect must use the same-origin "
                             + "/auth/manager/callback path");
+        }
+    }
+
+    /**
+     * Rejects customer-client configuration that broadens its single-purpose native boundary.
+     *
+     * <p>The callback is a query-free HTTPS endpoint on the declared customer origin. Tokens are
+     * short lived, refresh tokens rotate, and the client receives no manager or warehouse scopes.
+     *
+     * @param client configured customer Android declaration
+     * @param authenticationMethods normalized client authentication methods
+     * @param grantTypes normalized authorization grants
+     */
+    private void validateCustomerAndroidClientContract(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes) {
+        boolean exactPublicContract =
+                authenticationMethods.equals(Set.of(ClientAuthenticationMethod.NONE))
+                        && grantTypes.equals(Set.of(
+                                AuthorizationGrantType.AUTHORIZATION_CODE,
+                                AuthorizationGrantType.REFRESH_TOKEN))
+                        && client.scopes().equals(OAuthClientProperties.CUSTOMER_ANDROID_SCOPES)
+                        && client.allowedPrincipalTypes().equals(Set.of(
+                                dev.buhanzaz.rwms.auth.domain.PrincipalType.USER))
+                        && client.audiences().equals(Set.of("rwms-services"))
+                        && client.requireProofKey()
+                        && client.redirectUris().size() == 1
+                        && client.postLogoutRedirectUris().isEmpty()
+                        && client.allowedOrigins().size() == 1
+                        && client.accessTokenTtl().equals(Duration.ofMinutes(5))
+                        && client.refreshTokenTtl().equals(Duration.ofDays(30))
+                        && !client.reuseRefreshTokens()
+                        && client.secretEnvironment() == null
+                        && client.developmentSecret() == null;
+        if (!exactPublicContract) {
+            throw new IllegalStateException(
+                    "rwms-customer-android must use its exact CUSTOMER USER PKCE contract");
+        }
+        URI redirect = URI.create(client.redirectUris().iterator().next());
+        URI origin = URI.create(client.allowedOrigins().iterator().next());
+        boolean safeHttpsOrigin = "https".equalsIgnoreCase(origin.getScheme())
+                && origin.getHost() != null
+                && origin.getUserInfo() == null
+                && origin.getQuery() == null
+                && origin.getFragment() == null;
+        if (!safeHttpsOrigin
+                || !"/auth/customer/callback".equals(redirect.getPath())
+                || redirect.getUserInfo() != null
+                || redirect.getQuery() != null
+                || redirect.getFragment() != null
+                || !sameOrigin(origin, redirect)) {
+            throw new IllegalStateException(
+                    "rwms-customer-android redirect must use the same-origin HTTPS "
+                            + "/auth/customer/callback path");
         }
     }
 

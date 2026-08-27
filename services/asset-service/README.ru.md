@@ -51,6 +51,17 @@ type-to-dimension relations. `/cabin-catalog` — отдельный bounded rea
 facts lookup по warehouse и обязательному query. Он ищет number, type, finish,
 dimension, category, characteristics и linoleum среди всех current statuses;
 он не проверяет availability и не создаёт, не продлевает и не освобождает hold.
+`/customer-cabin-catalog` — customer-booking read для одного обязательного
+`holdScopeId`. Он возвращает только бытовки `FREE` без active order reservation
+или operation lease, исключает live holds других scopes и сохраняет видимыми
+собственные live holds запрашивающего inquiry. Фильтры type, finish, dimensions,
+category и linoleum используют normalized exact matching; все повторяющиеся
+characteristics должны присутствовать. Результаты сохраняют asset-owned stable
+order и разбиваются на страницы только после проверок availability и фильтров.
+Просроченные holds переводятся в expired во время этого чтения, но live hold не
+создаётся, не продлевается и не освобождается. Команды presentation и order
+reservation от клиента сохраняют `CUSTOMER` как audit role; Flyway V41 расширяет
+только соответствующие role constraints.
 `/rental-items/{id}/photo-presentation-snapshot` — отдельное least-privilege чтение для одного
 logistics-owned публичного photo snapshot. Оно возвращает identity/version/warehouse fencing,
 номер, габариты, отделку, категорию, упорядоченные названия характеристик и nullable-линолеум;

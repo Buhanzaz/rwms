@@ -244,9 +244,13 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
   const beginLogin = useCallback(
     async (returnTo = "/") => {
       setError(null)
-      await manager.signinRedirect({
-        state: { returnTo: getSafeReturnTo(returnTo) },
-      })
+      try {
+        await manager.signinRedirect({
+          state: { returnTo: getSafeReturnTo(returnTo) },
+        })
+      } catch (loginError) {
+        setError(getErrorMessage(loginError))
+      }
     },
     [manager]
   )

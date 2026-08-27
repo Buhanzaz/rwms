@@ -1840,6 +1840,7 @@ func TestLogisticsCabinPresentationSnapshotReturnsOpaqueCurrentReferences(t *tes
 		{
 			CabinID:      firstCabinID,
 			CoverMediaID: &firstMediaID,
+			PhotoCount:   2,
 			Photos: []persistence.CabinPresentationPhotoRecord{
 				{MediaID: firstMediaID, Generation: 3, SortOrder: 0, HasSmall: true, HasLarge: true},
 				{MediaID: secondMediaID, Generation: 2, SortOrder: 4, HasSmall: true},
@@ -1864,6 +1865,7 @@ func TestLogisticsCabinPresentationSnapshotReturnsOpaqueCurrentReferences(t *tes
 		Items []struct {
 			CabinID      uuid.UUID  `json:"cabinId"`
 			CoverMediaID *uuid.UUID `json:"coverMediaId"`
+			PhotoCount   int64      `json:"photoCount"`
 			Photos       []struct {
 				MediaID           uuid.UUID `json:"mediaId"`
 				Generation        int       `json:"generation"`
@@ -1877,12 +1879,14 @@ func TestLogisticsCabinPresentationSnapshotReturnsOpaqueCurrentReferences(t *tes
 	}
 	if len(payload.Items) != 2 || payload.Items[0].CabinID != firstCabinID ||
 		payload.Items[0].CoverMediaID == nil || *payload.Items[0].CoverMediaID != firstMediaID ||
+		payload.Items[0].PhotoCount != 2 ||
 		len(payload.Items[0].Photos) != 2 || payload.Items[0].Photos[0].MediaID != firstMediaID ||
 		payload.Items[0].Photos[0].Generation != 3 || payload.Items[0].Photos[0].SortOrder != 0 ||
 		!sameStrings(payload.Items[0].Photos[0].AvailableVariants, []string{"SMALL", "LARGE"}) ||
 		payload.Items[0].Photos[1].MediaID != secondMediaID ||
 		!sameStrings(payload.Items[0].Photos[1].AvailableVariants, []string{"SMALL"}) ||
 		payload.Items[1].CabinID != secondCabinID || payload.Items[1].CoverMediaID != nil ||
+		payload.Items[1].PhotoCount != 0 ||
 		len(payload.Items[1].Photos) != 0 {
 		t.Fatalf("snapshot payload = %#v", payload.Items)
 	}

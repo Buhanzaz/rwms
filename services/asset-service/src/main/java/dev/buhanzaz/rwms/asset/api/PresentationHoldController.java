@@ -8,6 +8,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
+import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -55,6 +56,37 @@ public class PresentationHoldController {
       @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
     access.requireLogisticsAssetAccess(jwt);
     return service.catalog(warehouseId, query, page, size);
+  }
+
+  /** Returns only cabins currently bookable by the specified customer inquiry scope. */
+  @GetMapping("/customer-cabin-catalog")
+  public CabinCatalogPage customerCatalog(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestParam UUID warehouseId,
+      @RequestParam UUID holdScopeId,
+      @RequestParam(required = false) @Size(max = 255) String query,
+      @RequestParam(required = false) @Size(max = 255) String cabinType,
+      @RequestParam(required = false) @Size(max = 255) String finish,
+      @RequestParam(required = false) @Size(max = 255) String dimensions,
+      @RequestParam(required = false) @Size(max = 255) String category,
+      @RequestParam(required = false) Boolean linoleum,
+      @RequestParam(required = false) @Size(max = 20)
+          List<@Size(min = 1, max = 255) String> characteristics,
+      @RequestParam(defaultValue = "0") @Min(0) int page,
+      @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+    access.requireLogisticsAssetAccess(jwt);
+    return service.customerCatalog(
+        warehouseId,
+        holdScopeId,
+        query,
+        cabinType,
+        finish,
+        dimensions,
+        category,
+        linoleum,
+        characteristics,
+        page,
+        size);
   }
 
   /**

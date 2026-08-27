@@ -1,0 +1,514 @@
+package dev.buhanzaz.rwms.client.ui
+
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Book
+import androidx.compose.material.icons.filled.HomeWork
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
+import androidx.navigation3.runtime.NavKey
+import androidx.navigation3.runtime.entryProvider
+import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
+import androidx.navigation3.ui.NavDisplay
+import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
+
+/** Signed-out login destination. */
+@Serializable
+internal data object LoginRoute : NavKey
+
+/** Signed-out registration destination. */
+@Serializable
+internal data object RegistrationRoute : NavKey
+
+/** Free-cabin catalog destination. */
+@Serializable
+internal data object CatalogRoute : NavKey
+
+/** Current selected cabins/equipment destination. */
+@Serializable
+internal data object CartRoute : NavKey
+
+/** Full-screen delivery address and map-point destination. */
+@Serializable
+internal data object DeliveryMapRoute : NavKey
+
+/** Server-returned delivery date destination. */
+@Serializable
+internal data object DeliveryDatesRoute : NavKey
+
+/** Server-returned slots for one exact delivery date. */
+@Serializable
+internal data class DeliverySlotsRoute(val date: String) : NavKey
+
+/** Held-slot rental duration and checkout destination. */
+@Serializable
+internal data object DeliveryConfirmationRoute : NavKey
+
+/** Durable customer booking history destination. */
+@Serializable
+internal data object BookingsRoute : NavKey
+
+/** Customer profile destination. */
+@Serializable
+internal data object ProfileRoute : NavKey
+
+/** Full-screen cabin gallery opened at a specific photo. */
+@Serializable
+internal data class GalleryRoute(val unitId: String, val initialPage: Int) : NavKey
+
+/** Top-level app that binds Hilt state to the testable conditional navigation content. */
+@Composable
+fun CustomerApp(viewModel: CustomerAppViewModel = hiltViewModel()) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    CustomerTheme {
+        CustomerAppContent(
+            state = state,
+            onLogin = viewModel::login,
+            onRegister = viewModel::register,
+            onLogout = viewModel::logout,
+            onSaveProfile = viewModel::saveProfile,
+            onWarehouse = viewModel::selectWarehouse,
+            onFilters = viewModel::applyFilters,
+            onLoadMoreCabins = viewModel::loadMoreCabins,
+            onToggleCabin = viewModel::toggleCabin,
+            onEquipment = viewModel::setEquipment,
+            onAddress = viewModel::setAddress,
+            onPoint = viewModel::setMapPoint,
+            onConfirmedLocation = viewModel::confirmDeliveryLocation,
+            onLocationDraftChanged = viewModel::invalidateDeliveryLocation,
+            onSearchSlots = viewModel::searchSlots,
+            onSelectSlot = viewModel::selectSlot,
+            onHoldSlot = viewModel::holdSelectedSlot,
+            onRentalMonths = viewModel::setRentalMonths,
+            onCheckout = viewModel::checkout,
+            onRefreshBookings = viewModel::refreshBookings,
+            onDismissError = viewModel::dismissError,
+        )
+    }
+}
+
+/** Pure app shell used by tests to prove signed-out and signed-in graphs are mutually exclusive. */
+@Composable
+@Suppress("LongParameterList")
+fun CustomerAppContent(
+    state: CustomerAppState,
+    onLogin: (String, String) -> Unit = { _, _ -> },
+    onRegister: (String, String, String) -> Unit = { _, _, _ -> },
+    onLogout: () -> Unit = {},
+    onSaveProfile: (dev.buhanzaz.rwms.client.data.CustomerProfile) -> Unit = {},
+    onWarehouse: (dev.buhanzaz.rwms.client.data.CustomerWarehouse) -> Unit = {},
+    onFilters: (dev.buhanzaz.rwms.client.data.CabinFilters) -> Unit = {},
+    onLoadMoreCabins: () -> Unit = {},
+    onToggleCabin: (String) -> Unit = {},
+    onEquipment: (String, dev.buhanzaz.rwms.client.data.AvailableEquipment, Long) -> Unit = { _, _, _ -> },
+    onAddress: (String) -> Unit = {},
+    onPoint: (Double, Double) -> Unit = { _, _ -> },
+    onConfirmedLocation: (String, Double, Double) -> Unit = { _, _, _ -> },
+    onLocationDraftChanged: () -> Unit = {},
+    onSearchSlots: () -> Unit = {},
+    onSelectSlot: (String) -> Unit = {},
+    onHoldSlot: () -> Unit = {},
+    onRentalMonths: (Long) -> Unit = {},
+    onCheckout: () -> Unit = {},
+    onRefreshBookings: () -> Unit = {},
+    onDismissError: () -> Unit = {},
+) {
+    when (state) {
+        CustomerAppState.Loading -> LoadingCustomerScreen("Проверяем безопасную сессию…")
+        is CustomerAppState.SignedOut -> SignedOutNavigation(state, onLogin, onRegister)
+        is CustomerAppState.Ready -> {
+            val workflow = state.workflow
+            when {
+                workflow.bootstrapping -> LoadingCustomerScreen("Загружаем данные клиента…")
+                workflow.profile == null -> ProfileFormScreen(null, workflow.busy, onSaveProfile)
+                workflow.selectedWarehouse == null -> WarehouseScreen(
+                    warehouses = workflow.warehouses,
+                    busy = workflow.busy,
+                    onSelect = onWarehouse,
+                    onLogout = onLogout,
+                )
+                else -> SignedInNavigation(
+                    state = workflow,
+                    onLogout = onLogout,
+                    onSaveProfile = onSaveProfile,
+                    onFilters = onFilters,
+                    onLoadMoreCabins = onLoadMoreCabins,
+                    onToggleCabin = onToggleCabin,
+                    onEquipment = onEquipment,
+                    onAddress = onAddress,
+                    onPoint = onPoint,
+                    onConfirmedLocation = onConfirmedLocation,
+                    onLocationDraftChanged = onLocationDraftChanged,
+                    onSearchSlots = onSearchSlots,
+                    onSelectSlot = onSelectSlot,
+                    onHoldSlot = onHoldSlot,
+                    onRentalMonths = onRentalMonths,
+                    onCheckout = onCheckout,
+                    onRefreshBookings = onRefreshBookings,
+                    onDismissError = onDismissError,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SignedOutNavigation(
+    state: CustomerAppState.SignedOut,
+    onLogin: (String, String) -> Unit,
+    onRegister: (String, String, String) -> Unit,
+) {
+    val backStack = rememberNavBackStack(LoginRoute)
+    NavDisplay(
+        backStack = backStack,
+        onBack = { backStack.removeLastOrNull() },
+        entryDecorators = listOf(
+            rememberSaveableStateHolderNavEntryDecorator(),
+            rememberViewModelStoreNavEntryDecorator(),
+        ),
+        entryProvider = entryProvider {
+            entry<LoginRoute> {
+                LoginScreen(
+                    message = state.message,
+                    submitting = state.submitting,
+                    onLogin = onLogin,
+                    onRegister = { backStack.add(RegistrationRoute) },
+                )
+            }
+            entry<RegistrationRoute> {
+                RegistrationScreen(
+                    message = state.message,
+                    submitting = state.submitting,
+                    onSubmit = onRegister,
+                    onBack = { backStack.removeLastOrNull() },
+                )
+            }
+        },
+    )
+}
+
+@Composable
+@Suppress("LongParameterList")
+private fun SignedInNavigation(
+    state: CustomerWorkflowState,
+    onLogout: () -> Unit,
+    onSaveProfile: (dev.buhanzaz.rwms.client.data.CustomerProfile) -> Unit,
+    onFilters: (dev.buhanzaz.rwms.client.data.CabinFilters) -> Unit,
+    onLoadMoreCabins: () -> Unit,
+    onToggleCabin: (String) -> Unit,
+    onEquipment: (String, dev.buhanzaz.rwms.client.data.AvailableEquipment, Long) -> Unit,
+    onAddress: (String) -> Unit,
+    onPoint: (Double, Double) -> Unit,
+    onConfirmedLocation: (String, Double, Double) -> Unit,
+    onLocationDraftChanged: () -> Unit,
+    onSearchSlots: () -> Unit,
+    onSelectSlot: (String) -> Unit,
+    onHoldSlot: () -> Unit,
+    onRentalMonths: (Long) -> Unit,
+    onCheckout: () -> Unit,
+    onRefreshBookings: () -> Unit,
+    onDismissError: () -> Unit,
+) {
+    val backStack = rememberNavBackStack(CatalogRoute)
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val coroutineScope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
+    val current = backStack.lastOrNull()
+
+    fun topLevel(route: NavKey) {
+        backStack.clear()
+        backStack.add(route)
+        coroutineScope.launch { drawerState.close() }
+    }
+
+    LaunchedEffect(state.error) {
+        state.error?.let { message ->
+            snackbar.showSnackbar(message)
+            onDismissError()
+        }
+    }
+    LaunchedEffect(state.booking?.status) {
+        if (CustomerBookingPolicy.locksCart(state.booking)) {
+            topLevel(BookingsRoute)
+        }
+    }
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = !current.isDeliveryFlowRoute(),
+        drawerContent = {
+            ModalDrawerSheet {
+                Text("RWMS Клиент", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(24.dp))
+                NavigationDrawerItem(
+                    label = { Text("Свободные бытовки") },
+                    selected = current is CatalogRoute,
+                    onClick = { topLevel(CatalogRoute) },
+                    icon = { Icon(Icons.Default.HomeWork, contentDescription = null) },
+                )
+                NavigationDrawerItem(
+                    label = { Text("Корзина (${state.selectedCabinIds.size})") },
+                    selected = current is CartRoute || current.isDeliveryFlowRoute(),
+                    onClick = { topLevel(CartRoute) },
+                    icon = { Icon(Icons.Default.ShoppingCart, contentDescription = null) },
+                )
+                NavigationDrawerItem(
+                    label = { Text("Мои заказы") },
+                    selected = current is BookingsRoute,
+                    onClick = { topLevel(BookingsRoute) },
+                    icon = { Icon(Icons.Default.Book, contentDescription = null) },
+                )
+                NavigationDrawerItem(
+                    label = { Text("Профиль") },
+                    selected = current is ProfileRoute,
+                    onClick = { topLevel(ProfileRoute) },
+                    icon = { Icon(Icons.Default.Person, contentDescription = null) },
+                )
+                NavigationDrawerItem(label = { Text("Выйти") }, selected = false, onClick = onLogout)
+            }
+        },
+    ) {
+        CustomerAdaptiveNavigation(
+            current = current,
+            cartCount = state.selectedCabinIds.size,
+            hideTopLevelNavigation = current.isDeliveryFlowRoute(),
+            onCatalog = { topLevel(CatalogRoute) },
+            onCart = { topLevel(CartRoute) },
+            onBookings = { topLevel(BookingsRoute) },
+        ) {
+            Box(Modifier.fillMaxSize()) {
+                NavDisplay(
+                    backStack = backStack,
+                    onBack = { backStack.removeLastOrNull() },
+                    entryDecorators = listOf(
+                        rememberSaveableStateHolderNavEntryDecorator(),
+                        rememberViewModelStoreNavEntryDecorator(),
+                    ),
+                    entryProvider = entryProvider {
+                        entry<CatalogRoute> {
+                            CabinCatalogScreen(
+                                state = state,
+                                onMenu = { coroutineScope.launch { drawerState.open() } },
+                                onProfile = { topLevel(ProfileRoute) },
+                                onCart = { topLevel(CartRoute) },
+                                onFilters = onFilters,
+                                onLoadMore = onLoadMoreCabins,
+                                onToggleCabin = onToggleCabin,
+                                onEquipment = onEquipment,
+                                onPhoto = { unitId, page -> backStack.add(GalleryRoute(unitId, page)) },
+                            )
+                        }
+                        entry<CartRoute> {
+                            CartScreen(
+                                state = state,
+                                onMenu = { coroutineScope.launch { drawerState.open() } },
+                                onProfile = { topLevel(ProfileRoute) },
+                                onContinue = {
+                                    if (backStack.lastOrNull() !is DeliveryMapRoute) {
+                                        backStack.add(DeliveryMapRoute)
+                                    }
+                                },
+                                onToggleCabin = onToggleCabin,
+                            )
+                        }
+                        entry<DeliveryMapRoute> {
+                            DeliveryMapScreen(
+                                state = state,
+                                onBack = { backStack.removeLastOrNull() },
+                                onAddress = onAddress,
+                                onPoint = onPoint,
+                                onConfirmedLocation = onConfirmedLocation,
+                                onLocationDraftChanged = onLocationDraftChanged,
+                                onContinue = {
+                                    onSearchSlots()
+                                    if (backStack.lastOrNull() !is DeliveryDatesRoute) {
+                                        backStack.add(DeliveryDatesRoute)
+                                    }
+                                },
+                            )
+                        }
+                        entry<DeliveryDatesRoute> {
+                            DeliveryDatesScreen(
+                                state = state,
+                                onBack = { backStack.removeLastOrNull() },
+                                onDate = { date ->
+                                    val route = DeliverySlotsRoute(date)
+                                    if (backStack.lastOrNull() != route) backStack.add(route)
+                                },
+                            )
+                        }
+                        entry<DeliverySlotsRoute> { route ->
+                            DeliverySlotsScreen(
+                                state = state,
+                                date = route.date,
+                                onBack = { backStack.removeLastOrNull() },
+                                onSelectSlot = onSelectSlot,
+                                onHoldSlot = onHoldSlot,
+                                onHeld = {
+                                    if (backStack.lastOrNull() !is DeliveryConfirmationRoute) {
+                                        backStack.add(DeliveryConfirmationRoute)
+                                    }
+                                },
+                            )
+                        }
+                        entry<DeliveryConfirmationRoute> {
+                            DeliveryConfirmationScreen(
+                                state = state,
+                                onBack = { backStack.removeLastOrNull() },
+                                onRentalMonths = onRentalMonths,
+                                onCheckout = onCheckout,
+                            )
+                        }
+                        entry<BookingsRoute> {
+                            BookingsScreen(
+                                bookings = state.bookings,
+                                latest = state.booking,
+                                busy = state.busy,
+                                onMenu = { coroutineScope.launch { drawerState.open() } },
+                                onProfile = { topLevel(ProfileRoute) },
+                                onRefresh = onRefreshBookings,
+                            )
+                        }
+                        entry<ProfileRoute> {
+                            ProfileFormScreen(
+                                existing = state.profile,
+                                busy = state.busy,
+                                onSave = onSaveProfile,
+                                onBack = { topLevel(CatalogRoute) },
+                            )
+                        }
+                        entry<GalleryRoute> { route ->
+                            FullscreenCabinGallery(
+                                cabin = state.cabins.firstOrNull { it.unitId == route.unitId }
+                                    ?: state.cart?.cabins?.firstOrNull { it.unitId == route.unitId },
+                                initialPage = route.initialPage,
+                                onClose = { backStack.removeLastOrNull() },
+                            )
+                        }
+                    },
+                )
+                SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+                if (state.busy) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CustomerAdaptiveNavigation(
+    current: NavKey?,
+    cartCount: Int,
+    hideTopLevelNavigation: Boolean,
+    onCatalog: () -> Unit,
+    onCart: () -> Unit,
+    onBookings: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        if (hideTopLevelNavigation) {
+            content()
+            return@BoxWithConstraints
+        }
+        val expanded = maxWidth >= 840.dp
+        if (expanded) {
+            Row(Modifier.fillMaxSize()) {
+                NavigationRail {
+                    NavigationRailItem(
+                        selected = current is CatalogRoute,
+                        onClick = onCatalog,
+                        icon = { Icon(Icons.Default.HomeWork, contentDescription = "Бытовки") },
+                        label = { Text("Бытовки") },
+                    )
+                    NavigationRailItem(
+                        selected = current is CartRoute || current.isDeliveryFlowRoute(),
+                        onClick = onCart,
+                        icon = { Icon(Icons.Default.ShoppingCart, contentDescription = "Корзина, $cartCount") },
+                        label = { Text("Корзина") },
+                    )
+                    NavigationRailItem(
+                        selected = current is BookingsRoute,
+                        onClick = onBookings,
+                        icon = { Icon(Icons.Default.Book, contentDescription = "Заказы") },
+                        label = { Text("Заказы") },
+                    )
+                }
+                Box(Modifier.weight(1f)) { content() }
+            }
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                Box(Modifier.weight(1f)) { content() }
+                NavigationBar {
+                    NavigationBarItem(
+                        selected = current is CatalogRoute,
+                        onClick = onCatalog,
+                        icon = { Icon(Icons.Default.HomeWork, contentDescription = null) },
+                        label = { Text("Бытовки") },
+                    )
+                    NavigationBarItem(
+                        selected = current is CartRoute || current.isDeliveryFlowRoute(),
+                        onClick = onCart,
+                        icon = { Icon(Icons.Default.ShoppingCart, contentDescription = null) },
+                        label = { Text("Корзина $cartCount") },
+                    )
+                    NavigationBarItem(
+                        selected = current is BookingsRoute,
+                        onClick = onBookings,
+                        icon = { Icon(Icons.Default.Book, contentDescription = null) },
+                        label = { Text("Заказы") },
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun NavKey?.isDeliveryFlowRoute(): Boolean =
+    this is DeliveryMapRoute ||
+        this is DeliveryDatesRoute ||
+        this is DeliverySlotsRoute ||
+        this is DeliveryConfirmationRoute
+
+@Composable
+private fun LoadingCustomerScreen(message: String) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator()
+            Text(message, modifier = Modifier.padding(16.dp))
+        }
+    }
+}

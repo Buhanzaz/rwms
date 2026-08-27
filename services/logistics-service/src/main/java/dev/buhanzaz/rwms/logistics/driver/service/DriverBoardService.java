@@ -24,10 +24,12 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -65,10 +67,11 @@ public class DriverBoardService {
     List<DriverBoardRepairPlaceCardResponse> repairPlaces = repairPlaces(warehouseId, places);
     List<CapitalRepairCardResponse> capitalRepairs =
         capitalRepairs(warehouseId, localTasks.values());
+    LocalDate today = warehouseToday(warehouseId);
 
     return new DriverBoardResponse(
         warehouseId,
-        warehouseToday(warehouseId),
+        today,
         board.queueId(),
         board.queueVersion(),
         places.repairPlaceCount(),
@@ -86,23 +89,39 @@ public class DriverBoardService {
                   return card(value, task, task == null ? null : tripDetails.get(task.getId()));
                 })
             .toList(),
-        board.dates().stream()
-            .map(
-                column ->
-                    new DriverBoardDateColumnResponse(
-                        column.date(),
-                        column.tasks().stream()
-                            .map(
-                                value -> {
-                                  DriverLogisticsTask task = localTasks.get(value.externalTaskId());
-                                  return card(
-                                      value,
-                                      task,
-                                      task == null ? null : tripDetails.get(task.getId()));
-                                })
-                            .toList()))
-            .toList(),
+        currentAndFutureDateColumns(board.dates(), localTasks, tripDetails, today),
         capitalRepairs);
+  }
+
+  /**
+   * Floors overdue active task-board columns to the warehouse-local current date. This keeps every
+   * recoverable card visible while the background workflow converges its persisted placement and
+   * guarantees that the public board never offers a past movement target.
+   */
+  private static List<DriverBoardDateColumnResponse> currentAndFutureDateColumns(
+      List<LogisticsDependencyGateway.DriverBoardDateColumn> columns,
+      Map<UUID, DriverLogisticsTask> localTasks,
+      Map<UUID, dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.DriverTripDetailsResponse>
+          tripDetails,
+      LocalDate today) {
+    Map<LocalDate, List<DriverBoardCardResponse>> grouped = new TreeMap<>();
+    for (LogisticsDependencyGateway.DriverBoardDateColumn column : columns) {
+      LocalDate effectiveDate = column.date().isBefore(today) ? today : column.date();
+      List<DriverBoardCardResponse> cards =
+          grouped.computeIfAbsent(effectiveDate, ignored -> new ArrayList<>());
+      for (LogisticsDependencyGateway.DriverBoardTask value : column.tasks()) {
+        DriverLogisticsTask task = localTasks.get(value.externalTaskId());
+        cards.add(
+            card(
+                value,
+                task,
+                task == null ? null : tripDetails.get(task.getId()),
+                effectiveDate));
+      }
+    }
+    return grouped.entrySet().stream()
+        .map(entry -> new DriverBoardDateColumnResponse(entry.getKey(), entry.getValue()))
+        .toList();
   }
 
   /**
@@ -440,6 +459,15 @@ public class DriverBoardService {
       DriverLogisticsTask local,
       dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.DriverTripDetailsResponse
           tripDetails) {
+    return card(board, local, tripDetails, board.scheduledDate());
+  }
+
+  private static DriverBoardCardResponse card(
+      LogisticsDependencyGateway.DriverBoardTask board,
+      DriverLogisticsTask local,
+      dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.DriverTripDetailsResponse
+          tripDetails,
+      LocalDate effectiveScheduledDate) {
     return new DriverBoardCardResponse(
         local == null ? null : local.getId(),
         board.externalTaskId(),
@@ -458,7 +486,7 @@ public class DriverBoardService {
         local == null ? null : local.getState(),
         board.status(),
         board.entryStatus(),
-        board.scheduledDate(),
+        effectiveScheduledDate,
         board.lane(),
         board.priority(),
         board.pinned(),

@@ -5,10 +5,29 @@ import {
   CharacteristicTags,
   EmptyDossierRegister,
 } from "@/features/rental-items/rental-item-detail-support"
+import { rentalLifecycleLabel } from "@/features/rental-items/rental-item-lifecycle"
 
 afterEach(cleanup)
 
 describe("rental item detail support", () => {
+  it("shows an imported cabin as shipped only when shipment date and tenant are both present", () => {
+    expect(
+      rentalLifecycleLabel(null, null, null, "2023-05-17", "ООО Партнёр")
+    ).toBe("Отгружена")
+    expect(rentalLifecycleLabel(null, null, null, "2023-05-17", "   ")).toBe(
+      "Не отгружена"
+    )
+    expect(rentalLifecycleLabel(null, null, null, null, "ООО Партнёр")).toBe(
+      "Не отгружена"
+    )
+  })
+
+  it("keeps a live draft shipment authoritative over imported passport facts", () => {
+    expect(
+      rentalLifecycleLabel("DRAFT", null, null, "2023-05-17", "ООО Партнёр")
+    ).toBe("Ожидает отгрузки")
+  })
+
   it("keeps compound characteristics in neutral rounded tags", () => {
     render(
       <CharacteristicTags

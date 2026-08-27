@@ -703,7 +703,7 @@ func (server *Server) listLogisticsCabinPresentationSnapshots(response http.Resp
 				}
 				items = append(items, map[string]any{
 					"cabinId": record.CabinID, "coverMediaId": record.CoverMediaID,
-					"photos": photos,
+					"photoCount": record.PhotoCount, "photos": photos,
 				})
 			}
 			return nil

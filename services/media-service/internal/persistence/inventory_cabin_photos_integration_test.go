@@ -341,12 +341,11 @@ func assertCurrentInventoryFolderAndArchive(
 		func(records []CabinCoverRecord) error {
 			covers = records
 			return nil
-		}); err != nil || len(covers) != 1 || covers[0].PhotoCount != 3 ||
-		covers[0].MediaID != secondAsset.ID || len(covers[0].Previews) != 3 ||
+		}); err != nil || len(covers) != 1 || covers[0].PhotoCount != 2 ||
+		covers[0].MediaID != secondAsset.ID || len(covers[0].Previews) != 2 ||
 		covers[0].Previews[0].MediaID != secondAsset.ID ||
-		covers[0].Previews[1].MediaID != directAsset.ID ||
-		covers[0].Previews[2].MediaID != firstAsset.ID {
-		t.Fatalf("cover-first full archive projection = %#v error=%v", covers, err)
+		covers[0].Previews[1].MediaID != firstAsset.ID {
+		t.Fatalf("cover-first active-folder projection = %#v error=%v", covers, err)
 	}
 	var presentation []CabinPresentationSnapshotRecord
 	if err := repository.ReadCabinPresentationSnapshots(ctx, warehouseID,
@@ -356,14 +355,13 @@ func assertCurrentInventoryFolderAndArchive(
 		}); err != nil || len(presentation) != 1 ||
 		presentation[0].CoverMediaID == nil ||
 		*presentation[0].CoverMediaID != secondAsset.ID ||
-		len(presentation[0].Photos) != 3 ||
+		presentation[0].PhotoCount != 2 ||
+		len(presentation[0].Photos) != 2 ||
 		presentation[0].Photos[0].MediaID != secondAsset.ID ||
 		presentation[0].Photos[0].SortOrder != 0 ||
-		presentation[0].Photos[1].MediaID != directAsset.ID ||
-		presentation[0].Photos[1].SortOrder != 1 ||
-		presentation[0].Photos[2].MediaID != firstAsset.ID ||
-		presentation[0].Photos[2].SortOrder != 2 {
-		t.Fatalf("full archive presentation = %#v error=%v", presentation, err)
+		presentation[0].Photos[1].MediaID != firstAsset.ID ||
+		presentation[0].Photos[1].SortOrder != 1 {
+		t.Fatalf("active-folder presentation = %#v error=%v", presentation, err)
 	}
 	var archive []AssetWithVariants
 	if err := repository.ReadOwnerAssets(ctx, OwnerTypeCabin, cabinID.String(),

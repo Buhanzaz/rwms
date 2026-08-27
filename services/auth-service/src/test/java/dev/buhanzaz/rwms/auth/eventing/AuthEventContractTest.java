@@ -2,8 +2,10 @@ package dev.buhanzaz.rwms.auth.eventing;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import dev.buhanzaz.rwms.auth.domain.UserGlobalRole;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
@@ -59,6 +61,10 @@ class AuthEventContractTest {
         assertThat(schema.get("additionalProperties").booleanValue()).isFalse();
         assertThat(schema.at("/properties/producer/const").stringValue()).isEqualTo("auth-service");
         assertThat(schema.at("/properties/envelopeVersion/const").intValue()).isEqualTo(2);
+        assertThat(strings(schema.at("/$defs/userAuthorization/properties/globalRole/enum")))
+                .isEqualTo(Arrays.stream(UserGlobalRole.values())
+                        .map(Enum::name)
+                        .collect(java.util.stream.Collectors.toUnmodifiableSet()));
     }
 
     @Test

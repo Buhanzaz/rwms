@@ -233,13 +233,95 @@ class CabinPhotoPresentationIntegrationTest {
   void emptyReadyPhotoSnapshotConflictsWithoutCreatingAPublicLink() throws Exception {
     when(dependencies.readCabinMediaSnapshots(WAREHOUSE, List.of(CABIN)))
         .thenReturn(
-            List.of(new LogisticsDependencyGateway.CabinMediaSnapshot(CABIN, List.of())));
+            List.of(new LogisticsDependencyGateway.CabinMediaSnapshot(CABIN, 0, List.of())));
 
     mockMvc
         .perform(create(UUID.randomUUID(), WAREHOUSE, CABIN_VERSION))
         .andExpect(status().isConflict())
         .andExpect(jsonPath("$.code").value("CABIN_PHOTOS_EMPTY"));
 
+    assertThat(rowCount()).isZero();
+  }
+
+  @Test
+  void boundedSnapshotCannotHideAnOverLimitLogicalPhotoFolder() throws Exception {
+    when(dependencies.readCabinMediaSnapshots(WAREHOUSE, List.of(CABIN)))
+        .thenReturn(
+            List.of(
+                new LogisticsDependencyGateway.CabinMediaSnapshot(
+                    CABIN,
+                    101,
+                    List.of(
+                        new LogisticsDependencyGateway.CabinMediaPhoto(
+                            PHOTO, 3, 2, List.of("SMALL", "LARGE"))))));
+
+    mockMvc
+        .perform(create(UUID.randomUUID(), WAREHOUSE, CABIN_VERSION))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("CABIN_PHOTO_LIMIT_EXCEEDED"));
+
+    assertThat(rowCount()).isZero();
+  }
+
+  @Test
+  void incompleteReadySnapshotCannotCreateAPartialPresentation() throws Exception {
+    when(dependencies.readCabinMediaSnapshots(WAREHOUSE, List.of(CABIN)))
+        .thenReturn(
+            List.of(
+                new LogisticsDependencyGateway.CabinMediaSnapshot(
+                    CABIN,
+                    2,
+                    List.of(
+                        new LogisticsDependencyGateway.CabinMediaPhoto(
+                            PHOTO, 3, 2, List.of("SMALL", "LARGE"))))));
+
+    mockMvc
+        .perform(create(UUID.randomUUID(), WAREHOUSE, CABIN_VERSION))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("CABIN_PHOTO_PROCESSING_INCOMPLETE"));
+
+    assertThat(rowCount()).isZero();
+  }
+
+  @Test
+  void duplicatePhotoPositionsCannotCreateAnAmbiguousPresentation() throws Exception {
+    UUID secondPhoto = UUID.randomUUID();
+    when(dependencies.readCabinMediaSnapshots(WAREHOUSE, List.of(CABIN)))
+        .thenReturn(
+            List.of(
+                new LogisticsDependencyGateway.CabinMediaSnapshot(
+                    CABIN,
+                    2,
+                    List.of(
+                        new LogisticsDependencyGateway.CabinMediaPhoto(
+                            PHOTO, 3, 0, List.of("SMALL")),
+                        new LogisticsDependencyGateway.CabinMediaPhoto(
+                            secondPhoto, 1, 0, List.of("SMALL"))))));
+
+    mockMvc
+        .perform(create(UUID.randomUUID(), WAREHOUSE, CABIN_VERSION))
+        .andExpect(status().isServiceUnavailable());
+    assertThat(rowCount()).isZero();
+  }
+
+  @Test
+  void gappedPhotoPositionsCannotCreateAnAmbiguousPresentation() throws Exception {
+    UUID secondPhoto = UUID.randomUUID();
+    when(dependencies.readCabinMediaSnapshots(WAREHOUSE, List.of(CABIN)))
+        .thenReturn(
+            List.of(
+                new LogisticsDependencyGateway.CabinMediaSnapshot(
+                    CABIN,
+                    2,
+                    List.of(
+                        new LogisticsDependencyGateway.CabinMediaPhoto(
+                            PHOTO, 3, 0, List.of("SMALL")),
+                        new LogisticsDependencyGateway.CabinMediaPhoto(
+                            secondPhoto, 1, 2, List.of("SMALL"))))));
+
+    mockMvc
+        .perform(create(UUID.randomUUID(), WAREHOUSE, CABIN_VERSION))
+        .andExpect(status().isServiceUnavailable());
     assertThat(rowCount()).isZero();
   }
 
@@ -287,7 +369,7 @@ class CabinPhotoPresentationIntegrationTest {
         .andExpect(jsonPath("$.passport").doesNotExist())
         .andExpect(jsonPath("$.photos[0].mediaId").value(PHOTO.toString()))
         .andExpect(jsonPath("$.photos[0].generation").value(3))
-        .andExpect(jsonPath("$.photos[0].sortOrder").value(2))
+        .andExpect(jsonPath("$.photos[0].sortOrder").value(0))
         .andExpect(
             jsonPath("$.photos[0].thumbnailUrl")
                 .value(org.hamcrest.Matchers.endsWith("/" + PHOTO + "/3/SMALL")))
@@ -488,8 +570,9 @@ class CabinPhotoPresentationIntegrationTest {
   private static LogisticsDependencyGateway.CabinMediaSnapshot media(List<String> variants) {
     return new LogisticsDependencyGateway.CabinMediaSnapshot(
         CABIN,
+        1,
         List.of(
-            new LogisticsDependencyGateway.CabinMediaPhoto(PHOTO, 3, 2, variants)));
+            new LogisticsDependencyGateway.CabinMediaPhoto(PHOTO, 3, 0, variants)));
   }
 
   private int rowCount() {

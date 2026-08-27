@@ -79,6 +79,31 @@ afterEach(() => {
 })
 
 describe("public cabin photo presentation", () => {
+  it("owns viewport scrolling so every photo in a long presentation remains reachable", async () => {
+    api.get.mockResolvedValue({
+      ...presentation,
+      photos: Array.from({ length: 12 }, (_, index) => ({
+        mediaId: `photo-${index + 1}`,
+        generation: 1,
+        sortOrder: index,
+        thumbnailUrl: `/api/logistics/public/photo-${index + 1}-small`,
+        contentUrl: `/api/logistics/public/photo-${index + 1}-large`,
+      })),
+    })
+    renderPage()
+
+    expect(
+      await screen.findByRole("button", { name: "Открыть фото 12 из 12" })
+    ).toBeTruthy()
+    const page = screen.getByRole("main")
+    expect(page.className).toContain("h-svh")
+    expect(page.className).toContain("overflow-y-auto")
+    expect(page.className).not.toContain("overflow-hidden")
+    expect(
+      within(page).getAllByRole("button", { name: /Открыть фото/ })
+    ).toHaveLength(12)
+  })
+
   it("shows the allowed immutable cabin details without RWMS or private fields", async () => {
     renderPage()
 
