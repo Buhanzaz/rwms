@@ -21,6 +21,9 @@ export function SimulationBar({ plan, state, timestamp, timeZone, playing, speed
 }) {
   const bounds = planTimeBounds(plan);
   const events = useMemo(() => simulationEventTimestamps(plan, overrides), [overrides, plan]);
+  const activeVehicleCount = state.vehicles.filter(
+    (vehicle) => vehicle.status !== 'FINISHED' && vehicle.status !== 'WAITING_SHIFT',
+  ).length;
   useEffect(() => {
     if (!playing || !bounds) return;
     let previous = performance.now();
@@ -54,7 +57,7 @@ export function SimulationBar({ plan, state, timestamp, timeZone, playing, speed
         <div className="simulation-time__labels"><span>{formatTime(bounds.start, timeZone)}</span><strong className="simulation-time__current" data-testid="simulation-current-time">{time}</strong><span>{formatTime(bounds.end, timeZone)}</span></div>
         <input aria-label="Время симуляции" type="range" min={bounds.start} max={bounds.end} step={1000} value={timestamp} onChange={(event) => { onPlaying(false); onTimestamp(Number(event.target.value)); }} />
         <div className="entity-card__row">
-          <span>{state.vehicles.filter((vehicle) => vehicle.status !== 'FINISHED').length} машин в работе</span>
+          <span>Машин в работе: {activeVehicleCount}</span>
           <label className="checkbox-field">Скорость <select className="input" aria-label="Скорость симуляции" value={speed} onChange={(event) => onSpeed(Number(event.target.value) as 1 | 5 | 10 | 20 | 60)}>{speeds.map((value) => <option value={value} key={value}>{value}×</option>)}</select></label>
         </div>
       </div>

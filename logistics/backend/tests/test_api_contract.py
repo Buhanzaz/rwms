@@ -36,7 +36,9 @@ def test_openapi_is_served_under_api_and_contains_core_operations() -> None:
     assert "/api/zones/{zone_id}/cutouts" in paths
     assert "/api/scenarios/{scenario_id}/generate-workload" in paths
     assert "/api/scenarios/{scenario_id}/generated-workload" in paths
+    assert "/api/scenarios/{scenario_id}/rwms/capacity" in paths
     assert "/api/scenarios/{scenario_id}/plans/generate" in paths
+    assert "/api/requests/{request_id}/planning-details" in paths
     assert "/api/optimization-runs/{run_id}/stream" in paths
     assert "/api/plans/{plan_id}/simulation/delay" in paths
     assert "/api/plans/{plan_id}/simulation/driver-unavailable" in paths

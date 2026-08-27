@@ -30,17 +30,28 @@ test.afterEach(async ({ request }) => {
 test('создание, demo-план, симуляция, задержка и экспорт', async ({ page, request }) => {
   await page.goto('/');
 
-  await expect(page.getByTestId('map-stage')).toBeVisible();
-  const sidebar = page.getByLabel('Разделы логистического стенда');
-  await sidebar.getByRole('button', { name: /Сценарий/ }).click();
-  await page.getByRole('button', { name: /Новый сценарий/ }).click();
   const scenarioName = `E2E логистика ${Date.now()}`;
+  const emptyWorkspaceCreate = page.getByRole('button', { name: 'Создать сценарий' });
+  const mapStage = page.getByTestId('map-stage');
+  await expect.poll(async () => (
+    await emptyWorkspaceCreate.isVisible().catch(() => false)
+    || await mapStage.isVisible().catch(() => false)
+  )).toBe(true);
+  if (await emptyWorkspaceCreate.isVisible()) {
+    await emptyWorkspaceCreate.click();
+  } else {
+    const currentSidebar = page.getByLabel('Разделы логистического стенда');
+    await currentSidebar.getByRole('button', { name: /Сценарий/ }).click();
+    await page.getByRole('button', { name: /Новый сценарий/ }).click();
+  }
   await page.getByLabel('Название').fill(scenarioName);
   await page.getByLabel('Описание').fill('Воспроизводимый Playwright smoke scenario');
   await page.getByRole('dialog').getByRole('button', { name: 'Сохранить' }).click();
   const scenarioSelect = page.getByLabel('Текущий сценарий');
   await expect(scenarioSelect.locator('option:checked')).toHaveText(scenarioName);
   createdScenarioId = await scenarioSelect.inputValue();
+  await expect(mapStage).toBeVisible();
+  const sidebar = page.getByLabel('Разделы логистического стенда');
 
   await page.getByRole('button', { name: /Demo scenario/ }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Создать demo' }).click();
@@ -118,7 +129,7 @@ test('создание, demo-план, симуляция, задержка и �
   const deliveryPairCycle = page.getByTestId(`cycle-${deliveryPairCycleData.id}`);
   await expect(deliveryPairCycle).toBeVisible();
   await expect(deliveryPairCycle.locator('.stop-row__type')).toHaveText(
-    deliveryPairCycleData.stops.map((stop) => stop.stop_type === 'DELIVERY' ? 'D' : stop.stop_type === 'PICKUP' ? 'P' : 'С'),
+    deliveryPairCycleData.stops.map((stop) => stop.stop_type === 'DELIVERY' ? 'D' : stop.stop_type === 'PICKUP' ? 'V' : 'С'),
   );
 
   // Exercise the real dnd-kit keyboard sensor: swap the two delivery stops,
@@ -133,6 +144,27 @@ test('создание, demo-план, симуляция, задержка и �
 
   await page.getByRole('button', { name: 'Проверить' }).click();
   await expect(page.getByText('Проверка плана завершена')).toBeVisible();
+  await page.getByRole('button', { name: 'Сохранить план' }).click();
+  const warningDialog = page.getByRole('dialog', { name: 'Подтвердить план с предупреждениями?' });
+  const planConfirmedToast = page.getByText('План подтверждён');
+  await expect.poll(async () => (
+    await warningDialog.isVisible().catch(() => false)
+    || await planConfirmedToast.isVisible().catch(() => false)
+  )).toBe(true);
+  if (await warningDialog.isVisible()) {
+    await warningDialog.getByRole('button', { name: 'Подтвердить с предупреждениями' }).click();
+  }
+  await expect(planConfirmedToast).toBeVisible();
+  const notificationJournal = page.getByLabel('Журнал тестовых уведомлений');
+  await expect(notificationJournal).toBeVisible();
+  const notificationJournalBox = await notificationJournal.boundingBox();
+  expect(notificationJournalBox).not.toBeNull();
+  expect(notificationJournalBox?.x).toBeLessThan(700);
+  expect(900 - ((notificationJournalBox?.y ?? 0) + (notificationJournalBox?.height ?? 0))).toBeCloseTo(18, 0);
+  const firstNotification = notificationJournal.locator('details').first();
+  await firstNotification.locator('summary').click();
+  await expect(firstNotification).toContainText('госномер');
+
   await page.getByRole('button', { name: 'Симуляция' }).click();
   await page.getByRole('button', { name: 'Запустить симуляцию' }).click();
   await page.getByRole('button', { name: 'Пауза' }).click();

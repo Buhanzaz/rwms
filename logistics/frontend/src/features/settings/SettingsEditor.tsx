@@ -43,6 +43,12 @@ const operationFields: NumericSetting[] = [
   { key: 'default_pickup_minutes', label: 'Вывоз, мин', min: 0 },
   { key: 'default_depot_turnaround_minutes', label: 'Оборот на складе, мин', min: 0 },
   { key: 'default_route_buffer_minutes', label: 'Резерв цикла, мин', min: 0 },
+  {
+    key: 'max_customer_wait_minutes',
+    label: 'Максимум ожидания между клиентами, мин',
+    min: 0,
+    hint: 'Более длинный разрыв разделяет задания на разные рейсы со стартом со склада',
+  },
   { key: 'default_service_minutes', label: 'Обслуживание по умолчанию, мин', min: 0 },
   { key: 'default_buffer_minutes', label: 'Общий резерв по умолчанию, мин', min: 0 },
   { key: 'soft_overtime_limit_minutes', label: 'Мягкая переработка, мин', min: 0 },

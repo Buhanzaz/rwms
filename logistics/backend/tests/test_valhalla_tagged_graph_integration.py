@@ -121,12 +121,8 @@ async def test_one_cabin_uses_short_path_but_two_cabins_avoid_maxlength() -> Non
     """The same truck gets a different path once its 18 m trailer is attached."""
 
     provider = _provider()
-    one_max_lat, one_distance = await _route_max_latitude(
-        provider, 55.00, _one_cargo_profile()
-    )
-    two_max_lat, two_distance = await _route_max_latitude(
-        provider, 55.00, _two_cargo_profile()
-    )
+    one_max_lat, one_distance = await _route_max_latitude(provider, 55.00, _one_cargo_profile())
+    two_max_lat, two_distance = await _route_max_latitude(provider, 55.00, _two_cargo_profile())
 
     assert not _uses_detour(one_max_lat, 55.00)
     assert _uses_detour(two_max_lat, 55.00)
@@ -184,9 +180,7 @@ async def test_static_dimension_and_weight_restrictions_select_safe_detour(
 async def test_hgv_no_is_not_used_as_a_penalized_truck_shortcut() -> None:
     """The pinned maximum HGV penalty keeps truck access as a hard edge mask."""
 
-    max_latitude, distance = await _route_max_latitude(
-        _provider(), 55.15, _one_cargo_profile()
-    )
+    max_latitude, distance = await _route_max_latitude(_provider(), 55.15, _one_cargo_profile())
 
     assert _uses_detour(max_latitude, 55.15)
     assert distance > 3_000

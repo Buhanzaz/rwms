@@ -82,6 +82,14 @@ function installFetchRouter(options: { requestOutside?: boolean; deletedRequests
     const method = init?.method ?? 'GET';
     if (url === '/api/scenarios') return jsonResponse([scenario]);
     if (url === '/api/scenarios/scenario-id') return jsonResponse(scenario);
+    if (url === '/api/scenarios/scenario-id/rwms/refresh' && method === 'POST') {
+      return jsonResponse({
+        scenario_id: 'scenario-id',
+        date_from: '2026-08-27',
+        date_to: '2026-09-26',
+        warehouses: [],
+      });
+    }
     if (url === '/api/scenarios/scenario-id/warehouses') {
       return jsonResponse([{
         id: 'warehouse-id', scenario_id: 'scenario-id', name: 'Основной склад', latitude: 55.75, longitude: 37.61,
@@ -119,9 +127,13 @@ function installFetchRouter(options: { requestOutside?: boolean; deletedRequests
         latitude: 55.8, longitude: 37.7, quantity: 1, service_minutes: 30, priority: 1, status: 'READY',
         zone_id: options.requestOutside && !reclassified ? null : 'zone-id', zone_version: options.requestOutside && !reclassified ? null : 1,
         split_allowed: true, notes: '', created_at: '2026-08-20T08:00:00Z', updated_at: '2026-08-22T08:00:00Z',
+        trailer_access_allowed: true,
+        include_driver_passport_in_notification: false,
+        contact_name: '',
+        contact_phone: '',
         zone_classification_status: options.requestOutside && !reclassified ? 'OUTSIDE_ZONES' : 'CLASSIFIED', zone_is_stale: false,
         scheduled_date: null,
-        date_options: [{ id: 'date-id', request_id: 'request-id', date: '2026-08-25', priority: 1, window_start: null, window_end: null, is_hard: false }],
+        date_options: [{ id: 'date-id', request_id: 'request-id', date: '2026-08-25', priority: 1, window_start: '09:00:00', window_end: '15:00:00', is_hard: true }],
         tasks: [],
       }]);
     }

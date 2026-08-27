@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import IntEnum
 from typing import Any, Literal
 
 from pydantic import AwareDatetime, Field, model_validator
@@ -72,3 +73,65 @@ class TruckRestrictionFeatureCollection(ApiModel):
     type: Literal["FeatureCollection"] = "FeatureCollection"
     features: list[TruckRestrictionFeature]
     metadata: TruckRestrictionMetadata
+
+
+class TravelTimeContourMinutes(IntEnum):
+    """Supported fixed truck-travel contour durations in minutes."""
+
+    ONE_HOUR = 60
+    TWO_HOURS = 120
+    THREE_HOURS = 180
+    FOUR_HOURS = 240
+
+
+class TravelTimeContourQuery(ApiModel):
+    """Validated WGS84 depot or route-front coordinate used as the isochrone origin."""
+
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+
+
+class TravelTimeContourGeometry(ApiModel):
+    """Validated GeoJSON area returned by Valhalla for one truck-time contour."""
+
+    type: Literal["Polygon", "MultiPolygon"]
+    coordinates: list[Any]
+
+
+class TravelTimeContourProperties(ApiModel):
+    """Stable styling key for one fixed travel-time contour."""
+
+    contour_minutes: TravelTimeContourMinutes
+
+
+class TravelTimeContourFeature(ApiModel):
+    """One truck travel-time area centered on the requested origin."""
+
+    type: Literal["Feature"] = "Feature"
+    geometry: TravelTimeContourGeometry
+    properties: TravelTimeContourProperties
+
+
+class TravelTimeContourOrigin(ApiModel):
+    """WGS84 depot or route-front origin echoed in contour response metadata."""
+
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+
+
+class TravelTimeContourMetadata(ApiModel):
+    """Provider provenance distinguishing visual estimates from planner routes."""
+
+    source: Literal["valhalla"] = "valhalla"
+    costing: Literal["truck"] = "truck"
+    origin: TravelTimeContourOrigin
+    contours_minutes: list[TravelTimeContourMinutes]
+    osm_data_version: str
+
+
+class TravelTimeContourFeatureCollection(ApiModel):
+    """Four validated Valhalla truck isochrones rendered as visual map estimates."""
+
+    type: Literal["FeatureCollection"] = "FeatureCollection"
+    features: list[TravelTimeContourFeature]
+    metadata: TravelTimeContourMetadata

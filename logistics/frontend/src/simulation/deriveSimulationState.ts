@@ -374,8 +374,12 @@ export function deriveSimulationState(
 export function planTimeBounds(plan: RoutePlan): { start: number; end: number } | null {
   const cycles = plan.driver_routes.flatMap((route) => route.cycles);
   if (cycles.length === 0) return null;
+  const starts = plan.driver_routes.flatMap((route) => [
+    millis(route.shift_start_at),
+    ...route.cycles.map((cycle) => millis(cycle.planned_start)),
+  ]);
   return {
-    start: Math.min(...cycles.map((cycle) => millis(cycle.planned_start))),
+    start: Math.min(...starts),
     end: Math.max(...cycles.map((cycle) => millis(cycle.planned_finish))),
   };
 }

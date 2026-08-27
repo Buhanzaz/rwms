@@ -440,6 +440,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/requests/{request_id}/planning-details": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Request Planning Details
+         * @description Store the dispatcher-approved date, service window, and access decision.
+         */
+        post: operations["set_request_planning_details_api_requests__request_id__planning_details_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/requests/{request_id}/schedule": {
         parameters: {
             query?: never;
@@ -471,9 +491,29 @@ export interface paths {
         put?: never;
         /**
          * Split Request
-         * @description Regenerate deterministic capacity-two transport parts.
+         * @description Regenerate automatic or explicitly-sized transport parts.
          */
         post: operations["split_request_api_requests__request_id__split_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/routing/travel-time-contours": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Travel Time Contours
+         * @description Return Valhalla truck isochrones as a visual estimate around one WGS84 origin.
+         */
+        get: operations["get_travel_time_contours_api_routing_travel_time_contours_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -774,6 +814,46 @@ export interface paths {
          * @description Create, server-classify, and split a delivery or pickup request.
          */
         post: operations["create_request_api_scenarios__scenario_id__requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scenarios/{scenario_id}/rwms/capacity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile Rwms Capacity
+         * @description Publish the complete current generated-delivery capacity snapshot to RWMS.
+         */
+        post: operations["reconcile_rwms_capacity_api_scenarios__scenario_id__rwms_capacity_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scenarios/{scenario_id}/rwms/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Rwms Requests
+         * @description Refresh the current 31-day horizon for every linked warehouse server-side.
+         */
+        post: operations["refresh_rwms_requests_api_scenarios__scenario_id__rwms_refresh_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1285,6 +1365,11 @@ export interface components {
              * @default
              */
             notes: string;
+            /**
+             * Passport Details
+             * @default
+             */
+            passport_details: string;
             /** Preferred Route Group */
             preferred_route_group?: string | null;
         };
@@ -1311,6 +1396,11 @@ export interface components {
              * @default
              */
             notes: string;
+            /**
+             * Passport Details
+             * @default
+             */
+            passport_details: string;
             /** Preferred Route Group */
             preferred_route_group?: string | null;
             /**
@@ -1356,6 +1446,8 @@ export interface components {
             name?: components["schemas"]["NonBlank"] | null;
             /** Notes */
             notes?: string | null;
+            /** Passport Details */
+            passport_details?: string | null;
             /** Preferred Route Group */
             preferred_route_group?: string | null;
         };
@@ -1378,6 +1470,35 @@ export interface components {
              * Format: uuid
              */
             id: string;
+        };
+        /**
+         * ExportPlanNotificationLog
+         * @description Simulated contact message retained with an exported confirmed plan.
+         */
+        ExportPlanNotificationLog: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Includes Driver Passport */
+            includes_driver_passport: boolean;
+            /** Message */
+            message: string;
+            /** Recipient Contact */
+            recipient_contact: string;
+            /** Recipient Name */
+            recipient_name: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "SIMULATED_DELIVERED";
         };
         /**
          * ExportRelation
@@ -1496,6 +1617,8 @@ export interface components {
             };
             /** Name */
             name: string;
+            /** Notification Logs */
+            notification_logs?: components["schemas"]["ExportPlanNotificationLog"][];
             /** Score */
             score: number;
             status: components["schemas"]["PlanStatus"];
@@ -1788,8 +1911,23 @@ export interface components {
             cargo_weight_kg?: number | null;
             /** Cargo Width Mm */
             cargo_width_mm?: number | null;
+            /**
+             * Contact Name
+             * @default
+             */
+            contact_name: string;
+            /**
+             * Contact Phone
+             * @default
+             */
+            contact_phone: string;
             /** Date Options */
             date_options?: components["schemas"]["RequestDateOptionInput"][];
+            /**
+             * Include Driver Passport In Notification
+             * @default false
+             */
+            include_driver_passport_in_notification: boolean;
             /** Latitude */
             latitude: number;
             /** Longitude */
@@ -1819,6 +1957,8 @@ export interface components {
             split_allowed: boolean;
             /** @default READY */
             status: components["schemas"]["RequestStatus"];
+            /** Trailer Access Allowed */
+            trailer_access_allowed?: boolean | null;
             type: components["schemas"]["RequestType"];
         };
         /**
@@ -1836,6 +1976,10 @@ export interface components {
             cargo_weight_kg?: number | null;
             /** Cargo Width Mm */
             cargo_width_mm?: number | null;
+            /** Contact Name */
+            contact_name: string;
+            /** Contact Phone */
+            contact_phone: string;
             /**
              * Created At
              * Format: date-time
@@ -1843,11 +1987,15 @@ export interface components {
             created_at: string;
             /** Date Options */
             date_options?: components["schemas"]["RequestDateOptionRead"][];
+            /** External Id */
+            external_id: string | null;
             /**
              * Id
              * Format: uuid
              */
             id: string;
+            /** Include Driver Passport In Notification */
+            include_driver_passport_in_notification: boolean;
             /** Latitude */
             latitude: number;
             /** Longitude */
@@ -1869,11 +2017,15 @@ export interface components {
             scheduled_date: string | null;
             /** Service Minutes */
             service_minutes: number;
+            /** Source System */
+            source_system: string | null;
             /** Split Allowed */
             split_allowed: boolean;
             status: components["schemas"]["RequestStatus"];
             /** Tasks */
             tasks?: components["schemas"]["PlanningTaskRead"][];
+            /** Trailer Access Allowed */
+            trailer_access_allowed: boolean | null;
             type: components["schemas"]["RequestType"];
             /**
              * Updated At
@@ -1906,8 +2058,14 @@ export interface components {
             cargo_weight_kg?: number | null;
             /** Cargo Width Mm */
             cargo_width_mm?: number | null;
+            /** Contact Name */
+            contact_name?: string | null;
+            /** Contact Phone */
+            contact_phone?: string | null;
             /** Date Options */
             date_options?: components["schemas"]["RequestDateOptionInput"][] | null;
+            /** Include Driver Passport In Notification */
+            include_driver_passport_in_notification?: boolean | null;
             /** Latitude */
             latitude?: number | null;
             /** Longitude */
@@ -1924,6 +2082,8 @@ export interface components {
             /** Split Allowed */
             split_allowed?: boolean | null;
             status?: components["schemas"]["RequestStatus"] | null;
+            /** Trailer Access Allowed */
+            trailer_access_allowed?: boolean | null;
             type?: components["schemas"]["RequestType"] | null;
         };
         /**
@@ -1989,6 +2149,45 @@ export interface components {
          * @enum {string}
          */
         OptimizationStatus: "PENDING" | "RUNNING" | "COMPLETED" | "CANCELLED" | "FAILED" | "TIMED_OUT";
+        /**
+         * PlanNotificationLogRead
+         * @description One simulated notification rendered after explicit plan confirmation.
+         */
+        PlanNotificationLogRead: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Includes Driver Passport */
+            includes_driver_passport: boolean;
+            /** Message */
+            message: string;
+            /**
+             * Plan Id
+             * Format: uuid
+             */
+            plan_id: string;
+            /** Recipient Contact */
+            recipient_contact: string;
+            /** Recipient Name */
+            recipient_name: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "SIMULATED_DELIVERED";
+        };
         /**
          * PlanStatus
          * @description Persistence lifecycle of a dated route plan.
@@ -2082,6 +2281,8 @@ export interface components {
              * @default 0
              */
             priority: number;
+            /** Travel Zone Hours */
+            travel_zone_hours?: number | null;
             /** Window End */
             window_end?: string | null;
             /** Window Start */
@@ -2117,6 +2318,8 @@ export interface components {
              * Format: uuid
              */
             request_id: string;
+            /** Travel Zone Hours */
+            travel_zone_hours?: number | null;
             /** Window End */
             window_end?: string | null;
             /** Window Start */
@@ -2133,10 +2336,49 @@ export interface components {
             is_hard?: boolean | null;
             /** Priority */
             priority?: number | null;
+            /** Travel Zone Hours */
+            travel_zone_hours?: number | null;
             /** Window End */
             window_end?: string | null;
             /** Window Start */
             window_start?: string | null;
+        };
+        /**
+         * RequestPlanningDetailsInput
+         * @description Dispatcher-approved date, service window, access, and notification details.
+         */
+        RequestPlanningDetailsInput: {
+            /** Contact Name */
+            contact_name: string;
+            /** Contact Phone */
+            contact_phone: string;
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /**
+             * Include Driver Passport In Notification
+             * @default false
+             */
+            include_driver_passport_in_notification: boolean;
+            /**
+             * Is Hard
+             * @default false
+             */
+            is_hard: boolean;
+            /** Trailer Access Allowed */
+            trailer_access_allowed: boolean;
+            /**
+             * Window End
+             * Format: time
+             */
+            window_end: string;
+            /**
+             * Window Start
+             * Format: time
+             */
+            window_start: string;
         };
         /**
          * RequestScheduleInput
@@ -2157,6 +2399,14 @@ export interface components {
          * @enum {string}
          */
         RequestStatus: "DRAFT" | "READY" | "PLANNED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED" | "UNASSIGNED";
+        /**
+         * RequestTaskSplitInput
+         * @description Explicit operator-selected transport-part quantities for one request.
+         */
+        RequestTaskSplitInput: {
+            /** Part Quantities */
+            part_quantities: number[];
+        };
         /**
          * RequestType
          * @description Supported physical request directions.
@@ -2255,6 +2505,8 @@ export interface components {
             };
             /** Name */
             name: string;
+            /** Notification Logs */
+            notification_logs?: components["schemas"]["PlanNotificationLogRead"][];
             /**
              * Scenario Id
              * Format: uuid
@@ -2410,6 +2662,37 @@ export interface components {
             rejected?: components["schemas"]["RwmsRejectedAssignment"][];
         };
         /**
+         * RwmsCapacitySnapshotResult
+         * @description Versioned capacity revision accepted or idempotently replayed by RWMS.
+         */
+        RwmsCapacitySnapshotResult: {
+            /** Jobcount */
+            jobCount: number;
+            /** Replayed */
+            replayed: boolean;
+            /** Sourcegeneration */
+            sourceGeneration: number;
+            /** Sourcerevision */
+            sourceRevision: string;
+            /**
+             * Sourcescenarioid
+             * Format: uuid
+             */
+            sourceScenarioId: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+            /** Version */
+            version: number;
+            /**
+             * Warehouseid
+             * Format: uuid
+             */
+            warehouseId: string;
+        };
+        /**
          * RwmsPlanApplyRequest
          * @description Optimistic plan version plus explicitly selected future shared delivery parts.
          */
@@ -2485,6 +2768,24 @@ export interface components {
             orderId: string;
         };
         /**
+         * RwmsScenarioRefreshResult
+         * @description Server-owned current-horizon refresh across every linked scenario warehouse.
+         */
+        RwmsScenarioRefreshResult: {
+            /**
+             * Date From
+             * Format: date
+             */
+            date_from: string;
+            /**
+             * Date To
+             * Format: date
+             */
+            date_to: string;
+            /** Warehouses */
+            warehouses?: components["schemas"]["RwmsWarehouseSyncResult"][];
+        };
+        /**
          * RwmsSyncFailure
          * @description One source order that could not be synchronized safely.
          */
@@ -2530,6 +2831,25 @@ export interface components {
             skipped: number;
             /** Updated */
             updated: number;
+        };
+        /**
+         * RwmsWarehouseSyncResult
+         * @description One linked warehouse outcome inside a server-owned scenario refresh.
+         */
+        RwmsWarehouseSyncResult: {
+            /** Failures */
+            failures?: components["schemas"]["RwmsSyncFailure"][];
+            /** Imported */
+            imported: number;
+            /** Skipped */
+            skipped: number;
+            /** Updated */
+            updated: number;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
         };
         /**
          * ScenarioCreate
@@ -2738,6 +3058,11 @@ export interface components {
              * @default 8
              */
             max_candidate_neighbors: number;
+            /**
+             * Max Customer Wait Minutes
+             * @default 120
+             */
+            max_customer_wait_minutes: number;
             /**
              * Max Delivery Stops
              * @default 2
@@ -3181,6 +3506,94 @@ export interface components {
             tare_weight_kg?: number | null;
             /** Width Mm */
             width_mm?: number | null;
+        };
+        /**
+         * TravelTimeContourFeature
+         * @description One truck travel-time area centered on the requested origin.
+         */
+        TravelTimeContourFeature: {
+            geometry: components["schemas"]["TravelTimeContourGeometry"];
+            properties: components["schemas"]["TravelTimeContourProperties"];
+            /**
+             * Type
+             * @default Feature
+             * @constant
+             */
+            type: "Feature";
+        };
+        /**
+         * TravelTimeContourFeatureCollection
+         * @description Four validated Valhalla truck isochrones rendered as visual map estimates.
+         */
+        TravelTimeContourFeatureCollection: {
+            /** Features */
+            features: components["schemas"]["TravelTimeContourFeature"][];
+            metadata: components["schemas"]["TravelTimeContourMetadata"];
+            /**
+             * Type
+             * @default FeatureCollection
+             * @constant
+             */
+            type: "FeatureCollection";
+        };
+        /**
+         * TravelTimeContourGeometry
+         * @description Validated GeoJSON area returned by Valhalla for one truck-time contour.
+         */
+        TravelTimeContourGeometry: {
+            /** Coordinates */
+            coordinates: unknown[];
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "Polygon" | "MultiPolygon";
+        };
+        /**
+         * TravelTimeContourMetadata
+         * @description Provider provenance distinguishing visual estimates from planner routes.
+         */
+        TravelTimeContourMetadata: {
+            /** Contours Minutes */
+            contours_minutes: components["schemas"]["TravelTimeContourMinutes"][];
+            /**
+             * Costing
+             * @default truck
+             * @constant
+             */
+            costing: "truck";
+            origin: components["schemas"]["TravelTimeContourOrigin"];
+            /** Osm Data Version */
+            osm_data_version: string;
+            /**
+             * Source
+             * @default valhalla
+             * @constant
+             */
+            source: "valhalla";
+        };
+        /**
+         * TravelTimeContourMinutes
+         * @description Supported fixed truck-travel contour durations in minutes.
+         * @enum {integer}
+         */
+        TravelTimeContourMinutes: 60 | 120 | 180 | 240;
+        /**
+         * TravelTimeContourOrigin
+         * @description WGS84 depot or route-front origin echoed in contour response metadata.
+         */
+        TravelTimeContourOrigin: {
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+        };
+        /**
+         * TravelTimeContourProperties
+         * @description Stable styling key for one fixed travel-time contour.
+         */
+        TravelTimeContourProperties: {
+            contour_minutes: components["schemas"]["TravelTimeContourMinutes"];
         };
         /**
          * TruckRestrictionCategory
@@ -4986,6 +5399,41 @@ export interface operations {
             };
         };
     };
+    set_request_planning_details_api_requests__request_id__planning_details_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestPlanningDetailsInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogisticsRequestRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     schedule_request_api_requests__request_id__schedule_post: {
         parameters: {
             query?: never;
@@ -5030,7 +5478,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RequestTaskSplitInput"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -5039,6 +5491,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LogisticsRequestRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_travel_time_contours_api_routing_travel_time_contours_get: {
+        parameters: {
+            query: {
+                latitude: number;
+                longitude: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TravelTimeContourFeatureCollection"];
                 };
             };
             /** @description Validation Error */
@@ -5640,6 +6124,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LogisticsRequestRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconcile_rwms_capacity_api_scenarios__scenario_id__rwms_capacity_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scenario_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RwmsCapacitySnapshotResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_rwms_requests_api_scenarios__scenario_id__rwms_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scenario_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RwmsScenarioRefreshResult"];
                 };
             };
             /** @description Validation Error */

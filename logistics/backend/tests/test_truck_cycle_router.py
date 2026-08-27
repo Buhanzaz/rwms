@@ -61,6 +61,7 @@ class RecordingTruckProvider:
 
     def __init__(self) -> None:
         self.profiles: list[EffectiveTruckProfile] = []
+        self.departures: list[datetime] = []
 
     async def get_matrix(
         self,
@@ -85,6 +86,7 @@ class RecordingTruckProvider:
         assert departure_at is not None
         assert profile is not None
         self.profiles.append(profile)
+        self.departures.append(departure_at)
         distance = 20_000 if profile.length_meters > 12 else 10_000
         seconds = 1_200 if profile.length_meters > 12 else 600
         geometry = {
@@ -93,6 +95,25 @@ class RecordingTruckProvider:
         }
         leg = RouteLeg(0, 1, distance, seconds, geometry)
         return RouteGeometry(geometry, (leg,), distance, seconds)
+
+
+class DepartureSensitiveTruckProvider(RecordingTruckProvider):
+    """Shorten a leg after noon to prove delayed departures are rerouted."""
+
+    async def get_route(
+        self,
+        points: list[GeoPoint],
+        departure_at: datetime | None,
+        *,
+        profile: EffectiveTruckProfile | None = None,
+    ) -> RouteGeometry:
+        """Return twenty minutes before noon and ten minutes afterwards."""
+
+        route = await super().get_route(points, departure_at, profile=profile)
+        assert departure_at is not None
+        seconds = 1_200 if departure_at.hour < 12 else 600
+        leg = replace(route.legs[0], travel_seconds=seconds)
+        return replace(route, legs=(leg,), total_travel_seconds=seconds)
 
 
 class NoSafeRouteProvider(RecordingTruckProvider):
@@ -299,6 +320,235 @@ def _shift() -> DriverShift:
     )
 
 
+def _with_window(
+    cycle: RouteCycle,
+    *,
+    stop_index: int,
+    start: datetime,
+    end: datetime,
+) -> RouteCycle:
+    """Attach one hard service window to an existing customer stop."""
+
+    stops = list(cycle.stops)
+    stops[stop_index] = replace(
+        stops[stop_index],
+        window_start=start,
+        window_end=end,
+        window_is_hard=True,
+    )
+    return replace(cycle, stops=tuple(stops))
+
+
+@pytest.mark.asyncio
+async def test_first_delivery_window_delays_cycle_instead_of_on_site_wait() -> None:
+    """A 15:00 window shifts loading and uses the final delayed route departure."""
+
+    provider = DepartureSensitiveTruckProvider()
+    router = ExactTruckCycleRouter(
+        provider,
+        provider_name="valhalla",
+        osm_data_version="2026-08-24",
+        now=lambda: START,
+    )
+    task = _task("afternoon", FIRST, 1)
+    window_start = START.replace(hour=15)
+    cycle = _with_window(
+        _cycle((task,)),
+        stop_index=1,
+        start=window_start,
+        end=START.replace(hour=18),
+    )
+
+    result = await router.route_candidate(
+        cycle,
+        tasks=(task,),
+        vehicle=_vehicle(),
+        shift=_shift(),
+        settings=PlanningSettings(),
+    )
+
+    depot, delivery = result.stops[:2]
+    first_leg = result.legs[0]
+    assert provider.departures[:3] == [
+        START + timedelta(minutes=30),
+        START.replace(hour=14, minute=40),
+        START.replace(hour=14, minute=50),
+    ]
+    assert result.planned_start == START.replace(hour=14, minute=20)
+    assert depot.planned_arrival == START.replace(hour=14, minute=20)
+    assert depot.planned_departure == START.replace(hour=14, minute=50)
+    assert depot.planned_departure - depot.planned_arrival == timedelta(minutes=30)
+    assert first_leg.departure_at == START.replace(hour=14, minute=50)
+    assert first_leg.arrival_at == window_start
+    assert delivery.planned_arrival == window_start
+    assert delivery.planned_departure == window_start + timedelta(minutes=10)
+    assert delivery.planned_departure - delivery.planned_arrival == timedelta(minutes=10)
+    assert result.waiting_seconds == 0
+
+
+@pytest.mark.asyncio
+async def test_short_later_window_gap_is_absorbed_at_warehouse() -> None:
+    """A later gap moves the complete feasible prefix to the warehouse."""
+
+    provider = RecordingTruckProvider()
+    router = ExactTruckCycleRouter(
+        provider,
+        provider_name="valhalla",
+        osm_data_version="2026-08-24",
+        now=lambda: START,
+    )
+    tasks = (_task("morning", FIRST, 1), _task("afternoon", SECOND, 2))
+    window_start = START.replace(hour=10)
+    cycle = _with_window(
+        _cycle(tasks),
+        stop_index=2,
+        start=window_start,
+        end=START.replace(hour=12),
+    )
+
+    result = await router.route_candidate(
+        cycle,
+        tasks=tasks,
+        vehicle=_vehicle(),
+        shift=_shift(),
+        settings=PlanningSettings(),
+    )
+
+    depot = result.stops[0]
+    first_delivery = result.stops[1]
+    second_delivery = result.stops[2]
+    connecting_leg = result.legs[1]
+    assert depot.planned_arrival == START.replace(hour=8, minute=40)
+    assert depot.planned_departure == START.replace(hour=9, minute=10)
+    assert first_delivery.planned_arrival == START.replace(hour=9, minute=30)
+    assert first_delivery.planned_departure == START.replace(hour=9, minute=40)
+    assert connecting_leg.departure_at == START.replace(hour=9, minute=40)
+    assert connecting_leg.arrival_at == window_start
+    assert second_delivery.planned_arrival == window_start
+    assert second_delivery.planned_departure == window_start + timedelta(minutes=10)
+    assert result.waiting_seconds == 0
+
+
+@pytest.mark.asyncio
+async def test_warehouse_delay_reroutes_time_dependent_prefix_to_fixed_point() -> None:
+    """Every depot shift reroutes prior legs until the late arrival is exact."""
+
+    provider = DepartureSensitiveTruckProvider()
+    router = ExactTruckCycleRouter(
+        provider,
+        provider_name="valhalla",
+        osm_data_version="2026-08-24",
+        now=lambda: START,
+    )
+    tasks = (_task("morning", FIRST, 1), _task("afternoon", SECOND, 2))
+    window_start = START.replace(hour=12, minute=30)
+    cycle = _with_window(
+        _cycle(tasks),
+        stop_index=2,
+        start=window_start,
+        end=START.replace(hour=14),
+    )
+
+    result = await router.route_candidate(
+        cycle,
+        tasks=tasks,
+        vehicle=_vehicle(),
+        shift=_shift(),
+        settings=PlanningSettings(),
+    )
+
+    depot, first_delivery, second_delivery = result.stops[:3]
+    assert depot.planned_arrival == START.replace(hour=11, minute=20)
+    assert depot.planned_departure == START.replace(hour=11, minute=50)
+    assert first_delivery.planned_arrival == START.replace(hour=12, minute=10)
+    assert first_delivery.planned_departure == START.replace(hour=12, minute=20)
+    assert result.legs[1].departure_at == START.replace(hour=12, minute=20)
+    assert second_delivery.planned_arrival == window_start
+    assert result.waiting_seconds == 0
+    assert provider.departures.count(START.replace(hour=11, minute=50)) >= 1
+    assert provider.departures.count(START.replace(hour=12, minute=20)) >= 1
+
+
+@pytest.mark.asyncio
+async def test_residual_wait_stays_at_previous_source_when_prior_window_blocks_shift() -> None:
+    """Only wait that cannot move to the depot remains at the prior customer."""
+
+    provider = RecordingTruckProvider()
+    router = ExactTruckCycleRouter(
+        provider,
+        provider_name="valhalla",
+        osm_data_version="2026-08-24",
+        now=lambda: START,
+    )
+    tasks = (_task("morning", FIRST, 1), _task("afternoon", SECOND, 2))
+    cycle = _with_window(
+        _with_window(
+            _cycle(tasks),
+            stop_index=1,
+            start=START.replace(hour=9),
+            end=START.replace(hour=9, minute=30),
+        ),
+        stop_index=2,
+        start=START.replace(hour=10),
+        end=START.replace(hour=12),
+    )
+
+    result = await router.route_candidate(
+        cycle,
+        tasks=tasks,
+        vehicle=_vehicle(),
+        shift=_shift(),
+        settings=PlanningSettings(),
+    )
+
+    depot, first_delivery, second_delivery = result.stops[:3]
+    connecting_leg = result.legs[1]
+    assert depot.planned_arrival == START.replace(hour=8, minute=30)
+    assert depot.planned_departure == START.replace(hour=9)
+    assert first_delivery.planned_arrival == START.replace(hour=9, minute=20)
+    assert first_delivery.planned_departure == START.replace(hour=9, minute=30)
+    assert connecting_leg.departure_at == START.replace(hour=9, minute=40)
+    assert connecting_leg.arrival_at == START.replace(hour=10)
+    assert second_delivery.planned_arrival == START.replace(hour=10)
+    assert result.waiting_seconds == 600
+
+
+@pytest.mark.asyncio
+async def test_multi_hour_later_window_gap_rejects_the_combined_cycle() -> None:
+    """A long residual gap must be replanned as another depot cycle."""
+
+    provider = RecordingTruckProvider()
+    router = ExactTruckCycleRouter(
+        provider,
+        provider_name="valhalla",
+        osm_data_version="2026-08-24",
+        now=lambda: START,
+    )
+    tasks = (_task("morning", FIRST, 1), _task("afternoon", SECOND, 2))
+    cycle = _with_window(
+        _with_window(
+            _cycle(tasks),
+            stop_index=1,
+            start=START.replace(hour=8, minute=50),
+            end=START.replace(hour=9),
+        ),
+        stop_index=2,
+        start=START.replace(hour=15),
+        end=START.replace(hour=18),
+    )
+
+    with pytest.raises(CandidateRouteRejected) as captured:
+        await router.route_candidate(
+            cycle,
+            tasks=tasks,
+            vehicle=_vehicle(),
+            shift=_shift(),
+            settings=PlanningSettings(max_customer_wait_minutes=120),
+        )
+
+    assert captured.value.reason_code is UnassignedReasonCode.TIME_WINDOW_CONFLICT
+
+
 @pytest.mark.asyncio
 async def test_two_cargo_routes_each_leg_with_attached_trailer_after_unloading() -> None:
     """A remaining or empty trailer keeps combination length on later legs."""
@@ -408,6 +658,35 @@ async def test_missing_cargo_dimensions_rejects_before_provider_call() -> None:
         )
 
     assert captured.value.reason_code is UnassignedReasonCode.ROUTING_PROFILE_INCOMPLETE
+    assert provider.profiles == []
+
+
+@pytest.mark.asyncio
+async def test_trailer_denied_address_rejects_two_cargo_before_provider_call() -> None:
+    """Exact routing cannot override a dispatcher's address access agreement."""
+
+    provider = RecordingTruckProvider()
+    tasks = (
+        replace(_task("denied", FIRST, 1), trailer_access_allowed=False),
+        _task("allowed", SECOND, 2),
+    )
+    router = ExactTruckCycleRouter(
+        provider,
+        provider_name="valhalla",
+        osm_data_version="2026-08-24",
+        now=lambda: START,
+    )
+
+    with pytest.raises(CandidateRouteRejected) as captured:
+        await router.route_candidate(
+            _cycle(tasks),
+            tasks=tasks,
+            vehicle=_vehicle(),
+            shift=_shift(),
+            settings=PlanningSettings(),
+        )
+
+    assert captured.value.reason_code is UnassignedReasonCode.TRAILER_ACCESS_NOT_ALLOWED
     assert provider.profiles == []
 
 

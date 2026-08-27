@@ -214,6 +214,7 @@ const catalogSchema = z.object({
   name: z.string().trim().min(1, 'Введите название'),
   external_worker_id: optionalUuidSchema,
   preferred_route_group: z.string(),
+  passport_details: z.string(),
   registration_number: z.string(),
   capacity: z.number().int().min(1, 'Вместимость должна быть не меньше 1').max(2, 'Для MVP вместимость не может превышать 2'),
   average_speed_city: z.number().positive(),
@@ -285,7 +286,7 @@ export function CatalogDialog({ kind, value, trailers = [], busy, onClose, onSub
   const { register, handleSubmit, watch, setValue, formState: { errors } } = useForm<CatalogValues>({
     resolver: zodResolver(catalogSchema),
     defaultValues: {
-      name: value?.name ?? '', external_worker_id: driver?.external_worker_id ?? '', preferred_route_group: driver?.preferred_route_group ?? '', registration_number: vehicle?.registration_number ?? '',
+      name: value?.name ?? '', external_worker_id: driver?.external_worker_id ?? '', preferred_route_group: driver?.preferred_route_group ?? '', passport_details: driver?.passport_details ?? '', registration_number: vehicle?.registration_number ?? '',
       capacity: vehicle?.capacity ?? 2, average_speed_city: vehicle?.average_speed_city ?? 35, average_speed_region: vehicle?.average_speed_region ?? 65,
       notes: value?.notes ?? '', active: value?.active ?? true,
       vehicle_type: vehicle?.vehicle_type ?? '', manufacturer: vehicle?.manufacturer ?? '', model: vehicle?.model ?? '', is_hgv: vehicle?.is_hgv ?? null,
@@ -318,7 +319,7 @@ export function CatalogDialog({ kind, value, trailers = [], busy, onClose, onSub
     max_actual_axle_load_kg: profile.max_actual_axle_load_kg,
   }]);
   const submit = (formValues: CatalogValues) => kind === 'driver'
-    ? onSubmit({ name: formValues.name, external_worker_id: formValues.external_worker_id || null, preferred_route_group: formValues.preferred_route_group, notes: formValues.notes, active: formValues.active })
+    ? onSubmit({ name: formValues.name, external_worker_id: formValues.external_worker_id || null, preferred_route_group: formValues.preferred_route_group, passport_details: formValues.passport_details, notes: formValues.notes, active: formValues.active })
     : onSubmit({
       name: formValues.name,
       registration_number: formValues.registration_number,
@@ -373,6 +374,7 @@ export function CatalogDialog({ kind, value, trailers = [], busy, onClose, onSub
             hint="Нужен только для явной отправки назначенного плана в RWMS."
           />
           <Field className="span-2" label="Предпочтительная группа" {...register('preferred_route_group')} hint="Мягкое предпочтение, не запрет" />
+          <label className="field span-2"><span className="field__label">Паспортные данные водителя</span><textarea className="input" {...register('passport_details')} /><span className="field__hint">Используются только в тестовом сообщении, когда в заявке явно включена соответствующая галочка.</span></label>
         </> : <>
           <Field label="Госномер" {...register('registration_number')} />
           <Field label="Вместимость" type="number" min="1" {...register('capacity', { valueAsNumber: true })} error={errors.capacity?.message} hint="Допустимо 1–2 бытовки" />
@@ -519,6 +521,10 @@ const dateOptionSchema = z.object({ date: z.string().date(), priority: z.number(
 const requestSchema = z.object({
   type: z.enum(['DELIVERY', 'PICKUP']), name: z.string().trim().min(1, 'Введите название'), address_label: z.string(), latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180),
   quantity: z.number().int().positive(), service_minutes: z.number().int().min(0), priority: z.number().int(), status: z.enum(['DRAFT', 'READY', 'PLANNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'UNASSIGNED']),
+  trailer_access_allowed: nullableBoolean,
+  include_driver_passport_in_notification: z.boolean(),
+  contact_name: z.string(),
+  contact_phone: z.string(),
   cargo_length_mm: nullablePositiveInteger, cargo_width_mm: nullablePositiveInteger, cargo_height_mm: nullablePositiveInteger, cargo_weight_kg: nullablePositiveInteger,
   split_allowed: z.boolean(), notes: z.string(), date_options: z.array(dateOptionSchema).min(1, 'Добавьте хотя бы одну дату'),
 }).refine((value) => {
@@ -535,6 +541,10 @@ export function RequestDialog({ request, point, type, defaultDate, busy, onClose
     defaultValues: {
       type: request?.type ?? type, name: request?.name ?? '', address_label: request?.address_label ?? '', latitude: point?.latitude ?? request?.latitude ?? 55.75, longitude: point?.longitude ?? request?.longitude ?? 37.62,
       quantity: request?.quantity ?? 1, service_minutes: request?.service_minutes ?? 30, priority: request?.priority ?? 0, status: request?.status ?? 'READY', split_allowed: request?.split_allowed ?? true, notes: request?.notes ?? '',
+      trailer_access_allowed: request?.trailer_access_allowed ?? null,
+      include_driver_passport_in_notification: request?.include_driver_passport_in_notification ?? false,
+      contact_name: request?.contact_name ?? '',
+      contact_phone: request?.contact_phone ?? '',
       cargo_length_mm: request?.cargo_length_mm ?? null, cargo_width_mm: request?.cargo_width_mm ?? null,
       cargo_height_mm: request?.cargo_height_mm ?? null, cargo_weight_kg: request?.cargo_weight_kg ?? null,
       date_options: request?.date_options.map((option) => ({ date: option.date, priority: option.priority, window_start: option.window_start, window_end: option.window_end, is_hard: option.is_hard })) ?? [{ date: defaultDate, priority: 1, window_start: null, window_end: null, is_hard: false }],
@@ -542,6 +552,7 @@ export function RequestDialog({ request, point, type, defaultDate, busy, onClose
   });
   const { fields, append, remove } = useFieldArray({ control, name: 'date_options' });
   const splitAllowed = watch('split_allowed');
+  const includePassport = watch('include_driver_passport_in_notification');
   return (
     <Modal wide title={request ? 'Изменить заявку' : type === 'DELIVERY' ? 'Новая доставка' : 'Новый вывоз'} description="Зону определит backend по координатам; передать zone_id из формы невозможно" onClose={onClose}>
       <form className="form-grid" onSubmit={handleSubmit(onSubmit)}>
@@ -553,6 +564,14 @@ export function RequestDialog({ request, point, type, defaultDate, busy, onClose
         <Field label="Долгота" type="number" step="any" {...register('longitude', { valueAsNumber: true })} error={errors.longitude?.message} />
         <Field label="Количество бытовок" type="number" min="1" {...register('quantity', { valueAsNumber: true })} />
         <Field label="Обслуживание, мин" type="number" min="0" {...register('service_minutes', { valueAsNumber: true })} />
+        <SelectField className="span-2" label="Машина с прицепом проедет к адресу" {...register('trailer_access_allowed', { setValueAs: optionalBoolean })}>
+          <option value="">Не согласовано — планирование будет заблокировано</option>
+          <option value="true">Да, проезд с прицепом согласован</option>
+          <option value="false">Нет, только без прицепа</option>
+        </SelectField>
+        <Field label="Контактное лицо" {...register('contact_name')} />
+        <Field label="Телефон / контакт" {...register('contact_phone')} />
+        <div className="span-2"><CheckboxField label="Оповещение с паспортными данными водителя" checked={includePassport} onChange={(checked) => setValue('include_driver_passport_in_notification', checked)} /></div>
         <div className="span-2 entity-card__row"><strong>Фактические параметры одной бытовки</strong><span className="field__hint">Без полного набора безопасный грузовой маршрут не рассчитывается</span></div>
         <Field label="Длина бытовки, мм" type="number" min="1" {...register('cargo_length_mm', optionalNumberRegistration())} error={errors.cargo_length_mm?.message} />
         <Field label="Ширина бытовки, мм" type="number" min="1" {...register('cargo_width_mm', optionalNumberRegistration())} error={errors.cargo_width_mm?.message} />

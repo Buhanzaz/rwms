@@ -63,9 +63,7 @@ def calculate_plan_metrics(
         if any(cycle.driver_shift_id == shift.id for cycle in cycle_list)
     )
     total_usable_seconds = sum(shift_usable_seconds(shift) for shift in used_shifts)
-    total_duty_seconds = sum(
-        shift_duty_seconds(cycle_list, shift) for shift in used_shifts
-    )
+    total_duty_seconds = sum(shift_duty_seconds(cycle_list, shift) for shift in used_shifts)
     return PlanMetrics(
         total_tasks=total_tasks,
         assigned_tasks=assigned,
@@ -84,9 +82,7 @@ def calculate_plan_metrics(
         paired_pickup_count=pickup_pairs,
         average_vehicle_load=(sum(loads) / len(loads) if loads else 0.0),
         shift_utilization_percent=(
-            total_duty_seconds / total_usable_seconds * 100.0
-            if total_usable_seconds
-            else 0.0
+            total_duty_seconds / total_usable_seconds * 100.0 if total_usable_seconds else 0.0
         ),
         overtime_seconds=overtime_seconds,
         minimum_buffer_seconds=min(buffers, default=0),
@@ -105,7 +101,7 @@ def validate_route_plan(
     unassigned_tasks: int = 0,
     score: float = 0.0,
 ) -> ValidationResult:
-    """Validate hard logistics invariants after generation or any manual edit."""
+    """Validate hard invariants, including source-side waiting between legs."""
 
     cycle_list = tuple(cycles)
     shift_by_id = {shift.id: shift for shift in shifts}
@@ -150,24 +146,71 @@ def validate_route_plan(
                     cycle.id,
                 )
             )
+        calculated_waiting_seconds = 0
         for leg_index, leg in enumerate(cycle.legs):
             if leg_index + 1 >= len(cycle.stops):
                 break
             from_stop = cycle.stops[leg_index]
             to_stop = cycle.stops[leg_index + 1]
+            routed_seconds = round((leg.arrival_at - leg.departure_at).total_seconds())
+            source_waiting_seconds = max(
+                0,
+                round((leg.departure_at - from_stop.planned_departure).total_seconds()),
+            )
+            calculated_waiting_seconds += source_waiting_seconds
+            if (
+                from_stop.task_id is not None
+                and source_waiting_seconds > settings.max_customer_wait_minutes * 60
+            ):
+                errors.append(
+                    ValidationIssue(
+                        ValidationErrorCode.TIME_WINDOW_VIOLATION,
+                        (
+                            "Ожидание у клиентской точки превышает лимит "
+                            "сценария; задания нужно разделить на рейсы со склада."
+                        ),
+                        cycle.id,
+                        from_stop.task_id,
+                    )
+                )
             if (
                 leg.from_stop_sequence != from_stop.sequence
                 or leg.to_stop_sequence != to_stop.sequence
-                or leg.departure_at != from_stop.planned_departure
+                or leg.departure_at < from_stop.planned_departure
                 or leg.arrival_at != to_stop.planned_arrival
+                or routed_seconds != leg.travel_seconds
             ):
                 errors.append(
                     ValidationIssue(
                         ValidationErrorCode.INVALID_TIME,
-                        "Время или индексы участка не согласованы с остановками.",
+                        (
+                            "Время участка не согласовано с остановками или фактической "
+                            "длительностью движения."
+                        ),
                         cycle.id,
                     )
                 )
+        if (
+            cycle.total_distance_meters != sum(leg.distance_meters for leg in cycle.legs)
+            or cycle.total_travel_seconds != sum(leg.travel_seconds for leg in cycle.legs)
+            or cycle.total_service_seconds != sum(stop.service_seconds for stop in cycle.stops)
+            or cycle.waiting_seconds != calculated_waiting_seconds
+        ):
+            errors.append(
+                ValidationIssue(
+                    ValidationErrorCode.INVALID_TIME,
+                    "Итоговые метрики рейса не совпадают с его участками и остановками.",
+                    cycle.id,
+                )
+            )
+        if not 0 <= cycle.empty_distance_meters <= cycle.total_distance_meters:
+            errors.append(
+                ValidationIssue(
+                    ValidationErrorCode.LOAD_DISCONTINUITY,
+                    "Пустой пробег должен находиться в пределах общего пробега рейса.",
+                    cycle.id,
+                )
+            )
 
         pickup_seen = False
         previous_departure = None
@@ -178,6 +221,19 @@ def validate_route_plan(
                     ValidationIssue(
                         ValidationErrorCode.INVALID_TIME,
                         "Последовательность остановок содержит пропуск или дубликат.",
+                        cycle.id,
+                        stop.task_id,
+                    )
+                )
+            expected_departure = stop.planned_arrival + timedelta(seconds=stop.service_seconds)
+            if stop.planned_departure != expected_departure:
+                errors.append(
+                    ValidationIssue(
+                        ValidationErrorCode.INVALID_TIME,
+                        (
+                            "Остановка не может включать ожидание до временного окна: "
+                            "ожидание должно происходить до выезда на участок."
+                        ),
                         cycle.id,
                         stop.task_id,
                     )
@@ -202,6 +258,15 @@ def validate_route_plan(
                     )
                 )
             previous_load_after = stop.load_after
+            if stop.load_after != stop.load_before + stop.quantity_delta:
+                errors.append(
+                    ValidationIssue(
+                        ValidationErrorCode.LOAD_DISCONTINUITY,
+                        "Изменение загрузки не совпадает с загрузкой до и после остановки.",
+                        cycle.id,
+                        stop.task_id,
+                    )
+                )
             if stop.load_after > capacity or stop.load_before > capacity:
                 errors.append(
                     ValidationIssue(
@@ -231,15 +296,8 @@ def validate_route_plan(
                         stop.task_id,
                     )
                 )
-            if (
-                (
-                    stop.stop_type is StopType.DELIVERY
-                    and stop.quantity_delta >= 0
-                )
-                or (
-                    stop.stop_type is StopType.PICKUP
-                    and stop.quantity_delta <= 0
-                )
+            if (stop.stop_type is StopType.DELIVERY and stop.quantity_delta >= 0) or (
+                stop.stop_type is StopType.PICKUP and stop.quantity_delta <= 0
             ):
                 errors.append(
                     ValidationIssue(
@@ -264,9 +322,9 @@ def validate_route_plan(
                         )
                     )
             if stop.window_start is not None and stop.window_end is not None:
-                service_start = stop.planned_departure - timedelta(seconds=stop.service_seconds)
                 outside = (
-                    service_start < stop.window_start or stop.planned_departure > stop.window_end
+                    stop.planned_arrival < stop.window_start
+                    or stop.planned_departure > stop.window_end
                 )
                 if outside and stop.window_is_hard:
                     errors.append(

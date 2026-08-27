@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApiError, type DriverInput, type RwmsSyncResult, type VehicleInput, type WarehouseInput } from '../src/api/client';
 import { CatalogDialog, WarehouseDialog } from '../src/components/EntityDialogs';
 import { EMPTY_METRICS } from '../src/domain/defaults';
-import type { RoutePlan, Warehouse } from '../src/domain/types';
+import type { LogisticsRequest, RoutePlan, Warehouse } from '../src/domain/types';
 import { RwmsIntegrationDialog } from '../src/features/rwms/RwmsIntegrationDialog';
 
 const externalWarehouseId = '35b8738c-d405-4c42-ac2b-e9f4a26d7c19';
@@ -39,6 +39,36 @@ const generatedPlan: RoutePlan = {
   unassigned: [],
   metrics: { ...EMPTY_METRICS },
 };
+
+function sourceRequest(
+  id: string,
+  sourceSystem: string | null,
+  name = 'Доставка из RWMS',
+): LogisticsRequest {
+  return {
+    id,
+    scenario_id: 'scenario-id',
+    source_system: sourceSystem,
+    external_id: sourceSystem === 'RWMS' ? `external-${id}` : null,
+    type: 'DELIVERY',
+    name,
+    address_label: 'Москва',
+    latitude: 55.75,
+    longitude: 37.61,
+    quantity: 1,
+    service_minutes: 30,
+    priority: 0,
+    status: 'READY',
+    zone_id: null,
+    zone_version: null,
+    split_allowed: false,
+    notes: '',
+    created_at: '2026-08-23T08:00:00Z',
+    updated_at: '2026-08-23T08:00:00Z',
+    scheduled_date: null,
+    date_options: [],
+  };
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -180,7 +210,7 @@ describe('RWMS operator actions', () => {
     expect(within(result).getByText('применено', { selector: '.badge' })).toBeVisible();
   });
 
-  it('publishes only explicitly selected unassigned deliveries to the driver pool', async () => {
+  it('publishes only explicitly selected RWMS deliveries and hides scenario-local work', async () => {
     const user = userEvent.setup();
     const onApply = vi.fn<ComponentProps<typeof RwmsIntegrationDialog>['onApply']>(() => Promise.resolve({
       applied: [],
@@ -204,15 +234,56 @@ describe('RWMS operator actions', () => {
           priority: 0,
           status: 'READY',
         },
+        request: sourceRequest('request-id', 'RWMS'),
         reason_codes: ['NO_SHIFT_CAPACITY'],
         reasons: ['не хватило смены'],
         recommendations: ['Опубликовать свободным водителям'],
+      }, {
+        task: {
+          id: 'generated-task-id',
+          request_id: 'generated-request-id',
+          part_number: 2,
+          quantity: 1,
+          type: 'DELIVERY',
+          latitude: 55.76,
+          longitude: 37.62,
+          zone_id: null,
+          zone_version: null,
+          service_minutes: 30,
+          priority: 0,
+          status: 'READY',
+        },
+        request: sourceRequest('generated-request-id', 'SIMULATOR_GENERATOR', 'Сгенерированная доставка'),
+        reason_codes: ['NO_SHIFT_CAPACITY'],
+        reasons: ['не хватило смены'],
+        recommendations: ['Оставить в сценарии'],
+      }, {
+        task: {
+          id: 'manual-task-id',
+          request_id: 'manual-request-id',
+          part_number: 3,
+          quantity: 1,
+          type: 'DELIVERY',
+          latitude: 55.77,
+          longitude: 37.63,
+          zone_id: null,
+          zone_version: null,
+          service_minutes: 30,
+          priority: 0,
+          status: 'READY',
+        },
+        request: sourceRequest('manual-request-id', null, 'Ручная доставка'),
+        reason_codes: ['NO_SHIFT_CAPACITY'],
+        reasons: ['не хватило смены'],
+        recommendations: ['Оставить в сценарии'],
       }],
     };
     const { props } = integrationDialog({ onApply, plan });
     render(<RwmsIntegrationDialog {...props} />);
 
-    await user.click(screen.getByRole('checkbox', { name: /Задача 1 · 2 шт. · не хватило смены/ }));
+    await user.click(screen.getByRole('checkbox', { name: /Доставка из RWMS · 2 шт. · не хватило смены/ }));
+    expect(screen.queryByRole('checkbox', { name: /Сгенерированная доставка/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /Ручная доставка/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Передать план в RWMS' }));
 
     expect(onApply).toHaveBeenCalledWith('plan-id', 7, [sharedTaskId]);
@@ -240,6 +311,7 @@ describe('RWMS operator actions', () => {
           priority: 0,
           status: 'READY' as const,
         },
+        request: sourceRequest(`request-${index + 1}`, 'RWMS', `Задача ${index + 1}`),
         reason_codes: ['NO_SHIFT_CAPACITY'],
         reasons: ['не хватило смены'],
         recommendations: ['Опубликовать свободным водителям'],
@@ -311,6 +383,7 @@ describe('RWMS operator actions', () => {
           priority: 0,
           status: 'READY',
         },
+        request: sourceRequest('request-id', 'RWMS'),
         reason_codes: ['NO_SHIFT_CAPACITY'],
         reasons: ['не хватило смены'],
         recommendations: ['Опубликовать свободным водителям'],

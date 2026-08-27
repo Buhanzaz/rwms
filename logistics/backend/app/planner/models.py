@@ -76,6 +76,7 @@ class UnassignedReasonCode(StrEnum):
     DUPLICATE_ASSIGNMENT_CONFLICT = "DUPLICATE_ASSIGNMENT_CONFLICT"
     NO_FEASIBLE_DELIVERY_PAIR = "NO_FEASIBLE_DELIVERY_PAIR"
     NO_FEASIBLE_PICKUP_PAIR = "NO_FEASIBLE_PICKUP_PAIR"
+    TRAILER_ACCESS_NOT_ALLOWED = "TRAILER_ACCESS_NOT_ALLOWED"
     CARGO_TOO_HEAVY = "CARGO_TOO_HEAVY"
     CARGO_TOO_LONG = "CARGO_TOO_LONG"
     CARGO_TOO_WIDE = "CARGO_TOO_WIDE"
@@ -157,6 +158,7 @@ class RequestDateOption:
     window_start: datetime | None = None
     window_end: datetime | None = None
     is_hard: bool = False
+    travel_zone_hours: int | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.window_start, "window_start")
@@ -168,6 +170,11 @@ class RequestDateOption:
                 raise ValueError("time-window datetimes must belong to option date")
             if self.window_start >= self.window_end:
                 raise ValueError("window_start must be before window_end")
+        if self.travel_zone_hours is not None:
+            if not 1 <= self.travel_zone_hours <= 4:
+                raise ValueError("travel_zone_hours must be between 1 and 4")
+            if self.window_start is None or not self.is_hard:
+                raise ValueError("travel_zone_hours requires a complete hard time window")
 
     @property
     def width(self) -> timedelta:
@@ -199,6 +206,8 @@ class LogisticsRequest:
     notes: str = ""
     source_key: str | None = None
     cargo_dimensions: CargoDimensions | None = None
+    trailer_access_allowed: bool = True
+    task_quantities: tuple[int, ...] | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.created_at, "created_at")
@@ -208,6 +217,19 @@ class LogisticsRequest:
             raise ValueError("service_minutes cannot be negative")
         if self.zone_version is not None and self.zone_version < 1:
             raise ValueError("zone_version must be positive")
+        if self.task_quantities is not None:
+            if not self.task_quantities or any(
+                quantity < 1 or quantity > 2 for quantity in self.task_quantities
+            ):
+                raise ValueError("task_quantities must contain only values in [1, 2]")
+            if sum(self.task_quantities) != self.quantity:
+                raise ValueError("task_quantities must sum to request quantity")
+            if len(self.task_quantities) > 1 and not self.split_allowed:
+                raise ValueError("task_quantities require split_allowed")
+            if not self.trailer_access_allowed and any(
+                quantity > 1 for quantity in self.task_quantities
+            ):
+                raise ValueError("two-unit tasks require trailer access")
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,6 +254,7 @@ class PlanningTask:
     remaining_date_count: int
     is_last_available_date: bool
     cargo_dimensions: CargoDimensions | None = None
+    trailer_access_allowed: bool = True
 
     def __post_init__(self) -> None:
         require_aware(self.created_at, "created_at")
@@ -507,6 +530,7 @@ class PlanningSettings:
     default_pickup_minutes: int = 30
     default_depot_turnaround_minutes: int = 15
     default_route_buffer_minutes: int = 15
+    max_customer_wait_minutes: int = 120
     max_optimization_seconds: float = 5.0
     max_local_search_iterations: int = 50
     empty_travel_weight: float = 1.5
@@ -549,6 +573,7 @@ class PlanningSettings:
             self.default_pickup_minutes,
             self.default_depot_turnaround_minutes,
             self.default_route_buffer_minutes,
+            self.max_customer_wait_minutes,
             self.max_optimization_seconds,
             self.max_local_search_iterations,
             self.soft_overtime_limit_minutes,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 from uuid import UUID, uuid5
 
 from geoalchemy2.shape import to_shape
@@ -31,12 +31,19 @@ from app.schemas.domain import (
     WorkloadGeneratorInput,
 )
 from app.services import catalog
+from app.services.capacity_generation import advance_scenario_capacity_generation
 
 _POINT_ATTEMPTS = 256
 _ROAD_SNAP_ATTEMPTS = 24
 GENERATOR_SOURCE_SYSTEM = "SIMULATOR_GENERATOR"
 _LEGACY_GENERATOR_NOTES_PREFIX = "Детерминированная нагрузка, seed="
 _GENERATOR_EXTERNAL_ID_NAMESPACE = UUID("64bf4fc6-a798-4a4d-9d4a-75a10c708dbb")
+_DELIVERY_WINDOWS = (
+    (time(9), time(12)),
+    (time(12), time(15)),
+    (time(15), time(18)),
+)
+_PICKUP_WINDOW = (time(9), time(18))
 
 
 def _stable_zones(zones: list[Zone]) -> list[Zone]:
@@ -48,9 +55,13 @@ def _stable_zones(zones: list[Zone]) -> list[Zone]:
 def _weighted_component(rng: random.Random, geometry: Polygon | MultiPolygon) -> Polygon:
     """Choose a stable polygon component proportionally to its usable area."""
 
-    components = [geometry] if isinstance(geometry, Polygon) else sorted(
-        geometry.geoms,
-        key=lambda polygon: (polygon.bounds, polygon.wkb_hex),
+    components = (
+        [geometry]
+        if isinstance(geometry, Polygon)
+        else sorted(
+            geometry.geoms,
+            key=lambda polygon: (polygon.bounds, polygon.wkb_hex),
+        )
     )
     return rng.choices(components, weights=[polygon.area for polygon in components], k=1)[0]
 
@@ -110,19 +121,36 @@ def _date_options(
     horizon: tuple[date, ...],
     primary_date: date,
     alternative_count: int,
+    request_type: RequestType,
+    sequence: int,
 ) -> list[RequestDateOptionInput]:
-    """Build one preferred date and the requested number of unique lower-priority options."""
+    """Build complete hard windows for one preferred date and its alternatives."""
 
     alternatives = rng.sample(
         [candidate for candidate in horizon if candidate != primary_date],
         alternative_count,
     )
-    options = [RequestDateOptionInput(date=primary_date, priority=100, is_hard=False)]
+    window_start, window_end = (
+        _DELIVERY_WINDOWS[(sequence - 1) % len(_DELIVERY_WINDOWS)]
+        if request_type == RequestType.DELIVERY
+        else _PICKUP_WINDOW
+    )
+    options = [
+        RequestDateOptionInput(
+            date=primary_date,
+            priority=100,
+            window_start=window_start,
+            window_end=window_end,
+            is_hard=True,
+        )
+    ]
     options.extend(
         RequestDateOptionInput(
             date=alternative,
             priority=90 - index * 10,
-            is_hard=False,
+            window_start=window_start,
+            window_end=window_end,
+            is_hard=True,
         )
         for index, alternative in enumerate(sorted(alternatives))
     )
@@ -212,11 +240,7 @@ async def generate_scenario_workload(
     if scenario is None:
         raise not_found("scenario", scenario_id)
     zones = _stable_zones(
-        list(
-            await session.scalars(
-                select(Zone).where(Zone.scenario_id == scenario_id)
-            )
-        )
+        list(await session.scalars(select(Zone).where(Zone.scenario_id == scenario_id)))
     )
     if not zones:
         raise ApiError(
@@ -254,9 +278,7 @@ async def generate_scenario_workload(
                 zone = rng.choice(zones)
                 snapped = await _routable_point_inside_zone(rng, zone, snapper)
                 point = snapped.point
-                request_label = (
-                    "Доставка" if request_type == RequestType.DELIVERY else "Вывоз"
-                )
+                request_label = "Доставка" if request_type == RequestType.DELIVERY else "Вывоз"
                 road_label = f", дорога: {snapped.name}" if snapped.name else ""
                 generated_request = await catalog.create_request(
                     session,
@@ -279,12 +301,15 @@ async def generate_scenario_workload(
                         priority=0,
                         status=RequestStatus.READY,
                         split_allowed=True,
+                        trailer_access_allowed=True,
                         notes=f"Детерминированная нагрузка, seed={payload.seed}",
                         date_options=_date_options(
                             rng,
                             horizon,
                             primary_date,
                             payload.alternative_dates_count,
+                            request_type,
+                            sequence,
                         ),
                     ),
                 )
@@ -301,6 +326,9 @@ async def generate_scenario_workload(
                 else:
                     created_pickups += 1
 
+    # The monotonic generation separates an intentional A -> B -> A workload
+    # replacement from a delayed network retry of the first A publication.
+    await advance_scenario_capacity_generation(session, scenario_id)
     created_requests = created_deliveries + created_pickups
     return WorkloadGenerationResult(
         scenario_id=scenario_id,
@@ -335,6 +363,8 @@ async def delete_generated_workload(
         scenario_id,
         horizon,
     )
+    if deleted_requests > 0:
+        await advance_scenario_capacity_generation(session, scenario_id)
     return WorkloadDeletionResult(
         scenario_id=scenario_id,
         date=target_date,

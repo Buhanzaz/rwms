@@ -101,7 +101,7 @@ export function RequestMapCard({
               className={option.date === request.scheduled_date ? 'request-map-menu__date--scheduled' : undefined}
               onClick={() => setSelectedDate(option.date)}
             >
-              {formatDate(option.date)} · {formatWindow(option.window_start, option.window_end)}{option.is_hard ? ' · жёстко' : ''}
+              {formatDate(option.date)} · {formatWindow(option.window_start, option.window_end)}{option.travel_zone_hours ? ` · зона ${option.travel_zone_hours} ч` : ''}{option.is_hard ? ' · жёстко' : ''}
             </button>
           ))}
         </div>

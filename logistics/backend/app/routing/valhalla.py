@@ -35,6 +35,7 @@ _NO_SAFE_ROUTE_MESSAGES = (
     "unreachable",
     "unconnected regions",
 )
+_TRAVEL_TIME_CONTOURS_MINUTES = (60, 120, 180, 240)
 
 
 class ValhallaRoutingError(RuntimeError):
@@ -97,9 +98,11 @@ class ValhallaRoutingProvider:
         if not isfinite(timeout_seconds) or timeout_seconds < 0:
             raise ValueError("Valhalla timeout_seconds must be non-negative")
         normalized_osm_version = osm_data_version.strip()
-        if not normalized_osm_version or any(
-            char.isspace() for char in normalized_osm_version
-        ) or len(normalized_osm_version) > 128:
+        if (
+            not normalized_osm_version
+            or any(char.isspace() for char in normalized_osm_version)
+            or len(normalized_osm_version) > 128
+        ):
             raise ValueError("osm_data_version must be non-blank and contain no spaces")
         normalized_provider_version = provider_version.strip()
         if (
@@ -187,9 +190,7 @@ class ValhallaRoutingProvider:
         except ValhallaRoutingError as exc:
             self._log_result("matrix", effective_profile, started_at, error=exc)
             raise
-        total_distance = sum(
-            metric.distance_meters for row in matrix.rows for metric in row
-        )
+        total_distance = sum(metric.distance_meters for row in matrix.rows for metric in row)
         total_duration = sum(metric.travel_seconds for row in matrix.rows for metric in row)
         self._log_result(
             "matrix",
@@ -257,15 +258,11 @@ class ValhallaRoutingProvider:
             ) from exc
         locations = self._sequence(payload, "locate response")
         if not locations:
-            raise ValhallaRoadSnapNotFoundError(
-                "Valhalla did not find a routable road segment"
-            )
+            raise ValhallaRoadSnapNotFoundError("Valhalla did not find a routable road segment")
         location = self._mapping(locations[0], "locate response location")
         edges = self._sequence(location.get("edges"), "locate response edges")
         if not edges:
-            raise ValhallaRoadSnapNotFoundError(
-                "Valhalla did not find a routable road segment"
-            )
+            raise ValhallaRoadSnapNotFoundError("Valhalla did not find a routable road segment")
         edge = self._mapping(edges[0], "locate response edge")
         try:
             snapped = GeoPoint(
@@ -282,6 +279,24 @@ class ValhallaRoutingProvider:
             distance_meters=self._haversine_meters(point, snapped),
             name=self._road_name(edge),
         )
+
+    async def get_truck_travel_time_contours(
+        self,
+        origin: GeoPoint,
+    ) -> list[dict[str, object]]:
+        """Return fixed one-to-four-hour truck isochrones with validated GeoJSON areas."""
+
+        raw_payload = await self._request_json(
+            "/isochrone",
+            {
+                "locations": [self._location(origin)],
+                "costing": "truck",
+                "contours": [{"time": minutes} for minutes in _TRAVEL_TIME_CONTOURS_MINUTES],
+                "polygons": True,
+            },
+        )
+        payload = self._mapping(raw_payload, "isochrone response")
+        return self._parse_travel_time_contours(payload)
 
     def _route_request(
         self,
@@ -415,17 +430,14 @@ class ValhallaRoutingProvider:
         )
         if is_no_route:
             if snap_request:
-                raise ValhallaRoadSnapNotFoundError(
-                    "Valhalla did not find a routable road segment"
-                )
+                raise ValhallaRoadSnapNotFoundError("Valhalla did not find a routable road segment")
             raise NoSafeRouteError(
                 "Для текущей конфигурации автомобиля безопасный грузовой маршрут не найден."
             )
         suffix = f" Код Valhalla: {error_code}." if error_code is not None else ""
         detail_suffix = f" {detail}" if detail else ""
         raise RoutingProviderUnavailableError(
-            f"Valhalla отклонила запрос (HTTP {response.status_code})."
-            f"{suffix}{detail_suffix}"
+            f"Valhalla отклонила запрос (HTTP {response.status_code}).{suffix}{detail_suffix}"
         )
 
     def _parse_matrix(
@@ -500,9 +512,7 @@ class ValhallaRoutingProvider:
                     distance_meters=self._kilometers_to_meters(
                         summary.get("length"), "route leg length"
                     ),
-                    travel_seconds=self._seconds(
-                        summary.get("time"), "route leg time"
-                    ),
+                    travel_seconds=self._seconds(summary.get("time"), "route leg time"),
                     geometry=self._shape(leg.get("shape"), f"trip.legs[{index}].shape"),
                 )
             )
@@ -510,11 +520,129 @@ class ValhallaRoutingProvider:
         return RouteGeometry(
             geometry=self._join_leg_shapes(legs),
             legs=tuple(legs),
-            total_distance_meters=self._kilometers_to_meters(
-                summary.get("length"), "route length"
-            ),
+            total_distance_meters=self._kilometers_to_meters(summary.get("length"), "route length"),
             total_travel_seconds=self._seconds(summary.get("time"), "route time"),
         )
+
+    def _parse_travel_time_contours(
+        self,
+        payload: Mapping[str, object],
+    ) -> list[dict[str, object]]:
+        """Canonicalize exactly the requested Valhalla Polygon/MultiPolygon contours."""
+
+        if payload.get("type") != "FeatureCollection":
+            raise RoutingProviderUnavailableError(
+                "Valhalla isochrone response must be a GeoJSON FeatureCollection."
+            )
+        raw_features = self._sequence(payload.get("features"), "isochrone features")
+        contours: dict[int, dict[str, object]] = {}
+        for index, raw_feature in enumerate(raw_features):
+            feature = self._mapping(raw_feature, f"isochrone features[{index}]")
+            if feature.get("type") != "Feature":
+                raise RoutingProviderUnavailableError(
+                    f"Valhalla isochrone features[{index}] must be a GeoJSON Feature."
+                )
+            properties = self._mapping(
+                feature.get("properties"), f"isochrone features[{index}].properties"
+            )
+            contour_minutes = self._isochrone_contour_minutes(
+                properties.get("contour"), f"isochrone features[{index}].properties.contour"
+            )
+            if contour_minutes in contours:
+                raise RoutingProviderUnavailableError(
+                    f"Valhalla returned duplicate {contour_minutes}-minute isochrones."
+                )
+            geometry = self._isochrone_geometry(
+                feature.get("geometry"), f"isochrone features[{index}].geometry"
+            )
+            contours[contour_minutes] = {
+                "type": "Feature",
+                "geometry": geometry,
+                "properties": {"contour_minutes": contour_minutes},
+            }
+        if set(contours) != set(_TRAVEL_TIME_CONTOURS_MINUTES):
+            raise RoutingProviderUnavailableError(
+                "Valhalla did not return all requested travel-time contours."
+            )
+        return [contours[minutes] for minutes in reversed(_TRAVEL_TIME_CONTOURS_MINUTES)]
+
+    def _isochrone_geometry(self, value: object, field: str) -> dict[str, object]:
+        """Validate and normalize one GeoJSON Polygon or MultiPolygon geometry."""
+
+        geometry = self._mapping(value, field)
+        geometry_type = geometry.get("type")
+        if geometry_type == "Polygon":
+            coordinates: object = self._isochrone_polygon_coordinates(
+                geometry.get("coordinates"), f"{field}.coordinates"
+            )
+        elif geometry_type == "MultiPolygon":
+            raw_polygons = self._sequence(geometry.get("coordinates"), f"{field}.coordinates")
+            if not raw_polygons:
+                raise RoutingProviderUnavailableError(
+                    f"Valhalla {field}.coordinates must contain at least one polygon."
+                )
+            coordinates = [
+                self._isochrone_polygon_coordinates(polygon, f"{field}.coordinates[{index}]")
+                for index, polygon in enumerate(raw_polygons)
+            ]
+        else:
+            raise RoutingProviderUnavailableError(
+                f"Valhalla {field} must be a GeoJSON Polygon or MultiPolygon."
+            )
+        return {"type": geometry_type, "coordinates": coordinates}
+
+    def _isochrone_polygon_coordinates(
+        self,
+        value: object,
+        field: str,
+    ) -> list[list[list[float]]]:
+        """Validate all closed linear rings of one GeoJSON polygon."""
+
+        raw_rings = self._sequence(value, field)
+        if not raw_rings:
+            raise RoutingProviderUnavailableError(
+                f"Valhalla {field} must contain at least one linear ring."
+            )
+        rings: list[list[list[float]]] = []
+        for ring_index, raw_ring in enumerate(raw_rings):
+            ring_field = f"{field}[{ring_index}]"
+            raw_coordinates = self._sequence(raw_ring, ring_field)
+            coordinates: list[list[float]] = []
+            for coordinate_index, raw_coordinate in enumerate(raw_coordinates):
+                coordinate = self._sequence(raw_coordinate, f"{ring_field}[{coordinate_index}]")
+                if len(coordinate) < 2:
+                    raise RoutingProviderUnavailableError(
+                        f"Valhalla {ring_field} contains an invalid coordinate."
+                    )
+                longitude = self._finite_number(coordinate[0], "isochrone longitude")
+                latitude = self._finite_number(coordinate[1], "isochrone latitude")
+                if not -180 <= longitude <= 180 or not -90 <= latitude <= 90:
+                    raise RoutingProviderUnavailableError(
+                        f"Valhalla {ring_field} contains an out-of-range WGS84 coordinate."
+                    )
+                coordinates.append([longitude, latitude])
+            if len(coordinates) < 4 or coordinates[0] != coordinates[-1]:
+                raise RoutingProviderUnavailableError(
+                    f"Valhalla {ring_field} must be a closed GeoJSON linear ring."
+                )
+            rings.append(coordinates)
+        return rings
+
+    @staticmethod
+    def _isochrone_contour_minutes(value: object, field: str) -> int:
+        """Require one unique member of the fixed visual contour set."""
+
+        if (
+            not isinstance(value, int | float)
+            or isinstance(value, bool)
+            or not isfinite(value)
+            or int(value) != value
+            or int(value) not in _TRAVEL_TIME_CONTOURS_MINUTES
+        ):
+            raise RoutingProviderUnavailableError(
+                f"Valhalla {field} must be one of {_TRAVEL_TIME_CONTOURS_MINUTES}."
+            )
+        return int(value)
 
     def _shape(self, value: object, field: str) -> GeoJsonLineString:
         """Accept Valhalla's requested GeoJSON or its native polyline6 representation."""
@@ -528,9 +656,7 @@ class ValhallaRoutingProvider:
             return {"type": "LineString", "coordinates": decoded_coordinates}
         shape = self._mapping(value, field)
         if shape.get("type") != "LineString":
-            raise RoutingProviderUnavailableError(
-                f"Valhalla {field} must be a GeoJSON LineString."
-            )
+            raise RoutingProviderUnavailableError(f"Valhalla {field} must be a GeoJSON LineString.")
         raw_coordinates = self._sequence(shape.get("coordinates"), f"{field}.coordinates")
         coordinates: list[list[float]] = []
         for index, raw_coordinate in enumerate(raw_coordinates):
@@ -546,9 +672,7 @@ class ValhallaRoutingProvider:
                 ]
             )
         if len(coordinates) < 2:
-            raise RoutingProviderUnavailableError(
-                f"Valhalla {field} contains too few coordinates."
-            )
+            raise RoutingProviderUnavailableError(f"Valhalla {field} contains too few coordinates.")
         return {"type": "LineString", "coordinates": coordinates}
 
     @staticmethod
@@ -621,9 +745,7 @@ class ValhallaRoutingProvider:
             return (None, "")
         raw_code = payload.get("error_code")
         error_code = (
-            raw_code
-            if isinstance(raw_code, int) and not isinstance(raw_code, bool)
-            else None
+            raw_code if isinstance(raw_code, int) and not isinstance(raw_code, bool) else None
         )
         raw_detail = payload.get("error") or payload.get("status") or payload.get("message")
         if not isinstance(raw_detail, str):
@@ -674,9 +796,7 @@ class ValhallaRoutingProvider:
         return round(parsed)
 
     @staticmethod
-    def _validate_matrix_index(
-        cell: Mapping[str, object], field: str, expected: int
-    ) -> None:
+    def _validate_matrix_index(cell: Mapping[str, object], field: str, expected: int) -> None:
         """Validate verbose matrix indexes when Valhalla includes them."""
 
         value = cell.get(field)

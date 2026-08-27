@@ -53,6 +53,18 @@ import {
   type TruckRestrictionLayerState,
 } from './TruckRestrictions';
 import { TruckRestrictionLayerMenuItem } from './TruckRestrictionsLayer';
+import {
+  TRAVEL_TIME_CONTOUR_LAYER_IDS,
+  TRAVEL_TIME_CONTOUR_SOURCE_ID,
+  TRAVEL_TIME_CONTOUR_STYLES,
+  deriveTravelTimeContourOrigins,
+  scenarioViewportCoordinates,
+  travelTimeContourFeaturesForOrigin,
+  travelTimeContourLayerSpecifications,
+  travelTimeContourStatusText,
+  type TravelTimeContourLayerState,
+  type TravelTimeContourOrigin,
+} from './TravelTimeContours';
 
 const BLANK_STYLE: maplibregl.StyleSpecification = {
   version: 8,
@@ -62,9 +74,10 @@ const BLANK_STYLE: maplibregl.StyleSpecification = {
 };
 
 const EMPTY_COLLECTION: FeatureCollection = { type: 'FeatureCollection', features: [] };
-const SOURCE_IDS = ['rwms-zones', 'rwms-corridor', 'rwms-routes', 'rwms-traveled', 'rwms-active', 'rwms-candidates', 'rwms-selected', 'rwms-truck-restrictions'] as const;
+const SOURCE_IDS = [TRAVEL_TIME_CONTOUR_SOURCE_ID, 'rwms-zones', 'rwms-corridor', 'rwms-routes', 'rwms-traveled', 'rwms-active', 'rwms-candidates', 'rwms-selected', 'rwms-truck-restrictions'] as const;
 const ROUTE_COLORS = ['#5ee2b2', '#60a5fa', '#fb923c', '#c084fc', '#facc15', '#22d3ee'];
 const TRUCK_RESTRICTION_MIN_ZOOM = 8;
+const TRAVEL_TIME_CONTOUR_MAX_CONCURRENCY = 4;
 const TRUCK_RESTRICTION_LAYER_IDS = [
   'rwms-truck-restrictions-lines',
   'rwms-truck-restrictions-points',
@@ -78,11 +91,40 @@ const EMPTY_TRUCK_RESTRICTION_STATE: TruckRestrictionLayerState = {
   error: null,
 };
 
+/** Load every contour origin without flooding the shared Valhalla worker pool. */
+async function loadTravelTimeContourFeatures(
+  origins: readonly TravelTimeContourOrigin[],
+  signal: AbortSignal,
+): Promise<Array<Feature<Polygon | MultiPolygon>>> {
+  const featuresByOrigin = Array.from(
+    { length: origins.length },
+    (): Array<Feature<Polygon | MultiPolygon>> => [],
+  );
+  let nextIndex = 0;
+  const worker = async () => {
+    while (!signal.aborted) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const origin = origins[index];
+      if (!origin) return;
+      const collection = await api.getTravelTimeContours(
+        origin.latitude,
+        origin.longitude,
+        signal,
+      );
+      featuresByOrigin[index] = travelTimeContourFeaturesForOrigin(collection, origin);
+    }
+  };
+  const workerCount = Math.min(TRAVEL_TIME_CONTOUR_MAX_CONCURRENCY, origins.length);
+  await Promise.all(Array.from({ length: workerCount }, worker));
+  return featuresByOrigin.flat();
+}
+
 const layerLabels: Record<keyof LayerVisibility, string> = {
   base: 'Базовая карта / сетка',
   zones: 'Заливка зон',
   zoneBorders: 'Границы зон',
-  warehouse: 'Склад',
+  warehouse: 'Склады и изохроны маршрутов',
   deliveries: 'Доставки (Д)',
   pickups: 'Возвраты (В)',
   unassigned: 'Нераспределённые',
@@ -280,6 +322,7 @@ function addOverlaySources(map: MapLibreMap): void {
     if (!map.getLayer(layer.id)) map.addLayer(layer);
   };
   addTruckRestrictionIcons(map);
+  travelTimeContourLayerSpecifications().forEach(addLayer);
   addLayer({
     id: 'rwms-zones-fill', type: 'fill', source: 'rwms-zones',
     paint: { 'fill-color': ['case', ['==', ['get', 'group'], 'WEST'], '#60a5fa', ['==', ['get', 'group'], 'EAST'], '#fb923c', ['==', ['get', 'group'], 'REGION'], '#a78bfa', '#5ee2b2'], 'fill-opacity': 0.16 },
@@ -391,15 +434,18 @@ export function MapCanvas({
   const markersRef = useRef<Marker[]>([]);
   const truckRestrictionPopupRef = useRef<Popup | null>(null);
   const truckRestrictionAbortRef = useRef<AbortController | null>(null);
+  const travelTimeContourAbortRef = useRef<AbortController | null>(null);
   const truckRestrictionLookupRef = useRef<ReturnType<typeof truckRestrictionLookup>>(new Map());
   const truckRestrictionMetadataRef = useRef<TruckRestrictionMetadata | null>(null);
   const hydratedRef = useRef(false);
+  const fittedScenarioIdRef = useRef<UUID | null>(null);
   const fittedPlanIdRef = useRef<UUID | null>(null);
   const zonesRef = useRef(workspace.zones);
   const [mapReady, setMapReady] = useState(false);
   const [offlineMode, setOfflineMode] = useState(!import.meta.env.VITE_MAP_STYLE_URL);
   const [layersOpen, setLayersOpen] = useState(false);
   const [truckRestrictionState, setTruckRestrictionState] = useState<TruckRestrictionLayerState>(EMPTY_TRUCK_RESTRICTION_STATE);
+  const [travelTimeContourState, setTravelTimeContourState] = useState<TravelTimeContourLayerState>({ status: 'idle' });
   const mapTool = useUiStore((state) => state.mapTool);
   const setMapTool = useUiStore((state) => state.setMapTool);
   const relationSourceZoneId = useUiStore((state) => state.relationSourceZoneId);
@@ -410,6 +456,10 @@ export function MapCanvas({
   const cutoutZone = mapTool === 'CUT_ZONE' && selected?.kind === 'zone'
     ? workspace.zones.find((zone) => zone.id === selected.id) ?? null
     : null;
+  const travelTimeContourOrigins = useMemo(
+    () => deriveTravelTimeContourOrigins(workspace.warehouses, plan),
+    [plan, workspace.warehouses],
+  );
   zonesRef.current = workspace.zones;
 
   const onZoneDrawnRef = useRef(onZoneDrawn);
@@ -464,6 +514,8 @@ export function MapCanvas({
       markersRef.current = [];
       truckRestrictionAbortRef.current?.abort();
       truckRestrictionAbortRef.current = null;
+      travelTimeContourAbortRef.current?.abort();
+      travelTimeContourAbortRef.current = null;
       truckRestrictionPopupRef.current?.remove();
       truckRestrictionPopupRef.current = null;
       map.remove();
@@ -551,6 +603,50 @@ export function MapCanvas({
       truckRestrictionAbortRef.current = null;
     };
   }, [layers.truckRestrictions, loadTruckRestrictions, mapReady]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    travelTimeContourAbortRef.current?.abort();
+    travelTimeContourAbortRef.current = null;
+    if (!layers.warehouse) {
+      if (map && mapReady) setSource(map, TRAVEL_TIME_CONTOUR_SOURCE_ID, EMPTY_COLLECTION);
+      setTravelTimeContourState({ status: 'idle' });
+      return;
+    }
+    if (!map || !mapReady) return;
+    if (!travelTimeContourOrigins.length) {
+      setSource(map, TRAVEL_TIME_CONTOUR_SOURCE_ID, EMPTY_COLLECTION);
+      setTravelTimeContourState({ status: 'idle' });
+      return;
+    }
+
+    const controller = new AbortController();
+    travelTimeContourAbortRef.current = controller;
+    setTravelTimeContourState({ status: 'loading' });
+    void loadTravelTimeContourFeatures(travelTimeContourOrigins, controller.signal).then((features) => {
+      if (controller.signal.aborted || travelTimeContourAbortRef.current !== controller) return;
+      setSource(map, TRAVEL_TIME_CONTOUR_SOURCE_ID, featureCollection(features));
+      setTravelTimeContourState({
+        status: 'loaded',
+        depotCount: travelTimeContourOrigins.filter((origin) => origin.kind === 'DEPOT').length,
+        routeFrontCount: travelTimeContourOrigins.filter((origin) => origin.kind === 'ROUTE_FRONT').length,
+      });
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted || travelTimeContourAbortRef.current !== controller) return;
+      setSource(map, TRAVEL_TIME_CONTOUR_SOURCE_ID, EMPTY_COLLECTION);
+      setTravelTimeContourState({
+        status: 'unavailable',
+        error: error instanceof Error ? error.message : 'неизвестная ошибка провайдера',
+      });
+      controller.abort();
+    }).finally(() => {
+      if (travelTimeContourAbortRef.current === controller) travelTimeContourAbortRef.current = null;
+    });
+    return () => {
+      controller.abort();
+      if (travelTimeContourAbortRef.current === controller) travelTimeContourAbortRef.current = null;
+    };
+  }, [layers.warehouse, mapReady, travelTimeContourOrigins]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -751,6 +847,28 @@ export function MapCanvas({
 
   useEffect(() => {
     const map = mapRef.current;
+    if (!map || !mapReady || fittedScenarioIdRef.current === workspace.scenario.id) return;
+    const coordinates = scenarioViewportCoordinates(workspace.warehouses, workspace.zones);
+    if (!coordinates.length) return;
+    fittedScenarioIdRef.current = workspace.scenario.id;
+    fittedPlanIdRef.current = null;
+    if (coordinates.length === 1) {
+      map.easeTo({ center: coordinates[0]!, zoom: 11, duration: 450 });
+      return;
+    }
+    const bounds = coordinates.reduce(
+      (current, coordinate) => current.extend(coordinate),
+      new maplibregl.LngLatBounds(coordinates[0], coordinates[0]),
+    );
+    map.fitBounds(bounds, {
+      padding: { top: 74, bottom: 74, left: 74, right: 290 },
+      maxZoom: 12,
+      duration: 450,
+    });
+  }, [mapReady, workspace.scenario.id, workspace.warehouses, workspace.zones]);
+
+  useEffect(() => {
+    const map = mapRef.current;
     if (!map || !mapReady || !plan || fittedPlanIdRef.current === plan.id) return;
     const bounds = new maplibregl.LngLatBounds();
     let pointCount = 0;
@@ -828,6 +946,7 @@ export function MapCanvas({
       ['rwms-truck-restrictions-points', layers.truckRestrictions],
       ['rwms-truck-restrictions-line-labels', layers.truckRestrictions],
       ['rwms-truck-restrictions-point-labels', layers.truckRestrictions],
+      ...TRAVEL_TIME_CONTOUR_LAYER_IDS.map((id): [string, boolean] => [id, layers.warehouse]),
     ];
     visibility.forEach(([id, visible]) => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none'));
     const overlayIds = new Set(visibility.map(([id]) => id));
@@ -839,6 +958,7 @@ export function MapCanvas({
   const toolButton = useCallback((tool: MapTool, label: string, icon: React.ReactNode) => (
     <button type="button" aria-label={label} title={label} aria-pressed={mapTool === tool} onClick={() => setMapTool(tool)}>{icon}</button>
   ), [mapTool, setMapTool]);
+  const travelTimeContourStatus = travelTimeContourStatusText(travelTimeContourState, layers.warehouse);
 
   return (
     <main className="map-stage" data-testid="map-stage">
@@ -879,6 +999,25 @@ export function MapCanvas({
           </button>)}
         </div>
       ) : null}
+      {layers.warehouse && travelTimeContourState.status === 'loaded' ? (
+        <div
+          className="map-overlay route-legend"
+          aria-label="Изохроны складов и точек маршрута"
+          style={{ top: 62, left: 12, right: 'auto', width: 176, pointerEvents: 'none' }}
+        >
+          <strong>Время от складов и маршрутов</strong>
+          <small>Складов: {travelTimeContourState.depotCount} · точек маршрута: {travelTimeContourState.routeFrontCount}</small>
+          <small>Склады + последние точки доставки водителей. Оценка Valhalla; точный маршрут проверяет планировщик.</small>
+          <div style={{ display: 'grid', gap: 5 }}>
+            {TRAVEL_TIME_CONTOUR_STYLES.map((style) => (
+              <span key={style.minutes} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11 }}>
+                <i style={{ width: 14, height: 14, borderRadius: '50%', background: style.color, opacity: 0.9 }} />
+                {style.label}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
       {selectedRequest && mapReady && mapRef.current ? (
         <RequestMapPopup
           map={mapRef.current}
@@ -891,7 +1030,11 @@ export function MapCanvas({
           onClose={() => onSelect(null)}
         />
       ) : null}
-      <div className={`map-overlay map-status ${offlineMode ? 'map-status--error' : ''}`}>
+      <div
+        className={`map-overlay map-status ${offlineMode || travelTimeContourState.status === 'unavailable' ? 'map-status--error' : ''}`}
+        role="status"
+        aria-live="polite"
+      >
         <i />{mapTool === 'CUT_ZONE'
           ? !cutoutZone
             ? 'Вырез зоны · выберите исходную зону'
@@ -901,6 +1044,7 @@ export function MapCanvas({
           : mapTool === 'RELATE_ZONES'
           ? relationSourceZoneId ? 'Связи зон · выберите вторую зону' : 'Связи зон · выберите первую зону'
           : offlineMode ? 'Grid mode · без внешней карты' : 'Map mode · MapLibre'}
+        {travelTimeContourStatus ? ` · ${travelTimeContourStatus}` : ''}
       </div>
       {!mapReady ? <div className="map-overlay progress-card"><span className="spinner">Карта запускается…</span></div> : null}
       {optimizationRun && ['PENDING', 'RUNNING'].includes(optimizationRun.status) ? (

@@ -20,14 +20,19 @@ from app.planner.models import (
     ValidationWarningCode,
     Vehicle,
 )
+from app.routing.models import RouteGeometry
 from app.routing.provider import RoutingProvider
 from app.routing.truck_profile import (
     CargoPlacement,
     CargoPosition,
+    EffectiveTruckProfile,
     EffectiveTruckProfileCalculator,
     LoadConfiguration,
     TruckProfileError,
 )
+
+_MAX_WINDOW_DEPARTURE_ADJUSTMENTS = 4
+_MAX_WAREHOUSE_DELAY_ADJUSTMENTS = 8
 
 
 class ExactTruckCycleRouter:
@@ -59,6 +64,27 @@ class ExactTruckCycleRouter:
     ) -> RouteCycle:
         """Return an exact truck-safe candidate or a stable rejection reason."""
 
+        return await self._route_candidate(
+            cycle,
+            tasks=tasks,
+            vehicle=vehicle,
+            shift=shift,
+            settings=settings,
+            warehouse_delay_attempt=0,
+        )
+
+    async def _route_candidate(
+        self,
+        cycle: RouteCycle,
+        *,
+        tasks: tuple[PlanningTask, ...],
+        vehicle: Vehicle,
+        shift: DriverShift,
+        settings: PlanningSettings,
+        warehouse_delay_attempt: int,
+    ) -> RouteCycle:
+        """Route one candidate, retrying from a later depot start when feasible."""
+
         if vehicle.routing_spec is None:
             raise CandidateRouteRejected(
                 UnassignedReasonCode.ROUTING_PROFILE_INCOMPLETE,
@@ -73,6 +99,11 @@ class ExactTruckCycleRouter:
             )
         task_by_id = {task.id: task for task in tasks}
         trailer_attached = max(stop.load_after for stop in ordered_stops) > 1
+        if trailer_attached and any(not task.trailer_access_allowed for task in tasks):
+            raise CandidateRouteRejected(
+                UnassignedReasonCode.TRAILER_ACCESS_NOT_ALLOWED,
+                "Dispatcher did not approve trailer access for every visited address",
+            )
         trailer = vehicle.default_trailer if trailer_attached else None
         if trailer_attached and trailer is None:
             raise CandidateRouteRejected(
@@ -96,8 +127,7 @@ class ExactTruckCycleRouter:
         first = replace(
             ordered_stops[0],
             planned_arrival=start,
-            planned_departure=start
-            + timedelta(seconds=ordered_stops[0].service_seconds),
+            planned_departure=start + timedelta(seconds=ordered_stops[0].service_seconds),
         )
         routed_stops: list[RouteStop] = [first]
         routed_legs: list[PlannedLeg] = []
@@ -128,9 +158,10 @@ class ExactTruckCycleRouter:
                 ) from exc
 
             try:
-                route = await self._provider.get_route(
-                    [source.point, target.point],
-                    routed_source.planned_departure,
+                route, leg_departure, arrival = await self._route_leg(
+                    source=source,
+                    target=target,
+                    source_ready_at=routed_source.planned_departure,
                     profile=profile,
                 )
             except Exception as exc:
@@ -145,14 +176,60 @@ class ExactTruckCycleRouter:
             if len(route.legs) != 1:
                 raise RuntimeError("truck provider must return exactly one leg per segment")
             road_leg = route.legs[0]
-            arrival = routed_source.planned_departure + timedelta(
-                seconds=road_leg.travel_seconds
+            source_waiting_seconds = round(
+                (leg_departure - routed_source.planned_departure).total_seconds()
             )
-            service_start = arrival
-            if target.window_start is not None and service_start < target.window_start:
-                waiting_seconds += round((target.window_start - service_start).total_seconds())
-                service_start = target.window_start
-            departure = service_start + timedelta(seconds=target.service_seconds)
+            if source_waiting_seconds:
+                if (
+                    len(routed_stops) == 1
+                    and routed_source.stop_type is StopType.DEPOT_LOAD
+                    and target.task_id is not None
+                ):
+                    shifted_start = leg_departure - timedelta(seconds=routed_source.service_seconds)
+                    routed_source = replace(
+                        routed_source,
+                        planned_arrival=shifted_start,
+                        planned_departure=leg_departure,
+                    )
+                    routed_stops[-1] = routed_source
+                else:
+                    warehouse_delay = self._warehouse_delay_before_source(
+                        routed_stops,
+                        timedelta(seconds=source_waiting_seconds),
+                    )
+                    if (
+                        warehouse_delay > timedelta(0)
+                        and warehouse_delay_attempt < _MAX_WAREHOUSE_DELAY_ADJUSTMENTS
+                    ):
+                        shifted_cycle = replace(
+                            cycle,
+                            planned_start=start + warehouse_delay,
+                            planned_finish=cycle.planned_finish + warehouse_delay,
+                        )
+                        try:
+                            return await self._route_candidate(
+                                shifted_cycle,
+                                tasks=tasks,
+                                vehicle=vehicle,
+                                shift=shift,
+                                settings=settings,
+                                warehouse_delay_attempt=warehouse_delay_attempt + 1,
+                            )
+                        except CandidateRouteRejected:
+                            # A time-dependent route can become infeasible after the
+                            # depot shift. In that case the already safe earlier
+                            # departure remains available with bounded source waiting.
+                            pass
+                    if source_waiting_seconds > settings.max_customer_wait_minutes * 60:
+                        raise CandidateRouteRejected(
+                            UnassignedReasonCode.TIME_WINDOW_CONFLICT,
+                            (
+                                "Exact route requires more waiting between customer "
+                                "stops than the scenario permits"
+                            ),
+                        )
+                    waiting_seconds += source_waiting_seconds
+            departure = arrival + timedelta(seconds=target.service_seconds)
             if target.window_end is not None and departure > target.window_end:
                 if target.window_is_hard:
                     raise CandidateRouteRejected(
@@ -174,7 +251,7 @@ class ExactTruckCycleRouter:
                 PlannedLeg(
                     from_stop_sequence=source.sequence,
                     to_stop_sequence=target.sequence,
-                    departure_at=routed_source.planned_departure,
+                    departure_at=leg_departure,
                     arrival_at=arrival,
                     distance_meters=road_leg.distance_meters,
                     travel_seconds=road_leg.travel_seconds,
@@ -254,6 +331,63 @@ class ExactTruckCycleRouter:
             ),
             warnings=tuple(sorted(warnings, key=lambda item: item.value)),
         )
+
+    @staticmethod
+    def _warehouse_delay_before_source(
+        routed_stops: list[RouteStop],
+        source_wait: timedelta,
+    ) -> timedelta:
+        """Return wait absorbable at the depot without breaking prior windows."""
+
+        prior_slack = [
+            stop.window_end - stop.planned_departure
+            for stop in routed_stops
+            if stop.task_id is not None and stop.window_end is not None
+        ]
+        available = min(prior_slack, default=source_wait)
+        return min(source_wait, max(timedelta(0), available))
+
+    async def _route_leg(
+        self,
+        *,
+        source: RouteStop,
+        target: RouteStop,
+        source_ready_at: datetime,
+        profile: EffectiveTruckProfile,
+    ) -> tuple[RouteGeometry, datetime, datetime]:
+        """Route at the actual departure while keeping early-window waits at source.
+
+        Travel duration may change after delaying departure. The bounded adjustment
+        therefore asks the provider again with every proposed departure. A final
+        conservative request at ``window_start`` guarantees that an unstable
+        time-dependent provider can never expose an arrival before the agreed window.
+        """
+
+        departure = source_ready_at
+        for _ in range(_MAX_WINDOW_DEPARTURE_ADJUSTMENTS):
+            route = await self._provider.get_route(
+                [source.point, target.point],
+                departure,
+                profile=profile,
+            )
+            if len(route.legs) != 1:
+                raise RuntimeError("truck provider must return exactly one leg per segment")
+            arrival = departure + timedelta(seconds=route.legs[0].travel_seconds)
+            if target.window_start is None or arrival >= target.window_start:
+                return route, departure, arrival
+            departure += target.window_start - arrival
+
+        if target.window_start is not None and departure < target.window_start:
+            departure = target.window_start
+        route = await self._provider.get_route(
+            [source.point, target.point],
+            departure,
+            profile=profile,
+        )
+        if len(route.legs) != 1:
+            raise RuntimeError("truck provider must return exactly one leg per segment")
+        arrival = departure + timedelta(seconds=route.legs[0].travel_seconds)
+        return route, departure, arrival
 
     @staticmethod
     def _initial_delivery_placements(
@@ -378,8 +512,5 @@ class ExactTruckCycleRouter:
         if total_distance_meters <= 0:
             return 0.0
         return (
-            empty_distance_meters
-            / total_distance_meters
-            * (total_travel_seconds / 60.0)
-            * weight
+            empty_distance_meters / total_distance_meters * (total_travel_seconds / 60.0) * weight
         )

@@ -72,7 +72,9 @@ export function RwmsIntegrationDialog({
   const [statusPending, setStatusPending] = useState(false);
   const statusRequestSequence = useRef(0);
   const publishableTasks = useMemo(
-    () => plan?.unassigned.filter((item) => item.task.type === 'DELIVERY') ?? [],
+    () => plan?.unassigned.filter((item) => (
+      item.task.type === 'DELIVERY' && item.request?.source_system === 'RWMS'
+    )) ?? [],
     [plan],
   );
   const [publishTaskIds, setPublishTaskIds] = useState<UUID[]>([]);
@@ -233,7 +235,7 @@ export function RwmsIntegrationDialog({
           {publishableTasks.length ? (
             <div className="rwms-integration__pool" aria-label="Будущие доставки в общий пул">
               <strong>Дополнительные задания для DriverApp</strong>
-              <p>Отметьте только те нераспределённые доставки, которые логист явно разрешает показать свободным водителям. RWMS повторно проверит дату, заказ и состав бытовок.</p>
+              <p>Здесь доступны только нераспределённые доставки, полученные из RWMS. Отметьте задания, которые логист явно разрешает показать свободным водителям. RWMS повторно проверит дату, заказ и состав бытовок.</p>
               {publishableTasks.map((item) => {
                 const taskStatus = taskStatuses.get(item.task.id);
                 return (

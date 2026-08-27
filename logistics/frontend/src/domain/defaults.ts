@@ -13,6 +13,7 @@ export const DEFAULT_PLANNING_SETTINGS: PlanningSettings = {
   default_pickup_minutes: 30,
   default_depot_turnaround_minutes: 20,
   default_route_buffer_minutes: 15,
+  max_customer_wait_minutes: 120,
   city_speed_kmh: 35,
   region_speed_kmh: 65,
   road_factor: 1.25,

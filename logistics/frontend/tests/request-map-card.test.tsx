@@ -67,7 +67,7 @@ const request: LogisticsRequest = {
   updated_at: '2026-08-22T08:00:00Z',
   scheduled_date: null,
   date_options: [
-    { date: '2026-08-25', priority: 20, window_start: '09:00', window_end: '11:00', is_hard: true },
+    { date: '2026-08-25', priority: 20, window_start: '09:00', window_end: '11:00', is_hard: true, travel_zone_hours: 2 },
     { date: '2026-08-26', priority: 10, window_start: null, window_end: null, is_hard: false },
   ],
   zone_status: 'CURRENT',
@@ -162,7 +162,7 @@ describe('request map card', () => {
     expect(screen.getByText('2 бытов. · обслуживание 35 мин')).toBeVisible();
     expect(screen.getByText('Зона Z1 · версия 3')).toBeVisible();
     expect(screen.getByText('Доставка · 125 ₽')).toBeVisible();
-    expect(screen.getByText(/25 августа 2026.*09:00–11:00.*жёстко/)).toBeVisible();
+    expect(screen.getByText(/25 августа 2026.*09:00–11:00.*зона 2 ч.*жёстко/)).toBeVisible();
 
     await user.click(screen.getByRole('button', { name: 'Выставить на 25 августа 2026 г.' }));
     expect(onSchedule).toHaveBeenCalledWith('request-142', '2026-08-25', false);

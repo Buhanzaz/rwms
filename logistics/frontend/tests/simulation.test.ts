@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RoutePlan, SimulationOverride } from '../src/domain/types';
-import { deriveSimulationState, interpolateLineString } from '../src/simulation/deriveSimulationState';
+import { deriveSimulationState, interpolateLineString, planTimeBounds } from '../src/simulation/deriveSimulationState';
 import { EMPTY_METRICS } from '../src/domain/defaults';
 import { deriveSimulationRouteLayers } from '../src/simulation/route-layers';
 
@@ -10,7 +10,7 @@ function planFixture(): RoutePlan {
     status: 'GENERATED', score: 10, created_at: '2026-08-24T00:00:00Z', updated_at: '2026-08-24T00:00:00Z',
     metrics: { ...EMPTY_METRICS }, unassigned: [],
     driver_routes: [{
-      driver_shift_id: 'shift-1', driver_id: 'driver-1', driver_name: 'Водитель 1', vehicle_id: 'vehicle-1', vehicle_name: 'МАЗ', registration_number: 'А123БВ', preferred_route_group: 'WEST', metrics: { ...EMPTY_METRICS },
+      driver_shift_id: 'shift-1', shift_start_at: '2026-08-25T04:00:00Z', shift_end_at: '2026-08-25T17:00:00Z', driver_id: 'driver-1', driver_name: 'Водитель 1', vehicle_id: 'vehicle-1', vehicle_name: 'МАЗ', registration_number: 'А123БВ', preferred_route_group: 'WEST', metrics: { ...EMPTY_METRICS },
       cycles: [{
         id: 'cycle-1', route_plan_id: 'plan-1', driver_shift_id: 'shift-1', sequence: 1,
         planned_start: '2026-08-25T05:00:00Z', planned_finish: '2026-08-25T07:30:00Z', total_distance_meters: 10000,
@@ -41,6 +41,19 @@ describe('interpolateLineString', () => {
 });
 
 describe('deriveSimulationState', () => {
+  it('starts the timeline at shift start so depot waiting remains seekable', () => {
+    const plan = planFixture();
+
+    expect(planTimeBounds(plan)).toEqual({
+      start: new Date('2026-08-25T04:00:00Z').getTime(),
+      end: new Date('2026-08-25T07:30:00Z').getTime(),
+    });
+    expect(deriveSimulationState(plan, '2026-08-25T04:19:00Z', []).vehicles[0]).toMatchObject({
+      status: 'WAITING_SHIFT',
+      position: { geometry: { coordinates: [37.6, 55.75] } },
+    });
+  });
+
   it('keeps load_before throughout service and switches at departure', () => {
     const plan = planFixture();
     const during = deriveSimulationState(plan, '2026-08-25T06:05:00Z', []);
@@ -60,6 +73,79 @@ describe('deriveSimulationState', () => {
       next_stop_label: 'Москва, Тверская улица, 10',
       eta: '2026-08-25T06:00:00.000Z',
     });
+  });
+
+  it('keeps a vehicle at the depot before a late customer window', () => {
+    const plan = planFixture();
+    const cycle = plan.driver_routes[0]?.cycles[0];
+    expect(cycle).toBeDefined();
+    if (!cycle) return;
+    const [depot, delivery, , depotReturn] = cycle.stops;
+    expect(depot && delivery && depotReturn).toBeDefined();
+    if (!depot || !delivery || !depotReturn) return;
+    cycle.planned_start = '2026-08-25T11:00:00Z';
+    cycle.planned_finish = '2026-08-25T13:00:00Z';
+    cycle.stops = [
+      { ...depot, planned_arrival: '2026-08-25T11:00:00Z', planned_departure: '2026-08-25T11:30:00Z' },
+      { ...delivery, planned_arrival: '2026-08-25T12:00:00Z', planned_departure: '2026-08-25T12:15:00Z' },
+      { ...depotReturn, sequence: 2, planned_arrival: '2026-08-25T13:00:00Z', planned_departure: '2026-08-25T13:00:00Z' },
+    ];
+    cycle.legs = [
+      { ...cycle.legs[0]!, departure_at: '2026-08-25T11:30:00Z', arrival_at: '2026-08-25T12:00:00Z' },
+      { ...cycle.legs[2]!, id: 'leg-return', departure_at: '2026-08-25T12:15:00Z', arrival_at: '2026-08-25T13:00:00Z' },
+    ];
+
+    const state = deriveSimulationState(plan, '2026-08-25T06:19:00Z', []);
+
+    expect(state.vehicles[0]).toMatchObject({
+      status: 'WAITING_SHIFT',
+      position: { geometry: { coordinates: [37.6, 55.75] } },
+    });
+    expect(state.active_stop_ids).toEqual([]);
+    expect(state.events).toEqual([]);
+  });
+
+  it('keeps a bounded residual wait at the previous point, not the next client', () => {
+    const plan = planFixture();
+    const cycle = plan.driver_routes[0]?.cycles[0];
+    expect(cycle).toBeDefined();
+    if (!cycle) return;
+    const pickup = cycle.stops[2];
+    const depotReturn = cycle.stops[3];
+    expect(pickup && depotReturn).toBeDefined();
+    if (!pickup || !depotReturn) return;
+    cycle.planned_finish = '2026-08-25T08:30:00Z';
+    cycle.stops[2] = {
+      ...pickup,
+      planned_arrival: '2026-08-25T07:45:00Z',
+      planned_departure: '2026-08-25T08:00:00Z',
+    };
+    cycle.stops[3] = {
+      ...depotReturn,
+      planned_arrival: '2026-08-25T08:30:00Z',
+      planned_departure: '2026-08-25T08:30:00Z',
+    };
+    cycle.legs[1] = {
+      ...cycle.legs[1]!,
+      departure_at: '2026-08-25T07:15:00Z',
+      arrival_at: '2026-08-25T07:45:00Z',
+    };
+    cycle.legs[2] = {
+      ...cycle.legs[2]!,
+      departure_at: '2026-08-25T08:00:00Z',
+      arrival_at: '2026-08-25T08:30:00Z',
+    };
+
+    const state = deriveSimulationState(plan, '2026-08-25T06:45:00Z', []);
+
+    expect(state.vehicles[0]).toMatchObject({
+      status: 'BREAK',
+      load: 1,
+      next_stop_label: 'Вывоз 98',
+      eta: '2026-08-25T07:45:00.000Z',
+      position: { geometry: { coordinates: [37.63, 55.75] } },
+    });
+    expect(state.active_stop_ids).toEqual([]);
   });
 
   it('applies delay without mutating the original plan', () => {

@@ -22,6 +22,7 @@ from app.models import (
     DriverShift,
     LogisticsRequest,
     OptimizationRun,
+    PlanNotificationLog,
     RouteCycle,
     RouteExplanation,
     RoutePlan,
@@ -40,6 +41,7 @@ from app.repositories import get_required
 from app.schemas.domain import (
     DriverCreate,
     ExportDriver,
+    ExportPlanNotificationLog,
     ExportRelation,
     ExportRequest,
     ExportRouteCycle,
@@ -261,6 +263,7 @@ def _scenario_graph_statement(scenario_id: UUID, *, include_plans: bool) -> Any:
                 selectinload(Scenario.plans)
                 .selectinload(RoutePlan.unassigned_tasks)
                 .selectinload(UnassignedTask.task),
+                selectinload(Scenario.plans).selectinload(RoutePlan.notification_logs),
             ]
         )
     return select(Scenario).where(Scenario.id == scenario_id).options(*options)
@@ -373,6 +376,18 @@ def _export_route_plan(plan: RoutePlan) -> ExportRoutePlan:
             )
             for item in plan.unassigned_tasks
         ],
+        notification_logs=[
+            ExportPlanNotificationLog(
+                request_id=item.request_id,
+                recipient_name=item.recipient_name,
+                recipient_contact=item.recipient_contact,
+                message=item.message,
+                includes_driver_passport=item.includes_driver_passport,
+                status="SIMULATED_DELIVERED",
+                created_at=item.created_at,
+            )
+            for item in plan.notification_logs
+        ],
     )
 
 
@@ -406,6 +421,12 @@ async def export_scenario(
                     priority=request.priority,
                     status=request.status,
                     split_allowed=request.split_allowed,
+                    trailer_access_allowed=request.trailer_access_allowed,
+                    include_driver_passport_in_notification=(
+                        request.include_driver_passport_in_notification
+                    ),
+                    contact_name=request.contact_name,
+                    contact_phone=request.contact_phone,
                     notes=request.notes,
                     date_options=[
                         RequestDateOptionInput.model_validate(option)
@@ -532,6 +553,7 @@ async def import_scenario(
     trailer_ids: dict[UUID, UUID] = {}
     vehicle_ids: dict[UUID, UUID] = {}
     shift_ids: dict[UUID, UUID] = {}
+    request_ids: dict[UUID, UUID] = {}
     tasks: dict[tuple[UUID, int], UUID] = {}
 
     for warehouse_item in document.warehouses:
@@ -587,9 +609,7 @@ async def import_scenario(
     for profile_item in document.vehicle_load_profiles:
         session.add(
             VehicleLoadProfile(
-                vehicle_id=_mapped(
-                    vehicle_ids, profile_item.vehicle_id, "vehicle load profile"
-                ),
+                vehicle_id=_mapped(vehicle_ids, profile_item.vehicle_id, "vehicle load profile"),
                 **profile_item.data.model_dump(),
             )
         )
@@ -606,6 +626,7 @@ async def import_scenario(
         shift_ids[shift_item.id] = shift.id
     for request_item in document.requests:
         logistics_request = await create_request(session, scenario.id, request_item.data)
+        request_ids[request_item.id] = logistics_request.id
         logistics_request.source_system = request_item.source_system
         logistics_request.external_id = request_item.external_id
         logistics_request.external_version = request_item.external_version
@@ -739,6 +760,21 @@ async def import_scenario(
                     **unassigned_item.model_dump(exclude={"task"}),
                 )
             )
+        for notification_item in plan_item.notification_logs:
+            request_id = request_ids.get(notification_item.request_id)
+            if request_id is None:
+                raise ApiError(
+                    422,
+                    "IMPORT_REFERENCE_INVALID",
+                    "Plan notification references an unknown source request",
+                )
+            session.add(
+                PlanNotificationLog(
+                    plan_id=plan.id,
+                    request_id=request_id,
+                    **notification_item.model_dump(exclude={"request_id"}),
+                )
+            )
     await session.flush()
     await session.refresh(scenario)
     return scenario
@@ -864,6 +900,7 @@ async def reset_demo_scenario(session: AsyncSession, scenario_id: UUID) -> Scena
             name=f"Водитель {index}",
             preferred_route_group=group,
             active=True,
+            passport_details=f"Паспорт DEMO-{index:02d}, выдан для тестового сценария",
             notes="",
         )
         vehicle = await _create_demo_vehicle_bundle(
@@ -923,6 +960,9 @@ async def reset_demo_scenario(session: AsyncSession, scenario_id: UUID) -> Scena
                 priority=priority,
                 status="READY",
                 split_allowed=True,
+                trailer_access_allowed=True,
+                contact_name=f"Контакт · {name}",
+                contact_phone=f"+7 900 000-00-{priority % 100:02d}",
                 notes="",
                 date_options=[
                     RequestDateOptionInput(
@@ -1041,6 +1081,7 @@ async def create_multi_day_demo_scenario(session: AsyncSession, settings: Settin
             name=f"Тестовый водитель {index}",
             preferred_route_group=group,
             active=True,
+            passport_details=f"Паспорт MULTI-DEMO-{index:02d}",
             notes="Одна из трёх параллельных смен многодневного стенда.",
         )
         vehicle = await _create_demo_vehicle_bundle(
@@ -1200,6 +1241,9 @@ async def create_multi_day_demo_scenario(session: AsyncSession, settings: Settin
                 priority=priority,
                 status="READY",
                 split_allowed=True,
+                trailer_access_allowed=True,
+                contact_name=f"Контакт · {name}",
+                contact_phone=f"+7 901 000-00-{priority % 100:02d}",
                 notes="Данные стенда: допустимые даты меняются по итогам звонка.",
                 date_options=options,
             ),

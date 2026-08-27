@@ -80,6 +80,14 @@ class Settings(BaseSettings):
             "RWMS_SYNC_ENABLED", "LOGISTICS_RWMS_SYNC_ENABLED", "rwms_sync_enabled"
         ),
     )
+    rwms_capacity_publish_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "RWMS_CAPACITY_PUBLISH_ENABLED",
+            "LOGISTICS_RWMS_CAPACITY_PUBLISH_ENABLED",
+            "rwms_capacity_publish_enabled",
+        ),
+    )
     rwms_logistics_base_url: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
@@ -243,6 +251,8 @@ class Settings(BaseSettings):
     def validate_enabled_rwms_integration(self) -> Settings:
         """Require all service-authentication inputs when synchronization is enabled."""
 
+        if self.rwms_capacity_publish_enabled and not self.rwms_sync_enabled:
+            raise ValueError("RWMS capacity publication requires RWMS_SYNC_ENABLED=true")
         if not self.rwms_sync_enabled:
             return self
         missing: list[str] = []

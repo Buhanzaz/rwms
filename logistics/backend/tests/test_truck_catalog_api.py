@@ -162,9 +162,7 @@ async def test_trailer_vehicle_load_profile_and_cargo_crud() -> None:
                 },
             )
             assert invalid_atomic_update.status_code == 422
-            unchanged_vehicle = await client.get(
-                f"/api/scenarios/{scenario_id}/vehicles"
-            )
+            unchanged_vehicle = await client.get(f"/api/scenarios/{scenario_id}/vehicles")
             assert unchanged_vehicle.json()[0]["name"] == "Манипулятор 1"
 
             updated_configuration = await client.put(
@@ -188,7 +186,7 @@ async def test_trailer_vehicle_load_profile_and_cargo_crud() -> None:
             assert listed_profiles.status_code == 200
             assert [item["configuration_type"] for item in listed_profiles.json()] == [
                 "CARGO_ON_TRUCK",
-                "TWO_CARGO_SPLIT"
+                "TWO_CARGO_SPLIT",
             ]
 
             profile_id = next(

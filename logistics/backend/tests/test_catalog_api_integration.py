@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -262,9 +264,7 @@ async def test_http_zone_cutout_versions_geometry_and_preserves_request_snapshot
             assert preserved.json()["zone_version"] == 1
             assert preserved.json()["zone_is_stale"] is True
 
-            reclassified = await client.post(
-                f"/api/scenarios/{scenario_id}/reclassify-requests"
-            )
+            reclassified = await client.post(f"/api/scenarios/{scenario_id}/reclassify-requests")
             assert reclassified.status_code == 200
             assert reclassified.json() == {"updated": 1, "outside_zones": 0, "unchanged": 0}
             moved = await client.get(f"/api/requests/{request_id}")
@@ -346,9 +346,7 @@ async def test_http_request_schedule_supports_options_agreement_and_unscheduling
             assert agreed.status_code == 200
             assert agreed.json()["scheduled_date"] == "2026-08-27"
             custom_option = next(
-                option
-                for option in agreed.json()["date_options"]
-                if option["date"] == "2026-08-27"
+                option for option in agreed.json()["date_options"] if option["date"] == "2026-08-27"
             )
             assert custom_option == {
                 "id": custom_option["id"],
@@ -358,6 +356,7 @@ async def test_http_request_schedule_supports_options_agreement_and_unscheduling
                 "window_start": None,
                 "window_end": None,
                 "is_hard": False,
+                "travel_zone_hours": None,
             }
 
             replayed_agreement = await client.post(
@@ -366,10 +365,13 @@ async def test_http_request_schedule_supports_options_agreement_and_unscheduling
             )
             assert replayed_agreement.status_code == 200
             assert replayed_agreement.json()["scheduled_date"] == "2026-08-27"
-            assert sum(
-                option["date"] == "2026-08-27"
-                for option in replayed_agreement.json()["date_options"]
-            ) == 1
+            assert (
+                sum(
+                    option["date"] == "2026-08-27"
+                    for option in replayed_agreement.json()["date_options"]
+                )
+                == 1
+            )
 
             options_replaced = await client.patch(
                 f"/api/requests/{request_id}",
@@ -435,8 +437,7 @@ async def test_demo_plan_is_immediately_visible_editable_exportable_and_deletabl
                 "requests": 6,
             }
             assert all(
-                relation["max_detour_minutes"] == 60
-                and relation["max_detour_ratio"] == 3.0
+                relation["max_detour_minutes"] == 60 and relation["max_detour_ratio"] == 3.0
                 for relation in resources["zone-relations"].json()
             )
 
@@ -483,6 +484,291 @@ async def test_demo_plan_is_immediately_visible_editable_exportable_and_deletabl
             )
             assert exported.status_code == 200, exported.text
             assert len(exported.json()["plans"]) == 1
+        finally:
+            deleted = await client.delete(f"/api/scenarios/{scenario_id}")
+            assert deleted.status_code == 204, deleted.text
+
+
+@pytest.mark.asyncio
+async def test_planning_details_gate_generation_and_drive_explicit_subtasks() -> None:
+    """Planning waits for a real window/access decision and persists operator subtasks."""
+
+    transport = ASGITransport(app=create_app(RuntimePlannerFacade("mock")))
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/api/scenarios",
+            json={"name": "Planning details", "timezone": "Europe/Moscow", "seed": 731},
+        )
+        assert created.status_code == 201
+        scenario_id = created.json()["id"]
+        try:
+            demo = await client.post(f"/api/scenarios/{scenario_id}/generate-demo")
+            assert demo.status_code == 200
+            planning_date = demo.json()["default_planning_date"]
+            request_response = await client.post(
+                f"/api/scenarios/{scenario_id}/requests",
+                json={
+                    "type": "DELIVERY",
+                    "name": "Нужно согласование",
+                    "address_label": "Тестовый адрес",
+                    "latitude": 55.74,
+                    "longitude": 37.52,
+                    "quantity": 2,
+                    "date_options": [{"date": planning_date, "priority": 100}],
+                },
+            )
+            assert request_response.status_code == 201, request_response.text
+            request_id = request_response.json()["id"]
+
+            rejected_plan = await client.post(
+                f"/api/scenarios/{scenario_id}/plans/generate",
+                json={"date": planning_date, "seed": 731},
+            )
+            assert rejected_plan.status_code == 422
+            assert rejected_plan.json()["code"] == "PLANNING_INPUT_INCOMPLETE"
+            assert rejected_plan.json()["requests"] == [
+                {
+                    "request_id": request_id,
+                    "name": "Нужно согласование",
+                    "missing_fields": ["time_window", "trailer_access_allowed"],
+                }
+            ]
+
+            wrong_date = await client.post(
+                f"/api/requests/{request_id}/planning-details",
+                json={
+                    "date": "2099-01-01",
+                    "window_start": "09:00:00",
+                    "window_end": "15:00:00",
+                    "is_hard": True,
+                    "trailer_access_allowed": False,
+                    "include_driver_passport_in_notification": False,
+                    "contact_name": "Контакт",
+                    "contact_phone": "+7 900 100-20-30",
+                },
+            )
+            assert wrong_date.status_code == 422
+            assert wrong_date.json()["code"] == "REQUEST_DATE_NOT_ALLOWED"
+            unchanged = await client.get(f"/api/requests/{request_id}")
+            assert unchanged.json()["scheduled_date"] is None
+            assert unchanged.json()["trailer_access_allowed"] is None
+
+            planned = await client.post(
+                f"/api/requests/{request_id}/planning-details",
+                json={
+                    "date": planning_date,
+                    "window_start": "09:00:00",
+                    "window_end": "15:00:00",
+                    "is_hard": True,
+                    "trailer_access_allowed": False,
+                    "include_driver_passport_in_notification": False,
+                    "contact_name": "Контакт",
+                    "contact_phone": "+7 900 100-20-30",
+                },
+            )
+            assert planned.status_code == 200, planned.text
+            assert planned.json()["scheduled_date"] == planning_date
+            assert planned.json()["trailer_access_allowed"] is False
+            assert [task["quantity"] for task in planned.json()["tasks"]] == [1, 1]
+            option = next(
+                item for item in planned.json()["date_options"] if item["date"] == planning_date
+            )
+            assert (option["window_start"], option["window_end"], option["is_hard"]) == (
+                "09:00:00",
+                "15:00:00",
+                True,
+            )
+
+            forbidden_split = await client.post(
+                f"/api/requests/{request_id}/split",
+                json={"part_quantities": [2]},
+            )
+            assert forbidden_split.status_code == 422
+            assert forbidden_split.json()["code"] == "TRAILER_ACCESS_NOT_ALLOWED"
+            explicit_split = await client.post(
+                f"/api/requests/{request_id}/split",
+                json={"part_quantities": [1, 1]},
+            )
+            assert explicit_split.status_code == 200
+            assert [task["quantity"] for task in explicit_split.json()["tasks"]] == [1, 1]
+
+            generated = await client.post(
+                f"/api/scenarios/{scenario_id}/plans/generate",
+                json={"date": planning_date, "seed": 731},
+            )
+            assert generated.status_code == 202, generated.text
+            assert generated.json()["status"] == "COMPLETED"
+            saved_plan = await client.get(f"/api/plans/{generated.json()['plan_id']}")
+            assigned_task_ids = {
+                stop["task_id"]
+                for cycle in saved_plan.json()["cycles"]
+                for stop in cycle["stops"]
+                if stop["task_id"] is not None
+            }
+            current_requests = await client.get(f"/api/scenarios/{scenario_id}/requests")
+            referenced = next(
+                request
+                for request in current_requests.json()
+                if request["trailer_access_allowed"] is True
+                and any(task["id"] in assigned_task_ids for task in request["tasks"])
+            )
+            referenced_option = next(
+                item for item in referenced["date_options"] if item["date"] == planning_date
+            )
+            blocked_change = await client.post(
+                f"/api/requests/{referenced['id']}/planning-details",
+                json={
+                    "date": planning_date,
+                    "window_start": referenced_option["window_start"],
+                    "window_end": referenced_option["window_end"],
+                    "is_hard": referenced_option["is_hard"],
+                    "trailer_access_allowed": False,
+                    "include_driver_passport_in_notification": False,
+                    "contact_name": referenced["contact_name"],
+                    "contact_phone": referenced["contact_phone"],
+                },
+            )
+            assert blocked_change.status_code == 409
+            assert blocked_change.json()["code"] == "REQUEST_TASKS_ALREADY_PLANNED"
+            unchanged_referenced = await client.get(f"/api/requests/{referenced['id']}")
+            assert unchanged_referenced.json()["trailer_access_allowed"] is True
+        finally:
+            deleted = await client.delete(f"/api/scenarios/{scenario_id}")
+            assert deleted.status_code == 204, deleted.text
+
+
+@pytest.mark.asyncio
+async def test_confirmation_logs_messages_once_and_requires_requested_passports() -> None:
+    """Confirmation simulates one aggregate contact message and fences passport data."""
+
+    transport = ASGITransport(app=create_app(RuntimePlannerFacade("mock")))
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/api/scenarios",
+            json={"name": "Notification log", "timezone": "Europe/Moscow", "seed": 902},
+        )
+        assert created.status_code == 201
+        scenario_id = created.json()["id"]
+        try:
+            demo = await client.post(f"/api/scenarios/{scenario_id}/generate-demo")
+            planning_date = demo.json()["default_planning_date"]
+            requests = await client.get(f"/api/scenarios/{scenario_id}/requests")
+            assert requests.status_code == 200
+            split_source = next(request for request in requests.json() if request["quantity"] == 2)
+            split_response = await client.post(
+                f"/api/requests/{split_source['id']}/split",
+                json={"part_quantities": [1, 1]},
+            )
+            assert split_response.status_code == 200, split_response.text
+            split_task_ids = {task["id"] for task in split_response.json()["tasks"]}
+            for request in requests.json():
+                updated = await client.patch(
+                    f"/api/requests/{request['id']}",
+                    json={"include_driver_passport_in_notification": True},
+                )
+                assert updated.status_code == 200, updated.text
+
+            generated = await client.post(
+                f"/api/scenarios/{scenario_id}/plans/generate",
+                json={"date": planning_date, "seed": 902},
+            )
+            assert generated.status_code == 202, generated.text
+            plan_id = generated.json()["plan_id"]
+            plan = await client.get(f"/api/plans/{plan_id}")
+            assigned_task_ids = {
+                stop["task_id"]
+                for cycle in plan.json()["cycles"]
+                for stop in cycle["stops"]
+                if stop["task_id"] is not None
+            }
+            assert split_task_ids <= assigned_task_ids
+            confirmed = await client.post(
+                f"/api/plans/{plan_id}/confirm",
+                json={
+                    "expected_version": plan.json()["version"],
+                    "accept_warnings": True,
+                },
+            )
+            assert confirmed.status_code == 200, confirmed.text
+            body = confirmed.json()
+            assert body["status"] == "CONFIRMED"
+            assert body["notification_logs"]
+            split_notifications = [
+                item
+                for item in body["notification_logs"]
+                if item["request_id"] == split_source["id"]
+            ]
+            assert len(split_notifications) == 1
+            assert "2 БК" in split_notifications[0]["message"]
+            assert all(
+                item["status"] == "SIMULATED_DELIVERED"
+                and item["includes_driver_passport"]
+                and "водитель" in item["message"]
+                and "госномер" in item["message"]
+                and "Паспортные данные" in item["message"]
+                for item in body["notification_logs"]
+            )
+            current_requests = await client.get(f"/api/scenarios/{scenario_id}/requests")
+            assert current_requests.status_code == 200
+            request_by_task_id = {
+                task["id"]: request["id"]
+                for request in current_requests.json()
+                for task in request["tasks"]
+            }
+            for notification in body["notification_logs"]:
+                local_arrivals = {
+                    datetime.fromisoformat(stop["planned_arrival"])
+                    .astimezone(ZoneInfo("Europe/Moscow"))
+                    .strftime("%H:%M")
+                    for cycle in body["cycles"]
+                    for stop in cycle["stops"]
+                    if stop["task_id"] is not None
+                    and request_by_task_id[stop["task_id"]] == notification["request_id"]
+                }
+                assert local_arrivals
+                assert all(
+                    f"прибытие ориентировочно {arrival}" in notification["message"]
+                    for arrival in local_arrivals
+                )
+            notification_ids = [item["id"] for item in body["notification_logs"]]
+
+            repeated = await client.post(
+                f"/api/plans/{plan_id}/confirm",
+                json={
+                    "expected_version": body["version"],
+                    "accept_warnings": True,
+                },
+            )
+            assert repeated.status_code == 200, repeated.text
+            assert repeated.json()["version"] == body["version"]
+            assert [item["id"] for item in repeated.json()["notification_logs"]] == (
+                notification_ids
+            )
+
+            clone = await client.post(
+                f"/api/plans/{plan_id}/clone",
+                json={"name": "Без паспортов"},
+            )
+            assert clone.status_code == 201, clone.text
+            drivers = await client.get(f"/api/scenarios/{scenario_id}/drivers")
+            for driver in drivers.json():
+                cleared = await client.patch(
+                    f"/api/drivers/{driver['id']}",
+                    json={"passport_details": ""},
+                )
+                assert cleared.status_code == 200, cleared.text
+            passport_rejected = await client.post(
+                f"/api/plans/{clone.json()['id']}/confirm",
+                json={
+                    "expected_version": clone.json()["version"],
+                    "accept_warnings": True,
+                },
+            )
+            assert passport_rejected.status_code == 422
+            assert passport_rejected.json()["code"] == "DRIVER_PASSPORT_REQUIRED"
+            unchanged_clone = await client.get(f"/api/plans/{clone.json()['id']}")
+            assert unchanged_clone.json()["status"] == "DRAFT"
+            assert unchanged_clone.json()["notification_logs"] == []
         finally:
             deleted = await client.delete(f"/api/scenarios/{scenario_id}")
             assert deleted.status_code == 204, deleted.text
@@ -588,10 +874,7 @@ async def test_http_workload_generator_can_regenerate_one_day() -> None:
             assert len(requests.json()) == 3
             assert all(request["zone_id"] == zone.json()["id"] for request in requests.json())
             assert all(len(request["date_options"]) == 1 for request in requests.json())
-            assert all(
-                request["scheduled_date"] == "2026-08-24"
-                for request in requests.json()
-            )
+            assert all(request["scheduled_date"] == "2026-08-24" for request in requests.json())
 
             next_day = await client.post(
                 f"/api/scenarios/{scenario_id}/generate-workload",
@@ -625,10 +908,7 @@ async def test_http_workload_generator_can_regenerate_one_day() -> None:
             assert repeated_delete.json()["deleted_plans"] == 0
             remaining = await client.get(f"/api/scenarios/{scenario_id}/requests")
             assert len(remaining.json()) == 2
-            assert all(
-                request["scheduled_date"] == "2026-08-25"
-                for request in remaining.json()
-            )
+            assert all(request["scheduled_date"] == "2026-08-25" for request in remaining.json())
         finally:
             deleted = await client.delete(f"/api/scenarios/{scenario_id}")
             assert deleted.status_code == 204, deleted.text

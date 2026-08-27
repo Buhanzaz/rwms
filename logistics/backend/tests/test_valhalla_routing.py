@@ -124,9 +124,7 @@ def test_route_payload_uses_exact_one_and_two_cargo_profiles() -> None:
 def test_route_parses_native_trip_metrics_and_geojson_legs() -> None:
     """Valhalla's kilometer summaries become exact meter/second simulation legs."""
 
-    provider = _provider(
-        httpx.MockTransport(lambda _: httpx.Response(200, json=_route_response()))
-    )
+    provider = _provider(httpx.MockTransport(lambda _: httpx.Response(200, json=_route_response())))
     route = asyncio.run(
         provider.get_route(
             [GeoPoint(37.6, 55.7), GeoPoint(37.61, 55.71)],
@@ -213,9 +211,7 @@ def test_locate_snaps_candidate_without_claiming_a_truck_route() -> None:
         )
 
     snapped = asyncio.run(
-        _provider(httpx.MockTransport(handler)).snap_point(
-            GeoPoint(37.6, 55.7, is_city=True)
-        )
+        _provider(httpx.MockTransport(handler)).snap_point(GeoPoint(37.6, 55.7, is_city=True))
     )
 
     assert snapped.point == GeoPoint(37.60025, 55.7005, is_city=True)
@@ -311,9 +307,7 @@ def test_unreachable_matrix_cell_is_no_safe_route() -> None:
         httpx.MockTransport(lambda _: httpx.Response(503, json={"error_code": 442})),
         httpx.MockTransport(lambda _: httpx.Response(200, content=b"not-json")),
         httpx.MockTransport(
-            lambda request: (_ for _ in ()).throw(
-                httpx.ConnectError("down", request=request)
-            )
+            lambda request: (_ for _ in ()).throw(httpx.ConnectError("down", request=request))
         ),
     ],
 )
@@ -390,9 +384,7 @@ def test_capability_table_does_not_overclaim_conditional_dimensions() -> None:
     claims = {item.osm_tag: item.support for item in OSM_TRUCK_RESTRICTIONS}
     assert claims["hgv / access / motor_vehicle / vehicle"] is RestrictionSupport.SUPPORTED
     conditional = next(
-        support
-        for tag, support in claims.items()
-        if tag.startswith("maxweight:conditional")
+        support for tag, support in claims.items() if tag.startswith("maxweight:conditional")
     )
     assert conditional is RestrictionSupport.UNSUPPORTED
     assert claims["hgv_articulated / trailer"] is RestrictionSupport.UNSUPPORTED

@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MultiPolygon, Polygon } from 'geojson';
-import { api, ApiError, getScenarioWorkspace, optimizationStreamUrl, type ZoneInput } from '../api/client';
+import { api, ApiError, getScenarioWorkspace, optimizationStreamUrl, type RequestPlanningDetailsInput, type ZoneInput } from '../api/client';
 import type {
   Driver,
   DriverShift,
@@ -45,12 +45,14 @@ import {
 } from '../components/EntityDialogs';
 import { MapCanvas } from '../map/MapCanvas';
 import { isRequestVisibleOnDate } from '../domain/request-dates';
+import { requestPlanningMissingFields } from '../domain/planning-readiness';
 import { useUiStore } from '../stores/ui-store';
 import { dateInTimeZone, formatDate, nextDate } from '../utils/format';
 import { deriveSimulationState, planTimeBounds } from '../simulation/deriveSimulationState';
 import { Sidebar } from './Sidebar';
 import { Inspector, type EditableEntity, type EntityKind } from './Inspector';
 import type { PlanMove } from '../features/planning/PlanPanel';
+import { NotificationLog } from '../features/planning/NotificationLog';
 import { SimulationBar } from '../features/simulation/SimulationBar';
 import { RwmsIntegrationDialog } from '../features/rwms/RwmsIntegrationDialog';
 import { WorkloadGeneratorDialog } from '../features/scenarios/WorkloadGeneratorDialog';
@@ -176,7 +178,8 @@ export function App() {
       setValidation(null);
       clearSimulationOverrides();
     }
-  }, [clearSimulationOverrides, plan?.date]);
+    if (mode === 'PLAN') setSection('PLAN_DAY');
+  }, [clearSimulationOverrides, mode, plan?.date, setSection]);
 
   const scenariosQuery = useQuery({ queryKey: ['scenarios'], queryFn: api.listScenarios });
   useEffect(() => {
@@ -194,15 +197,14 @@ export function App() {
   const baseWorkspace = workspaceQuery.data ?? null;
   const workspaceScenarioId = baseWorkspace?.scenario.id;
   const workspaceDefaultPlanningDate = baseWorkspace?.scenario.default_planning_date;
+  const workspaceTimeZone = baseWorkspace?.scenario.timezone;
   useEffect(() => {
-    if (workspaceDefaultPlanningDate) setPlanningDate(workspaceDefaultPlanningDate);
-    setPlanId(null);
-    setPlan(null);
-    setRunId(null);
-    setValidation(null);
-    clearTrace();
-    clearSimulationOverrides();
-  }, [clearSimulationOverrides, clearTrace, workspaceDefaultPlanningDate, workspaceScenarioId]);
+    if (!workspaceScenarioId || !workspaceTimeZone) return;
+    setPlanningDate(
+      workspaceDefaultPlanningDate ?? dateInTimeZone(new Date(), workspaceTimeZone),
+    );
+    clearLocalPlanningState();
+  }, [clearLocalPlanningState, workspaceDefaultPlanningDate, workspaceScenarioId, workspaceTimeZone]);
 
   const truckCatalogQuery = useQuery({
     queryKey: ['truck-catalog', workspaceScenarioId, baseWorkspace?.scenario.updated_at],
@@ -275,7 +277,7 @@ export function App() {
     if (run.plan_id) {
       setPlanId(run.plan_id);
       setMode('PLAN');
-      setSection(run.status === 'FAILED' ? 'UNASSIGNED' : 'ROUTES');
+      setSection(run.status === 'FAILED' ? 'UNASSIGNED' : 'PLAN_DAY');
       if (run.status !== 'COMPLETED') {
         const detail = run.status === 'TIMED_OUT' ? 'Показан лучший найденный план.' : run.error_message;
         toast({ tone: run.status === 'TIMED_OUT' ? 'warning' : 'error', title: run.status === 'TIMED_OUT' ? 'Лимит времени достигнут' : `Оптимизация: ${run.status}`, ...(detail ? { detail } : {}) });
@@ -401,6 +403,10 @@ export function App() {
   const handleRequestMoveDraft = useCallback((requestId: UUID, longitude: number, latitude: number) => {
     const request = workspace?.requests.find((candidate) => candidate.id === requestId);
     if (!request) return;
+    if (request.source_system === 'RWMS') {
+      toast({ tone: 'warning', title: 'Координаты принадлежат RWMS', detail: 'Исправьте заказ в RWMS и повторите синхронизацию.' });
+      return;
+    }
     setDialog({ kind: 'request', value: request, point: { longitude, latitude }, requestType: request.type });
     toast({ tone: 'info', title: 'Новые координаты не сохранены', detail: 'Проверьте форму и сохраните; backend заново определит зону.' });
   }, [toast, workspace]);
@@ -471,6 +477,18 @@ export function App() {
       toast({ tone: 'warning', title: 'План пока построить нельзя', detail: missing.join('; ') });
       return;
     }
+    const incompleteRequests = readyRequests.filter((request) => requestPlanningMissingFields(request, planningDate).length > 0);
+    if (incompleteRequests.length) {
+      setMode('PLAN');
+      setSection('PLAN_DAY');
+      const preview = incompleteRequests.slice(0, 3).map((request) => `${request.name}: ${requestPlanningMissingFields(request, planningDate).join(', ')}`).join('; ');
+      toast({
+        tone: 'warning',
+        title: `Заполните условия: ${incompleteRequests.length}`,
+        detail: `${preview}${incompleteRequests.length > 3 ? `; ещё ${incompleteRequests.length - 3}` : ''}`,
+      });
+      return;
+    }
     const outsideCount = readyRequests.filter((request) => request.zone_status === 'OUTSIDE_ZONES').length;
     const staleCount = readyRequests.filter((request) => request.zone_status === 'STALE').length;
     if (outsideCount + staleCount > 0) {
@@ -514,7 +532,12 @@ export function App() {
       setPlan(confirmed);
       setValidation(null);
       setDialog(null);
-    }, 'План подтверждён').catch(() => undefined);
+      toast({
+        tone: 'success',
+        title: 'План подтверждён',
+        detail: `В тестовый журнал записано уведомлений: ${confirmed.notification_logs?.length ?? 0}.`,
+      });
+    }, undefined).catch(() => undefined);
   };
 
   const savePlan = async () => {
@@ -543,6 +566,38 @@ export function App() {
     }, 'Изменение проверено и применено').catch(() => undefined);
   };
 
+  const saveRequestPlanning = async (requestId: UUID, input: RequestPlanningDetailsInput) => {
+    await execute(async () => {
+      await api.saveRequestPlanningDetails(requestId, input);
+      await refresh();
+      if (plan?.date === input.date) {
+        queryClient.removeQueries({ queryKey: ['plan', plan.id] });
+        setPlanId(null);
+        setPlan(null);
+        setValidation(null);
+        setRunId(null);
+      }
+      setMode('PLAN');
+      setSection('PLAN_DAY');
+    }, 'Условия заявки сохранены').catch(() => undefined);
+  };
+
+  const splitRequestIntoSubtasks = async (requestId: UUID, quantities: number[]) => {
+    await execute(async () => {
+      await api.splitRequest(requestId, quantities);
+      await refresh();
+      if (plan) {
+        queryClient.removeQueries({ queryKey: ['plan', plan.id] });
+        setPlanId(null);
+        setPlan(null);
+        setValidation(null);
+        setRunId(null);
+      }
+      setMode('PLAN');
+      setSection('PLAN_DAY');
+    }, `Созданы подзадачи: ${quantities.join(' + ')}`).catch(() => undefined);
+  };
+
   const toggleCycleLock = async (cycle: RouteCycle) => {
     if (!workspace || !plan) return;
     await execute(async () => {
@@ -561,17 +616,18 @@ export function App() {
   }, [mode, plan, setSimulationTimestamp, simulationTimestamp]);
 
   const changeMode = (nextMode: 'EDITOR' | 'PLAN' | 'SIMULATION') => {
-    if (nextMode !== 'EDITOR' && !plan) {
-      toast({ tone: 'info', title: 'Сначала постройте план' });
-      return;
-    }
     if (nextMode === 'SIMULATION' && plan && !plan.driver_routes.some((route) => route.cycles.length > 0)) {
       setSection('UNASSIGNED');
       toast({ tone: 'warning', title: 'Симуляцию пока запустить нельзя', detail: 'В плане нет ни одного рейса. Открыты причины нераспределения.' });
       return;
     }
+    if (nextMode === 'SIMULATION' && !plan) {
+      toast({ tone: 'info', title: 'Сначала постройте план' });
+      return;
+    }
     setMode(nextMode);
-    if (nextMode === 'SIMULATION') setSection('ROUTES');
+    if (nextMode === 'PLAN') setSection('PLAN_DAY');
+    else if (nextMode === 'SIMULATION') setSection('ROUTES');
   };
 
   const exportScenario = async () => {
@@ -659,7 +715,7 @@ export function App() {
   const selectedOverrideRoute = dialog?.kind === 'simulation' ? plan?.driver_routes.find((route) => route.driver_shift_id === dialog.driverShiftId) : undefined;
 
   return (
-    <div className={`app-shell ${mode === 'SIMULATION' ? 'app-shell--simulation' : ''}`}>
+    <div className={`app-shell ${mode === 'SIMULATION' ? 'app-shell--simulation' : ''} ${mode === 'PLAN' ? 'app-shell--plan' : ''}`}>
       <header className="topbar">
         <div className="topbar__brand"><div className="brand-mark">L</div><label className="scenario-select"><small>RWMS · Логистический стенд</small><select aria-label="Текущий сценарий" value={scenarioId} onChange={(event) => setScenarioId(event.target.value)}>{scenariosQuery.data.map((scenario) => <option value={scenario.id} key={scenario.id}>{scenario.name}</option>)}</select></label></div>
         <div className="topbar__date"><label className="date-field"><CalendarDays size={15} /><input aria-label="Дата планирования" type="date" value={planningDate} onChange={(event) => selectPlanningDate(event.target.value)} /></label><Button size="sm" onClick={() => selectPlanningDate(dateInTimeZone(new Date(), workspace.scenario.timezone))}>Сегодня</Button><Button size="sm" onClick={() => selectPlanningDate(nextDate(dateInTimeZone(new Date(), workspace.scenario.timezone), 1))}>Завтра</Button></div>
@@ -713,9 +769,12 @@ export function App() {
           planningDate={planningDate} onPlanningDateChange={selectPlanningDate}
           onScheduleRequestDate={(requestId, date, addIfMissing) => void scheduleRequestDate(requestId, date, addIfMissing)}
           onUnscheduleRequest={(requestId) => void unscheduleRequest(requestId)}
+          onSaveRequestPlanning={saveRequestPlanning}
+          onSplitRequest={splitRequestIntoSubtasks}
         />
       </div>
       {mode === 'SIMULATION' && plan && simulationState && simulationTimestamp !== null ? <SimulationBar plan={plan} state={simulationState} timestamp={simulationTimestamp} timeZone={workspace.scenario.timezone} playing={simulationPlaying} speed={simulationSpeed} overrides={simulationOverrides} onTimestamp={setSimulationTimestamp} onPlaying={setSimulationPlaying} onSpeed={setSimulationSpeed} /> : null}
+      <NotificationLog logs={plan?.notification_logs ?? []} sidebarsCollapsed={sidebarsCollapsed} />
       <input ref={importRef} hidden type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importScenario(file); event.currentTarget.value = ''; }} />
 
       {dialog?.kind === 'scenario' ? <ScenarioDialog scenario={dialog.value} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => {

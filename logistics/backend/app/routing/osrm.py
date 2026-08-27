@@ -169,8 +169,7 @@ class OsrmRoutingProvider:
                 request_points = sources + destinations
                 source_indexes = ";".join(str(index) for index in range(len(sources)))
                 destination_indexes = ";".join(
-                    str(index)
-                    for index in range(len(sources), len(request_points))
+                    str(index) for index in range(len(sources), len(request_points))
                 )
                 payload = await self._request(
                     f"/table/v1/{self.profile}/{self._coordinates(request_points)}",
@@ -196,12 +195,12 @@ class OsrmRoutingProvider:
                     source_index = source_start + source_offset
                     for destination_offset in range(len(destinations)):
                         destination_index = destination_start + destination_offset
-                        distances[source_index][destination_index] = block_distances[
-                            source_offset
-                        ][destination_offset]
-                        durations[source_index][destination_index] = block_durations[
-                            source_offset
-                        ][destination_offset]
+                        distances[source_index][destination_index] = block_distances[source_offset][
+                            destination_offset
+                        ]
+                        durations[source_index][destination_index] = block_durations[source_offset][
+                            destination_offset
+                        ]
 
         return (
             tuple(tuple(row) for row in distances),
@@ -291,9 +290,7 @@ class OsrmRoutingProvider:
             code = raw_payload.get("code") if isinstance(raw_payload, Mapping) else None
             message = raw_payload.get("message") if isinstance(raw_payload, Mapping) else None
             if code == "NoSegment":
-                raise OsrmRoadSnapNotFoundError(
-                    "OSRM did not find a routable road segment"
-                )
+                raise OsrmRoadSnapNotFoundError("OSRM did not find a routable road segment")
             code_suffix = f", код {code}" if isinstance(code, str) else ""
             message_suffix = f": {message[:300]}" if isinstance(message, str) else ""
             raise OsrmRoutingProviderError(
@@ -305,9 +302,7 @@ class OsrmRoutingProvider:
         code = raw_payload.get("code")
         if code != "Ok":
             if code == "NoSegment":
-                raise OsrmRoadSnapNotFoundError(
-                    "OSRM did not find a routable road segment"
-                )
+                raise OsrmRoadSnapNotFoundError("OSRM did not find a routable road segment")
             message = raw_payload.get("message")
             suffix = f": {message}" if isinstance(message, str) else ""
             raise OsrmRoutingProviderError(f"OSRM routing failed with code {code!r}{suffix}")

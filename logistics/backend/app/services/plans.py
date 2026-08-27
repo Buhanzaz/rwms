@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Protocol
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,15 +15,21 @@ from app.db import utc_now
 from app.errors import ApiError, not_found
 from app.geo import geometry_to_geojson
 from app.models import (
+    Driver,
+    DriverShift,
+    LogisticsRequest,
     ManualChangeAudit,
     OptimizationRun,
     OptimizationTraceEvent,
+    PlanningTask,
+    PlanNotificationLog,
     RouteCycle,
     RouteExplanation,
     RoutePlan,
     RouteSegment,
     RouteStop,
     UnassignedTask,
+    Vehicle,
 )
 from app.models.domain import OptimizationStatus, PlanStatus
 from app.repositories import get_required
@@ -29,6 +37,7 @@ from app.schemas.domain import (
     CyclePatch,
     GeneratePlanRequest,
     ManualChangeRequest,
+    PlanNotificationLogRead,
     RouteCycleRead,
     RoutePlanRead,
     RouteSegmentRead,
@@ -93,6 +102,16 @@ class PlannerFacade(Protocol):
         command: ManualChangeRequest,
     ) -> OptimizationRun:
         """Replan only unfinished, unlocked work from fixed simulation state."""
+
+
+@dataclass(slots=True)
+class _NotificationGroup:
+    """Mutable confirmation-time aggregation for one assigned source request."""
+
+    request: LogisticsRequest
+    visits: list[tuple[RouteStop, Driver, Vehicle, int]] = field(default_factory=list)
+    task_ids: set[UUID] = field(default_factory=set)
+    assigned_quantity: int = 0
 
 
 class UnavailablePlannerFacade:
@@ -181,14 +200,21 @@ async def get_plan(session: AsyncSession, plan_id: UUID, *, for_update: bool = F
     """Load a complete saved plan graph, optionally locking its version row."""
 
     cycles = selectinload(RoutePlan.cycles)
+    stops = cycles.selectinload(RouteCycle.stops)
     statement = (
         select(RoutePlan)
         .where(RoutePlan.id == plan_id)
         .options(
-            cycles.selectinload(RouteCycle.stops),
+            stops.selectinload(RouteStop.task)
+            .selectinload(PlanningTask.request)
+            .selectinload(LogisticsRequest.date_options),
             cycles.selectinload(RouteCycle.segments),
             cycles.selectinload(RouteCycle.explanations),
+            cycles.selectinload(RouteCycle.driver_shift).selectinload(DriverShift.driver),
+            cycles.selectinload(RouteCycle.driver_shift).selectinload(DriverShift.vehicle),
+            selectinload(RoutePlan.scenario),
             selectinload(RoutePlan.unassigned_tasks),
+            selectinload(RoutePlan.notification_logs),
         )
     )
     if for_update:
@@ -273,6 +299,9 @@ def plan_read(plan: RoutePlan) -> RoutePlanRead:
         unassigned_tasks=[
             UnassignedTaskRead.model_validate(item) for item in plan.unassigned_tasks
         ],
+        notification_logs=[
+            PlanNotificationLogRead.model_validate(item) for item in plan.notification_logs
+        ],
     )
 
 
@@ -345,10 +374,137 @@ async def confirm_plan(
             "Explicitly accept warnings before confirming this plan",
             extra={"warnings": plan.validation_warnings},
         )
+    if plan.status == PlanStatus.CONFIRMED:
+        return plan
+    await _create_simulated_notification_logs(session, plan)
     plan.status = PlanStatus.CONFIRMED
     plan.version += 1
     await session.flush()
     return await get_plan(session, plan.id)
+
+
+def _vehicle_label(vehicle: Vehicle) -> str:
+    """Render manufacturer and model with the operational name as a fallback."""
+
+    manufacturer = str(getattr(vehicle, "manufacturer", "") or "").strip()
+    model = str(getattr(vehicle, "model", "") or "").strip()
+    physical_label = " ".join(part for part in (manufacturer, model) if part)
+    return physical_label or str(getattr(vehicle, "name", "Автомобиль"))
+
+
+def _notification_message(
+    plan: RoutePlan,
+    request: LogisticsRequest,
+    visits: list[tuple[RouteStop, Driver, Vehicle, int]],
+    assigned_quantity: int,
+) -> str:
+    """Build one Russian contact message aggregating every split-request visit."""
+
+    operation = "Доставка" if request.type == "DELIVERY" else "Вывоз"
+    planned_word = "запланирована" if request.type == "DELIVERY" else "запланирован"
+    greeting = f"{request.contact_name}, " if request.contact_name.strip() else ""
+    scenario_zone = ZoneInfo(plan.scenario.timezone)
+    lines = [
+        f"{greeting}{operation} {assigned_quantity} БК {planned_word} "
+        f"на {plan.date.strftime('%d.%m.%Y')}.",
+    ]
+    option = next((item for item in request.date_options if item.date == plan.date), None)
+    if option is not None and option.window_start is not None and option.window_end is not None:
+        lines.append(
+            f"Согласованное окно: {option.window_start.strftime('%H:%M')}-"
+            f"{option.window_end.strftime('%H:%M')}."
+        )
+    seen_assignments: set[tuple[UUID, UUID, int, str]] = set()
+    for stop, driver, vehicle, cycle_sequence in visits:
+        assignment_key = (driver.id, vehicle.id, cycle_sequence, stop.planned_arrival.isoformat())
+        if assignment_key in seen_assignments:
+            continue
+        seen_assignments.add(assignment_key)
+        local_arrival = stop.planned_arrival.astimezone(scenario_zone)
+        lines.append(
+            f"Рейс {cycle_sequence}, прибытие ориентировочно "
+            f"{local_arrival.strftime('%H:%M')}: водитель {driver.name}; "
+            f"автомобиль {_vehicle_label(vehicle)}; госномер {vehicle.registration_number}."
+        )
+    if request.include_driver_passport_in_notification:
+        seen_drivers: set[UUID] = set()
+        for _, driver, _, _ in visits:
+            if driver.id in seen_drivers:
+                continue
+            seen_drivers.add(driver.id)
+            lines.append(f"Паспортные данные водителя {driver.name}: {driver.passport_details}.")
+    return "\n".join(lines)
+
+
+async def _create_simulated_notification_logs(
+    session: AsyncSession,
+    plan: RoutePlan,
+) -> None:
+    """Append one idempotent simulated delivery record per assigned source request."""
+
+    grouped: dict[UUID, _NotificationGroup] = {}
+    for cycle in sorted(plan.cycles, key=lambda item: (item.planned_start, item.sequence)):
+        shift = cycle.driver_shift
+        for stop in sorted(cycle.stops, key=lambda item: item.sequence):
+            if stop.task is None:
+                continue
+            request = stop.task.request
+            group = grouped.setdefault(
+                request.id,
+                _NotificationGroup(request=request),
+            )
+            group.visits.append((stop, shift.driver, shift.vehicle, cycle.sequence))
+            if stop.task.id not in group.task_ids:
+                group.task_ids.add(stop.task.id)
+                group.assigned_quantity += stop.task.quantity
+
+    missing_passports: list[dict[str, object]] = []
+    for group in grouped.values():
+        request = group.request
+        if not request.include_driver_passport_in_notification:
+            continue
+        missing_names = sorted(
+            {driver.name for _, driver, _, _ in group.visits if not driver.passport_details.strip()}
+        )
+        if missing_names:
+            missing_passports.append(
+                {
+                    "request_id": str(request.id),
+                    "request_name": request.name,
+                    "drivers": missing_names,
+                }
+            )
+    if missing_passports:
+        raise ApiError(
+            422,
+            "DRIVER_PASSPORT_REQUIRED",
+            "Fill in passport details for every driver included in a client notification",
+            extra={"requests": missing_passports},
+        )
+
+    existing_request_ids = {item.request_id for item in plan.notification_logs}
+    for request_id, group in sorted(grouped.items(), key=lambda item: str(item[0])):
+        if request_id in existing_request_ids:
+            continue
+        request = group.request
+        session.add(
+            PlanNotificationLog(
+                plan_id=plan.id,
+                request_id=request_id,
+                recipient_name=request.contact_name,
+                recipient_contact=request.contact_phone,
+                message=_notification_message(
+                    plan,
+                    request,
+                    group.visits,
+                    group.assigned_quantity,
+                ),
+                includes_driver_passport=(request.include_driver_passport_in_notification),
+                status="SIMULATED_DELIVERED",
+            )
+        )
+    await session.flush()
+    session.expire(plan, ["notification_logs"])
 
 
 async def clone_plan(session: AsyncSession, plan_id: UUID, *, name: str | None = None) -> RoutePlan:

@@ -19,7 +19,7 @@ function planFixture(): RoutePlan {
       reason_codes: ['TIME_WINDOW_CONFLICT'], reasons: ['временное окно 09:00–11:00 не помещается ни в одну смену'], closest_option: '12:15', recommendations: ['увеличить временное окно'],
     }],
     driver_routes: [{
-      driver_shift_id: 'shift', driver_id: 'driver', driver_name: 'Водитель 1', vehicle_id: 'vehicle', vehicle_name: 'МАЗ', registration_number: 'А123БВ', preferred_route_group: 'WEST', metrics: { ...EMPTY_METRICS, shift_utilization_percent: 67 },
+      driver_shift_id: 'shift', shift_start_at: '2026-08-25T04:00:00Z', shift_end_at: '2026-08-25T17:00:00Z', driver_id: 'driver', driver_name: 'Водитель 1', vehicle_id: 'vehicle', vehicle_name: 'МАЗ', registration_number: 'А123БВ', preferred_route_group: 'WEST', metrics: { ...EMPTY_METRICS, shift_utilization_percent: 67 },
       cycles: [{
         id: 'cycle', route_plan_id: 'plan', driver_shift_id: 'shift', sequence: 1, planned_start: '2026-08-25T05:00:00Z', planned_finish: '2026-08-25T10:00:00Z', total_distance_meters: 146000,
         total_travel_seconds: 12300, total_service_seconds: 6000, empty_distance_meters: 25000, detour_seconds: 1320, score: 12.5, locked: false,
@@ -90,6 +90,8 @@ function inspectorProps(plan: RoutePlan, simulation: SimulationDerivedState): Co
     onPlanningDateChange: () => undefined,
     onScheduleRequestDate: () => undefined,
     onUnscheduleRequest: () => undefined,
+    onSaveRequestPlanning: () => Promise.resolve(),
+    onSplitRequest: () => Promise.resolve(),
   };
 }
 
@@ -162,8 +164,45 @@ describe('simulation controls', () => {
     await user.selectOptions(screen.getByLabelText('Скорость симуляции'), '20');
     expect(onSpeed).toHaveBeenCalledWith(20);
     const slider = screen.getByLabelText('Время симуляции');
+    expect(slider).toHaveAttribute('min', String(new Date('2026-08-25T04:00:00Z').getTime()));
     fireEvent.change(slider, { target: { value: String(new Date('2026-08-25T08:00:00Z').getTime()) } });
     expect(onTimestamp).toHaveBeenCalledWith(new Date('2026-08-25T08:00:00Z').getTime());
+  });
+
+  it('does not count vehicles whose first window has not started as working', () => {
+    const plan = planFixture();
+    const timestamp = new Date('2026-08-25T06:00:00Z').getTime();
+    const vehicle: SimulationDerivedState['vehicles'][number] = {
+      driver_shift_id: 'waiting-shift',
+      driver_name: 'Ожидающий водитель',
+      vehicle_name: 'Машина',
+      registration_number: 'А000АА',
+      position: { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [37.6, 55.7] } },
+      status: 'WAITING_SHIFT',
+      load: 0,
+      next_stop_label: 'Поздняя доставка',
+      eta: '2026-08-25T12:00:00Z',
+      active_cycle_id: null,
+      active_leg_index: null,
+      delayed_by_minutes: 0,
+    };
+    const state: SimulationDerivedState = {
+      timestamp: new Date(timestamp).toISOString(),
+      vehicles: [
+        vehicle,
+        { ...vehicle, driver_shift_id: 'active-shift', status: 'DRIVING' },
+        { ...vehicle, driver_shift_id: 'finished-shift', status: 'FINISHED' },
+      ],
+      events: [],
+      completed_stop_ids: [],
+      active_stop_ids: [],
+      affected_task_ids: [],
+      warnings: [],
+    };
+
+    render(<SimulationBar plan={plan} state={state} timestamp={timestamp} timeZone="Europe/Moscow" playing={false} speed={5} overrides={[]} onTimestamp={() => undefined} onPlaying={() => undefined} onSpeed={() => undefined} />);
+
+    expect(screen.getByText('Машин в работе: 1')).toBeVisible();
   });
 });
 

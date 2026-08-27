@@ -123,27 +123,29 @@ export function normalizeMetrics(source: Record<string, unknown>): PlanMetrics {
   };
 }
 
-function lineGeometry(raw: Record<string, unknown>, from: RawRouteStop | undefined, to: RawRouteStop | undefined): Feature<LineString> {
+function lineGeometry(raw: Record<string, unknown>, segmentId: UUID): Feature<LineString> {
   const rawType = raw.type;
   const rawCoordinates = raw.coordinates;
-  if (rawType === 'LineString' && Array.isArray(rawCoordinates)) {
-    const coordinates = rawCoordinates.filter(
-      (point): point is [number, number] =>
-        Array.isArray(point) && typeof point[0] === 'number' && typeof point[1] === 'number',
-    );
-    if (coordinates.length >= 2) return { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates } };
+  if (rawType !== 'LineString' || !Array.isArray(rawCoordinates) || rawCoordinates.length < 2) {
+    throw new Error(`Route segment ${segmentId} has invalid GeoJSON geometry`);
   }
-  return {
-    type: 'Feature',
-    properties: {},
-    geometry: {
-      type: 'LineString',
-      coordinates: [
-        [from?.longitude ?? 0, from?.latitude ?? 0],
-        [to?.longitude ?? 0, to?.latitude ?? 0],
-      ],
-    },
-  };
+  const coordinates = rawCoordinates.map((point) => {
+    if (
+      !Array.isArray(point)
+      || typeof point[0] !== 'number'
+      || typeof point[1] !== 'number'
+      || !Number.isFinite(point[0])
+      || !Number.isFinite(point[1])
+      || point[0] < -180
+      || point[0] > 180
+      || point[1] < -90
+      || point[1] > 90
+    ) {
+      throw new Error(`Route segment ${segmentId} has invalid WGS84 coordinates`);
+    }
+    return [point[0], point[1]] as [number, number];
+  });
+  return { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates } };
 }
 
 function textFromRecord(record: Record<string, unknown>): string {
@@ -170,29 +172,12 @@ function explanationLines(records: Array<Record<string, unknown>>): string[] {
   return records.map(textFromRecord).filter(Boolean);
 }
 
-function lookupTask(workspace: ScenarioWorkspace, taskId: UUID): { task: PlanningTask; request?: LogisticsRequest } | null {
+function lookupTask(workspace: ScenarioWorkspace, taskId: UUID): { task: PlanningTask; request: LogisticsRequest } | null {
   for (const request of workspace.requests) {
     const task = request.tasks?.find((candidate) => candidate.id === taskId);
     if (task) return { task, request };
   }
   return null;
-}
-
-function fallbackTask(taskId: UUID): PlanningTask {
-  return {
-    id: taskId,
-    request_id: taskId,
-    part_number: 1,
-    quantity: 1,
-    type: 'DELIVERY',
-    latitude: 0,
-    longitude: 0,
-    zone_id: null,
-    zone_version: null,
-    service_minutes: 0,
-    priority: 0,
-    status: 'UNASSIGNED',
-  };
 }
 
 function normalizeCycle(raw: RawRouteCycle, workspace: ScenarioWorkspace, planId: UUID): RouteCycle {
@@ -217,11 +202,7 @@ function normalizeCycle(raw: RawRouteCycle, workspace: ScenarioWorkspace, planId
       arrival_at: segment.arrival_at,
       distance_meters: segment.distance_meters,
       travel_seconds: segment.travel_seconds,
-      geometry: lineGeometry(
-        segment.geometry,
-        raw.stops.find((stop) => stop.id === segment.from_stop_id),
-        raw.stops.find((stop) => stop.id === segment.to_stop_id),
-      ),
+      geometry: lineGeometry(segment.geometry, segment.id),
     }));
   return {
     id: raw.id,
@@ -276,6 +257,8 @@ export function normalizeRoutePlan(raw: RawRoutePlan, workspace: ScenarioWorkspa
     });
     return {
       driver_shift_id: shiftId,
+      shift_start_at: shift?.start_at ?? firstCycle?.planned_start ?? raw.created_at,
+      shift_end_at: shift?.end_at ?? lastCycle?.planned_finish ?? raw.updated_at,
       driver_id: driver?.id ?? shift?.driver_id ?? shiftId,
       driver_name: driver?.name ?? 'Неизвестный водитель',
       vehicle_id: vehicle?.id ?? shift?.vehicle_id ?? shiftId,
@@ -288,16 +271,44 @@ export function normalizeRoutePlan(raw: RawRoutePlan, workspace: ScenarioWorkspa
   });
   const unassigned: UnassignedTask[] = raw.unassigned_tasks.map((item) => {
     const found = lookupTask(workspace, item.task_id);
+    if (!found) {
+      throw new Error(`Route plan ${raw.id} references missing task ${item.task_id}`);
+    }
     const nearest = item.nearest_option ? textFromRecord(item.nearest_option) : null;
     return {
-      task: found?.task ?? fallbackTask(item.task_id),
-      ...(found?.request ? { request: found.request } : {}),
+      task: found.task,
+      request: found.request,
       reason_codes: item.reason_codes as UnassignedTask['reason_codes'],
       reasons: item.descriptions_ru,
       closest_option: nearest,
       recommendations: item.recommendation_ru ? [item.recommendation_ru] : [],
     };
   });
+  const rawRecord = raw as unknown as Record<string, unknown>;
+  const notificationLogs = Array.isArray(rawRecord.notification_logs)
+    ? rawRecord.notification_logs.flatMap((value) => {
+      if (!value || typeof value !== 'object') return [];
+      const item = value as Record<string, unknown>;
+      if (
+        typeof item.id !== 'string'
+        || typeof item.plan_id !== 'string'
+        || typeof item.request_id !== 'string'
+        || typeof item.message !== 'string'
+        || typeof item.created_at !== 'string'
+      ) return [];
+      return [{
+        id: item.id,
+        plan_id: item.plan_id,
+        request_id: item.request_id,
+        recipient_name: typeof item.recipient_name === 'string' ? item.recipient_name : '',
+        recipient_contact: typeof item.recipient_contact === 'string' ? item.recipient_contact : '',
+        message: item.message,
+        includes_driver_passport: item.includes_driver_passport === true,
+        status: 'SIMULATED_DELIVERED' as const,
+        created_at: item.created_at,
+      }];
+    })
+    : [];
   return {
     id: raw.id,
     scenario_id: raw.scenario_id,
@@ -311,6 +322,7 @@ export function normalizeRoutePlan(raw: RawRoutePlan, workspace: ScenarioWorkspa
     driver_routes: driverRoutes,
     unassigned,
     metrics: normalizeMetrics(raw.metrics),
+    notification_logs: notificationLogs,
   };
 }
 
@@ -358,11 +370,19 @@ export function normalizeWorkspace(workspace: ScenarioWorkspace): ScenarioWorksp
   return {
     ...workspace,
     scenario: normalizeScenario(workspace.scenario),
-    drivers: workspace.drivers.map((driver) => ({ ...driver, preferred_route_group: driver.preferred_route_group ?? '' })),
+    drivers: workspace.drivers.map((driver) => ({
+      ...driver,
+      preferred_route_group: driver.preferred_route_group ?? '',
+      passport_details: driver.passport_details ?? '',
+    })),
     shifts: workspace.shifts.map((shift) => ({ ...shift, preferred_route_group: shift.preferred_route_group ?? '' })),
     requests: workspace.requests.map((request) => ({
       ...request,
       scheduled_date: request.scheduled_date ?? null,
+      trailer_access_allowed: request.trailer_access_allowed ?? null,
+      include_driver_passport_in_notification: request.include_driver_passport_in_notification ?? false,
+      contact_name: request.contact_name ?? '',
+      contact_phone: request.contact_phone ?? '',
       date_options: request.date_options ?? [],
       tasks: request.tasks ?? [],
       zone_status: request.zone_status ??

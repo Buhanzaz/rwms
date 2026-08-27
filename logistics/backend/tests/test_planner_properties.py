@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from hypothesis import given, settings
@@ -24,6 +24,7 @@ from app.planner import (
     Warehouse,
     ZoneSnapshot,
     split_request,
+    validate_route_plan,
 )
 from app.routing import GeoPoint, MockRoutingProvider, RoutingSettings
 
@@ -74,6 +75,8 @@ def test_split_preserves_quantity_and_transport_part_bounds(quantity: int) -> No
             st.sampled_from([TaskType.DELIVERY, TaskType.PICKUP]),
             st.integers(min_value=1, max_value=2),
             st.integers(min_value=0, max_value=50),
+            st.integers(min_value=8, max_value=18),
+            st.integers(min_value=1, max_value=4),
         ),
         min_size=1,
         max_size=12,
@@ -81,7 +84,7 @@ def test_split_preserves_quantity_and_transport_part_bounds(quantity: int) -> No
 )
 @settings(max_examples=30, deadline=None)
 def test_generated_plans_preserve_all_hard_route_invariants(
-    task_specs: list[tuple[TaskType, int, int]],
+    task_specs: list[tuple[TaskType, int, int, int, int]],
 ) -> None:
     requests = tuple(
         LogisticsRequest(
@@ -96,10 +99,24 @@ def test_generated_plans_preserve_all_hard_route_invariants(
             status=RequestStatus.READY,
             zone_id="zone",
             zone_version=1,
-            date_options=(RequestDateOption(DAY, 1, at(8), at(22), True),),
+            date_options=(
+                RequestDateOption(
+                    DAY,
+                    1,
+                    at(window_start_hour),
+                    at(window_start_hour + window_length_hours),
+                    True,
+                ),
+            ),
             created_at=at(7),
         )
-        for index, (task_type, quantity, offset) in enumerate(task_specs)
+        for index, (
+            task_type,
+            quantity,
+            offset,
+            window_start_hour,
+            window_length_hours,
+        ) in enumerate(task_specs)
     )
     warehouse = Warehouse("w", "Склад", GeoPoint(37.6, 55.7, True), 2, 2, 2)
     vehicle = Vehicle("v", "Машина", 2)
@@ -136,19 +153,25 @@ def test_generated_plans_preserve_all_hard_route_invariants(
         assert cycle.stops[-1].stop_type is StopType.DEPOT_RETURN
         assert cycle.stops[0].point.coordinates == warehouse.point.coordinates
         assert cycle.stops[-1].point.coordinates == warehouse.point.coordinates
-        delivery_stops = [
-            stop for stop in cycle.stops if stop.stop_type is StopType.DELIVERY
-        ]
-        pickup_stops = [
-            stop for stop in cycle.stops if stop.stop_type is StopType.PICKUP
-        ]
-        assert cycle.stops[0].load_after == sum(
-            -stop.quantity_delta for stop in delivery_stops
-        )
+        delivery_stops = [stop for stop in cycle.stops if stop.stop_type is StopType.DELIVERY]
+        pickup_stops = [stop for stop in cycle.stops if stop.stop_type is StopType.PICKUP]
+        assert cycle.stops[0].load_after == sum(-stop.quantity_delta for stop in delivery_stops)
         assert all(stop.quantity_delta < 0 for stop in delivery_stops)
         assert all(stop.quantity_delta > 0 for stop in pickup_stops)
         assert all(0 <= stop.load_before <= 2 for stop in cycle.stops)
         assert all(0 <= stop.load_after <= 2 for stop in cycle.stops)
+        assert all(
+            stop.planned_departure == stop.planned_arrival + timedelta(seconds=stop.service_seconds)
+            for stop in cycle.stops
+        )
+        assert all(
+            stop.window_start is None or stop.planned_arrival >= stop.window_start
+            for stop in cycle.stops
+        )
+        assert all(
+            stop.window_end is None or stop.planned_departure <= stop.window_end
+            for stop in cycle.stops
+        )
         customer_types = [
             stop.stop_type
             for stop in cycle.stops
@@ -189,3 +212,18 @@ def test_generated_plans_preserve_all_hard_route_invariants(
             if pickup_indexes and delivery_indexes:
                 assert max(delivery_indexes) < min(pickup_indexes)
     assert len(assigned_ids) == len(set(assigned_ids))
+    validation = validate_route_plan(
+        result.cycles,
+        warehouse=warehouse,
+        shifts=(shift,),
+        vehicles=(vehicle,),
+        settings=PlanningSettings(
+            max_detour_minutes=240,
+            max_detour_ratio=10,
+            max_local_search_iterations=10,
+        ),
+        total_tasks=len(result.tasks),
+        unassigned_tasks=len(result.unassigned),
+        score=result.score,
+    )
+    assert not validation.errors

@@ -4,9 +4,10 @@ from datetime import date
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.api.dependencies import RoadSnapperDep, SessionDep, SettingsDep
+from app.integrations.rwms import RwmsPlanningClient, get_rwms_planning_client
 from app.models import Scenario
 from app.repositories import get_required
 from app.schemas.domain import (
@@ -21,12 +22,22 @@ from app.schemas.domain import (
     WorkloadGeneratorInput,
 )
 from app.services import scenarios as service
+from app.services.capacity_projection import publish_scenario_capacity
 from app.services.workload_generator import (
     delete_generated_workload,
     generate_scenario_workload,
 )
 
 router = APIRouter(prefix="/scenarios", tags=["scenarios"])
+
+
+def capacity_rwms_client(settings: SettingsDep) -> RwmsPlanningClient:
+    """Resolve the shared authenticated client for optional generator publication."""
+
+    return get_rwms_planning_client(settings)
+
+
+CapacityRwmsClientDep = Annotated[RwmsPlanningClient, Depends(capacity_rwms_client)]
 
 
 @router.get("", response_model=list[ScenarioRead])
@@ -120,10 +131,16 @@ async def generate_workload(
     payload: WorkloadGeneratorInput,
     session: SessionDep,
     snapper: RoadSnapperDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
 ) -> WorkloadGenerationResult:
     """Delete affected plans, then replace deterministic workload inside current zones."""
 
-    return await generate_scenario_workload(session, scenario_id, payload, snapper)
+    result = await generate_scenario_workload(session, scenario_id, payload, snapper)
+    if settings.rwms_capacity_publish_enabled:
+        await session.commit()
+        await publish_scenario_capacity(session, scenario_id, client)
+    return result
 
 
 @router.delete(
@@ -134,10 +151,16 @@ async def delete_workload(
     scenario_id: UUID,
     target_date: Annotated[date, Query(alias="date")],
     session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
 ) -> WorkloadDeletionResult:
     """Delete generator-owned workload and every saved plan for one exact date."""
 
-    return await delete_generated_workload(session, scenario_id, target_date)
+    result = await delete_generated_workload(session, scenario_id, target_date)
+    if settings.rwms_capacity_publish_enabled and result.deleted_requests > 0:
+        await session.commit()
+        await publish_scenario_capacity(session, scenario_id, client)
+    return result
 
 
 @router.post("/generate-multi-day-demo", response_model=ScenarioRead, status_code=201)

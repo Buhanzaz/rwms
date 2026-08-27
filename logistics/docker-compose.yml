@@ -24,6 +24,7 @@ services:
     user: "0:0"
     environment:
       OSRM_DATA_URL: ${OSRM_DATA_URL:-https://download.geofabrik.de/russia/central-fed-district-latest.osm.pbf}
+      OSM_NORTHWESTERN_DATA_URL: ${OSM_NORTHWESTERN_DATA_URL:-https://download.geofabrik.de/russia/northwestern-fed-district-latest.osm.pbf}
     volumes:
       - logistics-osrm-data:/data
     entrypoint:
@@ -31,12 +32,23 @@ services:
       - -ec
     command:
       - |
-        if [ -s /data/region.osm.pbf ]; then
-          exit 0
-        fi
-        curl --fail --location --retry 5 --retry-all-errors --continue-at - \
-          --output /data/region.osm.pbf.download "$${OSRM_DATA_URL}"
-        mv /data/region.osm.pbf.download /data/region.osm.pbf
+        download_extract() {
+          target="$${1}"
+          source_url="$${2}"
+          if [ -s "$${target}" ]; then
+            return
+          fi
+          curl --fail --location --retry 5 --retry-all-errors --continue-at - \
+            --output "$${target}.download" "$${source_url}"
+          mv "$${target}.download" "$${target}"
+        }
+        download_extract /data/region.osm.pbf "$${OSRM_DATA_URL}"
+        download_extract /data/northwestern-fed-district.osm.pbf "$${OSM_NORTHWESTERN_DATA_URL}"
+        sha256sum \
+          /data/region.osm.pbf \
+          /data/northwestern-fed-district.osm.pbf \
+          | sed 's#/data/##' > /data/rwms-pbf-manifest.sha256.next
+        mv /data/rwms-pbf-manifest.sha256.next /data/rwms-pbf-manifest.sha256
     restart: "no"
 
   osrm-prepare:
@@ -106,12 +118,19 @@ services:
     command:
       - |
         test -s /osm-source/region.osm.pbf
+        test -s /osm-source/northwestern-fed-district.osm.pbf
+        test -s /osm-source/rwms-pbf-manifest.sha256
         ln -sfn /osm-source/region.osm.pbf /custom_files/region.osm.pbf
+        ln -sfn /osm-source/northwestern-fed-district.osm.pbf /custom_files/northwestern-fed-district.osm.pbf
         test -e /custom_files/region.osm.pbf
+        test -e /custom_files/northwestern-fed-district.osm.pbf
     restart: "no"
 
   valhalla:
     image: ghcr.io/valhalla/valhalla-scripted:3.8.3
+    entrypoint:
+      - /usr/bin/bash
+      - /valhalla/rwms-entrypoint.sh
     depends_on:
       valhalla-init:
         condition: service_completed_successfully
@@ -128,6 +147,9 @@ services:
     volumes:
       - logistics-osrm-data:/osm-source:ro
       - logistics-valhalla-data:/custom_files
+      - ./valhalla/rwms-entrypoint.sh:/valhalla/rwms-entrypoint.sh:ro
+    ports:
+      - "127.0.0.1:${VALHALLA_HOST_PORT:-8002}:8002"
     healthcheck:
       test:
         - CMD-SHELL
@@ -145,7 +167,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://logistics:logistics@db:5432/logistics}
       OSM_DATA_VERSION: ${OSM_DATA_VERSION:-unknown}
-      OSM_RESTRICTIONS_PBF_PATH: /osm-source/region.osm.pbf
+      OSM_RESTRICTIONS_PBF_PATHS: /osm-source/region.osm.pbf:/osm-source/northwestern-fed-district.osm.pbf
       OSM_RESTRICTIONS_BATCH_SIZE: ${OSM_RESTRICTIONS_BATCH_SIZE:-1000}
     depends_on:
       db:
@@ -174,6 +196,7 @@ services:
       DEFAULT_SCENARIO_TIMEZONE: ${DEFAULT_SCENARIO_TIMEZONE:-Europe/Moscow}
       PLANNER_DEFAULT_SEED: ${PLANNER_DEFAULT_SEED:-20260822}
       RWMS_SYNC_ENABLED: ${RWMS_SYNC_ENABLED:-false}
+      RWMS_CAPACITY_PUBLISH_ENABLED: ${RWMS_CAPACITY_PUBLISH_ENABLED:-false}
       RWMS_LOGISTICS_BASE_URL: ${RWMS_LOGISTICS_BASE_URL:-}
       RWMS_TOKEN_URL: ${RWMS_TOKEN_URL:-}
       RWMS_CLIENT_ID: ${RWMS_CLIENT_ID:-logistics-planner}

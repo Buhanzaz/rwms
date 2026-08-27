@@ -39,6 +39,7 @@ export interface PlanningSettings {
   default_pickup_minutes: number;
   default_depot_turnaround_minutes: number;
   default_route_buffer_minutes: number;
+  max_customer_wait_minutes: number;
   city_speed_kmh: number;
   region_speed_kmh: number;
   road_factor: number;
@@ -130,6 +131,7 @@ export interface Driver {
   external_worker_id?: UUID | null;
   name: string;
   preferred_route_group: string;
+  passport_details?: string;
   active: boolean;
   notes: string;
 }
@@ -235,17 +237,24 @@ export interface RequestDateOption {
   window_start: string | null;
   window_end: string | null;
   is_hard: boolean;
+  travel_zone_hours?: number | null;
 }
 
 export interface LogisticsRequest {
   id: UUID;
   scenario_id: UUID;
+  source_system?: string | null;
+  external_id?: UUID | null;
   type: RequestType;
   name: string;
   address_label: string;
   latitude: number;
   longitude: number;
   quantity: number;
+  trailer_access_allowed?: boolean | null;
+  include_driver_passport_in_notification?: boolean;
+  contact_name?: string;
+  contact_phone?: string;
   service_minutes: number;
   priority: number;
   status: RequestStatus;
@@ -270,6 +279,7 @@ export interface PlanningTask {
   request_id: UUID;
   part_number: number;
   quantity: number;
+  trailer_access_allowed?: boolean;
   type: RequestType;
   latitude: number;
   longitude: number;
@@ -369,6 +379,8 @@ export interface RouteCycle {
 
 export interface DriverRoute {
   driver_shift_id: UUID;
+  shift_start_at: IsoDateTime;
+  shift_end_at: IsoDateTime;
   driver_id: UUID;
   driver_name: string;
   vehicle_id: UUID;
@@ -439,6 +451,20 @@ export interface RoutePlan {
   driver_routes: DriverRoute[];
   unassigned: UnassignedTask[];
   metrics: PlanMetrics;
+  notification_logs?: PlanNotificationLog[];
+}
+
+/** Simulated contact notification written only after final plan confirmation. */
+export interface PlanNotificationLog {
+  id: UUID;
+  plan_id: UUID;
+  request_id: UUID;
+  recipient_name: string;
+  recipient_contact: string;
+  message: string;
+  includes_driver_passport: boolean;
+  status: 'SIMULATED_DELIVERED';
+  created_at: IsoDateTime;
 }
 
 export interface ValidationMessage {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import ValidationError
@@ -31,9 +32,11 @@ from app.schemas.domain import (
     RwmsPlanningRequest,
     RwmsPlanStatusResult,
     RwmsPlanTaskStatus,
+    RwmsScenarioRefreshResult,
     RwmsSyncFailure,
     RwmsSyncRequest,
     RwmsSyncResult,
+    RwmsWarehouseSyncResult,
 )
 from app.services import catalog
 
@@ -115,6 +118,58 @@ async def sync_scenario_requests(
     return RwmsSyncResult(**counts, failures=failures)
 
 
+async def refresh_scenario_requests(
+    session: AsyncSession,
+    scenario_id: UUID,
+    *,
+    date_from: date,
+    date_to: date,
+    client: RwmsPlanningClient,
+) -> RwmsScenarioRefreshResult:
+    """Refresh every linked warehouse without delegating the cross-warehouse saga to a browser.
+
+    Each warehouse uses the ordinary strict synchronization workflow. That workflow commits
+    before remote I/O, so a slow or failed upstream call never retains a local database lock.
+    Successfully imported earlier warehouses remain retry-safe if a later warehouse fails.
+    """
+
+    await catalog.require_scenario(session, scenario_id)
+    warehouse_ids = list(
+        await session.scalars(
+            select(Warehouse.external_warehouse_id)
+            .where(
+                Warehouse.scenario_id == scenario_id,
+                Warehouse.external_warehouse_id.is_not(None),
+            )
+            .order_by(Warehouse.external_warehouse_id)
+        )
+    )
+    results: list[RwmsWarehouseSyncResult] = []
+    for warehouse_id in warehouse_ids:
+        assert warehouse_id is not None
+        result = await sync_scenario_requests(
+            session,
+            scenario_id,
+            RwmsSyncRequest(
+                warehouse_id=warehouse_id,
+                date_from=date_from,
+                date_to=date_to,
+            ),
+            client,
+        )
+        results.append(
+            RwmsWarehouseSyncResult(
+                warehouse_id=warehouse_id,
+                **result.model_dump(),
+            )
+        )
+    return RwmsScenarioRefreshResult(
+        date_from=date_from,
+        date_to=date_to,
+        warehouses=results,
+    )
+
+
 def build_assignments_command(
     plan: RoutePlan,
     publish_unassigned_task_ids: set[UUID] | frozenset[UUID] = frozenset(),
@@ -141,6 +196,8 @@ def build_assignments_command(
                     "RWMS_DELIVERY_TASK_MISSING",
                     "A delivery stop has no planning task",
                 )
+            if stop.task.request.source_system != catalog.RWMS_SOURCE_SYSTEM:
+                continue
             if stop.task.id in assigned_task_ids:
                 raise ApiError(
                     422,
@@ -159,9 +216,14 @@ def build_assignments_command(
             "Every published task must still be unassigned in the exact plan version",
         )
     shared_tasks = [
-        unassigned_by_task_id[task_id]
-        for task_id in sorted(publish_unassigned_task_ids, key=str)
+        unassigned_by_task_id[task_id] for task_id in sorted(publish_unassigned_task_ids, key=str)
     ]
+    if any(task.request.source_system != catalog.RWMS_SOURCE_SYSTEM for task in shared_tasks):
+        raise ApiError(
+            422,
+            "RWMS_UNASSIGNED_SOURCE_INVALID",
+            "Only synchronized RWMS deliveries can be explicitly published",
+        )
     if any(task.type != "DELIVERY" for task in shared_tasks):
         raise ApiError(
             422,
@@ -181,8 +243,7 @@ def build_assignments_command(
         if request.id in source_by_request:
             continue
         if (
-            request.source_system != catalog.RWMS_SOURCE_SYSTEM
-            or request.external_id is None
+            request.external_id is None
             or request.external_version is None
             or request.external_payload is None
         ):
@@ -335,9 +396,7 @@ async def apply_plan_to_rwms(
             "The route plan changed after it was loaded",
             extra={"current_version": plan.version},
         )
-    assignments = build_assignments_command(
-        plan, set(command.publish_unassigned_task_ids)
-    )
+    assignments = build_assignments_command(plan, set(command.publish_unassigned_task_ids))
     idempotency_key = str(rwms_plan_idempotency_key(plan.id, plan.version))
     await session.commit()
     return await client.apply_assignments(

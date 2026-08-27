@@ -77,9 +77,7 @@ def test_osrm_nearest_returns_typed_sanitized_road_snap() -> None:
         )
 
     snapped = asyncio.run(
-        _provider(httpx.MockTransport(handler)).snap_point(
-            GeoPoint(37.6, 55.7, is_city=True)
-        )
+        _provider(httpx.MockTransport(handler)).snap_point(GeoPoint(37.6, 55.7, is_city=True))
     )
 
     assert snapped.point == GeoPoint(37.60025, 55.7005, is_city=True)
@@ -94,16 +92,13 @@ def test_osrm_nearest_rejects_nonfinite_coordinates() -> None:
         return httpx.Response(
             200,
             content=(
-                b'{"code":"Ok","waypoints":['
-                b'{"location":[NaN,55.7],"distance":1.0,"name":"road"}]}'
+                b'{"code":"Ok","waypoints":[{"location":[NaN,55.7],"distance":1.0,"name":"road"}]}'
             ),
             headers={"content-type": "application/json"},
         )
 
     with pytest.raises(OsrmRoutingProviderError, match="finite"):
-        asyncio.run(
-            _provider(httpx.MockTransport(handler)).snap_point(GeoPoint(37.6, 55.7))
-        )
+        asyncio.run(_provider(httpx.MockTransport(handler)).snap_point(GeoPoint(37.6, 55.7)))
 
 
 def test_osrm_nearest_maps_no_segment_to_narrow_snap_error() -> None:
@@ -116,9 +111,7 @@ def test_osrm_nearest_maps_no_segment_to_narrow_snap_error() -> None:
         )
 
     with pytest.raises(RoadSnapNotFoundError):
-        asyncio.run(
-            _provider(httpx.MockTransport(handler)).snap_point(GeoPoint(37.6, 55.7))
-        )
+        asyncio.run(_provider(httpx.MockTransport(handler)).snap_point(GeoPoint(37.6, 55.7)))
 
 
 def test_mock_snapper_is_deterministic_identity() -> None:
@@ -140,9 +133,7 @@ def test_osrm_large_matrix_is_partitioned_into_bounded_rectangular_tables() -> N
     def handler(request: httpx.Request) -> httpx.Response:
         encoded_points = request.url.path.rsplit("/", maxsplit=1)[-1].split(";")
         sources = [int(value) for value in request.url.params["sources"].split(";")]
-        destinations = [
-            int(value) for value in request.url.params["destinations"].split(";")
-        ]
+        destinations = [int(value) for value in request.url.params["destinations"].split(";")]
         assert len(encoded_points) <= 4
         assert len(sources) <= 2
         assert len(destinations) <= 2

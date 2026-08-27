@@ -29,7 +29,9 @@ from app.schemas.domain import (
     RequestDateOptionInput,
     RequestDateOptionRead,
     RequestDateOptionUpdate,
+    RequestPlanningDetailsInput,
     RequestScheduleInput,
+    RequestTaskSplitInput,
     ShiftCreate,
     ShiftRead,
     ShiftUpdate,
@@ -460,11 +462,35 @@ async def delete_request(request_id: UUID, session: SessionDep) -> Response:
     return Response(status_code=204)
 
 
-@router.post("/requests/{request_id}/split", response_model=LogisticsRequestRead)
-async def split_request(request_id: UUID, session: SessionDep) -> LogisticsRequestRead:
-    """Regenerate deterministic capacity-two transport parts."""
+@router.post("/requests/{request_id}/planning-details", response_model=LogisticsRequestRead)
+async def set_request_planning_details(
+    request_id: UUID,
+    payload: RequestPlanningDetailsInput,
+    session: SessionDep,
+) -> LogisticsRequestRead:
+    """Store the dispatcher-approved date, service window, and access decision."""
 
-    return await request_read(session, await service.split_request(session, request_id))
+    entity = await service.set_request_planning_details(
+        session,
+        request_id,
+        payload,
+    )
+    return await request_read(session, entity)
+
+
+@router.post("/requests/{request_id}/split", response_model=LogisticsRequestRead)
+async def split_request(
+    request_id: UUID,
+    session: SessionDep,
+    payload: RequestTaskSplitInput | None = None,
+) -> LogisticsRequestRead:
+    """Regenerate automatic or explicitly-sized transport parts."""
+
+    quantities = payload.part_quantities if payload is not None else None
+    return await request_read(
+        session,
+        await service.split_request(session, request_id, quantities),
+    )
 
 
 @router.post("/requests/{request_id}/schedule", response_model=LogisticsRequestRead)

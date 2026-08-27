@@ -13,6 +13,7 @@ from app.errors import ApiError
 from app.models import Scenario, Trailer, VehicleLoadProfile
 from app.models.domain import PlanStatus, StopType
 from app.schemas.domain import (
+    ExportPlanNotificationLog,
     ExportRouteCycle,
     ExportRoutePlan,
     ExportRouteSegment,
@@ -62,9 +63,7 @@ async def test_demo_export_import_preserves_seed_versions_and_counts(
     )
     document = await scenarios.export_scenario(db_session, source.id, include_plans=True)
     shift = document.shifts[0]
-    routed_vehicle = next(
-        item for item in document.vehicles if item.id == shift.data.vehicle_id
-    )
+    routed_vehicle = next(item for item in document.vehicles if item.id == shift.data.vehicle_id)
     routed_request = next(
         item
         for item in document.requests
@@ -78,9 +77,7 @@ async def test_demo_export_import_preserves_seed_versions_and_counts(
         "trailerId": str(routed_vehicle.data.default_trailer_id),
         "trailerAttached": True,
         "cargoCount": 1,
-        "cargoPlacements": [
-            {"cargoId": "source-task-part-1", "position": "TRUCK_PLATFORM"}
-        ],
+        "cargoPlacements": [{"cargoId": "source-task-part-1", "position": "TRUCK_PLATFORM"}],
         "configurationType": "CARGO_ON_TRUCK_WITH_TRAILER",
         "effectiveHeightMeters": 3.7,
         "effectiveWidthMeters": 2.5,
@@ -95,7 +92,7 @@ async def test_demo_export_import_preserves_seed_versions_and_counts(
             date=selected_date,
             name="Truck snapshot",
             version=1,
-            status=PlanStatus.GENERATED,
+            status=PlanStatus.CONFIRMED,
             score=45,
             metrics={},
             validation_errors=[],
@@ -179,6 +176,17 @@ async def test_demo_export_import_preserves_seed_versions_and_counts(
                 )
             ],
             unassigned_tasks=[],
+            notification_logs=[
+                ExportPlanNotificationLog(
+                    request_id=routed_request.id,
+                    recipient_name="Иван Петров",
+                    recipient_contact="+7 900 000-00-00",
+                    message="Доставка на 25.08.2026. Водитель и машина назначены.",
+                    includes_driver_passport=False,
+                    status="SIMULATED_DELIVERED",
+                    created_at=routed_at,
+                )
+            ],
         )
     )
     document.zones[0].data.delivery_price = 12_500
@@ -205,8 +213,7 @@ async def test_demo_export_import_preserves_seed_versions_and_counts(
     source_trailer_ids = {item.id for item in document.trailers}
     assert imported_trailer_ids.isdisjoint(source_trailer_ids)
     assert all(
-        item.data.default_trailer_id in imported_trailer_ids
-        for item in imported_document.vehicles
+        item.data.default_trailer_id in imported_trailer_ids for item in imported_document.vehicles
     )
     assert all(
         item.data.default_trailer_id not in source_trailer_ids
@@ -229,12 +236,11 @@ async def test_demo_export_import_preserves_seed_versions_and_counts(
         (item.data.configuration_type, item.data.max_actual_axle_load_kg)
         for item in document.vehicle_load_profiles
     }
-    assert {
-        item.id for item in imported_document.vehicle_load_profiles
-    }.isdisjoint({item.id for item in document.vehicle_load_profiles})
+    assert {item.id for item in imported_document.vehicle_load_profiles}.isdisjoint(
+        {item.id for item in document.vehicle_load_profiles}
+    )
     assert all(
-        item.vehicle_id in imported_vehicle_ids
-        for item in imported_document.vehicle_load_profiles
+        item.vehicle_id in imported_vehicle_ids for item in imported_document.vehicle_load_profiles
     )
     assert all(
         item.data.cargo_length_mm == 6_000
@@ -249,6 +255,15 @@ async def test_demo_export_import_preserves_seed_versions_and_counts(
     assert imported_segment.osm_data_version == "moscow-2026-08-24"
     assert imported_segment.routed_at == routed_at
     imported_plan = await plans.get_plan(db_session, imported_document.plans[0].id)
+    assert len(imported_document.plans[0].notification_logs) == 1
+    imported_notification = imported_document.plans[0].notification_logs[0]
+    assert imported_notification.request_id != routed_request.id
+    assert imported_notification.request_id in {item.id for item in imported_document.requests}
+    assert imported_notification.message == "Доставка на 25.08.2026. Водитель и машина назначены."
+    assert imported_notification.created_at == routed_at
+    projected_notifications = plans.plan_read(imported_plan).notification_logs
+    assert len(projected_notifications) == 1
+    assert projected_notifications[0].message == imported_notification.message
     projected_segment = plans.plan_read(imported_plan).cycles[0].segments[0]
     assert projected_segment.routing_profile_snapshot == profile_snapshot
     assert projected_segment.routing_provider == "valhalla"
@@ -325,9 +340,7 @@ async def test_legacy_document_without_truck_collections_still_imports(
     }
     for item in legacy_payload["vehicles"]:
         item["data"] = {
-            key: value
-            for key, value in item["data"].items()
-            if key in legacy_vehicle_fields
+            key: value for key, value in item["data"].items() if key in legacy_vehicle_fields
         }
     legacy_document = ScenarioExportDocument.model_validate(legacy_payload)
 
@@ -359,9 +372,7 @@ async def test_unknown_default_trailer_rolls_back_all_imported_truck_rows(
     document.vehicles[0].data.default_trailer_id = uuid4()
     before_scenarios = int(await db_session.scalar(select(func.count(Scenario.id))) or 0)
     before_trailers = int(await db_session.scalar(select(func.count(Trailer.id))) or 0)
-    before_profiles = int(
-        await db_session.scalar(select(func.count(VehicleLoadProfile.id))) or 0
-    )
+    before_profiles = int(await db_session.scalar(select(func.count(VehicleLoadProfile.id))) or 0)
 
     with pytest.raises(ApiError) as failure:
         async with db_session.begin_nested():
@@ -390,9 +401,7 @@ async def test_unknown_load_profile_vehicle_rolls_back_import(
     document = await scenarios.export_scenario(db_session, source.id, include_plans=False)
     document.vehicle_load_profiles[0].vehicle_id = uuid4()
     before_scenarios = int(await db_session.scalar(select(func.count(Scenario.id))) or 0)
-    before_profiles = int(
-        await db_session.scalar(select(func.count(VehicleLoadProfile.id))) or 0
-    )
+    before_profiles = int(await db_session.scalar(select(func.count(VehicleLoadProfile.id))) or 0)
 
     with pytest.raises(ApiError) as failure:
         async with db_session.begin_nested():

@@ -1,4 +1,4 @@
-"""One-shot, atomic importer for truck restrictions in the mounted OSM PBF."""
+"""One-shot, atomic importer for truck restrictions in the mounted OSM PBF set."""
 
 from __future__ import annotations
 
@@ -159,6 +159,21 @@ def iter_extracted_restrictions(path: Path) -> Iterator[ParsedTruckRestriction]:
                 yield restriction
 
 
+def iter_unique_extracted_restrictions(
+    paths: Sequence[Path],
+) -> Iterator[ParsedTruckRestriction]:
+    """Stream a deterministic union while collapsing shared extract-boundary objects."""
+
+    seen: set[tuple[str, int]] = set()
+    for path in paths:
+        for restriction in iter_extracted_restrictions(path):
+            identity = (restriction.osm_type, restriction.osm_id)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            yield restriction
+
+
 async def _version_is_imported(osm_data_version: str) -> bool:
     """Check whether a completed import already represents the active tileset."""
 
@@ -196,7 +211,7 @@ def _restriction_row(
 async def _import_atomically(
     connection: AsyncConnection,
     *,
-    extraction_path: Path,
+    extraction_path: Path | Sequence[Path],
     source_file: str,
     osm_data_version: str,
     expected_count: int,
@@ -224,7 +239,10 @@ async def _import_atomically(
     )
     inserted_count = 0
     batch: list[dict[str, Any]] = []
-    for restriction in iter_extracted_restrictions(extraction_path):
+    extraction_paths = (
+        (extraction_path,) if isinstance(extraction_path, Path) else tuple(extraction_path)
+    )
+    for restriction in iter_unique_extracted_restrictions(extraction_paths):
         batch.append(_restriction_row(restriction, osm_data_version=osm_data_version))
         if len(batch) >= batch_size:
             await connection.execute(insert(OsmTruckRestriction), batch)
@@ -248,32 +266,44 @@ async def _import_atomically(
 
 async def run_import(
     *,
-    source_pbf: Path,
+    source_pbfs: Sequence[Path],
     osm_data_version: str,
     batch_size: int,
 ) -> None:
-    """Skip completed data or extract, validate, and atomically replace the index."""
+    """Skip completed data or atomically publish the union of all routing extracts."""
 
     if await _version_is_imported(osm_data_version):
         _structured_log("restriction_import_skipped", osm_data_version=osm_data_version)
         return
+    if not source_pbfs:
+        raise RestrictionImportError("At least one OSM source PBF is required")
     with tempfile.TemporaryDirectory(prefix="osm-truck-restrictions-") as temporary:
-        extraction_path = extract_restrictions(source_pbf, Path(temporary))
-        expected_count = sum(1 for _ in iter_extracted_restrictions(extraction_path))
+        extraction_paths: list[Path] = []
+        for index, source_pbf in enumerate(source_pbfs):
+            work_directory = Path(temporary) / f"source-{index}"
+            work_directory.mkdir()
+            extraction_paths.append(extract_restrictions(source_pbf, work_directory))
+        expected_count = sum(1 for _ in iter_unique_extracted_restrictions(extraction_paths))
         if expected_count <= 0:
             raise RestrictionImportError("No relevant node/way truck restrictions were extracted")
-        source_bytes = await asyncio.to_thread(os.path.getsize, source_pbf)
+        source_bytes = sum(
+            await asyncio.gather(
+                *(asyncio.to_thread(os.path.getsize, source_pbf) for source_pbf in source_pbfs)
+            )
+        )
+        source_file = ",".join(source_pbf.name for source_pbf in source_pbfs)
         _structured_log(
             "restriction_extraction_completed",
             osm_data_version=osm_data_version,
             restriction_count=expected_count,
             source_bytes=source_bytes,
+            source_count=len(source_pbfs),
         )
         async with engine.begin() as connection:
             imported = await _import_atomically(
                 connection,
-                extraction_path=extraction_path,
-                source_file=source_pbf.name,
+                extraction_path=extraction_paths,
+                source_file=source_file,
                 osm_data_version=osm_data_version,
                 expected_count=expected_count,
                 batch_size=batch_size,
@@ -285,12 +315,14 @@ async def run_import(
     )
 
 
-async def _run_and_dispose(*, source_pbf: Path, osm_data_version: str, batch_size: int) -> None:
+async def _run_and_dispose(
+    *, source_pbfs: Sequence[Path], osm_data_version: str, batch_size: int
+) -> None:
     """Keep engine use and disposal on one event loop."""
 
     try:
         await run_import(
-            source_pbf=source_pbf,
+            source_pbfs=source_pbfs,
             osm_data_version=osm_data_version,
             batch_size=batch_size,
         )
@@ -303,7 +335,12 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     settings = get_settings()
-    source_pbf = Path(os.getenv("OSM_RESTRICTIONS_PBF_PATH", "/osm-source/region.osm.pbf"))
+    configured_paths = os.getenv("OSM_RESTRICTIONS_PBF_PATHS")
+    source_pbfs = (
+        tuple(Path(value) for value in configured_paths.split(os.pathsep) if value)
+        if configured_paths
+        else (Path(os.getenv("OSM_RESTRICTIONS_PBF_PATH", "/osm-source/region.osm.pbf")),)
+    )
     try:
         batch_size = int(os.getenv("OSM_RESTRICTIONS_BATCH_SIZE", "1000"))
     except ValueError as exc:
@@ -313,12 +350,12 @@ def main() -> None:
     _structured_log(
         "restriction_import_started",
         osm_data_version=settings.osm_data_version,
-        source_file=source_pbf.name,
+        source_files=[source_pbf.name for source_pbf in source_pbfs],
     )
     try:
         asyncio.run(
             _run_and_dispose(
-                source_pbf=source_pbf,
+                source_pbfs=source_pbfs,
                 osm_data_version=settings.osm_data_version,
                 batch_size=batch_size,
             )

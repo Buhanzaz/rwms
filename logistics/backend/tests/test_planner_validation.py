@@ -7,6 +7,8 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from app.planner import (
     DriverShift,
     HeuristicPlanner,
@@ -129,6 +131,31 @@ def test_validator_detects_capacity_exceeded() -> None:
     )
 
     assert ValidationErrorCode.CAPACITY_EXCEEDED in error_codes(validation)
+
+
+def test_domain_and_validator_reject_load_and_aggregate_metric_mismatches() -> None:
+    """Manual edits cannot forge the load transition or persisted route totals."""
+
+    cycle, data, _ = generated_cycle((TaskType.DELIVERY,))
+    customer = cycle.stops[1]
+    with pytest.raises(ValueError, match="load_after must equal"):
+        replace(customer, load_after=customer.load_before)
+    bad_cycle = replace(
+        cycle,
+        total_distance_meters=cycle.total_distance_meters + 1,
+        waiting_seconds=cycle.waiting_seconds + 60,
+    )
+
+    validation = validate_route_plan(
+        (bad_cycle,),
+        warehouse=data.warehouse,
+        shifts=data.shifts,
+        vehicles=data.vehicles,
+        settings=PlanningSettings(),
+    )
+
+    codes = error_codes(validation)
+    assert ValidationErrorCode.INVALID_TIME in codes
 
 
 def test_validator_detects_delivery_after_pickup() -> None:
@@ -358,3 +385,92 @@ def test_hard_window_requires_service_completion_before_window_end() -> None:
     )
 
     assert ValidationErrorCode.TIME_WINDOW_VIOLATION in error_codes(validation)
+
+
+def test_validator_rejects_early_customer_arrival_hidden_inside_long_stop() -> None:
+    """Waiting until an appointment cannot be disguised as customer service time."""
+
+    cycle, data, _ = generated_cycle((TaskType.DELIVERY,))
+    depot, customer, depot_return = cycle.stops
+    window_start = customer.planned_arrival + timedelta(minutes=30)
+    stretched_customer = replace(
+        customer,
+        planned_departure=window_start + timedelta(seconds=customer.service_seconds),
+        window_start=window_start,
+        window_end=window_start + timedelta(hours=2),
+        window_is_hard=True,
+    )
+    shifted_return = replace(
+        depot_return,
+        planned_arrival=depot_return.planned_arrival + timedelta(minutes=30),
+        planned_departure=depot_return.planned_departure + timedelta(minutes=30),
+    )
+    bad_cycle = replace(
+        cycle,
+        planned_finish=shifted_return.planned_departure,
+        stops=(depot, stretched_customer, shifted_return),
+        legs=(
+            cycle.legs[0],
+            replace(
+                cycle.legs[1],
+                departure_at=stretched_customer.planned_departure,
+                arrival_at=shifted_return.planned_arrival,
+            ),
+        ),
+    )
+
+    validation = validate_route_plan(
+        (bad_cycle,),
+        warehouse=data.warehouse,
+        shifts=data.shifts,
+        vehicles=data.vehicles,
+        settings=PlanningSettings(),
+    )
+
+    assert ValidationErrorCode.INVALID_TIME in error_codes(validation)
+    assert ValidationErrorCode.TIME_WINDOW_VIOLATION in error_codes(validation)
+
+
+def test_validator_allows_waiting_gap_before_a_route_leg() -> None:
+    """A bounded source wait is valid, while the configured limit remains hard."""
+
+    cycle, data, _ = generated_cycle((TaskType.DELIVERY,))
+    delay = timedelta(minutes=10)
+    depot, customer, depot_return = cycle.stops
+    shifted_return = replace(
+        depot_return,
+        planned_arrival=depot_return.planned_arrival + delay,
+        planned_departure=depot_return.planned_departure + delay,
+    )
+    waiting_cycle = replace(
+        cycle,
+        planned_finish=shifted_return.planned_departure,
+        waiting_seconds=cycle.waiting_seconds + round(delay.total_seconds()),
+        stops=(depot, customer, shifted_return),
+        legs=(
+            cycle.legs[0],
+            replace(
+                cycle.legs[1],
+                departure_at=cycle.legs[1].departure_at + delay,
+                arrival_at=cycle.legs[1].arrival_at + delay,
+            ),
+        ),
+    )
+
+    validation = validate_route_plan(
+        (waiting_cycle,),
+        warehouse=data.warehouse,
+        shifts=data.shifts,
+        vehicles=data.vehicles,
+        settings=PlanningSettings(),
+    )
+    excessive = validate_route_plan(
+        (waiting_cycle,),
+        warehouse=data.warehouse,
+        shifts=data.shifts,
+        vehicles=data.vehicles,
+        settings=PlanningSettings(max_customer_wait_minutes=5),
+    )
+
+    assert ValidationErrorCode.INVALID_TIME not in error_codes(validation)
+    assert ValidationErrorCode.TIME_WINDOW_VIOLATION in error_codes(excessive)

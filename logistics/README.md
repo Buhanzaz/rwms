@@ -13,9 +13,31 @@ The default deployment uses a private Valhalla 3.8.3 service built from
 OpenStreetMap data and always requests `costing=truck`. Every road leg is
 calculated for the vehicle, attached trailer and cargo remaining on that exact
 leg. There is no silent car-route fallback. No API key is needed; internet is
-needed only to download the selected regional extract and optional map style.
+needed only to download the Central and Northwestern Federal District extracts
+and the optional map style. A source manifest rebuilds the derived admin,
+routing-tile and tile-extract files whenever either PBF changes.
 If the MapLibre style cannot load, the editor falls back to its coordinate grid
 while zone editing and saved-route simulation remain available.
+Opening or switching a scenario fits that scenario's warehouses and complete
+zone geometry once, so a Saint Petersburg workspace never inherits Moscow's
+camera while later operator pan and zoom remain untouched.
+For every visible scenario warehouse and the latest `DELIVERY` stop of each
+driver in the visible plan, the map requests fixed 60, 120, 180 and 240 minute
+`costing=truck` isochrones from Valhalla and renders the nested areas behind
+operational routes. Pickup and depot-return stops never become route fronts;
+equal coordinates are requested once with depot precedence. The browser keeps
+at most four contour requests in flight and aborts the remaining siblings when
+one fails. The Compose-owned
+[`valhalla/rwms-entrypoint.sh`](valhalla/rwms-entrypoint.sh) keeps Valhalla's
+generated configuration intact while raising its isochrone ceiling from the
+upstream 120-minute default to the required 240 minutes; startup fails if that
+limit is not applied. Those GeoJSON polygons are a visual estimate and never
+replace exact route legs. Separately, an imported CustomerApp booking
+stores its numeric one-to-four-hour `travelZoneHours` band from the source
+depot. That band participates in multi-point candidate construction, while
+exact directed legs from each driver's previous delivery point decide whether
+the next delivery fits. A disabled or failed contour request is shown as an explicit non-blocking
+map status and never produces synthetic circles or changes persisted demand.
 
 ## Interface
 
@@ -24,7 +46,7 @@ while zone editing and saved-route simulation remain available.
 ├───────────────┬─────────────────────────────────────┬─────────────────┤
 │ scenario      │                                     │ selected object │
 │ warehouse     │       MapLibre or grid map          │ form / warnings │
-│ zones         │  zones · requests · routes · trucks │ route metrics   │
+│ zones         │ rings · requests · routes · trucks  │ route metrics   │
 │ relations     │                                     │ explanation     │
 │ drivers       │                                     │                 │
 │ vehicles      │                                     │                 │
@@ -63,6 +85,30 @@ and the original accepted dates remain intact. To make return
 pairing observable, this fixture uses a wider detour limit of 60 minutes and a
 3.0 ratio; the scenario settings remain editable.
 
+The **Plan** mode is the dispatcher day board. Switching its date shows only
+requests eligible for that day. Every READY request must first receive a
+positive service interval and an explicit answer whether the address accepts
+the truck with its trailer; plan generation fails with
+`PLANNING_INPUT_INCOMPLETE` while either decision is absent. A negative trailer
+answer splits that request into one-unit transport tasks and excludes it from
+every trailer-attached cycle. A positive answer permits the combination at the
+address but never overrides Valhalla/OSM truck safety restrictions. The same
+board can create explicit one-unit subtasks and, after generation, drag tasks
+between driver cycles; every move is version-fenced and fully revalidated on
+the backend before it is saved.
+
+Confirming a valid plan writes one idempotent **simulated** contact message per
+assigned source request. The message contains the plan date, agreed window,
+assigned quantity, arrival time, driver name, vehicle make/model and
+registration number. Driver passport details are included only when the
+request explicitly enables them, and confirmation fails if an assigned driver
+then has no passport details. These records appear in the bottom-left test
+notification journal; this MVP does not send SMS, messenger or push messages.
+When saved plans are included in a scenario export, their simulated message
+records are exported and imported with the corresponding request identities.
+Exports can therefore contain contact and driver passport data and must be
+handled as sensitive internal files.
+
 ## Architecture
 
 This directory is a monorepo with isolated runtime containers:
@@ -71,7 +117,8 @@ This directory is a monorepo with isolated runtime containers:
   TanStack Query, Zustand, React Hook Form/Zod and dnd-kit;
 - `backend/`: FastAPI, Pydantic, SQLAlchemy 2, GeoAlchemy2/Shapely and Alembic;
 - `db`: PostgreSQL with PostGIS and one simulator-only named volume.
-- `osrm-download`: a one-shot PBF downloader shared read-only with Valhalla;
+- `osrm-download`: a one-shot downloader for both regional PBFs shared
+  read-only with Valhalla;
 - `valhalla-init` and `valhalla`: private tile preparation and truck routing;
 - `truck-restrictions-indexer`: a one-shot, versioned Osmium import of
   truck-related OSM nodes/ways into the PostGIS viewport index;
@@ -149,6 +196,14 @@ the optimizer.
 - Zone relations are a candidate filter, not a geographic hard-code. A
   `BLOCKED` relation or disabled pickup transition is hard; both stop orders,
   actual time windows, travel length, shift end and capacity are validated.
+- A customer stop's `planned_arrival` is the actual service start, never an
+  early physical arrival hidden inside a long stop. For the first late window,
+  depot loading and departure move closer to the appointment. For later
+  windows, the complete routed prefix is shifted at the depot as far as earlier
+  windows permit. Only a bounded residual wait may remain at the previous
+  customer (`max_customer_wait_minutes`, 120 by default); a longer gap splits
+  the work into another depot cycle. Exact Valhalla routing is requested again
+  for the actual delayed departure time.
 - Within the same mandatory-date priority, the planner prefers a full outbound
   and return load: `2 -> 1 -> 0 -> 1 -> 2 -> 0`. Fewer depot cycles and returns
   rank ahead of weighted distance only while deliveries remain protected. The
@@ -218,7 +273,9 @@ changing the source plan; driver unavailability freezes the selected truck and
 marks its remaining tasks as affected. An override is persisted only when the
 request explicitly sets `persist=true`. Simulation mode keeps the full plan and
 all cycle cards visible; each active driver status and truck popup shows the
-current destination address, ETA and load.
+current destination address, ETA and load. The timeline starts at the earliest
+assigned shift, so a cycle delayed for a customer window remains seekable as a
+truck waiting at the warehouse before loading.
 
 ## Start
 
@@ -233,10 +290,12 @@ docker compose up --build
 Open <http://localhost:5173>. The API documentation is available at
 <http://localhost:8000/api/docs> and its schema at
 <http://localhost:8000/api/openapi.json>. Compose binds both development ports
-to loopback only. Valhalla is internal to the Compose network and has no host
-port. The first `up` downloads and builds the configured OpenStreetMap extract
-and indexes its truck restrictions, so it can take tens of minutes for a
-regional graph; later starts reuse `logistics-osrm-data`,
+to loopback only. Valhalla stays private: Compose exposes its port only on
+`127.0.0.1` so the co-located RWMS logistics-service can reuse the same truck
+matrix without making routing public. The first `up` downloads and builds both
+configured OpenStreetMap extracts and indexes their deduplicated truck
+restrictions, so it can take tens of minutes for the combined graph; later
+starts reuse `logistics-osrm-data`,
 `logistics-valhalla-data` and skip an already imported `OSM_DATA_VERSION`. No
 routing or map key is required.
 
@@ -335,11 +394,13 @@ make openapi
 | `ROUTING_PROVIDER` | `valhalla` | Runtime adapter; `mock` is test-only and `osrm` is an explicit legacy development option |
 | `VALHALLA_ENABLED` | `true` | Fails configuration if Valhalla is selected but disabled |
 | `VALHALLA_URL` | `http://valhalla:8002` | Private Valhalla endpoint; never exposed through Nginx |
+| `VALHALLA_HOST_PORT` | `8002` | Loopback-only host port used by the co-located RWMS logistics-service |
 | `VALHALLA_TIMEOUT_SECONDS` | `30` | Deadline for one truck-routing request |
 | `VALHALLA_SERVER_THREADS` | `2` | Self-hosted Valhalla worker threads |
 | `OSM_DATA_VERSION` | configured extract identity | Immutable PBF/tile identity stored in route snapshots and cache keys |
 | `OSM_RESTRICTIONS_BATCH_SIZE` | `1000` | Atomic PostGIS restriction-import batch size, from 1 to 10000 |
 | `OSRM_DATA_URL` | Central Federal District extract | One-time OpenStreetMap PBF download shared with Valhalla |
+| `OSM_NORTHWESTERN_DATA_URL` | Northwestern Federal District extract | Second PBF covering Saint Petersburg; its checksum participates in the routing-source manifest |
 | `OSRM_BASE_URL`, `OSRM_PROFILE`, `OSRM_TIMEOUT_SECONDS` | legacy values | Used only with provider `osrm` and Compose profile `legacy-routing` |
 | `DEFAULT_SCENARIO_TIMEZONE` | `Europe/Moscow` | Timezone for new scenarios |
 | `PLANNER_DEFAULT_SEED` | `20260822` | Default deterministic tie-break seed |
@@ -347,6 +408,7 @@ make openapi
 | `VITE_API_BASE_URL` | `/api` | Frontend build arg for the same-origin browser API prefix |
 | `VITE_APP_BASE_PATH` | `/` | Vite base; use `/logistics-simulator/` on the VPS with API `/logistics-simulator/api` |
 | `RWMS_SYNC_ENABLED` | `false` | Explicitly enables authenticated RWMS import/apply operations |
+| `RWMS_CAPACITY_PUBLISH_ENABLED` | `false` | Separately opts generated delivery capacity into RWMS slot calculation; requires RWMS sync |
 | `RWMS_LOGISTICS_BASE_URL` | empty | Private base URL of the RWMS logistics-service planning boundary |
 | `RWMS_TOKEN_URL` | empty | Private OAuth2 token endpoint used for client credentials |
 | `RWMS_CLIENT_ID` | `logistics-planner` | Dedicated client with only `logistics.planning` scope |
@@ -359,19 +421,71 @@ reuse them outside the isolated local simulator.
 ## RWMS synchronization
 
 RWMS integration is disabled by default. To enable it, provision the dedicated
-`logistics-planner` OAuth client in `auth-service`, set the six `RWMS_*`
+`logistics-planner` OAuth client in `auth-service`, set the seven `RWMS_*`
 variables above, and link the simulator warehouse through
 `external_warehouse_id` to the RWMS warehouse UUID. Drivers that may receive
 an applied route must similarly have `external_worker_id` set to their RWMS
 worker UUID.
 
-The operator explicitly synchronizes a scenario and date range through
-`POST /api/scenarios/{scenario_id}/rwms/sync`. The simulator upserts orders by
-the stable `(scenario, RWMS, orderId)` identity, keeps RWMS order versions and
-cabin unit IDs, and reclassifies coordinates through its own versioned zones.
-If both an address and coordinates exist, coordinates are authoritative.
-Address-only orders are reported as `COORDINATES_REQUIRED` and are not imported:
-no public geocoder or fabricated coordinate fallback is used.
+Capacity publication is a second explicit opt-in. Set
+`RWMS_CAPACITY_PUBLISH_ENABLED=true` only together with RWMS synchronization.
+The generator and delete commands then commit their local replacement first
+and publish one deterministic complete snapshot containing only active
+`SIMULATOR_GENERATOR` deliveries for the scenario's exactly one linked
+warehouse. Pickups, manual requests and imported RWMS orders are excluded.
+Each committed generator replacement advances a persisted simulator-wide
+capacity generation allocated by Alembic migrations `20260827_0009` and
+`20260827_0010`; `20260827_0011` safely lifts the sequence above any generations
+created before the global allocator existed. The generation is sent as
+`sourceGeneration` and participates in the source revision, so an intentional
+`A -> B -> A` regeneration is a new
+command, a never-accepted delayed older command is rejected, and a network
+retry of an already accepted generation remains idempotent.
+Migration `20260827_0012` preserves each existing generator delivery's selected
+window but makes it hard, and normalizes existing generated pickups to the
+all-workday `09:00-18:00` backhaul window. Manual and RWMS rows are untouched.
+Remote failure is returned explicitly and does not roll back the already
+committed local scenario; reconcile it with
+`POST /api/scenarios/{scenario_id}/rwms/capacity`. Replacing the snapshot never
+deletes a real RWMS booking, and generated tasks are never assignment exports.
+Scenario deletion, demo reset and external warehouse relinking are not remote
+capacity-deactivation commands and currently do not clear an accepted
+snapshot. Do not use those local operations as deactivation; reconcile the
+remote projection explicitly until that lifecycle has an authoritative rule.
+
+Opening a scenario workspace makes one body-free
+`POST /api/scenarios/{scenario_id}/rwms/refresh` request. The backend discovers
+every linked RWMS warehouse and owns the 31-date horizon from the current UTC
+day through day +30 before the browser reads the request list. Valid sibling
+orders remain committed, while any per-order failure returns explicit
+`RWMS_WORKSPACE_SYNC_INCOMPLETE` with warehouse-tagged failures. The explicit
+`POST /api/scenarios/{scenario_id}/rwms/sync` command remains available for a
+reviewed custom range of at most 31 inclusive dates. The simulator upserts
+orders by the stable `(scenario, RWMS, orderId)` identity, keeps RWMS order
+versions and cabin unit IDs, and reclassifies coordinates through its own
+versioned zones. Therefore switching scenarios or reloading a linked workspace
+cannot erase a real RWMS request: the authoritative feed restores it before
+rendering. A sync failure is surfaced instead of silently showing stale or
+fabricated demand. If both an address and coordinates exist, coordinates are
+authoritative. Address-only orders are reported as `COORDINATES_REQUIRED` and
+are not imported: no public geocoder or fabricated coordinate fallback is
+used.
+The upstream response is described as a still-unplanned demand snapshot but
+does not carry tombstones or an absence reason. Current synchronization does
+not deactivate a previously imported request that disappears from that feed;
+choosing deletion, cancellation or history-preserving inactivity requires an
+authoritative lifecycle rule.
+
+A confirmed CustomerApp booking is imported with its exact hard local-time
+window and the source one-to-four-hour `travelZoneHours` ring. The value is
+persisted with the accepted date, shown to the dispatcher and used when the
+planner orders and validates multi-point candidates for driver cycles. The hard
+window is immutable outside authoritative synchronization. Ordinary request
+reads include `source_system` and `external_id`, so the unassigned-task UI can
+identify real RWMS deliveries. The manual editor cannot replace or delete RWMS
+source facts and accepted dates; it may change only local planning enrichment.
+Vehicle capacity, shift and exact directed Valhalla legs remain decisive; the
+numeric ring and its visual polygon never substitute for exact routing.
 
 No simulator database transaction remains open across OAuth or RWMS HTTP I/O.
 Sync closes its read transaction before fetching the feed; apply freezes the
@@ -389,7 +503,8 @@ logistics decision in RWMS.
 
 Unassigned deliveries remain private to the operator by default. In the RWMS
 exchange dialog the operator may explicitly select individual delivery parts
-to publish as future `WAREHOUSE_DRIVERS` work. That deliberate publication may
+whose source is exactly `RWMS` to publish as future `WAREHOUSE_DRIVERS` work.
+Manual and generated leftovers are not selectable. That deliberate publication may
 target tomorrow but never the warehouse-local current day, carries no invented
 driver identity, and is revalidated by RWMS before DriverApp can preview and
 claim it. Pickup/return publication is not part of this boundary yet.
@@ -409,7 +524,9 @@ has been independently requested from private Valhalla with `costing=truck`
 and the leg's `EffectiveTruckProfile`. Exact Valhalla distance and duration are
 then used to reschedule windows, shift finish and objective cost. The saved
 GeoJSON and profile snapshot power route cards, map lines, diagnostics and
-simulation.
+simulation. The browser rejects an invalid segment geometry or a plan reference
+to a missing task; it never invents a straight line, zero coordinate or
+placeholder task for incomplete authoritative state.
 
 The profile contains actual effective height, width, full combination length,
 gross weight, axle count and configured maximum actual axle load. It is derived
@@ -429,10 +546,13 @@ never substitutes for Valhalla truck costing. OSM turn-restriction relations
 remain routing-graph behavior and are not fabricated as clickable lines.
 
 The graph has no live traffic feed: durations reflect the built OSM graph, not
-Yandex traffic. To change regions, update `OSRM_DATA_URL` and
-`OSM_DATA_VERSION`, then explicitly rebuild the routing-data volumes; this does
-not delete the separate PostGIS scenario volume. OpenStreetMap attribution
-remains visible through MapLibre. Do not expose the private router publicly.
+Yandex traffic. The normal runtime combines `OSRM_DATA_URL` and
+`OSM_NORTHWESTERN_DATA_URL`; their source manifest forces a rebuild of derived
+Valhalla admin/tiles/extract files when either PBF changes. Update
+`OSM_DATA_VERSION` with that source set so route snapshots, cache keys and the
+deduplicated restriction index agree. This never deletes the separate PostGIS
+scenario volume. OpenStreetMap attribution remains visible through MapLibre.
+Do not expose the private router publicly.
 
 For a backwards-compatibility development run only, use
 `docker compose --profile legacy-routing up osrm`; selecting `osrm` does not
@@ -491,18 +611,21 @@ pattern instead of pretending to be a universal VRP solver. It:
 2. builds the deterministic travel matrix;
 3. prioritizes deliveries by hard/last-date, manual priority, scarce dates and
    narrow windows, then batches equal-priority work nearest-first;
-4. considers bounded delivery pairs and both orders;
-5. considers at most `max_candidate_neighbors` detour-ranked pickup groups per
+4. schedules every candidate just in time from the depot, shifts its routed
+   prefix as far as earlier windows permit, and rejects combinations whose
+   residual customer wait exceeds `max_customer_wait_minutes`;
+5. considers bounded delivery pairs and both orders;
+6. considers at most `max_candidate_neighbors` detour-ranked pickup groups per
    delivery group and keeps only groups inside both detour limits;
-6. compares the mixed draft with one bounded delivery-only reference and
+7. compares the mixed draft with one bounded delivery-only reference and
    restores it if mandatory/last-date/total delivery coverage fell, then tries
    pickup attachments only through a fully valid reschedule of the shift suffix;
-7. allows a later depot-loaded cycle for the same driver and creates penalized
+8. allows a later depot-loaded cycle for the same driver and creates penalized
    pickup-only cycles only after no delivery candidate remains;
-8. globally assigns the best next feasible cycle to an available driver;
-9. compares resource activation against break-adjusted driver workload;
-10. performs bounded, fully revalidated local improvements;
-11. persists metrics, explanations, reasons and bounded trace events.
+9. globally assigns the best next feasible cycle to an available driver;
+10. compares resource activation against break-adjusted driver workload;
+11. performs bounded, fully revalidated local improvements;
+12. persists metrics, explanations, reasons and bounded trace events.
 
 The engine stops predictably at the configured time/iteration limit and
 returns the best valid plan found. The optimization seed is stored with the
@@ -545,6 +668,11 @@ whose preferred date is inside that horizon and creates the replacement batch
 in the same database transaction. It never appends a second generated batch to
 the same date. The response shows the number of deleted plans and replaced
 requests. Every generated request is explicitly assigned to its preferred date;
+generated deliveries receive hard windows round-robin `09:00-12:00`,
+`12:00-15:00`, `15:00-18:00`, while pickups receive the broad hard window
+`09:00-18:00`. When capacity publication is enabled, the complete generated
+delivery snapshot is sent after the local transaction commits. Its persisted
+generation advances atomically with that workload replacement;
 alternative accepted dates remain visible for a later manual dispatcher
 decision but never move work to another day automatically. Manual and RWMS
 requests, generated requests for other dates and plans on other dates are never

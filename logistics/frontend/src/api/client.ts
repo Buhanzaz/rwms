@@ -1,4 +1,4 @@
-import type { Feature, FeatureCollection, Geometry } from 'geojson';
+import type { Feature, FeatureCollection, Geometry, MultiPolygon, Polygon } from 'geojson';
 import type {
   Driver,
   DriverShift,
@@ -144,6 +144,31 @@ export interface TruckRestrictionBounds {
   north: number;
 }
 
+/** One of the fixed Valhalla truck travel-time contours exposed by the backend. */
+export type TravelTimeContourMinutes = 60 | 120 | 180 | 240;
+
+/** Stable properties attached to one validated travel-time area. */
+export interface TravelTimeContourProperties {
+  contour_minutes: TravelTimeContourMinutes;
+}
+
+/** One Polygon/MultiPolygon truck isochrone returned by the private Valhalla adapter. */
+export type TravelTimeContourFeature = Feature<Polygon | MultiPolygon, TravelTimeContourProperties>;
+
+/** Provider provenance and requested origin echoed by the read-only endpoint. */
+export interface TravelTimeContourMetadata {
+  source: 'valhalla';
+  costing: 'truck';
+  origin: { latitude: number; longitude: number };
+  contours_minutes: TravelTimeContourMinutes[];
+  osm_data_version: string;
+}
+
+/** Validated GeoJSON response containing all one-to-four-hour visual estimates. */
+export interface TravelTimeContourCollection extends FeatureCollection<Polygon | MultiPolygon, TravelTimeContourProperties> {
+  metadata: TravelTimeContourMetadata;
+}
+
 function jsonBody(value: unknown): string {
   return JSON.stringify(value);
 }
@@ -231,6 +256,7 @@ export interface DriverInput {
   external_worker_id?: UUID | null;
   name: string;
   preferred_route_group: string;
+  passport_details?: string;
   active: boolean;
   notes: string;
 }
@@ -323,6 +349,10 @@ export interface LogisticsRequestInput {
   latitude: number;
   longitude: number;
   quantity: number;
+  trailer_access_allowed?: boolean | null;
+  include_driver_passport_in_notification?: boolean;
+  contact_name?: string;
+  contact_phone?: string;
   cargo_length_mm: number | null;
   cargo_width_mm: number | null;
   cargo_height_mm: number | null;
@@ -338,6 +368,18 @@ export interface LogisticsRequestInput {
 export interface RequestScheduleInput {
   date: string | null;
   add_if_missing?: boolean;
+}
+
+/** Atomic dispatcher preparation required before a request can enter planning. */
+export interface RequestPlanningDetailsInput {
+  date: string;
+  window_start: string;
+  window_end: string;
+  is_hard: boolean;
+  trailer_access_allowed: boolean;
+  include_driver_passport_in_notification: boolean;
+  contact_name: string;
+  contact_phone: string;
 }
 
 export interface ManualChangeInput {
@@ -369,6 +411,18 @@ export interface RwmsSyncResult {
   updated: number;
   skipped: number;
   failures: RwmsSyncFailure[];
+}
+
+/** One warehouse result returned by the server-owned workspace refresh. */
+export interface RwmsWarehouseSyncResult extends RwmsSyncResult {
+  warehouse_id: UUID;
+}
+
+/** Exact current-horizon refresh performed across linked warehouses by the backend. */
+export interface RwmsScenarioRefreshResult {
+  date_from: string;
+  date_to: string;
+  warehouses: RwmsWarehouseSyncResult[];
 }
 
 export interface RwmsAppliedAssignment {
@@ -619,6 +673,19 @@ export const api = {
     return request<TruckRestrictionCollection>(`/routing/truck-restrictions?${query.toString()}`, init);
   },
 
+  getTravelTimeContours: (
+    latitude: number,
+    longitude: number,
+    signal?: AbortSignal,
+  ) => {
+    const query = new URLSearchParams({
+      latitude: String(latitude),
+      longitude: String(longitude),
+    });
+    const init: RequestInit = signal ? { signal } : {};
+    return request<TravelTimeContourCollection>(`/routing/travel-time-contours?${query.toString()}`, init);
+  },
+
   listScenarios: async () => (await request<RawScenario[]>('/scenarios')).map((scenario) => normalizeScenario(scenario)),
   getScenario: async (id: UUID) => normalizeScenario(await request<RawScenario>(`/scenarios/${id}`)),
   createScenario: async (input: ScenarioCreateInput) =>
@@ -721,10 +788,17 @@ export const api = {
   scheduleRequest: (id: UUID, input: RequestScheduleInput) =>
     request<LogisticsRequest>(`/requests/${id}/schedule`, { method: 'POST', body: jsonBody(input) }),
   deleteRequest: (id: UUID) => request<void>(`/requests/${id}`, { method: 'DELETE' }),
-  splitRequest: (id: UUID) => request<LogisticsRequest>(`/requests/${id}/split`, { method: 'POST' }),
+  splitRequest: (id: UUID, partQuantities?: number[]) => request<LogisticsRequest>(`/requests/${id}/split`, {
+    method: 'POST',
+    ...(partQuantities ? { body: jsonBody({ part_quantities: partQuantities }) } : {}),
+  }),
+  saveRequestPlanningDetails: (id: UUID, input: RequestPlanningDetailsInput) =>
+    request<LogisticsRequest>(`/requests/${id}/planning-details`, { method: 'POST', body: jsonBody(input) }),
 
   syncRwmsRequests: (scenarioId: UUID, input: { warehouse_id: UUID; date_from: string; date_to: string }) =>
     request<RwmsSyncResult>(`/scenarios/${scenarioId}/rwms/sync`, { method: 'POST', body: jsonBody(input) }),
+  refreshRwmsRequests: (scenarioId: UUID) =>
+    request<RwmsScenarioRefreshResult>(`/scenarios/${scenarioId}/rwms/refresh`, { method: 'POST' }),
   applyPlanToRwms: async (
     planId: UUID,
     expectedVersion: number,
@@ -820,7 +894,7 @@ export const api = {
 };
 
 export async function getScenarioWorkspace(scenarioId: UUID): Promise<ScenarioWorkspace> {
-  const [scenario, warehouses, zones, zoneRelations, drivers, vehicles, shifts, requests] = await Promise.all([
+  const [scenario, warehouses, zones, zoneRelations, drivers, vehicles, shifts] = await Promise.all([
     api.getScenario(scenarioId),
     api.listWarehouses(scenarioId),
     api.listZones(scenarioId),
@@ -828,8 +902,9 @@ export async function getScenarioWorkspace(scenarioId: UUID): Promise<ScenarioWo
     api.listDrivers(scenarioId),
     api.listVehicles(scenarioId),
     api.listShifts(scenarioId),
-    api.listRequests(scenarioId),
   ]);
+  await api.refreshRwmsRequests(scenarioId);
+  const requests = await api.listRequests(scenarioId);
   return normalizeWorkspace({
     scenario,
     warehouses,

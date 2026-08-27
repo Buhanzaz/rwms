@@ -15,7 +15,11 @@ from app.routing.restrictions import (
     parse_geojsonseq_feature,
 )
 from app.services import osm_restriction_indexer
-from app.services.osm_restriction_indexer import extract_restrictions, iter_extracted_restrictions
+from app.services.osm_restriction_indexer import (
+    extract_restrictions,
+    iter_extracted_restrictions,
+    iter_unique_extracted_restrictions,
+)
 
 
 @pytest.mark.parametrize(
@@ -173,6 +177,40 @@ def test_geojsonseq_parser_handles_record_separator_and_short_node_id(tmp_path: 
     assert len(restrictions) == 1
     assert restrictions[0].osm_type == "node"
     assert restrictions[0].osm_id == 123
+
+
+def test_multi_extract_union_deduplicates_shared_boundary_objects(tmp_path: Path) -> None:
+    """Adjacent regional PBFs must publish one row for a shared OSM identity."""
+
+    shared = {
+        "type": "Feature",
+        "id": "n123",
+        "properties": {"maxweight": "20"},
+        "geometry": {"type": "Point", "coordinates": [37.6, 55.7]},
+    }
+    northwest_only = {
+        "type": "Feature",
+        "id": "w456",
+        "properties": {"hgv": "no"},
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[30.3, 59.9], [30.4, 60.0]],
+        },
+    }
+    central_path = tmp_path / "central.geojsonseq"
+    northwest_path = tmp_path / "northwestern.geojsonseq"
+    central_path.write_text(json.dumps(shared) + "\n", encoding="utf-8")
+    northwest_path.write_text(
+        json.dumps(shared) + "\n" + json.dumps(northwest_only) + "\n",
+        encoding="utf-8",
+    )
+
+    restrictions = list(iter_unique_extracted_restrictions((central_path, northwest_path)))
+
+    assert [(item.osm_type, item.osm_id) for item in restrictions] == [
+        ("node", 123),
+        ("way", 456),
+    ]
 
 
 def test_irrelevant_dependency_object_is_skipped_before_geometry_validation() -> None:

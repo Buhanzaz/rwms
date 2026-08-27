@@ -332,9 +332,7 @@ class RuntimePlannerFacade:
             self._payload_mapping(command.payload.get("settings")),
             self._optional_int(command.payload.get("seed")),
         )
-        locked = tuple(
-            self._core_cycle(cycle, snapshot) for cycle in source.cycles if cycle.locked
-        )
+        locked = tuple(self._core_cycle(cycle, snapshot) for cycle in source.cycles if cycle.locked)
         return await self._execute_generation(session, snapshot, locked_cycles=locked)
 
     async def replan_simulation(
@@ -524,9 +522,7 @@ class RuntimePlannerFacade:
                 selectinload(Scenario.vehicles).selectinload(DbVehicle.load_profiles),
                 selectinload(Scenario.shifts).selectinload(DbDriverShift.driver),
                 selectinload(Scenario.shifts).selectinload(DbDriverShift.vehicle),
-                selectinload(Scenario.requests).selectinload(
-                    DbLogisticsRequest.date_options
-                ),
+                selectinload(Scenario.requests).selectinload(DbLogisticsRequest.date_options),
                 selectinload(Scenario.requests).selectinload(DbLogisticsRequest.tasks),
             )
         )
@@ -573,14 +569,22 @@ class RuntimePlannerFacade:
             scenario.requests,
             key=lambda item: (item.created_at, item.id),
         )
-        requests = tuple(
-            self._core_request(request, zone_entities, zone_info)
+        eligible_request_entities = [
+            request
             for request in request_entities
             if request_is_available_on_date(
                 request.scheduled_date,
                 (option.date for option in request.date_options),
                 planning_date,
             )
+        ]
+        self._assert_planning_details_complete(
+            eligible_request_entities,
+            planning_date,
+        )
+        requests = tuple(
+            self._core_request(request, zone_entities, zone_info)
+            for request in eligible_request_entities
         )
         vehicles = tuple(
             Vehicle(
@@ -592,9 +596,7 @@ class RuntimePlannerFacade:
                 default_trailer=self._trailer_spec(vehicle.default_trailer),
                 axle_load_profiles=tuple(
                     OperationalAxleLoadProfile(
-                        configuration_type=TruckConfigurationType(
-                            profile.configuration_type
-                        ),
+                        configuration_type=TruckConfigurationType(profile.configuration_type),
                         max_actual_axle_load_kg=profile.max_actual_axle_load_kg,
                     )
                     for profile in vehicle.load_profiles
@@ -728,6 +730,7 @@ class RuntimePlannerFacade:
                     else None
                 ),
                 is_hard=option.is_hard,
+                travel_zone_hours=option.travel_zone_hours,
             )
             for option in request.date_options
         )
@@ -754,7 +757,49 @@ class RuntimePlannerFacade:
                 height_mm=request.cargo_height_mm,
                 weight_kg=request.cargo_weight_kg,
             ),
+            trailer_access_allowed=(request.trailer_access_allowed is not False),
+            task_quantities=tuple(
+                task.quantity for task in sorted(request.tasks, key=lambda item: item.part_number)
+            ),
         )
+
+    @staticmethod
+    def _assert_planning_details_complete(
+        requests: Iterable[DbLogisticsRequest],
+        planning_date: date,
+    ) -> None:
+        """Reject planning until every eligible ready request has operator decisions."""
+
+        incomplete: list[dict[str, object]] = []
+        for request in requests:
+            if request.status != RequestStatus.READY:
+                continue
+            option = next(
+                (item for item in request.date_options if item.date == planning_date),
+                None,
+            )
+            missing_fields: list[str] = []
+            if option is None:
+                missing_fields.extend(("date_option", "time_window"))
+            elif option.window_start is None or option.window_end is None:
+                missing_fields.append("time_window")
+            if request.trailer_access_allowed is None:
+                missing_fields.append("trailer_access_allowed")
+            if missing_fields:
+                incomplete.append(
+                    {
+                        "request_id": str(request.id),
+                        "name": request.name,
+                        "missing_fields": missing_fields,
+                    }
+                )
+        if incomplete:
+            raise ApiError(
+                422,
+                "PLANNING_INPUT_INCOMPLETE",
+                "Set a service window and trailer-access decision for every request",
+                extra={"requests": incomplete},
+            )
 
     @staticmethod
     def _request_source_key(request: DbLogisticsRequest) -> str | None:
@@ -762,10 +807,7 @@ class RuntimePlannerFacade:
 
         if not request.source_system:
             return None
-        if (
-            request.source_system != "SIMULATOR_GENERATOR"
-            or request.external_id is not None
-        ):
+        if request.source_system != "SIMULATOR_GENERATOR" or request.external_id is not None:
             return (
                 f"{request.source_system}:{request.external_id}"
                 if request.external_id is not None
@@ -784,9 +826,7 @@ class RuntimePlannerFacade:
         else:
             scheduled_date = getattr(request, "scheduled_date", None)
             primary_dates = (
-                (scheduled_date.isoformat(),)
-                if isinstance(scheduled_date, date)
-                else ()
+                (scheduled_date.isoformat(),) if isinstance(scheduled_date, date) else ()
             )
         return repr(
             (
@@ -807,18 +847,29 @@ class RuntimePlannerFacade:
         """Translate a stored request part for validation and manual editing."""
 
         matching = [option for option in request.date_options if option.date == planning_date]
-        selected = (
-            min(
-                matching,
-                key=lambda option: (
-                    not option.is_hard,
-                    -option.priority,
-                    option.width,
-                    option.window_start or request.created_at,
-                ),
+        if not matching:
+            raise ApiError(
+                422,
+                "PLANNING_INPUT_INCOMPLETE",
+                "A persisted planning task has no accepted option for the plan date",
+                extra={
+                    "requests": [
+                        {
+                            "request_id": request.id,
+                            "name": request.name,
+                            "missing_fields": ["date_option", "time_window"],
+                        }
+                    ]
+                },
             )
-            if matching
-            else RequestDateOption(date=planning_date)
+        selected = min(
+            matching,
+            key=lambda option: (
+                not option.is_hard,
+                -option.priority,
+                option.width,
+                option.window_start or request.created_at,
+            ),
         )
         available_dates = sorted({option.date for option in request.date_options})
         remaining = sum(value >= planning_date for value in available_dates)
@@ -848,6 +899,7 @@ class RuntimePlannerFacade:
                 height_mm=task.cargo_height_mm,
                 weight_kg=task.cargo_weight_kg,
             ),
+            trailer_access_allowed=request.trailer_access_allowed,
         )
 
     @staticmethod
@@ -995,9 +1047,7 @@ class RuntimePlannerFacade:
             plan = await self._persist_result(session, snapshot, result)
             run.plan_id = plan.id
             run.status = (
-                OptimizationStatus.TIMED_OUT
-                if result.timed_out
-                else OptimizationStatus.COMPLETED
+                OptimizationStatus.TIMED_OUT if result.timed_out else OptimizationStatus.COMPLETED
             )
             run.final_score = result.score
             run.finished_at = utc_now()
@@ -1146,13 +1196,10 @@ class RuntimePlannerFacade:
         async def enrich_cycle(cycle: RouteCycle) -> RouteCycle:
             ordered_stops = tuple(sorted(cycle.stops, key=lambda stop: stop.sequence))
             expected_pairs = tuple(
-                (first.sequence, second.sequence)
-                for first, second in pairwise(ordered_stops)
+                (first.sequence, second.sequence) for first, second in pairwise(ordered_stops)
             )
             if len(cycle.legs) != len(expected_pairs):
-                raise RuntimeError(
-                    "planner cycle leg count does not match its ordered stop count"
-                )
+                raise RuntimeError("planner cycle leg count does not match its ordered stop count")
             departure_at = cycle.legs[0].departure_at if cycle.legs else cycle.planned_start
             async with semaphore:
                 road_route = await provider.get_route(
@@ -1176,9 +1223,7 @@ class RuntimePlannerFacade:
                 enriched_legs.append(replace(leg, geometry=road_leg.geometry))
             return replace(cycle, legs=tuple(enriched_legs))
 
-        enriched_cycles = await asyncio.gather(
-            *(enrich_cycle(cycle) for cycle in result.cycles)
-        )
+        enriched_cycles = await asyncio.gather(*(enrich_cycle(cycle) for cycle in result.cycles))
         return replace(result, cycles=tuple(enriched_cycles))
 
     async def _persist_result(
@@ -1275,9 +1320,7 @@ class RuntimePlannerFacade:
                         else None
                     ),
                     recommendation_ru=(
-                        " ".join(item.recommendation_ru)
-                        if item.recommendation_ru
-                        else None
+                        " ".join(item.recommendation_ru) if item.recommendation_ru else None
                     ),
                 )
             )
@@ -1377,11 +1420,7 @@ class RuntimePlannerFacade:
         """Reconstruct the pure domain cycle used by validation and simulation."""
 
         shift = next(
-            (
-                item
-                for item in snapshot.input_data.shifts
-                if item.id == str(cycle.driver_shift_id)
-            ),
+            (item for item in snapshot.input_data.shifts if item.id == str(cycle.driver_shift_id)),
             None,
         )
         if shift is None:
@@ -1429,19 +1468,13 @@ class RuntimePlannerFacade:
                     zone_id=core_task.zone_id if core_task is not None else None,
                     route_group=zone.route_group if zone is not None else None,
                     window_start=(
-                        core_task.selected_option.window_start
-                        if core_task is not None
-                        else None
+                        core_task.selected_option.window_start if core_task is not None else None
                     ),
                     window_end=(
-                        core_task.selected_option.window_end
-                        if core_task is not None
-                        else None
+                        core_task.selected_option.window_end if core_task is not None else None
                     ),
                     window_is_hard=(
-                        core_task.selected_option.is_hard
-                        if core_task is not None
-                        else False
+                        core_task.selected_option.is_hard if core_task is not None else False
                     ),
                 )
             )
@@ -1541,9 +1574,7 @@ class RuntimePlannerFacade:
         if source_cycle is not None and source_cycle.locked:
             raise ApiError(409, "CYCLE_LOCKED", "The source route cycle is locked")
         if any(
-            stop.task_id == task_id and stop.locked
-            for cycle in plan.cycles
-            for stop in cycle.stops
+            stop.task_id == task_id and stop.locked for cycle in plan.cycles for stop in cycle.stops
         ):
             raise ApiError(409, "TASK_LOCKED", "The selected task is locked")
 
@@ -1696,18 +1727,12 @@ class RuntimePlannerFacade:
                 and item.start_at.date() == snapshot.input_data.planning_date
                 and item.vehicle_id in active_vehicle_ids
             ),
-            default=cycle.planned_start.astimezone(
-                ZoneInfo(snapshot.scenario.timezone)
-            ),
+            default=cycle.planned_start.astimezone(ZoneInfo(snapshot.scenario.timezone)),
         )
         matrix = await provider.get_matrix(points, departure_at)
         matrix_index = {task.id: index + 1 for index, task in enumerate(all_tasks)}
         shift = next(
-            (
-                item
-                for item in snapshot.input_data.shifts
-                if item.id == str(cycle.driver_shift_id)
-            ),
+            (item for item in snapshot.input_data.shifts if item.id == str(cycle.driver_shift_id)),
             None,
         )
         vehicle = next(
@@ -1738,8 +1763,7 @@ class RuntimePlannerFacade:
             existing_shift_cycles=tuple(
                 self._core_cycle(item, snapshot)
                 for item in cycle.route_plan.cycles
-                if item.id != cycle.id
-                and item.driver_shift_id == cycle.driver_shift_id
+                if item.id != cycle.id and item.driver_shift_id == cycle.driver_shift_id
             ),
         )
         if candidate is None:
@@ -1877,16 +1901,11 @@ class RuntimePlannerFacade:
         if not isinstance(locked_value, bool):
             raise ApiError(422, "TASK_LOCK_INVALID", "locked must be a boolean")
         matching_stops = [
-            stop
-            for cycle in plan.cycles
-            for stop in cycle.stops
-            if stop.task_id == task_id
+            stop for cycle in plan.cycles for stop in cycle.stops if stop.task_id == task_id
         ]
         if not matching_stops:
             raise not_found("assigned_planning_task", task_id)
-        previous: dict[str, object] = {
-            "locked": all(stop.locked for stop in matching_stops)
-        }
+        previous: dict[str, object] = {"locked": all(stop.locked for stop in matching_stops)}
         for stop in matching_stops:
             stop.locked = locked_value
         task = await session.get(DbPlanningTask, task_id)

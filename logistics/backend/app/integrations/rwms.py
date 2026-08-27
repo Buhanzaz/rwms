@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Mapping
 from functools import lru_cache
 from time import monotonic
+from uuid import UUID
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -15,6 +16,8 @@ from app.errors import ApiError
 from app.schemas.domain import (
     RwmsApplyResult,
     RwmsAssignmentsCommand,
+    RwmsCapacitySnapshotCommand,
+    RwmsCapacitySnapshotResult,
     RwmsPlanningAssignmentStatusFeed,
     RwmsPlanningFeed,
 )
@@ -42,6 +45,7 @@ class RwmsPlanningClient:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._enabled = settings.rwms_sync_enabled
+        self._capacity_publish_enabled = settings.rwms_capacity_publish_enabled
         self._base_url = settings.rwms_logistics_base_url
         self._token_url = settings.rwms_token_url
         self._client_id = settings.rwms_client_id
@@ -61,6 +65,17 @@ class RwmsPlanningClient:
                 "RWMS_SYNC_DISABLED",
                 "RWMS synchronization is disabled by runtime configuration",
             )
+
+    def ensure_capacity_publish_enabled(self) -> None:
+        """Fail explicitly when simulator capacity publication is not opted in."""
+
+        if not self._capacity_publish_enabled:
+            raise ApiError(
+                503,
+                "RWMS_CAPACITY_PUBLISH_DISABLED",
+                "RWMS capacity publication is disabled by runtime configuration",
+            )
+        self.ensure_enabled()
 
     async def get_planning_requests(
         self,
@@ -118,6 +133,28 @@ class RwmsPlanningClient:
             response,
             RwmsPlanningAssignmentStatusFeed,
             "RWMS_ASSIGNMENT_STATUS_RESPONSE_INVALID",
+        )
+
+    async def replace_capacity_snapshot(
+        self,
+        scenario_id: UUID,
+        command: RwmsCapacitySnapshotCommand,
+        *,
+        idempotency_key: UUID,
+    ) -> RwmsCapacitySnapshotResult:
+        """Replace one scenario's active anonymous capacity projection idempotently."""
+
+        self.ensure_capacity_publish_enabled()
+        response = await self._authorized_request(
+            "PUT",
+            f"/api/internal/logistics/v1/planning/capacity-snapshots/{scenario_id}",
+            headers={"Idempotency-Key": str(idempotency_key)},
+            json_body=command.model_dump(mode="json", by_alias=True),
+        )
+        return self._validate_response(
+            response,
+            RwmsCapacitySnapshotResult,
+            "RWMS_CAPACITY_RESPONSE_INVALID",
         )
 
     async def _authorized_request(
@@ -236,6 +273,7 @@ class RwmsPlanningClient:
 @lru_cache(maxsize=8)
 def _cached_rwms_client(
     enabled: bool,
+    capacity_publish_enabled: bool,
     base_url: str | None,
     token_url: str | None,
     client_id: str,
@@ -246,6 +284,7 @@ def _cached_rwms_client(
 
     settings = Settings(
         rwms_sync_enabled=enabled,
+        rwms_capacity_publish_enabled=capacity_publish_enabled,
         rwms_logistics_base_url=base_url,
         rwms_token_url=token_url,
         rwms_client_id=client_id,
@@ -260,6 +299,7 @@ def get_rwms_planning_client(settings: Settings) -> RwmsPlanningClient:
 
     return _cached_rwms_client(
         settings.rwms_sync_enabled,
+        settings.rwms_capacity_publish_enabled,
         settings.rwms_logistics_base_url,
         settings.rwms_token_url,
         settings.rwms_client_id,

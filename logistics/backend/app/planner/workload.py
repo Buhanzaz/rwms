@@ -42,9 +42,7 @@ def calculate_shift_workload_cost(
     """Penalize only duty above the preferred break-adjusted utilization target."""
 
     preferred_seconds = (
-        shift_usable_seconds(shift)
-        * settings.preferred_shift_utilization_percent
-        / 100.0
+        shift_usable_seconds(shift) * settings.preferred_shift_utilization_percent / 100.0
     )
     excess_minutes = max(
         0.0,
@@ -62,10 +60,7 @@ def calculate_driver_workload_cost(
 
     cycle_list = tuple(cycles)
     return round(
-        sum(
-            calculate_shift_workload_cost(cycle_list, shift, settings)
-            for shift in shifts
-        ),
+        sum(calculate_shift_workload_cost(cycle_list, shift, settings) for shift in shifts),
         6,
     )
 

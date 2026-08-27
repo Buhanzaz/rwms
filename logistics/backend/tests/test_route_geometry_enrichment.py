@@ -93,8 +93,10 @@ def _line(first: GeoPoint, second: GeoPoint) -> dict[str, object]:
 def _cycle(cycle_index: int, customer_count: int = 3) -> RouteCycle:
     points = (
         GeoPoint(37.60, 55.70),
-        *(GeoPoint(37.60 + cycle_index / 100 + index / 1000, 55.70 + index / 1000)
-          for index in range(1, customer_count + 1)),
+        *(
+            GeoPoint(37.60 + cycle_index / 100 + index / 1000, 55.70 + index / 1000)
+            for index in range(1, customer_count + 1)
+        ),
         GeoPoint(37.60, 55.70),
     )
     stops = tuple(
@@ -186,9 +188,7 @@ async def test_enrichment_requests_one_route_per_cycle_and_maps_each_leg_geometr
     cycles = (_cycle(0, 3), _cycle(1, 2), _cycle(2, 1))
     provider = _RecordingRoutingProvider()
 
-    enriched = await RuntimePlannerFacade._attach_road_geometries(
-        _result(cycles), provider
-    )
+    enriched = await RuntimePlannerFacade._attach_road_geometries(_result(cycles), provider)
 
     assert len(provider.calls) == len(cycles)
     assert [cycle.id for cycle in enriched.cycles] == [cycle.id for cycle in cycles]
@@ -202,8 +202,7 @@ async def test_enrichment_requests_one_route_per_cycle_and_maps_each_leg_geometr
             leg.travel_seconds for leg in original.legs
         ]
         assert [leg.geometry for leg in actual.legs] == [
-            _line(first.point, second.point)
-            for first, second in pairwise(actual.stops)
+            _line(first.point, second.point) for first, second in pairwise(actual.stops)
         ]
 
     assert sorted(len(points) for points, _departure_at in provider.calls) == sorted(
@@ -215,9 +214,7 @@ async def test_enrichment_limits_route_requests_to_four_concurrent_cycles() -> N
     cycles = tuple(_cycle(index, 1) for index in range(9))
     provider = _RecordingRoutingProvider(delay_seconds=0.01)
 
-    enriched = await RuntimePlannerFacade._attach_road_geometries(
-        _result(cycles), provider
-    )
+    enriched = await RuntimePlannerFacade._attach_road_geometries(_result(cycles), provider)
 
     assert [cycle.id for cycle in enriched.cycles] == [cycle.id for cycle in cycles]
     assert provider.max_active_calls == 4
@@ -227,6 +224,4 @@ async def test_enrichment_rejects_a_route_with_the_wrong_leg_count() -> None:
     provider = _RecordingRoutingProvider(omit_last_leg=True)
 
     with pytest.raises(RuntimeError, match="route leg count"):
-        await RuntimePlannerFacade._attach_road_geometries(
-            _result((_cycle(0, 2),)), provider
-        )
+        await RuntimePlannerFacade._attach_road_geometries(_result((_cycle(0, 2),)), provider)

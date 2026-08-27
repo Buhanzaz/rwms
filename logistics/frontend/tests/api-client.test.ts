@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, ApiError } from '../src/api/client';
+import { api, ApiError, getScenarioWorkspace } from '../src/api/client';
 import { normalizeRoutePlan, normalizeScenario, type RawRoutePlan, type RawScenario } from '../src/api/mappers';
 import type { ScenarioWorkspace, Zone } from '../src/domain/types';
 
@@ -87,9 +87,56 @@ function requestBody(mock: ReturnType<typeof fetchMock>, index: number): Record<
   return JSON.parse(body) as Record<string, unknown>;
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 describe('actual backend transport contract', () => {
+  it('delegates the current-horizon RWMS refresh to one server-owned command', async () => {
+    const mock = fetchMock(
+      rawScenario,
+      [{
+        id: 'warehouse-id',
+        scenario_id: 'scenario-id',
+        external_warehouse_id: '00000000-0000-0000-0000-000000000002',
+        name: 'Основной склад',
+        latitude: 55.7574,
+        longitude: 37.3995,
+        loading_minutes: 30,
+        unloading_minutes: 20,
+        turnaround_minutes: 20,
+        working_day_start: '08:00:00',
+        working_day_end: '20:00:00',
+      }],
+      [],
+      [],
+      [],
+      [],
+      [],
+      {
+        date_from: '2026-08-26',
+        date_to: '2026-09-25',
+        warehouses: [{
+          warehouse_id: '00000000-0000-0000-0000-000000000002',
+          imported: 0,
+          updated: 0,
+          skipped: 0,
+          failures: [],
+        }],
+      },
+      [],
+    );
+
+    const workspace = await getScenarioWorkspace('scenario-id');
+
+    expect(mock.mock.calls[7]?.[0]).toBe('/api/scenarios/scenario-id/rwms/refresh');
+    expect(mock.mock.calls[7]?.[1]?.method).toBe('POST');
+    expect(mock.mock.calls[7]?.[1]?.body).toBeUndefined();
+    expect(mock.mock.calls[8]?.[0]).toBe('/api/scenarios/scenario-id/requests');
+    expect(workspace.requests).toEqual([]);
+  });
+
   it('uses body-free demo/export and wraps an imported document', async () => {
     const mock = fetchMock(rawScenario, { schema_version: 1 }, rawScenario);
     await api.generateDemo('scenario-id');
@@ -107,6 +154,57 @@ describe('actual backend transport contract', () => {
     const mock = fetchMock(rawPlan);
     await api.clonePlan('plan-id', 'План B', workspaceFixture());
     expect(requestBody(mock, 0)).toEqual({ name: 'План B' });
+  });
+
+  it('rejects incomplete plan state instead of fabricating tasks or route geometry', () => {
+    const missingTaskPlan: RawRoutePlan = {
+      ...rawPlan,
+      unassigned_tasks: [{
+        id: 'unassigned-id',
+        task_id: 'missing-task-id',
+        reason_codes: ['NO_SHIFT'],
+        descriptions_ru: ['Нет доступной смены'],
+        nearest_option: null,
+        recommendation_ru: null,
+      }],
+    };
+    expect(() => normalizeRoutePlan(missingTaskPlan, workspaceFixture()))
+      .toThrow('Route plan plan-id references missing task missing-task-id');
+
+    const invalidGeometryPlan = {
+      ...rawPlan,
+      cycles: [{
+        id: 'cycle-id',
+        driver_shift_id: 'shift-id',
+        sequence: 1,
+        planned_start: '2026-08-25T08:00:00Z',
+        planned_finish: '2026-08-25T09:00:00Z',
+        total_distance_meters: 100,
+        total_travel_seconds: 60,
+        total_service_seconds: 0,
+        empty_distance_meters: 100,
+        detour_seconds: 0,
+        score: 0,
+        locked: false,
+        manually_changed: false,
+        metrics: {},
+        stops: [],
+        segments: [{
+          id: 'segment-id',
+          sequence: 1,
+          from_stop_id: 'from-stop-id',
+          to_stop_id: 'to-stop-id',
+          departure_at: '2026-08-25T08:00:00Z',
+          arrival_at: '2026-08-25T08:01:00Z',
+          distance_meters: 100,
+          travel_seconds: 60,
+          geometry: {},
+        }],
+        explanations: [],
+      }],
+    } as RawRoutePlan;
+    expect(() => normalizeRoutePlan(invalidGeometryPlan, workspaceFixture()))
+      .toThrow('Route segment segment-id has invalid GeoJSON geometry');
   });
 
   it('keeps zone geometry bare and locking on its dedicated endpoint', async () => {
@@ -197,6 +295,36 @@ describe('actual backend transport contract', () => {
     expect(mock.mock.calls[0]?.[1]?.method).toBe('DELETE');
     expect(mock.mock.calls[0]?.[1]?.body).toBeUndefined();
     expect(result).toEqual({ scenario_id: 'scenario-id', date: '2026-08-25', deleted_requests: 8, deleted_plans: 2 });
+  });
+
+  it('saves dispatcher planning details atomically and sends explicit subtask quantities', async () => {
+    const mock = fetchMock({}, {});
+
+    await api.saveRequestPlanningDetails('request-id', {
+      date: '2026-08-25',
+      window_start: '09:00',
+      window_end: '15:00',
+      is_hard: true,
+      trailer_access_allowed: false,
+      include_driver_passport_in_notification: true,
+      contact_name: 'Иван Петров',
+      contact_phone: '+79991234567',
+    });
+    await api.splitRequest('request-id', [1, 1]);
+
+    expect(mock.mock.calls[0]?.[0]).toBe('/api/requests/request-id/planning-details');
+    expect(requestBody(mock, 0)).toEqual({
+      date: '2026-08-25',
+      window_start: '09:00',
+      window_end: '15:00',
+      is_hard: true,
+      trailer_access_allowed: false,
+      include_driver_passport_in_notification: true,
+      contact_name: 'Иван Петров',
+      contact_phone: '+79991234567',
+    });
+    expect(mock.mock.calls[1]?.[0]).toBe('/api/requests/request-id/split');
+    expect(requestBody(mock, 1)).toEqual({ part_quantities: [1, 1] });
   });
 
   it('nests manual-change payload but leaves dedicated simulation bodies raw', async () => {

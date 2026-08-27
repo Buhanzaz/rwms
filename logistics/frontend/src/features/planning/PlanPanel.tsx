@@ -42,7 +42,7 @@ function isTargetData(value: unknown): value is TargetData {
 
 function stopSymbol(stop: RouteStop): string {
   if (stop.stop_type === 'DELIVERY') return 'D';
-  if (stop.stop_type === 'PICKUP') return 'P';
+  if (stop.stop_type === 'PICKUP') return 'V';
   return 'С';
 }
 

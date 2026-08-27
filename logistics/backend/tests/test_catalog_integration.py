@@ -6,11 +6,16 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
+from app.errors import ApiError
+from app.models import RoutePlan, UnassignedTask
 from app.schemas.domain import (
     GeoJsonGeometry,
     LogisticsRequestCreate,
+    LogisticsRequestUpdate,
     RequestDateOptionInput,
+    RequestPlanningDetailsInput,
     ScenarioCreate,
+    WarehouseCreate,
     ZoneCreate,
     ZoneRelationCreate,
     ZoneUpdate,
@@ -99,3 +104,100 @@ async def test_relation_uuid_binding_and_request_zone_version_flow(
     assert unchanged == 0
     assert request.zone_version == 2
     assert all(task.zone_version == 2 for task in request.tasks)
+
+
+@pytest.mark.asyncio
+async def test_task_regeneration_rejects_an_unassigned_plan_reference(
+    db_session: AsyncSession,
+) -> None:
+    """Return the stable conflict instead of violating the unassigned-task FK."""
+
+    scenario = await scenarios.create_scenario(
+        db_session,
+        ScenarioCreate(name="Unassigned task reference"),
+        Settings(),
+    )
+    warehouse = await catalog.create_warehouse(
+        db_session,
+        scenario.id,
+        WarehouseCreate(name="Warehouse", latitude=55.75, longitude=37.61),
+    )
+    request = await catalog.create_request(
+        db_session,
+        scenario.id,
+        LogisticsRequestCreate(
+            type="DELIVERY",
+            name="Unassigned delivery",
+            latitude=55.76,
+            longitude=37.62,
+            quantity=2,
+            date_options=[RequestDateOptionInput(date=date(2026, 8, 27))],
+        ),
+    )
+    plan = RoutePlan(
+        scenario_id=scenario.id,
+        warehouse_id=warehouse.id,
+        date=date(2026, 8, 27),
+        name="Plan with unassigned task",
+    )
+    db_session.add(plan)
+    await db_session.flush()
+    db_session.add(
+        UnassignedTask(
+            route_plan_id=plan.id,
+            task_id=request.tasks[0].id,
+            reason_codes=["NO_SHIFT"],
+            descriptions_ru=["Нет доступной смены"],
+        )
+    )
+    await db_session.flush()
+
+    original_task_ids = [task.id for task in request.tasks]
+    updated = await catalog.update_request(
+        db_session,
+        request.id,
+        LogisticsRequestUpdate(
+            type=request.type,
+            name=request.name,
+            latitude=request.latitude,
+            longitude=request.longitude,
+            quantity=request.quantity,
+            trailer_access_allowed=request.trailer_access_allowed,
+            notes="Operator note only",
+            date_options=[
+                RequestDateOptionInput(
+                    date=option.date,
+                    priority=option.priority,
+                    window_start=option.window_start,
+                    window_end=option.window_end,
+                    is_hard=option.is_hard,
+                    travel_zone_hours=option.travel_zone_hours,
+                )
+                for option in request.date_options
+            ],
+        ),
+    )
+    assert updated.notes == "Operator note only"
+    assert [task.id for task in updated.tasks] == original_task_ids
+
+    with pytest.raises(ApiError) as error:
+        await catalog.set_request_planning_details(
+            db_session,
+            request.id,
+            RequestPlanningDetailsInput(
+                date=date(2026, 8, 27),
+                window_start="09:00",
+                window_end="12:00",
+                is_hard=True,
+                trailer_access_allowed=False,
+                contact_name="Контакт",
+                contact_phone="+7 900 000-00-00",
+            ),
+        )
+
+    assert error.value.status_code == 409
+    assert error.value.code == "REQUEST_TASKS_ALREADY_PLANNED"
+    with pytest.raises(ApiError) as delete_error:
+        await catalog.delete_request(db_session, request.id)
+    assert delete_error.value.status_code == 409
+    assert delete_error.value.code == "REQUEST_ALREADY_PLANNED"

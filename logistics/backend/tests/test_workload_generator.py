@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import date
+from datetime import date, time
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -13,8 +14,10 @@ from shapely.geometry import Point
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import app.api.scenarios as scenarios_api
 from app.config import Settings
 from app.errors import ApiError
+from app.integrations.rwms import RwmsPlanningClient
 from app.models import LogisticsRequest, RoutePlan, Scenario, UnassignedTask, Zone
 from app.models.domain import RequestStatus, RequestType, ZoneClassificationStatus
 from app.routing import GeoPoint, MockRoutingProvider, RoadSnapper, SnappedPoint
@@ -189,9 +192,7 @@ def _multi_polygon_with_hole() -> GeoJsonGeometry:
                 [(37.0, 55.0), (38.0, 55.0), (38.0, 56.0), (37.0, 56.0), (37.0, 55.0)],
                 [(37.4, 55.4), (37.6, 55.4), (37.6, 55.6), (37.4, 55.6), (37.4, 55.4)],
             ],
-            [
-                [(38.2, 55.0), (38.4, 55.0), (38.4, 55.2), (38.2, 55.2), (38.2, 55.0)]
-            ],
+            [[(38.2, 55.0), (38.4, 55.0), (38.4, 55.2), (38.2, 55.2), (38.2, 55.0)]],
         ],
     )
 
@@ -296,6 +297,7 @@ async def test_generation_creates_exact_dated_classified_workload(
         assert request.status == RequestStatus.READY
         assert request.service_minutes == 37
         assert request.quantity in (1, 2)
+        assert request.trailer_access_allowed is True
         assert request.zone_id is not None
         assert request.zone_classification_status == ZoneClassificationStatus.CLASSIFIED
         assert geometry.contains(Point(request.longitude, request.latitude))
@@ -304,25 +306,34 @@ async def test_generation_creates_exact_dated_classified_workload(
 
         option_dates = [option.date for option in request.date_options]
         assert len(option_dates) == len(set(option_dates)) == 3
+        assert all(
+            option.window_start is not None and option.window_end is not None and option.is_hard
+            for option in request.date_options
+        )
+        if request.type == RequestType.DELIVERY:
+            sequence = int(request.name.rsplit("№", 1)[1])
+            expected_window = (
+                (time(9), time(12)),
+                (time(12), time(15)),
+                (time(15), time(18)),
+            )[(sequence - 1) % 3]
+        else:
+            expected_window = (time(9), time(18))
+        assert {(option.window_start, option.window_end) for option in request.date_options} == {
+            expected_window
+        }
         assert set(option_dates) <= horizon
         primary = next(option for option in request.date_options if option.priority == 100)
         assert request.scheduled_date == primary.date
         assert all(
-            option.priority < 100
-            for option in request.date_options
-            if option is not primary
+            option.priority < 100 for option in request.date_options if option is not primary
         )
         primary_counts[(primary.date, request.type)] += 1
 
     expected_primary_counts: Counter[tuple[date, str]] = Counter(
-        {
-            (day, RequestType.DELIVERY): 2
-            for day in sorted(horizon)
-        }
+        {(day, RequestType.DELIVERY): 2 for day in sorted(horizon)}
     )
-    expected_primary_counts.update(
-        {(day, RequestType.PICKUP): 1 for day in sorted(horizon)}
-    )
+    expected_primary_counts.update({(day, RequestType.PICKUP): 1 for day in sorted(horizon)})
     assert primary_counts == expected_primary_counts
 
 
@@ -383,12 +394,9 @@ async def test_repeated_seed_automatically_replaces_generated_workload(
     assert result.created_requests == 4
     remaining = await catalog.list_requests(db_session, scenario.id)
     assert len(remaining) == 4
-    assert {request.id for request in remaining}.isdisjoint(
-        {request.id for request in original}
-    )
+    assert {request.id for request in remaining}.isdisjoint({request.id for request in original})
     assert all(
-        request.notes == "Детерминированная нагрузка, seed=20260822"
-        for request in remaining
+        request.notes == "Детерминированная нагрузка, seed=20260822" for request in remaining
     )
 
 
@@ -482,9 +490,7 @@ async def test_one_day_regeneration_replaces_only_generated_requests(
             longitude=37.2,
             quantity=1,
             status=RequestStatus.READY,
-            date_options=[
-                RequestDateOptionInput(date=date(2026, 12, 24), priority=100)
-            ],
+            date_options=[RequestDateOptionInput(date=date(2026, 12, 24), priority=100)],
         ),
     )
 
@@ -502,9 +508,7 @@ async def test_one_day_regeneration_replaces_only_generated_requests(
     )
     requests = await catalog.list_requests(db_session, scenario.id)
     generated = [
-        request
-        for request in requests
-        if request.source_system == GENERATOR_SOURCE_SYSTEM
+        request for request in requests if request.source_system == GENERATOR_SOURCE_SYSTEM
     ]
 
     assert result.replaced_requests == 3
@@ -548,9 +552,7 @@ async def test_generation_keeps_neighboring_dates_isolated(
     )
     before = await catalog.list_requests(db_session, scenario.id)
     next_day_ids = {
-        request.id
-        for request in before
-        if request.scheduled_date == date(2026, 12, 26)
+        request.id for request in before if request.scheduled_date == date(2026, 12, 26)
     }
 
     result = await _generate_workload(
@@ -570,9 +572,7 @@ async def test_generation_keeps_neighboring_dates_isolated(
         {date(2026, 12, 25): 1, date(2026, 12, 26): 2}
     )
     assert next_day_ids == {
-        request.id
-        for request in after
-        if request.scheduled_date == date(2026, 12, 26)
+        request.id for request in after if request.scheduled_date == date(2026, 12, 26)
     }
 
 
@@ -608,9 +608,7 @@ async def test_delete_generated_workload_is_exact_and_idempotent(
             longitude=37.2,
             quantity=1,
             status=RequestStatus.READY,
-            date_options=[
-                RequestDateOptionInput(date=date(2026, 12, 25), priority=100)
-            ],
+            date_options=[RequestDateOptionInput(date=date(2026, 12, 25), priority=100)],
         ),
     )
 
@@ -634,6 +632,100 @@ async def test_delete_generated_workload_is_exact_and_idempotent(
     assert Counter(request.scheduled_date for request in remaining) == Counter(
         {date(2026, 12, 26): 2, None: 1}
     )
+
+
+@pytest.mark.asyncio
+async def test_enabled_api_keeps_committed_generator_mutation_when_publication_fails(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Commit generate/delete state first and surface a later remote failure explicitly."""
+
+    scenario, _ = await _scenario_with_zone(db_session, name="Publish failure")
+    settings = Settings(
+        rwms_sync_enabled=True,
+        rwms_capacity_publish_enabled=True,
+        rwms_logistics_base_url="https://rwms.internal",
+        rwms_token_url="https://auth.internal/oauth2/token",
+        rwms_client_secret="test-secret",
+    )
+    client = AsyncMock(spec=RwmsPlanningClient)
+    publication_calls = 0
+
+    async def fail_publication(
+        session: AsyncSession,
+        scenario_id: UUID,
+        _: RwmsPlanningClient,
+    ) -> None:
+        nonlocal publication_calls
+        publication_calls += 1
+        assert scenario_id == scenario.id
+        assert not session.in_transaction()
+        raise ApiError(502, "RWMS_REQUEST_FAILED", "remote unavailable")
+
+    monkeypatch.setattr(scenarios_api, "publish_scenario_capacity", fail_publication)
+    payload = WorkloadGeneratorInput(
+        start_date=date(2026, 12, 26),
+        deliveries_per_day=1,
+        pickups_per_day=1,
+        seed=2601,
+    )
+
+    with pytest.raises(ApiError, match="remote unavailable"):
+        await scenarios_api.generate_workload(
+            scenario.id,
+            payload,
+            db_session,
+            MockRoutingProvider(),
+            settings,
+            client,
+        )
+    await db_session.rollback()
+    assert len(await catalog.list_requests(db_session, scenario.id)) == 2
+
+    with pytest.raises(ApiError, match="remote unavailable"):
+        await scenarios_api.delete_workload(
+            scenario.id,
+            date(2026, 12, 26),
+            db_session,
+            settings,
+            client,
+        )
+    await db_session.rollback()
+    assert await catalog.list_requests(db_session, scenario.id) == []
+    assert publication_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_enabled_api_does_not_publish_an_unchanged_empty_deletion(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep a no-op delete successful instead of emitting an invalid generation-zero snapshot."""
+
+    scenario, _ = await _scenario_with_zone(db_session, name="Empty deletion")
+    settings = Settings(
+        rwms_sync_enabled=True,
+        rwms_capacity_publish_enabled=True,
+        rwms_logistics_base_url="https://rwms.internal",
+        rwms_token_url="https://auth.internal/oauth2/token",
+        rwms_client_secret="test-secret",
+    )
+    client = AsyncMock(spec=RwmsPlanningClient)
+    publish = AsyncMock()
+    monkeypatch.setattr(scenarios_api, "publish_scenario_capacity", publish)
+
+    result = await scenarios_api.delete_workload(
+        scenario.id,
+        date(2026, 12, 31),
+        db_session,
+        settings,
+        client,
+    )
+
+    assert result.deleted_requests == 0
+    assert result.deleted_plans == 0
+    publish.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -676,9 +768,7 @@ async def test_generator_rejects_zone_without_a_routable_point(
     """A zone whose nearest road always lies outside fails explicitly after bounded retries."""
 
     scenario, _ = await _scenario_with_zone(db_session, name="No road in zone")
-    snapper = StubRoadSnapper(
-        (SnappedPoint(GeoPoint(39.0, 57.0), 25.0, "Вне зоны"),)
-    )
+    snapper = StubRoadSnapper((SnappedPoint(GeoPoint(39.0, 57.0), 25.0, "Вне зоны"),))
 
     with pytest.raises(ApiError) as failure:
         await _generate_workload(
@@ -764,12 +854,14 @@ async def test_saved_plan_is_deleted_with_replaced_or_deleted_workload(
 
     assert regenerated.replaced_requests == 1
     assert regenerated.deleted_plans == 1
-    assert await db_session.scalar(
-        select(RoutePlan.id).where(RoutePlan.id == affected_plan.id)
-    ) is None
-    assert await db_session.scalar(
-        select(RoutePlan.id).where(RoutePlan.id == neighboring_plan.id)
-    ) == neighboring_plan.id
+    assert (
+        await db_session.scalar(select(RoutePlan.id).where(RoutePlan.id == affected_plan.id))
+        is None
+    )
+    assert (
+        await db_session.scalar(select(RoutePlan.id).where(RoutePlan.id == neighboring_plan.id))
+        == neighboring_plan.id
+    )
     current_requests = await catalog.list_requests(db_session, scenario.id)
     assert len(current_requests) == 4
     assert all(item.id != request.id for item in current_requests)
@@ -800,10 +892,12 @@ async def test_saved_plan_is_deleted_with_replaced_or_deleted_workload(
 
     assert deleted.deleted_requests == 4
     assert deleted.deleted_plans == 1
-    assert await db_session.scalar(
-        select(RoutePlan.id).where(RoutePlan.id == replacement_plan.id)
-    ) is None
-    assert await db_session.scalar(
-        select(RoutePlan.id).where(RoutePlan.id == neighboring_plan.id)
-    ) == neighboring_plan.id
+    assert (
+        await db_session.scalar(select(RoutePlan.id).where(RoutePlan.id == replacement_plan.id))
+        is None
+    )
+    assert (
+        await db_session.scalar(select(RoutePlan.id).where(RoutePlan.id == neighboring_plan.id))
+        == neighboring_plan.id
+    )
     assert await catalog.list_requests(db_session, scenario.id) == []

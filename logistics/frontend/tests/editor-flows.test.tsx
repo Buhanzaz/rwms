@@ -173,6 +173,8 @@ function inspectorProps(workspace: ScenarioWorkspace): ComponentProps<typeof Ins
     onPlanningDateChange: () => undefined,
     onScheduleRequestDate: () => undefined,
     onUnscheduleRequest: () => undefined,
+    onSaveRequestPlanning: () => Promise.resolve(),
+    onSplitRequest: () => Promise.resolve(),
   };
 }
 

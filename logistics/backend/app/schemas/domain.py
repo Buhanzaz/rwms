@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, time
 from datetime import date as DateValue
+from decimal import Decimal
 from typing import Annotated, Any, Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -14,6 +15,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
+    field_serializer,
     field_validator,
     model_validator,
 )
@@ -62,6 +64,7 @@ class ScenarioSettings(ApiModel):
     default_pickup_minutes: int = Field(default=30, ge=0)
     default_depot_turnaround_minutes: int = Field(default=15, ge=0)
     default_route_buffer_minutes: int = Field(default=15, ge=0)
+    max_customer_wait_minutes: int = Field(default=120, ge=0)
     city_speed_kmh: float = Field(default=35, gt=0)
     region_speed_kmh: float = Field(default=65, gt=0)
     road_factor: float = Field(default=1.25, ge=1)
@@ -410,6 +413,7 @@ class DriverCreate(ApiModel):
     external_worker_id: UUID | None = None
     preferred_route_group: str | None = None
     active: bool = True
+    passport_details: str = ""
     notes: str = ""
 
 
@@ -420,6 +424,7 @@ class DriverUpdate(ApiModel):
     external_worker_id: UUID | None = None
     preferred_route_group: str | None = None
     active: bool | None = None
+    passport_details: str | None = None
     notes: str | None = None
 
 
@@ -688,6 +693,7 @@ class RequestDateOptionInput(ApiModel):
     window_start: time | None = None
     window_end: time | None = None
     is_hard: bool = False
+    travel_zone_hours: int | None = Field(default=None, ge=1, le=4)
 
     @model_validator(mode="after")
     def validate_window(self) -> RequestDateOptionInput:
@@ -701,6 +707,8 @@ class RequestDateOptionInput(ApiModel):
             and self.window_end <= self.window_start
         ):
             raise ValueError("window_end must be after window_start")
+        if self.travel_zone_hours is not None and (self.window_start is None or not self.is_hard):
+            raise ValueError("travel_zone_hours requires a complete hard time window")
         return self
 
 
@@ -719,6 +727,7 @@ class RequestDateOptionUpdate(ApiModel):
     window_start: time | None = None
     window_end: time | None = None
     is_hard: bool | None = None
+    travel_zone_hours: int | None = Field(default=None, ge=1, le=4)
 
 
 class RequestScheduleInput(ApiModel):
@@ -726,6 +735,42 @@ class RequestScheduleInput(ApiModel):
 
     date: DateValue | None
     add_if_missing: bool = False
+
+
+class RequestPlanningDetailsInput(ApiModel):
+    """Dispatcher-approved date, service window, access, and notification details."""
+
+    date: date
+    window_start: time
+    window_end: time
+    is_hard: bool = False
+    trailer_access_allowed: bool
+    include_driver_passport_in_notification: bool = False
+    contact_name: str = Field(max_length=200)
+    contact_phone: str = Field(max_length=64)
+
+    @model_validator(mode="after")
+    def validate_window(self) -> RequestPlanningDetailsInput:
+        """Require a positive dispatcher-approved service interval."""
+
+        if self.window_end <= self.window_start:
+            raise ValueError("window_end must be after window_start")
+        return self
+
+
+class RequestTaskSplitInput(ApiModel):
+    """Explicit operator-selected transport-part quantities for one request."""
+
+    part_quantities: list[int] = Field(min_length=1)
+
+    @field_validator("part_quantities")
+    @classmethod
+    def validate_part_capacities(cls, value: list[int]) -> list[int]:
+        """Keep every explicit subtask within the supported one-or-two-unit capacity."""
+
+        if any(quantity < 1 or quantity > 2 for quantity in value):
+            raise ValueError("each part quantity must be between 1 and 2")
+        return value
 
 
 class LogisticsRequestCreate(ApiModel):
@@ -745,6 +790,10 @@ class LogisticsRequestCreate(ApiModel):
     priority: int = 0
     status: RequestStatus = RequestStatus.READY
     split_allowed: bool = True
+    trailer_access_allowed: bool | None = None
+    include_driver_passport_in_notification: bool = False
+    contact_name: str = Field(default="", max_length=200)
+    contact_phone: str = Field(default="", max_length=64)
     notes: str = ""
     date_options: list[RequestDateOptionInput] = Field(default_factory=list)
 
@@ -792,6 +841,10 @@ class LogisticsRequestUpdate(ApiModel):
     priority: int | None = None
     status: RequestStatus | None = None
     split_allowed: bool | None = None
+    trailer_access_allowed: bool | None = None
+    include_driver_passport_in_notification: bool | None = None
+    contact_name: str | None = Field(default=None, max_length=200)
+    contact_phone: str | None = Field(default=None, max_length=64)
     notes: str | None = None
     date_options: list[RequestDateOptionInput] | None = None
 
@@ -823,6 +876,8 @@ class LogisticsRequestRead(ApiModel):
 
     id: UUID
     scenario_id: UUID
+    source_system: str | None
+    external_id: UUID | None
     type: RequestType
     name: str
     address_label: str
@@ -842,6 +897,10 @@ class LogisticsRequestRead(ApiModel):
     zone_classification_status: ZoneClassificationStatus
     zone_is_stale: bool = False
     split_allowed: bool
+    trailer_access_allowed: bool | None
+    include_driver_passport_in_notification: bool
+    contact_name: str
+    contact_phone: str
     notes: str
     created_at: AwareDatetime
     updated_at: AwareDatetime
@@ -869,6 +928,24 @@ class RwmsPlanningDateOption(RwmsApiModel):
     date: date
     priority: int
     is_hard: bool = Field(alias="isHard")
+    window_start: time | None = Field(default=None, alias="windowStart")
+    window_end: time | None = Field(default=None, alias="windowEnd")
+    travel_zone_hours: int | None = Field(default=None, alias="travelZoneHours", ge=1, le=4)
+
+    @model_validator(mode="after")
+    def validate_customer_window(self) -> RwmsPlanningDateOption:
+        """Require complete ordered hard windows for CustomerApp planning options."""
+
+        if (self.window_start is None) != (self.window_end is None):
+            raise ValueError("windowStart and windowEnd must be provided together")
+        if self.window_start is not None and self.window_end is not None:
+            if self.window_start >= self.window_end:
+                raise ValueError("windowStart must precede windowEnd")
+            if not self.is_hard:
+                raise ValueError("fixed delivery windows must be hard")
+        if self.travel_zone_hours is not None and (self.window_start is None or not self.is_hard):
+            raise ValueError("travelZoneHours requires a complete hard window")
+        return self
 
 
 class RwmsPlanningRequest(RwmsApiModel):
@@ -931,10 +1008,12 @@ class RwmsSyncRequest(ApiModel):
 
     @model_validator(mode="after")
     def validate_date_range(self) -> RwmsSyncRequest:
-        """Reject backwards synchronization ranges."""
+        """Require the logistics-owner's bounded 31-day inclusive range."""
 
         if self.date_to < self.date_from:
             raise ValueError("date_to must be on or after date_from")
+        if (self.date_to - self.date_from).days > 30:
+            raise ValueError("RWMS synchronization range cannot exceed 31 inclusive days")
         return self
 
 
@@ -953,6 +1032,91 @@ class RwmsSyncResult(ApiModel):
     updated: int
     skipped: int
     failures: list[RwmsSyncFailure] = Field(default_factory=list)
+
+
+class RwmsWarehouseSyncResult(RwmsSyncResult):
+    """One linked warehouse outcome inside a server-owned scenario refresh."""
+
+    warehouse_id: UUID
+
+
+class RwmsScenarioRefreshResult(ApiModel):
+    """Server-owned current-horizon refresh across every linked scenario warehouse."""
+
+    date_from: date
+    date_to: date
+    warehouses: list[RwmsWarehouseSyncResult] = Field(default_factory=list)
+
+
+class RwmsPlanningCapacityJob(RwmsApiModel):
+    """One anonymous generated delivery that consumes a fixed RWMS route window."""
+
+    source_job_id: UUID = Field(alias="sourceJobId")
+    delivery_date: date = Field(alias="deliveryDate")
+    latitude: Decimal = Field(
+        ge=Decimal("-90"),
+        le=Decimal("90"),
+        max_digits=8,
+        decimal_places=6,
+    )
+    longitude: Decimal = Field(
+        ge=Decimal("-180"),
+        le=Decimal("180"),
+        max_digits=9,
+        decimal_places=6,
+    )
+    cabin_count: int = Field(alias="cabinCount", ge=1)
+    window_start: time = Field(alias="windowStart")
+    window_end: time = Field(alias="windowEnd")
+    service_minutes: int = Field(alias="serviceMinutes", ge=1)
+
+    @model_validator(mode="after")
+    def validate_window(self) -> RwmsPlanningCapacityJob:
+        """Require a positive fixed capacity interval."""
+
+        if self.window_end <= self.window_start:
+            raise ValueError("windowStart must precede windowEnd")
+        return self
+
+    @field_serializer("latitude", "longitude", when_used="json")
+    def serialize_coordinate(self, value: Decimal) -> float:
+        """Emit JSON numbers while retaining decimal validation and revision precision."""
+
+        return float(value)
+
+
+class RwmsCapacitySnapshotCommand(RwmsApiModel):
+    """Complete replacement of one warehouse's active simulator capacity projection."""
+
+    warehouse_id: UUID = Field(alias="warehouseId")
+    source_generation: int = Field(alias="sourceGeneration", ge=1)
+    source_revision: str = Field(alias="sourceRevision", pattern=r"^[0-9a-f]{64}$")
+    jobs: list[RwmsPlanningCapacityJob] = Field(max_length=1_000)
+
+    @field_validator("jobs")
+    @classmethod
+    def validate_unique_source_jobs(
+        cls, value: list[RwmsPlanningCapacityJob]
+    ) -> list[RwmsPlanningCapacityJob]:
+        """Reject an ambiguous snapshot containing the same source job twice."""
+
+        identifiers = [job.source_job_id for job in value]
+        if len(set(identifiers)) != len(identifiers):
+            raise ValueError("sourceJobId values must be unique")
+        return value
+
+
+class RwmsCapacitySnapshotResult(RwmsApiModel):
+    """Versioned capacity revision accepted or idempotently replayed by RWMS."""
+
+    warehouse_id: UUID = Field(alias="warehouseId")
+    source_scenario_id: UUID = Field(alias="sourceScenarioId")
+    source_generation: int = Field(alias="sourceGeneration", ge=1)
+    version: int = Field(ge=0)
+    source_revision: str = Field(alias="sourceRevision", pattern=r"^[0-9a-f]{64}$")
+    job_count: int = Field(alias="jobCount", ge=0)
+    replayed: bool
+    updated_at: AwareDatetime = Field(alias="updatedAt")
 
 
 class RwmsPlanningAssignment(RwmsApiModel):
@@ -1165,6 +1329,20 @@ class UnassignedTaskRead(ApiModel):
     recommendation_ru: str | None
 
 
+class PlanNotificationLogRead(ApiModel):
+    """One simulated notification rendered after explicit plan confirmation."""
+
+    id: UUID
+    plan_id: UUID
+    request_id: UUID
+    recipient_name: str
+    recipient_contact: str
+    message: str
+    includes_driver_passport: bool
+    status: Literal["SIMULATED_DELIVERED"]
+    created_at: AwareDatetime
+
+
 class RoutePlanRead(ApiModel):
     """Complete saved plan projection for editor and simulation clients."""
 
@@ -1184,6 +1362,7 @@ class RoutePlanRead(ApiModel):
     updated_at: AwareDatetime
     cycles: list[RouteCycleRead]
     unassigned_tasks: list[UnassignedTaskRead]
+    notification_logs: list[PlanNotificationLogRead] = Field(default_factory=list)
 
 
 class ExpectedVersionRequest(ApiModel):
@@ -1439,6 +1618,18 @@ class ExportUnassignedTask(ApiModel):
     recommendation_ru: str | None
 
 
+class ExportPlanNotificationLog(ApiModel):
+    """Simulated contact message retained with an exported confirmed plan."""
+
+    request_id: UUID
+    recipient_name: str
+    recipient_contact: str
+    message: str
+    includes_driver_passport: bool
+    status: Literal["SIMULATED_DELIVERED"]
+    created_at: AwareDatetime
+
+
 class ExportRoutePlan(ApiModel):
     """Validated saved plan representation in a scenario export."""
 
@@ -1455,6 +1646,7 @@ class ExportRoutePlan(ApiModel):
     manually_changed: bool
     cycles: list[ExportRouteCycle]
     unassigned_tasks: list[ExportUnassignedTask]
+    notification_logs: list[ExportPlanNotificationLog] = Field(default_factory=list)
 
 
 class ScenarioExportDocument(ApiModel):

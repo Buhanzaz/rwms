@@ -124,6 +124,11 @@
             "title": "Notes",
             "type": "string"
           },
+          "passport_details": {
+            "default": "",
+            "title": "Passport Details",
+            "type": "string"
+          },
           "preferred_route_group": {
             "anyOf": [
               {
@@ -174,6 +179,11 @@
           "notes": {
             "default": "",
             "title": "Notes",
+            "type": "string"
+          },
+          "passport_details": {
+            "default": "",
+            "title": "Passport Details",
             "type": "string"
           },
           "preferred_route_group": {
@@ -286,6 +296,17 @@
             ],
             "title": "Notes"
           },
+          "passport_details": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passport Details"
+          },
           "preferred_route_group": {
             "anyOf": [
               {
@@ -335,6 +356,54 @@
           "data"
         ],
         "title": "ExportDriver",
+        "type": "object"
+      },
+      "ExportPlanNotificationLog": {
+        "additionalProperties": false,
+        "description": "Simulated contact message retained with an exported confirmed plan.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "includes_driver_passport": {
+            "title": "Includes Driver Passport",
+            "type": "boolean"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "recipient_contact": {
+            "title": "Recipient Contact",
+            "type": "string"
+          },
+          "recipient_name": {
+            "title": "Recipient Name",
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "SIMULATED_DELIVERED",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "recipient_name",
+          "recipient_contact",
+          "message",
+          "includes_driver_passport",
+          "status",
+          "created_at"
+        ],
+        "title": "ExportPlanNotificationLog",
         "type": "object"
       },
       "ExportRelation": {
@@ -609,6 +678,13 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "notification_logs": {
+            "items": {
+              "$ref": "#/components/schemas/ExportPlanNotificationLog"
+            },
+            "title": "Notification Logs",
+            "type": "array"
           },
           "score": {
             "title": "Score",
@@ -1270,12 +1346,29 @@
             ],
             "title": "Cargo Width Mm"
           },
+          "contact_name": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Contact Name",
+            "type": "string"
+          },
+          "contact_phone": {
+            "default": "",
+            "maxLength": 64,
+            "title": "Contact Phone",
+            "type": "string"
+          },
           "date_options": {
             "items": {
               "$ref": "#/components/schemas/RequestDateOptionInput"
             },
             "title": "Date Options",
             "type": "array"
+          },
+          "include_driver_passport_in_notification": {
+            "default": false,
+            "title": "Include Driver Passport In Notification",
+            "type": "boolean"
           },
           "latitude": {
             "maximum": 90.0,
@@ -1321,6 +1414,17 @@
           "status": {
             "$ref": "#/components/schemas/RequestStatus",
             "default": "READY"
+          },
+          "trailer_access_allowed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trailer Access Allowed"
           },
           "type": {
             "$ref": "#/components/schemas/RequestType"
@@ -1388,6 +1492,14 @@
             ],
             "title": "Cargo Width Mm"
           },
+          "contact_name": {
+            "title": "Contact Name",
+            "type": "string"
+          },
+          "contact_phone": {
+            "title": "Contact Phone",
+            "type": "string"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -1400,10 +1512,26 @@
             "title": "Date Options",
             "type": "array"
           },
+          "external_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Id"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "include_driver_passport_in_notification": {
+            "title": "Include Driver Passport In Notification",
+            "type": "boolean"
           },
           "latitude": {
             "title": "Latitude",
@@ -1450,6 +1578,17 @@
             "title": "Service Minutes",
             "type": "integer"
           },
+          "source_system": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source System"
+          },
           "split_allowed": {
             "title": "Split Allowed",
             "type": "boolean"
@@ -1463,6 +1602,17 @@
             },
             "title": "Tasks",
             "type": "array"
+          },
+          "trailer_access_allowed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trailer Access Allowed"
           },
           "type": {
             "$ref": "#/components/schemas/RequestType"
@@ -1507,6 +1657,8 @@
         "required": [
           "id",
           "scenario_id",
+          "source_system",
+          "external_id",
           "type",
           "name",
           "address_label",
@@ -1521,6 +1673,10 @@
           "zone_version",
           "zone_classification_status",
           "split_allowed",
+          "trailer_access_allowed",
+          "include_driver_passport_in_notification",
+          "contact_name",
+          "contact_phone",
           "notes",
           "created_at",
           "updated_at"
@@ -1591,6 +1747,30 @@
             ],
             "title": "Cargo Width Mm"
           },
+          "contact_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Name"
+          },
+          "contact_phone": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Phone"
+          },
           "date_options": {
             "anyOf": [
               {
@@ -1604,6 +1784,17 @@
               }
             ],
             "title": "Date Options"
+          },
+          "include_driver_passport_in_notification": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Include Driver Passport In Notification"
           },
           "latitude": {
             "anyOf": [
@@ -1707,6 +1898,17 @@
                 "type": "null"
               }
             ]
+          },
+          "trailer_access_allowed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trailer Access Allowed"
           },
           "type": {
             "anyOf": [
@@ -1900,6 +2102,66 @@
         ],
         "title": "OptimizationStatus",
         "type": "string"
+      },
+      "PlanNotificationLogRead": {
+        "additionalProperties": false,
+        "description": "One simulated notification rendered after explicit plan confirmation.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "includes_driver_passport": {
+            "title": "Includes Driver Passport",
+            "type": "boolean"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "plan_id": {
+            "format": "uuid",
+            "title": "Plan Id",
+            "type": "string"
+          },
+          "recipient_contact": {
+            "title": "Recipient Contact",
+            "type": "string"
+          },
+          "recipient_name": {
+            "title": "Recipient Name",
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "SIMULATED_DELIVERED",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "plan_id",
+          "request_id",
+          "recipient_name",
+          "recipient_contact",
+          "message",
+          "includes_driver_passport",
+          "status",
+          "created_at"
+        ],
+        "title": "PlanNotificationLogRead",
+        "type": "object"
       },
       "PlanStatus": {
         "description": "Persistence lifecycle of a dated route plan.",
@@ -2122,6 +2384,19 @@
             "title": "Priority",
             "type": "integer"
           },
+          "travel_zone_hours": {
+            "anyOf": [
+              {
+                "maximum": 4.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Travel Zone Hours"
+          },
           "window_end": {
             "anyOf": [
               {
@@ -2181,6 +2456,19 @@
             "format": "uuid",
             "title": "Request Id",
             "type": "string"
+          },
+          "travel_zone_hours": {
+            "anyOf": [
+              {
+                "maximum": 4.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Travel Zone Hours"
           },
           "window_end": {
             "anyOf": [
@@ -2253,6 +2541,19 @@
             ],
             "title": "Priority"
           },
+          "travel_zone_hours": {
+            "anyOf": [
+              {
+                "maximum": 4.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Travel Zone Hours"
+          },
           "window_end": {
             "anyOf": [
               {
@@ -2279,6 +2580,61 @@
           }
         },
         "title": "RequestDateOptionUpdate",
+        "type": "object"
+      },
+      "RequestPlanningDetailsInput": {
+        "additionalProperties": false,
+        "description": "Dispatcher-approved date, service window, access, and notification details.",
+        "properties": {
+          "contact_name": {
+            "maxLength": 200,
+            "title": "Contact Name",
+            "type": "string"
+          },
+          "contact_phone": {
+            "maxLength": 64,
+            "title": "Contact Phone",
+            "type": "string"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "include_driver_passport_in_notification": {
+            "default": false,
+            "title": "Include Driver Passport In Notification",
+            "type": "boolean"
+          },
+          "is_hard": {
+            "default": false,
+            "title": "Is Hard",
+            "type": "boolean"
+          },
+          "trailer_access_allowed": {
+            "title": "Trailer Access Allowed",
+            "type": "boolean"
+          },
+          "window_end": {
+            "format": "time",
+            "title": "Window End",
+            "type": "string"
+          },
+          "window_start": {
+            "format": "time",
+            "title": "Window Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "window_start",
+          "window_end",
+          "trailer_access_allowed",
+          "contact_name",
+          "contact_phone"
+        ],
+        "title": "RequestPlanningDetailsInput",
         "type": "object"
       },
       "RequestScheduleInput": {
@@ -2322,6 +2678,25 @@
         ],
         "title": "RequestStatus",
         "type": "string"
+      },
+      "RequestTaskSplitInput": {
+        "additionalProperties": false,
+        "description": "Explicit operator-selected transport-part quantities for one request.",
+        "properties": {
+          "part_quantities": {
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 1,
+            "title": "Part Quantities",
+            "type": "array"
+          }
+        },
+        "required": [
+          "part_quantities"
+        ],
+        "title": "RequestTaskSplitInput",
+        "type": "object"
       },
       "RequestType": {
         "description": "Supported physical request directions.",
@@ -2490,6 +2865,13 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "notification_logs": {
+            "items": {
+              "$ref": "#/components/schemas/PlanNotificationLogRead"
+            },
+            "title": "Notification Logs",
+            "type": "array"
           },
           "scenario_id": {
             "format": "uuid",
@@ -2812,6 +3194,63 @@
         "title": "RwmsApplyResult",
         "type": "object"
       },
+      "RwmsCapacitySnapshotResult": {
+        "additionalProperties": false,
+        "description": "Versioned capacity revision accepted or idempotently replayed by RWMS.",
+        "properties": {
+          "jobCount": {
+            "minimum": 0.0,
+            "title": "Jobcount",
+            "type": "integer"
+          },
+          "replayed": {
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "sourceGeneration": {
+            "minimum": 1.0,
+            "title": "Sourcegeneration",
+            "type": "integer"
+          },
+          "sourceRevision": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sourcerevision",
+            "type": "string"
+          },
+          "sourceScenarioId": {
+            "format": "uuid",
+            "title": "Sourcescenarioid",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          },
+          "version": {
+            "minimum": 0.0,
+            "title": "Version",
+            "type": "integer"
+          },
+          "warehouseId": {
+            "format": "uuid",
+            "title": "Warehouseid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "warehouseId",
+          "sourceScenarioId",
+          "sourceGeneration",
+          "version",
+          "sourceRevision",
+          "jobCount",
+          "replayed",
+          "updatedAt"
+        ],
+        "title": "RwmsCapacitySnapshotResult",
+        "type": "object"
+      },
       "RwmsPlanApplyRequest": {
         "additionalProperties": false,
         "description": "Optimistic plan version plus explicitly selected future shared delivery parts.",
@@ -2963,6 +3402,35 @@
         "title": "RwmsRejectedAssignment",
         "type": "object"
       },
+      "RwmsScenarioRefreshResult": {
+        "additionalProperties": false,
+        "description": "Server-owned current-horizon refresh across every linked scenario warehouse.",
+        "properties": {
+          "date_from": {
+            "format": "date",
+            "title": "Date From",
+            "type": "string"
+          },
+          "date_to": {
+            "format": "date",
+            "title": "Date To",
+            "type": "string"
+          },
+          "warehouses": {
+            "items": {
+              "$ref": "#/components/schemas/RwmsWarehouseSyncResult"
+            },
+            "title": "Warehouses",
+            "type": "array"
+          }
+        },
+        "required": [
+          "date_from",
+          "date_to"
+        ],
+        "title": "RwmsScenarioRefreshResult",
+        "type": "object"
+      },
       "RwmsSyncFailure": {
         "additionalProperties": false,
         "description": "One source order that could not be synchronized safely.",
@@ -3053,6 +3521,44 @@
           "skipped"
         ],
         "title": "RwmsSyncResult",
+        "type": "object"
+      },
+      "RwmsWarehouseSyncResult": {
+        "additionalProperties": false,
+        "description": "One linked warehouse outcome inside a server-owned scenario refresh.",
+        "properties": {
+          "failures": {
+            "items": {
+              "$ref": "#/components/schemas/RwmsSyncFailure"
+            },
+            "title": "Failures",
+            "type": "array"
+          },
+          "imported": {
+            "title": "Imported",
+            "type": "integer"
+          },
+          "skipped": {
+            "title": "Skipped",
+            "type": "integer"
+          },
+          "updated": {
+            "title": "Updated",
+            "type": "integer"
+          },
+          "warehouse_id": {
+            "format": "uuid",
+            "title": "Warehouse Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "imported",
+          "updated",
+          "skipped",
+          "warehouse_id"
+        ],
+        "title": "RwmsWarehouseSyncResult",
         "type": "object"
       },
       "ScenarioCreate": {
@@ -3408,6 +3914,12 @@
             "default": 8,
             "minimum": 1.0,
             "title": "Max Candidate Neighbors",
+            "type": "integer"
+          },
+          "max_customer_wait_minutes": {
+            "default": 120,
+            "minimum": 0.0,
+            "title": "Max Customer Wait Minutes",
             "type": "integer"
           },
           "max_delivery_stops": {
@@ -4635,6 +5147,171 @@
           }
         },
         "title": "TrailerUpdate",
+        "type": "object"
+      },
+      "TravelTimeContourFeature": {
+        "additionalProperties": false,
+        "description": "One truck travel-time area centered on the requested origin.",
+        "properties": {
+          "geometry": {
+            "$ref": "#/components/schemas/TravelTimeContourGeometry"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/TravelTimeContourProperties"
+          },
+          "type": {
+            "const": "Feature",
+            "default": "Feature",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "geometry",
+          "properties"
+        ],
+        "title": "TravelTimeContourFeature",
+        "type": "object"
+      },
+      "TravelTimeContourFeatureCollection": {
+        "additionalProperties": false,
+        "description": "Four validated Valhalla truck isochrones rendered as visual map estimates.",
+        "properties": {
+          "features": {
+            "items": {
+              "$ref": "#/components/schemas/TravelTimeContourFeature"
+            },
+            "title": "Features",
+            "type": "array"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/TravelTimeContourMetadata"
+          },
+          "type": {
+            "const": "FeatureCollection",
+            "default": "FeatureCollection",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "features",
+          "metadata"
+        ],
+        "title": "TravelTimeContourFeatureCollection",
+        "type": "object"
+      },
+      "TravelTimeContourGeometry": {
+        "additionalProperties": false,
+        "description": "Validated GeoJSON area returned by Valhalla for one truck-time contour.",
+        "properties": {
+          "coordinates": {
+            "items": {},
+            "title": "Coordinates",
+            "type": "array"
+          },
+          "type": {
+            "enum": [
+              "Polygon",
+              "MultiPolygon"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "coordinates"
+        ],
+        "title": "TravelTimeContourGeometry",
+        "type": "object"
+      },
+      "TravelTimeContourMetadata": {
+        "additionalProperties": false,
+        "description": "Provider provenance distinguishing visual estimates from planner routes.",
+        "properties": {
+          "contours_minutes": {
+            "items": {
+              "$ref": "#/components/schemas/TravelTimeContourMinutes"
+            },
+            "title": "Contours Minutes",
+            "type": "array"
+          },
+          "costing": {
+            "const": "truck",
+            "default": "truck",
+            "title": "Costing",
+            "type": "string"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/TravelTimeContourOrigin"
+          },
+          "osm_data_version": {
+            "title": "Osm Data Version",
+            "type": "string"
+          },
+          "source": {
+            "const": "valhalla",
+            "default": "valhalla",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "origin",
+          "contours_minutes",
+          "osm_data_version"
+        ],
+        "title": "TravelTimeContourMetadata",
+        "type": "object"
+      },
+      "TravelTimeContourMinutes": {
+        "description": "Supported fixed truck-travel contour durations in minutes.",
+        "enum": [
+          60,
+          120,
+          180,
+          240
+        ],
+        "title": "TravelTimeContourMinutes",
+        "type": "integer"
+      },
+      "TravelTimeContourOrigin": {
+        "additionalProperties": false,
+        "description": "WGS84 depot or route-front origin echoed in contour response metadata.",
+        "properties": {
+          "latitude": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Longitude",
+            "type": "number"
+          }
+        },
+        "required": [
+          "latitude",
+          "longitude"
+        ],
+        "title": "TravelTimeContourOrigin",
+        "type": "object"
+      },
+      "TravelTimeContourProperties": {
+        "additionalProperties": false,
+        "description": "Stable styling key for one fixed travel-time contour.",
+        "properties": {
+          "contour_minutes": {
+            "$ref": "#/components/schemas/TravelTimeContourMinutes"
+          }
+        },
+        "required": [
+          "contour_minutes"
+        ],
+        "title": "TravelTimeContourProperties",
         "type": "object"
       },
       "TruckRestrictionCategory": {
@@ -8431,6 +9108,60 @@
         ]
       }
     },
+    "/api/requests/{request_id}/planning-details": {
+      "post": {
+        "description": "Store the dispatcher-approved date, service window, and access decision.",
+        "operationId": "set_request_planning_details_api_requests__request_id__planning_details_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestPlanningDetailsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogisticsRequestRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Request Planning Details",
+        "tags": [
+          "catalog"
+        ]
+      }
+    },
     "/api/requests/{request_id}/schedule": {
       "post": {
         "description": "Assign the request to one accepted or explicitly agreed date.",
@@ -8487,7 +9218,7 @@
     },
     "/api/requests/{request_id}/split": {
       "post": {
-        "description": "Regenerate deterministic capacity-two transport parts.",
+        "description": "Regenerate automatic or explicitly-sized transport parts.",
         "operationId": "split_request_api_requests__request_id__split_post",
         "parameters": [
           {
@@ -8501,6 +9232,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RequestTaskSplitInput"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
@@ -8526,6 +9274,62 @@
         "summary": "Split Request",
         "tags": [
           "catalog"
+        ]
+      }
+    },
+    "/api/routing/travel-time-contours": {
+      "get": {
+        "description": "Return Valhalla truck isochrones as a visual estimate around one WGS84 origin.",
+        "operationId": "get_travel_time_contours_api_routing_travel_time_contours_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "latitude",
+            "required": true,
+            "schema": {
+              "maximum": 90,
+              "minimum": -90,
+              "title": "Latitude",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "longitude",
+            "required": true,
+            "schema": {
+              "maximum": 180,
+              "minimum": -180,
+              "title": "Longitude",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TravelTimeContourFeatureCollection"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Travel Time Contours",
+        "tags": [
+          "routing"
         ]
       }
     },
@@ -9435,6 +10239,94 @@
         "summary": "Create Request",
         "tags": [
           "catalog"
+        ]
+      }
+    },
+    "/api/scenarios/{scenario_id}/rwms/capacity": {
+      "post": {
+        "description": "Publish the complete current generated-delivery capacity snapshot to RWMS.",
+        "operationId": "reconcile_rwms_capacity_api_scenarios__scenario_id__rwms_capacity_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scenario_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Scenario Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RwmsCapacitySnapshotResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reconcile Rwms Capacity",
+        "tags": [
+          "rwms-integration"
+        ]
+      }
+    },
+    "/api/scenarios/{scenario_id}/rwms/refresh": {
+      "post": {
+        "description": "Refresh the current 31-day horizon for every linked warehouse server-side.",
+        "operationId": "refresh_rwms_requests_api_scenarios__scenario_id__rwms_refresh_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scenario_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Scenario Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RwmsScenarioRefreshResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh Rwms Requests",
+        "tags": [
+          "rwms-integration"
         ]
       }
     },

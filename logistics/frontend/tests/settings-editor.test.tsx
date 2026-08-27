@@ -22,6 +22,8 @@ describe('planner resource settings', () => {
     expect(screen.getByLabelText('Штраф нагрузки сверх цели')).toHaveValue(3);
     expect(screen.getByLabelText('Порог большого крюка, мин')).toHaveValue(35);
     expect(screen.getByLabelText('Порог доли крюка')).toHaveValue(1.5);
+    expect(screen.getByLabelText('Максимум ожидания между клиентами, мин')).toHaveValue(120);
+    expect(screen.getByLabelText('Максимум ожидания между клиентами, мин')).toHaveAttribute('min', '0');
     expect(screen.getByLabelText('В каждом цикле доставки раньше вывозов')).toBeChecked();
     expect(screen.getByLabelText('В каждом цикле доставки раньше вывозов')).toBeDisabled();
     expect(screen.getByLabelText('Доставок в цикле')).toHaveAttribute('min', '1');
@@ -40,6 +42,7 @@ describe('planner resource settings', () => {
       additional_resource_activation_penalty: 240,
       preferred_shift_utilization_percent: 75,
       driver_workload_weight: 3,
+      max_customer_wait_minutes: 120,
     })));
   });
 });

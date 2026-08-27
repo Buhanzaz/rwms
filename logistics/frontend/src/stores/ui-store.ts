@@ -11,6 +11,7 @@ export type LeftSection =
   | 'VEHICLES'
   | 'SHIFTS'
   | 'REQUESTS'
+  | 'PLAN_DAY'
   | 'ROUTES'
   | 'UNASSIGNED'
   | 'SETTINGS';

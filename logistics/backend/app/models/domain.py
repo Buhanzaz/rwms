@@ -189,12 +189,19 @@ class Scenario(UuidPrimaryKeyMixin, TimestampMixin, Base):
     """Independent, reproducible logistics experiment and its configuration."""
 
     __tablename__ = "scenarios"
+    __table_args__ = (
+        CheckConstraint(
+            "capacity_generation >= 0",
+            name="nonnegative_capacity_generation",
+        ),
+    )
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     timezone: Mapped[str] = mapped_column(String(100), nullable=False, default="Europe/Moscow")
     default_planning_date: Mapped[date | None] = mapped_column(Date)
     seed: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    capacity_generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     settings: Mapped[dict[str, Any]] = mapped_column(
         MutableDict.as_mutable(JSONB), nullable=False, default=dict
     )
@@ -353,6 +360,7 @@ class Driver(UuidPrimaryKeyMixin, Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     preferred_route_group: Mapped[str | None] = mapped_column(String(100))
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    passport_details: Mapped[str] = mapped_column(Text, nullable=False, default="")
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     scenario: Mapped[Scenario] = relationship(back_populates="drivers")
@@ -647,6 +655,12 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
         String(32), nullable=False, default=ZoneClassificationStatus.OUTSIDE_ZONES
     )
     split_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    trailer_access_allowed: Mapped[bool | None] = mapped_column(Boolean)
+    include_driver_passport_in_notification: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    contact_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    contact_phone: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     scenario: Mapped[Scenario] = relationship(back_populates="requests")
@@ -663,6 +677,9 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
         passive_deletes=True,
         order_by="PlanningTask.part_number",
     )
+    notification_logs: Mapped[list[PlanNotificationLog]] = relationship(
+        back_populates="request", passive_deletes=True
+    )
 
 
 class RequestDateOption(UuidPrimaryKeyMixin, Base):
@@ -674,6 +691,10 @@ class RequestDateOption(UuidPrimaryKeyMixin, Base):
         CheckConstraint(
             "window_start IS NULL OR window_end IS NULL OR window_end > window_start",
             name="valid_window",
+        ),
+        CheckConstraint(
+            "travel_zone_hours IS NULL OR travel_zone_hours BETWEEN 1 AND 4",
+            name="valid_travel_zone_hours",
         ),
         Index("ix_request_date_options_date", "date"),
     )
@@ -688,6 +709,7 @@ class RequestDateOption(UuidPrimaryKeyMixin, Base):
     window_start: Mapped[time | None] = mapped_column(Time)
     window_end: Mapped[time | None] = mapped_column(Time)
     is_hard: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    travel_zone_hours: Mapped[int | None] = mapped_column(Integer)
 
     request: Mapped[LogisticsRequest] = relationship(back_populates="date_options")
 
@@ -783,6 +805,12 @@ class RoutePlan(UuidPrimaryKeyMixin, TimestampMixin, Base):
     optimization_runs: Mapped[list[OptimizationRun]] = relationship(back_populates="plan")
     manual_changes: Mapped[list[ManualChangeAudit]] = relationship(
         back_populates="route_plan", cascade="all, delete-orphan", passive_deletes=True
+    )
+    notification_logs: Mapped[list[PlanNotificationLog]] = relationship(
+        back_populates="route_plan",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="PlanNotificationLog.created_at, PlanNotificationLog.id",
     )
 
 
@@ -978,6 +1006,37 @@ class UnassignedTask(UuidPrimaryKeyMixin, Base):
 
     route_plan: Mapped[RoutePlan] = relationship(back_populates="unassigned_tasks")
     task: Mapped[PlanningTask] = relationship()
+
+
+class PlanNotificationLog(UuidPrimaryKeyMixin, Base):
+    """Simulated contact notification produced once per assigned source request."""
+
+    __tablename__ = "plan_notification_logs"
+    __table_args__ = (
+        UniqueConstraint("plan_id", "request_id", name="uq_plan_notification_logs_plan_request"),
+        CheckConstraint("status = 'SIMULATED_DELIVERED'", name="simulated_status"),
+        Index("ix_plan_notification_logs_request_id", "request_id"),
+    )
+
+    plan_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("route_plans.id", ondelete="CASCADE"), nullable=False
+    )
+    request_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("logistics_requests.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    recipient_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    recipient_contact: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    includes_driver_passport: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="SIMULATED_DELIVERED")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    route_plan: Mapped[RoutePlan] = relationship(back_populates="notification_logs")
+    request: Mapped[LogisticsRequest] = relationship(back_populates="notification_logs")
 
 
 class OptimizationRun(UuidPrimaryKeyMixin, Base):
