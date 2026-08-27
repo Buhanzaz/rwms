@@ -35,6 +35,7 @@ public class ScenarioCapacitySnapshotService {
   private final ScenarioCapacityCommandReceiptRepository receipts;
   private final ScenarioCapacitySnapshotResponseMapper responses;
   private final LogisticsTransactionLock transactionLock;
+  private final CustomerDeliveryCapacityFence capacityFence;
   private final Clock clock;
 
   /** Replaces one active warehouse projection while preserving exact command replay semantics. */
@@ -51,7 +52,7 @@ public class ScenarioCapacitySnapshotService {
       if (!accepted.matchesRequest(requestSha256)) throw idempotencyConflict();
       return responses.toResponse(accepted, true);
     }
-    transactionLock.acquire("customer-scenario-capacity:" + request.warehouseId());
+    capacityFence.acquireScenario(request.warehouseId());
     ScenarioCapacityCommandReceipt acceptedRevision =
         receipts
             .findFirstByWarehouseIdAndSourceScenarioIdAndSourceGenerationAndSourceRevisionOrderByCreatedAtAscIdempotencyKeyAsc(

@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.driver.service;
 
+import dev.buhanzaz.rwms.logistics.customer.capacity.service.CustomerDeliveryCapacityFence;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
@@ -45,6 +46,7 @@ public class DocumentDriverTaskPlanner {
   private final LogisticsDependencyGateway dependencies;
   private final DriverTaskWorkflowStore workflowStore;
   private final ShipmentTaskSettingsService shipmentTaskSettings;
+  private final CustomerDeliveryCapacityFence capacityFence;
 
   /** Creates or idempotently replans every driver task required by a scheduled document. */
   @Transactional
@@ -56,6 +58,7 @@ public class DocumentDriverTaskPlanner {
         dependencies.readWarehouseDriverQueue(document.getWarehouseId());
     shipmentTaskSettings.requireWithinLimit(
         document.getWarehouseId(), lines.size(), document.getRequestedBySubjectId());
+    capacityFence.acquireTaskDay(document.getWarehouseId(), document.getScheduledDate(), kind);
     cancelLegacyLineTasksBeforeGrouping(document, lines);
     planGroupedDocument(document, lines, kind, audience, queue);
   }

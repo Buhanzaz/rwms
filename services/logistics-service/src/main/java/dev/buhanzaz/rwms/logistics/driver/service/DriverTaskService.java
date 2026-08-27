@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.driver.service;
 
+import dev.buhanzaz.rwms.logistics.customer.capacity.service.CustomerDeliveryCapacityFence;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.CreateDriverTaskRequest;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.DriverTaskResponse;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
@@ -46,6 +47,7 @@ public class DriverTaskService {
   private final LogisticsWarehouseLifecycle warehouseLifecycle;
   private final LogisticsWarehouseOperationMarkStore warehouseOperationMarks;
   private final LogisticsTransactionLock transactionLock;
+  private final CustomerDeliveryCapacityFence capacityFence;
 
   public DriverTaskResponse get(UUID taskId) {
     DriverLogisticsTask task = required(taskId);
@@ -389,6 +391,7 @@ public class DriverTaskService {
     String checksum = checksum(request, cabin.number(), queue.queueDefinitionId());
 
     warehouseLifecycle.consume(admission);
+    capacityFence.acquireTaskDay(request.warehouseId(), scheduledDate, request.kind());
 
     DriverLogisticsTask task =
         tasks.saveAndFlush(

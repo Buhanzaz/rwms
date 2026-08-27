@@ -11,6 +11,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import dev.buhanzaz.rwms.logistics.customer.capacity.service.CustomerDeliveryCapacityFence;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
@@ -39,9 +40,11 @@ class DocumentDriverTaskPlannerTest {
   private final DriverTaskWorkflowStore workflowStore = mock(DriverTaskWorkflowStore.class);
   private final ShipmentTaskSettingsService shipmentTaskSettings =
       mock(ShipmentTaskSettingsService.class);
+  private final CustomerDeliveryCapacityFence capacityFence =
+      mock(CustomerDeliveryCapacityFence.class);
   private final DocumentDriverTaskPlanner planner =
       new DocumentDriverTaskPlanner(
-          tasks, documents, dependencies, workflowStore, shipmentTaskSettings);
+          tasks, documents, dependencies, workflowStore, shipmentTaskSettings, capacityFence);
 
   @Test
   void shipmentCreatesOneAssignedFixedDateGroupTaskAndReplaysByChecksum() {
@@ -108,6 +111,8 @@ class DocumentDriverTaskPlannerTest {
     planner.plan(document, List.of(firstLine, secondLine));
 
     verify(tasks, times(1)).saveAndFlush(any(DriverLogisticsTask.class));
+    verify(capacityFence, times(2))
+        .acquireTaskDay(warehouseId, date, DriverTaskKind.SHIPMENT);
   }
 
   @Test

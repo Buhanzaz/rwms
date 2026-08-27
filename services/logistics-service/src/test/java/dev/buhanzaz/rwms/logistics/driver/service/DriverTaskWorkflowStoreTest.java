@@ -10,6 +10,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import dev.buhanzaz.rwms.logistics.customer.capacity.service.CustomerDeliveryCapacityFence;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.MaintenanceDriverTaskCompensationOutcome;
@@ -43,8 +44,11 @@ class DriverTaskWorkflowStoreTest {
       mock(LogisticsDocumentLineRepository.class);
   private final RentalOrderUnitTermRepository rentalTerms =
       mock(RentalOrderUnitTermRepository.class);
+  private final CustomerDeliveryCapacityFence capacityFence =
+      mock(CustomerDeliveryCapacityFence.class);
   private final DriverTaskWorkflowStore store =
-      new DriverTaskWorkflowStore(tasks, documents, documentLines, rentalTerms);
+      new DriverTaskWorkflowStore(
+          tasks, documents, documentLines, rentalTerms, capacityFence);
 
   @Test
   void statusRecoveryMovesEveryGroupedDocumentTypeWithoutChangingMembers() {
@@ -117,6 +121,7 @@ class DriverTaskWorkflowStoreTest {
     verify(documents, times(3)).saveAndFlush(any(LogisticsDocument.class));
     verify(documentLines, never()).findAllByDocument_IdOrderByLineNumber(any());
     verify(rentalTerms, never()).saveAllAndFlush(any());
+    verify(capacityFence, times(3)).acquireDay(warehouseId, movedDate);
   }
 
   @Test

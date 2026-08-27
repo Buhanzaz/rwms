@@ -62,7 +62,10 @@ that the same day plan can still accept, not an arithmetic free-truck counter. A
 mutation detaches the old slot from the cart. Route calculation runs outside a database transaction;
 the final hold transaction locks the cart, offer and current local workload under warehouse/day and
 scenario advisory locks, then accepts the route only if the canonical workload fingerprint is
-unchanged. Checkout replaces `HELD` with durable `CHECKOUT_PENDING` capacity using the stable command
+unchanged. The same warehouse/day fence is acquired by simulator replacement and every
+capacity-counted shipment/transfer create, replan, manual calendar move and lost-response status
+recovery. A driver reservation therefore cannot commit inside the final fingerprint/hold window;
+concurrent writers have one deterministic transaction order. Checkout replaces `HELD` with durable `CHECKOUT_PENDING` capacity using the stable command
 key before any remote presentation/booking call, then atomically binds the durable booking receipt.
 A terminal result confirms or releases that capacity. Checkout creates the ordinary saved rental order and
 deterministic per-cabin furniture tasks. A transport retry with the same intent reuses the original

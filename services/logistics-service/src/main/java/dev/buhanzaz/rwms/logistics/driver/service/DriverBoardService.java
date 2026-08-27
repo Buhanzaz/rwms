@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.driver.service;
 
+import dev.buhanzaz.rwms.logistics.customer.capacity.service.CustomerDeliveryCapacityFence;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.CapitalRepairCardResponse;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardCardResponse;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardDateColumnResponse;
@@ -55,6 +56,7 @@ public class DriverBoardService {
   private final DriverTaskService driverTaskService;
   private final DriverTripProjectionService tripProjection;
   private final LogisticsTransactionLock transactionLock;
+  private final CustomerDeliveryCapacityFence capacityFence;
 
   public DriverBoardResponse board(UUID warehouseId) {
     LogisticsDependencyGateway.DriverBoardSnapshot board =
@@ -137,6 +139,11 @@ public class DriverBoardService {
   @Transactional
   public DriverBoardCardResponse move(UUID externalTaskId, MoveDriverBoardTaskRequest request) {
     transactionLock.acquire("driver-queue:" + request.warehouseId());
+    LocalDate today = warehouseToday(request.warehouseId());
+    if (request.targetDate().isBefore(today)) {
+      throw new IllegalArgumentException("Дата логистического задания не может быть в прошлом");
+    }
+    capacityFence.acquireDay(request.warehouseId(), request.targetDate());
     DriverLogisticsTask local =
         tasks
             .findForUpdateByExternalTaskId(externalTaskId)
@@ -156,10 +163,6 @@ public class DriverBoardService {
       throw new LogisticsConflictException("Задание не принадлежит выбранному складу");
     }
     requirePublicMoveScope(local, current, request);
-    LocalDate today = warehouseToday(request.warehouseId());
-    if (request.targetDate().isBefore(today)) {
-      throw new IllegalArgumentException("Дата логистического задания не может быть в прошлом");
-    }
     if (request.targetLane() == DriverBoardLane.CURRENT) {
       if (!"CURRENT".equals(current.lane())
           && local.getKind() != DriverTaskKind.CAPITAL_TO_PRODUCTION) {

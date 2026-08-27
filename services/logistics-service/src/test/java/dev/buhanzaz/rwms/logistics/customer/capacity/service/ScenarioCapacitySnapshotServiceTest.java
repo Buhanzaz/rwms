@@ -49,8 +49,10 @@ class ScenarioCapacitySnapshotServiceTest {
     ScenarioCapacitySnapshotResponseMapper mapper =
         mock(ScenarioCapacitySnapshotResponseMapper.class);
     LogisticsTransactionLock locks = mock(LogisticsTransactionLock.class);
+    CustomerDeliveryCapacityFence capacityFence = mock(CustomerDeliveryCapacityFence.class);
     ScenarioCapacitySnapshotService service =
-        new ScenarioCapacitySnapshotService(repository, receipts, mapper, locks, CLOCK);
+        new ScenarioCapacitySnapshotService(
+            repository, receipts, mapper, locks, capacityFence, CLOCK);
     ReplacePlanningCapacitySnapshotRequest request = request("a".repeat(64), 2);
     when(repository.findByWarehouseIdForUpdate(WAREHOUSE)).thenReturn(Optional.empty());
     when(repository.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
@@ -102,13 +104,13 @@ class ScenarioCapacitySnapshotServiceTest {
 
     assertThat(created.replayed()).isFalse();
     assertThat(snapshot.getJobs()).extracting(job -> job.getDeliveryDate()).isSorted();
-    verify(locks).acquire("customer-scenario-capacity:" + WAREHOUSE);
 
     when(receipts.findById(COMMAND)).thenReturn(Optional.of(receiptCaptor.getValue()));
     PlanningCapacitySnapshotResponse replayed = service.replace(SCENARIO, COMMAND, request);
 
     assertThat(replayed.replayed()).isTrue();
     assertThat(replayed.jobCount()).isEqualTo(2);
+    verify(capacityFence).acquireScenario(WAREHOUSE);
   }
 
   @Test
@@ -119,8 +121,10 @@ class ScenarioCapacitySnapshotServiceTest {
     ScenarioCapacitySnapshotResponseMapper mapper =
         mock(ScenarioCapacitySnapshotResponseMapper.class);
     LogisticsTransactionLock locks = mock(LogisticsTransactionLock.class);
+    CustomerDeliveryCapacityFence capacityFence = mock(CustomerDeliveryCapacityFence.class);
     ScenarioCapacitySnapshotService service =
-        new ScenarioCapacitySnapshotService(repository, receipts, mapper, locks, CLOCK);
+        new ScenarioCapacitySnapshotService(
+            repository, receipts, mapper, locks, capacityFence, CLOCK);
     ReplacePlanningCapacitySnapshotRequest original = request("a".repeat(64), 1);
     List<PlanningCapacityJobRequest> sorted = original.jobs().stream().sorted(
         java.util.Comparator.comparing(PlanningCapacityJobRequest::deliveryDate)).toList();
@@ -156,8 +160,10 @@ class ScenarioCapacitySnapshotServiceTest {
     ScenarioCapacitySnapshotResponseMapper mapper =
         mock(ScenarioCapacitySnapshotResponseMapper.class);
     LogisticsTransactionLock locks = mock(LogisticsTransactionLock.class);
+    CustomerDeliveryCapacityFence capacityFence = mock(CustomerDeliveryCapacityFence.class);
     ScenarioCapacitySnapshotService service =
-        new ScenarioCapacitySnapshotService(repository, receipts, mapper, locks, CLOCK);
+        new ScenarioCapacitySnapshotService(
+            repository, receipts, mapper, locks, capacityFence, CLOCK);
     ReplacePlanningCapacitySnapshotRequest activeRequest =
         request(2, "b".repeat(64), 1);
     ScenarioCapacitySnapshot active =
@@ -192,8 +198,10 @@ class ScenarioCapacitySnapshotServiceTest {
     ScenarioCapacitySnapshotResponseMapper mapper =
         mock(ScenarioCapacitySnapshotResponseMapper.class);
     LogisticsTransactionLock locks = mock(LogisticsTransactionLock.class);
+    CustomerDeliveryCapacityFence capacityFence = mock(CustomerDeliveryCapacityFence.class);
     ScenarioCapacitySnapshotService service =
-        new ScenarioCapacitySnapshotService(repository, receipts, mapper, locks, CLOCK);
+        new ScenarioCapacitySnapshotService(
+            repository, receipts, mapper, locks, capacityFence, CLOCK);
     ReplacePlanningCapacitySnapshotRequest activeRequest = request(2, "b".repeat(64), 1);
     ScenarioCapacitySnapshot active =
         ScenarioCapacitySnapshot.create(

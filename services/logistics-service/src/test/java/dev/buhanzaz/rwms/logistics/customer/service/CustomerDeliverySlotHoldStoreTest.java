@@ -5,12 +5,12 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.ScenarioCapacityJobRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.service.CustomerDeliveryCapacityFence;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlot;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotState;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerRentalSession;
 import dev.buhanzaz.rwms.logistics.customer.repository.CustomerDeliverySlotRepository;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
-import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
@@ -59,9 +59,10 @@ class CustomerDeliverySlotHoldStoreTest {
     CustomerDeliverySlotRepository slots = mock(CustomerDeliverySlotRepository.class);
     ScenarioCapacityJobRepository generated = mock(ScenarioCapacityJobRepository.class);
     DriverLogisticsTaskRepository drivers = mock(DriverLogisticsTaskRepository.class);
-    LogisticsTransactionLock locks = mock(LogisticsTransactionLock.class);
+    CustomerDeliveryCapacityFence capacityFence = mock(CustomerDeliveryCapacityFence.class);
     CustomerDeliverySlotHoldStore store =
-        new CustomerDeliverySlotHoldStore(sessions, slots, generated, drivers, locks, CLOCK);
+        new CustomerDeliverySlotHoldStore(
+            sessions, slots, generated, drivers, capacityFence, CLOCK);
     when(sessions.selectSlot(subjectId, inquiryId, 4, slotId)).thenReturn(session);
     when(slots.findByIdForUpdate(slotId)).thenReturn(Optional.of(offered));
     when(slots.findCapacityWorkloadForUpdate(
@@ -97,5 +98,6 @@ class CustomerDeliverySlotHoldStoreTest {
     assertThat(held.slot().getState()).isEqualTo(CustomerDeliverySlotState.HELD);
     assertThat(held.slot().getExpiresAt())
         .isEqualTo(OffsetDateTime.parse("2026-08-27T08:20:00Z"));
+    org.mockito.Mockito.verify(capacityFence).acquireDayAndScenario(warehouseId, date);
   }
 }

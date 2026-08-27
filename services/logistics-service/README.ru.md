@@ -61,8 +61,11 @@ shipment/transfer. Возвраты только с датой не резерв
 в той же точке/окне, которую ещё примет тот же дневной план, а не арифметически свободное место в машинах. Любое изменение бытовок или
 мебели отвязывает старый slot от корзины. Расчёт маршрута идёт вне database transaction; финальная
 hold transaction блокирует корзину, offer и текущую локальную нагрузку под warehouse/day и scenario
-advisory locks и принимает маршрут, только если canonical workload fingerprint не изменился.
-Checkout заменяет `HELD` на долговечную ёмкость `CHECKOUT_PENDING` со стабильным command key до
+advisory locks и принимает маршрут, только если canonical workload fingerprint не изменился. Тот
+же warehouse/day fence захватывают замена simulator snapshot и каждый учитываемый в ёмкости create,
+replan, ручной перенос по календарю и lost-response status recovery для shipment/transfer. Поэтому
+driver reservation не может зафиксироваться внутри финального окна fingerprint/hold, а
+конкурирующие writers получают один детерминированный transaction order. Checkout заменяет `HELD` на долговечную ёмкость `CHECKOUT_PENDING` со стабильным command key до
 любого remote presentation/booking call, затем атомарно привязывает durable booking receipt.
 Terminal-результат подтверждает или освобождает эту ёмкость. Checkout создаёт
 обычный сохранённый rental order и детерминированные furniture tasks по каждой бытовке. Transport

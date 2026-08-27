@@ -2,13 +2,13 @@ package dev.buhanzaz.rwms.logistics.customer.service;
 
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.ScenarioCapacityJob;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.ScenarioCapacityJobRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.service.CustomerDeliveryCapacityFence;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlot;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotState;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerRentalSession;
 import dev.buhanzaz.rwms.logistics.customer.repository.CustomerDeliverySlotRepository;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
-import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDate;
@@ -34,16 +34,13 @@ class CustomerDeliverySlotHoldStore {
   private final CustomerDeliverySlotRepository slots;
   private final ScenarioCapacityJobRepository scenarioJobs;
   private final DriverLogisticsTaskRepository driverTasks;
-  private final LogisticsTransactionLock transactionLock;
+  private final CustomerDeliveryCapacityFence capacityFence;
   private final Clock clock;
 
   /** Commits a route decision only if every local capacity input still matches its calculation. */
   @Transactional
   HeldSlot hold(HoldCommand command) {
-    transactionLock.acquireAll(
-        List.of(
-            dayLock(command.warehouseId(), command.deliveryDate()),
-            scenarioLock(command.warehouseId())));
+    capacityFence.acquireDayAndScenario(command.warehouseId(), command.deliveryDate());
     CustomerRentalSession session =
         sessions.selectSlot(
             command.subjectId(),
@@ -100,14 +97,6 @@ class CustomerDeliverySlotHoldStore {
     return OffsetDateTime.now(clock)
         .withOffsetSameInstant(ZoneOffset.UTC)
         .truncatedTo(ChronoUnit.MICROS);
-  }
-
-  private static String dayLock(UUID warehouseId, LocalDate date) {
-    return "customer-delivery-slot:" + warehouseId + ":" + date;
-  }
-
-  private static String scenarioLock(UUID warehouseId) {
-    return "customer-scenario-capacity:" + warehouseId;
   }
 
   private static OrderProblemException notFound() {

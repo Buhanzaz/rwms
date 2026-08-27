@@ -748,7 +748,11 @@ receipt is durable, `CHECKOUT_PENDING` continues consuming capacity until
 terminal confirmation or release. Checkout reuses the ordinary saved-order
 transition and creates stable per-cabin furniture tasks; a transport retry of
 the same intent resumes with the original domain idempotency key instead of
-creating a second order.
+creating a second order. The final hold, simulator snapshot replacement and
+every whole-day shipment/transfer create, replan, manual calendar move or
+lost-response recovery share one warehouse/day transaction fence. A driver
+reservation cannot commit inside the route fingerprint/hold window; concurrent
+capacity writers are observed in one deterministic order.
 
 A warehouse-card historical rental command is a logistics-owned factual import,
 not an asset-status edit. It creates one normal, `historicalRentalImport`
@@ -1025,6 +1029,7 @@ Evidence: [`services/logistics-service/`](../../services/logistics-service/),
 [`OrderClientService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/OrderClientService.java),
 [`CustomerController.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/api/CustomerController.java),
 [`CustomerDeliverySlotService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/service/CustomerDeliverySlotService.java),
+[`CustomerDeliveryCapacityFence.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/capacity/service/CustomerDeliveryCapacityFence.java),
 [`CustomerCheckoutService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/service/CustomerCheckoutService.java),
 [`PresentationBookingService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/PresentationBookingService.java),
 [`ClientDeliveryDatePolicy.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/ClientDeliveryDatePolicy.java),

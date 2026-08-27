@@ -10,6 +10,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import dev.buhanzaz.rwms.logistics.customer.capacity.service.CustomerDeliveryCapacityFence;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardLane;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.MoveDriverBoardTaskRequest;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.ReturnCapitalRepairRequest;
@@ -44,6 +45,8 @@ class DriverBoardServiceTest {
   private final DriverTripProjectionService tripProjection =
       mock(DriverTripProjectionService.class);
   private final LogisticsTransactionLock transactionLock = mock(LogisticsTransactionLock.class);
+  private final CustomerDeliveryCapacityFence capacityFence =
+      mock(CustomerDeliveryCapacityFence.class);
   private final DriverBoardService service =
       new DriverBoardService(
           tasks,
@@ -53,7 +56,8 @@ class DriverBoardServiceTest {
           scheduler,
           driverTaskService,
           tripProjection,
-          transactionLock);
+          transactionLock,
+          capacityFence);
 
   @BeforeEach
   void warehouseClock() {
@@ -182,6 +186,7 @@ class DriverBoardServiceTest {
 
     verify(dependencies)
         .moveDriverTask(task.getExternalTaskId(), 1, 0, "SCHEDULED", targetDate, 0, null);
+    verify(capacityFence).acquireDay(warehouseId, targetDate);
   }
 
   @Test

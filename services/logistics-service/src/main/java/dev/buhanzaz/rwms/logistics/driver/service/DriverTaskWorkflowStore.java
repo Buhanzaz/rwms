@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.driver.service;
 
+import dev.buhanzaz.rwms.logistics.customer.capacity.service.CustomerDeliveryCapacityFence;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
@@ -56,6 +57,7 @@ class DriverTaskWorkflowStore {
   private final LogisticsDocumentRepository documents;
   private final LogisticsDocumentLineRepository documentLines;
   private final RentalOrderUnitTermRepository rentalTerms;
+  private final CustomerDeliveryCapacityFence capacityFence;
 
   @Transactional
   public Optional<Work> nextWork(UUID taskId) {
@@ -99,6 +101,7 @@ class DriverTaskWorkflowStore {
 
   @Transactional
   public void confirmRegistration(UUID taskId, LogisticsDependencyGateway.DriverBoardTask board) {
+    fenceCapacityObservation(board);
     DriverLogisticsTask task = locked(taskId);
     if (task.getState() != DriverTaskState.REGISTERING
         && task.getState() != DriverTaskState.SCHEDULED) {
@@ -121,6 +124,7 @@ class DriverTaskWorkflowStore {
 
   @Transactional
   public void confirmStatus(UUID taskId, LogisticsDependencyGateway.DriverBoardTask board) {
+    fenceCapacityObservation(board);
     DriverLogisticsTask task = locked(taskId);
     if (task.getState() != DriverTaskState.SCHEDULED
         && task.getState() != DriverTaskState.CURRENT) {
@@ -179,6 +183,7 @@ class DriverTaskWorkflowStore {
   @Transactional
   public void confirmReconciliationStatus(
       UUID taskId, LogisticsDependencyGateway.DriverBoardTask board) {
+    fenceCapacityObservation(board);
     DriverLogisticsTask task = locked(taskId);
     if (task.getState() != DriverTaskState.RECONCILIATION_REQUIRED
         || !isRecoverableDependencyReconciliation(task.getFailureCode())) {
@@ -269,6 +274,12 @@ class DriverTaskWorkflowStore {
     }
     synchronizeRentalTerms(document, board.scheduledDate());
     documents.saveAndFlush(document);
+  }
+
+  private void fenceCapacityObservation(LogisticsDependencyGateway.DriverBoardTask board) {
+    if (board.scheduledDate() != null) {
+      capacityFence.acquireDay(board.warehouseId(), board.scheduledDate());
+    }
   }
 
   private void synchronizeRentalTerms(LogisticsDocument document, java.time.LocalDate date) {

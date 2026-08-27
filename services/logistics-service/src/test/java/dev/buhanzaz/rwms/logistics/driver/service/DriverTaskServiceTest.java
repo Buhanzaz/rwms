@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import dev.buhanzaz.rwms.logistics.customer.capacity.service.CustomerDeliveryCapacityFence;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.CreateDriverTaskRequest;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.DriverTaskResponse;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
@@ -46,6 +47,8 @@ class DriverTaskServiceTest {
   private final LogisticsWarehouseOperationMarkStore warehouseOperationMarks =
       mock(LogisticsWarehouseOperationMarkStore.class);
   private final LogisticsTransactionLock transactionLock = mock(LogisticsTransactionLock.class);
+  private final CustomerDeliveryCapacityFence capacityFence =
+      mock(CustomerDeliveryCapacityFence.class);
   private final DriverTaskService service =
       new DriverTaskService(
           tasks,
@@ -54,7 +57,8 @@ class DriverTaskServiceTest {
           dependencies,
           warehouseLifecycle,
           warehouseOperationMarks,
-          transactionLock);
+          transactionLock,
+          capacityFence);
 
   @Test
   void rediscoveryReusesExistingCurrentRemovalDespiteChecksumDrift() {
@@ -186,6 +190,8 @@ class DriverTaskServiceTest {
                     task.getScheduledDate().equals(today)
                         && task.getPlanningMode() == DriverTaskPlanningMode.FIXED_DATE
                         && task.getSourceType() == DriverTaskSourceType.REPAIR));
+    verify(capacityFence)
+        .acquireTaskDay(warehouseId, today, DriverTaskKind.DELIVER_TO_REPAIR);
   }
 
   @Test
