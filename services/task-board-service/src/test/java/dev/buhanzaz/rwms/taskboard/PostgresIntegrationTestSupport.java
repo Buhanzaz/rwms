@@ -34,6 +34,7 @@ abstract class PostgresIntegrationTestSupport {
             worker_current_group_interval, worker_group_availability_interval,
             kpi_activation_receipt, warehouse_kpi_settings, kpi_work_break, kpi_work_schedule,
             kpi_palette_range, kpi_palette, warehouse_event_inbox, warehouse_metadata,
+            worker_action_receipt, worker_feed_revision,
             worker_device_registration, worker_media_event_inbox, worker_task_evidence,
             sanitized_dead_letter, version_gap_quarantine,
             inbox_message, consumer_aggregate_checkpoint,

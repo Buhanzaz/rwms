@@ -140,11 +140,26 @@ fun TasksScreen(
                 )
             }
             if (state.conflicts.isNotEmpty()) {
-                Text(
-                    "Есть конфликты синхронизации: ${state.conflicts.size}",
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    color = MaterialTheme.colorScheme.error,
-                )
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        "Есть конфликты синхронизации: ${state.conflicts.size}",
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Text(
+                        state.conflicts.first().message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    OutlinedButton(
+                        onClick = viewModel::acknowledgeConflicts,
+                        modifier = Modifier.testTag("task-board-conflict-acknowledge"),
+                    ) {
+                        Text("Принять состояние RWMS и обновить")
+                    }
+                }
             }
             val columns = buildWorkBoardColumns(
                 groups = state.groups,
@@ -470,7 +485,7 @@ private fun TaskRow(
             }
             if (expanded) {
                 Text(
-                    "Этап ${workerTaskStageOrdinal(task.routeIndex, task.routeStepCount, " из ")}",
+                    "Этап ${workerTaskStageOrdinal(task.routeStepIndex, task.routeStepCount, " из ")}",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(

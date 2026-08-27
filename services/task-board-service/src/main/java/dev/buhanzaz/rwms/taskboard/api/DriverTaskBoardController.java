@@ -108,7 +108,10 @@ public class DriverTaskBoardController {
       @RequestHeader(name = "Last-Event-ID", required = false) String lastEventId) {
     DriverPrincipal principal = principal(jwt, false);
     return invalidations.subscribe(
-        MobileTaskSurface.DRIVER, principal.workerId(), service.revision());
+        principal.warehouseId(),
+        MobileTaskSurface.DRIVER,
+        principal.workerId(),
+        service.revision(principal.warehouseId()));
   }
 
   /** Applies an idempotent primary-driver action under version and offline-lease fencing. */

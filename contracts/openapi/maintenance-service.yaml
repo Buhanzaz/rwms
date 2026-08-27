@@ -469,14 +469,15 @@ paths:
       tags: [Logistics Integration]
       operationId: closeHistoricalShipmentMaintenance
       description: >-
-        Private exact logistics-service maintenance.logistics SERVICE boundary. Before an imported
-        rental shipment may acquire its own asset lease, maintenance durably records the automatic
-        closure reason, completes ordinary repairs without fabricating worker evidence, and
-        cancels only pre-start capital-repair or movement work. Started work is rejected for
-        operator reconciliation rather than erased.
+        Private exact logistics-service maintenance.logistics SERVICE boundary. Maintenance
+        durably records the automatic closure reason, completes ordinary repairs without
+        fabricating worker evidence, and cancels only pre-start capital-repair or movement work.
+        Started work is rejected for operator reconciliation rather than erased. When the cabin is
+        already RENTED and has no repair to close, the response explicitly preserves that status so
+        logistics does not acquire another lease or repeat shipment effects.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/HistoricalShipmentRepairClosureRequest' } } } }
       responses:
-        '200': { description: Historical shipment repair closure and the exact released cabin fence., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/HistoricalShipmentRepairClosureResponse' } } } }
+        '200': { description: Historical shipment repair closure and the exact observed FREE or unchanged RENTED cabin fence., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/HistoricalShipmentRepairClosureResponse' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -791,6 +792,10 @@ paths:
         - name: rentalItemId
           in: query
           schema: { type: string, format: uuid }
+        - name: estimateId
+          in: query
+          description: Optional exact maintenance-owned estimate identity; pagination remains database-backed.
+          schema: { type: string, format: uuid }
         - name: repairIds
           in: query
           description: Optional bounded maintenance-owned IDs used to resolve only visible task-board repairs.
@@ -828,6 +833,9 @@ paths:
         Requires USER, rwms.write and warehouse EDIT access. Creates a DIRECT_REPAIR
         primary repair in DRAFT without an estimate or downstream side effect. An empty
         lines/plan pair is valid and is completed by the queue command without creating a task.
+        The idempotency receipt is rechecked under the rental-item creation fence: exact lost-response
+        retries replay the original repair, while another active PRIMARY repair chain for the same
+        rental item returns 409.
       parameters:
         - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateDirectRepairRequest' } } } }
@@ -1053,7 +1061,11 @@ paths:
     get:
       tags: [Decisions]
       operationId: listAcceptanceProjection
-      description: Read-only repair projection; not a command aggregate. Requires USER, rwms.read and warehouse VIEW access.
+      description: >-
+        Database-paged read-only repair projection; not a command aggregate. A source blocked by
+        unresolved rework is excluded in the same query. Inventory-origin rows require every route
+        stage to contain task-board completion identity; registration versions and historical
+        system completion are not execution proof. Requires USER, rwms.read and warehouse VIEW access.
       parameters:
         - { $ref: '#/components/parameters/WarehouseIdQuery' }
         - { $ref: '#/components/parameters/Page' }
@@ -1061,6 +1073,10 @@ paths:
         - name: state
           in: query
           schema: { $ref: '#/components/schemas/RepairAcceptanceState' }
+        - name: repairId
+          in: query
+          description: Optional exact maintenance-owned repair identity for a bounded acceptance lookup.
+          schema: { type: string, format: uuid }
       responses:
         '200': { description: Acceptance projection page., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/AcceptanceProjectionPage' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -3339,12 +3355,15 @@ components:
         warehouseId: { type: string, format: uuid }
         rentalItemId: { type: string, format: uuid }
         rentalItemVersion: { type: integer, format: int64, minimum: 0 }
-        rentalItemStatus: { type: string, enum: [FREE] }
+        rentalItemStatus:
+          type: string
+          enum: [FREE, RENTED]
+          description: FREE when maintenance released the cabin; RENTED when the historical shipment only restores missing logistics provenance for an already rented cabin.
         closedRepairIds:
           type: array
           uniqueItems: true
           items: { type: string, format: uuid }
-        outcome: { type: string, enum: [NOT_REQUIRED, CLOSED] }
+        outcome: { type: string, enum: [NOT_REQUIRED, CLOSED, ALREADY_RENTED] }
     RepairPlan:
       type: object
       additionalProperties: false

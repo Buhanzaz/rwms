@@ -179,6 +179,8 @@ move.
 | `MobileTaskSurfacePolicy` | Непересекающиеся DriverApp primary и WorkerApp secondary capabilities |
 | `WorkerTaskAccessService` | Общая worker/group/qualification аудитория очередей для native task reads и media proofs |
 | `WorkerFeedCountProjection` | Однозапросные route cardinality и READY-evidence counts для bounded native feed page |
+| `WorkerFeedRevisionStore` | Transactional warehouse-scoped opaque revision, продвигаемая authoritative task-board facts |
+| `WorkerActionReceiptStore` | Immutable receipts canonical native-action request и frozen response под advisory lock |
 | `TaskBoardEntryOwnerProofReconciler` | Bounded idempotent восстановление legacy или workforce-stale аудиторий media proof |
 | `WorkerPushOutbox` / `WorkerPushDispatcher` | Transactional уведомление стропальщика, leased FCM delivery и bounded recovery |
 | `WorkforceService` | Стабильный фасад worker/group API над тремя владельцами lifecycle |
@@ -255,7 +257,11 @@ joined-worker или legacy одной бригады, задачи и physical 
 `GET /api/worker/v1/events` — SSE invalidation stream. Текущий producer
 отправляет `FEED_CHANGED` при подписке и последующих изменениях; worker app также
 периодически делает authoritative REST refresh. Payload не является полной task
-projection.
+projection. Подписка keyed authenticated warehouse, native surface и worker,
+поэтому факт другого склада не продвигает и не уведомляет этот stream. Feed page
+читает warehouse revision и projection в одном repeatable-read snapshot;
+изменения постороннего склада не делают cursor недействительным. Weak ETag
+также scoped authenticated warehouse, native surface и worker вместе с этой revision.
 
 `GET /api/driver/v1/events` имеет ту же invalidation-only семантику. Device
 registrations привязаны к surface и принимают текущие Firebase Installation ID
@@ -282,14 +288,17 @@ audit для каждого, выдаёт существующий queue-entry c
 первой позиции. Каждый `WorkerWork.sourceMediaIds` является точной связью строки работы с её
 собственными references в этом массиве; task-board не выравнивает и не угадывает эту связь.
 
-Каждый `WorkerFeedEntry` возвращает zero-based `routeIndex`, положительный `routeStepCount`,
-обязательный `entryType` и обязательный `pinned`. WorkerApp получает только выбранные сервером
+Каждый `WorkerFeedEntry` возвращает raw zero-based `routeIndex`, zero-based `routeStepIndex`,
+положительный `routeStepCount`, обязательный `entryType` и обязательный `pinned`;
+`WorkerTaskDetail` также возвращает оба route index и тот же положительный авторитетный package
+count. `routeIndex` остаётся persisted route-row и
+evidence identity, а `routeStepIndex` является ordinal worker execution package. WorkerApp получает только выбранные сервером
 `REAL` из включённых очередей: активную работу плюс ограниченный план ожидающих карточек. Будущие
-`SHADOW` остаются в manager snapshot и никогда не публикуются в WorkerApp. Для maintenance route
-cardinality считает физические очереди, поэтому исторический начатый same-queue пакет всё равно
-показывается одной подзадачей, хотя его immutable source-mapped строки остаются сохранёнными; для
-остальных источников считаются route entries. Route cardinality и число READY evidence загружаются
-для выбранной страницы feed одной database projection, а не отдельным запросом для каждой карточки.
+`SHADOW` остаются в manager snapshot и никогда не публикуются в WorkerApp. Для maintenance один
+package образуют только последовательные rows одной physical queue: A-A-B даёт два package, а
+A-B-A — три. Для остальных источников каждый persisted route row является отдельным package.
+Package coordinates и число READY evidence загружаются для выбранной страницы feed одной database
+projection, а не отдельным запросом для каждой карточки.
 
 Worker action проверяет identity работника, current assignment, entry version,
 action/status transition и offline lease, где он нужен. 24-часовое окно строго
@@ -299,7 +308,18 @@ action/status transition и offline lease, где он нужен. 24-часов
 будущего остаются обязательными. `deadlineAt` остаётся операционным metadata
 задания и не блокирует корректное завершение. Каждое принятое завершение
 публикует канонический факт `QUEUE_ENTRY_COMPLETED`; maintenance по финальному
-факту связанной стадии переводит ремонт в ожидание приёмки. Evidence сначала резервируется со stable client
+факту связанной стадии переводит ремонт в ожидание приёмки.
+
+До любого live task read action path сериализует попытки одного `operationId`
+transaction-scoped advisory lock. Первый успешный request сохраняет complete
+canonical request identity и frozen response в `worker_action_receipt` в той же
+транзакции, что event/outbox effects. Точный retry возвращает исходный response
+без изменений; изменение surface, worker, warehouse, entry или любого request
+field даёт `409`. Pre-V36 event с тем же correlation ID, но без receipt, также
+fail-closed отвечает `409`, потому что его исходный response нельзя безопасно
+восстановить. Volatile SSE invalidation отправляется только после commit.
+
+Evidence сначала резервируется со stable client
 reference, затем загружается в media-service. Media fact связывает обработанную
 generation с reservation до использования в completion. Legacy-декларация `image/jpeg` может занимать не более 15 MiB; логический клиентский
 bundle `image/webp` — не более 1 MiB, а его `sha256` является детерминированным checksum manifest
@@ -316,6 +336,11 @@ task-evidence, поэтому этот поток всегда начинает�
 `TASK_EVIDENCE` и по порядку повторно ставит в очередь их исходные факты из quarantine с разрывом
 версии. Она не переписывает исходные факты и не затрагивает уже опубликованный поток; контракт
 payload события не меняется.
+
+[`V36__worker_feed_revision_and_action_receipts.sql`](src/main/resources/db/migration/V36__worker_feed_revision_and_action_receipts.sql)
+добавляет warehouse revision sequence/projection и immutable worker-action receipts. Существующие
+warehouse rows backfill-ятся выше прежнего global revision fence; domain events, tasks и evidence
+rows не переписываются.
 
 Текущий OpenAPI упоминает `Last-Event-ID`, но controller и client не реализуют
 durable replay. Reconnect сейчас безопасен благодаря fresh invalidation и
@@ -383,6 +408,9 @@ completion никогда не ждёт стропальщика. Миграци
   contract-defined fence и возвращают `409` при stale state.
 - Retry source task creation/synchronization использует stable external task ID
   и source identity.
+- Retry native action использует один durable operation receipt: точный request
+  возвращает frozen первый response, а divergent или невосстановимый legacy
+  replay отвечает `409` без повторного effect.
 - Credential reset/disable/delete workflows сохраняют pending/ambiguous states
   и имеют explicit reconciliation commands вместо local rollback.
 - Worker media inbox остаётся pending, пока не появится referenced evidence;

@@ -9,6 +9,7 @@ import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventStore;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventSourcing;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardProjectionWriter;
+import dev.buhanzaz.rwms.taskboard.eventing.WorkerFeedRevisionStore;
 import dev.buhanzaz.rwms.taskboard.repository.*;
 import dev.buhanzaz.rwms.taskboard.service.WarehouseLifecycleFence.AdmissionPermit;
 import java.time.LocalDate;
@@ -61,6 +62,7 @@ class TaskBoardExternalMutationService {
   private final TaskBoardQueuePositionCoordinator queuePositions;
   private final DriverTaskAudienceService driverAudiences;
   private final WorkerInvalidationHub workerInvalidations;
+  private final WorkerFeedRevisionStore workerFeedRevisions;
 
   TaskBoardExternalMutationService(
       BoardTaskRepository tasks,
@@ -78,7 +80,8 @@ class TaskBoardExternalMutationService {
       PlatformTransactionManager transactionManager,
       TaskBoardQueuePositionCoordinator queuePositions,
       DriverTaskAudienceService driverAudiences,
-      WorkerInvalidationHub workerInvalidations) {
+      WorkerInvalidationHub workerInvalidations,
+      WorkerFeedRevisionStore workerFeedRevisions) {
     this.tasks = tasks;
     this.entries = entries;
     this.queues = queues;
@@ -95,6 +98,7 @@ class TaskBoardExternalMutationService {
     this.queuePositions = queuePositions;
     this.driverAudiences = driverAudiences;
     this.workerInvalidations = workerInvalidations;
+    this.workerFeedRevisions = workerFeedRevisions;
   }
 
   BoardTask requireOwnedExternalTask(String sourceClientId, UUID externalTaskId) {
@@ -229,7 +233,7 @@ class TaskBoardExternalMutationService {
           request.targetDriverAudience());
       result = registrationDto(task);
     }
-    publishWorkerFeedChangedAfterCommit();
+    publishWorkerFeedChangedAfterCommit(task.getWarehouseId());
     return result;
   }
 
@@ -642,6 +646,9 @@ class TaskBoardExternalMutationService {
         task.getVersion());
     kpiEvidence.refreshWarehouse(sourceWarehouseId, now());
     kpiEvidence.refreshWarehouse(targetWarehouseId, now());
+    workerFeedRevisions.advanceWarehouse(sourceWarehouseId);
+    publishWorkerFeedChangedAfterCommit(sourceWarehouseId);
+    publishWorkerFeedChangedAfterCommit(targetWarehouseId);
     return registrationDto(task);
   }
 
@@ -956,8 +963,11 @@ class TaskBoardExternalMutationService {
    * Invalidates every connected worker feed only after the atomic move and audience change commit.
    * This is deliberately projection-only because an audience change may revoke entry discovery.
    */
-  private void publishWorkerFeedChangedAfterCommit() {
-    Runnable dispatch = () -> workerInvalidations.feedChanged(workerRevision());
+  private void publishWorkerFeedChangedAfterCommit(UUID warehouseId) {
+    Runnable dispatch =
+        () ->
+            workerInvalidations.feedChanged(
+                warehouseId, workerFeedRevisions.current(warehouseId));
     if (TransactionSynchronizationManager.isSynchronizationActive()) {
       TransactionSynchronizationManager.registerSynchronization(
           new TransactionSynchronization() {
@@ -969,14 +979,6 @@ class TaskBoardExternalMutationService {
     } else {
       dispatch.run();
     }
-  }
-
-  private long workerRevision() {
-    Long revision =
-        jdbc.queryForObject(
-            "select coalesce(sum(current_version + 1), 0)::bigint from event_stream_head",
-            Long.class);
-    return revision == null ? 0 : revision;
   }
 
   private BoardTaskRegistrationDto registrationDto(BoardTask task) {

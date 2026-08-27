@@ -12,12 +12,12 @@ import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardAggregateType;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventSourcing;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardProjectionWriter;
+import dev.buhanzaz.rwms.taskboard.eventing.WorkerFeedRevisionStore;
 import dev.buhanzaz.rwms.taskboard.repository.QueueEntryRepository;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -43,7 +43,7 @@ class TaskBoardFutureAvailabilityService {
   private final TaskBoardProjectionWriter projectionWriter;
   private final TaskBoardEntryOwnerProofService ownerProofs;
   private final WorkerInvalidationHub workerInvalidations;
-  private final JdbcTemplate jdbc;
+  private final WorkerFeedRevisionStore workerFeedRevisions;
 
   TaskBoardFutureAvailabilityService(
       QueueEntryRepository entries,
@@ -52,14 +52,14 @@ class TaskBoardFutureAvailabilityService {
       TaskBoardProjectionWriter projectionWriter,
       TaskBoardEntryOwnerProofService ownerProofs,
       WorkerInvalidationHub workerInvalidations,
-      JdbcTemplate jdbc) {
+      WorkerFeedRevisionStore workerFeedRevisions) {
     this.entries = entries;
     this.queuePositions = queuePositions;
     this.eventSourcing = eventSourcing;
     this.projectionWriter = projectionWriter;
     this.ownerProofs = ownerProofs;
     this.workerInvalidations = workerInvalidations;
-    this.jdbc = jdbc;
+    this.workerFeedRevisions = workerFeedRevisions;
   }
 
   /**
@@ -98,7 +98,7 @@ class TaskBoardFutureAvailabilityService {
     eventSourcing.entryChanged(
         changed, streamVersion, TaskBoardEventTypes.QUEUE_ENTRY_CHANGED);
     ownerProofs.publish(warehouseId, changed.getId(), request.available());
-    publishWorkerFeedChangedAfterCommit();
+    publishWorkerFeedChangedAfterCommit(warehouseId);
   }
 
   private void requireEligibleRouteEntry(
@@ -136,8 +136,11 @@ class TaskBoardFutureAvailabilityService {
   }
 
   /** Registers a projection-only invalidation that cannot run for a rolled-back command. */
-  private void publishWorkerFeedChangedAfterCommit() {
-    Runnable dispatch = () -> workerInvalidations.feedChanged(workerRevision());
+  private void publishWorkerFeedChangedAfterCommit(UUID warehouseId) {
+    Runnable dispatch =
+        () ->
+            workerInvalidations.feedChanged(
+                warehouseId, workerFeedRevisions.current(warehouseId));
     if (TransactionSynchronizationManager.isSynchronizationActive()) {
       TransactionSynchronizationManager.registerSynchronization(
           new TransactionSynchronization() {
@@ -151,11 +154,4 @@ class TaskBoardFutureAvailabilityService {
     }
   }
 
-  private long workerRevision() {
-    Long revision =
-        jdbc.queryForObject(
-            "select coalesce(sum(current_version + 1), 0)::bigint from event_stream_head",
-            Long.class);
-    return revision == null ? 0 : revision;
-  }
 }

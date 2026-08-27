@@ -212,8 +212,8 @@ interface TaskEvidenceDao {
     )
     suspend fun reviewRequiredByReason(userId: String, reviewReason: String): List<TaskEvidenceEntity>
 
-    @Query("SELECT COUNT(*) FROM task_evidence WHERE userId = :userId AND entryId = :entryId AND state = 'READY'")
-    suspend fun readyCount(userId: String, entryId: String): Int
+    @Query("SELECT evidenceId FROM task_evidence WHERE userId = :userId AND entryId = :entryId AND state = 'READY'")
+    suspend fun readyIds(userId: String, entryId: String): List<String>
 
     @Query("SELECT * FROM task_evidence WHERE userId = :userId ORDER BY createdAtEpochMillis DESC")
     fun observeAll(userId: String): Flow<List<TaskEvidenceEntity>>

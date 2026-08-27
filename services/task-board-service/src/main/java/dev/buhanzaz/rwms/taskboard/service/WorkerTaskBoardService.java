@@ -8,7 +8,7 @@ import dev.buhanzaz.rwms.taskboard.api.KpiSettingsApiModels.KpiPaletteDto;
 import dev.buhanzaz.rwms.taskboard.domain.GroupOperationalStatus;
 import dev.buhanzaz.rwms.taskboard.domain.ParticipationPolicy;
 import dev.buhanzaz.rwms.taskboard.domain.QueuePurpose;
-import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
+import dev.buhanzaz.rwms.taskboard.eventing.WorkerFeedRevisionStore;
 import dev.buhanzaz.rwms.taskboard.push.WorkerPushOutbox;
 import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
@@ -31,7 +31,10 @@ import org.slf4j.MDC;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Builds worker-scoped task views and applies replay-safe worker commands.
@@ -65,6 +68,8 @@ public class WorkerTaskBoardService {
   private final KpiSettingsService kpiSettings;
   private final MobileTaskSurfacePolicy surfacePolicy;
   private final WorkerPushOutbox pushOutbox;
+  private final WorkerFeedRevisionStore feedRevisions;
+  private final WorkerActionReceiptStore actionReceipts;
 
   public WorkerTaskBoardService(
       TaskBoardService taskBoard,
@@ -79,7 +84,9 @@ public class WorkerTaskBoardService {
       TaskBoardEntryOwnerProofService ownerProofs,
       KpiSettingsService kpiSettings,
       MobileTaskSurfacePolicy surfacePolicy,
-      WorkerPushOutbox pushOutbox) {
+      WorkerPushOutbox pushOutbox,
+      WorkerFeedRevisionStore feedRevisions,
+      WorkerActionReceiptStore actionReceipts) {
     this.taskBoard = taskBoard;
     this.feedCounts = feedCounts;
     this.workforce = workforce;
@@ -93,19 +100,23 @@ public class WorkerTaskBoardService {
     this.kpiSettings = kpiSettings;
     this.surfacePolicy = surfacePolicy;
     this.pushOutbox = pushOutbox;
+    this.feedRevisions = feedRevisions;
+    this.actionReceipts = actionReceipts;
   }
 
   /** Returns the WorkerApp-compatible access context. */
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
   public WorkerContext context(UUID workerId, UUID warehouseId) {
     return context(MobileTaskSurface.WORKER, workerId, warehouseId);
   }
 
   /** Returns the selected native surface's access context, revision and offline lease. */
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
   public WorkerContext context(
       MobileTaskSurface surface, UUID workerId, UUID warehouseId) {
     WorkerAccess access = access(surface, workerId, warehouseId);
     OffsetDateTime now = now();
-    long revision = revision();
+    long revision = revision(warehouseId);
     WorkerDto worker = access.worker();
     return new WorkerContext(
         new WorkerIdentity(
@@ -150,6 +161,7 @@ public class WorkerTaskBoardService {
    *
    * <p>A cursor from another revision is rejected rather than serving a mixed snapshot.
    */
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
   public FeedPage feed(
       UUID workerId, UUID warehouseId, String encodedCursor, int requestedLimit) {
     return feed(
@@ -161,6 +173,7 @@ public class WorkerTaskBoardService {
   }
 
   /** Returns one authorized feed page for the selected native task surface. */
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
   public FeedPage feed(
       MobileTaskSurface surface,
       UUID workerId,
@@ -169,7 +182,7 @@ public class WorkerTaskBoardService {
       int requestedLimit) {
     int limit = Math.max(1, Math.min(MAX_LIMIT, requestedLimit));
     WorkerAccess access = access(surface, workerId, warehouseId);
-    long currentRevision = revision();
+    long currentRevision = revision(warehouseId);
     Cursor cursor =
         encodedCursor == null
             ? new Cursor(currentRevision, 0, now().toInstant().toEpochMilli())
@@ -207,7 +220,9 @@ public class WorkerTaskBoardService {
     Map<UUID, List<WorkerFeedEntry>> selected = new LinkedHashMap<>();
     for (VisibleEntry item : page) {
       WorkerFeedCountProjection.Counts counts = countsByEntry.get(item.entry().id());
-      if (counts == null || counts.routeStepCount() < 1) {
+      if (counts == null
+          || counts.routeStepIndex() < 0
+          || counts.routeStepIndex() >= counts.routeStepCount()) {
         throw new IllegalStateException(
             "Маршрут задания не содержит текущий шаг " + item.entry().id());
       }
@@ -230,7 +245,8 @@ public class WorkerTaskBoardService {
             : null;
     OffsetDateTime serverTime =
         OffsetDateTime.ofInstant(Instant.ofEpochMilli(cursor.serverTimeMillis()), ZoneOffset.UTC);
-    String etag = etag(currentRevision, cursor.offset(), limit);
+    String etag =
+        etag(surface, workerId, warehouseId, currentRevision, cursor.offset(), limit);
     return new FeedPage(
         new WorkerFeed(
             currentRevision, serverTime, List.copyOf(pageCategories), nextCursor),
@@ -238,6 +254,7 @@ public class WorkerTaskBoardService {
   }
 
   /** Returns WorkerApp-compatible task detail. */
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
   public WorkerTaskDetail detail(UUID workerId, UUID warehouseId, UUID entryId) {
     return detail(MobileTaskSurface.WORKER, workerId, warehouseId, entryId);
   }
@@ -245,9 +262,11 @@ public class WorkerTaskBoardService {
   /**
    * Returns task detail after enforcing the selected surface and worker audience.
    *
-   * <p>A maintenance representative presents the content and remaining timer of its consecutive
-   * same-queue execution package; other sources remain entry-scoped.
+   * <p>A repeatable-read snapshot keeps the raw route identity, package ordinal and aggregated
+   * detail content consistent. A maintenance representative presents the content and remaining
+   * timer of its consecutive same-queue execution package; other sources remain entry-scoped.
    */
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
   public WorkerTaskDetail detail(
       MobileTaskSurface surface, UUID workerId, UUID warehouseId, UUID entryId) {
     WorkerAccess access = access(surface, workerId, warehouseId);
@@ -259,6 +278,7 @@ public class WorkerTaskBoardService {
             .orElseThrow(() -> new NotFoundException("Задание не найдено"));
     surfacePolicy.requireDetailVisible(surface, queue, entry, workerId);
     BoardTaskRegistrationDto task = registration(warehouseId, entry);
+    WorkerFeedCountProjection.Counts routeCoordinates = routeCoordinates(entry);
     int photoMinimum = surfacePolicy.resultPhotoMinimum(queue);
     List<WorkerRelatedStep> related =
         task == null
@@ -394,6 +414,8 @@ public class WorkerTaskBoardService {
         entry.taskId(),
         entry.source(),
         entry.routeIndex(),
+        routeCoordinates.routeStepIndex(),
+        routeCoordinates.routeStepCount(),
         entry.title(),
         task == null ? null : task.description(),
         object,
@@ -554,7 +576,11 @@ public class WorkerTaskBoardService {
         findEvidence(request.evidenceId(), request.operationId())
             .orElseThrow(() -> new IllegalStateException("Резервирование фотографии не сохранено"))
             .dto();
-    invalidations.actionApplied(surface, workerId, entryId, revision());
+    long changedRevision = revision(warehouseId);
+    afterCommit(
+        () ->
+            invalidations.actionApplied(
+                warehouseId, surface, workerId, entryId, changedRevision));
     return reserved;
   }
 
@@ -724,18 +750,13 @@ public class WorkerTaskBoardService {
       String idempotencyKey,
       WorkerActionRequest request) {
     requireIdempotencyKey(idempotencyKey, request.operationId());
+    Optional<WorkerActionAppliedResult> replay =
+        actionReceipts.lockAndReplay(
+            surface, workerId, warehouseId, entryId, request);
+    if (replay.isPresent()) return replay.get();
     WorkerTaskDetail current = detail(surface, workerId, warehouseId, entryId);
     boolean primaryTakeTriggersNotification =
         request.action() == WorkerAction.TAKE && "WAITING".equals(current.status());
-    ActionReplay replay = replay(request.operationId());
-    if (replay != null) {
-      if (!replay.entryId().equals(entryId)
-          || !replay.eventType().equals(eventType(request.action()))) {
-        throw new ConflictException("operationId уже использован другой командой");
-      }
-      return new WorkerActionAppliedResult("REPLAYED", current.version(), current);
-    }
-
     WorkerAccess access = access(surface, workerId, warehouseId);
     UUID currentGroupId = access.worker().currentGroupId();
     BoardEntryDto commandEntry =
@@ -840,25 +861,36 @@ public class WorkerTaskBoardService {
       }
     }
     WorkerTaskDetail changed = detail(surface, workerId, warehouseId, entryId);
-    long changedRevision = revision();
+    long changedRevision = revision(warehouseId);
     Set<UUID> notifiedWorkerIds =
         primaryTakeTriggersNotification
             ? notifiedWorkerIds(warehouseId, commandEntry.queueId(), workerId)
             : Set.of();
     pushOutbox.enqueueJoinAvailable(
         notifiedWorkerIds, warehouseId, entryId, changedRevision);
-    invalidations.actionApplied(
-        surface, workerId, entryId, changedRevision, notifiedWorkerIds);
-    return new WorkerActionAppliedResult("APPLIED", changed.version(), changed);
+    WorkerActionAppliedResult response =
+        actionReceipts.save(
+            surface,
+            workerId,
+            warehouseId,
+            entryId,
+            request,
+            new WorkerActionAppliedResult("APPLIED", changed.version(), changed));
+    afterCommit(
+        () ->
+            invalidations.actionApplied(
+                warehouseId,
+                surface,
+                workerId,
+                entryId,
+                changedRevision,
+                notifiedWorkerIds));
+    return response;
   }
 
-  /** Returns the current worker-feed revision used to fence pagination and invalidations. */
-  public long revision() {
-    Long value =
-        jdbc.queryForObject(
-            "select coalesce(sum(current_version + 1), 0)::bigint from event_stream_head",
-            Long.class);
-    return value == null ? 0 : value;
+  /** Returns one warehouse's current worker-feed revision for pagination and invalidations. */
+  public long revision(UUID warehouseId) {
+    return feedRevisions.current(warehouseId);
   }
 
   private WorkerAccess access(
@@ -969,6 +1001,7 @@ public class WorkerTaskBoardService {
         entry.version(),
         entry.taskId(),
         entry.routeIndex(),
+        counts.routeStepIndex(),
         counts.routeStepCount(),
         entry.title(),
         entry.unitNumber(),
@@ -1007,6 +1040,18 @@ public class WorkerTaskBoardService {
                     assignment.pausedAt(),
                     assignment.finishedAt()))
         .toList();
+  }
+
+  private WorkerFeedCountProjection.Counts routeCoordinates(BoardEntryDto entry) {
+    WorkerFeedCountProjection.Counts coordinates =
+        feedCounts.load(Map.of(entry.id(), entry.taskId())).get(entry.id());
+    if (coordinates == null
+        || coordinates.routeStepIndex() < 0
+        || coordinates.routeStepIndex() >= coordinates.routeStepCount()) {
+      throw new IllegalStateException(
+          "Маршрут задания не содержит текущий шаг " + entry.id());
+    }
+    return coordinates;
   }
 
   private BoardTaskRegistrationDto registration(UUID warehouseId, BoardEntryDto entry) {
@@ -1265,33 +1310,6 @@ public class WorkerTaskBoardService {
         + generation;
   }
 
-  private ActionReplay replay(UUID operationId) {
-    List<ActionReplay> events =
-        jdbc.query(
-            """
-            select aggregate_id,event_type
-              from domain_event
-             where correlation_id=?
-               and aggregate_type='QUEUE_ENTRY'
-             order by recorded_at,event_id
-            """,
-            (result, row) ->
-                new ActionReplay(
-                    UUID.fromString(result.getString("aggregate_id")),
-                    result.getString("event_type")),
-            operationId);
-    return events.isEmpty() ? null : events.get(events.size() - 1);
-  }
-
-  private String eventType(WorkerAction action) {
-    return switch (action) {
-      case TAKE, JOIN -> TaskBoardEventTypes.QUEUE_ENTRY_TAKEN;
-      case PAUSE -> TaskBoardEventTypes.QUEUE_ENTRY_PAUSED;
-      case RESUME -> TaskBoardEventTypes.QUEUE_ENTRY_RESUMED;
-      case COMPLETE -> TaskBoardEventTypes.QUEUE_ENTRY_COMPLETED;
-    };
-  }
-
   private void requireIdempotencyKey(String value, UUID operationId) {
     try {
       if (!UUID.fromString(value).equals(operationId)) {
@@ -1325,8 +1343,26 @@ public class WorkerTaskBoardService {
     return worker.appLogin();
   }
 
-  private String etag(long revision, int offset, int limit) {
-    return "W/\"worker-" + revision + "-" + offset + "-" + limit + "\"";
+  private String etag(
+      MobileTaskSurface surface,
+      UUID workerId,
+      UUID warehouseId,
+      long revision,
+      int offset,
+      int limit) {
+    return "W/\"worker-"
+        + surface.name()
+        + "-"
+        + warehouseId
+        + "-"
+        + workerId
+        + "-"
+        + revision
+        + "-"
+        + offset
+        + "-"
+        + limit
+        + "\"";
   }
 
   private String encodeCursor(Cursor cursor) {
@@ -1359,6 +1395,21 @@ public class WorkerTaskBoardService {
     return OffsetDateTime.now(ZoneOffset.UTC);
   }
 
+  /** Dispatches volatile invalidations only after the authoritative transaction has committed. */
+  private void afterCommit(Runnable action) {
+    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+      action.run();
+      return;
+    }
+    TransactionSynchronizationManager.registerSynchronization(
+        new TransactionSynchronization() {
+          @Override
+          public void afterCommit() {
+            action.run();
+          }
+        });
+  }
+
   public record FeedPage(WorkerFeed feed, String etag) {}
 
   public record DeviceRegistrationResult(
@@ -1374,8 +1425,6 @@ public class WorkerTaskBoardService {
 
   /** One authorized entry retained until feed pagination has selected its page. */
   private record VisibleEntry(WorkerCategory category, BoardEntryDto entry) {}
-
-  private record ActionReplay(UUID entryId, String eventType) {}
 
   private record EvidenceRow(
       TaskEvidence dto,

@@ -16,6 +16,28 @@ class CompletionGateTest {
     }
 
     @Test
+    fun `server evidence count participates without double counting cached ids`() {
+        assertThat(
+            combinedReadyEvidenceCount(
+                serverReadyEvidenceCount = 2,
+                localReadyEvidenceIds = listOf("evidence-2"),
+                detailReadyEvidenceIds = listOf("evidence-1", "evidence-2"),
+            ),
+        ).isEqualTo(2)
+    }
+
+    @Test
+    fun `new local ready evidence extends an older detail snapshot`() {
+        assertThat(
+            combinedReadyEvidenceCount(
+                serverReadyEvidenceCount = 1,
+                localReadyEvidenceIds = listOf("evidence-2"),
+                detailReadyEvidenceIds = listOf("evidence-1"),
+            ),
+        ).isEqualTo(2)
+    }
+
+    @Test
     fun `all pages must describe one stable feed revision`() {
         val first = validateFeedPage(null, revision = 8, serverTime = "2026-07-25T10:00:00Z")
 

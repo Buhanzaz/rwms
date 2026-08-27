@@ -214,18 +214,15 @@ describe("AcceptancePage filters", () => {
 })
 
 describe("AcceptancePage actionable selection", () => {
-  it("does not expose a direct acceptance dossier for a parent absent from the actionable projection", async () => {
+  it("opens an exact pending repair even when it is absent from the current list response", async () => {
     const parentRepair = task("parent-repair")
     repairTasksApi.listPendingRepairAcceptance.mockResolvedValue([])
     repairTasksApi.getRepairTask.mockResolvedValue(parentRepair)
 
     renderPage("/acceptance?acceptanceId=parent-repair")
 
-    expect(await screen.findByText("Приёмка недоступна")).toBeTruthy()
-    expect(
-      screen.getByText("Задание больше не доступно для приёмки.")
-    ).toBeTruthy()
-    expect(screen.queryByText("Досье приёмки")).toBeNull()
+    expect(await screen.findByText("Досье приёмки")).toBeTruthy()
+    expect(screen.queryByText("Приёмка недоступна")).toBeNull()
   })
 
   it("opens a direct acceptance dossier only for a repair returned by the actionable projection", async () => {
@@ -239,6 +236,17 @@ describe("AcceptancePage actionable selection", () => {
 
     expect(await screen.findByText("Досье приёмки")).toBeTruthy()
     expect(screen.queryByText("Приёмка недоступна")).toBeNull()
+  })
+
+  it("rejects a pending repair excluded by the exact actionable projection", async () => {
+    const blockedRepair = task("blocked-repair", { readyAt: null })
+    repairTasksApi.listPendingRepairAcceptance.mockResolvedValue([])
+    repairTasksApi.getRepairTask.mockResolvedValue(blockedRepair)
+
+    renderPage("/acceptance?acceptanceId=blocked-repair")
+
+    expect(await screen.findByText("Приёмка недоступна")).toBeTruthy()
+    expect(screen.queryByText("Досье приёмки")).toBeNull()
   })
 
   it("provides the page-header action slot to an actionable dossier", async () => {

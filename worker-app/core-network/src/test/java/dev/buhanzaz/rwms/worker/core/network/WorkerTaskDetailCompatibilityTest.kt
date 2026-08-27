@@ -7,7 +7,7 @@ import org.junit.Test
 
 class WorkerTaskDetailCompatibilityTest {
     @Test
-    fun `first release cached detail decodes without works or evidence media paths`() {
+    fun `cached detail decodes optional legacy content when package coordinates are present`() {
         val detail = Json { explicitNulls = false }.decodeFromString<WorkerTaskDetailDto>(
             """
             {
@@ -15,6 +15,8 @@ class WorkerTaskDetailCompatibilityTest {
               "version":8,
               "taskId":"task-1",
               "routeIndex":0,
+              "routeStepIndex":0,
+              "routeStepCount":1,
               "title":"Замена профлиста",
               "description":null,
               "object":null,
@@ -80,6 +82,8 @@ class WorkerTaskDetailCompatibilityTest {
               "version":9,
               "taskId":"task-1",
               "routeIndex":0,
+              "routeStepIndex":0,
+              "routeStepCount":1,
               "title":"Замена профлиста",
               "description":null,
               "object":null,

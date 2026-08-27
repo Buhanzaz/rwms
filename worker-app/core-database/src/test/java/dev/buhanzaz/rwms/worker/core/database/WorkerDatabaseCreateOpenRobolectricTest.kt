@@ -5,6 +5,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import com.google.common.truth.Truth.assertThat
+import org.json.JSONObject
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -674,6 +675,87 @@ class WorkerDatabaseCreateOpenRobolectricTest {
             assertThat(cursor.getInt(1)).isEqualTo(0)
         }
         versionTen.close()
+        context.deleteDatabase(name)
+    }
+
+    @Test
+    fun migrationTenToElevenSeparatesRawRouteIdentityFromWorkerPackageOrdinal() {
+        val context = RuntimeEnvironment.getApplication()
+        val name = "worker-room-package-ordinal-migration.db"
+        context.deleteDatabase(name)
+        val versionTen = openHelper(
+            context = context,
+            name = name,
+            version = 10,
+            onCreate = { database ->
+                database.execSQL(
+                    """
+                    CREATE TABLE `worker_task` (
+                        `localId` TEXT NOT NULL PRIMARY KEY,
+                        `userId` TEXT NOT NULL,
+                        `entryId` TEXT NOT NULL,
+                        `routeIndex` INTEGER NOT NULL,
+                        `routeStepCount` INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                database.execSQL(
+                    """
+                    CREATE TABLE `worker_task_detail` (
+                        `localId` TEXT NOT NULL PRIMARY KEY,
+                        `userId` TEXT NOT NULL,
+                        `entryId` TEXT NOT NULL,
+                        `sanitizedDetailJson` TEXT NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                database.execSQL(
+                    "INSERT INTO `worker_task` VALUES ('worker:entry', 'worker', 'entry', 41, 3)",
+                )
+                database.execSQL(
+                    """
+                    INSERT INTO `worker_task_detail` VALUES (
+                        'worker:entry', 'worker', 'entry',
+                        '{"entryId":"entry","routeIndex":41}'
+                    )
+                    """.trimIndent(),
+                )
+            },
+        )
+        versionTen.writableDatabase
+        versionTen.close()
+
+        val versionEleven = openHelper(
+            context = context,
+            name = name,
+            version = 11,
+            onCreate = { error("Expected the version 10 database to exist") },
+            onUpgrade = { database -> WorkerDatabase.MIGRATION_10_11.migrate(database) },
+        )
+        val database = versionEleven.writableDatabase
+
+        database.query(
+            """
+            SELECT `routeIndex`, `routeStepIndex`, `routeStepCount`
+            FROM `worker_task`
+            WHERE `localId`='worker:entry'
+            """.trimIndent(),
+        ).use { cursor ->
+            assertThat(cursor.moveToFirst()).isTrue()
+            assertThat(cursor.getInt(0)).isEqualTo(41)
+            assertThat(cursor.getInt(1)).isEqualTo(0)
+            assertThat(cursor.getInt(2)).isEqualTo(3)
+        }
+        database.query(
+            "SELECT `sanitizedDetailJson` FROM `worker_task_detail` WHERE `localId`='worker:entry'",
+        ).use { cursor ->
+            assertThat(cursor.moveToFirst()).isTrue()
+            val migrated = JSONObject(cursor.getString(0))
+            assertThat(migrated.getInt("routeIndex")).isEqualTo(41)
+            assertThat(migrated.getInt("routeStepIndex")).isEqualTo(0)
+            assertThat(migrated.getInt("routeStepCount")).isEqualTo(3)
+        }
+        versionEleven.close()
         context.deleteDatabase(name)
     }
 

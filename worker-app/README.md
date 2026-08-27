@@ -117,6 +117,14 @@ The entry/resume action stays in a safe-area-aware static footer rather than
 scrolling with task content. Its button spans the available width, and the
 ordinary TAKE label is `Взять задание`.
 
+Both board and detail stage labels use the required zero-based
+`routeStepIndex` plus one over `routeStepCount`, the authoritative ordinal and
+count of worker execution packages. They never derive presentation from the raw
+persisted `routeIndex`: that separate value remains the identity supplied to
+camera/evidence reservation. Room 10→11 adds the separate package ordinal with
+a fail-safe zero for legacy rows and upgrades cached detail JSON with its known
+package count until the next authoritative feed/detail refresh.
+
 Authenticated full-screen media first loads the SMALL preview for the selected
 page and its immediate neighbours, then progressively replaces the selected
 preview with the original. Per-path jobs are cancelled independently during a
@@ -152,6 +160,8 @@ at most 1 MiB; only the original is visible in the UI. The final
 saved evidence ID is attached only where the logistics completion contract
 requires a selected photo. The sync coordinator never sends `COMPLETE` until
 the queued evidence has been processed and required evidence is server-`READY`.
+The gate merges the feed's server count with exact READY IDs from cached detail
+and local finalized rows, without counting the same evidence twice.
 Downloads remains the recovery surface for failed or pending uploads and
 explicit retry. The task screen records a work result and WebP evidence but
 never decides a task transition locally.
@@ -176,8 +186,10 @@ is invented. Worker-facing work data does not expose price/cost fields.
   A passed task `deadlineAt` does not block this completion; once task-board
   accepts it, the canonical completion fact advances the mapped repair to
   acceptance.
-  Unique connected WorkManager work sends actions, reserves/uploads/finalizes
-  evidence, waits for 'READY', then refreshes the feed. A historical
+  Unique connected WorkManager work preserves prerequisite → reservation →
+  upload/finalize → COMPLETE ordering independently for each entry, so evidence
+  waiting or failure on one task does not block another task from progressing.
+  It refreshes the feed after every pass. A historical
   `Действие создано вне срока offline lease` result-photo failure is recognized
   from either retained review or upload-error state. After the next authenticated
   context, the same reservation outbox row is reset with the fresh lease while
@@ -198,13 +210,17 @@ Gateway Problem Details are mapped to explicit safe failures. A missing token,
 invalid session, unreachable gateway, or unsupported operation is not
 represented as mock success. An expired lease remains a conflict for a new
 offline transition, but not for the current worker's delayed result photo or
-COMPLETE. Conflicts are persisted so that the task UI can show the server state
-and require an intentional refresh/retry.
+COMPLETE. Conflicts are persisted so that the task UI can show the server state.
+A full-feed refresh never acknowledges them: the worker must explicitly select
+`Принять состояние RWMS и обновить`, which closes the visible conflict and requests
+a new authoritative feed.
 
 After the authenticator's one refresh opportunity, `401` stops sync for login;
 `403` stops it for a grant refresh or worker action. A `409` persists the
 conflict (and any supplied server snapshot) before the authoritative feed is
-refreshed. Automatic failure retry is limited to `429`, `502`, `503`, `504`,
+refreshed. Because the conflict is already durable and requires user input, its
+WorkManager run succeeds instead of becoming a terminal scheduler failure.
+Automatic failure retry is limited to `429`, `502`, `503`, `504`,
 and proven transport faults; malformed Problem Details retain the actual HTTP
 status with a safe fallback.
 

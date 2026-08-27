@@ -99,10 +99,18 @@ describe("maintenance lifecycle HTTP client", () => {
       executionState: "QUEUED",
       acceptanceState: "NOT_READY",
       rentalItemId,
+      estimateId,
       repairIds: [repairId, secondRepairId],
     })
     await getMaintenanceRepair("token", warehouseId, repairId)
-    await listMaintenanceAcceptance("token", warehouseId)
+    await listMaintenanceAcceptance(
+      "token",
+      warehouseId,
+      "PENDING",
+      3,
+      25,
+      repairId
+    )
 
     for (const [url, init] of fetchMock.mock.calls as Array<
       [string, RequestInit]
@@ -131,7 +139,14 @@ describe("maintenance lifecycle HTTP client", () => {
     expect(
       new URL(String(fetchMock.mock.calls[3]![0])).searchParams.get("repairIds")
     ).toBe(`${repairId},${secondRepairId}`)
-    expect(String(fetchMock.mock.calls[5]![0])).toContain("state=PENDING")
+    expect(
+      new URL(String(fetchMock.mock.calls[3]![0])).searchParams.get("estimateId")
+    ).toBe(estimateId)
+    const acceptanceUrl = new URL(String(fetchMock.mock.calls[5]![0]))
+    expect(acceptanceUrl.searchParams.get("state")).toBe("PENDING")
+    expect(acceptanceUrl.searchParams.get("page")).toBe("3")
+    expect(acceptanceUrl.searchParams.get("size")).toBe("25")
+    expect(acceptanceUrl.searchParams.get("repairId")).toBe(repairId)
   })
 
   it("preserves projected worker evidence in a repair stage", async () => {

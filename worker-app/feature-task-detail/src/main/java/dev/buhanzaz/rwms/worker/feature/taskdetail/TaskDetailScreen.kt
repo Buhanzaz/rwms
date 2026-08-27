@@ -136,8 +136,12 @@ fun TaskDetailScreen(
         sourceMedia = detail?.sourceMedia.orEmpty(),
     )
     val generalSourceMedia = sourceMediaPresentation.general
-    val routeIndex = detail?.routeIndex ?: task?.routeIndex ?: 0
-    val routeStepCount = task?.routeStepCount ?: (routeIndex + 1)
+    val stageOrdinal = taskDetailStageOrdinal(
+        detailRouteStepIndex = detail?.routeStepIndex,
+        detailRouteStepCount = detail?.routeStepCount,
+        cachedRouteStepIndex = task?.routeStepIndex,
+        cachedRouteStepCount = task?.routeStepCount,
+    )
     val repairComplexity = workerRepairComplexityLabel(detail?.title ?: task?.title)
     val showRepairComplexity = detail?.source?.type == "MAINTENANCE_REPAIR" || repairComplexity != null
     LaunchedEffect(timerSnapshot?.nextTransitionAt, timerSnapshot?.serverTime) {
@@ -212,7 +216,7 @@ fun TaskDetailScreen(
             item { TaskTimerCard(timing = timing, kpiColor = kpiTimeColor) }
             item {
                 TaskMetadataCard(
-                    stage = workerTaskStageOrdinal(routeIndex, routeStepCount, "/"),
+                    stage = stageOrdinal,
                     priority = detail?.priority ?: task?.priority,
                     repairComplexity = repairComplexity,
                     showRepairComplexity = showRepairComplexity,
@@ -372,6 +376,21 @@ fun TaskDetailScreen(
             }
         }
     }
+}
+
+/**
+ * Resolves the worker-package label from authoritative detail first and then the offline feed
+ * projection. Raw evidence route identities are deliberately absent from this presentation path.
+ */
+internal fun taskDetailStageOrdinal(
+    detailRouteStepIndex: Int?,
+    detailRouteStepCount: Int?,
+    cachedRouteStepIndex: Int?,
+    cachedRouteStepCount: Int?,
+): String {
+    val routeStepIndex = detailRouteStepIndex ?: cachedRouteStepIndex ?: 0
+    val routeStepCount = detailRouteStepCount ?: cachedRouteStepCount ?: (routeStepIndex + 1)
+    return workerTaskStageOrdinal(routeStepIndex, routeStepCount, "/")
 }
 
 /** Keeps task entry and resume actions visible in a safe-area-aware, full-width footer. */

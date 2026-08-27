@@ -342,6 +342,13 @@ class WorkerLocalStore @Inject constructor(
     fun decryptConflictCurrentEntry(conflict: WorkerConflictEntity): String? =
         conflict.encryptedCurrentEntry?.let(pendingPayloadCipher::decrypt)
 
+    /**
+     * Records the worker's explicit acceptance of the latest authoritative
+     * server state; background/full-feed refreshes never acknowledge conflicts.
+     */
+    suspend fun acknowledgeOpenConflicts(userId: String): Int =
+        database.conflictDao().resolveOpenForUser(userId, System.currentTimeMillis())
+
     suspend fun updateProgress(progress: WorkerSyncProgressEntity) = database.syncProgressDao().upsert(progress)
 
     suspend fun setSession(session: WorkerSessionEntity) = database.sessionDao().upsert(session)

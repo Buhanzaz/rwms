@@ -70,11 +70,28 @@ function statusForStage(
   return "WAITING"
 }
 
-function entriesByExternalTaskId(board: TaskBoardSnapshotDto | null) {
-  return new Map(
-    (board?.queues.flatMap((queue) => queue.entries) ?? [])
+function taskBoardEntries(board: TaskBoardSnapshotDto | null) {
+  const entries = board?.queues.flatMap((queue) => queue.entries) ?? []
+  const byId = new Map(entries.map((entry) => [entry.id, entry]))
+  const byLegacyRoute = new Map(
+    entries
       .filter((entry) => entry.externalTaskId)
       .map((entry) => [`${entry.externalTaskId!}:${entry.routeIndex}`, entry])
+  )
+  return { byId, byLegacyRoute }
+}
+
+function taskBoardEntryForStage(
+  entries: ReturnType<typeof taskBoardEntries>,
+  stage: RepairWorkStage
+) {
+  if (stage.taskSync.taskBoardEntryId) {
+    return entries.byId.get(stage.taskSync.taskBoardEntryId) ?? null
+  }
+  return (
+    entries.byLegacyRoute.get(
+      `${stage.taskSync.externalTaskId}:${stage.order}`
+    ) ?? null
   )
 }
 
@@ -333,20 +350,23 @@ async function toTask(
     decisionActorId?: string | null
   }
 ): Promise<RepairTaskDto> {
-  const entries = entriesByExternalTaskId(board)
-  const subtasks = repair.plan.stages
-    .map(requireRepairWorkStage)
-    .map((stage) =>
-      toSubtask(
-        stage,
-        entries.get(`${stage.taskSync.externalTaskId}:${stage.order}`) ?? null
-      )
-    )
-    .sort((left, right) => left.sortOrder - right.sortOrder)
-  const rentalItem = await rentalItemsClient.resolveById(
-    repair.warehouseId,
-    repair.rentalItemId
+  const entries = taskBoardEntries(board)
+  const stages = repair.plan.stages.map(requireRepairWorkStage)
+  const stageEntries = stages.map((stage) =>
+    taskBoardEntryForStage(entries, stage)
   )
+  const subtasks = stages
+    .map((stage, index) => toSubtask(stage, stageEntries[index] ?? null))
+    .sort((left, right) => left.sortOrder - right.sortOrder)
+  const boardCabinNumber = stageEntries
+    .map((entry) => entry?.unitNumber?.trim())
+    .find((value): value is string => Boolean(value))
+  const rentalItem = boardCabinNumber
+    ? null
+    : await rentalItemsClient.resolveById(
+        repair.warehouseId,
+        repair.rentalItemId
+      )
   return {
     id: repair.id,
     version: repair.version,
@@ -361,7 +381,7 @@ async function toTask(
         : null,
     warehouseId: repair.warehouseId,
     rentalItemId: repair.rentalItemId,
-    cabinNumber: rentalItem?.number ?? "",
+    cabinNumber: boardCabinNumber ?? rentalItem?.number ?? "",
     actorId: repair.actor.actorId,
     sourceParty:
       repair.sourceParty ??
@@ -652,11 +672,94 @@ const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 const QUEUE_CONFIRMATION_BACKOFF_MS = [100, 200, 400, 800, 1_000] as const
+const MAINTENANCE_PAGE_SIZE = 200
+const MAINTENANCE_REPAIR_ID_BATCH_SIZE = 100
+const MAINTENANCE_HYDRATION_CONCURRENCY = 8
 
 type QueueConfirmationWait = (delayMs: number) => Promise<void>
 
 function waitForQueueConfirmation(delayMs: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, delayMs))
+}
+
+async function mapWithConcurrency<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  mapper: (value: T, index: number) => Promise<R>
+) {
+  const results = new Array<R>(values.length)
+  let nextIndex = 0
+  await Promise.all(
+    Array.from(
+      { length: Math.min(concurrency, values.length) },
+      async () => {
+        while (nextIndex < values.length) {
+          const index = nextIndex
+          nextIndex += 1
+          results[index] = await mapper(values[index], index)
+        }
+      }
+    )
+  )
+  return results
+}
+
+async function allPendingAcceptance(
+  accessToken: string,
+  warehouseId: string,
+  repairId?: string
+) {
+  const items: MaintenanceAcceptanceProjection[] = []
+  let page = 0
+  let totalElements = Number.POSITIVE_INFINITY
+  while (items.length < totalElements) {
+    const response = await listMaintenanceAcceptance(
+      accessToken,
+      warehouseId,
+      "PENDING",
+      page,
+      MAINTENANCE_PAGE_SIZE,
+      repairId
+    )
+    items.push(...response.items)
+    totalElements = Number.isFinite(response.totalElements)
+      ? response.totalElements
+      : items.length
+    if (response.items.length === 0) break
+    page += 1
+  }
+  return items
+}
+
+async function repairsByIds(
+  accessToken: string,
+  warehouseId: string,
+  repairIds: string[]
+) {
+  const repairs = new Map<string, MaintenanceRepair>()
+  for (
+    let offset = 0;
+    offset < repairIds.length;
+    offset += MAINTENANCE_REPAIR_ID_BATCH_SIZE
+  ) {
+    const batch = repairIds.slice(
+      offset,
+      offset + MAINTENANCE_REPAIR_ID_BATCH_SIZE
+    )
+    const page = await listMaintenanceRepairs(accessToken, warehouseId, {
+      repairIds: batch,
+      page: 0,
+      size: batch.length,
+    })
+    page.items.forEach((repair) => repairs.set(repair.id, repair))
+  }
+  const missingRepairs = await mapWithConcurrency(
+    repairIds.filter((repairId) => !repairs.has(repairId)),
+    MAINTENANCE_HYDRATION_CONCURRENCY,
+    (repairId) => getMaintenanceRepair(accessToken, warehouseId, repairId)
+  )
+  missingRepairs.forEach((repair) => repairs.set(repair.id, repair))
+  return repairs
 }
 
 function hasPermanentQueueFailure(result: MaintenanceRepairCommandResult) {
@@ -709,12 +812,12 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
     repair: MaintenanceRepair
   ) {
     if (repair.acceptanceState === "PENDING") {
-      const page = await listMaintenanceAcceptance(
+      const projections = await allPendingAcceptance(
         accessToken,
         warehouseId,
-        "PENDING"
+        repair.id
       )
-      const projection = page.items.find(
+      const projection = projections.find(
         (candidate) => candidate.repairId === repair.id
       )
       return projection ? { readyAt: projection.readyAt } : undefined
@@ -724,23 +827,36 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
 
   async listPendingAcceptance(warehouseId: string) {
     const accessToken = await this.tokenProvider()
-    const [page, board] = await Promise.all([
-      listMaintenanceAcceptance(accessToken, warehouseId, "PENDING"),
+    const [projections, board] = await Promise.all([
+      allPendingAcceptance(accessToken, warehouseId),
       this.board(accessToken, warehouseId),
     ])
-    return Promise.all(
-      page.items.map(async (projection: MaintenanceAcceptanceProjection) =>
-        toTask(
-          await getMaintenanceRepair(
-            accessToken,
-            warehouseId,
-            projection.repairId
-          ),
-          this.rentalItemsClient,
-          board,
-          { readyAt: projection.readyAt }
-        )
-      )
+
+    if (projections.length === 0) return []
+
+    const repairIds = [
+      ...new Set(projections.map((projection) => projection.repairId)),
+    ]
+    const repairsById = await repairsByIds(
+      accessToken,
+      warehouseId,
+      repairIds
+    )
+
+    return mapWithConcurrency(
+      projections,
+      MAINTENANCE_HYDRATION_CONCURRENCY,
+      (projection: MaintenanceAcceptanceProjection) => {
+        const repair = repairsById.get(projection.repairId)
+        if (!repair) {
+          throw new Error(
+            `Сервис ремонтов не вернул приёмку ${projection.repairId}.`
+          )
+        }
+        return toTask(repair, this.rentalItemsClient, board, {
+          readyAt: projection.readyAt,
+        })
+      }
     )
   }
 
@@ -766,12 +882,17 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
   async getBySourceEstimateId(sourceEstimateId: string, warehouseId: string) {
     const accessToken = await this.tokenProvider()
     const [page, board] = await Promise.all([
-      listMaintenanceRepairs(accessToken, warehouseId),
+      listMaintenanceRepairs(accessToken, warehouseId, {
+        estimateId: sourceEstimateId,
+        page: 0,
+        size: 2,
+      }),
       this.board(accessToken, warehouseId),
     ])
-    const repair = page.items.find(
-      (candidate) => candidate.estimateId === sourceEstimateId
-    )
+    if (page.totalElements > 1 || page.items.length > 1) {
+      throw new Error("Сервис ремонтов вернул несколько ремонтов одной сметы.")
+    }
+    const repair = page.items[0]
     return repair ? toTask(repair, this.rentalItemsClient, board) : null
   }
 
@@ -808,7 +929,7 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
         accessToken,
         command.warehouseId,
         command.sourceRepairTaskId,
-        createMaintenanceIdempotencyKey(),
+        command.creationIdempotencyKey,
         {
           expectedVersion: command.sourceRepairTaskVersion,
           reason: command.reason.trim(),
@@ -838,7 +959,7 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
     }
     return createDirectMaintenanceRepair(
       accessToken,
-      createMaintenanceIdempotencyKey(),
+      command.creationIdempotencyKey,
       {
         warehouseId: command.warehouseId,
         rentalItemId: command.rentalItemId,

@@ -12,6 +12,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
+import org.json.JSONObject
 
 @Database(
     entities = [
@@ -27,7 +28,7 @@ import javax.inject.Singleton
         WorkerConflictEntity::class,
         WorkerInvalidationEntity::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = true,
 )
 /**
@@ -438,6 +439,46 @@ abstract class WorkerDatabase : RoomDatabase() {
                 )
             }
         }
+
+        /**
+         * Adds the worker-package ordinal without treating the raw evidence route identity as
+         * display order. Legacy projections show the first package until an authoritative refresh.
+         */
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `worker_task` ADD COLUMN `routeStepIndex` INTEGER NOT NULL DEFAULT 0",
+                )
+                val cachedDetails = buildList {
+                    db.query(
+                        """
+                        SELECT detail.`localId`, detail.`sanitizedDetailJson`,
+                               COALESCE(task.`routeStepCount`, 1)
+                        FROM `worker_task_detail` AS detail
+                        LEFT JOIN `worker_task` AS task
+                          ON task.`userId` = detail.`userId`
+                         AND task.`entryId` = detail.`entryId`
+                        """.trimIndent(),
+                    ).use { cursor ->
+                        while (cursor.moveToNext()) {
+                            add(Triple(cursor.getString(0), cursor.getString(1), cursor.getInt(2)))
+                        }
+                    }
+                }
+                cachedDetails.forEach { (localId, encoded, routeStepCount) ->
+                    val migrated = runCatching {
+                        JSONObject(encoded)
+                            .put("routeStepIndex", 0)
+                            .put("routeStepCount", routeStepCount.coerceAtLeast(1))
+                            .toString()
+                    }.getOrNull() ?: return@forEach
+                    db.execSQL(
+                        "UPDATE `worker_task_detail` SET `sanitizedDetailJson` = ? WHERE `localId` = ?",
+                        arrayOf(migrated, localId),
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -461,6 +502,7 @@ object WorkerDatabaseModule {
                 WorkerDatabase.MIGRATION_7_8,
                 WorkerDatabase.MIGRATION_8_9,
                 WorkerDatabase.MIGRATION_9_10,
+                WorkerDatabase.MIGRATION_10_11,
             )
             .build()
 }

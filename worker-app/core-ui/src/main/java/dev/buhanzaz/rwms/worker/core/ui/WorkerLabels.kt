@@ -25,9 +25,9 @@ fun workerRepairComplexityLabel(value: String?): String? =
         else -> null
     }
 
-/** Formats the zero-based server route index against its authoritative route size. */
-fun workerTaskStageOrdinal(routeIndex: Int, routeStepCount: Int, separator: String): String {
-    val current = routeIndex.coerceAtLeast(0) + 1
+/** Formats the zero-based worker-package ordinal against its authoritative package count. */
+fun workerTaskStageOrdinal(routeStepIndex: Int, routeStepCount: Int, separator: String): String {
+    val current = routeStepIndex.coerceAtLeast(0) + 1
     val total = routeStepCount.coerceAtLeast(current)
     return "$current$separator$total"
 }

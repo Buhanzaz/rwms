@@ -3088,17 +3088,27 @@ components:
       additionalProperties: false
     WorkerFeedEntry:
       type: object
-      required: [entryId, version, taskId, routeIndex, routeStepCount, title, unitNumber, taskText, scheduledDate, deadlineAt, priority, queuePosition, entryType, pinned, status, availabilityMode, driverAudience, plannedDurationMinutes, activeStartedAt, activeWorkSeconds, timerSnapshot, assignments, readyEvidenceCount, resultPhotoMinCount]
+      required: [entryId, version, taskId, routeIndex, routeStepIndex, routeStepCount, title, unitNumber, taskText, scheduledDate, deadlineAt, priority, queuePosition, entryType, pinned, status, availabilityMode, driverAudience, plannedDurationMinutes, activeStartedAt, activeWorkSeconds, timerSnapshot, assignments, readyEvidenceCount, resultPhotoMinCount]
       properties:
         entryId: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         taskId: { type: string, format: uuid }
-        routeIndex: { type: integer, minimum: 0 }
+        routeIndex:
+          description: Raw persisted route-row identity used by evidence and commands; it is not an execution-package ordinal.
+          type: integer
+          minimum: 0
+        routeStepIndex:
+          description: >-
+            Zero-based worker execution-package ordinal. Every non-maintenance route row is one
+            package. For MAINTENANCE_REPAIR, consecutive rows of the same physical queue share an
+            ordinal; the same queue after another queue starts a new package.
+          type: integer
+          minimum: 0
         routeStepCount:
           description: >-
-            Authoritative total number of worker-executable subtasks. For MAINTENANCE_REPAIR this
-            is the number of distinct physical queues, including compatibility packaging of an
-            immutable started legacy route; other task sources count persisted route steps.
+            Authoritative total number of worker execution packages. Every non-maintenance route
+            row is one package. For MAINTENANCE_REPAIR this counts consecutive same-physical-queue
+            segments, so an A-B-A route has three packages.
           type: integer
           minimum: 1
         title: { type: string, minLength: 1 }
@@ -3262,13 +3272,29 @@ components:
       additionalProperties: false
     WorkerTaskDetail:
       type: object
-      required: [entryId, version, taskId, source, routeIndex, title, description, object, taskText, scheduledDate, deadlineAt, priority, queuePosition, status, availabilityMode, plannedDurationMinutes, activeStartedAt, activeWorkSeconds, timerSnapshot, audienceSelectors, assignments, works, materials, comments, sourceMedia, evidence, relatedSteps, resultPhotoMinCount, completionAllowed]
+      required: [entryId, version, taskId, source, routeIndex, routeStepIndex, routeStepCount, title, description, object, taskText, scheduledDate, deadlineAt, priority, queuePosition, status, availabilityMode, plannedDurationMinutes, activeStartedAt, activeWorkSeconds, timerSnapshot, audienceSelectors, assignments, works, materials, comments, sourceMedia, evidence, relatedSteps, resultPhotoMinCount, completionAllowed]
       properties:
         entryId: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         taskId: { type: string, format: uuid }
         source: { oneOf: [{ $ref: '#/components/schemas/TaskSourceReference' }, { type: 'null' }] }
-        routeIndex: { type: integer, minimum: 0 }
+        routeIndex:
+          description: Raw persisted route-row identity used by evidence and commands; it is not an execution-package ordinal.
+          type: integer
+          minimum: 0
+        routeStepIndex:
+          description: >-
+            Zero-based worker execution-package ordinal. Consecutive MAINTENANCE_REPAIR rows in one
+            physical queue share the ordinal; all other route rows retain one package each.
+          type: integer
+          minimum: 0
+        routeStepCount:
+          description: >-
+            Authoritative total number of worker execution packages. Consecutive
+            MAINTENANCE_REPAIR rows in one physical queue count as one package; all other route rows
+            count individually.
+          type: integer
+          minimum: 1
         title: { type: string, minLength: 1 }
         description: { oneOf: [{ type: string }, { type: 'null' }] }
         object: { oneOf: [{ $ref: '#/components/schemas/WorkerTaskObject' }, { type: 'null' }] }

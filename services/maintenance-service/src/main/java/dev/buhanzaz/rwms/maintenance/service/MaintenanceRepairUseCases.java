@@ -12,6 +12,7 @@ import dev.buhanzaz.rwms.maintenance.domain.RepairKind;
 import dev.buhanzaz.rwms.maintenance.domain.RepairOrigin;
 import dev.buhanzaz.rwms.maintenance.domain.RepairReclassificationState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStage;
+import dev.buhanzaz.rwms.maintenance.domain.RepairStageState;
 import dev.buhanzaz.rwms.maintenance.domain.RentalItemFactProjection;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventStore;
 import dev.buhanzaz.rwms.maintenance.integration.MaintenanceDependencyGateway;
@@ -87,13 +88,15 @@ public class MaintenanceRepairUseCases {
 
   /**
    * Reads one filtered repair page in PostgreSQL before hydrating the response models. An optional
-   * bounded ID set lets task-board presentation resolve only its visible maintenance sources.
+   * exact estimate ID supports bounded estimate-detail lookup, while a bounded repair ID set lets
+   * task-board presentation resolve only its visible maintenance sources.
    */
   public PageResponse<RepairResponse> repairs(
       UUID warehouseId,
       RepairExecutionState executionState,
       RepairAcceptanceState acceptanceState,
       UUID rentalItemId,
+      UUID estimateId,
       Set<UUID> repairIds,
       int page,
       int size) {
@@ -112,6 +115,9 @@ public class MaintenanceRepairUseCases {
           }
           if (rentalItemId != null) {
             predicates.add(criteria.equal(root.get("rentalItemId"), rentalItemId));
+          }
+          if (estimateId != null) {
+            predicates.add(criteria.equal(root.get("estimateId"), estimateId));
           }
           if (repairIds != null) {
             predicates.add(root.get("id").in(repairIds));
@@ -276,13 +282,19 @@ public class MaintenanceRepairUseCases {
     return new WarehouseAdmissionPreflight<>(request.warehouseId(), null);
   }
 
+  /**
+   * Serializes direct creation on the maintenance-owned rental-item fact, then rechecks the exact
+   * idempotency receipt under that fence before enforcing the single active primary-root invariant.
+   */
   private CreateResult<RepairResponse> createDirectRepairInTransaction(
       UUID subjectId, UUID key, CreateDirectRepairRequest request) {
     String requestHash = commandSupport.hash(request);
-    Optional<JsonNode> replay = idempotency.replay(subjectId, "repair.direct", key, requestHash);
-    if (replay.isPresent()) return new CreateResult<>(commandSupport.read(replay.get(), RepairResponse.class), true);
-    RentalItemFactProjection rentalItem = repairModelSupport.requireRentalItemFact(
+    RentalItemFactProjection rentalItem = repairModelSupport.requireRentalItemFactForUpdate(
         request.rentalItemId(), request.warehouseId());
+    Optional<JsonNode> replay = idempotency.replay(subjectId, "repair.direct", key, requestHash);
+    if (replay.isPresent()) {
+      return new CreateResult<>(commandSupport.read(replay.get(), RepairResponse.class), true);
+    }
     repairModelSupport.requireDirectRepairSourceStatus(rentalItem);
     if (request.lines() != null
         && request.lines().isEmpty()
@@ -292,6 +304,14 @@ public class MaintenanceRepairUseCases {
           "An empty direct repair requires an unoccupied rental item");
     }
     mediaSupport.validateCoverMediaSelection(request.mediaReferences(), request.coverMediaId());
+    if (!repairs
+        .findActivePrimaryRootsForUpdate(
+            request.rentalItemId(), PageRequest.of(0, 1))
+        .isEmpty()) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Rental item already has an active primary repair chain");
+    }
     MaintenanceRepair draft = MaintenanceRepair.primary(
         request.warehouseId(), request.rentalItemId(), rentalItem.getAggregateVersion(), null,
         RepairOrigin.DIRECT_REPAIR,
@@ -983,19 +1003,42 @@ public class MaintenanceRepairUseCases {
     return new CreateResult<>(response, false);
   }
 
-  public List<AcceptanceProjection> acceptance(UUID warehouseId) {
-    return repairs.findAllByWarehouseIdOrderByCreatedAtDesc(warehouseId).stream()
-        .filter(value -> value.getAcceptanceState() == RepairAcceptanceState.PENDING
-            || value.getAcceptanceState() == RepairAcceptanceState.IN_REWORK)
-        .filter(this::hasInventoryExecutionCompletion)
-        // A source repair is not actionable while a child rework is still being
-        // planned, executed or awaiting its own acceptance. Returning both
-        // chain nodes made clients offer a terminal action that must be rejected.
-        .filter(value -> !repairLifecycleSupport.hasUnresolvedRework(value.getId()))
-        .map(value -> new AcceptanceProjection(
-            value.getId(), commandSupport.rootId(value), value.getWarehouseId(), value.getRentalItemId(),
-            value.getExecutionState(), value.getAcceptanceState(), value.getVersion(), value.getUpdatedAt()))
-        .toList();
+  /**
+   * Reads one actionable acceptance page with state, inventory-completion and unresolved-rework
+   * predicates applied by PostgreSQL before projection materialization.
+   */
+  public PageResponse<AcceptanceProjection> acceptance(
+      UUID warehouseId,
+      RepairAcceptanceState state,
+      UUID repairId,
+      int page,
+      int size) {
+    Page<MaintenanceRepair> result =
+        repairs.findAcceptancePage(
+            warehouseId,
+            repairId,
+            state,
+            PageRequest.of(
+                page,
+                size,
+                Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"))));
+    return new PageResponse<>(
+        result.getContent().stream()
+            .map(
+                value ->
+                    new AcceptanceProjection(
+                        value.getId(),
+                        commandSupport.rootId(value),
+                        value.getWarehouseId(),
+                        value.getRentalItemId(),
+                        value.getExecutionState(),
+                        value.getAcceptanceState(),
+                        value.getVersion(),
+                        value.getUpdatedAt()))
+            .toList(),
+        result.getNumber(),
+        result.getSize(),
+        result.getTotalElements());
   }
 
   /**
@@ -1004,16 +1047,30 @@ public class MaintenanceRepairUseCases {
    * registered and completed its execution route.
    */
   private void requireInventoryExecutionCompletion(MaintenanceRepair repair) {
-    if (!hasInventoryExecutionCompletion(repair)) {
+    if (!hasConfirmedInventoryTaskBoardCompletion(repair)) {
       throw new MaintenanceConflictException(
           "MAINTENANCE_STATE_CONFLICT",
           "Inventory publication is not proof that repair execution completed");
     }
   }
 
-  /** Returns whether inventory-origin work has task-board execution evidence. */
-  private boolean hasInventoryExecutionCompletion(MaintenanceRepair repair) {
-    return repair.getOrigin() != RepairOrigin.INVENTORY || repair.getTaskBoardVersion() != null;
+  /**
+   * Returns whether every inventory-origin route stage has a complete task-board execution
+   * identity. Registration versions alone and system-recorded historical completion are not
+   * worker completion proof.
+   */
+  private boolean hasConfirmedInventoryTaskBoardCompletion(MaintenanceRepair repair) {
+    if (repair.getOrigin() != RepairOrigin.INVENTORY) return true;
+    List<RepairStage> stages = repairStages.findAllByRepairIdOrderByStageNo(repair.getId());
+    return !stages.isEmpty()
+        && stages.stream()
+            .allMatch(
+                stage ->
+                    stage.getState() == RepairStageState.DONE
+                        && stage.getExternalQueueEntryId() != null
+                        && stage.getTaskBoardVersion() != null
+                        && stage.getCompletedEventId() != null
+                        && stage.getCompletedAt() != null);
   }
 
 }

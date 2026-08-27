@@ -21,4 +21,18 @@ class WorkerSyncRetryPolicyTest {
         assertThat(backoff).isAtLeast(10_000L)
         assertThat(backoff).isAtMost(15_000L)
     }
+
+    @Test
+    fun `persisted conflict completes WorkManager run for explicit user acknowledgement`() {
+        assertThat(workerRunDisposition(WorkerSyncOutcome.Conflict("stale"), runAttemptCount = 0))
+            .isEqualTo(WorkerRunDisposition.SUCCESS)
+    }
+
+    @Test
+    fun `only retry outcome consumes bounded WorkManager retry budget`() {
+        assertThat(workerRunDisposition(WorkerSyncOutcome.Retry("offline"), runAttemptCount = 2))
+            .isEqualTo(WorkerRunDisposition.RETRY)
+        assertThat(workerRunDisposition(WorkerSyncOutcome.Retry("offline"), runAttemptCount = 3))
+            .isEqualTo(WorkerRunDisposition.FAILURE)
+    }
 }

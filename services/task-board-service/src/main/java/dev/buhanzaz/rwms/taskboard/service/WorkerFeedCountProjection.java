@@ -10,14 +10,13 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * Loads authoritative route cardinality and ready-evidence counts for one bounded worker-feed
- * page.
+ * Loads authoritative route package coordinates and ready-evidence counts for one bounded
+ * worker-feed page.
  *
  * <p>The projection reads every persisted route step for each selected task while returning one
- * row per visible entry. A maintenance route counts physical queues because one queue is one
- * worker-executable subtask even while a started historical task still retains several persisted
- * content rows for that queue. Other task sources remain entry-counted. Both counts are batched in
- * one database round trip.
+ * row per visible entry. Consecutive maintenance rows in one physical queue form one execution
+ * package; a queue that recurs after another queue starts a new package. Other task sources keep
+ * one package per persisted row. Coordinates and counts are batched in one database round trip.
  */
 @Component
 class WorkerFeedCountProjection {
@@ -52,16 +51,40 @@ class WorkerFeedCountProjection {
                 left join task_sync_source source
                   on source.board_task_id=selected_tasks.task_id
             ),
-            route_counts as (
-              select route.task_id,
-                     case when task_sources.maintenance_repair
-                          then count(distinct route.queue_id)::integer
-                          else count(*)::integer
-                      end route_step_count
+            route_boundaries as (
+              select route.id entry_id,
+                     route.task_id,
+                     route.route_index,
+                     case
+                       when not task_sources.maintenance_repair then 1
+                       when row_number() over (
+                              partition by route.task_id
+                              order by route.route_index,route.id)=1 then 1
+                       when lag(route.queue_id) over (
+                              partition by route.task_id
+                              order by route.route_index,route.id)
+                            is distinct from route.queue_id then 1
+                       else 0
+                     end package_start
                 from queue_entry route
                 join selected_tasks on selected_tasks.task_id=route.task_id
                 join task_sources on task_sources.task_id=route.task_id
-               group by route.task_id,task_sources.maintenance_repair
+            ),
+            route_packages as (
+              select entry_id,
+                     task_id,
+                     (sum(package_start) over (
+                        partition by task_id
+                        order by route_index,entry_id
+                        rows between unbounded preceding and current row)-1)::integer
+                       route_step_index
+                from route_boundaries
+            ),
+            route_counts as (
+              select task_id,
+                     (max(route_step_index)+1)::integer route_step_count
+                from route_packages
+               group by task_id
             ),
             evidence_counts as (
               select evidence.entry_id,
@@ -71,9 +94,13 @@ class WorkerFeedCountProjection {
                group by evidence.entry_id
             )
             select selected.entry_id,
+                   route_packages.route_step_index,
                    route_counts.route_step_count,
                    coalesce(evidence_counts.ready_evidence_count,0) ready_evidence_count
               from selected
+              join route_packages
+                on route_packages.entry_id=selected.entry_id
+               and route_packages.task_id=selected.task_id
               join route_counts on route_counts.task_id=selected.task_id
               left join evidence_counts on evidence_counts.entry_id=selected.entry_id
             """
@@ -81,6 +108,7 @@ class WorkerFeedCountProjection {
             (result, row) ->
                 new Counts(
                     result.getObject("entry_id", UUID.class),
+                    result.getInt("route_step_index"),
                     result.getInt("route_step_count"),
                     result.getInt("ready_evidence_count")),
             parameters.toArray());
@@ -89,6 +117,7 @@ class WorkerFeedCountProjection {
     return Map.copyOf(byEntry);
   }
 
-  /** Counts required to render one selected worker-feed entry. */
-  record Counts(UUID entryId, int routeStepCount, int readyEvidenceCount) {}
+  /** Package coordinates and evidence count required to render one selected native entry. */
+  record Counts(
+      UUID entryId, int routeStepIndex, int routeStepCount, int readyEvidenceCount) {}
 }

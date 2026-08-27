@@ -45,7 +45,10 @@ public class MaintenanceRepairController {
   private final MaintenanceAuthorizer access;
   private final PropertyDispositionApplicationService dispositions;
 
-  /** Returns one database-paged repair collection with an optional bounded ID filter. */
+  /**
+   * Returns one database-paged repair collection with optional exact estimate and bounded repair
+   * ID filters.
+   */
   @GetMapping("/repairs")
   public ResponseEntity<PageResponse<RepairResponse>> list(
       @AuthenticationPrincipal Jwt jwt,
@@ -55,6 +58,7 @@ public class MaintenanceRepairController {
       @RequestParam(required = false) RepairExecutionState executionState,
       @RequestParam(required = false) RepairAcceptanceState acceptanceState,
       @RequestParam(required = false) UUID rentalItemId,
+      @RequestParam(required = false) UUID estimateId,
       @RequestParam(required = false) @Size(max = 200) Set<UUID> repairIds,
       @RequestHeader(name = HttpHeaders.IF_NONE_MATCH, required = false) String ifNoneMatch) {
     access.requireRead(jwt, warehouseId);
@@ -64,6 +68,7 @@ public class MaintenanceRepairController {
             executionState,
             acceptanceState,
             rentalItemId,
+            estimateId,
             repairIds,
             page,
             size);
@@ -80,6 +85,8 @@ public class MaintenanceRepairController {
             + acceptanceState
             + ':'
             + rentalItemId
+            + ':'
+            + estimateId
             + ':'
             + repairIdsKey(repairIds),
         response,
@@ -238,18 +245,20 @@ public class MaintenanceRepairController {
     return response.body(result.response());
   }
 
+  /**
+   * Returns a warehouse-fenced actionable acceptance page, optionally narrowed to one exact
+   * repair.
+   */
   @GetMapping("/acceptance")
   public PageResponse<AcceptanceProjection> acceptance(
       @AuthenticationPrincipal Jwt jwt,
       @RequestParam UUID warehouseId,
       @RequestParam(defaultValue = "0") @Min(0) int page,
       @RequestParam(defaultValue = "50") @Min(1) @Max(200) int size,
-      @RequestParam(required = false) RepairAcceptanceState state) {
+      @RequestParam(required = false) RepairAcceptanceState state,
+      @RequestParam(required = false) UUID repairId) {
     access.requireRead(jwt, warehouseId);
-    List<AcceptanceProjection> values = service.acceptance(warehouseId).stream()
-        .filter(value -> state == null || value.acceptanceState() == state)
-        .toList();
-    return page(values, page, size);
+    return service.acceptance(warehouseId, state, repairId, page, size);
   }
 
   private RepairResponse requireWarehouse(UUID id, UUID warehouseId) {

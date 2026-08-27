@@ -8,6 +8,7 @@ import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventStore;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventSourcing;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardProjectionWriter;
+import dev.buhanzaz.rwms.taskboard.eventing.WorkerFeedRevisionStore;
 import dev.buhanzaz.rwms.taskboard.repository.*;
 import dev.buhanzaz.rwms.taskboard.service.WarehouseLifecycleFence.AdmissionPermit;
 import dev.buhanzaz.rwms.taskboard.service.WarehouseLifecycleGateway.OperationDirection;
@@ -61,6 +62,7 @@ class TaskBoardExternalRegistrationService {
   private final WorkQueueClassBindingRepository bindings;
   private final WorkforceService workforce;
   private final WorkerInvalidationHub workerInvalidations;
+  private final WorkerFeedRevisionStore workerFeedRevisions;
   private final DriverTaskAudienceService driverAudiences;
   private final TaskBoardEntryOwnerProofService ownerProofs;
   private final JdbcTemplate jdbc;
@@ -80,6 +82,7 @@ class TaskBoardExternalRegistrationService {
       WorkQueueClassBindingRepository bindings,
       WorkforceService workforce,
       WorkerInvalidationHub workerInvalidations,
+      WorkerFeedRevisionStore workerFeedRevisions,
       DriverTaskAudienceService driverAudiences,
       TaskBoardEntryOwnerProofService ownerProofs,
       JdbcTemplate jdbc) {
@@ -97,6 +100,7 @@ class TaskBoardExternalRegistrationService {
     this.bindings = bindings;
     this.workforce = workforce;
     this.workerInvalidations = workerInvalidations;
+    this.workerFeedRevisions = workerFeedRevisions;
     this.driverAudiences = driverAudiences;
     this.ownerProofs = ownerProofs;
     this.jdbc = jdbc;
@@ -726,10 +730,11 @@ class TaskBoardExternalRegistrationService {
 
     Runnable dispatch =
         () -> {
-          long revision = workerRevision();
+          long revision = workerFeedRevisions.current(task.getWarehouseId());
           notifications.forEach(
               notification ->
                   workerInvalidations.taskAvailable(
+                      task.getWarehouseId(),
                       notification.surface(),
                       notification.workerIds(),
                       notification.entryId(),
@@ -807,15 +812,6 @@ class TaskBoardExternalRegistrationService {
     }
     return eligibleWorkerIds(task.getWarehouseId(), queue, surface);
   }
-
-  private long workerRevision() {
-    Long revision =
-        jdbc.queryForObject(
-            "select coalesce(sum(current_version + 1), 0)::bigint from event_stream_head",
-            Long.class);
-    return revision == null ? 0 : revision;
-  }
-
 
   private BoardTask requireTask(UUID warehouseId, UUID id) {
     BoardTask task = tasks.findById(id).orElseThrow(() -> new NotFoundException("Задача не найдена"));

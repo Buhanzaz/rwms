@@ -36,23 +36,18 @@ export function RepairReworkWizardDialog({
       return
     }
 
-    const state: RepairsLocationState = {
-      workspaceEntry: true,
-      reworkSeed: {
-        type: "repair-rework-seed-v1",
-        warehouseId: task.warehouseId,
-        sourceRepairTaskId: task.id,
-        sourceRepairTaskVersion: task.version,
-        sourceOrigin: task.origin,
-        sourceEstimateId: task.sourceEstimateId,
-        sourceEstimateVersion: task.sourceEstimateVersion,
-        rentalItemId: task.rentalItemId,
-        lines: [],
-        selectedLineageRootIds,
-      },
-    }
+    const state: RepairsLocationState = { workspaceEntry: true }
+    const params = new URLSearchParams({
+      create: "1",
+      reworkWarehouseId: task.warehouseId,
+      reworkSourceId: task.id,
+      reworkSourceVersion: String(task.version),
+    })
+    selectedLineageRootIds.forEach((lineageRootId) =>
+      params.append("reworkLineage", lineageRootId)
+    )
     onOpenChange(false)
-    navigate("/repairs?create=1", { state })
+    navigate(`/repairs?${params.toString()}`, { state })
   }
 
   return (

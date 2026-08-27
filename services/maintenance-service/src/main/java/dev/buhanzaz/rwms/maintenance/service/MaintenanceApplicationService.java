@@ -189,13 +189,17 @@ public class MaintenanceApplicationService {
     return facadeResult(estimates.amendEstimate(subjectId, key, id, request));
   }
 
-  /** Delegates the warehouse-fenced, database-paged repair collection read. */
+  /**
+   * Delegates the warehouse-fenced, database-paged repair collection read, including its exact
+   * estimate and bounded repair ID filters.
+   */
   @Transactional(readOnly = true)
   public PageResponse<RepairResponse> repairs(
       UUID warehouseId,
       RepairExecutionState executionState,
       RepairAcceptanceState acceptanceState,
       UUID rentalItemId,
+      UUID estimateId,
       Set<UUID> repairIds,
       int page,
       int size) {
@@ -204,6 +208,7 @@ public class MaintenanceApplicationService {
         executionState,
         acceptanceState,
         rentalItemId,
+        estimateId,
         repairIds,
         page,
         size);
@@ -300,9 +305,18 @@ public class MaintenanceApplicationService {
     return facadeResult(repairs.accept(subjectId, key, id, request));
   }
 
+  /**
+   * Delegates the warehouse-fenced actionable acceptance read; all filters and pagination remain
+   * in the maintenance database.
+   */
   @Transactional(readOnly = true)
-  public List<AcceptanceProjection> acceptance(UUID warehouseId) {
-    return repairs.acceptance(warehouseId);
+  public PageResponse<AcceptanceProjection> acceptance(
+      UUID warehouseId,
+      RepairAcceptanceState state,
+      UUID repairId,
+      int page,
+      int size) {
+    return repairs.acceptance(warehouseId, state, repairId, page, size);
   }
   @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
   public void applyInboundMediaFact(

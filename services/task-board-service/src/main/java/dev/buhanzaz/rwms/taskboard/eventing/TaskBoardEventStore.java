@@ -43,6 +43,7 @@ public class TaskBoardEventStore {
   private final TaskBoardEventPayloadPolicy payloadPolicy;
   private final TaskBoardCorrelationContextProvider correlations;
   private final TaskBoardActorReferenceProvider actors;
+  private final WorkerFeedRevisionStore workerFeedRevisions;
 
   @Transactional(propagation = Propagation.MANDATORY)
   public long initialize(
@@ -255,6 +256,7 @@ public class TaskBoardEventStore {
           payloadHash,
           recordedAt);
     }
+    workerFeedRevisions.advance(aggregateType, payload);
   }
 
   private long eventsSinceSnapshotAnchor(TaskBoardAggregateType aggregateType, UUID aggregateId) {

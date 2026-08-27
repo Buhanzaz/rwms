@@ -6,12 +6,14 @@ import java.lang.reflect.Method
 import java.lang.reflect.Proxy
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
@@ -201,6 +203,9 @@ class WorkerGatewayApiContractBoundaryTest {
         val evidenceJson = json.encodeToString(evidenceRequest)
 
         assertThat(detail.entryId).isEqualTo("44444444-4444-4444-4444-444444444444")
+        assertThat(detail.routeIndex).isEqualTo(41)
+        assertThat(detail.routeStepIndex).isEqualTo(1)
+        assertThat(detail.routeStepCount).isEqualTo(3)
         assertThat(actionResult.entry).isEqualTo(detail)
         assertThat(evidence.state).isEqualTo("RESERVED")
         assertThat(json.parseToJsonElement(actionJson).jsonObject.keys).containsExactly(
@@ -216,6 +221,16 @@ class WorkerGatewayApiContractBoundaryTest {
         assertThat(actionJson).contains("\"evidenceId\":null")
         assertThat(evidenceJson).contains("\"contentType\":\"image/webp\"")
         assertThat(evidenceJson).contains("\"sha256\":\"${"a".repeat(64)}\"")
+        assertThrows(SerializationException::class.java) {
+            json.decodeFromString<WorkerTaskDetailDto>(
+                detailFixture.replace("  \"routeStepIndex\":1,\n", ""),
+            )
+        }
+        assertThrows(SerializationException::class.java) {
+            json.decodeFromString<WorkerTaskDetailDto>(
+                detailFixture.replace("  \"routeStepCount\":3,\n", ""),
+            )
+        }
     }
 
     @Test
@@ -450,7 +465,9 @@ private fun canonicalWorkerTaskDetailFixture(): String =
       "version":9,
       "taskId":"55555555-5555-5555-5555-555555555555",
       "source":null,
-      "routeIndex":0,
+      "routeIndex":41,
+      "routeStepIndex":1,
+      "routeStepCount":3,
       "title":"Inspect cabin",
       "description":null,
       "object":null,

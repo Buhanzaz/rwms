@@ -17,7 +17,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
- * Holds native-surface- and worker-scoped SSE connections and sends invalidation signals.
+ * Holds warehouse-, native-surface- and worker-scoped SSE connections and sends invalidation
+ * signals.
  *
  * <p>An event never grants data access or transports a complete task projection. The worker app
  * must reload the authorized feed after receiving it, which preserves authorization and avoids
@@ -40,8 +41,9 @@ public class WorkerInvalidationHub {
   }
 
   /** Opens one bounded native-surface stream and immediately emits the current feed revision. */
-  public SseEmitter subscribe(MobileTaskSurface surface, UUID workerId, long revision) {
-    SubscriptionKey key = new SubscriptionKey(surface, workerId);
+  public SseEmitter subscribe(
+      UUID warehouseId, MobileTaskSurface surface, UUID workerId, long revision) {
+    SubscriptionKey key = new SubscriptionKey(warehouseId, surface, workerId);
     SseEmitter emitter = emitterFactory.get();
     emitters.computeIfAbsent(key, ignored -> new CopyOnWriteArraySet<>()).add(emitter);
     emitter.onCompletion(() -> remove(key, emitter));
@@ -61,12 +63,17 @@ public class WorkerInvalidationHub {
 
   /** Broadcasts an action invalidation without leaking its entry ID to the other native surface. */
   public void actionApplied(
-      MobileTaskSurface actorSurface, UUID actorWorkerId, UUID entryId, long revision) {
-    actionApplied(actorSurface, actorWorkerId, entryId, revision, Set.of());
+      UUID warehouseId,
+      MobileTaskSurface actorSurface,
+      UUID actorWorkerId,
+      UUID entryId,
+      long revision) {
+    actionApplied(warehouseId, actorSurface, actorWorkerId, entryId, revision, Set.of());
   }
 
   /** Broadcasts an action and exposes JOIN identity only to eligible WorkerApp streams. */
   public void actionApplied(
+      UUID warehouseId,
       MobileTaskSurface actorSurface,
       UUID actorWorkerId,
       UUID entryId,
@@ -75,6 +82,7 @@ public class WorkerInvalidationHub {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
     emitters.forEach(
         (key, workerEmitters) -> {
+          if (!key.warehouseId().equals(warehouseId)) return;
           boolean actor =
               key.surface() == actorSurface && key.workerId().equals(actorWorkerId);
           boolean joinAvailable =
@@ -95,10 +103,11 @@ public class WorkerInvalidationHub {
   }
 
   /** Broadcasts a projection-only feed invalidation without exposing an entry identity. */
-  public void feedChanged(long revision) {
+  public void feedChanged(UUID warehouseId, long revision) {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
     emitters.forEach(
         (key, workerEmitters) -> {
+          if (!key.warehouseId().equals(warehouseId)) return;
           WorkerInvalidationEvent event =
               new WorkerInvalidationEvent(
                   UUID.randomUUID(), revision, "FEED_CHANGED", null, now);
@@ -113,6 +122,7 @@ public class WorkerInvalidationHub {
    * can display any task data.
    */
   public void taskAvailable(
+      UUID warehouseId,
       MobileTaskSurface surface,
       Set<UUID> audienceWorkerIds,
       UUID entryId,
@@ -123,7 +133,7 @@ public class WorkerInvalidationHub {
     String type = urgent ? "URGENT_TASK" : "NEW_TASK";
     audienceWorkerIds.forEach(
         workerId -> {
-          SubscriptionKey key = new SubscriptionKey(surface, workerId);
+          SubscriptionKey key = new SubscriptionKey(warehouseId, surface, workerId);
           Set<SseEmitter> workerEmitters = emitters.get(key);
           if (workerEmitters == null) return;
           WorkerInvalidationEvent event =
@@ -167,6 +177,7 @@ public class WorkerInvalidationHub {
     if (workerEmitters.isEmpty()) emitters.remove(key, workerEmitters);
   }
 
-  /** Exact native capability and authenticated worker owning one SSE subscription set. */
-  private record SubscriptionKey(MobileTaskSurface surface, UUID workerId) {}
+  /** Exact warehouse, native capability and authenticated worker owning one SSE subscription set. */
+  private record SubscriptionKey(
+      UUID warehouseId, MobileTaskSurface surface, UUID workerId) {}
 }

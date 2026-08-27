@@ -129,7 +129,9 @@ public final class WorkerApiModels {
    * One worker-visible route entry with a server-owned classification for ordinary versus
    * logistics-driver tables.
    *
-   * @param routeStepCount positive number of steps in the task's authoritative route
+   * @param routeIndex raw persisted route-row and evidence identity
+   * @param routeStepIndex zero-based worker execution-package ordinal
+   * @param routeStepCount positive number of worker execution packages in the route
    * @param entryType server-owned executable-versus-shadow classification
    * @param pinned whether a manager fixed the task ahead of newly promoted unpinned work
    * @param driverAudience logistics driver audience, or {@code null} for ordinary work
@@ -139,6 +141,7 @@ public final class WorkerApiModels {
       long version,
       UUID taskId,
       int routeIndex,
+      int routeStepIndex,
       int routeStepCount,
       String title,
       String unitNumber,
@@ -211,7 +214,7 @@ public final class WorkerApiModels {
    * @param evidenceId stable evidence identity
    * @param version current evidence version
    * @param entryId route entry that owns the evidence
-   * @param routeIndex immutable route-step index
+   * @param routeIndex raw persisted route-row and evidence identity
    * @param workerId worker attributed by the server
    * @param workerGroupId group attributed by the server
    * @param capturedAt actual capture time
@@ -260,7 +263,9 @@ public final class WorkerApiModels {
    * @param version current entry version for worker commands
    * @param taskId parent task identity
    * @param source immutable source-domain reference, if any
-   * @param routeIndex immutable route-step index
+   * @param routeIndex raw persisted route-row and evidence identity
+   * @param routeStepIndex zero-based worker execution-package ordinal
+   * @param routeStepCount positive number of worker execution packages in the route
    * @param title task title
    * @param description worker-visible task description
    * @param taskObject optional domain object summary
@@ -292,6 +297,8 @@ public final class WorkerApiModels {
       UUID taskId,
       @JsonInclude(JsonInclude.Include.ALWAYS) TaskSourceReferenceDto source,
       int routeIndex,
+      int routeStepIndex,
+      int routeStepCount,
       String title,
       String description,
       @JsonProperty("object") WorkerTaskObject taskObject,

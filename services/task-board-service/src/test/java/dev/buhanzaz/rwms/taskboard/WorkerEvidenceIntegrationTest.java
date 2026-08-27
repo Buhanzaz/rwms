@@ -9,7 +9,9 @@ import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerDeviceRegist
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerFeedEntry;
 import dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerMediaReference;
+import dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerTaskDetail;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
 import dev.buhanzaz.rwms.taskboard.domain.TaskLane;
 import dev.buhanzaz.rwms.taskboard.domain.TaskSourceType;
@@ -171,6 +173,7 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
             .findFirst()
             .orElseThrow();
     assertThat(feedEntry.routeIndex()).isZero();
+    assertThat(feedEntry.routeStepIndex()).isZero();
     assertThat(feedEntry.routeStepCount()).isEqualTo(3);
     assertThat(feedEntry.entryType()).isEqualTo("REAL");
     assertThat(feedEntry.pinned()).isFalse();
@@ -202,7 +205,70 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
             .findFirst()
             .orElseThrow();
     assertThat(maintenanceFeedEntry.routeIndex()).isZero();
+    assertThat(maintenanceFeedEntry.routeStepIndex()).isZero();
     assertThat(maintenanceFeedEntry.routeStepCount()).isEqualTo(2);
+
+    jdbc.update(
+        "update queue_entry set entry_type='REAL' where task_id=?",
+        maintenanceRegistration.taskId());
+    var consecutivePackageEntries =
+        workerBoard.feed(worker.id(), WAREHOUSE, null, 50).feed().categories().stream()
+            .flatMap(category -> category.entries().stream())
+            .filter(candidate -> candidate.taskId().equals(maintenanceRegistration.taskId()))
+            .sorted(java.util.Comparator.comparingInt(WorkerFeedEntry::routeIndex))
+            .toList();
+    assertThat(consecutivePackageEntries)
+        .extracting(WorkerFeedEntry::routeIndex)
+        .containsExactly(0, 1, 2);
+    assertThat(consecutivePackageEntries)
+        .extracting(WorkerFeedEntry::routeStepIndex)
+        .containsExactly(0, 0, 1);
+    assertThat(consecutivePackageEntries)
+        .extracting(WorkerFeedEntry::routeStepCount)
+        .containsOnly(2);
+    var consecutivePackageDetails =
+        maintenanceRegistration.route().stream()
+            .map(step -> workerBoard.detail(worker.id(), WAREHOUSE, step.entryId()))
+            .toList();
+    assertThat(consecutivePackageDetails)
+        .extracting(WorkerTaskDetail::routeStepIndex)
+        .containsExactly(0, 0, 1);
+    assertThat(consecutivePackageDetails)
+        .extracting(WorkerTaskDetail::routeStepCount)
+        .containsOnly(2);
+
+    UUID firstPhysicalQueueId = maintenanceRegistration.route().get(0).workQueueId();
+    UUID secondPhysicalQueueId = maintenanceRegistration.route().get(2).workQueueId();
+    jdbc.update(
+        "update queue_entry set queue_id=? where task_id=? and route_index=1",
+        secondPhysicalQueueId,
+        maintenanceRegistration.taskId());
+    jdbc.update(
+        "update queue_entry set queue_id=? where task_id=? and route_index=2",
+        firstPhysicalQueueId,
+        maintenanceRegistration.taskId());
+    var recurringQueueEntries =
+        workerBoard.feed(worker.id(), WAREHOUSE, null, 50).feed().categories().stream()
+            .flatMap(category -> category.entries().stream())
+            .filter(candidate -> candidate.taskId().equals(maintenanceRegistration.taskId()))
+            .sorted(java.util.Comparator.comparingInt(WorkerFeedEntry::routeIndex))
+            .toList();
+    assertThat(recurringQueueEntries)
+        .extracting(WorkerFeedEntry::routeStepIndex)
+        .containsExactly(0, 1, 2);
+    assertThat(recurringQueueEntries)
+        .extracting(WorkerFeedEntry::routeStepCount)
+        .containsOnly(3);
+    var recurringQueueDetails =
+        maintenanceRegistration.route().stream()
+            .map(step -> workerBoard.detail(worker.id(), WAREHOUSE, step.entryId()))
+            .toList();
+    assertThat(recurringQueueDetails)
+        .extracting(WorkerTaskDetail::routeStepIndex)
+        .containsExactly(0, 1, 2);
+    assertThat(recurringQueueDetails)
+        .extracting(WorkerTaskDetail::routeStepCount)
+        .containsOnly(3);
 
     BoardEntryDto active =
         board.take(
@@ -216,7 +282,7 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
             .issue(
                 worker.id(),
                 WAREHOUSE,
-                workerBoard.revision(),
+                workerBoard.revision(WAREHOUSE),
                 context.serverTime().minusDays(2))
             .id();
     UUID jpegOperationId = UUID.randomUUID();
@@ -516,7 +582,7 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
             .issue(
                 worker.id(),
                 WAREHOUSE,
-                workerBoard.revision(),
+                workerBoard.revision(WAREHOUSE),
                 capturedAt.minusSeconds(1))
             .id();
     UUID operationId = UUID.randomUUID();

@@ -4,6 +4,7 @@ import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -460,7 +461,7 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
     assertThat(exposedElectrical.version()).isGreaterThan(futureElectrical.version());
     assertThat(workerFeedEntryIds(electrician.id())).contains(exposedElectrical.id());
     assertThat(ownerProofReaderWorkerIds(exposedElectrical.id())).contains(electrician.id());
-    verify(workerInvalidations, times(1)).feedChanged(anyLong());
+    verify(workerInvalidations, times(1)).feedChanged(eq(WAREHOUSE_ID), anyLong());
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from domain_event where aggregate_type='QUEUE_ENTRY' "
@@ -479,7 +480,7 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
     assertThat(hiddenElectrical.entryType()).isEqualTo(EntryType.SHADOW);
     assertThat(workerFeedEntryIds(electrician.id())).doesNotContain(hiddenElectrical.id());
     assertThat(ownerProofReaderWorkerIds(hiddenElectrical.id())).doesNotContain(electrician.id());
-    verify(workerInvalidations, times(1)).feedChanged(anyLong());
+    verify(workerInvalidations, times(1)).feedChanged(eq(WAREHOUSE_ID), anyLong());
 
     clearInvocations(workerInvalidations);
     TaskBoardSnapshot hiddenReplay =
@@ -489,7 +490,7 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
             new SetFutureTaskEntryAvailabilityRequest(hiddenElectrical.version(), false));
     BoardEntryDto replayedElectrical = entry(hiddenReplay, "parallel-route", electrical.id());
     assertThat(replayedElectrical.version()).isEqualTo(hiddenElectrical.version());
-    verify(workerInvalidations, never()).feedChanged(anyLong());
+    verify(workerInvalidations, never()).feedChanged(eq(WAREHOUSE_ID), anyLong());
 
     TaskBoardSnapshot exposedAgain =
         board.setFutureTaskEntryAvailability(
@@ -675,7 +676,7 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
                 Integer.class,
                 futureEntry.id().toString()))
         .isZero();
-    verify(workerInvalidations, never()).feedChanged(anyLong());
+    verify(workerInvalidations, never()).feedChanged(eq(WAREHOUSE_ID), anyLong());
   }
 
   @Test

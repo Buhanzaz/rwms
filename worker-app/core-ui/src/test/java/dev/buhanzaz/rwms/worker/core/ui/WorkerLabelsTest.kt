@@ -22,10 +22,10 @@ class WorkerLabelsTest {
     }
 
     @Test
-    fun `route stage is one based and never reports a total below current stage`() {
-        assertThat(workerTaskStageOrdinal(routeIndex = 0, routeStepCount = 2, separator = "/"))
+    fun `worker package ordinal is one based and never reports a total below current package`() {
+        assertThat(workerTaskStageOrdinal(routeStepIndex = 0, routeStepCount = 2, separator = "/"))
             .isEqualTo("1/2")
-        assertThat(workerTaskStageOrdinal(routeIndex = 2, routeStepCount = 1, separator = " из "))
+        assertThat(workerTaskStageOrdinal(routeStepIndex = 2, routeStepCount = 1, separator = " из "))
             .isEqualTo("3 из 3")
     }
 }

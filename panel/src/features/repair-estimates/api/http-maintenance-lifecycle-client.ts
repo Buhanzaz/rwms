@@ -506,6 +506,7 @@ export function listMaintenanceRepairs(
     executionState?: MaintenanceRepair["executionState"]
     acceptanceState?: MaintenanceRepair["acceptanceState"]
     rentalItemId?: string
+    estimateId?: string
     repairIds?: readonly string[]
     page?: number
     size?: number
@@ -662,10 +663,18 @@ export function acceptMaintenanceRepair(
 export function listMaintenanceAcceptance(
   accessToken: string,
   warehouseId: string,
-  state: MaintenanceRepair["acceptanceState"] = "PENDING"
+  state: MaintenanceRepair["acceptanceState"] = "PENDING",
+  page = 0,
+  size = 200,
+  repairId?: string
 ) {
   return bearerRequest<MaintenancePage<MaintenanceAcceptanceProjection>>(
     accessToken,
-    collectionEndpoint("acceptance", warehouseId, { state })
+    collectionEndpoint("acceptance", warehouseId, {
+      state,
+      page,
+      size,
+      repairId,
+    })
   )
 }

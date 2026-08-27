@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.taskboard.api;
 
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerFeedEntry;
+import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerTaskDetail;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -131,6 +132,7 @@ class TaskBoardControllerConditionalGetTest {
             2,
             TASK,
             0,
+            0,
             1,
             "Покраска",
             "БТ-1",
@@ -152,11 +154,56 @@ class TaskBoardControllerConditionalGetTest {
             0,
             1);
     var feedJson = mapper.valueToTree(feedEntry);
+    assertThat(feedJson.required("routeStepIndex").asInt()).isZero();
     assertThat(feedJson.required("routeStepCount").asInt()).isOne();
     assertThat(feedJson.required("entryType").asText()).isEqualTo("REAL");
     assertThat(feedJson.required("pinned").asBoolean()).isFalse();
     assertThat(feedJson.has("driverAudience")).isTrue();
     assertThat(feedJson.required("driverAudience").isNull()).isTrue();
+  }
+
+  @Test
+  void workerDetailSerializesRawRouteIdentityAndCompletePackageCoordinates() {
+    JsonMapper mapper = JsonMapper.builder().findAndAddModules().build();
+    var detail =
+        new WorkerTaskDetail(
+            ENTRY,
+            2,
+            TASK,
+            null,
+            41,
+            1,
+            3,
+            "Покраска",
+            null,
+            null,
+            "Покраска суриком",
+            DATE,
+            null,
+            3,
+            0,
+            "WAITING",
+            "AVAILABLE",
+            10,
+            null,
+            0,
+            null,
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            1,
+            false);
+
+    var detailJson = mapper.valueToTree(detail);
+
+    assertThat(detailJson.required("routeIndex").asInt()).isEqualTo(41);
+    assertThat(detailJson.required("routeStepIndex").asInt()).isOne();
+    assertThat(detailJson.required("routeStepCount").asInt()).isEqualTo(3);
   }
 
   @Test

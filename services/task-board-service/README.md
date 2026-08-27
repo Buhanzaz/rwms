@@ -176,6 +176,8 @@ components own the decisions:
 | `MobileTaskSurfacePolicy` | Non-overlapping DriverApp primary and WorkerApp secondary capabilities |
 | `WorkerTaskAccessService` | Shared worker/group/qualification queue audience for native task reads and media proofs |
 | `WorkerFeedCountProjection` | One-query route cardinality and READY-evidence counts for a bounded native feed page |
+| `WorkerFeedRevisionStore` | Transactional, warehouse-scoped opaque revision advanced by authoritative task-board facts |
+| `WorkerActionReceiptStore` | Advisory-locked immutable native-action request and frozen-response receipts |
 | `TaskBoardEntryOwnerProofReconciler` | Bounded idempotent repair of legacy or workforce-stale media proof audiences |
 | `WorkerPushOutbox` / `WorkerPushDispatcher` | Transactional slinger notification, leased FCM delivery and bounded recovery |
 | `WorkforceService` | Stable worker/group API facade over three lifecycle owners |
@@ -251,7 +253,12 @@ read-only, warehouse-authorized and owned entirely by task-board.
 `GET /api/worker/v1/events` is an SSE invalidation stream. The current producer
 emits a `FEED_CHANGED` signal when a client subscribes and for subsequent
 changes; the worker app also performs periodic authoritative REST refresh.
-Payloads are not a complete task projection.
+Payloads are not a complete task projection. A subscription is keyed by the
+authenticated warehouse, native surface and worker, so a fact from another
+warehouse cannot advance or notify this stream. A feed page reads its
+warehouse revision and projection under one repeatable-read snapshot; cursors
+remain valid across unrelated warehouse changes. Its weak ETag is scoped to
+the authenticated warehouse, native surface and worker as well as that revision.
 
 `GET /api/driver/v1/events` has the same invalidation-only semantics. Device
 registrations are surface-bound and accept current Firebase Installation IDs
@@ -278,14 +285,16 @@ persistence schema or event payload shape.
 first position. Each `WorkerWork.sourceMediaIds` is the exact link from a work line to its own
 references in that array; task-board does not flatten or infer that association.
 
-Every `WorkerFeedEntry` exposes zero-based `routeIndex`, positive `routeStepCount`, required
-`entryType` and required `pinned`. WorkerApp receives only server-selected `REAL` entries from
+Every `WorkerFeedEntry` exposes raw zero-based `routeIndex`, zero-based `routeStepIndex`, positive
+`routeStepCount`, required `entryType` and required `pinned`; `WorkerTaskDetail` exposes both route
+indices and the same positive authoritative package count. `routeIndex` remains the persisted
+route-row and evidence identity.
+`routeStepIndex` is the worker execution-package ordinal. WorkerApp receives only server-selected `REAL` entries from
 enabled queues: active work plus the queue's bounded waiting plan. Future `SHADOW` stages stay in
-the manager snapshot and are never published to WorkerApp. For maintenance, route cardinality
-counts physical queues, so a historical started same-queue package is still shown as one subtask
-even though its immutable source-mapped rows remain persisted; other task sources count route
-entries. Route cardinality and READY evidence counts are loaded for the selected feed page in one
-database projection rather than one query per card.
+the manager snapshot and are never published to WorkerApp. For maintenance, only consecutive rows
+of one physical queue share a package: A-A-B has two packages and A-B-A has three. Other task
+sources use one package per persisted route row. Package coordinates and READY evidence counts are
+loaded for the selected feed page in one database projection rather than one query per card.
 
 The worker action path validates the worker identity, current assignment,
 entry version, action/status transition, and offline lease where applicable.
@@ -297,6 +306,17 @@ expected version, photo gate and non-future occurrence time remain mandatory.
 completion. Each accepted completion emits the canonical `QUEUE_ENTRY_COMPLETED`
 fact; maintenance consumes the final mapped repair-stage fact to place the
 repair into pending acceptance.
+
+Before any live task read, the action path serializes attempts for the
+`operationId` with a transaction-scoped advisory lock. The first successful
+request stores its complete canonical request identity and frozen response in
+`worker_action_receipt` in the same transaction as the event/outbox effects.
+An exact retry returns that original response unchanged; any changed surface,
+worker, warehouse, entry or request field returns `409`. A pre-V36 event with
+the same correlation ID but no receipt also fails closed with `409`, because
+its original response cannot be reconstructed safely. Volatile SSE
+invalidation is dispatched only after commit.
+
 Evidence is first reserved with a stable client reference, then uploaded to
 media-service. A media fact links the processed generation back to the reserved
 evidence before completion may rely on it. A legacy `image/jpeg` declaration may be at most 15 MiB;
@@ -313,6 +333,11 @@ version. Migration
 adds deterministic missing origins only to entirely unpublished `TASK_EVIDENCE` streams and
 requeues their original aggregate-gap-quarantined facts in order. It does not rewrite the original
 facts or touch an already published stream; the event payload contract is unchanged.
+
+[`V36__worker_feed_revision_and_action_receipts.sql`](src/main/resources/db/migration/V36__worker_feed_revision_and_action_receipts.sql)
+adds the warehouse revision sequence/projection and immutable worker-action receipts. Existing
+warehouse rows are backfilled above the former global revision fence; no domain event, task or
+evidence row is rewritten.
 
 The current OpenAPI text mentions `Last-Event-ID`, but controller and client do
 not implement durable replay. Current reconnect is safe because it triggers a
@@ -381,6 +406,9 @@ completion waiting for one. The migration does not invent a missing slinger clas
   contract-defined fence and return `409` when stale.
 - Retried source task creation/synchronization uses a stable external task ID
   and source identity.
+- Native action retries use one durable operation receipt; exact requests return
+  the frozen first response, while divergent or unreconstructable legacy
+  replays return `409` without applying another effect.
 - Credential reset/disable/delete workflows preserve pending/ambiguous states
   and have explicit reconciliation commands rather than local rollback.
 - Worker media inbox rows remain pending until their referenced evidence exists;

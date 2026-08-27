@@ -127,6 +127,8 @@ export type RepairTaskDto = {
 }
 
 export type RepairTaskEditorDraft = {
+  /** Stable for the whole not-yet-persisted create/rework intent and all transport retries. */
+  creationIdempotencyKey: string
   taskId: string | null
   expectedVersion: number | null
   kind: RepairTaskKind
@@ -148,6 +150,8 @@ export type RepairTaskEditorDraft = {
 }
 
 export type RepairTaskWriteCommand = {
+  /** Stable for the whole not-yet-persisted create/rework intent and all transport retries. */
+  creationIdempotencyKey: string
   taskId: string | null
   expectedVersion: number | null
   kind: RepairTaskKind
@@ -195,7 +199,6 @@ export type RentalItemRepairSeed = {
 
 export type RepairsLocationState = {
   workspaceEntry?: true
-  reworkSeed?: RepairTaskReworkSeed
   rentalItemSeed?: RentalItemRepairSeed
 }
 

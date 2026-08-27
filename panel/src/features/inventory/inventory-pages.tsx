@@ -1796,6 +1796,7 @@ export function InventoryFinishPage() {
         <>
           {cabinDispositionReviewQuery.data && accessToken ? (
             <InventoryCabinDispositionReviewCard
+              key={`${cabinDispositionReviewQuery.data.inventoryId}:${cabinDispositionReviewQuery.data.reviewRevision}:${session.businessDate}`}
               review={cabinDispositionReviewQuery.data}
               accessToken={accessToken}
               warehouseId={session.warehouseId}
@@ -2329,11 +2330,11 @@ export function InventoryFinishPage() {
 export function InventoryHistoryPage() {
   useInventorySync()
   const navigate = useNavigate()
-  const [page, setPage] = useState(0)
   const { currentUser } = useAuth()
   const { selectedWarehouse } = useWarehouse()
   const warehouseId = selectedWarehouse?.id ?? "none"
-  useEffect(() => setPage(0), [warehouseId])
+  const [pagination, setPagination] = useState({ warehouseId, page: 0 })
+  const page = pagination.warehouseId === warehouseId ? pagination.page : 0
   const canView = selectedWarehouse
     ? hasInventoryWarehouseAccess(currentUser, selectedWarehouse.id, "VIEW")
     : false
@@ -2392,7 +2393,9 @@ export function InventoryHistoryPage() {
               size="sm"
               variant="outline"
               disabled={page === 0 || query.isFetching}
-              onClick={() => setPage((current) => Math.max(0, current - 1))}
+              onClick={() =>
+                setPagination({ warehouseId, page: Math.max(0, page - 1) })
+              }
             >
               Назад
             </Button>
@@ -2401,7 +2404,7 @@ export function InventoryHistoryPage() {
               size="sm"
               variant="outline"
               disabled={page + 1 >= pageMetadata.totalPages || query.isFetching}
-              onClick={() => setPage((current) => current + 1)}
+              onClick={() => setPagination({ warehouseId, page: page + 1 })}
             >
               Вперёд
             </Button>

@@ -54,7 +54,10 @@ class WorkerProjectionWriter @Inject constructor(
         }
     }
 
-    /** Activates a server-issued lease only after commands, media and feed succeed. */
+    /**
+     * Activates a server-issued lease only after commands, media and feed succeed. Open conflicts
+     * deliberately survive this refresh until [WorkerLocalStore.acknowledgeOpenConflicts].
+     */
     suspend fun applyContext(context: WorkerContextDto): WorkerSessionEntity {
         val now = System.currentTimeMillis()
         return database.withTransaction {
@@ -68,7 +71,6 @@ class WorkerProjectionWriter @Inject constructor(
             database.sessionDao().upsert(activated)
             replaceGroups(context)
             reconcileCompletedActionsFromDetails(context.worker.id, now)
-            database.conflictDao().resolveOpenForUser(context.worker.id, now)
             activated
         }
     }
@@ -77,6 +79,7 @@ class WorkerProjectionWriter @Inject constructor(
      * Commits the new lease and its complete authorized feed in one Room
      * transaction. Process death can therefore leave the prior lease intact,
      * but can never activate a lease without the matching full projection.
+     * Conflict acknowledgement is a separate explicit worker action.
      */
     suspend fun commitContextAndFeed(
         context: WorkerContextDto,
@@ -106,7 +109,6 @@ class WorkerProjectionWriter @Inject constructor(
                 now = now,
                 makeCacheVisible = true,
             )
-            database.conflictDao().resolveOpenForUser(userId, now)
         }
     }
 
@@ -401,6 +403,7 @@ class WorkerProjectionWriter @Inject constructor(
         timerNextTransitionAt = timerSnapshot?.nextTransitionAt,
         timerServerTime = timerSnapshot?.serverTime,
         routeIndex = routeIndex,
+        routeStepIndex = routeStepIndex,
         routeStepCount = routeStepCount,
         entryType = entryType,
         pinned = pinned,
@@ -450,6 +453,8 @@ class WorkerProjectionWriter @Inject constructor(
         timerNextTransitionAt = detail.timerSnapshot?.nextTransitionAt,
         timerServerTime = detail.timerSnapshot?.serverTime,
         routeIndex = detail.routeIndex,
+        routeStepIndex = detail.routeStepIndex,
+        routeStepCount = detail.routeStepCount,
     )
 
     private fun String.toEpochMillis(field: String): Long =

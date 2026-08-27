@@ -23,7 +23,8 @@ import kotlin.random.Random
  * Runs one authenticated sync attempt without depending on an Activity.
  * WorkManager performs only explicitly classified transient retries, bounded
  * by [WorkerSyncRetryPolicy], after terminal authorization and protocol
- * outcomes have already stopped the chain.
+ * outcomes have already stopped the chain. A durable visible conflict finishes
+ * the background run and waits for explicit acknowledgement in the task UI.
  */
 class WorkerSyncWorker(
     appContext: Context,
@@ -40,25 +41,49 @@ class WorkerSyncWorker(
             applicationContext,
             WorkerSyncEntryPoint::class.java,
         ).coordinator()
-        return when (coordinator.sync(userId)) {
-            WorkerSyncOutcome.Complete,
-            is WorkerSyncOutcome.Deferred -> Result.success()
-            is WorkerSyncOutcome.AuthenticationRequired,
-            is WorkerSyncOutcome.UserActionRequired,
-            is WorkerSyncOutcome.Conflict,
-            is WorkerSyncOutcome.Failed -> Result.failure()
-            is WorkerSyncOutcome.Retry -> {
-                if (WorkerSyncRetryPolicy.shouldUseWorkManagerRetry(runAttemptCount)) {
-                    Result.retry()
-                } else {
-                    Result.failure()
-                }
-            }
+        return when (workerRunDisposition(coordinator.sync(userId), runAttemptCount)) {
+            WorkerRunDisposition.SUCCESS -> Result.success()
+            WorkerRunDisposition.RETRY -> Result.retry()
+            WorkerRunDisposition.FAILURE -> Result.failure()
         }
     }
 
     companion object {
         const val KEY_USER_ID = "userId"
+    }
+}
+
+/** Terminal scheduling decision kept separate from Android's opaque WorkManager result type. */
+internal enum class WorkerRunDisposition {
+    SUCCESS,
+    RETRY,
+    FAILURE,
+}
+
+/**
+ * Maps durable sync truth to WorkManager behavior. A persisted conflict is a
+ * successful background run because only explicit user acknowledgement may
+ * close it; treating it as failure would hide the actionable state in a
+ * terminal scheduler result.
+ */
+internal fun workerRunDisposition(
+    outcome: WorkerSyncOutcome,
+    runAttemptCount: Int,
+): WorkerRunDisposition = when (outcome) {
+    WorkerSyncOutcome.Complete,
+    is WorkerSyncOutcome.Deferred,
+    is WorkerSyncOutcome.Conflict,
+    -> WorkerRunDisposition.SUCCESS
+    is WorkerSyncOutcome.AuthenticationRequired,
+    is WorkerSyncOutcome.UserActionRequired,
+    is WorkerSyncOutcome.Failed,
+    -> WorkerRunDisposition.FAILURE
+    is WorkerSyncOutcome.Retry -> {
+        if (WorkerSyncRetryPolicy.shouldUseWorkManagerRetry(runAttemptCount)) {
+            WorkerRunDisposition.RETRY
+        } else {
+            WorkerRunDisposition.FAILURE
+        }
     }
 }
 

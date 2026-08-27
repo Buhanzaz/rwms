@@ -461,7 +461,7 @@ class MaintenanceInventoryBoundaryIntegrationTest {
                 Integer.class,
                 repairId))
         .isOne();
-    assertThat(maintenance.acceptance(warehouseId))
+    assertThat(maintenance.acceptance(warehouseId, null, null, 0, 200).items())
         .extracting(AcceptanceProjection::repairId)
         .doesNotContain(repairId);
   }
@@ -572,7 +572,7 @@ class MaintenanceInventoryBoundaryIntegrationTest {
                 Integer.class,
                 repairId))
         .isZero();
-    assertThat(maintenance.acceptance(warehouseId))
+    assertThat(maintenance.acceptance(warehouseId, null, null, 0, 200).items())
         .extracting(AcceptanceProjection::repairId)
         .doesNotContain(repairId);
 

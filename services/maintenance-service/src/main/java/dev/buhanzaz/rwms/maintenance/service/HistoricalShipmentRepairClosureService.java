@@ -89,8 +89,12 @@ public class HistoricalShipmentRepairClosureService {
     ClosurePlan plan = local(() -> prepare(shipmentId, request));
     if (plan.repairs().isEmpty()) {
       AssetSnapshot asset = closeAssetAndReleaseLease(plan, idempotencyKey);
+      HistoricalShipmentClosureOutcome outcome =
+          "RENTED".equals(asset.status())
+              ? HistoricalShipmentClosureOutcome.ALREADY_RENTED
+              : HistoricalShipmentClosureOutcome.NOT_REQUIRED;
       return new CloseResult(
-          response(plan, asset, List.of(), HistoricalShipmentClosureOutcome.NOT_REQUIRED), true);
+          response(plan, asset, List.of(), outcome), true);
     }
 
     cancelRepairTasks(plan, idempotencyKey);
@@ -219,6 +223,8 @@ public class HistoricalShipmentRepairClosureService {
         throw unavailable("Asset service did not release the historical shipment cabin");
       }
       asset = changed;
+    } else if ("RENTED".equals(asset.status()) && plan.repairs().isEmpty()) {
+      return asset;
     } else if (!"FREE".equals(asset.status())) {
       throw conflict("Rental item cannot be closed for historical shipment from status " + asset.status());
     }
@@ -311,11 +317,17 @@ public class HistoricalShipmentRepairClosureService {
       AssetSnapshot asset,
       List<UUID> repairIds,
       HistoricalShipmentClosureOutcome outcome) {
+    boolean free = asset != null && "FREE".equals(asset.status());
+    boolean alreadyRented = asset != null && "RENTED".equals(asset.status());
     if (asset == null
         || !plan.rentalItemId().equals(asset.rentalItemId())
         || !plan.warehouseId().equals(asset.warehouseId())
         || asset.version() < 0
-        || !"FREE".equals(asset.status())) {
+        || (!free && !alreadyRented)
+        || (alreadyRented
+            && (outcome != HistoricalShipmentClosureOutcome.ALREADY_RENTED
+                || !repairIds.isEmpty()))
+        || (free && outcome == HistoricalShipmentClosureOutcome.ALREADY_RENTED)) {
       throw unavailable("Asset service did not return historical shipment closure truth");
     }
     return new HistoricalShipmentRepairClosureResponse(
@@ -323,7 +335,9 @@ public class HistoricalShipmentRepairClosureService {
         plan.warehouseId(),
         plan.rentalItemId(),
         asset.version(),
-        HistoricalShipmentRentalItemStatus.FREE,
+        alreadyRented
+            ? HistoricalShipmentRentalItemStatus.RENTED
+            : HistoricalShipmentRentalItemStatus.FREE,
         List.copyOf(repairIds),
         outcome);
   }

@@ -805,6 +805,47 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
+  void workerFeedPaginationIgnoresUnrelatedWarehouseEvents() {
+    var workerClass = registry.createClass(workerClass("WAREHOUSE_SCOPED_FEED"));
+    QueueFixtureRequest queueRequest =
+        queue(
+            "WAREHOUSE_SCOPED_FEED",
+            QueueType.REPAIR,
+            List.of(new QueueBindingRequest(workerClass.id(), true)));
+    var warehouseOneQueue =
+        QueueRegistryTestFixtures.create(registry, jdbc, W1, queueRequest);
+    var warehouseTwoQueue =
+        QueueRegistryTestFixtures.create(registry, jdbc, W2, queueRequest);
+    var worker =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Warehouse scoped worker",
+                "warehouse.scoped.worker",
+                "password-123",
+                List.of(new QualificationRequest(workerClass.id(), true, null))));
+    board.createTask(W1, task(warehouseOneQueue.id(), "warehouse one first"));
+    board.createTask(W1, task(warehouseOneQueue.id(), "warehouse one second"));
+
+    WorkerTaskBoardService.FeedPage firstPage =
+        workerBoard.feed(worker.id(), W1, null, 1);
+    assertThat(firstPage.feed().nextCursor()).isNotNull();
+    long warehouseOneRevision = workerBoard.revision(W1);
+    long warehouseTwoRevision = workerBoard.revision(W2);
+
+    board.createTask(W2, task(warehouseTwoQueue.id(), "warehouse two only"));
+
+    assertThat(workerBoard.revision(W1)).isEqualTo(warehouseOneRevision);
+    assertThat(workerBoard.revision(W2)).isGreaterThan(warehouseTwoRevision);
+    WorkerTaskBoardService.FeedPage secondPage =
+        workerBoard.feed(worker.id(), W1, firstPage.feed().nextCursor(), 1);
+    assertThat(secondPage.feed().revision()).isEqualTo(firstPage.feed().revision());
+    assertThat(secondPage.feed().categories())
+        .flatExtracting(WorkerFeedCategory::entries)
+        .singleElement();
+  }
+
+  @Test
   void scheduledSharedDriverAudienceIsVisibleAndNarrowsOnlyAfterTake() {
     var driverClass = registry.createClass(workerClass("DRIVER_SHARED_BOARD"));
     var movement =
@@ -3445,6 +3486,110 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
+  void concurrentExactWorkerActionPersistsOneEffectAndReturnsOneFrozenResponse()
+      throws Exception {
+    var workerClass = registry.createClass(workerClass("CONCURRENT_ACTION_WORKER"));
+    var queue =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
+            W1,
+            queue(
+                "CONCURRENT_ACTION_QUEUE",
+                QueueType.REPAIR,
+                List.of(new QueueBindingRequest(workerClass.id(), true))));
+    var createdWorker =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Concurrent worker",
+                null,
+                null,
+                List.of(new QualificationRequest(workerClass.id(), true, null))));
+    jdbc.update(
+        "update worker set app_login='concurrent.action.worker' where id=?",
+        createdWorker.id());
+    var group =
+        workforce.createGroup(
+            W1,
+            new WorkerGroupRequest(
+                0L,
+                workerClass.id(),
+                "Concurrent action group",
+                null,
+                true,
+                List.of(new GroupMemberRequest(createdWorker.id(), true))));
+    var worker =
+        workforce.setCurrentGroup(
+            W1,
+            createdWorker.id(),
+            new SetCurrentGroupRequest(createdWorker.version(), group.id()));
+    var entry =
+        board.createTask(W1, task(queue.id(), "concurrent action task")).columns().stream()
+            .flatMap(column -> column.entries().stream())
+            .findFirst()
+            .orElseThrow();
+    WorkerContext context = workerBoard.context(worker.id(), W1);
+    UUID operationId = UUID.randomUUID();
+    WorkerActionRequest request =
+        new WorkerActionRequest(
+            operationId,
+            WorkerAction.TAKE,
+            entry.version(),
+            group.id(),
+            context.serverTime(),
+            context.offlineLease().id(),
+            null);
+    CountDownLatch ready = new CountDownLatch(2);
+    CountDownLatch start = new CountDownLatch(1);
+
+    WorkerActionAppliedResult first;
+    WorkerActionAppliedResult second;
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var firstAttempt =
+          executor.submit(
+              () -> {
+                ready.countDown();
+                start.await(10, TimeUnit.SECONDS);
+                return workerBoard.applyAction(
+                    worker.id(), W1, entry.id(), operationId.toString(), request);
+              });
+      var secondAttempt =
+          executor.submit(
+              () -> {
+                ready.countDown();
+                start.await(10, TimeUnit.SECONDS);
+                return workerBoard.applyAction(
+                    worker.id(), W1, entry.id(), operationId.toString(), request);
+              });
+      assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+      start.countDown();
+      first = firstAttempt.get(20, TimeUnit.SECONDS);
+      second = secondAttempt.get(20, TimeUnit.SECONDS);
+    }
+
+    assertThat(second).isEqualTo(first);
+    assertThat(first.outcome()).isEqualTo("APPLIED");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from worker_action_receipt where operation_id=?",
+                Integer.class,
+                operationId))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                  from domain_event
+                 where correlation_id=? and event_type=?
+                """,
+                Integer.class,
+                operationId,
+                TaskBoardEventTypes.QUEUE_ENTRY_TAKEN))
+        .isOne();
+  }
+
+  @Test
   void workerCompletesOverdueMaintenanceQueuePackageAndPublishesAcceptanceFact() {
     var workerClass = registry.createClass(workerClass("MAINTENANCE_PACKAGE_WORKER"));
     var queue =
@@ -3601,7 +3746,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             .issue(
                 worker.id(),
                 W1,
-                workerBoard.revision(),
+                workerBoard.revision(W1),
                 completeContext.serverTime().minusDays(2))
             .id();
     WorkerActionRequest completeRequest =
@@ -3621,6 +3766,9 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             representative.getId(),
             completeOperation.toString(),
             completeRequest);
+    jdbc.update(
+        "update queue_entry set task_text='changed after first response' where id=?",
+        representative.getId());
     WorkerActionAppliedResult replayed =
         workerBoard.applyAction(
             MobileTaskSurface.WORKER,
@@ -3632,8 +3780,56 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
     assertThat(taken.entry().status()).isEqualTo("IN_PROGRESS");
     assertThat(completed.entry().status()).isEqualTo("DONE");
-    assertThat(replayed.outcome()).isEqualTo("REPLAYED");
-    assertThat(replayed.entry().entryId()).isEqualTo(representative.getId());
+    assertThat(replayed).isEqualTo(completed);
+    assertThat(replayed.outcome()).isEqualTo("APPLIED");
+    assertThat(replayed.entry().taskText()).isNotEqualTo("changed after first response");
+    assertThatThrownBy(
+            () ->
+                workerBoard.applyAction(
+                    MobileTaskSurface.WORKER,
+                    worker.id(),
+                    W1,
+                    UUID.randomUUID(),
+                    completeOperation.toString(),
+                    completeRequest))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("operationId");
+    assertThatThrownBy(
+            () ->
+                workerBoard.applyAction(
+                    MobileTaskSurface.WORKER,
+                    worker.id(),
+                    W1,
+                    representative.getId(),
+                    completeOperation.toString(),
+                    new WorkerActionRequest(
+                        completeOperation,
+                        WorkerAction.RESUME,
+                        completeRequest.expectedVersion(),
+                        completeRequest.workerGroupId(),
+                        completeRequest.occurredAt(),
+                        completeRequest.offlineLeaseId(),
+                        completeRequest.evidenceId())))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("operationId");
+    assertThatThrownBy(
+            () ->
+                workerBoard.applyAction(
+                    MobileTaskSurface.WORKER,
+                    worker.id(),
+                    W1,
+                    representative.getId(),
+                    completeOperation.toString(),
+                    new WorkerActionRequest(
+                        completeOperation,
+                        WorkerAction.COMPLETE,
+                        completeRequest.expectedVersion() + 1,
+                        completeRequest.workerGroupId(),
+                        completeRequest.occurredAt(),
+                        completeRequest.offlineLeaseId(),
+                        completeRequest.evidenceId())))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("operationId");
     List<QueueEntry> completedRoute =
         entries.findAllByTaskIdOrderByRouteIndexAsc(registration.taskId());
     assertThat(completedRoute)
@@ -3669,6 +3865,19 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                     representative.getId())
                 .works())
         .hasSize(5);
+    jdbc.update(
+        "delete from worker_action_receipt where operation_id=?", completeOperation);
+    assertThatThrownBy(
+            () ->
+                workerBoard.applyAction(
+                    MobileTaskSurface.WORKER,
+                    worker.id(),
+                    W1,
+                    representative.getId(),
+                    completeOperation.toString(),
+                    completeRequest))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("legacy-команде");
   }
 
   @Test
@@ -3974,6 +4183,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     history.setReason("Историческое событие до перемещения");
     history.setCreatedAt(OffsetDateTime.now(ZoneOffset.UTC));
     history = timeEvents.saveAndFlush(history);
+    long sourceRevisionBeforeRelocation = workerBoard.revision(W1);
+    long targetRevisionBeforeRelocation = workerBoard.revision(W2);
 
     BoardTaskRegistrationDto relocated =
         board.relocateExternalTask(
@@ -3983,6 +4194,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
     assertThat(relocated.taskId()).isEqualTo(registered.taskId());
     assertThat(relocated.warehouseId()).isEqualTo(W2);
+    assertThat(workerBoard.revision(W1)).isGreaterThan(sourceRevisionBeforeRelocation);
+    assertThat(workerBoard.revision(W2)).isGreaterThan(targetRevisionBeforeRelocation);
     assertThat(relocated.route())
         .extracting(RegisteredRouteStepDto::entryId)
         .containsExactlyElementsOf(
@@ -4028,6 +4241,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 originalEntry.getId().toString()))
         .isEqualTo(W2.toString());
 
+    long sourceRevisionBeforeReplay = workerBoard.revision(W1);
+    long targetRevisionBeforeReplay = workerBoard.revision(W2);
     BoardTaskRegistrationDto replay =
         board.relocateExternalTask(
             "maintenance-service",
@@ -4038,6 +4253,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .extracting(RegisteredRouteStepDto::entryVersion)
         .containsExactlyElementsOf(
             relocated.route().stream().map(RegisteredRouteStepDto::entryVersion).toList());
+    assertThat(workerBoard.revision(W1)).isEqualTo(sourceRevisionBeforeReplay);
+    assertThat(workerBoard.revision(W2)).isEqualTo(targetRevisionBeforeReplay);
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from task_relocation_receipt where external_task_id=?",

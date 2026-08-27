@@ -964,6 +964,7 @@ class MaintenanceOpenApiParityTest {
             query("executionState", false, "$RepairExecutionState", null),
             query("acceptanceState", false, "$RepairAcceptanceState", null),
             query("rentalItemId", false, "uuid", null),
+            query("estimateId", false, "uuid", null),
             query("repairIds", false, "array", null),
             optionalHeader("If-None-Match")),
         null, null, "200", "RepairPage", false, "304", "401", "403"));
@@ -1024,7 +1025,10 @@ class MaintenanceOpenApiParityTest {
         "400", "401", "403", "404", "409", "422", "503"));
     result.add(op("GET", "/api/maintenance/v1/acceptance", "listAcceptanceProjection",
         MaintenanceRepairController.class, "acceptance",
-        append(warehousePage, query("state", false, "$RepairAcceptanceState", null)),
+        append(
+            warehousePage,
+            query("state", false, "$RepairAcceptanceState", null),
+            query("repairId", false, "uuid", null)),
         null, null, "200", "AcceptanceProjectionPage", false, "401", "403"));
     result.add(op("GET", "/api/maintenance/v1/write-offs", "listWriteOffProjection",
         PropertyDispositionController.class, "writeOffs",
@@ -1561,7 +1565,9 @@ class MaintenanceOpenApiParityTest {
           sample(TransferRepairArrivalPreflightResponse.class, "transferArrivalPreflight");
       case "completeTransferArrival" -> createResult(CompleteTransferRepairResponse.class);
       case "activateQueuedRepairAfterDelivery" -> null;
-      case "acceptance" -> List.of(sample(AcceptanceProjection.class, "acceptance"));
+      case "acceptance" ->
+          new PageResponse<>(
+              List.of(sample(AcceptanceProjection.class, "acceptance")), 0, 50, 1);
       default -> invocation.callRealMethod();
     });
   }

@@ -67,10 +67,10 @@ class TaskBoardEventStoreMigrationIntegrationTest {
   }
 
   @Test
-  void cleanInstallAppliesV4ThroughV35AndRepeatIsNoOp() {
+  void cleanInstallAppliesV4ThroughV36AndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(32);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(33);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -88,6 +88,8 @@ class TaskBoardEventStoreMigrationIntegrationTest {
             "replay_operation_audit",
             "task_sync_source",
             "worker_task_evidence",
+            "worker_action_receipt",
+            "worker_feed_revision",
             "worker_media_event_inbox",
             "worker_device_registration",
             "task_board_outbox",
@@ -695,7 +697,7 @@ class TaskBoardEventStoreMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(31);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(32);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
     assertThat(retainedContentDigests()).containsExactlyInAnyOrderEntriesOf(before);

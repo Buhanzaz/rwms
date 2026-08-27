@@ -40,6 +40,10 @@ rental shipment. Maintenance first records the durable shipment audit identity a
 cancels an eligible capital-repair/movement branch. A pre-start task-board task receives the same
 comment and is safely cancelled; its repair stage is recorded as system-completed without forging
 worker evidence. Started or version-conflicting work is rejected for operator reconciliation.
+When no repair exists and asset-service already reports `RENTED`, maintenance returns the explicit
+`ALREADY_RENTED` proof with that unchanged cabin version; it does not issue a status transition or
+lease release. Logistics can therefore restore missing shipment provenance without repeating the
+physical departure.
 
 Inventory publication preflight keeps `findings` required and bounded, accepts an empty list when
 the final inventory plan contains no maintenance work, and always returns an empty `candidates`
@@ -197,11 +201,21 @@ the repair-stage projection is changed. Migration
 aligns both PostgreSQL topic allow-lists with the existing Kafka subscription, admitting only
 `rwms.task-board.task-evidence.v1`; it does not rewrite existing messages or move transport
 ownership.
-The public repair collection applies warehouse, state, cabin, and optional bounded `repairIds`
-filters plus paging in PostgreSQL before assembling repair DTOs. Task-board consumers use that
-additive ID filter in batches of at most 200, so a board refresh never hydrates every repair in a
-warehouse; the unfiltered endpoint retains its existing paged behavior. This read path is owned by
+The public repair collection applies warehouse, state, cabin, exact optional `estimateId`, and
+optional bounded `repairIds` filters plus paging in PostgreSQL before assembling repair DTOs.
+Task-board consumers use the ID filter in batches of at most 200, while estimate workspaces use the
+exact estimate filter; neither lookup hydrates unrelated warehouse repairs. The unfiltered endpoint
+retains its existing paged behavior. This read path is owned by
 [`MaintenanceRepairUseCases`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceRepairUseCases.java).
+Direct-repair finalization locks the maintenance-owned rental-item fact, rechecks the exact
+subject/key/request idempotency receipt after waiting, and then rejects another non-terminal
+PRIMARY root for the same cabin. A concurrent lost-response retry therefore returns
+the original repair, while a different semantic create receives `MAINTENANCE_STATE_CONFLICT`; no
+remote call is made while that local lock is held.
+Migration
+[`V49__repair_acceptance_and_creation_indexes.sql`](src/main/resources/db/migration/V49__repair_acceptance_and_creation_indexes.sql)
+adds only the source-rework and active-primary lookup indexes used by these bounded queries; it
+does not rewrite lifecycle rows.
 At startup, maintenance idempotently enqueues the existing pre-start task update workflow for
 every already registered queued repair. This owner-local pass performs no remote I/O and lets the
 normal reconciliation worker correct old presentation snapshots, including cover order and
@@ -246,11 +260,15 @@ effective date. Identity, source, kind, priority and state checks are unchanged.
 transport fence and
 [`MaintenanceTaskReconciliationUseCases`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceTaskReconciliationUseCases.java)
 confirmation fence.
-No-work publication uses the separate authoritative cleanup and leaves the cabin `FREE`. Acceptance
-and rework reads/commands reject inventory-origin rows without task-board execution evidence, which
-also keeps historical publication-created capital rows out of those surfaces. Reapplying their
-completed inventory outcome restores the former `COMPLETED/PENDING` rows to the active
-`QUEUED/NOT_READY` capital route.
+No-work publication uses the separate authoritative cleanup and leaves the cabin `FREE`. The
+acceptance collection applies paging, optional state and exact `repairId` filters, unresolved-child
+rework exclusion, and inventory execution proof in PostgreSQL before materializing its lightweight
+projection. For inventory-origin rows, every persisted route stage must be `DONE` and retain its
+task-board entry/version, completion event and completion time; repair registration versions and
+system-recorded historical completion are not execution proof. The same proof fences acceptance
+and rework commands, keeping historical publication-created capital rows out of those surfaces.
+Reapplying their completed inventory outcome restores the former `COMPLETED/PENDING` rows to the
+active `QUEUED/NOT_READY` capital route.
 
 Publication validates the fingerprint of the exact raw frozen snapshot before any compatibility
 adaptation. For schema version 1 only, a historical snapshot that copied the same non-empty
@@ -334,7 +352,7 @@ application owners:
 | `MaintenanceCatalogUseCases` plus catalog model/support types | Catalog-version reads, draft mutation, forking, validation and activation |
 | `MaintenanceEstimateUseCases`, `MaintenanceEstimateCreationUseCases` and estimate/furniture/revision supports | Estimate lifecycle facade; creation admission/deadline/idempotency; lines, plans, furniture admission and immutable revisions |
 | `MaintenanceRepairUseCases` plus repair lifecycle/model/media/task-board supports | Repair creation, queueing, execution, acceptance and rework preparation |
-| `HistoricalShipmentRepairClosureService` | Private logistics shipment closure: durable marker, pre-start task/movement compensation, fenced asset release and audited repair finalization outside local transactions |
+| `HistoricalShipmentRepairClosureService` | Private logistics shipment closure: durable marker, pre-start task/movement compensation, fenced asset release or explicit unchanged `ALREADY_RENTED` proof, and audited repair finalization outside local transactions |
 | `MaintenanceTransferUseCases` and `MaintenanceTransferSupport` | Transfer departure/arrival maintenance continuation |
 | `MaintenanceInboundUseCases` and `MaintenanceInboundFactProjectionUseCases` | Owner-fact ingestion and projection updates |
 | `MaintenanceReconciliationUseCases` | Claim dispatch, media-owner proof and failure recording only |

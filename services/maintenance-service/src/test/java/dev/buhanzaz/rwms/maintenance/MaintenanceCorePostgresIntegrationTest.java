@@ -41,6 +41,7 @@ import dev.buhanzaz.rwms.maintenance.service.MaintenanceDependencyException;
 import dev.buhanzaz.rwms.maintenance.service.FurnitureEquipmentLinkProcessor;
 import dev.buhanzaz.rwms.maintenance.service.FurnitureEquipmentLinkReviewService;
 import dev.buhanzaz.rwms.maintenance.service.FurnitureEquipmentLinkStore;
+import dev.buhanzaz.rwms.maintenance.service.HistoricalShipmentRepairClosureService;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceIdempotencyStore;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceNotFoundException;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceReconciliationReviewService;
@@ -139,6 +140,7 @@ class MaintenanceCorePostgresIntegrationTest {
   @Autowired FurnitureEquipmentLinkStore furnitureEquipmentLinks;
   @Autowired FurnitureEquipmentLinkProcessor furnitureEquipmentLinkProcessor;
   @Autowired FurnitureEquipmentLinkReviewService furnitureEquipmentLinkReviews;
+  @Autowired HistoricalShipmentRepairClosureService historicalShipmentClosures;
   @Autowired
   dev.buhanzaz.rwms.maintenance.service.RepairComplexitySettingsService
       repairComplexitySettings;
@@ -218,6 +220,46 @@ class MaintenanceCorePostgresIntegrationTest {
                   .toList());
         });
     clearInvocations(eventFacts);
+  }
+
+  @Test
+  void historicalShipmentAcceptsAlreadyRentedCabinWithoutRepeatingAssetEffects() {
+    UUID shipmentId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    when(dependencies.getRentalItemSnapshot(rentalItemId))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                rentalItemId, 12, REVIEWED_WAREHOUSE_ID, "БТ-1160699", "RENTED"));
+
+    HistoricalShipmentRepairClosureService.CloseResult result =
+        historicalShipmentClosures.close(
+            shipmentId,
+            UUID.randomUUID(),
+            new HistoricalShipmentRepairClosureRequest(REVIEWED_WAREHOUSE_ID, rentalItemId));
+
+    assertThat(result.replayed()).isTrue();
+    assertThat(result.response().shipmentId()).isEqualTo(shipmentId);
+    assertThat(result.response().rentalItemId()).isEqualTo(rentalItemId);
+    assertThat(result.response().rentalItemVersion()).isEqualTo(12);
+    assertThat(result.response().rentalItemStatus())
+        .isEqualTo(HistoricalShipmentRentalItemStatus.RENTED);
+    assertThat(result.response().outcome())
+        .isEqualTo(HistoricalShipmentClosureOutcome.ALREADY_RENTED);
+    assertThat(result.response().closedRepairIds()).isEmpty();
+    verify(dependencies, never())
+        .fencedStatus(
+            any(),
+            any(),
+            any(),
+            anyLong(),
+            any(),
+            anyLong(),
+            any(),
+            any(),
+            any(),
+            anyBoolean());
+    verify(dependencies, never())
+        .releaseLease(any(), any(), anyLong(), anyLong(), any(), any());
   }
 
   @Test
@@ -541,14 +583,14 @@ class MaintenanceCorePostgresIntegrationTest {
 
     PageResponse<RepairResponse> selected =
         service.repairs(
-            warehouseId, null, null, null, Set.of(repairIds.get(1)), 0, 200);
+            warehouseId, null, null, null, null, Set.of(repairIds.get(1)), 0, 200);
     assertThat(selected.totalElements()).isEqualTo(1);
     assertThat(selected.items()).extracting(RepairResponse::id).containsExactly(repairIds.get(1));
 
     PageResponse<RepairResponse> firstPage =
-        service.repairs(warehouseId, null, null, null, null, 0, 2);
+        service.repairs(warehouseId, null, null, null, null, null, 0, 2);
     PageResponse<RepairResponse> secondPage =
-        service.repairs(warehouseId, null, null, null, null, 1, 2);
+        service.repairs(warehouseId, null, null, null, null, null, 1, 2);
     assertThat(firstPage.totalElements()).isEqualTo(3);
     assertThat(firstPage.items()).hasSize(2);
     assertThat(secondPage.totalElements()).isEqualTo(3);
@@ -1497,7 +1539,7 @@ class MaintenanceCorePostgresIntegrationTest {
         .containsExactly(fixture.repairId());
     assertThat(service.activeCapitalRepair(fixture.repairId()).id())
         .isEqualTo(fixture.repairId());
-    assertThat(service.acceptance(warehouseId))
+    assertThat(service.acceptance(warehouseId, null, null, 0, 200).items())
         .extracting(AcceptanceProjection::repairId)
         .contains(fixture.repairId());
 
@@ -5837,7 +5879,7 @@ class MaintenanceCorePostgresIntegrationTest {
           assertThat(repair.executionState()).isEqualTo(RepairExecutionState.IN_PROGRESS);
           assertThat(repair.acceptanceState()).isEqualTo(RepairAcceptanceState.NOT_READY);
         });
-    assertThat(service.acceptance(fixture.repair().warehouseId()))
+    assertThat(service.acceptance(fixture.repair().warehouseId(), null, null, 0, 200).items())
         .extracting(AcceptanceProjection::repairId)
         .doesNotContain(fixture.repair().repairId());
 
@@ -5861,7 +5903,7 @@ class MaintenanceCorePostgresIntegrationTest {
 
     assertThat(service.repair(fixture.repair().repairId()).acceptanceState())
         .isEqualTo(RepairAcceptanceState.ACCEPTED);
-    assertThat(service.acceptance(fixture.repair().warehouseId()))
+    assertThat(service.acceptance(fixture.repair().warehouseId(), null, null, 0, 200).items())
         .extracting(AcceptanceProjection::repairId)
         .doesNotContain(fixture.repair().repairId());
   }
@@ -5943,7 +5985,7 @@ class MaintenanceCorePostgresIntegrationTest {
   void completedReworkReturnsSourceToPendingAndAcceptCascadesWithoutDuplicateStatus() {
     ReworkFixture fixture = createCompletedRework();
 
-    assertThat(service.acceptance(fixture.source().warehouseId()))
+    assertThat(service.acceptance(fixture.source().warehouseId(), null, null, 0, 200).items())
         .extracting(AcceptanceProjection::repairId)
         .contains(fixture.child().repairId())
         .doesNotContain(fixture.source().repairId());
@@ -5957,7 +5999,7 @@ class MaintenanceCorePostgresIntegrationTest {
         .isEqualTo(RepairAcceptanceState.ACCEPTED);
     assertThat(service.repair(fixture.source().repairId()).acceptanceState())
         .isEqualTo(RepairAcceptanceState.ACCEPTED);
-    assertThat(service.acceptance(fixture.source().warehouseId()))
+    assertThat(service.acceptance(fixture.source().warehouseId(), null, null, 0, 200).items())
         .extracting(AcceptanceProjection::repairId)
         .doesNotContain(fixture.child().repairId(), fixture.source().repairId());
     assertSinglePendingAcceptanceIntent(fixture.source().repairId());
@@ -6625,7 +6667,7 @@ class MaintenanceCorePostgresIntegrationTest {
     RepairFixture source = createQueuedPendingAcceptanceRepair();
     createDraftRework(source);
 
-    assertThat(service.acceptance(source.warehouseId()))
+    assertThat(service.acceptance(source.warehouseId(), null, null, 0, 200).items())
         .noneMatch(item -> item.repairId().equals(source.repairId()));
   }
 

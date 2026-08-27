@@ -71,7 +71,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
   void cumulativeVersionFourEventSourcingAndTaskSyncMigrateCleanDatabaseAndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(32);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(33);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -111,6 +111,8 @@ class TaskBoardFlywayMigrationIntegrationTest {
             "worker_deletion_intent",
             "worker_group",
             "worker_group_member",
+            "worker_action_receipt",
+            "worker_feed_revision",
             "worker_device_registration",
             "worker_media_event_inbox",
             "worker_task_evidence",
@@ -144,7 +146,9 @@ class TaskBoardFlywayMigrationIntegrationTest {
                 Map.entry("worker_class_assignment", 6),
                 Map.entry("worker_deletion_intent", 7),
                 Map.entry("worker_group", 11),
-                Map.entry("worker_group_member", 5)));
+                Map.entry("worker_group_member", 5),
+                Map.entry("worker_action_receipt", 11),
+                Map.entry("worker_feed_revision", 3)));
     assertThat(
             jdbc.queryForMap(
                 "select version, description, script, success from flyway_schema_history "
@@ -378,6 +382,19 @@ class TaskBoardFlywayMigrationIntegrationTest {
         .containsEntry("success", true);
     assertThat(
             jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='36'"))
+        .containsEntry("version", "36")
+        .containsEntry("description", "worker feed revision and action receipts")
+        .containsEntry(
+            "script", "V36__worker_feed_revision_and_action_receipts.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForObject(
+                "select to_regclass('public.worker_feed_revision_seq')", String.class))
+        .isEqualTo("worker_feed_revision_seq");
+    assertThat(
+            jdbc.queryForMap(
                 "select is_nullable,column_default from information_schema.columns "
                     + "where table_schema='public' and table_name='work_queue' "
                     + "and column_name='worker_feed_enabled'"))
@@ -478,7 +495,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
     UUID repairableEvidenceId = seedTaskEvidenceStreamAtVersionOne("QUARANTINED");
     UUID alreadyPublishedEvidenceId = seedTaskEvidenceStreamAtVersionOne("PUBLISHED");
 
-    Flyway migration = flyway(MIGRATION_LOCATION);
+    Flyway migration = configuration(MIGRATION_LOCATION).target("35").load();
     assertThat(migration.migrate().migrationsExecuted).isOne();
     migration.validate();
 
@@ -531,6 +548,49 @@ class TaskBoardFlywayMigrationIntegrationTest {
                 Long.class,
                 repairableEvidenceId.toString()))
         .isOne();
+  }
+
+  @Test
+  void versionThirtySixBackfillsWarehouseRevisionAboveTheLegacyGlobalFence() {
+    configuration(MIGRATION_LOCATION).target("35").load().migrate();
+    UUID warehouseId = UUID.randomUUID();
+    UUID workerId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into worker(
+          id,version,revision_marker,warehouse_id,display_name,active,credential_status)
+        values (?,0,?,?,?,true,'NOT_CONFIGURED')
+        """,
+        workerId,
+        UUID.randomUUID(),
+        warehouseId,
+        "Revision worker");
+    jdbc.update(
+        """
+        insert into event_stream_head(
+          aggregate_type,aggregate_id,current_version,last_event_id,updated_at)
+        values ('WORKER',?,50,?,clock_timestamp())
+        """,
+        workerId.toString(),
+        UUID.randomUUID());
+
+    Flyway migration = configuration(MIGRATION_LOCATION).target("36").load();
+    assertThat(migration.migrate().migrationsExecuted).isOne();
+    migration.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select revision from worker_feed_revision where warehouse_id=?",
+                Long.class,
+                warehouseId))
+        .isGreaterThan(51L);
+    assertThat(
+            jdbc.queryForList(
+                "select indexname from pg_indexes where schemaname='public'", String.class))
+        .contains(
+            "worker_feed_revision_pkey",
+            "idx_worker_action_receipt_scope",
+            "idx_domain_event_correlation");
   }
 
   @Test
@@ -2064,7 +2124,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(31);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(32);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
 

@@ -1,9 +1,11 @@
 package dev.buhanzaz.rwms.worker.core.network
 
 import com.google.common.truth.Truth.assertThat
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class WorkerLogisticsContractTest {
@@ -38,13 +40,14 @@ class WorkerLogisticsContractTest {
 
     @Test
     fun `worker feed decodes only an active task available for secondary join`() {
-        val entry = json.decodeFromString<WorkerFeedEntryDto>(
+        val fixture =
             """
             {
               "entryId":"entry",
               "version":4,
               "taskId":"task",
-              "routeIndex":0,
+              "routeIndex":41,
+              "routeStepIndex":1,
               "routeStepCount":3,
               "entryType":"REAL",
               "pinned":true,
@@ -77,16 +80,23 @@ class WorkerLogisticsContractTest {
               "driverAudience":null,
               "timerSnapshot":null
             }
-            """.trimIndent(),
-        )
+            """.trimIndent()
+        val entry = json.decodeFromString<WorkerFeedEntryDto>(fixture)
 
         assertThat(entry.status).isEqualTo("IN_PROGRESS")
         assertThat(entry.availabilityMode).isEqualTo("OPTIONAL_JOIN")
         assertThat(entry.assignments).hasSize(1)
+        assertThat(entry.routeIndex).isEqualTo(41)
+        assertThat(entry.routeStepIndex).isEqualTo(1)
         assertThat(entry.routeStepCount).isEqualTo(3)
         assertThat(entry.entryType).isEqualTo("REAL")
         assertThat(entry.pinned).isTrue()
         assertThat(entry.resultPhotoMinCount).isEqualTo(1)
+        assertThrows(SerializationException::class.java) {
+            json.decodeFromString<WorkerFeedEntryDto>(
+                fixture.replace("  \"routeStepIndex\":1,\n", ""),
+            )
+        }
     }
 
     @Test

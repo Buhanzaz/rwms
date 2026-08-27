@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 
 import { getEquipmentItems } from "@/api/equipment-api"
@@ -57,6 +57,35 @@ function furnitureDraft(): FurnitureDraft {
   }
 }
 
+function initialReturnDecisions(
+  review: InventoryCabinDispositionReview,
+  defaultDate: string
+): Record<string, ClientDecision> {
+  return Object.fromEntries(
+    review.returnCandidates.map((candidate) => [
+      candidate.findingId,
+      { date: defaultDate, client: null },
+    ])
+  )
+}
+
+function initialShipmentDecisions(
+  review: InventoryCabinDispositionReview,
+  defaultDate: string
+): Record<string, ShipmentDecision> {
+  return Object.fromEntries(
+    review.missingCandidates.map((candidate) => [
+      candidate.findingId,
+      {
+        date: defaultDate,
+        client: null,
+        shipped: false,
+        furniture: [],
+      },
+    ])
+  )
+}
+
 /**
  * Renders the server-owned return and shipment phases before furniture reconciliation.
  * Omitted missing cabins are deliberately not represented as a checkbox choice: confirmation
@@ -81,9 +110,11 @@ export function InventoryCabinDispositionReviewCard({
   onConfirmReturns: (request: ConfirmInventoryReturnsRequest) => void
   onConfirmShipments: (request: ConfirmInventoryShipmentsRequest) => void
 }) {
-  const [returns, setReturns] = useState<Record<string, ClientDecision>>({})
+  const [returns, setReturns] = useState<Record<string, ClientDecision>>(() =>
+    initialReturnDecisions(review, defaultDate)
+  )
   const [shipments, setShipments] = useState<Record<string, ShipmentDecision>>(
-    {}
+    () => initialShipmentDecisions(review, defaultDate)
   )
   const equipmentQuery = useQuery({
     queryKey: ["inventory", "shipment-furniture-catalog", warehouseId],
@@ -105,30 +136,6 @@ export function InventoryCabinDispositionReviewCard({
     () => new Map(furniture.map((item) => [item.id, item])),
     [furniture]
   )
-
-  useEffect(() => {
-    setReturns(
-      Object.fromEntries(
-        review.returnCandidates.map((candidate) => [
-          candidate.findingId,
-          { date: defaultDate, client: null },
-        ])
-      )
-    )
-    setShipments(
-      Object.fromEntries(
-        review.missingCandidates.map((candidate) => [
-          candidate.findingId,
-          {
-            date: defaultDate,
-            client: null,
-            shipped: false,
-            furniture: [],
-          },
-        ])
-      )
-    )
-  }, [defaultDate, review.reviewRevision])
 
   if (review.phase === "COMPLETED") return null
 

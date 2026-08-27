@@ -12,6 +12,18 @@ import org.junit.Test
 
 class TaskDetailPresentationTest {
     @Test
+    fun `detail stage uses package ordinal and prefers authoritative detail over cached feed`() {
+        assertThat(
+            taskDetailStageOrdinal(
+                detailRouteStepIndex = 1,
+                detailRouteStepCount = 3,
+                cachedRouteStepIndex = 0,
+                cachedRouteStepCount = 2,
+            ),
+        ).isEqualTo("2/3")
+    }
+
+    @Test
     fun `real electricity-only entry is takeable while shadow entry fails closed`() {
         val real = taskActionPresentation(
             currentWorkerId = "worker",

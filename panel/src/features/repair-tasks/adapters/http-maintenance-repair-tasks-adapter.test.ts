@@ -377,6 +377,7 @@ const maintenanceMaterialLine: MaintenanceEstimateLine = {
 }
 
 const writeCommand: RepairTaskWriteCommand = {
+  creationIdempotencyKey: "00000000-0000-4000-8000-000000000098",
   taskId: null,
   expectedVersion: null,
   kind: "REPAIR",
@@ -526,6 +527,216 @@ describe("maintenance repair tasks adapter", () => {
       workerGroup: { id: workerGroupId, name: "Бригада 1" },
     })
     expect(task?.subtasks[0]?.assignments[0]?.worker?.name).toBe("Иван")
+    expect(lifecycle.listAcceptance).toHaveBeenCalledWith(
+      "token",
+      warehouseId,
+      "PENDING",
+      0,
+      200,
+      repairId
+    )
+  })
+
+  it("does not mark a pending repair actionable when the exact projection excludes it", async () => {
+    lifecycle.get.mockResolvedValue(repair("PENDING"))
+    lifecycle.listAcceptance.mockResolvedValue({
+      items: [],
+      totalElements: 0,
+    })
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const task = await adapter.getById(repairId, warehouseId)
+
+    expect(task?.acceptanceStatus).toBe("PENDING")
+    expect(task?.readyAt).toBeNull()
+  })
+
+  it("binds a historical stage by its exact task-board entry id after route reordering", async () => {
+    const reorderedBoard = structuredClone(board)
+    reorderedBoard.queues[0]!.entries[0]!.routeIndex = 7
+    getBoard.mockResolvedValue(reorderedBoard)
+    lifecycle.get.mockResolvedValue(repair("PENDING"))
+    lifecycle.listAcceptance.mockResolvedValue({
+      items: [{ repairId, readyAt: "2026-07-18T10:05:00Z" }],
+      totalElements: 1,
+    })
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const task = await adapter.getById(repairId, warehouseId)
+
+    expect(task?.subtasks[0]).toMatchObject({
+      taskBoardEntryId: entryId,
+      queuePosition: 1,
+      activeWorkSeconds: 1200,
+    })
+    expect(task?.subtasks[0]?.assignments[0]?.worker?.name).toBe("Иван")
+  })
+
+  it("loads pending acceptance repairs in bulk and reuses board cabin numbers", async () => {
+    const pendingRepair = repair("PENDING")
+    lifecycle.listAcceptance.mockResolvedValue({
+      items: [
+        {
+          repairId,
+          readyAt: "2026-07-18T10:05:00Z",
+        },
+      ],
+    })
+    lifecycle.listRepairs.mockResolvedValue({ items: [pendingRepair] })
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const tasks = await adapter.listPendingAcceptance(warehouseId)
+
+    expect(lifecycle.listRepairs).toHaveBeenCalledWith("token", warehouseId, {
+      repairIds: [repairId],
+      page: 0,
+      size: 1,
+    })
+    expect(lifecycle.get).not.toHaveBeenCalled()
+    expect(rentalItemsClient.resolveById).not.toHaveBeenCalled()
+    expect(tasks).toEqual([
+      expect.objectContaining({
+        id: repairId,
+        cabinNumber: "CAB-17",
+        readyAt: "2026-07-18T10:05:00Z",
+      }),
+    ])
+  })
+
+  it("loads every pending acceptance page before the bounded bulk repair read", async () => {
+    const secondRepairId = "00000000-0000-4000-8000-000000000103"
+    const secondRepair = structuredClone(repair("PENDING"))
+    secondRepair.id = secondRepairId
+    secondRepair.rootRepairId = secondRepairId
+    lifecycle.listAcceptance.mockImplementation(
+      async (
+        _token: string,
+        _warehouse: string,
+        _state: string,
+        page: number
+      ) =>
+        page === 0
+          ? {
+              items: [{ repairId, readyAt: "2026-07-18T10:05:00Z" }],
+              totalElements: 2,
+            }
+          : {
+              items: [
+                {
+                  repairId: secondRepairId,
+                  readyAt: "2026-07-18T10:06:00Z",
+                },
+              ],
+              totalElements: 2,
+            }
+    )
+    lifecycle.listRepairs.mockResolvedValue({
+      items: [repair("PENDING"), secondRepair],
+    })
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const tasks = await adapter.listPendingAcceptance(warehouseId)
+
+    expect(lifecycle.listAcceptance).toHaveBeenNthCalledWith(
+      1,
+      "token",
+      warehouseId,
+      "PENDING",
+      0,
+      200,
+      undefined
+    )
+    expect(lifecycle.listAcceptance).toHaveBeenNthCalledWith(
+      2,
+      "token",
+      warehouseId,
+      "PENDING",
+      1,
+      200,
+      undefined
+    )
+    expect(lifecycle.listRepairs).toHaveBeenCalledWith("token", warehouseId, {
+      repairIds: [repairId, secondRepairId],
+      page: 0,
+      size: 2,
+    })
+    expect(tasks.map((task) => task.id)).toEqual([repairId, secondRepairId])
+  })
+
+  it("bounds exact repair hydration when a bulk response is incomplete", async () => {
+    const repairIds = Array.from(
+      { length: 9 },
+      (_, index) =>
+        `00000000-0000-4000-8000-${String(index + 201).padStart(12, "0")}`
+    )
+    lifecycle.listAcceptance.mockResolvedValue({
+      items: repairIds.map((id, index) => ({
+        repairId: id,
+        readyAt: `2026-07-18T10:${String(index).padStart(2, "0")}:00Z`,
+      })),
+      totalElements: repairIds.length,
+    })
+    lifecycle.listRepairs.mockResolvedValue({ items: [], totalElements: 0 })
+    let activeReads = 0
+    let peakReads = 0
+    lifecycle.get.mockImplementation(async (_token, _warehouse, id) => {
+      activeReads += 1
+      peakReads = Math.max(peakReads, activeReads)
+      await Promise.resolve()
+      activeReads -= 1
+      const value = structuredClone(repair("PENDING"))
+      value.id = id
+      value.rootRepairId = id
+      return value
+    })
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const tasks = await adapter.listPendingAcceptance(warehouseId)
+
+    expect(peakReads).toBe(8)
+    expect(tasks.map((task) => task.id)).toEqual(repairIds)
+  })
+
+  it("falls back to the asset owner when the board has no cabin number", async () => {
+    const boardWithoutCabinNumber = structuredClone(board)
+    boardWithoutCabinNumber.queues[0]!.entries[0]!.unitNumber = null
+    getBoard.mockResolvedValue(boardWithoutCabinNumber)
+    lifecycle.get.mockResolvedValue(repair("PENDING"))
+    lifecycle.listAcceptance.mockResolvedValue({
+      items: [
+        {
+          repairId,
+          readyAt: "2026-07-18T10:05:00Z",
+        },
+      ],
+    })
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const task = await adapter.getById(repairId, warehouseId)
+
+    expect(rentalItemsClient.resolveById).toHaveBeenCalledWith(
+      warehouseId,
+      rentalItemId
+    )
+    expect(task?.cabinNumber).toBe("CAB-17")
   })
 
   it("marks a queued ordinary repair as awaiting movement until work reaches the board", async () => {
@@ -674,6 +885,72 @@ describe("maintenance repair tasks adapter", () => {
         groupComment: "Монтажная группа",
       }),
     ])
+  })
+
+  it("reuses the draft creation idempotency key for a direct-repair retry", async () => {
+    lifecycle.createDirect.mockResolvedValue(repair())
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    await adapter.saveDraft(structuredClone(writeCommand))
+    await adapter.saveDraft(structuredClone(writeCommand))
+
+    expect(lifecycle.createDirect).toHaveBeenCalledTimes(2)
+    expect(lifecycle.createDirect.mock.calls[0]?.[1]).toBe(
+      writeCommand.creationIdempotencyKey
+    )
+    expect(lifecycle.createDirect.mock.calls[1]?.[1]).toBe(
+      writeCommand.creationIdempotencyKey
+    )
+  })
+
+  it("reuses the same creation idempotency key for a rework retry", async () => {
+    const createdRework = repair()
+    createdRework.kind = "REWORK"
+    createdRework.sourceRepairId = repairId
+    lifecycle.createRework.mockResolvedValue(createdRework)
+    const command = structuredClone(writeCommand)
+    command.kind = "REWORK"
+    command.sourceRepairTaskId = repairId
+    command.sourceRepairTaskVersion = 3
+    command.reason = "Повторить отделку"
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    await adapter.saveDraft(command)
+    await adapter.saveDraft(command)
+
+    expect(lifecycle.createRework).toHaveBeenCalledTimes(2)
+    expect(lifecycle.createRework.mock.calls[0]?.[3]).toBe(
+      command.creationIdempotencyKey
+    )
+    expect(lifecycle.createRework.mock.calls[1]?.[3]).toBe(
+      command.creationIdempotencyKey
+    )
+  })
+
+  it("uses the exact estimate filter instead of searching the first repair page", async () => {
+    const estimateId = "00000000-0000-4000-8000-000000000104"
+    const estimateRepair = repair()
+    estimateRepair.estimateId = estimateId
+    lifecycle.listRepairs.mockResolvedValue({ items: [estimateRepair] })
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const task = await adapter.getBySourceEstimateId(estimateId, warehouseId)
+
+    expect(lifecycle.listRepairs).toHaveBeenCalledWith("token", warehouseId, {
+      estimateId,
+      page: 0,
+      size: 2,
+    })
+    expect(task?.sourceEstimateId).toBe(estimateId)
   })
 
   it("normalizes an omitted capital-repair command to the contract default", async () => {

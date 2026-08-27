@@ -112,10 +112,13 @@ data class WorkerTaskEntity(
     val timerState: String? = null,
     val timerNextTransitionAt: String? = null,
     val timerServerTime: String? = null,
-    /** Zero-based task route stage supplied by task-board. */
+    /** Raw persisted route identity used by task-board evidence commands. */
     @ColumnInfo(defaultValue = "0")
     val routeIndex: Int = 0,
-    /** Total stages in the task route supplied by task-board. */
+    /** Zero-based ordinal of this worker execution package. */
+    @ColumnInfo(defaultValue = "0")
+    val routeStepIndex: Int = 0,
+    /** Total number of worker execution packages. */
     @ColumnInfo(defaultValue = "1")
     val routeStepCount: Int = 1,
     /** Server-owned route visibility: only REAL entries may expose worker actions. */

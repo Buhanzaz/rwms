@@ -111,6 +111,24 @@ final class MaintenanceRepairModelSupport {
         new MaintenanceValidationException(
             "MAINTENANCE_DEPENDENCY_UNAVAILABLE",
             "Current rental-item ownership/version fact is not available"));
+    return requireRentalItemWarehouse(fact, warehouseId);
+  }
+
+  /**
+   * Locks the maintenance-owned rental-item fact used to serialize direct-repair creation.
+   * Callers must already run in the final local write transaction.
+   */
+  protected RentalItemFactProjection requireRentalItemFactForUpdate(
+      UUID rentalItemId, UUID warehouseId) {
+    RentalItemFactProjection fact = rentalItemFacts.findByIdForUpdate(rentalItemId).orElseThrow(() ->
+        new MaintenanceValidationException(
+            "MAINTENANCE_DEPENDENCY_UNAVAILABLE",
+            "Current rental-item ownership/version fact is not available"));
+    return requireRentalItemWarehouse(fact, warehouseId);
+  }
+
+  private static RentalItemFactProjection requireRentalItemWarehouse(
+      RentalItemFactProjection fact, UUID warehouseId) {
     if (!warehouseId.equals(fact.getWarehouseId())) {
       throw new MaintenanceValidationException(
           "MAINTENANCE_VALIDATION_FAILED",

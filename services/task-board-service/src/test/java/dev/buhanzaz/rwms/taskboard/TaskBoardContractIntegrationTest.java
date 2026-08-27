@@ -470,9 +470,16 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
             ((List<?>) child(schemas, "WorkerFeedEntry").get("required")).stream()
                 .map(String::valueOf)
                 .toList())
-        .contains("routeStepCount", "entryType", "pinned", "driverAudience");
+        .contains(
+            "routeStepIndex", "routeStepCount", "entryType", "pinned", "driverAudience");
     assertThat(child(child(schemas, "WorkerFeedEntry"), "properties"))
-        .containsKeys("routeStepCount", "entryType", "pinned", "driverAudience");
+        .containsKeys(
+            "routeStepIndex", "routeStepCount", "entryType", "pinned", "driverAudience");
+    assertThat(
+            child(
+                child(child(schemas, "WorkerFeedEntry"), "properties"),
+                "routeStepIndex"))
+        .containsEntry("minimum", 0);
     assertThat(
             child(
                 child(child(schemas, "WorkerFeedEntry"), "properties"),
@@ -491,7 +498,10 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
         .asList()
         .contains("kpiPalette");
     Map<String, Object> workerTaskDetail = child(schemas, "WorkerTaskDetail");
-    assertThat(workerTaskDetail.get("required")).asList().contains("source");
+    assertThat(workerTaskDetail.get("required"))
+        .asList()
+        .contains("source", "routeStepIndex");
+    assertThat(child(workerTaskDetail, "properties")).containsKey("routeStepIndex");
     assertThat(child(child(workerTaskDetail, "properties"), "source").get("oneOf").toString())
         .contains("#/components/schemas/TaskSourceReference", "type=null");
     assertThat(

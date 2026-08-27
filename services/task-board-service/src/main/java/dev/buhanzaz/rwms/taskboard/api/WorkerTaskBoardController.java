@@ -4,8 +4,8 @@ import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.*;
 
 import dev.buhanzaz.rwms.taskboard.security.AccessLevel;
 import dev.buhanzaz.rwms.taskboard.security.WarehouseAccessAuthorizer;
-import dev.buhanzaz.rwms.taskboard.service.WorkerInvalidationHub;
 import dev.buhanzaz.rwms.taskboard.service.MobileTaskSurface;
+import dev.buhanzaz.rwms.taskboard.service.WorkerInvalidationHub;
 import dev.buhanzaz.rwms.taskboard.service.WorkerTaskBoardService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -109,7 +109,10 @@ public class WorkerTaskBoardController {
       @RequestHeader(name = "Last-Event-ID", required = false) String lastEventId) {
     WorkerPrincipal principal = principal(jwt, false);
     return invalidations.subscribe(
-        MobileTaskSurface.WORKER, principal.workerId(), service.revision());
+        principal.warehouseId(),
+        MobileTaskSurface.WORKER,
+        principal.workerId(),
+        service.revision(principal.warehouseId()));
   }
 
   /** Applies an idempotent worker action using the issued offline lease and observed entry version. */

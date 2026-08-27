@@ -475,6 +475,51 @@ describe("maintenance command access", () => {
     )
   })
 
+  it("reconstructs a fenced rework draft from URL parameters after refresh", async () => {
+    authState.level = "EDIT"
+    api.getRepairTask.mockResolvedValueOnce({
+      ...repair,
+      version: 7,
+      status: "COMPLETED",
+      acceptanceStatus: "PENDING",
+      completedAt: "2026-07-19T10:00:00Z",
+    })
+    const params = new URLSearchParams({
+      create: "1",
+      reworkWarehouseId: WAREHOUSE_ID,
+      reworkSourceId: REPAIR_ID,
+      reworkSourceVersion: "7",
+    })
+    params.append(
+      "reworkLineage",
+      "55555555-5555-4555-8555-555555555555"
+    )
+
+    renderPage(`/repairs?${params.toString()}`, <RepairsPage />)
+
+    expect((await screen.findByTestId("selected-rental-item")).textContent).toBe(
+      RENTAL_ITEM_ID
+    )
+    expect(
+      screen.getByRole("button", { name: "Сохранить черновик" })
+    ).toBeTruthy()
+    expect(api.getRepairTask).toHaveBeenCalledWith(REPAIR_ID, WAREHOUSE_ID)
+  })
+
+  it("does not downgrade a malformed rework URL to an ordinary repair draft", async () => {
+    authState.level = "EDIT"
+
+    renderPage(
+      `/repairs?create=1&reworkWarehouseId=${WAREHOUSE_ID}&reworkSourceId=${REPAIR_ID}`,
+      <RepairsPage />
+    )
+
+    expect(await screen.findByText("Доработка недоступна")).toBeTruthy()
+    expect(
+      screen.queryByRole("button", { name: "Сохранить черновик" })
+    ).toBeNull()
+  })
+
   it("shows cabin write-off only for MANAGE", async () => {
     authState.level = "MANAGE"
     renderPage(`/repairs?repairId=${REPAIR_ID}`, <RepairsPage />)

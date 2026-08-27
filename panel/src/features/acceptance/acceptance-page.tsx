@@ -58,6 +58,7 @@ import { AcceptanceStatusBadge } from "./acceptance-presentation"
 import { RepairAcceptanceDossier } from "./repair-acceptance-dossier"
 
 const EMPTY_REPAIR_TASKS: RepairTaskDto[] = []
+const MAINTENANCE_REFRESH_INTERVAL_MS = 15_000
 
 function acceptanceActorLabel(
   actorId: string | null | undefined,
@@ -140,6 +141,7 @@ export function AcceptancePage() {
     queryKey: repairAcceptanceListQueryKey(selectedWarehouseId ?? "none"),
     queryFn: () => listPendingRepairAcceptance(selectedWarehouseId!),
     enabled: selectedWarehouseId !== null,
+    refetchInterval: MAINTENANCE_REFRESH_INTERVAL_MS,
   })
   const detailQuery = useQuery({
     queryKey: repairTaskDetailQueryKey(
@@ -148,6 +150,7 @@ export function AcceptancePage() {
     ),
     queryFn: () => getRepairTask(acceptanceId!, selectedWarehouseId!),
     enabled: Boolean(acceptanceId && selectedWarehouseId),
+    refetchInterval: MAINTENANCE_REFRESH_INTERVAL_MS,
   })
 
   const tasks = listQuery.data ?? EMPTY_REPAIR_TASKS
@@ -165,10 +168,10 @@ export function AcceptancePage() {
     selectedTask?.status === "COMPLETED" &&
     selectedTask.acceptanceStatus === "PENDING"
   const selectedTaskIsActionable =
-    selectedTaskIsPending && tasks.some((task) => task.id === selectedTask?.id)
-  const selectedTaskLoading = detailQuery.isLoading || listQuery.isLoading
+    selectedTaskIsPending && selectedTask.readyAt !== null
+  const selectedTaskLoading = detailQuery.isLoading
   const selectedTaskIsUnavailable =
-    detailQuery.isError || listQuery.isError || !selectedTaskIsActionable
+    detailQuery.isError || !selectedTaskIsActionable
 
   function openTask(taskId: string) {
     const next = new URLSearchParams(searchParams)
@@ -203,8 +206,6 @@ export function AcceptancePage() {
               <CardDescription role="alert">
                 {detailQuery.isError
                   ? "Не удалось загрузить досье приёмки."
-                  : listQuery.isError
-                    ? "Не удалось проверить доступность приёмки."
                     : "Задание больше не доступно для приёмки."}
               </CardDescription>
             </CardHeader>

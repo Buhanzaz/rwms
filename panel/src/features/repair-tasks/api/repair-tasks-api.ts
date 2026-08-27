@@ -115,6 +115,7 @@ function buildWriteCommand(params: {
     )
   }
   return {
+    creationIdempotencyKey: params.draft.creationIdempotencyKey,
     taskId: params.draft.taskId,
     expectedVersion: params.draft.expectedVersion,
     kind: params.draft.kind,
@@ -344,6 +345,7 @@ export async function writeOffRepairDraft(params: {
     )
   }
   const draft: RepairTaskEditorDraft = {
+    creationIdempotencyKey: params.idempotencyKey,
     taskId: params.taskId,
     expectedVersion: params.expectedVersion,
     kind: "REPAIR",

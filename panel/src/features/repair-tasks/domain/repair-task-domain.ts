@@ -228,9 +228,11 @@ export function assertRepairTaskSubtasksValid(
 
 export function createNewRepairTaskDraft(
   dispatchDate: string,
-  seed?: RepairTaskReworkSeed
+  seed?: RepairTaskReworkSeed,
+  creationIdempotencyKey: string = createOpaqueId("repair-create")
 ): RepairTaskEditorDraft {
   return {
+    creationIdempotencyKey,
     taskId: null,
     expectedVersion: null,
     kind: seed ? "REWORK" : "REPAIR",
@@ -256,6 +258,7 @@ export function toRepairTaskEditorDraft(
   task: RepairTaskDto
 ): RepairTaskEditorDraft {
   return {
+    creationIdempotencyKey: task.id,
     taskId: task.id,
     expectedVersion: task.version,
     kind: task.kind,

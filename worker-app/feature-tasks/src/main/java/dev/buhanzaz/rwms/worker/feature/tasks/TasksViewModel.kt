@@ -130,4 +130,13 @@ class TasksViewModel @Inject constructor(
     fun syncNow() {
         userId.value?.let(scheduler::request)
     }
+
+    /** Accepts the persisted server snapshot explicitly, then asks for a fresh authoritative feed. */
+    fun acknowledgeConflicts() {
+        val id = userId.value ?: return
+        viewModelScope.launch {
+            localStore.acknowledgeOpenConflicts(id)
+            scheduler.request(id)
+        }
+    }
 }

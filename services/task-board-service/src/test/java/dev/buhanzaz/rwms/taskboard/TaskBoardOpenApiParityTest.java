@@ -208,6 +208,26 @@ class TaskBoardOpenApiParityTest {
         .doesNotContainKey("repairComplexity");
   }
 
+  @Test
+  void nativeWorkerSchemasSeparateRawRouteIdentityFromExecutionPackageOrdinal()
+      throws Exception {
+    Map<String, Object> document = openApiDocument();
+    Map<String, Object> schemas = child(child(document, "components"), "schemas");
+
+    Map<String, Object> feedEntry = child(schemas, "WorkerFeedEntry");
+    assertThat(list(feedEntry.get("required")))
+        .contains("routeIndex", "routeStepIndex", "routeStepCount");
+    assertThat(child(feedEntry, "properties"))
+        .containsKeys("routeIndex", "routeStepIndex", "routeStepCount");
+
+    Map<String, Object> detail = child(schemas, "WorkerTaskDetail");
+    assertThat(list(detail.get("required")))
+        .contains("routeIndex", "routeStepIndex", "routeStepCount");
+    Map<String, Object> detailProperties = child(detail, "properties");
+    assertThat(detailProperties).containsKeys("routeIndex", "routeStepIndex", "routeStepCount");
+    assertThat(child(detailProperties, "routeStepCount")).containsEntry("minimum", 1);
+  }
+
   private Set<Endpoint> controllerEndpoints() throws ClassNotFoundException {
     var scanner = new ClassPathScanningCandidateComponentProvider(false);
     scanner.addIncludeFilter(new AnnotationTypeFilter(RestController.class));

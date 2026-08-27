@@ -134,7 +134,11 @@ data class WorkerFeedEntryDto(
     val entryId: String,
     val version: Long,
     val taskId: String,
+    /** Raw persisted route identity used by task-board evidence commands. */
     val routeIndex: Int,
+    /** Zero-based ordinal of this worker execution package. */
+    val routeStepIndex: Int,
+    /** Total number of worker execution packages. */
     val routeStepCount: Int,
     val entryType: String,
     val pinned: Boolean,
@@ -310,7 +314,12 @@ data class WorkerTaskDetailDto(
     // Default is only for task detail JSON cached before task-board exposed
     // the required nullable source reference.
     val source: TaskSourceReferenceDto? = null,
+    /** Raw persisted route identity used by task-board evidence commands. */
     val routeIndex: Int,
+    /** Zero-based ordinal of this worker execution package. */
+    val routeStepIndex: Int,
+    /** Total number of worker execution packages. */
+    val routeStepCount: Int,
     val title: String,
     val description: String?,
     @SerialName("object") val taskObject: WorkerTaskObjectDto?,

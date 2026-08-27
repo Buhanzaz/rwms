@@ -41,6 +41,7 @@ import {
 import { getAssetRentalItem } from "@/features/rental-items/api/asset-rental-items-api"
 import type {
   RentalItemRepairSeed,
+  RepairTaskReworkSeed,
   RepairsLocationState,
 } from "@/features/repair-tasks/model/repair-task"
 import { RepairTaskDetailWorkspace } from "@/features/repair-tasks/repair-task-detail-workspace"
@@ -52,6 +53,9 @@ import { useWorkspaceBack } from "@/hooks/use-workspace-back"
 
 const REPAIRS_PAGE_SIZE = 50
 const CABIN_LOOKUP_CONCURRENCY = 8
+const MAINTENANCE_REFRESH_INTERVAL_MS = 15_000
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 /** One maintenance-owned repair paired with the asset-owned display number. */
 type RepairsOverviewRow = {
@@ -185,6 +189,7 @@ function RepairsOverview() {
     queryFn: () =>
       loadRepairsOverview(accessToken!, selectedWarehouseId!, page),
     enabled: Boolean(accessToken && selectedWarehouseId),
+    refetchInterval: MAINTENANCE_REFRESH_INTERVAL_MS,
   })
   const normalizedSearch = search.trim().toLocaleLowerCase("ru")
   const rows = useMemo(
@@ -470,6 +475,48 @@ function resolveRentalItemRepairSeed(
   return value as RentalItemRepairSeed
 }
 
+type ReworkUrlIntent = {
+  warehouseId: string
+  sourceRepairTaskId: string
+  sourceRepairTaskVersion: number
+  selectedLineageRootIds: string[]
+}
+
+function resolveReworkUrlIntent(
+  searchParams: URLSearchParams
+): ReworkUrlIntent | null {
+  const warehouseId = searchParams.get("reworkWarehouseId")?.trim() ?? ""
+  const sourceRepairTaskId =
+    searchParams.get("reworkSourceId")?.trim() ?? ""
+  const versionValue = searchParams.get("reworkSourceVersion")?.trim() ?? ""
+  const sourceRepairTaskVersion = Number(versionValue)
+  if (
+    !UUID_PATTERN.test(warehouseId) ||
+    !UUID_PATTERN.test(sourceRepairTaskId) ||
+    !versionValue ||
+    !Number.isSafeInteger(sourceRepairTaskVersion) ||
+    sourceRepairTaskVersion < 0 ||
+    searchParams
+      .getAll("reworkLineage")
+      .some((value) => !UUID_PATTERN.test(value.trim()))
+  ) {
+    return null
+  }
+  return {
+    warehouseId,
+    sourceRepairTaskId,
+    sourceRepairTaskVersion,
+    selectedLineageRootIds: [
+      ...new Set(
+        searchParams
+          .getAll("reworkLineage")
+          .map((value) => value.trim())
+          .filter(Boolean)
+      ),
+    ],
+  }
+}
+
 function RepairsWorkspace({
   repairId,
   createRequested,
@@ -502,7 +549,17 @@ function RepairsWorkspace({
     }
     workspaceBack()
   }, [locationState?.workspaceEntry, navigate, workspaceBack])
-  const reworkSeed = createRequested ? locationState?.reworkSeed : undefined
+  const reworkIntentPresent =
+    createRequested &&
+    [
+      "reworkWarehouseId",
+      "reworkSourceId",
+      "reworkSourceVersion",
+      "reworkLineage",
+    ].some((key) => searchParams.has(key))
+  const reworkIntent = createRequested
+    ? resolveReworkUrlIntent(searchParams)
+    : null
   const rentalItemSeed = createRequested
     ? resolveRentalItemRepairSeed(
         locationState?.rentalItemSeed,
@@ -514,16 +571,57 @@ function RepairsWorkspace({
     queryKey: repairTaskDetailQueryKey(selectedWarehouseId ?? "none", repairId),
     queryFn: () => getRepairTask(repairId!, selectedWarehouseId!),
     enabled: Boolean(repairId && selectedWarehouseId),
+    refetchInterval: MAINTENANCE_REFRESH_INTERVAL_MS,
   })
   const reworkSourceQuery = useQuery({
     queryKey: repairTaskDetailQueryKey(
       selectedWarehouseId ?? "none",
-      reworkSeed?.sourceRepairTaskId ?? null
+      reworkIntent?.sourceRepairTaskId ?? null
     ),
     queryFn: () =>
-      getRepairTask(reworkSeed!.sourceRepairTaskId, selectedWarehouseId!),
-    enabled: Boolean(reworkSeed && selectedWarehouseId),
+      getRepairTask(reworkIntent!.sourceRepairTaskId, selectedWarehouseId!),
+    enabled: Boolean(
+      reworkIntent &&
+        selectedWarehouseId &&
+        reworkIntent.warehouseId === selectedWarehouseId
+    ),
+    refetchInterval: MAINTENANCE_REFRESH_INTERVAL_MS,
   })
+  const reworkSource = reworkSourceQuery.data ?? null
+  const reworkSeed: RepairTaskReworkSeed | undefined =
+    reworkIntent && reworkSource
+      ? {
+          type: "repair-rework-seed-v1",
+          warehouseId: reworkIntent.warehouseId,
+          sourceRepairTaskId: reworkIntent.sourceRepairTaskId,
+          sourceRepairTaskVersion: reworkIntent.sourceRepairTaskVersion,
+          sourceOrigin: reworkSource.origin,
+          sourceEstimateId: reworkSource.sourceEstimateId,
+          sourceEstimateVersion: reworkSource.sourceEstimateVersion,
+          rentalItemId: reworkSource.rentalItemId,
+          lines: [],
+          selectedLineageRootIds: reworkIntent.selectedLineageRootIds,
+          forceCapitalRepair: reworkSource.forceCapitalRepair,
+        }
+      : undefined
+  const reworkLoading = Boolean(
+    reworkIntentPresent &&
+      reworkIntent &&
+      selectedWarehouseId === reworkIntent.warehouseId &&
+      reworkSourceQuery.isLoading
+  )
+  const reworkUnavailable = Boolean(
+    reworkIntentPresent &&
+      !reworkLoading &&
+      (!reworkIntent ||
+        !selectedWarehouseId ||
+        reworkIntent.warehouseId !== selectedWarehouseId ||
+        reworkSourceQuery.isError ||
+        !reworkSource ||
+        reworkSource.version !== reworkIntent.sourceRepairTaskVersion ||
+        reworkSource.status !== "COMPLETED" ||
+        reworkSource.acceptanceStatus !== "PENDING")
+  )
 
   const selectedRepair = detailQuery.data ?? null
   const selectedRepairPlanEditable = Boolean(
@@ -599,15 +697,7 @@ function RepairsWorkspace({
               </CardHeader>
             </Card>
           </>
-        ) : reworkSeed &&
-          !reworkSourceQuery.isLoading &&
-          (!reworkSourceQuery.data ||
-            reworkSeed.warehouseId !== selectedWarehouseId ||
-            reworkSourceQuery.data.version !==
-              reworkSeed.sourceRepairTaskVersion ||
-            reworkSourceQuery.data.rentalItemId !== reworkSeed.rentalItemId ||
-            reworkSourceQuery.data.status !== "COMPLETED" ||
-            reworkSourceQuery.data.acceptanceStatus !== "PENDING") ? (
+        ) : reworkUnavailable ? (
           <>
             {workspaceBackToolbar}
             <Card>
@@ -638,14 +728,15 @@ function RepairsWorkspace({
             task={selectedRepair}
             readOnly={!canEdit}
             canManage={canManage}
-            sourceTask={reworkSourceQuery.data}
-            seed={reworkSourceQuery.data ? reworkSeed : undefined}
+            sourceTask={reworkSource}
+            seed={reworkSeed}
             initialRentalItemId={
-              repairId || reworkSeed ? undefined : rentalItemSeed?.rentalItemId
+              repairId || reworkIntentPresent
+                ? undefined
+                : rentalItemSeed?.rentalItemId
             }
             loading={Boolean(
-              (repairId && detailQuery.isLoading) ||
-              (reworkSeed && reworkSourceQuery.isLoading)
+              (repairId && detailQuery.isLoading) || reworkLoading
             )}
             onBack={goBack}
             onClose={goBack}

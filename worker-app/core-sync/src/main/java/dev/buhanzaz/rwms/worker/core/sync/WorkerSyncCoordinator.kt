@@ -20,6 +20,7 @@ import dev.buhanzaz.rwms.worker.core.network.WorkerContextDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerFeedCategoryDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerFeedResponse
 import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient
+import dev.buhanzaz.rwms.worker.core.network.WorkerTaskDetailDto
 import dev.buhanzaz.rwms.worker.core.network.gatewayFailureDisposition
 import dev.buhanzaz.rwms.worker.core.network.isProvenGatewayTransportFailure
 import javax.inject.Inject
@@ -54,18 +55,12 @@ sealed interface WorkerSyncOutcome {
     /** A valid session lacks the current grant and must not be retried in the background. */
     data class UserActionRequired(val reason: String) : WorkerSyncOutcome
 
-    /** A command conflict has been persisted and requires authoritative state before another action. */
+    /** A conflict and any server snapshot are persisted until the worker explicitly acknowledges them. */
     data class Conflict(val reason: String) : WorkerSyncOutcome
 
     /** A non-recoverable local or protocol failure stopped this sync attempt safely. */
     data class Failed(val reason: String) : WorkerSyncOutcome
 }
-
-/**
- * Carries only an explicitly classified temporary failure to the bounded
- * WorkManager recovery loop.
- */
-private class RetryableSyncException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 /** Stops background replay when the current worker grant cannot perform the requested action. */
 private class UserActionRequiredSyncException(message: String) : Exception(message)
@@ -98,6 +93,16 @@ private data class EvidenceSyncResult(
     val completedUnits: Int,
 )
 
+/**
+ * Reports whether one durable operation was retired and whether later work for
+ * the same entry must wait. Independent entries always remain eligible.
+ */
+private data class EntryOperationResult(
+    val completedUnits: Int,
+    val blocksEntry: Boolean,
+    val outcome: WorkerSyncOutcome? = null,
+)
+
 /** Captures one independently uploaded evidence outcome without cancelling sibling transfers. */
 private data class EvidenceUploadAttempt(
     val index: Int,
@@ -107,9 +112,10 @@ private data class EvidenceUploadAttempt(
 )
 
 /**
- * Executes the only permitted ordering for offline work: prerequisite actions,
- * evidence reservations, media upload/finalization, then completion actions.
- * Room is the UI source of truth during every stage.
+ * Executes the only permitted per-entry ordering for offline work:
+ * prerequisite actions, evidence reservations, media upload/finalization,
+ * then completion actions. Room is the UI source of truth during every stage;
+ * a blocked entry never stalls another entry owned by the same worker.
  */
 @Singleton
 class WorkerSyncCoordinator @Inject constructor(
@@ -123,8 +129,9 @@ class WorkerSyncCoordinator @Inject constructor(
     private val evidenceUploadPermits = Semaphore(MAX_PARALLEL_EVIDENCE_UPLOADS)
 
     /**
-     * Runs one authenticated recovery pass in the fixed command/evidence/feed order and returns a
-     * durable outcome; it never activates a new offline lease from a partial sync.
+     * Runs one authenticated recovery pass in per-entry dependency order, then
+     * refreshes the feed and returns a durable aggregate outcome. A partial
+     * pass never activates a new offline lease.
      */
     suspend fun sync(userId: String): WorkerSyncOutcome {
         localStore.hideExpiredCacheIfNeeded(userId)
@@ -145,139 +152,128 @@ class WorkerSyncCoordinator @Inject constructor(
 
             val outbox = localStore.pendingOutbox(userId)
             val actions = outbox.filter { it.kind == WorkerLocalStore.OUTBOX_ACTION }
-            val prerequisites = actions.filter { actionPayload(it).action != "COMPLETE" }
-            val completions = actions.filter { actionPayload(it).action == "COMPLETE" }
-            val reservations = outbox.filter { it.kind == WorkerLocalStore.OUTBOX_EVIDENCE_RESERVATION }
+            val pendingEvidence = database.evidenceDao().pending(userId)
             // Captured rows already exist before their reservation outbox row is
             // applied, so count media once up front for a stable progress total.
-            val mediaCount = database.evidenceDao().pending(userId).size
-            val total = prerequisites.size + reservations.size + mediaCount + completions.size + 2
+            val mediaCount = pendingEvidence.size
+            val total = outbox.size + mediaCount + 2
             var completed = 1
-
-            prerequisites.forEach { operation ->
-                applyAction(userId, operation)
-                completed += 1
-                updateProgress(userId, "COMMANDS", completed, total, null, null, "Передаём действия")
-            }
-            reservations.forEach { operation ->
-                reserveEvidence(userId, operation)
-                completed += 1
-                updateProgress(userId, "EVIDENCE", completed, total, null, null, "Резервируем фото")
-            }
-
-            val mediaResult = try {
-                uploadEvidence(userId, completed, total, mediaCount)
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: GatewayProblemException) {
-                if (error.disposition == GatewayFailureDisposition.AUTHENTICATION_REQUIRED) {
-                    throw error
-                }
-                if (error.disposition == GatewayFailureDisposition.USER_ACTION_REQUIRED) {
-                    return WorkerSyncOutcome.UserActionRequired(
-                        error.problem.detail ?: "Нужно обновить доступ рабочего",
-                    )
-                }
-                reconcileFeedAfterBlockedMedia(userId, context)
-                updateProgress(
-                    userId,
-                    "WAITING_FOR_EVIDENCE",
-                    completed,
-                    total,
-                    null,
-                    null,
-                    "Фото не отправлено; задания обновлены по данным RWMS",
+            val entryOutcomes = mutableListOf<WorkerSyncOutcome>()
+            val entryIds = (
+                outbox.map { it.entryId to it.createdAtEpochMillis } +
+                    pendingEvidence.map { it.entryId to it.createdAtEpochMillis }
                 )
-                return workerSyncOutcomeForGatewayProblem(error)
-            } catch (error: Throwable) {
-                if (!error.isProvenGatewayTransportFailure()) {
-                    reconcileFeedAfterBlockedMedia(userId, context)
-                    updateProgress(
-                        userId,
-                        "WAITING_FOR_EVIDENCE",
-                        completed,
-                        total,
-                        null,
-                        null,
-                        "Фото требует действия; задания обновлены по данным RWMS",
-                    )
-                    return WorkerSyncOutcome.Failed(error.message ?: "Не удалось загрузить фотографию")
-                }
-                reconcileFeedAfterBlockedMedia(userId, context)
-                updateProgress(
-                    userId,
-                    "WAITING_FOR_EVIDENCE",
-                    completed,
-                    total,
-                    null,
-                    null,
-                    "Фото ожидает повторной отправки; задания обновлены по данным RWMS",
-                )
-                return WorkerSyncOutcome.Retry(error.message ?: "Не удалось загрузить фотографию")
-            }
-            if (mediaResult.outcome != null) {
-                // An upload can be delayed by media processing or a transient
-                // failure for minutes. It must not prevent an authenticated
-                // full feed from removing a task another worker has completed.
-                // Completion actions remain below this gate and therefore are
-                // never sent before their evidence is READY.
-                reconcileFeedAfterBlockedMedia(userId, context)
-                updateProgress(
-                    userId,
-                    "WAITING_FOR_EVIDENCE",
-                    mediaResult.completedUnits,
-                    total,
-                    null,
-                    null,
-                    "Фото ожидает готовности; задания обновлены по данным RWMS",
-                )
-                return mediaResult.outcome
-            }
-            completed = mediaResult.completedUnits
+                .sortedBy { it.second }
+                .map { it.first }
+                .distinct()
 
-            completions.forEach { operation ->
-                if (!completionEvidenceReady(userId, operation.entryId)) {
-                    updateProgress(
-                        userId,
-                        "WAITING_FOR_EVIDENCE",
-                        completed,
-                        total,
-                        null,
-                        null,
-                        "Завершение ждёт готовые фотографии",
-                    )
-                    return WorkerSyncOutcome.Deferred("Завершение ждёт обработки фотографии")
+            entryIds.forEach { entryId ->
+                val entryActions = actions.filter { it.entryId == entryId }
+                val prerequisites = entryActions.filter { actionPayload(it).action != "COMPLETE" }
+                val completions = entryActions.filter { actionPayload(it).action == "COMPLETE" }
+                val reservations = outbox.filter {
+                    it.entryId == entryId && it.kind == WorkerLocalStore.OUTBOX_EVIDENCE_RESERVATION
                 }
-                applyAction(userId, operation)
-                completed += 1
-                updateProgress(userId, "COMMANDS", completed, total, null, null, "Завершаем задания")
+                var entryBlocked = false
+
+                for (operation in prerequisites) {
+                    val result = applyAction(userId, operation)
+                    completed += result.completedUnits
+                    result.outcome?.let(entryOutcomes::add)
+                    updateProgress(userId, "COMMANDS", completed, total, null, null, "Передаём действия")
+                    if (result.blocksEntry) {
+                        entryBlocked = true
+                        break
+                    }
+                }
+                if (entryBlocked) return@forEach
+
+                for (operation in reservations) {
+                    val result = reserveEvidence(userId, operation)
+                    completed += result.completedUnits
+                    result.outcome?.let(entryOutcomes::add)
+                    updateProgress(userId, "EVIDENCE", completed, total, null, null, "Резервируем фото")
+                    if (result.blocksEntry) {
+                        entryBlocked = true
+                        break
+                    }
+                }
+                if (entryBlocked) return@forEach
+
+                val entryEvidence = database.evidenceDao().pending(userId).filter { it.entryId == entryId }
+                val mediaResult = uploadEvidence(userId, entryEvidence, completed, total)
+                completed = mediaResult.completedUnits
+                mediaResult.outcome?.let {
+                    entryOutcomes += it
+                    return@forEach
+                }
+
+                for (operation in completions) {
+                    if (!completionEvidenceReady(userId, operation.entryId)) {
+                        entryOutcomes += WorkerSyncOutcome.Deferred(
+                            "Завершение ${operation.entryId} ждёт обработки фотографии",
+                        )
+                        break
+                    }
+                    val result = applyAction(userId, operation)
+                    completed += result.completedUnits
+                    result.outcome?.let(entryOutcomes::add)
+                    updateProgress(userId, "COMMANDS", completed, total, null, null, "Завершаем задания")
+                    if (result.blocksEntry) break
+                }
             }
+
+            val passOutcome = highestPriorityOutcome(entryOutcomes)
             when (val feed = fetchFeed(userId, context)) {
                 is FetchedFeed.Changed -> {
-                    projections.commitContextAndFeed(
-                        context,
-                        feed.revision,
-                        feed.serverTime,
-                        feed.categories,
-                        feed.etag,
-                    )
+                    if (passOutcome == null) {
+                        projections.commitContextAndFeed(
+                            context,
+                            feed.revision,
+                            feed.serverTime,
+                            feed.categories,
+                            feed.etag,
+                        )
+                    } else {
+                        projections.commitFeedWithoutLeaseRenewal(
+                            userId = userId,
+                            revision = feed.revision,
+                            serverTime = feed.serverTime,
+                            categories = feed.categories,
+                            etag = feed.etag,
+                        )
+                    }
                 }
                 is FetchedFeed.NotModified -> {
                     // Context + a validated ETag is a successful full snapshot.
-                    projections.applyContext(context)
+                    if (passOutcome == null) projections.applyContext(context)
                 }
             }
             completed += 1
-            updateProgress(userId, "IDLE", completed, total, null, null, "Синхронизировано")
-            WorkerSyncOutcome.Complete
+            if (passOutcome == null) {
+                updateProgress(userId, "IDLE", completed, total, null, null, "Синхронизировано")
+                WorkerSyncOutcome.Complete
+            } else {
+                updateProgress(
+                    userId = userId,
+                    stage = passOutcome.progressStage(),
+                    completed = completed,
+                    total = total,
+                    activeEvidenceId = null,
+                    activeEvidencePercent = null,
+                    message = passOutcome.progressMessage(),
+                )
+                passOutcome
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (error: UserActionRequiredSyncException) {
             WorkerSyncOutcome.UserActionRequired(error.message ?: "Нужно обновить доступ рабочего")
         } catch (error: GatewayProblemException) {
+            if (error.disposition == GatewayFailureDisposition.CONFLICT) {
+                recordSyncConflict(userId, error)
+            }
             workerSyncOutcomeForGatewayProblem(error)
-        } catch (error: RetryableSyncException) {
-            WorkerSyncOutcome.Retry(error.message ?: "Сеть недоступна")
         } catch (error: TerminalSyncException) {
             WorkerSyncOutcome.Failed(error.message ?: "Не удалось синхронизировать данные")
         } catch (error: Throwable) {
@@ -289,7 +285,7 @@ class WorkerSyncCoordinator @Inject constructor(
         }
     }
 
-    private suspend fun applyAction(userId: String, operation: WorkerOutboxEntity) {
+    private suspend fun applyAction(userId: String, operation: WorkerOutboxEntity): EntryOperationResult {
         val pending = actionPayload(operation)
         try {
             val result = gateway.action(
@@ -305,6 +301,7 @@ class WorkerSyncCoordinator @Inject constructor(
                 ),
             )
             projections.commitActionResult(userId, operation.operationId, result.entry)
+            return EntryOperationResult(completedUnits = 1, blocksEntry = false)
         } catch (error: CancellationException) {
             throw error
         } catch (error: GatewayProblemException) {
@@ -312,7 +309,11 @@ class WorkerSyncCoordinator @Inject constructor(
                 GatewayFailureDisposition.AUTHENTICATION_REQUIRED -> throw error
                 GatewayFailureDisposition.RETRYABLE -> {
                     localStore.markOutboxRetry(operation, error.problem.detail ?: error.problem.title)
-                    throw RetryableSyncException(error.problem.detail ?: error.problem.title, error)
+                    return EntryOperationResult(
+                        completedUnits = 0,
+                        blocksEntry = true,
+                        outcome = WorkerSyncOutcome.Retry(error.problem.detail ?: error.problem.title),
+                    )
                 }
                 GatewayFailureDisposition.USER_ACTION_REQUIRED,
                 GatewayFailureDisposition.CONFLICT,
@@ -320,23 +321,46 @@ class WorkerSyncCoordinator @Inject constructor(
                 -> {
                     resolveTerminalActionProblem(userId, operation, error)
                     if (error.disposition == GatewayFailureDisposition.USER_ACTION_REQUIRED) {
-                        throw UserActionRequiredSyncException(
-                            error.problem.detail ?: "Нужно обновить доступ рабочего",
+                        return EntryOperationResult(
+                            completedUnits = 1,
+                            blocksEntry = true,
+                            outcome = WorkerSyncOutcome.UserActionRequired(
+                                error.problem.detail ?: "Нужно обновить доступ рабочего",
+                            ),
                         )
                     }
+                    return EntryOperationResult(
+                        completedUnits = 1,
+                        blocksEntry = true,
+                        outcome = if (error.disposition == GatewayFailureDisposition.CONFLICT) {
+                            WorkerSyncOutcome.Conflict(
+                                error.problem.detail ?: "Данные задания изменились на RWMS",
+                            )
+                        } else {
+                            null
+                        },
+                    )
                 }
             }
         } catch (error: Throwable) {
             if (error.isProvenGatewayTransportFailure()) {
                 localStore.markOutboxRetry(operation, error.message ?: "network")
-                throw RetryableSyncException("Не удалось передать действие", error)
+                return EntryOperationResult(
+                    completedUnits = 0,
+                    blocksEntry = true,
+                    outcome = WorkerSyncOutcome.Retry("Не удалось передать действие"),
+                )
             }
             localStore.markOutboxRetry(operation, error.message ?: "network")
-            throw TerminalSyncException("Не удалось передать действие", error)
+            return EntryOperationResult(
+                completedUnits = 0,
+                blocksEntry = true,
+                outcome = WorkerSyncOutcome.Failed("Не удалось передать действие"),
+            )
         }
     }
 
-    private suspend fun reserveEvidence(userId: String, operation: WorkerOutboxEntity) {
+    private suspend fun reserveEvidence(userId: String, operation: WorkerOutboxEntity): EntryOperationResult {
         val pending = runCatching {
             json.decodeFromString<PendingEvidenceReservation>(localStore.decryptOutboxPayload(operation))
         }.getOrElse { throw TerminalSyncException("Локальная резервная запись повреждена", it) }
@@ -363,6 +387,7 @@ class WorkerSyncCoordinator @Inject constructor(
                 now = System.currentTimeMillis(),
             )
             localStore.markOutboxComplete(operation.operationId)
+            return EntryOperationResult(completedUnits = 1, blocksEntry = false)
         } catch (error: CancellationException) {
             throw error
         } catch (error: GatewayProblemException) {
@@ -370,7 +395,11 @@ class WorkerSyncCoordinator @Inject constructor(
                 GatewayFailureDisposition.AUTHENTICATION_REQUIRED -> throw error
                 GatewayFailureDisposition.RETRYABLE -> {
                     localStore.markOutboxRetry(operation, error.problem.detail ?: error.problem.title)
-                    throw RetryableSyncException(error.problem.detail ?: error.problem.title, error)
+                    return EntryOperationResult(
+                        completedUnits = 0,
+                        blocksEntry = true,
+                        outcome = WorkerSyncOutcome.Retry(error.problem.detail ?: error.problem.title),
+                    )
                 }
                 GatewayFailureDisposition.USER_ACTION_REQUIRED,
                 GatewayFailureDisposition.CONFLICT,
@@ -378,19 +407,42 @@ class WorkerSyncCoordinator @Inject constructor(
                 -> {
                     resolveTerminalEvidenceReservationProblem(userId, operation, pending, error)
                     if (error.disposition == GatewayFailureDisposition.USER_ACTION_REQUIRED) {
-                        throw UserActionRequiredSyncException(
-                            error.problem.detail ?: "Нужно обновить доступ рабочего",
+                        return EntryOperationResult(
+                            completedUnits = 1,
+                            blocksEntry = true,
+                            outcome = WorkerSyncOutcome.UserActionRequired(
+                                error.problem.detail ?: "Нужно обновить доступ рабочего",
+                            ),
                         )
                     }
+                    return EntryOperationResult(
+                        completedUnits = 1,
+                        blocksEntry = true,
+                        outcome = if (error.disposition == GatewayFailureDisposition.CONFLICT) {
+                            WorkerSyncOutcome.Conflict(
+                                error.problem.detail ?: "Данные задания изменились на RWMS",
+                            )
+                        } else {
+                            null
+                        },
+                    )
                 }
             }
         } catch (error: Throwable) {
             if (error.isProvenGatewayTransportFailure()) {
                 localStore.markOutboxRetry(operation, error.message ?: "network")
-                throw RetryableSyncException("Не удалось зарезервировать фото", error)
+                return EntryOperationResult(
+                    completedUnits = 0,
+                    blocksEntry = true,
+                    outcome = WorkerSyncOutcome.Retry("Не удалось зарезервировать фото"),
+                )
             }
             localStore.markOutboxRetry(operation, error.message ?: "network")
-            throw TerminalSyncException("Не удалось зарезервировать фото", error)
+            return EntryOperationResult(
+                completedUnits = 0,
+                blocksEntry = true,
+                outcome = WorkerSyncOutcome.Failed("Не удалось зарезервировать фото"),
+            )
         }
     }
 
@@ -466,11 +518,10 @@ class WorkerSyncCoordinator @Inject constructor(
 
     private suspend fun uploadEvidence(
         userId: String,
+        evidence: List<TaskEvidenceEntity>,
         completed: Int,
         total: Int,
-        expectedMediaCount: Int,
     ): EvidenceSyncResult = supervisorScope {
-        val evidence = database.evidenceDao().pending(userId)
         val attempts = evidence.mapIndexed { index, item ->
             async {
                 evidenceUploadPermits.withPermit {
@@ -508,12 +559,42 @@ class WorkerSyncCoordinator @Inject constructor(
             }
         }.awaitAll().sortedBy(EvidenceUploadAttempt::index)
 
-        attempts.firstOrNull { it.error != null }?.let { failed ->
-            throw requireNotNull(failed.error)
-        }
         val completedUploads = attempts.count { attempt ->
             attempt.result is EvidenceUploadResult.Ready ||
                 attempt.result is EvidenceUploadResult.ReviewRequired
+        }
+        attempts.firstOrNull { it.error != null }?.let { failed ->
+            val error = requireNotNull(failed.error)
+            if (error is GatewayProblemException &&
+                error.disposition == GatewayFailureDisposition.AUTHENTICATION_REQUIRED
+            ) {
+                throw error
+            }
+            if (error is GatewayProblemException &&
+                error.disposition == GatewayFailureDisposition.CONFLICT
+            ) {
+                val item = evidence.first { it.evidenceId == failed.evidenceId }
+                localStore.recordConflict(
+                    userId = userId,
+                    operationId = item.uploadOperationId,
+                    entryId = item.entryId,
+                    code = error.problem.code,
+                    message = error.problem.detail ?: error.problem.title,
+                    currentVersion = error.problem.currentVersion,
+                    currentEntryJson = error.problem.currentEntry?.let(json::encodeToString),
+                )
+            }
+            val outcome = if (error is GatewayProblemException) {
+                workerSyncOutcomeForGatewayProblem(error)
+            } else if (error.isProvenGatewayTransportFailure()) {
+                WorkerSyncOutcome.Retry(error.message ?: "Не удалось загрузить фотографию")
+            } else {
+                WorkerSyncOutcome.Failed(error.message ?: "Не удалось загрузить фотографию")
+            }
+            return@supervisorScope EvidenceSyncResult(
+                outcome = outcome,
+                completedUnits = completed + completedUploads,
+            )
         }
         attempts.firstOrNull { it.result is EvidenceUploadResult.WaitingForReservation }?.let {
             return@supervisorScope EvidenceSyncResult(
@@ -527,7 +608,7 @@ class WorkerSyncCoordinator @Inject constructor(
                 completed + completedUploads,
             )
         }
-        EvidenceSyncResult(outcome = null, completedUnits = completed + expectedMediaCount)
+        EvidenceSyncResult(outcome = null, completedUnits = completed + evidence.size)
     }
 
     private suspend fun fetchFeed(userId: String, context: WorkerContextDto): FetchedFeed {
@@ -587,34 +668,34 @@ class WorkerSyncCoordinator @Inject constructor(
     }
 
     /**
-     * Applies an authenticated full feed after blocked media without accepting
-     * the context's new offline lease. This keeps completed-by-another-worker
-     * tasks from remaining IN_PROGRESS while preserving upload/completion
-     * ordering and the captured encrypted evidence.
-     */
-    private suspend fun reconcileFeedAfterBlockedMedia(userId: String, context: WorkerContextDto) {
-        when (val feed = fetchFeed(userId, context)) {
-            is FetchedFeed.Changed -> projections.commitFeedWithoutLeaseRenewal(
-                userId = userId,
-                revision = feed.revision,
-                serverTime = feed.serverTime,
-                categories = feed.categories,
-                etag = feed.etag,
-            )
-            is FetchedFeed.NotModified -> Unit
-        }
-    }
-
-    /**
-     * A completion is never sent while the local projection knows that its
-     * queue still lacks READY evidence. The server remains authoritative and
-     * repeats this gate, but avoiding the request prevents a false success UI.
+     * A completion is never sent while the merged server/local projection
+     * still lacks READY evidence. The task count covers a feed-only snapshot;
+     * cached detail IDs and local finalized IDs are unioned to avoid both stale
+     * feed undercounting and double-counting the same evidence.
      */
     private suspend fun completionEvidenceReady(userId: String, entryId: String): Boolean {
         val task = database.taskDao().task(userId, entryId) ?: return false
-        val ready = database.evidenceDao().readyCount(userId, entryId)
+        val localReadyIds = database.evidenceDao().readyIds(userId, entryId)
+        val detailReadyIds = cachedReadyEvidenceIds(userId, entryId)
+        val ready = combinedReadyEvidenceCount(
+            serverReadyEvidenceCount = task.readyEvidenceCount,
+            localReadyEvidenceIds = localReadyIds,
+            detailReadyEvidenceIds = detailReadyIds,
+        )
         return completionGateAllows(task.resultPhotoMinCount, ready)
     }
+
+    private suspend fun cachedReadyEvidenceIds(userId: String, entryId: String): List<String> =
+        database.detailDao().detail(userId, entryId)
+            ?.sanitizedDetailJson
+            ?.let { encoded ->
+                runCatching { json.decodeFromString<WorkerTaskDetailDto>(encoded) }
+                    .getOrNull()
+                    ?.evidence
+                    ?.filter { it.state == "READY" }
+                    ?.map { it.evidenceId }
+            }
+            .orEmpty()
 
     private fun actionPayload(operation: WorkerOutboxEntity): PendingWorkerAction =
         runCatching { json.decodeFromString<PendingWorkerAction>(localStore.decryptOutboxPayload(operation)) }
@@ -633,6 +714,20 @@ class WorkerSyncCoordinator @Inject constructor(
             message = error.problem.detail ?: error.problem.title,
             currentVersion = error.problem.currentVersion,
             currentEntryJson = error.problem.currentEntry?.let(json::encodeToString),
+        )
+    }
+
+    /** Persists a non-command 409 (for example a feed revision race) for explicit acknowledgement. */
+    private suspend fun recordSyncConflict(userId: String, error: GatewayProblemException) {
+        val currentEntry = error.problem.currentEntry
+        localStore.recordConflict(
+            userId = userId,
+            operationId = "sync:$userId:${error.problem.code}:${error.problem.currentVersion ?: "unknown"}",
+            entryId = currentEntry?.entryId ?: SYNC_CONFLICT_ENTRY_ID,
+            code = error.problem.code,
+            message = error.problem.detail ?: error.problem.title,
+            currentVersion = error.problem.currentVersion,
+            currentEntryJson = currentEntry?.let(json::encodeToString),
         )
     }
 
@@ -704,6 +799,49 @@ internal fun validateFeedPage(
 internal fun completionGateAllows(requiredReadyEvidence: Int, actualReadyEvidence: Int): Boolean =
     actualReadyEvidence >= requiredReadyEvidence
 
+/**
+ * Merges a count-only feed snapshot with exact READY IDs known from detail and
+ * local finalized evidence without counting an ID twice.
+ */
+internal fun combinedReadyEvidenceCount(
+    serverReadyEvidenceCount: Int,
+    localReadyEvidenceIds: List<String>,
+    detailReadyEvidenceIds: List<String>,
+): Int = maxOf(
+    serverReadyEvidenceCount,
+    (localReadyEvidenceIds + detailReadyEvidenceIds).distinct().size,
+)
+
+/** Selects the durable result for a pass after every independent entry had a chance to progress. */
+private fun highestPriorityOutcome(outcomes: List<WorkerSyncOutcome>): WorkerSyncOutcome? =
+    outcomes.firstOrNull { it is WorkerSyncOutcome.UserActionRequired } ?:
+        outcomes.firstOrNull { it is WorkerSyncOutcome.Failed } ?:
+        outcomes.firstOrNull { it is WorkerSyncOutcome.Retry } ?:
+        outcomes.firstOrNull { it is WorkerSyncOutcome.Conflict } ?:
+        outcomes.firstOrNull { it is WorkerSyncOutcome.Deferred }
+
+/** Returns the durable progress stage associated with an incomplete sync pass. */
+private fun WorkerSyncOutcome.progressStage(): String = when (this) {
+    WorkerSyncOutcome.Complete -> "IDLE"
+    is WorkerSyncOutcome.Deferred -> "WAITING_FOR_EVIDENCE"
+    is WorkerSyncOutcome.Retry -> "RETRY"
+    is WorkerSyncOutcome.AuthenticationRequired -> "AUTHENTICATION_REQUIRED"
+    is WorkerSyncOutcome.UserActionRequired -> "USER_ACTION_REQUIRED"
+    is WorkerSyncOutcome.Conflict -> "CONFLICT"
+    is WorkerSyncOutcome.Failed -> "FAILED"
+}
+
+/** Returns the worker-facing reason retained with an incomplete sync pass. */
+private fun WorkerSyncOutcome.progressMessage(): String? = when (this) {
+    WorkerSyncOutcome.Complete -> null
+    is WorkerSyncOutcome.Deferred -> reason
+    is WorkerSyncOutcome.Retry -> reason
+    is WorkerSyncOutcome.AuthenticationRequired -> reason
+    is WorkerSyncOutcome.UserActionRequired -> reason
+    is WorkerSyncOutcome.Conflict -> reason
+    is WorkerSyncOutcome.Failed -> reason
+}
+
 /** A purged/hidden projection must be fetched again instead of revalidated. */
 internal fun WorkerSessionEntity?.feedEtagForValidatedProjection(): String? =
     this?.takeIf { !it.cacheHidden }?.feedEtag
@@ -738,6 +876,7 @@ private const val MAX_FEED_PAGES = 100
 private const val MAX_PARALLEL_EVIDENCE_UPLOADS = 2
 private const val TERMINAL_TASK_EVIDENCE_REASON =
     "Задание уже завершено; локальная фотография сохранена на устройстве"
+private const val SYNC_CONFLICT_ENTRY_ID = "worker-feed"
 
 /** Returns whether task-board proved that no further worker evidence can be attached. */
 private fun String.isTerminalWorkerTaskStatus(): Boolean = this == "DONE" || this == "CANCELLED"

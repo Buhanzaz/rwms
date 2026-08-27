@@ -69,9 +69,9 @@ public final class MaintenanceApiModels {
   public enum InventoryPlanLineKind { CATALOG, MANUAL }
   public enum InventoryPlanLineType { WORK, MATERIAL }
   /** Asset state guaranteed to logistics after a successful historical-shipment repair closure. */
-  public enum HistoricalShipmentRentalItemStatus { FREE }
+  public enum HistoricalShipmentRentalItemStatus { FREE, RENTED }
   /** Result of the maintenance portion of one historical-shipment saga. */
-  public enum HistoricalShipmentClosureOutcome { NOT_REQUIRED, CLOSED }
+  public enum HistoricalShipmentClosureOutcome { NOT_REQUIRED, CLOSED, ALREADY_RENTED }
   /** The maintenance aggregate selected from the current asset truth for an inventory finding. */
   public enum InventoryPublicationTargetKind { ESTIMATE, REPAIR }
   /** A manager-approved publication decision for one completed inventory finding. */

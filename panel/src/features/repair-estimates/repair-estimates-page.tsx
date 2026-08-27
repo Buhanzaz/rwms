@@ -78,6 +78,7 @@ function positiveIntegerSearchParam(value: string | null) {
 }
 
 const EMPTY_REPAIR_ESTIMATES: RepairEstimateSummaryDto[] = []
+const EMPTY_RETURN_ESTIMATE_SOURCES: ReturnEstimateSourceDto[] = []
 
 export function RepairEstimatesPage() {
   const { selectedWarehouseId } = useWarehouse()
@@ -195,7 +196,8 @@ export function RepairEstimatesPage() {
     closeEditor()
   }
 
-  const returnEstimateSources = returnEstimateSourcesQuery.data ?? []
+  const returnEstimateSources =
+    returnEstimateSourcesQuery.data ?? EMPTY_RETURN_ESTIMATE_SOURCES
   useEffect(() => {
     if (
       returnId &&

@@ -2,8 +2,10 @@ package dev.buhanzaz.rwms.worker.core.sync
 
 import androidx.room.Room
 import com.google.common.truth.Truth.assertThat
+import dev.buhanzaz.rwms.worker.core.database.PendingPayloadCipher
 import dev.buhanzaz.rwms.worker.core.database.WorkerConflictEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerDatabase
+import dev.buhanzaz.rwms.worker.core.database.WorkerLocalStore
 import dev.buhanzaz.rwms.worker.core.database.WorkerOutboxEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerTaskEntity
 import dev.buhanzaz.rwms.worker.core.network.WorkerAssignmentDto
@@ -18,6 +20,8 @@ import dev.buhanzaz.rwms.worker.core.network.WorkerTaskTimerSnapshotDto
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import javax.crypto.SecretKey
+import javax.crypto.spec.SecretKeySpec
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -45,7 +49,7 @@ class FullSyncConflictResolutionRobolectricTest {
     }
 
     @Test
-    fun changedFullFeedResolvesOnlyCurrentUsersOpenConflicts() = runTest {
+    fun changedFullFeedPreservesEveryOpenConflictUntilExplicitAcknowledgement() = runTest {
         database.conflictDao().upsert(conflict(USER_ID, "operation-current"))
         database.conflictDao().upsert(conflict("worker-other", "operation-other"))
 
@@ -57,12 +61,12 @@ class FullSyncConflictResolutionRobolectricTest {
             etag = "\"feed-11\"",
         )
 
-        assertThat(database.conflictDao().observeOpen(USER_ID).first()).isEmpty()
+        assertThat(database.conflictDao().observeOpen(USER_ID).first()).hasSize(1)
         assertThat(database.conflictDao().observeOpen("worker-other").first()).hasSize(1)
     }
 
     @Test
-    fun validatedNotModifiedFeedRepairsLegacyOptimisticTaskAndResolvesConflicts() = runTest {
+    fun validatedNotModifiedFeedRepairsLegacyTaskButOnlyUserAcknowledgementResolvesConflict() = runTest {
         val now = System.currentTimeMillis()
         database.taskDao().upsertAll(listOf(optimisticTask(now)))
         writer.applyDetail(USER_ID, authoritativeDetail())
@@ -70,7 +74,7 @@ class FullSyncConflictResolutionRobolectricTest {
 
         writer.applyContext(context())
 
-        assertThat(database.conflictDao().observeOpen(USER_ID).first()).isEmpty()
+        assertThat(database.conflictDao().observeOpen(USER_ID).first()).hasSize(1)
         val repaired = database.taskDao().task(USER_ID, ENTRY_ID)
         assertThat(repaired?.status).isEqualTo("PAUSED")
         assertThat(repaired?.version).isEqualTo(8)
@@ -80,6 +84,14 @@ class FullSyncConflictResolutionRobolectricTest {
                 .single()
                 .workerName,
         ).isEqualTo("Android Demo")
+
+        val localStore = WorkerLocalStore(
+            database,
+            testPendingPayloadCipher(),
+            Json { ignoreUnknownKeys = true },
+        )
+        assertThat(localStore.acknowledgeOpenConflicts(USER_ID)).isEqualTo(1)
+        assertThat(database.conflictDao().observeOpen(USER_ID).first()).isEmpty()
     }
 
     @Test
@@ -166,13 +178,14 @@ class FullSyncConflictResolutionRobolectricTest {
     }
 
     @Test
-    fun fullFeedPersistsRouteSizeAcrossAuthoritativeDetailRefresh() = runTest {
+    fun feedAndDetailKeepRawRouteIdentitySeparateFromWorkerPackageOrdinal() = runTest {
         val repairs = category("repair", "Ремонты", sortOrder = 10)
         val entry = WorkerFeedEntryDto(
             entryId = ENTRY_ID,
             version = 11,
             taskId = "task",
-            routeIndex = 1,
+            routeIndex = 41,
+            routeStepIndex = 1,
             routeStepCount = 3,
             entryType = "SHADOW",
             pinned = true,
@@ -200,11 +213,19 @@ class FullSyncConflictResolutionRobolectricTest {
             categories = listOf(WorkerFeedCategoryDto(repairs, entries = listOf(entry))),
             etag = "\"feed-11\"",
         )
-        writer.applyDetail(USER_ID, authoritativeDetail().copy(routeIndex = 2))
+        writer.applyDetail(
+            USER_ID,
+            authoritativeDetail().copy(
+                routeIndex = 73,
+                routeStepIndex = 2,
+                routeStepCount = 4,
+            ),
+        )
 
         val persisted = database.taskDao().task(USER_ID, ENTRY_ID)
-        assertThat(persisted?.routeIndex).isEqualTo(2)
-        assertThat(persisted?.routeStepCount).isEqualTo(3)
+        assertThat(persisted?.routeIndex).isEqualTo(73)
+        assertThat(persisted?.routeStepIndex).isEqualTo(2)
+        assertThat(persisted?.routeStepCount).isEqualTo(4)
         assertThat(persisted?.entryType).isEqualTo("SHADOW")
         assertThat(persisted?.pinned).isTrue()
     }
@@ -256,6 +277,12 @@ class FullSyncConflictResolutionRobolectricTest {
         resolvedAtEpochMillis = null,
     )
 
+    private fun testPendingPayloadCipher(): PendingPayloadCipher {
+        val constructor = PendingPayloadCipher::class.java.getDeclaredConstructor(SecretKey::class.java)
+        constructor.isAccessible = true
+        return constructor.newInstance(SecretKeySpec(ByteArray(32) { 0x2a }, "AES"))
+    }
+
     private fun optimisticTask(now: Long) = WorkerTaskEntity(
         localId = "$USER_ID:$ENTRY_ID",
         userId = USER_ID,
@@ -303,6 +330,8 @@ class FullSyncConflictResolutionRobolectricTest {
         version = 8,
         taskId = "task",
         routeIndex = 0,
+        routeStepIndex = 0,
+        routeStepCount = 1,
         title = "Переместить бытовку",
         description = null,
         taskObject = null,

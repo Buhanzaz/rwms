@@ -41,6 +41,9 @@
 комментарий и безопасно отменяется; его этап ремонта фиксируется как системно завершённый без
 подделки worker evidence. Начатая работа или version conflict отклоняются для operator
 reconciliation.
+Когда ремонта нет, а asset-service уже возвращает `RENTED`, maintenance отвечает явным proof
+`ALREADY_RENTED` с неизменённой версией бытовки; он не отправляет переход статуса или release lease.
+Поэтому logistics может восстановить недостающие факты отгрузки без повторения физического выезда.
 
 Preflight публикации инвентаризации по-прежнему требует ограниченный список `findings`, принимает
 пустой список, когда итоговый план не содержит maintenance work, и всегда возвращает пустой массив
@@ -201,12 +204,21 @@ evidence и удаляя повторы по media ID. Эти ссылки не 
 согласует оба PostgreSQL allow-list топиков с существующей Kafka-подпиской, разрешая только
 `rwms.task-board.task-evidence.v1`; она не переписывает существующие сообщения и не переносит
 владение транспортом.
-Публичная коллекция ремонтов применяет склад, состояния, бытовку, опциональный ограниченный фильтр
-`repairIds` и пагинацию в PostgreSQL до сборки DTO ремонтов. Потребители task-board используют этот
-добавочный ID-фильтр порциями не более 200, поэтому обновление доски никогда не гидратирует все
-ремонты склада; нефильтрованный endpoint сохраняет прежнее постраничное поведение. Этот read path
-принадлежит
+Публичная коллекция ремонтов применяет склад, состояния, бытовку, точный необязательный
+`estimateId`, опциональный ограниченный `repairIds` и пагинацию в PostgreSQL до сборки DTO ремонтов.
+Потребители task-board используют ID-фильтр порциями не более 200, а workspace сметы — точный
+estimate-фильтр; оба lookup не гидратируют посторонние ремонты склада. Нефильтрованный endpoint
+сохраняет прежнее постраничное поведение. Этот read path принадлежит
 [`MaintenanceRepairUseCases`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceRepairUseCases.java).
+Финализация прямого ремонта блокирует maintenance-owned rental-item fact, после ожидания повторно
+проверяет точный receipt идемпотентности subject/key/request и затем отклоняет другой non-terminal
+PRIMARY root для той же бытовки. Поэтому конкурентный lost-response retry возвращает
+исходный ремонт, а другая семантическая команда создания получает `MAINTENANCE_STATE_CONFLICT`;
+пока удерживается эта локальная блокировка, remote call не выполняется.
+Миграция
+[`V49__repair_acceptance_and_creation_indexes.sql`](src/main/resources/db/migration/V49__repair_acceptance_and_creation_indexes.sql)
+добавляет только индексы source-rework и active-primary для этих bounded queries; lifecycle rows
+она не переписывает.
 При старте maintenance идемпотентно ставит существующий pre-start update workflow в очередь для
 всех уже зарегистрированных ожидающих ремонтов. Этот owner-local проход не выполняет remote I/O и
 позволяет обычному reconciliation worker исправить старые presentation snapshots, включая порядок
@@ -252,10 +264,15 @@ repair является капитальным. Капремонт всё рав
 и confirmation fence
 [`MaintenanceTaskReconciliationUseCases`](src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceTaskReconciliationUseCases.java).
 No-work publication использует отдельный authoritative cleanup и оставляет бытовку `FREE`.
-Чтения и команды приёмки/доработки отклоняют inventory-origin rows без task-board evidence
-исполнения, поэтому исторические capital rows, созданные одной публикацией, также не попадают на
-эти поверхности. Повторное применение их завершённого результата inventory возвращает прежние
-`COMPLETED/PENDING` rows в активный capital-route `QUEUED/NOT_READY`.
+Коллекция приёмки применяет пагинацию, необязательные фильтры состояния и точного `repairId`,
+исключение unresolved дочерней доработки и proof исполнения inventory прямо в PostgreSQL до
+материализации лёгкой проекции. Для inventory-origin rows каждая сохранённая стадия маршрута должна
+иметь `DONE`, task-board entry/version, событие завершения и время завершения; версия регистрации
+ремонта и системно записанное историческое завершение не являются proof исполнения. Тот же proof
+ограничивает команды приёмки и доработки, поэтому исторические capital rows, созданные одной
+публикацией, не попадают на эти поверхности. Повторное применение их завершённого результата
+inventory возвращает прежние `COMPLETED/PENDING` rows в активный capital-route
+`QUEUED/NOT_READY`.
 
 Публикация проверяет fingerprint точного raw frozen snapshot до любой compatibility adaptation.
 Только для schema version 1 исторический snapshot, в котором один и тот же непустой список
@@ -342,7 +359,7 @@ workflow замены бытовки.
 | `MaintenanceCatalogUseCases` и catalog model/support types | Чтения catalog versions, draft mutation, forking, validation и activation |
 | `MaintenanceEstimateUseCases`, `MaintenanceEstimateCreationUseCases` и estimate/furniture/revision supports | Фасад lifecycle сметы; admission/deadline/idempotency создания; lines, plans, furniture admission и immutable revisions |
 | `MaintenanceRepairUseCases` и repair lifecycle/model/media/task-board supports | Создание ремонта, queueing, execution, acceptance и подготовка rework |
-| `HistoricalShipmentRepairClosureService` | Private-closure отгрузки logistics: durable marker, компенсация pre-start task/movement, fenced release бытовки и audit-finalization ремонта вне local transactions |
+| `HistoricalShipmentRepairClosureService` | Private-closure отгрузки logistics: durable marker, компенсация pre-start task/movement, fenced release бытовки либо явный неизменённый proof `ALREADY_RENTED`, и audit-finalization ремонта вне local transactions |
 | `MaintenanceTransferUseCases` и `MaintenanceTransferSupport` | Maintenance continuation при transfer departure/arrival |
 | `MaintenanceInboundUseCases` и `MaintenanceInboundFactProjectionUseCases` | Приём owner facts и обновление projections |
 | `MaintenanceReconciliationUseCases` | Только claim dispatch, media-owner proof и failure recording |

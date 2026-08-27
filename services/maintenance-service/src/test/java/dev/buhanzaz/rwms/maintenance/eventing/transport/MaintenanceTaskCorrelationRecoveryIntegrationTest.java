@@ -224,7 +224,7 @@ class MaintenanceTaskCorrelationRecoveryIntegrationTest {
     stageAndProcess(inbox, completion);
 
     assertCompletedRepair(repair, List.of(completion.eventId()));
-    assertThat(service.acceptance(catalogInput.warehouseId()))
+    assertThat(service.acceptance(catalogInput.warehouseId(), null, null, 0, 200).items())
         .extracting(value -> value.repairId())
         .containsExactly(repair.repairId());
   }
@@ -248,7 +248,7 @@ class MaintenanceTaskCorrelationRecoveryIntegrationTest {
     assertThat(inbox.process(completion)).isEqualTo(MaintenanceInboxProcessor.Outcome.DUPLICATE);
 
     assertCompletedRepair(repair, List.of(completion.eventId()));
-    assertThat(service.acceptance(catalogInput.warehouseId()))
+    assertThat(service.acceptance(catalogInput.warehouseId(), null, null, 0, 200).items())
         .extracting(value -> value.repairId())
         .containsExactly(repair.repairId());
     assertThat(
