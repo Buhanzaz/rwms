@@ -60,8 +60,11 @@ The following are hard constraints:
   end;
 - every road leg has an exact `costing=truck` result.
 
-Tariff-zone containment, zone relation, route group, straight-line distance,
-or an ordinary geometric circle cannot make a slot available or unavailable.
+Isochrone or special-price containment, route group, straight-line distance,
+or an ordinary geometric circle cannot prove that a slot is available.
+Exceptional forbidden-delivery and forbidden-trailer polygons can reject the
+affected candidate, but every remaining candidate still needs an exact road
+and day-plan calculation.
 
 ## Day, trip, stop, and load model
 
@@ -75,7 +78,8 @@ infeasibility reason.
 The simulator's immutable planning types are in
 [`models.py`](../logistics/backend/app/slot_planning/models.py). The live service
 receives dated deliveries, pickups, shifts, vehicle capacity, trailer state,
-truck dimensions, and tariff polygons through the scenario capacity snapshot;
+truck dimensions, isochrone tariffs, and exceptional policy polygons through
+the scenario capacity snapshot;
 Flyway `V64` stores the additive fields in the owning logistics database.
 
 Orders may contain more cabins than one vehicle trip. They are split into
@@ -164,17 +168,26 @@ CustomerApp uses the canonical public
 the corresponding capacity calculation and final transaction fence; the app
 does not derive availability from a local calendar or map polygon.
 
-## Price zones
+## Isochrone prices and exceptional zones
 
-Simulator zones are tariff polygons only. The matching zone contributes
-`deliveryPriceRubles` and a price-zone code to an offer/hold. Overlaps are
-resolved deterministically by priority and geometry specificity. The price is
-shown above the date cards in CustomerApp and in the simulator slot panel.
+The ordinary delivery price comes from the smallest configured 60-, 120-,
+180-, or 240-minute warehouse road isochrone that contains the destination.
+The default bands are 10,000, 15,000, 20,000, and 25,000 rubles; each warehouse
+capacity snapshot carries its own values, so neither client hardcodes them.
+The selected band and price are retained in the offer and hold.
 
-Zone membership, price, priority, and geometry version are deliberately absent
-from route feasibility and candidate scoring. Editing a price zone changes
-money classification and its capacity-source revision, but it does not create
-a road or open a slot.
+Polygons are exceptional policies only: delivery forbidden, trailer forbidden,
+or special price. A forbidden polygon makes the matching candidate infeasible;
+a trailer-forbidden polygon removes only trailer configurations; a special-price
+polygon overrides the isochrone price without making an otherwise impossible
+road route feasible. Overlaps are resolved deterministically by policy,
+priority, and geometry specificity. Editing an isochrone tariff or exceptional
+zone changes the capacity-source revision, invalidates stale holds, and forces
+confirmation to repeat the authoritative checks.
+
+Neither an isochrone nor a polygon creates a road or opens a slot. Exact truck
+routing, capacity, shifts, reservations, and the full remaining day continue
+to decide availability after the policy checks.
 
 ## Warehouse configuration
 
@@ -229,8 +242,9 @@ configuration for the road network.
 - Pickup combination search is bounded to the vehicle capacity.
 - Routing caches are process-local and bounded; they are not shared across
   instances.
-- Isochrones are an explanatory/prefilter layer. Exact matrix simulation is
-  intentionally repeated at hold and confirmation boundaries.
+- Isochrones explain reachability and select the ordinary price band; they do
+  not prove route feasibility. Exact matrix simulation is intentionally
+  repeated at hold and confirmation boundaries.
 
 ## Verification
 
