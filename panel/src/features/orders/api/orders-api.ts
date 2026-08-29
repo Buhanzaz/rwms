@@ -643,6 +643,7 @@ export async function listOrderReplacementCandidates(params: {
   page: number
   size: number
   search?: string
+  inventorySourceWarehouseId?: string | null
 }): Promise<OrderPage<OrderUnitCandidate>> {
   const endpoint = new URL(
     ordersEndpoint(orderPath(params.orderId, "/available-units"))
@@ -651,6 +652,12 @@ export async function listOrderReplacementCandidates(params: {
   endpoint.searchParams.set("size", String(params.size))
   if (params.search?.trim()) {
     endpoint.searchParams.set("search", params.search.trim())
+  }
+  if (params.inventorySourceWarehouseId) {
+    endpoint.searchParams.set(
+      "inventorySourceWarehouseId",
+      uuid(params.inventorySourceWarehouseId)
+    )
   }
 
   return parsePage(
@@ -666,6 +673,7 @@ export async function replaceOrderUnit(params: {
   unitId: string
   replacementRentalItemId: string
   reason: string
+  inventorySourceWarehouseId?: string | null
   idempotencyKey: string
 }): Promise<OrderDetail> {
   const reason = params.reason.trim()
@@ -689,6 +697,14 @@ export async function replaceOrderUnit(params: {
           expectedVersion: params.expectedVersion,
           replacementRentalItemId: uuid(params.replacementRentalItemId),
           reason,
+          ...(params.inventorySourceWarehouseId === undefined
+            ? {}
+            : {
+                inventorySourceWarehouseId:
+                  params.inventorySourceWarehouseId === null
+                    ? null
+                    : uuid(params.inventorySourceWarehouseId),
+              }),
         }),
       }
     )

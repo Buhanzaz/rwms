@@ -39,6 +39,8 @@ export type ShipmentLine = {
   state: ShipmentLineState
   tenantSnapshot: string | null
   rentalOrderId: string | null
+  /** Physical warehouse that owned this cabin when outbound planning started. */
+  inventorySourceWarehouseId: string
   inventoryShipmentFurniture: InventoryShipmentFurniture[] | null
 }
 

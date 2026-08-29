@@ -5,6 +5,8 @@ import type {
   TransferFurnitureReadiness,
   TransferFurnitureReplacement,
   TransferMediaReference,
+  TransferPlan,
+  TransferPlanRequest,
 } from "@/features/logistics/warehouse-transfers/model/warehouse-transfer"
 
 export type TransferCreateCommand = {
@@ -14,7 +16,15 @@ export type TransferCreateCommand = {
   scheduledDate: string
   lines: CreateTransferLine[]
   furnitureReplacements: TransferFurnitureReplacement[]
+  /** Optional typed plan; legacy concrete-line callers omit this property. */
+  plan?: TransferPlanRequest | null
   idempotencyKey: string
+}
+
+/** Complete replacement of one mutable transfer draft plan. */
+export type TransferPlanUpdateCommand = TransferVersionedCommand & {
+  scheduledDate: string
+  plan: TransferPlanRequest
 }
 
 export type TransferVersionedCommand = {
@@ -41,6 +51,7 @@ export type TransferReconcileCommand = TransferVersionedCommand & {
 export interface WarehouseTransferClient {
   list(accessToken: string, warehouseId: string): Promise<TransferDocument[]>
   get(accessToken: string, documentId: string): Promise<TransferDocument>
+  getPlan(accessToken: string, documentId: string): Promise<TransferPlan>
   getFurnitureReadiness(
     accessToken: string,
     documentId: string
@@ -49,6 +60,8 @@ export interface WarehouseTransferClient {
     input: Omit<TransferLineCommand, "idempotencyKey">
   ): Promise<TransferArrivalPreflight>
   create(input: TransferCreateCommand): Promise<TransferDocument>
+  updatePlan(input: TransferPlanUpdateCommand): Promise<TransferPlan>
+  confirm(input: TransferVersionedCommand): Promise<TransferPlan>
   depart(input: TransferLineCommand): Promise<TransferDocument>
   arrive(input: TransferArrivalCommand): Promise<TransferDocument>
   cancel(input: TransferVersionedCommand): Promise<TransferDocument>

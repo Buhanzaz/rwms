@@ -37,6 +37,8 @@ import {
   OrderClientChooser,
   type OrderClientChoice,
 } from "@/features/orders/components/order-client-chooser"
+import { LogisticsDriverPicker } from "@/features/logistics/logistics-driver-picker"
+import type { RepairTaskWorkerSnapshotDto } from "@/features/repair-tasks/model/repair-task"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 import {
   createHistoricalRentalMovement,
@@ -82,10 +84,11 @@ function validateNewClient(choice: OrderClientChoice) {
 }
 
 /**
- * Collects or corrects one historical rental movement without exposing a driver or route planner.
- * A new client is persisted first with its own retry key, then the logistics command is retried
- * with a stable, independent key until its response is known. Corrections keep the existing
- * shipment identity and never replay physical effects.
+ * Collects or corrects one historical rental movement without exposing route planning. A shipment
+ * may retain one selected driver as audit evidence or explicitly keep that driver unknown; neither
+ * form creates driver work. A new client is persisted first with its own retry key, then the
+ * logistics command is retried with a stable, independent key until its response is known.
+ * Corrections keep the existing shipment identity and never replay physical effects.
  */
 export function HistoricalRentalMovementDialog({
   open,
@@ -108,6 +111,8 @@ export function HistoricalRentalMovementDialog({
     id: string
     version: number
     clientId: string | null
+    driverSnapshot: string | null
+    driverWorkerId: string | null
     scheduledDate: string | null
   } | null
   onOpenChange: (open: boolean) => void
@@ -121,6 +126,15 @@ export function HistoricalRentalMovementDialog({
   const [choice, setChoice] = useState<OrderClientChoice | null>(null)
   const [occurredOn, setOccurredOn] = useState(
     () => existingShipment?.scheduledDate ?? localDateInputValue()
+  )
+  const [driver, setDriver] = useState<RepairTaskWorkerSnapshotDto | null>(
+    () =>
+      existingShipment?.driverSnapshot && existingShipment.driverWorkerId
+        ? {
+            id: existingShipment.driverWorkerId,
+            name: existingShipment.driverSnapshot,
+          }
+        : null
   )
   const [errorText, setErrorText] = useState<string | null>(null)
   const isEditing = kind === "SHIPMENT" && existingShipment !== null
@@ -170,6 +184,9 @@ export function HistoricalRentalMovementDialog({
       if (!clientId)
         throw new Error("Не удалось определить клиента для операции.")
 
+      const driverSnapshot =
+        kind === "SHIPMENT" ? driver?.name.trim() || null : null
+      const driverWorkerId = driverSnapshot ? (driver?.id ?? null) : null
       movementIdempotencyKey.current ??=
         createHistoricalRentalMovementIdempotencyKey()
       if (isEditing) {
@@ -181,6 +198,8 @@ export function HistoricalRentalMovementDialog({
             expectedVersion: existingShipment!.version,
             rentalItemId: rentalItem.id,
             clientId,
+            driverSnapshot,
+            driverWorkerId,
             occurredOn,
           },
         })
@@ -193,6 +212,8 @@ export function HistoricalRentalMovementDialog({
           rentalItemId: rentalItem.id,
           expectedRentalItemVersion: rentalItem.version,
           clientId,
+          driverSnapshot,
+          driverWorkerId,
           kind,
           occurredOn,
         },
@@ -261,8 +282,8 @@ export function HistoricalRentalMovementDialog({
           </DialogTitle>
           <DialogDescription>
             {isEditing
-              ? `Будут исправлены клиент и дата существующей отгрузки бытовки ${rentalItem.number}. Физическая отгрузка повторно не выполняется.`
-              : `Будет создан реальный документ логистики для бытовки ${rentalItem.number}. Водитель и маршрут для такой операции не указываются.`}
+              ? `Будут исправлены клиент, водитель и дата существующей отгрузки бытовки ${rentalItem.number}. Физическая отгрузка повторно не выполняется.`
+              : `Будет создан реальный документ логистики для бытовки ${rentalItem.number}. Можно привязать водителя; маршрут и задание водителя не создаются.`}
           </DialogDescription>
         </DialogHeader>
         {open ? (
@@ -289,6 +310,28 @@ export function HistoricalRentalMovementDialog({
                 <FieldError>
                   Текущий клиент не загрузился. Выберите клиента заново.
                 </FieldError>
+              ) : null}
+
+              {kind === "SHIPMENT" ? (
+                <>
+                  <LogisticsDriverPicker
+                    accessToken={accessToken}
+                    id="historical-rental-driver"
+                    required={false}
+                    unknownLabel="Неизвестен"
+                    value={driver}
+                    warehouseId={rentalItem.warehouseId}
+                    onChange={(nextDriver) => {
+                      movementIdempotencyKey.current = null
+                      setDriver(nextDriver)
+                      setErrorText(null)
+                    }}
+                  />
+                  <FieldDescription>
+                    Если водитель известен, выберите его. Иначе оставьте
+                    «Неизвестен» — это не помешает сохранить отгрузку.
+                  </FieldDescription>
+                </>
               ) : null}
 
               <Field>

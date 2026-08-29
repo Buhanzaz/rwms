@@ -7,6 +7,7 @@ export type CreateOrderShipmentCommand = {
   accessToken: string
   orderId: string
   expectedVersion: number
+  inventorySourceWarehouseId: string | null
   driverSnapshot: string
   driverWorkerId: string
   scheduledDate: string
@@ -37,6 +38,7 @@ export async function createOrderShipment(
       headers: { "Idempotency-Key": input.idempotencyKey },
       body: JSON.stringify({
         expectedVersion: input.expectedVersion,
+        inventorySourceWarehouseId: input.inventorySourceWarehouseId,
         driverSnapshot: input.driverSnapshot,
         driverWorkerId: input.driverWorkerId,
         scheduledDate: input.scheduledDate,

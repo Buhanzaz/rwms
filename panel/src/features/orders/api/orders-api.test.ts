@@ -436,6 +436,7 @@ describe("parseOrderDetail", () => {
         page: 1,
         size: 50,
         search: " БЫТ-002 ",
+        inventorySourceWarehouseId: WAREHOUSE_ID,
       })
     ).resolves.toMatchObject({
       content: [{ added: false, unit: { id: REPLACEMENT_UNIT_ID } }],
@@ -451,6 +452,9 @@ describe("parseOrderDetail", () => {
     expect(endpoint.searchParams.get("page")).toBe("1")
     expect(endpoint.searchParams.get("size")).toBe("50")
     expect(endpoint.searchParams.get("search")).toBe("БЫТ-002")
+    expect(endpoint.searchParams.get("inventorySourceWarehouseId")).toBe(
+      WAREHOUSE_ID
+    )
   })
 
   it("replaces one order cabin through the exact idempotent command", async () => {
@@ -470,6 +474,7 @@ describe("parseOrderDetail", () => {
         unitId: UNIT_ID,
         replacementRentalItemId: REPLACEMENT_UNIT_ID,
         reason: "  Протечка  ",
+        inventorySourceWarehouseId: WAREHOUSE_ID,
         idempotencyKey: IDEMPOTENCY_KEY,
       })
     ).resolves.toMatchObject({ id: ORDER_ID, version: 5 })
@@ -486,7 +491,37 @@ describe("parseOrderDetail", () => {
       expectedVersion: 5,
       replacementRentalItemId: REPLACEMENT_UNIT_ID,
       reason: "Протечка",
+      inventorySourceWarehouseId: WAREHOUSE_ID,
     })
+  })
+
+  it("keeps same-warehouse replacement compatible with omitted or null source", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify(orderDetailResponse), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    const base = {
+      accessToken: "orders-token",
+      orderId: ORDER_ID,
+      expectedVersion: 5,
+      unitId: UNIT_ID,
+      replacementRentalItemId: REPLACEMENT_UNIT_ID,
+      reason: "Протечка",
+      idempotencyKey: IDEMPOTENCY_KEY,
+    }
+    await replaceOrderUnit(base)
+    await replaceOrderUnit({ ...base, inventorySourceWarehouseId: null })
+
+    const omittedBody = JSON.parse(String(fetchMock.mock.calls[0][1].body))
+    const nullBody = JSON.parse(String(fetchMock.mock.calls[1][1].body))
+    expect(omittedBody).not.toHaveProperty("inventorySourceWarehouseId")
+    expect(nullBody.inventorySourceWarehouseId).toBeNull()
   })
 
   it("extends selected shipped cabins through the gateway", async () => {

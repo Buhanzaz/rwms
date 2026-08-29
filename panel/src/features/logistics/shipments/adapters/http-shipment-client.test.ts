@@ -40,6 +40,7 @@ const document: ShipmentDocument = {
       state: "PENDING",
       tenantSnapshot: null,
       rentalOrderId: RENTAL_ORDER_ID,
+      inventorySourceWarehouseId: WAREHOUSE_ID,
       inventoryShipmentFurniture: null,
     },
   ],
@@ -392,10 +393,23 @@ describe("HttpShipmentClient", () => {
           },
         ])
       )
+      .mockResolvedValueOnce(
+        json([
+          {
+            ...document,
+            lines: [
+              {
+                ...document.lines[0],
+                inventorySourceWarehouseId: undefined,
+              },
+            ],
+          },
+        ])
+      )
     vi.stubGlobal("fetch", fetchMock)
     const client = new HttpShipmentClient()
 
-    for (let index = 0; index < 5; index += 1) {
+    for (let index = 0; index < 6; index += 1) {
       await expect(client.list("shipment-token", WAREHOUSE_ID)).rejects.toThrow(
         "Сервис логистики вернул некорректную отгрузку"
       )

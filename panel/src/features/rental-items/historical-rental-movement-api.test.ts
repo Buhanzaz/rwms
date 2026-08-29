@@ -16,11 +16,12 @@ const RENTAL_ITEM_ID = "22222222-2222-4222-8222-222222222222"
 const CLIENT_ID = "33333333-3333-4333-8333-333333333333"
 const DOCUMENT_ID = "44444444-4444-4444-8444-444444444444"
 const IDEMPOTENCY_KEY = "55555555-5555-4555-8555-555555555555"
+const DRIVER_WORKER_ID = "66666666-6666-4666-8666-666666666666"
 
 afterEach(() => vi.unstubAllGlobals())
 
 describe("historical rental movement API", () => {
-  it("posts the version-fenced historical shipment without driver data", async () => {
+  it("posts an explicit unknown driver pair without rejecting the shipment", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ id: DOCUMENT_ID, version: 4 }), {
         status: 201,
@@ -38,6 +39,8 @@ describe("historical rental movement API", () => {
           rentalItemId: RENTAL_ITEM_ID,
           expectedRentalItemVersion: 7,
           clientId: CLIENT_ID,
+          driverSnapshot: null,
+          driverWorkerId: null,
           kind: "SHIPMENT",
           occurredOn: "2026-08-01",
         },
@@ -57,10 +60,11 @@ describe("historical rental movement API", () => {
       rentalItemId: RENTAL_ITEM_ID,
       expectedRentalItemVersion: 7,
       clientId: CLIENT_ID,
+      driverSnapshot: null,
+      driverWorkerId: null,
       kind: "SHIPMENT",
       occurredOn: "2026-08-01",
     })
-    expect(String(init.body)).not.toContain("driver")
   })
 
   it("fails closed when the accepted document response lacks an identity", async () => {
@@ -82,6 +86,8 @@ describe("historical rental movement API", () => {
           rentalItemId: RENTAL_ITEM_ID,
           expectedRentalItemVersion: 7,
           clientId: CLIENT_ID,
+          driverSnapshot: null,
+          driverWorkerId: null,
           kind: "RETURN",
           occurredOn: "2026-08-01",
         },
@@ -107,6 +113,8 @@ describe("historical rental movement API", () => {
           expectedVersion: 5,
           rentalItemId: RENTAL_ITEM_ID,
           clientId: CLIENT_ID,
+          driverSnapshot: "Иванов Иван",
+          driverWorkerId: DRIVER_WORKER_ID,
           occurredOn: "2026-07-31",
         },
       })
@@ -124,6 +132,8 @@ describe("historical rental movement API", () => {
       expectedVersion: 5,
       rentalItemId: RENTAL_ITEM_ID,
       clientId: CLIENT_ID,
+      driverSnapshot: "Иванов Иван",
+      driverWorkerId: DRIVER_WORKER_ID,
       occurredOn: "2026-07-31",
     })
   })

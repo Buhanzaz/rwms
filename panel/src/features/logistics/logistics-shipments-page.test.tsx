@@ -144,6 +144,7 @@ import { LogisticsShipmentsPage } from "@/features/logistics/logistics-shipments
 const WAREHOUSE_ID = "11111111-1111-4111-8111-111111111111"
 const DRAFT_ID = "22222222-2222-4222-8222-222222222222"
 const AWAITING_ID = "33333333-3333-4333-8333-333333333333"
+const HISTORICAL_FAILED_ID = "34343434-3434-4434-8434-343434343434"
 const LINE_ID = "44444444-4444-4444-8444-444444444444"
 const ASSET_ID = "55555555-5555-4555-8555-555555555555"
 const CLIENT_ID = "66666666-6666-4666-8666-666666666666"
@@ -191,6 +192,7 @@ function shipmentDocument(
         state: "PENDING",
         tenantSnapshot: null,
         rentalOrderId: ORDER_ID,
+        inventorySourceWarehouseId: WAREHOUSE_ID,
         inventoryShipmentFurniture: null,
       },
     ],
@@ -856,6 +858,56 @@ describe("LogisticsShipmentsPage", () => {
         accessToken: "shipment-token",
         documentId: DRAFT_ID,
         expectedVersion: 2,
+        idempotencyKey: CANCEL_KEY,
+      })
+    )
+  })
+
+  it("shows unknown driver and starts cancellation of a failed historical shipment beside its composition", async () => {
+    vi.stubGlobal("crypto", { randomUUID: () => CANCEL_KEY })
+    const historicalShipment = {
+      ...shipmentDocument(HISTORICAL_FAILED_ID, "RECONCILIATION_REQUIRED", 4),
+      historicalRentalImport: true,
+      driverSnapshot: null,
+      driverWorkerId: null,
+    }
+    shipmentApi.listShipments.mockResolvedValue([historicalShipment])
+    shipmentApi.cancelShipment.mockResolvedValue({
+      ...historicalShipment,
+      state: "CANCELLING",
+      version: 5,
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    expect((await screen.findAllByText("Неизвестен")).length).toBeGreaterThan(0)
+    const compositionButton = (
+      await screen.findAllByRole("button", { name: "Показать состав" })
+    )[0]!
+    expect(
+      within(compositionButton.parentElement!)
+        .getAllByRole("button")
+        .map((button) => button.textContent)
+    ).toEqual(["Показать состав", "Отменить"])
+
+    await user.click(
+      within(compositionButton.parentElement!).getByRole("button", {
+        name: "Отменить",
+      })
+    )
+    const confirmation = screen.getByRole("alertdialog")
+    expect(
+      within(confirmation).getByText(/ошибочную отгрузку задним числом/)
+    ).toBeTruthy()
+    await user.click(
+      within(confirmation).getByRole("button", { name: "Отменить" })
+    )
+
+    await waitFor(() =>
+      expect(shipmentApi.cancelShipment).toHaveBeenCalledWith({
+        accessToken: "shipment-token",
+        documentId: HISTORICAL_FAILED_ID,
+        expectedVersion: 4,
         idempotencyKey: CANCEL_KEY,
       })
     )

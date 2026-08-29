@@ -12,11 +12,22 @@ import {
   type TransferFurnitureTaskStatus,
   type TransferLine,
   type TransferLineState,
+  type TransferCabinAllocationRequest,
+  type TransferCabinGroup,
+  type TransferFurniturePerCabin,
+  type TransferFurnitureTotal,
+  type TransferLooseFurnitureRequest,
+  type TransferPlan,
+  type TransferPlanState,
+  type TransferReservationReadiness,
+  type TransferResourceReposition,
+  type TransferResourceRepositionMode,
 } from "@/features/logistics/warehouse-transfers/model/warehouse-transfer"
 import type {
   TransferArrivalCommand,
   TransferCreateCommand,
   TransferLineCommand,
+  TransferPlanUpdateCommand,
   TransferReconcileCommand,
   TransferVersionedCommand,
   WarehouseTransferClient,
@@ -79,6 +90,55 @@ const ARRIVAL_PREFLIGHT_KEYS = [
   "priorityRequired",
   "missingQueueDefinitionIds",
 ] as const
+const TRANSFER_PLAN_KEYS = [
+  "transferId",
+  "documentVersion",
+  "documentState",
+  "planId",
+  "planVersion",
+  "state",
+  "reservationReadiness",
+  "readinessDetail",
+  "legacyCompatible",
+  "scheduledDate",
+  "plannedDepartureAt",
+  "plannedArrivalAt",
+  "logisticsComment",
+  "tripDriverId",
+  "tripVehicleId",
+  "driverReposition",
+  "vehicleReposition",
+  "cabinGroups",
+  "looseFurniture",
+  "totalCabinCount",
+  "furnitureTotals",
+] as const
+const RESOURCE_INTENT_KEYS = ["resourceId", "mode", "until"] as const
+const CABIN_GROUP_KEYS = [
+  "groupId",
+  "position",
+  "rentalTypeId",
+  "dimensionId",
+  "finishingId",
+  "characteristicIds",
+  "linoleum",
+  "quantity",
+  "furniturePerCabin",
+  "allocatedCabins",
+] as const
+const FURNITURE_PER_CABIN_KEYS = [
+  "furnitureCatalogItemId",
+  "quantityPerCabin",
+  "totalQuantity",
+] as const
+const CABIN_ALLOCATION_KEYS = ["assetId", "assetVersion"] as const
+const LOOSE_FURNITURE_KEYS = ["furnitureCatalogItemId", "quantity"] as const
+const FURNITURE_TOTAL_KEYS = [
+  "furnitureCatalogItemId",
+  "cabinRequirementQuantity",
+  "looseQuantity",
+  "totalQuantity",
+] as const
 
 function invalidResponse(): never {
   throw new Error("Сервис логистики вернул некорректный ответ перемещения.")
@@ -129,6 +189,14 @@ function nullableUuid(value: unknown): string | null {
   return value === null ? null : uuid(value)
 }
 
+function nullableTimestamp(value: unknown): string | null {
+  return value === null ? null : timestamp(value)
+}
+
+function nullableInteger(value: unknown): number | null {
+  return value === null ? null : integer(value)
+}
+
 function integer(value: unknown): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) invalidResponse()
   return value as number
@@ -137,6 +205,10 @@ function integer(value: unknown): number {
 function flag(value: unknown): boolean {
   if (typeof value !== "boolean") invalidResponse()
   return value
+}
+
+function nullableFlag(value: unknown): boolean | null {
+  return value === null ? null : flag(value)
 }
 
 function timestamp(value: unknown): string {
@@ -162,6 +234,18 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T {
   const candidate = text(value)
   if (!allowed.includes(candidate as T)) invalidResponse()
   return candidate as T
+}
+
+function positiveInteger(value: unknown): number {
+  const candidate = integer(value)
+  if (candidate < 1) invalidResponse()
+  return candidate
+}
+
+function uniqueUuids(value: unknown): string[] {
+  const ids = list(value).map(uuid)
+  if (new Set(ids).size !== ids.length) invalidResponse()
+  return ids
 }
 
 function transferLine(value: unknown): TransferLine {
@@ -245,6 +329,166 @@ export function parseTransferArrivalPreflight(
   }
 }
 
+function transferResourceIntent(value: unknown): TransferResourceReposition {
+  const source = object(value, RESOURCE_INTENT_KEYS)
+  const resourceId = nullableUuid(source.resourceId)
+  const mode = oneOf<TransferResourceRepositionMode>(source.mode, [
+    "NONE",
+    "TEMPORARY",
+    "PERMANENT",
+  ])
+  const until = nullableTimestamp(source.until)
+  if (
+    (mode === "NONE" && (resourceId !== null || until !== null)) ||
+    (mode === "TEMPORARY" && (resourceId === null || until === null)) ||
+    (mode === "PERMANENT" && (resourceId === null || until !== null))
+  ) {
+    invalidResponse()
+  }
+  return { resourceId, mode, until }
+}
+
+function transferFurniturePerCabin(
+  value: unknown,
+  groupQuantity: number
+): TransferFurniturePerCabin {
+  const source = object(value, FURNITURE_PER_CABIN_KEYS)
+  const quantityPerCabin = positiveInteger(source.quantityPerCabin)
+  const totalQuantity = positiveInteger(source.totalQuantity)
+  if (totalQuantity !== quantityPerCabin * groupQuantity) invalidResponse()
+  return {
+    furnitureCatalogItemId: uuid(source.furnitureCatalogItemId),
+    quantityPerCabin,
+    totalQuantity,
+  }
+}
+
+function transferCabinAllocation(
+  value: unknown
+): TransferCabinAllocationRequest {
+  const source = object(value, CABIN_ALLOCATION_KEYS)
+  return {
+    assetId: uuid(source.assetId),
+    assetVersion: integer(source.assetVersion),
+  }
+}
+
+function transferCabinGroup(value: unknown): TransferCabinGroup {
+  const source = object(value, CABIN_GROUP_KEYS)
+  const quantity = positiveInteger(source.quantity)
+  const characteristicIds = uniqueUuids(source.characteristicIds)
+  const furniturePerCabin = list(source.furniturePerCabin).map((item) =>
+    transferFurniturePerCabin(item, quantity)
+  )
+  const allocatedCabins = list(source.allocatedCabins).map(
+    transferCabinAllocation
+  )
+  if (
+    new Set(furniturePerCabin.map((item) => item.furnitureCatalogItemId))
+      .size !== furniturePerCabin.length ||
+    new Set(allocatedCabins.map((item) => item.assetId)).size !==
+      allocatedCabins.length ||
+    allocatedCabins.length > quantity
+  ) {
+    invalidResponse()
+  }
+  return {
+    groupId: uuid(source.groupId),
+    position: positiveInteger(source.position),
+    rentalTypeId: uuid(source.rentalTypeId),
+    dimensionId: nullableUuid(source.dimensionId),
+    finishingId: nullableUuid(source.finishingId),
+    characteristicIds,
+    linoleum: nullableFlag(source.linoleum),
+    quantity,
+    furniturePerCabin,
+    allocatedCabins,
+  }
+}
+
+function transferLooseFurniture(value: unknown): TransferLooseFurnitureRequest {
+  const source = object(value, LOOSE_FURNITURE_KEYS)
+  return {
+    furnitureCatalogItemId: uuid(source.furnitureCatalogItemId),
+    quantity: positiveInteger(source.quantity),
+  }
+}
+
+function transferFurnitureTotal(value: unknown): TransferFurnitureTotal {
+  const source = object(value, FURNITURE_TOTAL_KEYS)
+  const cabinRequirementQuantity = integer(source.cabinRequirementQuantity)
+  const looseQuantity = integer(source.looseQuantity)
+  const totalQuantity = positiveInteger(source.totalQuantity)
+  if (totalQuantity !== cabinRequirementQuantity + looseQuantity) {
+    invalidResponse()
+  }
+  return {
+    furnitureCatalogItemId: uuid(source.furnitureCatalogItemId),
+    cabinRequirementQuantity,
+    looseQuantity,
+    totalQuantity,
+  }
+}
+
+/** Parses the exact planning projection without synthesizing missing readiness. */
+export function parseTransferPlan(value: unknown): TransferPlan {
+  const source = object(value, TRANSFER_PLAN_KEYS)
+  const plannedDepartureAt = nullableTimestamp(source.plannedDepartureAt)
+  const plannedArrivalAt = nullableTimestamp(source.plannedArrivalAt)
+  const cabinGroups = list(source.cabinGroups).map(transferCabinGroup)
+  const looseFurniture = list(source.looseFurniture).map(transferLooseFurniture)
+  const furnitureTotals = list(source.furnitureTotals).map(
+    transferFurnitureTotal
+  )
+  const totalCabinCount = integer(source.totalCabinCount)
+  if (
+    (plannedDepartureAt !== null &&
+      plannedArrivalAt !== null &&
+      Date.parse(plannedArrivalAt) <= Date.parse(plannedDepartureAt)) ||
+    new Set(cabinGroups.map((group) => group.groupId)).size !==
+      cabinGroups.length ||
+    new Set(cabinGroups.map((group) => group.position)).size !==
+      cabinGroups.length ||
+    new Set(looseFurniture.map((item) => item.furnitureCatalogItemId)).size !==
+      looseFurniture.length ||
+    new Set(furnitureTotals.map((item) => item.furnitureCatalogItemId)).size !==
+      furnitureTotals.length ||
+    totalCabinCount !==
+      cabinGroups.reduce((total, group) => total + group.quantity, 0)
+  ) {
+    invalidResponse()
+  }
+  return {
+    transferId: uuid(source.transferId),
+    documentVersion: integer(source.documentVersion),
+    documentState: oneOf<TransferDocumentState>(
+      source.documentState,
+      TRANSFER_DOCUMENT_STATES
+    ),
+    planId: nullableUuid(source.planId),
+    planVersion: nullableInteger(source.planVersion),
+    state: oneOf<TransferPlanState>(source.state, ["DRAFT", "CONFIRMED"]),
+    reservationReadiness: oneOf<TransferReservationReadiness>(
+      source.reservationReadiness,
+      ["NOT_RESERVED", "RESERVED"]
+    ),
+    readinessDetail: nullableText(source.readinessDetail),
+    legacyCompatible: flag(source.legacyCompatible),
+    scheduledDate: calendarDate(source.scheduledDate),
+    plannedDepartureAt,
+    plannedArrivalAt,
+    logisticsComment: nullableText(source.logisticsComment),
+    tripDriverId: nullableUuid(source.tripDriverId),
+    tripVehicleId: nullableUuid(source.tripVehicleId),
+    driverReposition: transferResourceIntent(source.driverReposition),
+    vehicleReposition: transferResourceIntent(source.vehicleReposition),
+    cabinGroups,
+    looseFurniture,
+    totalCabinCount,
+    furnitureTotals,
+  }
+}
+
 export function parseTransferDocument(value: unknown): TransferDocument {
   const source = object(value, DOCUMENT_KEYS)
   const warehouseId = uuid(source.warehouseId)
@@ -257,8 +501,7 @@ export function parseTransferDocument(value: unknown): TransferDocument {
     source.driverWorkerId !== null ||
     nullableUuid(source.clientId) !== null ||
     source.rentalShipmentId !== null ||
-    warehouseId === destinationWarehouseId ||
-    lines.length === 0
+    warehouseId === destinationWarehouseId
   ) {
     invalidResponse()
   }
@@ -335,6 +578,17 @@ export class HttpWarehouseTransferClient implements WarehouseTransferClient {
     )
   }
 
+  async getPlan(accessToken: string, documentId: string) {
+    const plan = parseTransferPlan(
+      await bearerRequest<unknown>(
+        accessToken,
+        transfersEndpoint(`/${encodeURIComponent(documentId)}/plan`)
+      )
+    )
+    if (plan.transferId !== documentId) invalidResponse()
+    return plan
+  }
+
   async getFurnitureReadiness(accessToken: string, documentId: string) {
     const readiness = parseTransferFurnitureReadiness(
       await bearerRequest<unknown>(
@@ -376,8 +630,47 @@ export class HttpWarehouseTransferClient implements WarehouseTransferClient {
         scheduledDate: input.scheduledDate,
         lines: input.lines,
         furnitureReplacements: input.furnitureReplacements,
+        ...(Object.hasOwn(input, "plan") ? { plan: input.plan ?? null } : {}),
       }),
     })
+  }
+
+  async updatePlan(input: TransferPlanUpdateCommand) {
+    const plan = parseTransferPlan(
+      await bearerRequest<unknown>(
+        input.accessToken,
+        transfersEndpoint(
+          `/${encodeURIComponent(input.documentId)}/plan?expectedVersion=${input.expectedVersion}`
+        ),
+        {
+          method: "PUT",
+          headers: commandHeaders(input.idempotencyKey),
+          body: JSON.stringify({
+            scheduledDate: input.scheduledDate,
+            plan: input.plan,
+          }),
+        }
+      )
+    )
+    if (plan.transferId !== input.documentId) invalidResponse()
+    return plan
+  }
+
+  async confirm(input: TransferVersionedCommand) {
+    const plan = parseTransferPlan(
+      await bearerRequest<unknown>(
+        input.accessToken,
+        transfersEndpoint(
+          `/${encodeURIComponent(input.documentId)}/confirm?expectedVersion=${input.expectedVersion}`
+        ),
+        {
+          method: "POST",
+          headers: commandHeaders(input.idempotencyKey),
+        }
+      )
+    )
+    if (plan.transferId !== input.documentId) invalidResponse()
+    return plan
   }
 
   depart(input: TransferLineCommand) {

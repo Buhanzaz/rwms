@@ -240,6 +240,7 @@ describe("AuthProvider refresh-token renewal", () => {
     act(() => oidc.emitUserLoaded(user("b-access-token")))
 
     await screen.findByText("authenticated:b-access-token:panel-user-b")
+    await waitFor(() => expect(clients.at(-1)).not.toBe(principalAClient))
     const principalBClient = clients.at(-1)!
     expect(principalBClient).not.toBe(principalAClient)
     expect(principalAClient.getQueryData(["rental-items"])).toBeUndefined()

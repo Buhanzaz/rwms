@@ -57,6 +57,7 @@ describe("shipment UI contract mapping", () => {
             state: "PENDING",
             tenantSnapshot: null,
             rentalOrderId: null,
+            inventorySourceWarehouseId: "22222222-2222-4222-8222-222222222222",
             inventoryShipmentFurniture: null,
           },
         ],

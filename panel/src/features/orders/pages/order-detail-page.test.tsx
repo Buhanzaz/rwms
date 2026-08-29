@@ -17,10 +17,26 @@ const ordersApi = vi.hoisted(() => ({
     () => "99999999-9999-4999-8999-999999999999"
   ),
 }))
+const warehouseApi = vi.hoisted(() => ({
+  listWarehouseSupportLinks: vi.fn(),
+}))
 
 vi.mock("@/features/orders/api/orders-api", () => ({
   ORDERS_QUERY_KEY: ["orders"],
   ...ordersApi,
+}))
+vi.mock("@/api/warehouse-api", () => warehouseApi)
+vi.mock("@/hooks/use-warehouse", () => ({
+  useWarehouse: () => ({
+    warehouses: [
+      {
+        id: "22222222-2222-4222-8222-222222222222",
+        name: "СПб",
+        city: "Санкт-Петербург",
+        address: "Складская, 1",
+      },
+    ],
+  }),
 }))
 vi.mock("@/features/orders/orders-module-context", () => ({
   useOrdersModule: () => ({
@@ -208,6 +224,11 @@ function renderPage(order: OrderDetail) {
 
 beforeEach(() => {
   ordersApi.listOrderHistory.mockResolvedValue([])
+  warehouseApi.listWarehouseSupportLinks.mockResolvedValue({
+    servedWarehouseId: "22222222-2222-4222-8222-222222222222",
+    warehouseVersion: 1,
+    links: [],
+  })
   ordersApi.listOrderReplacementCandidates.mockResolvedValue({
     content: [availableReplacement],
     page: 0,

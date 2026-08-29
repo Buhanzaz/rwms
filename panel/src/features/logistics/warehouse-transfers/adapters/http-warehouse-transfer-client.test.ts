@@ -4,8 +4,13 @@ import {
   HttpWarehouseTransferClient,
   parseTransferArrivalPreflight,
   parseTransferDocument,
+  parseTransferPlan,
 } from "@/features/logistics/warehouse-transfers/adapters/http-warehouse-transfer-client"
-import type { TransferDocument } from "@/features/logistics/warehouse-transfers/model/warehouse-transfer"
+import type {
+  TransferDocument,
+  TransferPlan,
+  TransferPlanRequest,
+} from "@/features/logistics/warehouse-transfers/model/warehouse-transfer"
 
 const SOURCE_WAREHOUSE_ID = "11111111-1111-4111-8111-111111111111"
 const DESTINATION_WAREHOUSE_ID = "22222222-2222-4222-8222-222222222222"
@@ -19,6 +24,9 @@ const EQUIPMENT_TASK_ID = "99999999-9999-4999-8999-999999999999"
 const FURNITURE_TASK_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 const EXTERNAL_FURNITURE_TASK_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 const TASK_BOARD_TASK_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+const DRIVER_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+const PLAN_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+const GROUP_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
 
 const document: TransferDocument = {
   id: DOCUMENT_ID,
@@ -49,6 +57,88 @@ const document: TransferDocument = {
   ],
   createdAt: "2026-07-18T08:00:00Z",
   updatedAt: "2026-07-18T08:10:00Z",
+}
+
+const planRequest: TransferPlanRequest = {
+  plannedDepartureAt: "2026-07-19T05:00:00Z",
+  plannedArrivalAt: "2026-07-19T09:00:00Z",
+  logisticsComment: "Перемещение в филиал",
+  tripDriverId: DRIVER_ID,
+  tripVehicleId: null,
+  driverReposition: {
+    resourceId: DRIVER_ID,
+    mode: "TEMPORARY",
+    until: "2026-07-21T17:00:00Z",
+  },
+  vehicleReposition: null,
+  cabinGroups: [
+    {
+      rentalTypeId: EQUIPMENT_TASK_ID,
+      dimensionId: null,
+      finishingId: null,
+      characteristicIds: [],
+      linoleum: true,
+      quantity: 2,
+      furniturePerCabin: [
+        {
+          furnitureCatalogItemId: EQUIPMENT_ID,
+          quantityPerCabin: 4,
+        },
+      ],
+      allocatedCabins: [],
+    },
+  ],
+  looseFurniture: [{ furnitureCatalogItemId: FURNITURE_TASK_ID, quantity: 3 }],
+}
+
+const plan: TransferPlan = {
+  transferId: DOCUMENT_ID,
+  documentVersion: 4,
+  documentState: "DRAFT",
+  planId: PLAN_ID,
+  planVersion: 0,
+  state: "DRAFT",
+  reservationReadiness: "NOT_RESERVED",
+  readinessDetail: "ALLOCATIONS_REQUIRED",
+  legacyCompatible: false,
+  scheduledDate: "2026-07-19",
+  plannedDepartureAt: planRequest.plannedDepartureAt,
+  plannedArrivalAt: planRequest.plannedArrivalAt,
+  logisticsComment: planRequest.logisticsComment,
+  tripDriverId: DRIVER_ID,
+  tripVehicleId: null,
+  driverReposition: planRequest.driverReposition!,
+  vehicleReposition: { resourceId: null, mode: "NONE", until: null },
+  cabinGroups: [
+    {
+      groupId: GROUP_ID,
+      position: 1,
+      ...planRequest.cabinGroups[0]!,
+      furniturePerCabin: [
+        {
+          furnitureCatalogItemId: EQUIPMENT_ID,
+          quantityPerCabin: 4,
+          totalQuantity: 8,
+        },
+      ],
+    },
+  ],
+  looseFurniture: planRequest.looseFurniture,
+  totalCabinCount: 2,
+  furnitureTotals: [
+    {
+      furnitureCatalogItemId: EQUIPMENT_ID,
+      cabinRequirementQuantity: 8,
+      looseQuantity: 0,
+      totalQuantity: 8,
+    },
+    {
+      furnitureCatalogItemId: FURNITURE_TASK_ID,
+      cabinRequirementQuantity: 0,
+      looseQuantity: 3,
+      totalQuantity: 3,
+    },
+  ],
 }
 
 function json(value: unknown, status = 200) {
@@ -178,6 +268,86 @@ describe("HttpWarehouseTransferClient", () => {
         furnitureReplacements: command.furnitureReplacements,
       })
     }
+  })
+
+  it("creates, reads, replaces, and confirms a zero-line planned transfer", async () => {
+    const plannedDocument = { ...document, lines: [] }
+    const confirmedPlan: TransferPlan = {
+      ...plan,
+      documentVersion: 6,
+      state: "CONFIRMED",
+      reservationReadiness: "RESERVED",
+      readinessDetail: null,
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(plannedDocument, 201))
+      .mockResolvedValueOnce(json(plan))
+      .mockResolvedValueOnce(json({ ...plan, documentVersion: 5 }, 202))
+      .mockResolvedValueOnce(json(confirmedPlan, 202))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new HttpWarehouseTransferClient()
+
+    await expect(
+      client.create({
+        accessToken: "transfer-token",
+        warehouseId: SOURCE_WAREHOUSE_ID,
+        destinationWarehouseId: DESTINATION_WAREHOUSE_ID,
+        scheduledDate: "2026-07-19",
+        lines: [],
+        furnitureReplacements: [],
+        plan: planRequest,
+        idempotencyKey: IDEMPOTENCY_KEY,
+      })
+    ).resolves.toEqual(plannedDocument)
+    await expect(
+      client.getPlan("transfer-token", DOCUMENT_ID)
+    ).resolves.toEqual(plan)
+    await client.updatePlan({
+      accessToken: "transfer-token",
+      documentId: DOCUMENT_ID,
+      expectedVersion: 4,
+      scheduledDate: "2026-07-19",
+      plan: planRequest,
+      idempotencyKey: IDEMPOTENCY_KEY,
+    })
+    await expect(
+      client.confirm({
+        accessToken: "transfer-token",
+        documentId: DOCUMENT_ID,
+        expectedVersion: 5,
+        idempotencyKey: IDEMPOTENCY_KEY,
+      })
+    ).resolves.toEqual(confirmedPlan)
+
+    expect(parseTransferDocument(plannedDocument)).toEqual(plannedDocument)
+    expect(parseTransferPlan(plan)).toEqual(plan)
+    expect(
+      JSON.parse(commandInit(fetchMock.mock.calls[0]).body as string)
+    ).toEqual({
+      warehouseId: SOURCE_WAREHOUSE_ID,
+      destinationWarehouseId: DESTINATION_WAREHOUSE_ID,
+      scheduledDate: "2026-07-19",
+      lines: [],
+      furnitureReplacements: [],
+      plan: planRequest,
+    })
+    const updateUrl = new URL(fetchMock.mock.calls[2][0])
+    const confirmUrl = new URL(fetchMock.mock.calls[3][0])
+    expect(updateUrl.pathname).toBe(
+      `/api/logistics/v1/transfers/${DOCUMENT_ID}/plan`
+    )
+    expect(updateUrl.searchParams.get("expectedVersion")).toBe("4")
+    expect(
+      JSON.parse(commandInit(fetchMock.mock.calls[2]).body as string)
+    ).toEqual({
+      scheduledDate: "2026-07-19",
+      plan: planRequest,
+    })
+    expect(confirmUrl.pathname).toBe(
+      `/api/logistics/v1/transfers/${DOCUMENT_ID}/confirm`
+    )
+    expect(confirmUrl.searchParams.get("expectedVersion")).toBe("5")
   })
 
   it("departs a line with document and line CAS versions", async () => {
@@ -392,7 +562,6 @@ describe("HttpWarehouseTransferClient", () => {
       .fn()
       .mockResolvedValueOnce(json([{ ...document, documentType: "SHIPMENT" }]))
       .mockResolvedValueOnce(json([{ ...document, version: "4" }]))
-      .mockResolvedValueOnce(json([{ ...document, lines: [] }]))
       .mockResolvedValueOnce(json([{ ...document, unexpected: true }]))
       .mockResolvedValueOnce(
         json([
@@ -408,7 +577,7 @@ describe("HttpWarehouseTransferClient", () => {
     vi.stubGlobal("fetch", fetchMock)
     const client = new HttpWarehouseTransferClient()
 
-    for (let index = 0; index < 6; index += 1) {
+    for (let index = 0; index < 5; index += 1) {
       await expect(
         client.list("transfer-token", SOURCE_WAREHOUSE_ID)
       ).rejects.toThrow("Сервис логистики вернул некорректный ответ")
@@ -422,6 +591,50 @@ describe("HttpWarehouseTransferClient", () => {
       { ...document, rentalShipmentId: EQUIPMENT_TASK_ID },
     ]) {
       expect(() => parseTransferDocument(invalidDocument)).toThrow(
+        "Сервис логистики вернул некорректный ответ"
+      )
+    }
+  })
+
+  it("rejects malformed plan totals, allocations, intents, and extra fields", () => {
+    for (const invalid of [
+      { ...plan, unexpected: true },
+      {
+        ...plan,
+        totalCabinCount: 1,
+      },
+      {
+        ...plan,
+        cabinGroups: [
+          {
+            ...plan.cabinGroups[0],
+            allocatedCabins: [
+              { assetId: ASSET_ID, assetVersion: 1 },
+              { assetId: LINE_ID, assetVersion: 1 },
+              { assetId: MEDIA_ID, assetVersion: 1 },
+            ],
+          },
+        ],
+      },
+      {
+        ...plan,
+        driverReposition: {
+          resourceId: DRIVER_ID,
+          mode: "NONE",
+          until: null,
+        },
+      },
+      {
+        ...plan,
+        furnitureTotals: [
+          {
+            ...plan.furnitureTotals[0],
+            totalQuantity: 7,
+          },
+        ],
+      },
+    ]) {
+      expect(() => parseTransferPlan(invalid)).toThrow(
         "Сервис логистики вернул некорректный ответ"
       )
     }

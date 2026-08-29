@@ -107,6 +107,10 @@ const CANCELLABLE_STATES = new Set<ShipmentDocumentState>([
   "PREPARING",
   "AWAITING_CONFIRMATION",
 ])
+const FAILED_HISTORICAL_CANCELLABLE_STATES = new Set<ShipmentDocumentState>([
+  "CONFLICT",
+  "RECONCILIATION_REQUIRED",
+])
 
 type ShipmentFilters = LogisticsDocumentFiltersState<ShipmentDocumentState> & {
   counterparties: string[]
@@ -144,6 +148,13 @@ function formatSchedule(date: string | null) {
 
 function formatOptionalDate(date: string | null | undefined) {
   return date ? formatDate(date) : "—"
+}
+
+function shipmentDriverLabel(shipment: ShipmentDocument) {
+  return (
+    shipment.driverSnapshot?.trim() ||
+    (shipment.historicalRentalImport ? "Неизвестен" : "Не назначен")
+  )
 }
 
 function rentalMonthLabel(value: number) {
@@ -205,6 +216,19 @@ function isOrderShipment(shipment: ShipmentDocument) {
     shipment.rentalOrderId !== null ||
     shipment.lines.some((line) => line.rentalOrderId !== null)
   )
+}
+
+function isFailedHistoricalRentalShipment(shipment: ShipmentDocument) {
+  return (
+    shipment.historicalRentalImport === true &&
+    FAILED_HISTORICAL_CANCELLABLE_STATES.has(shipment.state)
+  )
+}
+
+function canCancelShipment(shipment: ShipmentDocument) {
+  return shipment.historicalRentalImport === true
+    ? isFailedHistoricalRentalShipment(shipment)
+    : CANCELLABLE_STATES.has(shipment.state)
 }
 
 function needsFurnitureReadiness(shipment: ShipmentDocument) {
@@ -414,6 +438,7 @@ export function LogisticsShipmentsPage() {
         shipment.id,
         shipment.partySnapshot,
         shipment.driverSnapshot,
+        shipment.historicalRentalImport ? shipmentDriverLabel(shipment) : null,
         shipment.rentalOrderId,
         shipment.rentalOrderId
           ? referenceLabels.orderNumbers.get(shipment.rentalOrderId)
@@ -686,6 +711,23 @@ export function LogisticsShipmentsPage() {
         >
           {expandedId === shipment.id ? "Скрыть состав" : "Показать состав"}
         </Button>
+        {canEdit && canCancelShipment(shipment) ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="destructive"
+            disabled={
+              confirming ||
+              cancelling ||
+              scheduling ||
+              addingFurniture ||
+              !accessToken
+            }
+            onClick={() => setCancelTarget(shipment)}
+          >
+            Отменить
+          </Button>
+        ) : null}
         {canEdit &&
         shipment.state === "DRAFT" &&
         orderShipment &&
@@ -784,23 +826,6 @@ export function LogisticsShipmentsPage() {
               </Button>
             )}
           </>
-        ) : null}
-        {canEdit && CANCELLABLE_STATES.has(shipment.state) ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="destructive"
-            disabled={
-              confirming ||
-              cancelling ||
-              scheduling ||
-              addingFurniture ||
-              !accessToken
-            }
-            onClick={() => setCancelTarget(shipment)}
-          >
-            Отменить
-          </Button>
         ) : null}
       </div>
     )
@@ -914,7 +939,7 @@ export function LogisticsShipmentsPage() {
                 label: "Водитель",
                 className: "min-w-52",
                 getSortValue: (shipment) => shipment.driverSnapshot ?? "",
-                render: (shipment) => shipment.driverSnapshot ?? "Не назначен",
+                render: shipmentDriverLabel,
               },
               {
                 id: "state",
@@ -953,7 +978,7 @@ export function LogisticsShipmentsPage() {
                 <CardTitle>{shipment.partySnapshot}</CardTitle>
                 <CardDescription>
                   {formatSchedule(shipment.scheduledDate)}
-                  {` · ${shipment.driverSnapshot ?? "водитель не назначен"}`}
+                  {` · ${shipmentDriverLabel(shipment)}`}
                 </CardDescription>
                 <CardAction>
                   <Badge variant={statusVariant(shipment.state)}>
@@ -1049,8 +1074,9 @@ export function LogisticsShipmentsPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Отменить отгрузку?</AlertDialogTitle>
             <AlertDialogDescription>
-              Сервис отменит задания, резервы мебели и активные leases этой
-              отгрузки.
+              {cancelTarget && isFailedHistoricalRentalShipment(cancelTarget)
+                ? "Сервис отменит ошибочную отгрузку задним числом, закроет её открытый конфликт и освободит только подтверждённые резервы. Если бытовка уже была подтверждена как отгруженная, сервис не разрешит отмену."
+                : "Сервис отменит задания, резервы мебели и активные leases этой отгрузки."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1448,7 +1474,7 @@ function ShipmentLines({
                 </p>
                 <p className="break-words">
                   <span className="text-muted-foreground">Отгрузил:</span>{" "}
-                  {shipment.driverSnapshot ?? "Не назначен"}
+                  {shipmentDriverLabel(shipment)}
                 </p>
                 <p className="break-words">
                   <span className="text-muted-foreground">Привёз:</span>{" "}

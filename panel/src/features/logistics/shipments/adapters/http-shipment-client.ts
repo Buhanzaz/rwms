@@ -142,6 +142,7 @@ function shipmentLine(value: unknown): ShipmentLine {
     state: oneOf<ShipmentLineState>(source.state, SHIPMENT_LINE_STATES),
     tenantSnapshot: nullableText(source.tenantSnapshot),
     rentalOrderId: nullableUuid(source.rentalOrderId),
+    inventorySourceWarehouseId: uuid(source.inventorySourceWarehouseId),
     inventoryShipmentFurniture: inventoryShipmentFurniture(
       source.inventoryShipmentFurniture
     ),

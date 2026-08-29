@@ -3,6 +3,7 @@ import type {
   TransferArrivalCommand,
   TransferCreateCommand,
   TransferLineCommand,
+  TransferPlanUpdateCommand,
   TransferReconcileCommand,
   TransferVersionedCommand,
 } from "@/features/logistics/warehouse-transfers/ports/warehouse-transfer-client"
@@ -15,6 +16,10 @@ export const TRANSFER_FURNITURE_READINESS_QUERY_KEY = [
   "logistics",
   "transfer-furniture-readiness",
 ] as const
+export const TRANSFER_PLAN_QUERY_KEY = [
+  "logistics",
+  "warehouse-transfer-plan",
+] as const
 
 export const warehouseTransferClient = new HttpWarehouseTransferClient()
 
@@ -25,6 +30,11 @@ export const listWarehouseTransfers = (
 
 export const getWarehouseTransfer = (accessToken: string, documentId: string) =>
   warehouseTransferClient.get(accessToken, documentId)
+
+export const getWarehouseTransferPlan = (
+  accessToken: string,
+  documentId: string
+) => warehouseTransferClient.getPlan(accessToken, documentId)
 
 export const getWarehouseTransferFurnitureReadiness = (
   accessToken: string,
@@ -37,6 +47,12 @@ export const getWarehouseTransferArrivalPreflight = (
 
 export const createWarehouseTransfer = (input: TransferCreateCommand) =>
   warehouseTransferClient.create(input)
+
+export const updateWarehouseTransferPlan = (input: TransferPlanUpdateCommand) =>
+  warehouseTransferClient.updatePlan(input)
+
+export const confirmWarehouseTransferPlan = (input: TransferVersionedCommand) =>
+  warehouseTransferClient.confirm(input)
 
 export const departWarehouseTransferLine = (input: TransferLineCommand) =>
   warehouseTransferClient.depart(input)

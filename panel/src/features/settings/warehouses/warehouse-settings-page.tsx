@@ -33,6 +33,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -58,6 +59,7 @@ import {
   parseWarehouseForm,
   type WarehouseFormValues,
 } from "@/features/settings/warehouses/warehouse-settings-form"
+import { WarehouseSupportLinksEditor } from "@/features/settings/warehouses/warehouse-support-links-editor"
 import {
   createEmptyWarehouseFilters,
   filterWarehouses,
@@ -85,14 +87,22 @@ function WarehouseEditorDialog({
   warehouse,
   pending,
   serverError,
+  accessToken,
+  warehouses,
   onOpenChange,
   onSave,
+  onSupportSaved,
+  onSupportConflict,
 }: {
   warehouse: WarehouseInfo | null
   pending: boolean
   serverError: string | null
+  accessToken: string | null
+  warehouses: WarehouseInfo[]
   onOpenChange: (open: boolean) => void
   onSave: (input: WarehouseWriteInput) => void
+  onSupportSaved: () => Promise<void>
+  onSupportConflict: () => Promise<void>
 }) {
   const [values, setValues] = useState<WarehouseFormValues>(() =>
     createWarehouseFormValues(warehouse)
@@ -122,7 +132,7 @@ function WarehouseEditorDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !pending && onOpenChange(open)}>
-      <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>{warehouse ? "Склад" : "Новый склад"}</DialogTitle>
         </DialogHeader>
@@ -182,6 +192,43 @@ function WarehouseEditorDialog({
               />
             </Field>
             <Field data-invalid={formError !== null || undefined}>
+              <FieldLabel htmlFor="warehouse-latitude">Широта</FieldLabel>
+              <Input
+                id="warehouse-latitude"
+                inputMode="decimal"
+                value={values.latitude}
+                onChange={(event) =>
+                  updateValue("latitude", event.target.value)
+                }
+                placeholder="59.934300"
+                aria-invalid={formError !== null}
+              />
+            </Field>
+            <Field data-invalid={formError !== null || undefined}>
+              <FieldLabel htmlFor="warehouse-longitude">Долгота</FieldLabel>
+              <Input
+                id="warehouse-longitude"
+                inputMode="decimal"
+                value={values.longitude}
+                onChange={(event) =>
+                  updateValue("longitude", event.target.value)
+                }
+                placeholder="30.335100"
+                aria-invalid={formError !== null}
+              />
+            </Field>
+            <p
+              className={`text-xs md:col-span-2 ${
+                values.latitude.trim() === "" && values.longitude.trim() === ""
+                  ? "text-amber-700 dark:text-amber-300"
+                  : "text-muted-foreground"
+              }`}
+            >
+              {values.latitude.trim() === "" && values.longitude.trim() === ""
+                ? "Не заданы координаты для использования склада в логистике."
+                : "Координаты WGS84 используются картой, маршрутизацией и изохронами."}
+            </p>
+            <Field data-invalid={formError !== null || undefined}>
               <FieldLabel htmlFor="warehouse-sort-order">Порядок</FieldLabel>
               <Input
                 id="warehouse-sort-order"
@@ -195,6 +242,18 @@ function WarehouseEditorDialog({
                 placeholder="Необязательно"
                 aria-invalid={formError !== null}
               />
+            </Field>
+            <Field orientation="horizontal" className="md:col-span-2">
+              <Checkbox
+                id="warehouse-representative"
+                checked={values.representative}
+                onCheckedChange={(checked) =>
+                  updateValue("representative", checked === true)
+                }
+              />
+              <FieldLabel htmlFor="warehouse-representative">
+                Представительский склад
+              </FieldLabel>
             </Field>
           </FieldGroup>
 
@@ -216,6 +275,26 @@ function WarehouseEditorDialog({
             </Button>
           </DialogFooter>
         </form>
+
+        {values.representative && warehouse === null ? (
+          <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+            Сначала сохраните новый склад, затем откройте его снова, чтобы
+            настроить опорные склады.
+          </p>
+        ) : values.representative && warehouse?.representative ? (
+          <WarehouseSupportLinksEditor
+            accessToken={accessToken}
+            warehouse={warehouse}
+            warehouses={warehouses}
+            onSaved={onSupportSaved}
+            onConflict={onSupportConflict}
+          />
+        ) : values.representative && warehouse ? (
+          <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+            Сохраните признак представительского склада и откройте форму снова,
+            чтобы настроить логистическое обслуживание.
+          </p>
+        ) : null}
       </DialogContent>
     </Dialog>
   )
@@ -452,8 +531,11 @@ export function WarehouseSettingsPage() {
           name: input.name,
           city: input.city,
           address: input.address,
+          latitude: input.latitude,
+          longitude: input.longitude,
           timeZone: input.timeZone,
           sortOrder: input.sortOrder,
+          representative: input.representative,
         }
         return createWarehouse(accessToken, crypto.randomUUID(), createInput)
       }
@@ -666,7 +748,18 @@ export function WarehouseSettingsPage() {
                 id: "name",
                 label: "Название",
                 getSortValue: (warehouse) => warehouse.name,
-                render: (warehouse) => warehouse.name,
+                render: (warehouse) => (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span>{warehouse.name}</span>
+                    {warehouse.representative ? (
+                      <Badge variant="outline">Представительский</Badge>
+                    ) : null}
+                    {warehouse.latitude === null ||
+                    warehouse.longitude === null ? (
+                      <Badge variant="outline">Нет координат</Badge>
+                    ) : null}
+                  </div>
+                ),
               },
               {
                 id: "city",
@@ -729,7 +822,16 @@ export function WarehouseSettingsPage() {
               <Card key={warehouse.id} size="sm">
                 <CardHeader>
                   <div className="flex items-start justify-between gap-3">
-                    <CardTitle>{warehouse.name}</CardTitle>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <CardTitle>{warehouse.name}</CardTitle>
+                      {warehouse.representative ? (
+                        <Badge variant="outline">Представительский</Badge>
+                      ) : null}
+                      {warehouse.latitude === null ||
+                      warehouse.longitude === null ? (
+                        <Badge variant="outline">Нет координат</Badge>
+                      ) : null}
+                    </div>
                     <Badge
                       variant={
                         warehouseLifecyclePresentation[warehouse.lifecycleState]
@@ -774,6 +876,8 @@ export function WarehouseSettingsPage() {
           warehouse={editor === "new" ? null : editor}
           pending={saveMutation.isPending}
           serverError={serverError}
+          accessToken={accessToken}
+          warehouses={warehouses}
           onOpenChange={(open) => {
             if (!open) {
               setEditor(null)
@@ -781,6 +885,12 @@ export function WarehouseSettingsPage() {
             }
           }}
           onSave={(input) => saveMutation.mutate(input)}
+          onSupportSaved={async () => {
+            await refreshAfterMutation()
+            setEditor(null)
+            setServerError(null)
+          }}
+          onSupportConflict={refreshAfterConflict}
         />
       ) : null}
 

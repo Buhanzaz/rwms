@@ -3,10 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   completeWarehouseInactivation,
   createWarehouse,
+  listWarehouseSupportLinks,
   listWarehouses,
   replaceWarehouse,
+  replaceWarehouseSupportLinks,
   scheduleWarehouseTimeZone,
   startWarehouseDraining,
+  type WarehouseSupportLinkInput,
 } from "@/api/warehouse-api"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 
@@ -19,10 +22,13 @@ const warehouseResponse = {
   name: "Северный склад",
   city: "Санкт-Петербург",
   address: null,
+  latitude: 59.9343,
+  longitude: 30.3351,
   timeZone: "Europe/Moscow",
   active: true,
   lifecycleState: "ACTIVE",
   sortOrder: 2,
+  representative: false,
 }
 
 function jsonResponse(body: unknown, status = 200) {
@@ -110,15 +116,21 @@ describe("warehouse HTTP API", () => {
       name: "Северный склад",
       city: "Санкт-Петербург",
       address: null,
+      latitude: 59.9343,
+      longitude: 30.3351,
       timeZone: "Europe/Moscow",
       sortOrder: 2,
+      representative: true,
     })
     await replaceWarehouse("access-token", WAREHOUSE_ID, 3, {
       name: warehouseResponse.name,
       city: warehouseResponse.city,
       address: warehouseResponse.address,
+      latitude: warehouseResponse.latitude,
+      longitude: warehouseResponse.longitude,
       timeZone: warehouseResponse.timeZone,
       sortOrder: warehouseResponse.sortOrder,
+      representative: true,
     })
     await startWarehouseDraining("access-token", WAREHOUSE_ID, 4)
     await completeWarehouseInactivation("access-token", WAREHOUSE_ID, 5)
@@ -138,8 +150,11 @@ describe("warehouse HTTP API", () => {
       name: "Северный склад",
       city: "Санкт-Петербург",
       address: null,
+      latitude: 59.9343,
+      longitude: 30.3351,
       timeZone: "Europe/Moscow",
       sortOrder: 2,
+      representative: true,
     })
 
     const replaceRequest = fetchMock.mock.calls[1]?.[1] as RequestInit
@@ -147,8 +162,11 @@ describe("warehouse HTTP API", () => {
       name: warehouseResponse.name,
       city: warehouseResponse.city,
       address: warehouseResponse.address,
+      latitude: warehouseResponse.latitude,
+      longitude: warehouseResponse.longitude,
       timeZone: warehouseResponse.timeZone,
       sortOrder: warehouseResponse.sortOrder,
+      representative: true,
       expectedVersion: 3,
     })
 
@@ -171,6 +189,77 @@ describe("warehouse HTTP API", () => {
       expectedVersion: 6,
       timeZone: "Europe/Samara",
       effectiveFrom: "2099-09-01T00:00:00+04:00",
+    })
+  })
+
+  it("reads and atomically replaces directed support links", async () => {
+    const supportWarehouseId = "00000000-0000-4000-8000-000000000003"
+    const supportLinkId = "00000000-0000-4000-8000-000000000004"
+    const link = {
+      id: supportLinkId,
+      version: 1,
+      supportWarehouseId,
+      servedWarehouseId: WAREHOUSE_ID,
+      active: true,
+      priority: 1,
+      allowDrivers: true,
+      allowVehicles: true,
+      allowInventory: true,
+      allowDirectFulfillment: true,
+      allowInterwarehouseTransfer: true,
+      allowContractorFallback: false,
+      allowedWeekdays: ["TUESDAY", "THURSDAY"],
+      allowedDates: ["2026-09-14"],
+      excludedDates: ["2026-09-15"],
+      serviceStart: "08:00:00",
+      serviceEnd: "18:00:00",
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          servedWarehouseId: WAREHOUSE_ID,
+          warehouseVersion: 3,
+          links: [link],
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          servedWarehouseId: WAREHOUSE_ID,
+          warehouseVersion: 4,
+          links: [{ ...link, version: 2 }],
+        })
+      )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      listWarehouseSupportLinks("access-token", WAREHOUSE_ID)
+    ).resolves.toMatchObject({ warehouseVersion: 3, links: [link] })
+
+    const input: WarehouseSupportLinkInput = {
+      supportWarehouseId,
+      active: true,
+      priority: 1,
+      allowDrivers: true,
+      allowVehicles: true,
+      allowInventory: true,
+      allowDirectFulfillment: true,
+      allowInterwarehouseTransfer: true,
+      allowContractorFallback: false,
+      allowedWeekdays: ["TUESDAY", "THURSDAY"],
+      allowedDates: ["2026-09-14"],
+      excludedDates: ["2026-09-15"],
+      serviceStart: "08:00",
+      serviceEnd: "18:00",
+    }
+    await replaceWarehouseSupportLinks("access-token", WAREHOUSE_ID, 3, [input])
+
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
+      `/${WAREHOUSE_ID}/support-links`
+    )
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+      expectedVersion: 3,
+      links: [input],
     })
   })
 })

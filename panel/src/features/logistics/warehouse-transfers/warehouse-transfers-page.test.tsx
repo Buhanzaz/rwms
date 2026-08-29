@@ -28,11 +28,15 @@ const transferApi = vi.hoisted(() => ({
   getWarehouseTransfer: vi.fn(),
   getWarehouseTransferArrivalPreflight: vi.fn(),
   getWarehouseTransferFurnitureReadiness: vi.fn(),
+  getWarehouseTransferPlan: vi.fn(),
   listWarehouseTransfers: vi.fn(),
   reconcileWarehouseTransfer: vi.fn(),
+  updateWarehouseTransferPlan: vi.fn(),
+  confirmWarehouseTransferPlan: vi.fn(),
 }))
 const rentalItemsApi = vi.hoisted(() => ({
   getAssetRentalItem: vi.fn(),
+  getRentalItemCreationOptions: vi.fn(),
   listAssetRentalItems: vi.fn(),
 }))
 const equipmentMovementTasksApi = vi.hoisted(() => ({
@@ -45,6 +49,7 @@ const authState = vi.hoisted(() => ({
   sourceLevel: "EDIT" as "VIEW" | "EDIT" | "MANAGE",
   destinationLevel: "EDIT" as "VIEW" | "EDIT" | "MANAGE",
 }))
+const setSelectedWarehouseId = vi.hoisted(() => vi.fn())
 
 vi.mock(
   "@/features/logistics/warehouse-transfers/api/warehouse-transfer-api",
@@ -53,6 +58,7 @@ vi.mock(
       "logistics",
       "transfer-furniture-readiness",
     ],
+    TRANSFER_PLAN_QUERY_KEY: ["logistics", "warehouse-transfer-plan"],
     WAREHOUSE_TRANSFERS_QUERY_KEY: ["logistics", "warehouse-transfers"],
     ...transferApi,
   })
@@ -64,6 +70,11 @@ vi.mock("@/api/equipment-api", () => ({
 
 vi.mock("@/features/rental-items/api/asset-rental-items-api", () => ({
   getAssetRentalItem: rentalItemsApi.getAssetRentalItem,
+  getRentalItemCreationOptions: rentalItemsApi.getRentalItemCreationOptions,
+  rentalItemCreationOptionsQueryKey: (warehouseId: string) => [
+    "rental-item-creation-options",
+    warehouseId,
+  ],
   listAssetRentalItems: rentalItemsApi.listAssetRentalItems,
 }))
 
@@ -130,6 +141,7 @@ const DESTINATION_WAREHOUSE_ID = "22222222-2222-4222-8222-222222222222"
 vi.mock("@/hooks/use-warehouse", () => ({
   useWarehouse: () => ({
     selectedWarehouseId: SOURCE_WAREHOUSE_ID,
+    setSelectedWarehouseId,
     warehouses: [
       {
         id: SOURCE_WAREHOUSE_ID,
@@ -300,6 +312,19 @@ async function renderTransferFilters() {
   return screen.getByRole("table")
 }
 
+async function openLegacyCreateDialog(
+  user: ReturnType<typeof userEvent.setup>
+) {
+  await user.click(
+    await screen.findByRole("button", { name: "Создать перемещение" })
+  )
+  await user.click(
+    screen.getByRole("button", {
+      name: "Выбрать конкретные бытовки без планирования",
+    })
+  )
+}
+
 function filterButton(label: string) {
   const button = [
     ...document.querySelectorAll<HTMLButtonElement>(
@@ -340,6 +365,16 @@ beforeEach(() => {
   rentalItemsApi.listAssetRentalItems.mockResolvedValue({
     content: [TRANSFER_CABIN, SECOND_TRANSFER_CABIN, EMPTY_TRANSFER_CABIN],
   })
+  rentalItemsApi.getRentalItemCreationOptions.mockResolvedValue({
+    newCategory: "Новая",
+    usedCategories: [],
+    rentalTypes: [],
+    dimensions: [],
+    finishings: [],
+    categories: [],
+    characteristics: [],
+    typeDimensions: [],
+  })
   rentalItemsApi.getAssetRentalItem.mockResolvedValue(TRANSFER_CABIN)
   equipmentApi.getEquipmentItems.mockResolvedValue([
     {
@@ -353,6 +388,32 @@ beforeEach(() => {
   const draft = transferDocument(DOCUMENT_ID, "DRAFT", 4)
   transferApi.listWarehouseTransfers.mockResolvedValue([draft])
   transferApi.getWarehouseTransfer.mockResolvedValue(draft)
+  transferApi.getWarehouseTransferPlan.mockImplementation(
+    (_accessToken: string, transferId: string) =>
+      Promise.resolve({
+        transferId,
+        documentVersion: 4,
+        documentState: "DRAFT",
+        planId: null,
+        planVersion: null,
+        state: "DRAFT",
+        reservationReadiness: "NOT_RESERVED",
+        readinessDetail: null,
+        legacyCompatible: true,
+        scheduledDate: "2026-07-19",
+        plannedDepartureAt: null,
+        plannedArrivalAt: null,
+        logisticsComment: null,
+        tripDriverId: null,
+        tripVehicleId: null,
+        driverReposition: { resourceId: null, mode: "NONE", until: null },
+        vehicleReposition: { resourceId: null, mode: "NONE", until: null },
+        cabinGroups: [],
+        looseFurniture: [],
+        totalCabinCount: 0,
+        furnitureTotals: [],
+      })
+  )
   transferApi.getWarehouseTransferFurnitureReadiness.mockResolvedValue({
     transferId: DOCUMENT_ID,
     transferVersion: 4,
@@ -489,6 +550,199 @@ describe("WarehouseTransfersPage", () => {
     )
   })
 
+  it("opens the planned transfer form and prefills a valid destination query", async () => {
+    renderPage(
+      `/logistics/transfers?destinationWarehouseId=${DESTINATION_WAREHOUSE_ID}`
+    )
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Создать межскладское перемещение",
+      })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("combobox", { name: "Склад назначения" }).textContent
+    ).toContain("Петербург")
+    await waitFor(() =>
+      expect(screen.getByTestId("current-location").textContent).toBe(
+        `/logistics/transfers?destinationWarehouseId=${DESTINATION_WAREHOUSE_ID}`
+      )
+    )
+  })
+
+  it("switches to the requested support source before opening a useful-cargo transfer", async () => {
+    renderPage(
+      `/logistics/transfers?sourceWarehouseId=${DESTINATION_WAREHOUSE_ID}&destinationWarehouseId=${SOURCE_WAREHOUSE_ID}`
+    )
+
+    await waitFor(() =>
+      expect(setSelectedWarehouseId).toHaveBeenCalledWith(
+        DESTINATION_WAREHOUSE_ID
+      )
+    )
+  })
+
+  it("renders planned cargo, resource intent, and readiness on the transfer card", async () => {
+    rentalItemsApi.getRentalItemCreationOptions.mockResolvedValue({
+      newCategory: "Новая",
+      usedCategories: [],
+      rentalTypes: [{ id: EQUIPMENT_TASK_ID, name: "BK2" }],
+      dimensions: [],
+      finishings: [{ id: FURNITURE_TASK_ID, name: "ЛДСП" }],
+      categories: [],
+      characteristics: [],
+      typeDimensions: [],
+    })
+    transferApi.getWarehouseTransferPlan.mockResolvedValue({
+      transferId: DOCUMENT_ID,
+      documentVersion: 4,
+      documentState: "DRAFT",
+      planId: EXTERNAL_FURNITURE_TASK_ID,
+      planVersion: 1,
+      state: "CONFIRMED",
+      reservationReadiness: "RESERVED",
+      readinessDetail: null,
+      legacyCompatible: false,
+      scheduledDate: "2026-09-19",
+      plannedDepartureAt: "2026-07-19T05:00:00Z",
+      plannedArrivalAt: "2026-07-19T09:00:00Z",
+      logisticsComment: null,
+      tripDriverId: IDEMPOTENCY_KEY,
+      tripVehicleId: null,
+      driverReposition: {
+        resourceId: IDEMPOTENCY_KEY,
+        mode: "PERMANENT",
+        until: null,
+      },
+      vehicleReposition: { resourceId: null, mode: "NONE", until: null },
+      cabinGroups: [
+        {
+          groupId: "abababab-abab-4bab-8bab-abababababab",
+          position: 1,
+          rentalTypeId: EQUIPMENT_TASK_ID,
+          dimensionId: null,
+          finishingId: FURNITURE_TASK_ID,
+          characteristicIds: [],
+          linoleum: true,
+          quantity: 2,
+          furniturePerCabin: [],
+          allocatedCabins: [
+            { assetId: ASSET_ID, assetVersion: 8 },
+            { assetId: SECOND_ASSET_ID, assetVersion: 3 },
+          ],
+        },
+      ],
+      looseFurniture: [],
+      totalCabinCount: 2,
+      furnitureTotals: [
+        {
+          furnitureCatalogItemId: EQUIPMENT_TASK_ID,
+          cabinRequirementQuantity: 8,
+          looseQuantity: 0,
+          totalQuantity: 8,
+        },
+      ],
+    })
+    renderPage()
+
+    expect(
+      (await screen.findAllByText("Межскладское перемещение")).length
+    ).toBeGreaterThan(0)
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole("listitem")
+          .some((item) =>
+            item.textContent?.includes(
+              "2 × BK2 · ЛДСП · линолеум · выбрано 2/2"
+            )
+          )
+      ).toBe(true)
+    )
+    expect(
+      screen.getAllByText(/водитель переводится на склад назначения постоянно/)
+        .length
+    ).toBeGreaterThan(0)
+    expect(
+      screen.getAllByText("Имущество зарезервировано").length
+    ).toBeGreaterThan(0)
+  })
+
+  it("reopens and updates an existing planned draft with document fencing", async () => {
+    authState.sourceLevel = "MANAGE"
+    authState.destinationLevel = "MANAGE"
+    const draftPlan = {
+      transferId: DOCUMENT_ID,
+      documentVersion: 4,
+      documentState: "DRAFT" as const,
+      planId: EXTERNAL_FURNITURE_TASK_ID,
+      planVersion: 1,
+      state: "DRAFT" as const,
+      reservationReadiness: "NOT_RESERVED" as const,
+      readinessDetail: "ALLOCATIONS_REQUIRED",
+      legacyCompatible: false,
+      scheduledDate: "2026-09-19",
+      plannedDepartureAt: null,
+      plannedArrivalAt: null,
+      logisticsComment: null,
+      tripDriverId: null,
+      tripVehicleId: null,
+      driverReposition: {
+        resourceId: null,
+        mode: "NONE" as const,
+        until: null,
+      },
+      vehicleReposition: {
+        resourceId: null,
+        mode: "NONE" as const,
+        until: null,
+      },
+      cabinGroups: [],
+      looseFurniture: [],
+      totalCabinCount: 0,
+      furnitureTotals: [],
+    }
+    transferApi.getWarehouseTransferPlan.mockResolvedValue(draftPlan)
+    transferApi.updateWarehouseTransferPlan.mockResolvedValue({
+      ...draftPlan,
+      documentVersion: 5,
+      planVersion: 2,
+      logisticsComment: "Обновлённый комментарий",
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Редактировать план" }))[0]!
+    )
+    expect(
+      screen.getByRole("heading", {
+        name: "Изменить межскладское перемещение",
+      })
+    ).toBeTruthy()
+    await user.type(
+      screen.getByLabelText("Комментарий логиста"),
+      "Обновлённый комментарий"
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Сохранить изменения" })
+    )
+
+    await waitFor(() =>
+      expect(transferApi.updateWarehouseTransferPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accessToken: "transfer-token",
+          documentId: DOCUMENT_ID,
+          expectedVersion: 4,
+          scheduledDate: "2026-09-19",
+          plan: expect.objectContaining({
+            logisticsComment: "Обновлённый комментарий",
+          }),
+        })
+      )
+    )
+  })
+
   it("keeps VIEW access read-only while preserving service reads", async () => {
     authState.sourceLevel = "VIEW"
     authState.destinationLevel = "VIEW"
@@ -514,9 +768,7 @@ describe("WarehouseTransfersPage", () => {
     const user = userEvent.setup()
     renderPage()
 
-    await user.click(
-      await screen.findByRole("button", { name: "Создать перемещение" })
-    )
+    await openLegacyCreateDialog(user)
 
     expect(
       screen.getByRole("heading", { name: "Создать складское перемещение" })
@@ -540,9 +792,7 @@ describe("WarehouseTransfersPage", () => {
     const user = userEvent.setup()
     renderPage()
 
-    await user.click(
-      await screen.findByRole("button", { name: "Создать перемещение" })
-    )
+    await openLegacyCreateDialog(user)
     const cabinInput = screen.getByRole("combobox", {
       name: "Номер бытовки",
     })
@@ -561,9 +811,7 @@ describe("WarehouseTransfersPage", () => {
     const user = userEvent.setup()
     renderPage()
 
-    await user.click(
-      await screen.findByRole("button", { name: "Создать перемещение" })
-    )
+    await openLegacyCreateDialog(user)
     await user.click(screen.getByLabelText("Номер бытовки"))
     await user.click(await screen.findByText(EMPTY_TRANSFER_CABIN.number))
 
@@ -582,9 +830,7 @@ describe("WarehouseTransfersPage", () => {
     )
     renderPage()
 
-    await user.click(
-      await screen.findByRole("button", { name: "Создать перемещение" })
-    )
+    await openLegacyCreateDialog(user)
     const dialog = screen.getByRole("dialog")
     await user.click(
       within(dialog).getByRole("combobox", { name: "Склад назначения" })

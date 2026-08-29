@@ -7,10 +7,13 @@ export type WarehouseInfo = {
   name: string
   city: string
   address: string | null
+  latitude: number | null
+  longitude: number | null
   timeZone: string
   active: boolean
   lifecycleState: WarehouseLifecycleState
   sortOrder: number | null
+  representative: boolean
 }
 
 export type WarehouseLifecycleState = "ACTIVE" | "DRAINING" | "INACTIVE"
@@ -19,11 +22,52 @@ export type WarehouseWriteInput = {
   name: string
   city: string
   address: string | null
+  latitude: number | null
+  longitude: number | null
   timeZone: string
   sortOrder: number | null
+  representative: boolean
 }
 
 export type WarehouseCreateInput = WarehouseWriteInput
+
+export type WarehouseSupportWeekday =
+  | "MONDAY"
+  | "TUESDAY"
+  | "WEDNESDAY"
+  | "THURSDAY"
+  | "FRIDAY"
+  | "SATURDAY"
+  | "SUNDAY"
+
+export type WarehouseSupportLinkInput = {
+  supportWarehouseId: string
+  active: boolean
+  priority: number
+  allowDrivers: boolean
+  allowVehicles: boolean
+  allowInventory: boolean
+  allowDirectFulfillment: boolean
+  allowInterwarehouseTransfer: boolean
+  allowContractorFallback: boolean
+  allowedWeekdays: WarehouseSupportWeekday[]
+  allowedDates: string[]
+  excludedDates: string[]
+  serviceStart: string | null
+  serviceEnd: string | null
+}
+
+export type WarehouseSupportLinkInfo = WarehouseSupportLinkInput & {
+  id: string
+  version: number
+  servedWarehouseId: string
+}
+
+export type WarehouseSupportLinksInfo = {
+  servedWarehouseId: string
+  warehouseVersion: number
+  links: WarehouseSupportLinkInfo[]
+}
 
 export type WarehouseTimeZoneChange = {
   warehouseId: string
@@ -41,11 +85,53 @@ const WAREHOUSE_RESPONSE_KEYS = [
   "name",
   "city",
   "address",
+  "latitude",
+  "longitude",
   "timeZone",
   "active",
   "lifecycleState",
   "sortOrder",
+  "representative",
 ] as const
+
+const WAREHOUSE_SUPPORT_LINK_KEYS = [
+  "id",
+  "version",
+  "supportWarehouseId",
+  "servedWarehouseId",
+  "active",
+  "priority",
+  "allowDrivers",
+  "allowVehicles",
+  "allowInventory",
+  "allowDirectFulfillment",
+  "allowInterwarehouseTransfer",
+  "allowContractorFallback",
+  "allowedWeekdays",
+  "allowedDates",
+  "excludedDates",
+  "serviceStart",
+  "serviceEnd",
+] as const
+
+const WAREHOUSE_SUPPORT_LINKS_KEYS = [
+  "servedWarehouseId",
+  "warehouseVersion",
+  "links",
+] as const
+
+const SUPPORT_WEEKDAYS: readonly WarehouseSupportWeekday[] = [
+  "MONDAY",
+  "TUESDAY",
+  "WEDNESDAY",
+  "THURSDAY",
+  "FRIDAY",
+  "SATURDAY",
+  "SUNDAY",
+]
+
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,9})?)?$/
 
 const WAREHOUSE_TIME_ZONE_CHANGE_KEYS = [
   "warehouseId",
@@ -107,6 +193,53 @@ function isOptionalSortOrder(value: unknown): value is number | null {
   return value === null || isNonNegativeInteger(value)
 }
 
+function isNullableCoordinate(
+  value: unknown,
+  minimum: number,
+  maximum: number
+): value is number | null {
+  return (
+    value === null ||
+    (typeof value === "number" &&
+      Number.isFinite(value) &&
+      value >= minimum &&
+      value <= maximum)
+  )
+}
+
+function isCoordinatePair(latitude: unknown, longitude: unknown) {
+  return (
+    isNullableCoordinate(latitude, -90, 90) &&
+    isNullableCoordinate(longitude, -180, 180) &&
+    ((latitude === null && longitude === null) ||
+      (latitude !== null && longitude !== null))
+  )
+}
+
+function isWarehouseSupportWeekday(
+  value: unknown
+): value is WarehouseSupportWeekday {
+  return SUPPORT_WEEKDAYS.includes(value as WarehouseSupportWeekday)
+}
+
+function isCalendarDate(value: unknown): value is string {
+  if (typeof value !== "string" || !DATE_PATTERN.test(value)) return false
+  const parsed = new Date(`${value}T00:00:00Z`)
+  return (
+    !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(value)
+  )
+}
+
+function isNullableTime(value: unknown): value is string | null {
+  return (
+    value === null || (typeof value === "string" && TIME_PATTERN.test(value))
+  )
+}
+
+function isUniqueArray<T>(values: T[]) {
+  return new Set(values).size === values.length
+}
+
 function isWarehouseLifecycleState(
   value: unknown
 ): value is WarehouseLifecycleState {
@@ -132,10 +265,13 @@ function parseWarehouse(value: unknown): WarehouseInfo {
     name,
     city,
     address,
+    latitude,
+    longitude,
     timeZone,
     active,
     lifecycleState,
     sortOrder,
+    representative,
   } = value
   if (
     !isUuid(id) ||
@@ -143,11 +279,13 @@ function parseWarehouse(value: unknown): WarehouseInfo {
     !isNonEmptyString(name, 255) ||
     !isNonEmptyString(city, 255) ||
     !isNullableString(address, 1000) ||
+    !isCoordinatePair(latitude, longitude) ||
     !isNonEmptyString(timeZone, 64) ||
     typeof active !== "boolean" ||
     !isWarehouseLifecycleState(lifecycleState) ||
     active !== (lifecycleState === "ACTIVE") ||
-    !isOptionalSortOrder(sortOrder)
+    !isOptionalSortOrder(sortOrder) ||
+    typeof representative !== "boolean"
   ) {
     throw new Error("Сервис складов вернул некорректный ответ.")
   }
@@ -158,11 +296,133 @@ function parseWarehouse(value: unknown): WarehouseInfo {
     name,
     city,
     address,
+    latitude: latitude as number | null,
+    longitude: longitude as number | null,
     timeZone,
     active,
     lifecycleState,
     sortOrder,
+    representative,
   }
+}
+
+function parseWarehouseSupportLink(value: unknown): WarehouseSupportLinkInfo {
+  if (!isRecord(value) || !hasExactKeys(value, WAREHOUSE_SUPPORT_LINK_KEYS)) {
+    throw new Error("Сервис складов вернул некорректную опорную связь.")
+  }
+
+  const {
+    id,
+    version,
+    supportWarehouseId,
+    servedWarehouseId,
+    active,
+    priority,
+    allowDrivers,
+    allowVehicles,
+    allowInventory,
+    allowDirectFulfillment,
+    allowInterwarehouseTransfer,
+    allowContractorFallback,
+    allowedWeekdays,
+    allowedDates,
+    excludedDates,
+    serviceStart,
+    serviceEnd,
+  } = value
+
+  const validWeekdays =
+    Array.isArray(allowedWeekdays) &&
+    allowedWeekdays.every(isWarehouseSupportWeekday) &&
+    isUniqueArray(allowedWeekdays)
+  const validAllowedDates =
+    Array.isArray(allowedDates) &&
+    allowedDates.every(isCalendarDate) &&
+    isUniqueArray(allowedDates)
+  const validExcludedDates =
+    Array.isArray(excludedDates) &&
+    excludedDates.every(isCalendarDate) &&
+    isUniqueArray(excludedDates)
+
+  if (
+    !isUuid(id) ||
+    !isNonNegativeInteger(version) ||
+    !isUuid(supportWarehouseId) ||
+    !isUuid(servedWarehouseId) ||
+    typeof active !== "boolean" ||
+    !Number.isInteger(priority) ||
+    (priority as number) < 1 ||
+    typeof allowDrivers !== "boolean" ||
+    typeof allowVehicles !== "boolean" ||
+    typeof allowInventory !== "boolean" ||
+    typeof allowDirectFulfillment !== "boolean" ||
+    typeof allowInterwarehouseTransfer !== "boolean" ||
+    typeof allowContractorFallback !== "boolean" ||
+    !validWeekdays ||
+    !validAllowedDates ||
+    !validExcludedDates ||
+    !isNullableTime(serviceStart) ||
+    !isNullableTime(serviceEnd) ||
+    (serviceStart === null) !== (serviceEnd === null) ||
+    (serviceStart !== null && serviceEnd !== null && serviceStart >= serviceEnd)
+  ) {
+    throw new Error("Сервис складов вернул некорректную опорную связь.")
+  }
+
+  return {
+    id,
+    version,
+    supportWarehouseId,
+    servedWarehouseId,
+    active,
+    priority: priority as number,
+    allowDrivers,
+    allowVehicles,
+    allowInventory,
+    allowDirectFulfillment,
+    allowInterwarehouseTransfer,
+    allowContractorFallback,
+    allowedWeekdays: allowedWeekdays as WarehouseSupportWeekday[],
+    allowedDates: allowedDates as string[],
+    excludedDates: excludedDates as string[],
+    serviceStart,
+    serviceEnd,
+  }
+}
+
+function parseWarehouseSupportLinks(
+  value: unknown,
+  expectedWarehouseId: string
+): WarehouseSupportLinksInfo {
+  if (!isRecord(value) || !hasExactKeys(value, WAREHOUSE_SUPPORT_LINKS_KEYS)) {
+    throw new Error(
+      "Сервис складов вернул некорректный список опорных складов."
+    )
+  }
+
+  const { servedWarehouseId, warehouseVersion, links } = value
+  if (
+    servedWarehouseId !== expectedWarehouseId ||
+    !isUuid(servedWarehouseId) ||
+    !isNonNegativeInteger(warehouseVersion) ||
+    !Array.isArray(links)
+  ) {
+    throw new Error(
+      "Сервис складов вернул некорректный список опорных складов."
+    )
+  }
+
+  const parsedLinks = links.map(parseWarehouseSupportLink)
+  if (
+    parsedLinks.some((link) => link.servedWarehouseId !== servedWarehouseId) ||
+    !isUniqueArray(parsedLinks.map((link) => link.supportWarehouseId))
+  ) {
+    throw new Error(
+      "Сервис складов вернул некорректный список опорных складов."
+    )
+  }
+
+  return { servedWarehouseId, warehouseVersion, links: parsedLinks }
 }
 
 function parseWarehouseTimeZoneChange(value: unknown): WarehouseTimeZoneChange {
@@ -207,11 +467,58 @@ function requireWarehouseWriteInput(input: WarehouseWriteInput) {
     isNonEmptyString(input.name, 255) &&
     isNonEmptyString(input.city, 255) &&
     isNullableString(input.address, 1000) &&
+    isCoordinatePair(input.latitude, input.longitude) &&
     isNonEmptyString(input.timeZone, 64) &&
-    isOptionalSortOrder(input.sortOrder)
+    isOptionalSortOrder(input.sortOrder) &&
+    typeof input.representative === "boolean"
 
   if (!valid) {
     throw new Error("Параметры склада не соответствуют контракту API.")
+  }
+}
+
+function requireWarehouseSupportLinkInput(
+  servedWarehouseId: string,
+  links: WarehouseSupportLinkInput[]
+) {
+  const supportWarehouseIds = new Set<string>()
+
+  for (const link of links) {
+    const valid =
+      isUuid(link.supportWarehouseId) &&
+      link.supportWarehouseId !== servedWarehouseId &&
+      !supportWarehouseIds.has(link.supportWarehouseId) &&
+      typeof link.active === "boolean" &&
+      Number.isInteger(link.priority) &&
+      link.priority >= 1 &&
+      typeof link.allowDrivers === "boolean" &&
+      typeof link.allowVehicles === "boolean" &&
+      typeof link.allowInventory === "boolean" &&
+      typeof link.allowDirectFulfillment === "boolean" &&
+      typeof link.allowInterwarehouseTransfer === "boolean" &&
+      typeof link.allowContractorFallback === "boolean" &&
+      Array.isArray(link.allowedWeekdays) &&
+      link.allowedWeekdays.every(isWarehouseSupportWeekday) &&
+      isUniqueArray(link.allowedWeekdays) &&
+      Array.isArray(link.allowedDates) &&
+      link.allowedDates.every(isCalendarDate) &&
+      isUniqueArray(link.allowedDates) &&
+      Array.isArray(link.excludedDates) &&
+      link.excludedDates.every(isCalendarDate) &&
+      isUniqueArray(link.excludedDates) &&
+      isNullableTime(link.serviceStart) &&
+      isNullableTime(link.serviceEnd) &&
+      ((link.serviceStart === null && link.serviceEnd === null) ||
+        (link.serviceStart !== null &&
+          link.serviceEnd !== null &&
+          link.serviceStart < link.serviceEnd))
+
+    if (!valid) {
+      throw new Error(
+        "Параметры опорного склада не соответствуют контракту API."
+      )
+    }
+    supportWarehouseIds.add(link.supportWarehouseId)
   }
 }
 
@@ -294,13 +601,52 @@ export async function replaceWarehouse(
         name: input.name,
         city: input.city,
         address: input.address,
+        latitude: input.latitude,
+        longitude: input.longitude,
         timeZone: input.timeZone,
         sortOrder: input.sortOrder,
+        representative: input.representative,
       }),
     }
   )
 
   return parseWarehouse(response)
+}
+
+export async function listWarehouseSupportLinks(
+  accessToken: string | null,
+  servedWarehouseId: string
+): Promise<WarehouseSupportLinksInfo> {
+  const warehouseId = requireWarehouseId(servedWarehouseId)
+  const response = await bearerRequest<unknown>(
+    requireAccessToken(accessToken),
+    `${WAREHOUSES_ENDPOINT}/${encodeURIComponent(warehouseId)}/support-links`
+  )
+
+  return parseWarehouseSupportLinks(response, warehouseId)
+}
+
+export async function replaceWarehouseSupportLinks(
+  accessToken: string | null,
+  servedWarehouseId: string,
+  expectedVersion: number,
+  links: WarehouseSupportLinkInput[]
+): Promise<WarehouseSupportLinksInfo> {
+  const warehouseId = requireWarehouseId(servedWarehouseId)
+  requireWarehouseSupportLinkInput(warehouseId, links)
+  const response = await bearerRequest<unknown>(
+    requireAccessToken(accessToken),
+    `${WAREHOUSES_ENDPOINT}/${encodeURIComponent(warehouseId)}/support-links`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        expectedVersion: requireExpectedVersion(expectedVersion),
+        links,
+      }),
+    }
+  )
+
+  return parseWarehouseSupportLinks(response, warehouseId)
 }
 
 async function transitionWarehouseLifecycle(

@@ -136,20 +136,30 @@ function cabinContentStatus(
 function logisticsTripTitle(kind: DriverBoardCard["kind"]) {
   if (kind === "SHIPMENT") return "Отгрузить бытовку"
   if (kind === "RETURN") return "Вернуть бытовку"
+  if (kind === "TRANSFER") return "Межскладское перемещение"
   return "Логистическая ходка"
 }
 
 /** Renders the logistics-owned trip projection with its final filling states. */
 export function DriverTripDetailsView({
   details,
+  kind = null,
 }: {
   details: DriverTripDetails
   live: boolean
+  kind?: DriverBoardCard["kind"]
 }) {
+  const transfer = kind === "TRANSFER"
+  const hasContacts =
+    details.primaryContactName !== null ||
+    details.primaryContactPhone !== null ||
+    details.additionalContacts.length > 0
   return (
     <div className="flex flex-col gap-3" aria-label="Данные водительской ходки">
       <section className="flex flex-col gap-1 text-sm">
-        <h3 className="font-medium">Клиент и маршрут</h3>
+        <h3 className="font-medium">
+          {transfer ? "Маршрут перемещения" : "Клиент и маршрут"}
+        </h3>
         <p>{details.clientName}</p>
         <p className="text-muted-foreground">
           {details.address?.trim() || "Адрес не указан"}
@@ -161,26 +171,32 @@ export function DriverTripDetailsView({
         </p>
       </section>
 
-      <Separator />
+      {!transfer || hasContacts ? (
+        <>
+          <Separator />
 
-      <section className="flex flex-col gap-1 text-sm">
-        <h3 className="font-medium">Контакты</h3>
-        <p>
-          Основной: {details.primaryContactName?.trim() || "имя не указано"} ·{" "}
-          {details.primaryContactPhone ?? "телефон не указан"}
-        </p>
-        {details.additionalContacts.length > 0 ? (
-          <ul className="flex flex-col gap-1">
-            {details.additionalContacts.map((contact, index) => (
-              <li key={`${contact.name}:${contact.phone}:${index}`}>
-                {contact.name} · {contact.phone}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-muted-foreground">Дополнительных контактов нет.</p>
-        )}
-      </section>
+          <section className="flex flex-col gap-1 text-sm">
+            <h3 className="font-medium">Контакты</h3>
+            <p>
+              Основной: {details.primaryContactName?.trim() || "имя не указано"}{" "}
+              · {details.primaryContactPhone ?? "телефон не указан"}
+            </p>
+            {details.additionalContacts.length > 0 ? (
+              <ul className="flex flex-col gap-1">
+                {details.additionalContacts.map((contact, index) => (
+                  <li key={`${contact.name}:${contact.phone}:${index}`}>
+                    {contact.name} · {contact.phone}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-muted-foreground">
+                Дополнительных контактов нет.
+              </p>
+            )}
+          </section>
+        </>
+      ) : null}
 
       {details.comment?.trim() ? (
         <section className="flex flex-col gap-1 text-sm">
@@ -286,7 +302,11 @@ export function DriverTripDetailsDialog({ card }: { card: DriverBoardCard }) {
           </Alert>
         ) : null}
         {query.data?.tripDetails ? (
-          <DriverTripDetailsView details={query.data.tripDetails} live />
+          <DriverTripDetailsView
+            details={query.data.tripDetails}
+            live
+            kind={card.kind}
+          />
         ) : null}
         {query.data && !query.data.tripDetails ? (
           <Alert>

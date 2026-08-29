@@ -31,7 +31,16 @@ import {
   FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+import { listWarehouseSupportLinks } from "@/api/warehouse-api"
 import {
   listOrderReplacementCandidates,
   replaceOrderUnit,
@@ -42,6 +51,7 @@ import type {
   OrderUnitCandidate,
 } from "@/features/orders/domain/orders"
 import { useOrdersModule } from "@/features/orders/orders-module-context"
+import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
 
 const CANDIDATE_PAGE_SIZE = 50
@@ -127,6 +137,7 @@ function OrderUnitReplacementDialogContent({
   onConflict: () => void
 }) {
   const { accessToken, currentUser } = useOrdersModule()
+  const { warehouses } = useWarehouse()
   const [selectedOldUnitIds, setSelectedOldUnitIds] = useState<string[]>([])
   const [selfReplacementOpen, setSelfReplacementOpen] = useState(false)
   const [reason, setReason] = useState("")
@@ -134,6 +145,9 @@ function OrderUnitReplacementDialogContent({
   const [page, setPage] = useState(0)
   const [replacementUnitId, setReplacementUnitId] = useState<string | null>(
     null
+  )
+  const [inventorySourceWarehouseId, setInventorySourceWarehouseId] = useState(
+    order.warehouseId ?? ""
   )
   const [errorText, setErrorText] = useState<string | null>(null)
   const commandIdentity = useRef(new OrderCommandIdentityRegistry())
@@ -148,13 +162,70 @@ function OrderUnitReplacementDialogContent({
     () => new Set(order.units.map((candidate) => candidate.unit.id)),
     [order.units]
   )
+  const supportLinksQuery = useQuery({
+    queryKey: [
+      "warehouses",
+      order.warehouseId ?? "no-service-warehouse",
+      "support-links",
+    ],
+    queryFn: () => listWarehouseSupportLinks(accessToken, order.warehouseId!),
+    enabled: Boolean(
+      accessToken && order.warehouseId && selfReplacementOpen && selectedOldUnit
+    ),
+  })
+  const sourceWarehouseOptions = useMemo(() => {
+    if (!order.warehouseId) return []
+    const warehouseById = new Map(
+      warehouses.map((warehouse) => [warehouse.id, warehouse] as const)
+    )
+    const serviceWarehouse = warehouseById.get(order.warehouseId)
+    const supportOptions = (supportLinksQuery.data?.links ?? [])
+      .filter(
+        (link) =>
+          link.active &&
+          link.allowInventory &&
+          link.allowDirectFulfillment &&
+          warehouseById.has(link.supportWarehouseId)
+      )
+      .sort(
+        (left, right) =>
+          left.priority - right.priority ||
+          (
+            warehouseById.get(left.supportWarehouseId)?.name ?? ""
+          ).localeCompare(
+            warehouseById.get(right.supportWarehouseId)?.name ?? "",
+            "ru"
+          )
+      )
+      .map((link) => ({
+        id: link.supportWarehouseId,
+        name: warehouseById.get(link.supportWarehouseId)!.name,
+        support: true,
+      }))
+
+    return [
+      {
+        id: order.warehouseId,
+        name: serviceWarehouse?.name ?? "Склад обслуживания",
+        support: false,
+      },
+      ...supportOptions,
+    ]
+  }, [order.warehouseId, supportLinksQuery.data?.links, warehouses])
+  const serviceWarehouseName =
+    warehouses.find((warehouse) => warehouse.id === order.warehouseId)?.name ??
+    "Склад обслуживания"
+  const selectedSourceWarehouseName =
+    sourceWarehouseOptions.find(
+      (warehouse) => warehouse.id === inventorySourceWarehouseId
+    )?.name ?? "выбранном складе"
   const candidateQuery = useQuery({
     queryKey: [
       "orders",
       "replacement-candidates",
       currentUser?.id ?? "unknown-user",
       order.id,
-      selectedOldUnit?.unit.warehouseId ?? "no-warehouse",
+      inventorySourceWarehouseId || "no-source-warehouse",
       page,
       CANDIDATE_PAGE_SIZE,
       search,
@@ -166,8 +237,17 @@ function OrderUnitReplacementDialogContent({
         page,
         size: CANDIDATE_PAGE_SIZE,
         search,
+        inventorySourceWarehouseId:
+          inventorySourceWarehouseId === order.warehouseId
+            ? null
+            : inventorySourceWarehouseId,
       }),
-    enabled: Boolean(accessToken && selfReplacementOpen && selectedOldUnit),
+    enabled: Boolean(
+      accessToken &&
+      selfReplacementOpen &&
+      selectedOldUnit &&
+      inventorySourceWarehouseId
+    ),
   })
   const candidates = useMemo(
     () =>
@@ -175,10 +255,14 @@ function OrderUnitReplacementDialogContent({
         (candidate) =>
           !candidate.added &&
           candidate.unit.status === "FREE" &&
-          candidate.unit.warehouseId === selectedOldUnit?.unit.warehouseId &&
+          candidate.unit.warehouseId === inventorySourceWarehouseId &&
           !currentOrderUnitIds.has(candidate.unit.id)
       ),
-    [candidateQuery.data?.content, currentOrderUnitIds, selectedOldUnit]
+    [
+      candidateQuery.data?.content,
+      currentOrderUnitIds,
+      inventorySourceWarehouseId,
+    ]
   )
 
   const replaceMutation = useMutation({
@@ -188,12 +272,14 @@ function OrderUnitReplacementDialogContent({
       normalizedReason,
       expectedVersion,
       fingerprint,
+      sourceWarehouseId,
     }: {
       oldUnit: OrderUnitCandidate
       newUnit: OrderUnitCandidate
       normalizedReason: string
       expectedVersion: number
       fingerprint: string
+      sourceWarehouseId: string
     }) => {
       if (!accessToken) throw new Error("Сессия завершена.")
       return replaceOrderUnit({
@@ -203,6 +289,8 @@ function OrderUnitReplacementDialogContent({
         unitId: oldUnit.unit.id,
         replacementRentalItemId: newUnit.unit.id,
         reason: normalizedReason,
+        inventorySourceWarehouseId:
+          sourceWarehouseId === order.warehouseId ? null : sourceWarehouseId,
         idempotencyKey: commandIdentity.current.keyFor(fingerprint),
       })
     },
@@ -237,6 +325,7 @@ function OrderUnitReplacementDialogContent({
     )
     setSelfReplacementOpen(false)
     setReplacementUnitId(null)
+    setInventorySourceWarehouseId(order.warehouseId ?? "")
     setPage(0)
     setErrorText(null)
   }
@@ -246,6 +335,18 @@ function OrderUnitReplacementDialogContent({
     const normalizedReason = reason.trim()
     if (!selectedOldUnit || selectedOldUnitIds.length !== 1) {
       setErrorText("Для самостоятельной замены выберите одну бытовку.")
+      return
+    }
+    if (!order.warehouseId || !inventorySourceWarehouseId) {
+      setErrorText("У заказа не задан склад обслуживания.")
+      return
+    }
+    if (
+      !sourceWarehouseOptions.some(
+        (warehouse) => warehouse.id === inventorySourceWarehouseId
+      )
+    ) {
+      setErrorText("Выбранный склад-источник больше недоступен.")
       return
     }
     if (normalizedReason.length === 0) {
@@ -269,6 +370,7 @@ function OrderUnitReplacementDialogContent({
       expectedVersion: order.version,
       oldUnitId: selectedOldUnit.unit.id,
       replacementRentalItemId: newUnit.unit.id,
+      inventorySourceWarehouseId,
       reason: normalizedReason,
     })
     setErrorText(null)
@@ -278,6 +380,7 @@ function OrderUnitReplacementDialogContent({
       normalizedReason,
       expectedVersion: order.version,
       fingerprint,
+      sourceWarehouseId: inventorySourceWarehouseId,
     })
   }
 
@@ -366,6 +469,7 @@ function OrderUnitReplacementDialogContent({
                   setSelfReplacementOpen(true)
                   setPage(0)
                   setReplacementUnitId(null)
+                  setInventorySourceWarehouseId(order.warehouseId ?? "")
                   setErrorText(null)
                 }}
               >
@@ -379,6 +483,52 @@ function OrderUnitReplacementDialogContent({
       {selfReplacementOpen && selectedOldUnit ? (
         <form noValidate onSubmit={submitSelfReplacement}>
           <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="order-unit-replacement-source">
+                Склад-источник бытовки
+              </FieldLabel>
+              <Select
+                value={inventorySourceWarehouseId}
+                disabled={
+                  replaceMutation.isPending ||
+                  !order.warehouseId ||
+                  sourceWarehouseOptions.length === 0
+                }
+                onValueChange={(warehouseId) => {
+                  setInventorySourceWarehouseId(warehouseId)
+                  setReplacementUnitId(null)
+                  setPage(0)
+                  setErrorText(null)
+                }}
+              >
+                <SelectTrigger id="order-unit-replacement-source">
+                  <SelectValue placeholder="Выберите склад-источник" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {sourceWarehouseOptions.map((warehouse) => (
+                      <SelectItem key={warehouse.id} value={warehouse.id}>
+                        {warehouse.name}
+                        {warehouse.support ? " · опорный" : " · обслуживание"}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <FieldDescription>
+                Склад обслуживания заказа: {serviceWarehouseName}. Физическая
+                бытовка будет зарезервирована на выбранном складе-источнике.
+              </FieldDescription>
+              {supportLinksQuery.isFetching ? (
+                <FieldDescription>Загружаем опорные склады…</FieldDescription>
+              ) : null}
+              {supportLinksQuery.isError ? (
+                <FieldDescription>
+                  Опорные склады недоступны. Можно выбрать только склад
+                  обслуживания.
+                </FieldDescription>
+              ) : null}
+            </Field>
             <Field data-invalid={Boolean(errorText) || undefined}>
               <FieldLabel htmlFor="order-unit-replacement-reason">
                 Причина замены
@@ -438,7 +588,8 @@ function OrderUnitReplacementDialogContent({
               </div>
             ) : candidates.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                Свободные бытовки того же склада не найдены.
+                Свободные бытовки на складе «{selectedSourceWarehouseName}» не
+                найдены.
               </p>
             ) : (
               <div className="grid gap-2 sm:grid-cols-2">

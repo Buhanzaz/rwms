@@ -75,7 +75,15 @@ afterAll(() => {
   }
 })
 
-function renderPicker(onChange = vi.fn()) {
+function renderPicker({
+  onChange = vi.fn(),
+  unknownLabel,
+  value = null,
+}: {
+  onChange?: (next: typeof DRIVER | null) => void
+  unknownLabel?: string
+  value?: typeof DRIVER | null
+} = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -85,7 +93,8 @@ function renderPicker(onChange = vi.fn()) {
         accessToken="driver-token"
         id="shipment-driver"
         warehouseId={WAREHOUSE_ID}
-        value={null}
+        unknownLabel={unknownLabel}
+        value={value}
         onChange={onChange}
       />
     </QueryClientProvider>
@@ -143,5 +152,29 @@ describe("LogisticsDriverPicker", () => {
     await user.click(await screen.findByRole("option", { name: DRIVER.name }))
 
     expect(onChange).toHaveBeenCalledWith(DRIVER)
+  })
+
+  it("keeps an optional unknown value selectable without a validation error", async () => {
+    const onChange = vi.fn()
+    renderPicker({
+      onChange,
+      unknownLabel: "Неизвестен",
+      value: DRIVER,
+    })
+    const user = userEvent.setup()
+
+    await waitFor(() =>
+      expect(
+        (
+          screen.getByRole("combobox", {
+            name: "Водитель",
+          }) as HTMLButtonElement
+        ).disabled
+      ).toBe(false)
+    )
+    await user.click(screen.getByRole("combobox", { name: "Водитель" }))
+    await user.click(await screen.findByRole("option", { name: "Неизвестен" }))
+
+    expect(onChange).toHaveBeenCalledWith(null)
   })
 })

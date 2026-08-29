@@ -6,6 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ApiError } from "@/lib/api-client"
 
+Object.defineProperties(HTMLElement.prototype, {
+  hasPointerCapture: { configurable: true, value: () => false },
+  setPointerCapture: { configurable: true, value: () => undefined },
+  scrollIntoView: { configurable: true, value: () => undefined },
+})
+
 const ordersApi = vi.hoisted(() => ({
   createOrderIdempotencyKey: vi.fn(
     () => "11111111-1111-4111-8111-111111111111"
@@ -13,8 +19,20 @@ const ordersApi = vi.hoisted(() => ({
   listOrderReplacementCandidates: vi.fn(),
   replaceOrderUnit: vi.fn(),
 }))
+const warehouseApi = vi.hoisted(() => ({
+  listWarehouseSupportLinks: vi.fn(),
+}))
 
 vi.mock("@/features/orders/api/orders-api", () => ordersApi)
+vi.mock("@/api/warehouse-api", () => warehouseApi)
+vi.mock("@/hooks/use-warehouse", () => ({
+  useWarehouse: () => ({
+    warehouses: [
+      { id: "55555555-5555-4555-8555-555555555555", name: "Регион" },
+      { id: "66666666-6666-4666-8666-666666666666", name: "Опорный" },
+    ],
+  }),
+}))
 vi.mock("@/features/orders/orders-module-context", () => ({
   useOrdersModule: () => ({
     accessToken: "orders-token",
@@ -191,6 +209,31 @@ function renderDialog({
 }
 
 beforeEach(() => {
+  warehouseApi.listWarehouseSupportLinks.mockResolvedValue({
+    servedWarehouseId: WAREHOUSE_ID,
+    warehouseVersion: 2,
+    links: [
+      {
+        id: "12121212-1212-4121-8121-121212121212",
+        version: 1,
+        supportWarehouseId: OTHER_WAREHOUSE_ID,
+        servedWarehouseId: WAREHOUSE_ID,
+        active: true,
+        priority: 1,
+        allowDrivers: true,
+        allowVehicles: true,
+        allowInventory: true,
+        allowDirectFulfillment: true,
+        allowInterwarehouseTransfer: true,
+        allowContractorFallback: false,
+        allowedWeekdays: [],
+        allowedDates: [],
+        excludedDates: [],
+        serviceStart: null,
+        serviceEnd: null,
+      },
+    ],
+  })
   ordersApi.listOrderReplacementCandidates.mockResolvedValue(
     candidatePage([validReplacement])
   )
@@ -302,11 +345,81 @@ describe("OrderUnitReplacementDialog", () => {
         unitId: OLD_ONE_ID,
         replacementRentalItemId: GOOD_REPLACEMENT_ID,
         reason: "Протечка",
+        inventorySourceWarehouseId: null,
         idempotencyKey: "11111111-1111-4111-8111-111111111111",
       })
     )
     expect(callbacks.onReplaced).toHaveBeenCalledWith(order)
     expect(callbacks.onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it("switches to an allowed physical source and resets the stale candidate", async () => {
+    const supportReplacement = unitCandidate({
+      id: "13131313-1313-4131-8131-131313131313",
+      number: "ОПОРНАЯ-200",
+      warehouseId: OTHER_WAREHOUSE_ID,
+    })
+    ordersApi.listOrderReplacementCandidates.mockImplementation(
+      ({
+        inventorySourceWarehouseId,
+      }: {
+        inventorySourceWarehouseId: string | null
+      }) =>
+        Promise.resolve(
+          candidatePage(
+            inventorySourceWarehouseId
+              ? [supportReplacement]
+              : [validReplacement]
+          )
+        )
+    )
+    const user = userEvent.setup()
+    renderDialog()
+
+    await user.click(
+      screen.getByRole("checkbox", { name: "Заменить бытовку СТАРАЯ-001" })
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Выбрать замену самостоятельно" })
+    )
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Выбрать заменяющую бытовку ЗАМЕНА-100",
+      })
+    )
+
+    const sourceSelect = screen.getByLabelText("Склад-источник бытовки")
+    sourceSelect.focus()
+    await user.keyboard("{Enter}{ArrowDown}{Enter}")
+
+    expect(screen.queryByText("ЗАМЕНА-100")).toBeNull()
+    await waitFor(() =>
+      expect(ordersApi.listOrderReplacementCandidates).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          orderId: ORDER_ID,
+          inventorySourceWarehouseId: OTHER_WAREHOUSE_ID,
+          page: 0,
+        })
+      )
+    )
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Выбрать заменяющую бытовку ОПОРНАЯ-200",
+      })
+    )
+    await user.type(screen.getByLabelText("Причина замены"), "Другой источник")
+    await user.click(screen.getByRole("button", { name: "Подтвердить замену" }))
+
+    await waitFor(() =>
+      expect(ordersApi.replaceOrderUnit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orderId: ORDER_ID,
+          replacementRentalItemId: supportReplacement.unit.id,
+          inventorySourceWarehouseId: OTHER_WAREHOUSE_ID,
+        })
+      )
+    )
+    expect(order.warehouseId).toBe(WAREHOUSE_ID)
   })
 
   it("refreshes after a conflict without clearing the user's replacement draft", async () => {

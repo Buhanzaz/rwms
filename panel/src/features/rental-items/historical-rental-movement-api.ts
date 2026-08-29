@@ -7,21 +7,25 @@ const UUID_PATTERN =
 /** Direction of a past rental fact entered directly from a cabin card. */
 export type HistoricalRentalMovementKind = "SHIPMENT" | "RETURN"
 
-/** Version-fenced command for creating one real historical logistics document. */
+/** Version-fenced create with an optional complete shipment-driver audit pair. */
 export type CreateHistoricalRentalMovementInput = {
   warehouseId: string
   rentalItemId: string
   expectedRentalItemVersion: number
   clientId: string
+  driverSnapshot: string | null
+  driverWorkerId: string | null
   kind: HistoricalRentalMovementKind
   occurredOn: string
 }
 
-/** Version-fenced correction of one existing historical rental shipment. */
+/** Version-fenced client, driver-audit and date correction of one historical shipment. */
 export type UpdateHistoricalRentalShipmentInput = {
   expectedVersion: number
   rentalItemId: string
   clientId: string
+  driverSnapshot: string | null
+  driverWorkerId: string | null
   occurredOn: string
 }
 

@@ -96,6 +96,10 @@ vi.mock("@/features/auth/use-auth", () => ({
           warehouseId: "11111111-1111-4111-8111-111111111111",
           level: "EDIT",
         },
+        {
+          warehouseId: "99999999-9999-4999-8999-999999999998",
+          level: "EDIT",
+        },
       ],
     },
   }),
@@ -103,16 +107,28 @@ vi.mock("@/features/auth/use-auth", () => ({
 vi.mock("@/hooks/use-warehouse", () => ({
   useWarehouse: () => ({
     selectedWarehouseId: "11111111-1111-4111-8111-111111111111",
+    warehouses: [
+      {
+        id: "11111111-1111-4111-8111-111111111111",
+        name: "Склад обслуживания",
+      },
+      {
+        id: "99999999-9999-4999-8999-999999999998",
+        name: "Опорный склад",
+      },
+    ],
   }),
 }))
 vi.mock("@/features/logistics/logistics-driver-picker", () => ({
   LogisticsDriverPicker: ({
     id,
     value,
+    warehouseId,
     onChange,
   }: {
     id: string
     value: { id: string; name: string } | null
+    warehouseId: string
     onChange: (value: { id: string; name: string } | null) => void
   }) => (
     <label htmlFor={id}>
@@ -120,6 +136,7 @@ vi.mock("@/features/logistics/logistics-driver-picker", () => ({
       <select
         id={id}
         aria-label="Водитель"
+        data-warehouse-id={warehouseId}
         value={value?.id ?? ""}
         onChange={(event) =>
           onChange(
@@ -149,6 +166,7 @@ const RETURN_ID = "66666666-6666-4666-8666-666666666666"
 const DRIVER_WORKER_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 const SECOND_ASSET_ID = "88888888-8888-4888-8888-888888888888"
 const THIRD_ASSET_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab"
+const SUPPORT_WAREHOUSE_ID = "99999999-9999-4999-8999-999999999998"
 
 function shipment() {
   return {
@@ -175,6 +193,7 @@ function shipment() {
         state: "PENDING" as const,
         tenantSnapshot: "Арендатор",
         rentalOrderId: ORDER_ID,
+        inventorySourceWarehouseId: WAREHOUSE_ID,
       },
     ],
     createdAt: "2026-07-30T08:00:00Z",
@@ -337,6 +356,24 @@ function savedOrderWithThreeCabins() {
           rentalMonths: 3,
           shipmentDate: null,
           returnDate: null,
+        },
+      },
+    ],
+  }
+}
+
+function savedOrderWithMixedSources() {
+  const order = savedOrderWithThreeCabins()
+  return {
+    ...order,
+    unitCount: 2,
+    units: [
+      order.units[0],
+      {
+        ...order.units[1],
+        unit: {
+          ...order.units[1].unit,
+          warehouseId: SUPPORT_WAREHOUSE_ID,
         },
       },
     ],
@@ -507,6 +544,9 @@ describe("LogisticsOrderTasksPage", () => {
     await user.click(screen.getAllByRole("button", { name: "Детали" })[0])
     expect(screen.getAllByText("Стол — 1 шт.").length).toBeGreaterThan(0)
     expect(screen.getAllByText("Проверить мебель").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Склад обслуживания:").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Склад-источник:").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Склад обслуживания").length).toBeGreaterThan(0)
 
     const checkbox = screen.getAllByRole("checkbox", {
       name: "Выбрать бытовку БЫТ-001",
@@ -574,6 +614,7 @@ describe("LogisticsOrderTasksPage", () => {
         expect.objectContaining({
           orderId: ORDER_ID,
           unitIds: [ASSET_ID],
+          inventorySourceWarehouseId: null,
           driverSnapshot: "Иванов Иван",
           driverWorkerId: DRIVER_WORKER_ID,
         })
@@ -581,6 +622,77 @@ describe("LogisticsOrderTasksPage", () => {
     )
     expect(shipmentApi.createShipmentFurnitureTasks).not.toHaveBeenCalled()
     expect(shipmentApi.replaceShipmentPlan).not.toHaveBeenCalled()
+  })
+
+  it("uses one physical source for the driver directory and shipment command", async () => {
+    const user = userEvent.setup()
+    const order = savedOrder()
+    order.units[0].unit.warehouseId = SUPPORT_WAREHOUSE_ID
+    useSavedOrderTask(order)
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Показать бытовки" }))[0]
+    )
+    await user.click(
+      screen.getAllByRole("checkbox", { name: "Выбрать бытовку БЫТ-001" })[0]
+    )
+    await user.click(
+      screen.getAllByRole("button", { name: "Создать отгрузку" }).at(-1)!
+    )
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Создать отгрузку",
+    })
+    expect(within(dialog).getByText("Склад обслуживания")).toBeTruthy()
+    expect(within(dialog).getByText("Опорный склад")).toBeTruthy()
+    const driverPicker = within(dialog).getByRole("combobox", {
+      name: "Водитель",
+    })
+    expect(driverPicker.getAttribute("data-warehouse-id")).toBe(
+      SUPPORT_WAREHOUSE_ID
+    )
+    await user.selectOptions(driverPicker, DRIVER_WORKER_ID)
+    await user.click(
+      within(dialog).getByRole("button", { name: "Создать отгрузку" })
+    )
+
+    await waitFor(() =>
+      expect(orderShipmentApi.createOrderShipment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orderId: ORDER_ID,
+          inventorySourceWarehouseId: SUPPORT_WAREHOUSE_ID,
+          unitIds: [ASSET_ID],
+        })
+      )
+    )
+  })
+
+  it("blocks a mixed-source shipment before opening its schedule", async () => {
+    const user = userEvent.setup()
+    useSavedOrderTask(savedOrderWithMixedSources())
+    useThreeCabinReferenceLabels()
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Показать бытовки" }))[0]
+    )
+    const first = screen.getAllByRole("checkbox", {
+      name: "Выбрать бытовку БЫТ-001",
+    })[0]
+    const second = screen.getAllByRole("checkbox", {
+      name: "Выбрать бытовку БЫТ-002",
+    })[0]
+    await user.click(first)
+    await user.click(second)
+
+    expect(
+      await screen.findByText(
+        "В одну отгрузку можно выбрать бытовки только с одного склада-источника. Создайте отдельную отгрузку для другого склада."
+      )
+    ).toBeTruthy()
+    expect(second.getAttribute("aria-checked")).toBe("false")
+    expect(orderShipmentApi.createOrderShipment).not.toHaveBeenCalled()
   })
 
   it("shows a saved order as an actionable task before its first shipment", async () => {

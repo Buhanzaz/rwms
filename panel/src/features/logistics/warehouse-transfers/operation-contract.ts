@@ -2,6 +2,9 @@ export const TRANSFER_OPERATION_IDS = {
   listTransfers: "listTransfers",
   getTransfer: "getTransfer",
   createTransfer: "createTransfer",
+  getTransferPlan: "getTransferPlan",
+  updateTransferPlan: "updateTransferPlan",
+  confirmTransferPlan: "confirmTransferPlan",
   departLine: "departTransferLine",
   arrivalPreflight: "getTransferArrivalPreflight",
   arriveLine: "arriveTransferLine",
@@ -10,7 +13,6 @@ export const TRANSFER_OPERATION_IDS = {
 } as const
 
 export const TRANSFER_CONTRACT_GAPS = [
-  "listCandidates",
   "retrySourceTask",
   "retryDestinationTask",
   "cancelSingleLine",

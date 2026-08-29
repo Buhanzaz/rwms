@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type FormEvent } from "react"
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react"
 import {
   useMutation,
   useQueries,
@@ -7,7 +7,7 @@ import {
 } from "@tanstack/react-query"
 import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 
 import { getEquipmentItems } from "@/api/equipment-api"
 import type { WarehouseInfo } from "@/api/warehouse-api"
@@ -101,6 +101,7 @@ import { furnitureEquipmentIds } from "@/features/rental-items/cabin-furniture"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 import {
   TRANSFER_FURNITURE_READINESS_QUERY_KEY,
+  TRANSFER_PLAN_QUERY_KEY,
   WAREHOUSE_TRANSFERS_QUERY_KEY,
   arriveWarehouseTransferLine,
   cancelWarehouseTransfer,
@@ -109,6 +110,7 @@ import {
   getWarehouseTransfer,
   getWarehouseTransferArrivalPreflight,
   getWarehouseTransferFurnitureReadiness,
+  getWarehouseTransferPlan,
   listWarehouseTransfers,
   reconcileWarehouseTransfer,
 } from "@/features/logistics/warehouse-transfers/api/warehouse-transfer-api"
@@ -125,6 +127,8 @@ import {
   type TransferLine,
   type TransferMediaReference,
 } from "@/features/logistics/warehouse-transfers/model/warehouse-transfer"
+import { TransferPlanDialog } from "@/features/logistics/warehouse-transfers/transfer-plan-dialog"
+import { TransferPlanSummary } from "@/features/logistics/warehouse-transfers/transfer-plan-summary"
 import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
@@ -304,14 +308,63 @@ function equipmentMovementLineLabel(line: { equipmentName: string | null }) {
 
 export function WarehouseTransfersPage() {
   const { accessToken, currentUser } = useAuth()
-  const { selectedWarehouseId, warehouses } = useWarehouse()
+  const { selectedWarehouseId, warehouses, setSelectedWarehouseId } =
+    useWarehouse()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState("")
   const [filters, setFilters] = useState(EMPTY_FILTERS)
   const { filtersOpen, setFiltersOpen } = useResponsiveFiltersOpen()
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [createOpen, setCreateOpen] = useState(false)
+  const requestedSourceWarehouseId = searchParams.get("sourceWarehouseId")
+  const requestedDestinationWarehouseId = searchParams.get(
+    "destinationWarehouseId"
+  )
+  const requestedSourceValid =
+    requestedSourceWarehouseId !== null &&
+    warehouses.some(
+      (warehouse) =>
+        warehouse.id === requestedSourceWarehouseId &&
+        warehouse.active &&
+        hasWarehouseAccess(currentUser, warehouse.id, "EDIT")
+    )
+  useEffect(() => {
+    if (
+      requestedSourceValid &&
+      requestedSourceWarehouseId !== selectedWarehouseId
+    ) {
+      setSelectedWarehouseId(requestedSourceWarehouseId)
+    }
+  }, [
+    requestedSourceValid,
+    requestedSourceWarehouseId,
+    selectedWarehouseId,
+    setSelectedWarehouseId,
+  ])
+  const requestedDestinationValid =
+    selectedWarehouseId !== null &&
+    hasWarehouseAccess(currentUser, selectedWarehouseId, "EDIT") &&
+    requestedDestinationWarehouseId !== null &&
+    requestedDestinationWarehouseId !== selectedWarehouseId &&
+    warehouses.some(
+      (warehouse) =>
+        warehouse.id === requestedDestinationWarehouseId &&
+        warehouse.active &&
+        hasWarehouseAccess(currentUser, warehouse.id, "EDIT")
+    )
+  const [createMode, setCreateMode] = useState<"PLAN" | "LEGACY" | null>(null)
+  const [destinationQueryDismissed, setDestinationQueryDismissed] =
+    useState(false)
+  const [initialDestinationWarehouseId, setInitialDestinationWarehouseId] =
+    useState<string | null>(null)
+  const [editingPlanDocumentId, setEditingPlanDocumentId] = useState<
+    string | null
+  >(null)
+  const planOpenFromDestinationQuery =
+    requestedDestinationValid &&
+    !destinationQueryDismissed &&
+    createMode === null
   const [arrivalTarget, setArrivalTarget] = useState<TransferLineTarget | null>(
     null
   )
@@ -345,6 +398,29 @@ export function WarehouseTransfersPage() {
     queryFn: () => getWarehouseTransfer(accessToken!, expandedId!),
     enabled: Boolean(accessToken && expandedId),
   })
+  const transferPlanQueries = useQueries({
+    queries: (query.data ?? []).map((document) => ({
+      queryKey: [...TRANSFER_PLAN_QUERY_KEY, document.id],
+      queryFn: () => getWarehouseTransferPlan(accessToken!, document.id),
+      enabled: Boolean(accessToken),
+      refetchInterval: 5_000,
+    })),
+  })
+  const transferPlanByDocumentId = useMemo(
+    () =>
+      new Map(
+        (query.data ?? []).flatMap((document, index) => {
+          const plan = transferPlanQueries[index]?.data
+          return plan ? ([[document.id, plan]] as const) : []
+        })
+      ),
+    [query.data, transferPlanQueries]
+  )
+  const editingPlanDocument = editingPlanDocumentId
+    ? ((query.data ?? []).find(
+        (document) => document.id === editingPlanDocumentId
+      ) ?? null)
+    : null
   const furnitureReadinessDocuments = useMemo(() => {
     const documents = query.data ?? []
     const expandedDetail = detailQuery.data
@@ -670,14 +746,30 @@ export function WarehouseTransfersPage() {
           </Button>
         ) : null}
         {canManage && current.state === "DRAFT" ? (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={cancelMutation.isPending}
-            onClick={() => setCancelTarget(current)}
-          >
-            Отменить
-          </Button>
+          <>
+            {transferPlanByDocumentId.get(current.id)?.state === "DRAFT" &&
+            !transferPlanByDocumentId.get(current.id)?.legacyCompatible ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setEditingPlanDocumentId(current.id)
+                  setDestinationQueryDismissed(true)
+                  setCreateMode("PLAN")
+                }}
+              >
+                Редактировать план
+              </Button>
+            ) : null}
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={cancelMutation.isPending}
+              onClick={() => setCancelTarget(current)}
+            >
+              Отменить
+            </Button>
+          </>
         ) : null}
         {canManage &&
         (current.state === "CONFLICT" ||
@@ -708,7 +800,14 @@ export function WarehouseTransfersPage() {
             onOpenChange={setFiltersOpen}
           />
           {canCreateTransfer ? (
-            <Button onClick={() => setCreateOpen(true)}>
+            <Button
+              onClick={() => {
+                setInitialDestinationWarehouseId(null)
+                setEditingPlanDocumentId(null)
+                setDestinationQueryDismissed(true)
+                setCreateMode("PLAN")
+              }}
+            >
               <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
               Создать перемещение
             </Button>
@@ -773,6 +872,13 @@ export function WarehouseTransfersPage() {
                         "Не удалось обновить документ"
                       )}
                     </FieldError>
+                  ) : null}
+                  {transferPlanByDocumentId.get(current.id) ? (
+                    <TransferPlanSummary
+                      accessToken={accessToken!}
+                      sourceWarehouseId={current.warehouseId}
+                      plan={transferPlanByDocumentId.get(current.id)!}
+                    />
                   ) : null}
                   <TransferLines
                     accessToken={accessToken}
@@ -869,6 +975,7 @@ export function WarehouseTransfersPage() {
             <Card key={document.id} size="sm">
               <CardHeader>
                 <CardTitle>
+                  Межскладское перемещение ·{" "}
                   {warehouseLabel(
                     warehouses.find(
                       (warehouse) => warehouse.id === document.warehouseId
@@ -896,37 +1003,46 @@ export function WarehouseTransfersPage() {
                   const current = currentDocument(document)
                   const furniture = furnitureGate(current)
                   return (
-                    <TransferLines
-                      accessToken={accessToken}
-                      document={current}
-                      canManage={canManageDocument(current)}
-                      furnitureReadiness={furniture.readiness}
-                      furnitureReady={furniture.ready}
-                      furnitureBlockerLabel={furniture.blockerLabel}
-                      showDetails={expandedId === document.id}
-                      departingLineId={
-                        departMutation.isPending
-                          ? (departMutation.variables?.line.id ?? null)
-                          : null
-                      }
-                      arrivingLineId={
-                        arriveMutation.isPending
-                          ? (arriveMutation.variables?.line.id ?? null)
-                          : null
-                      }
-                      onDepart={(line) =>
-                        departMutation.mutate({
-                          document: current,
-                          line,
-                        })
-                      }
-                      onArrive={(line) =>
-                        setArrivalTarget({
-                          document: current,
-                          line,
-                        })
-                      }
-                    />
+                    <div className="grid gap-3">
+                      {transferPlanByDocumentId.get(current.id) ? (
+                        <TransferPlanSummary
+                          accessToken={accessToken!}
+                          sourceWarehouseId={current.warehouseId}
+                          plan={transferPlanByDocumentId.get(current.id)!}
+                        />
+                      ) : null}
+                      <TransferLines
+                        accessToken={accessToken}
+                        document={current}
+                        canManage={canManageDocument(current)}
+                        furnitureReadiness={furniture.readiness}
+                        furnitureReady={furniture.ready}
+                        furnitureBlockerLabel={furniture.blockerLabel}
+                        showDetails={expandedId === document.id}
+                        departingLineId={
+                          departMutation.isPending
+                            ? (departMutation.variables?.line.id ?? null)
+                            : null
+                        }
+                        arrivingLineId={
+                          arriveMutation.isPending
+                            ? (arriveMutation.variables?.line.id ?? null)
+                            : null
+                        }
+                        onDepart={(line) =>
+                          departMutation.mutate({
+                            document: current,
+                            line,
+                          })
+                        }
+                        onArrive={(line) =>
+                          setArrivalTarget({
+                            document: current,
+                            line,
+                          })
+                        }
+                      />
+                    </div>
                   )
                 })()}
               </CardContent>
@@ -938,13 +1054,48 @@ export function WarehouseTransfersPage() {
         </div>
       </div>
 
-      {createOpen && selectedWarehouseId && accessToken ? (
+      {(createMode === "PLAN" || planOpenFromDestinationQuery) &&
+      selectedWarehouseId &&
+      accessToken &&
+      (!editingPlanDocumentId || editingPlanDocument) ? (
+        <TransferPlanDialog
+          accessToken={accessToken}
+          currentUser={currentUser}
+          warehouseId={selectedWarehouseId}
+          warehouses={warehouses}
+          initialDestinationWarehouseId={
+            planOpenFromDestinationQuery
+              ? requestedDestinationWarehouseId
+              : initialDestinationWarehouseId
+          }
+          existingDocument={editingPlanDocument}
+          existingPlan={
+            editingPlanDocumentId
+              ? (transferPlanByDocumentId.get(editingPlanDocumentId) ?? null)
+              : null
+          }
+          onCreated={applyTransferProjection}
+          onLegacyCreate={() => {
+            setDestinationQueryDismissed(true)
+            setEditingPlanDocumentId(null)
+            setCreateMode("LEGACY")
+          }}
+          onOpenChange={(open) => {
+            if (!open) {
+              setDestinationQueryDismissed(true)
+              setEditingPlanDocumentId(null)
+              setCreateMode(null)
+            }
+          }}
+        />
+      ) : null}
+      {createMode === "LEGACY" && selectedWarehouseId && accessToken ? (
         <CreateTransferDialog
           accessToken={accessToken}
           currentUser={currentUser}
           warehouseId={selectedWarehouseId}
           warehouses={warehouses}
-          onOpenChange={setCreateOpen}
+          onOpenChange={(open) => !open && setCreateMode(null)}
         />
       ) : null}
       {arrivalTarget ? (
@@ -1068,6 +1219,12 @@ function TransferLines({
 
   return (
     <div className="grid gap-2">
+      {document.lines.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          Конкретные бытовки ещё не зафиксированы. Подтвердите готовый план,
+          чтобы создать складские строки и резервы.
+        </p>
+      ) : null}
       {document.lines.map((line) => {
         const cabinQuery = cabinQueryByLineId.get(line.id)
         const taskBinding = taskBindingByLineId.get(line.id)

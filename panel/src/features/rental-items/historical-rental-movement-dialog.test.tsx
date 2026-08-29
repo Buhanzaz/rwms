@@ -89,6 +89,40 @@ vi.mock("@/features/orders/components/order-client-chooser", () => ({
     </div>
   ),
 }))
+vi.mock("@/features/logistics/logistics-driver-picker", () => ({
+  LogisticsDriverPicker: ({
+    id,
+    value,
+    onChange,
+  }: {
+    id: string
+    value: { id: string; name: string } | null
+    onChange: (value: { id: string; name: string } | null) => void
+  }) => (
+    <label htmlFor={id}>
+      Водитель
+      <select
+        id={id}
+        value={value?.id ?? "unknown"}
+        onChange={(event) =>
+          onChange(
+            event.target.value === "unknown"
+              ? null
+              : {
+                  id: event.target.value,
+                  name: "Иванов Иван",
+                }
+          )
+        }
+      >
+        <option value="unknown">Неизвестен</option>
+        <option value="dddddddd-dddd-4ddd-8ddd-dddddddddddd">
+          Иванов Иван
+        </option>
+      </select>
+    </label>
+  ),
+}))
 
 import { HistoricalRentalMovementDialog } from "@/features/rental-items/historical-rental-movement-dialog"
 
@@ -123,6 +157,8 @@ function renderDialog(
     id: string
     version: number
     clientId: string | null
+    driverSnapshot: string | null
+    driverWorkerId: string | null
     scheduledDate: string | null
   } | null = null
 ) {
@@ -186,7 +222,7 @@ afterEach(() => {
 })
 
 describe("HistoricalRentalMovementDialog", () => {
-  it("creates a fenced historical shipment for an existing client without driver fields", async () => {
+  it("creates a fenced historical shipment with an explicit unknown driver", async () => {
     const user = userEvent.setup()
     const { onCreated } = renderDialog("SHIPMENT")
 
@@ -214,6 +250,8 @@ describe("HistoricalRentalMovementDialog", () => {
           rentalItemId: rentalItem.id,
           expectedRentalItemVersion: rentalItem.version,
           clientId: "33333333-3333-4333-8333-333333333333",
+          driverSnapshot: null,
+          driverWorkerId: null,
           kind: "SHIPMENT",
           occurredOn: "2026-08-02",
         },
@@ -225,6 +263,31 @@ describe("HistoricalRentalMovementDialog", () => {
         id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         version: 3,
       })
+    )
+  })
+
+  it("binds a selected driver without requiring route planning", async () => {
+    const user = userEvent.setup()
+    renderDialog("SHIPMENT")
+
+    await user.click(
+      screen.getByRole("button", { name: "Выбрать существующего клиента" })
+    )
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Водитель" }),
+      "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+    )
+    await user.click(screen.getByRole("button", { name: "Создать отгрузку" }))
+
+    await waitFor(() =>
+      expect(movementsApi.createHistoricalRentalMovement).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: expect.objectContaining({
+            driverSnapshot: "Иванов Иван",
+            driverWorkerId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          }),
+        })
+      )
     )
   })
 
@@ -281,6 +344,8 @@ describe("HistoricalRentalMovementDialog", () => {
       id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
       version: 5,
       clientId: "33333333-3333-4333-8333-333333333333",
+      driverSnapshot: "Иванов Иван",
+      driverWorkerId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
       scheduledDate: "2026-08-01",
     })
 
@@ -308,6 +373,8 @@ describe("HistoricalRentalMovementDialog", () => {
           expectedVersion: 5,
           rentalItemId: rentalItem.id,
           clientId: "33333333-3333-4333-8333-333333333333",
+          driverSnapshot: "Иванов Иван",
+          driverWorkerId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
           occurredOn: "2026-07-31",
         },
       })

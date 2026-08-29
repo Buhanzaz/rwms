@@ -10,6 +10,9 @@ describe("warehouse transfer UI contract mapping", () => {
       listTransfers: "listTransfers",
       getTransfer: "getTransfer",
       createTransfer: "createTransfer",
+      getTransferPlan: "getTransferPlan",
+      updateTransferPlan: "updateTransferPlan",
+      confirmTransferPlan: "confirmTransferPlan",
       departLine: "departTransferLine",
       arrivalPreflight: "getTransferArrivalPreflight",
       arriveLine: "arriveTransferLine",
@@ -20,7 +23,6 @@ describe("warehouse transfer UI contract mapping", () => {
 
   it("keeps browser orchestration and contents transfer as gaps", () => {
     expect(TRANSFER_CONTRACT_GAPS).toEqual([
-      "listCandidates",
       "retrySourceTask",
       "retryDestinationTask",
       "cancelSingleLine",

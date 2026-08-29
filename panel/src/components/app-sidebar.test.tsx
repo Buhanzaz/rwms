@@ -58,10 +58,13 @@ const WAREHOUSE: WarehouseInfo = {
   name: "Saint Petersburg",
   city: "Санкт-Петербург",
   address: null,
+  latitude: null,
+  longitude: null,
   timeZone: "Europe/Moscow",
   active: true,
   lifecycleState: "ACTIVE",
   sortOrder: 0,
+  representative: false,
 }
 
 const MSK_WAREHOUSE: WarehouseInfo = {

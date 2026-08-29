@@ -153,8 +153,9 @@ function orderCards(cards: DriverBoardCard[]) {
 
 function isSupportedLogisticsTrip(card: DriverBoardCard) {
   return (
-    card.tripDetails !== null &&
-    (card.kind === "SHIPMENT" || card.kind === "RETURN")
+    card.kind === "TRANSFER" ||
+    (card.tripDetails !== null &&
+      (card.kind === "SHIPMENT" || card.kind === "RETURN"))
   )
 }
 
@@ -165,6 +166,7 @@ function isTaskMovable(card: DriverBoardCard) {
 function logisticsTripTitle(kind: DriverBoardCard["kind"]) {
   if (kind === "SHIPMENT") return "Отгрузить бытовку"
   if (kind === "RETURN") return "Вернуть бытовку"
+  if (kind === "TRANSFER") return "Межскладское перемещение"
   return "Логистическая ходка"
 }
 
@@ -356,9 +358,11 @@ function LogisticsTaskCard({
     opacity: isDragging ? 0 : 1,
   }
 
-  if (!trip) return null
-
-  const cabins = `Бытовки: ${trip.cabins.length}`
+  const cabins = trip
+    ? `Бытовки: ${trip.cabins.length}`
+    : card.unitNumber
+      ? `Бытовка: ${card.unitNumber}`
+      : "Состав не указан"
 
   return (
     <div
@@ -383,7 +387,9 @@ function LogisticsTaskCard({
           <CardHeader>
             <CardTitle className="line-clamp-2 pr-10">{taskTitle}</CardTitle>
             <CardDescription>
-              {trip.clientName} · {cabins}
+              {trip
+                ? `${trip.clientName} · ${cabins}`
+                : card.taskText?.trim() || card.title}
             </CardDescription>
             <CardAction className="flex items-center gap-1">
               <CollapsibleTrigger asChild>
@@ -450,8 +456,19 @@ function LogisticsTaskCard({
                   Водитель: {card.driverAudience.workerName ?? "не назначен"}
                 </Badge>
               </div>
-              <DriverTripDetailsView details={trip} live={false} />
-              <DriverTripDetailsDialog card={card} />
+              {trip ? (
+                <DriverTripDetailsView
+                  details={trip}
+                  live={false}
+                  kind={card.kind}
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {cabins}. Дополнительные факты появятся после формирования
+                  логистической проекции.
+                </p>
+              )}
+              {trip ? <DriverTripDetailsDialog card={card} /> : null}
             </CardContent>
           </CollapsibleContent>
         </Card>

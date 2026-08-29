@@ -39,10 +39,13 @@ const warehouse: WarehouseInfo = {
   name: "Северный",
   city: "Санкт-Петербург",
   address: null,
+  latitude: null,
+  longitude: null,
   timeZone: "Europe/Moscow",
   active: true,
   lifecycleState: "ACTIVE",
   sortOrder: null,
+  representative: false,
 }
 
 const secondWarehouse: WarehouseInfo = {

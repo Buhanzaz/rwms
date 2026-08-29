@@ -221,6 +221,26 @@ function taskKey(kind: TaskKind, documentId: string) {
   return `${kind}:${documentId}`
 }
 
+function shipmentSourceWarehouseIds(
+  task: RentalOrderTask,
+  selectedLineIds: readonly string[]
+) {
+  if (task.kind !== "SHIPMENT") return new Set<string>()
+  const selected = new Set(selectedLineIds)
+  return new Set(
+    (task.document as ShipmentDocument).lines
+      .filter((line) => selected.has(line.id))
+      .map((line) => line.inventorySourceWarehouseId)
+  )
+}
+
+function warehouseName(
+  warehouseNames: ReadonlyMap<string, string>,
+  warehouseId: string
+) {
+  return warehouseNames.get(warehouseId) ?? "Склад недоступен"
+}
+
 function pendingOrderShipment(
   order: OrderDetail,
   assignedUnitIds: ReadonlySet<string>
@@ -255,6 +275,7 @@ function pendingOrderShipment(
       state: "PENDING",
       tenantSnapshot: order.client.displayName,
       rentalOrderId: order.id,
+      inventorySourceWarehouseId: candidate.unit.warehouseId,
       inventoryShipmentFurniture: null,
     })),
     createdAt: order.createdAt,
@@ -405,7 +426,7 @@ function unitTerm(order: OrderDetail | null, assetId: string) {
 }
 
 export function LogisticsOrderTasksPage() {
-  const { selectedWarehouseId } = useWarehouse()
+  const { selectedWarehouseId, warehouses } = useWarehouse()
   const { accessToken, currentUser } = useAuth()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState("")
@@ -423,6 +444,11 @@ export function LogisticsOrderTasksPage() {
   const [commandError, setCommandError] = useState<string | null>(null)
   const [commandNotice, setCommandNotice] = useState<string | null>(null)
   const commandKeys = useRef(new Map<string, string>())
+  const warehouseNames = useMemo(
+    () =>
+      new Map(warehouses.map((warehouse) => [warehouse.id, warehouse.name])),
+    [warehouses]
+  )
 
   const shipmentsQuery = useQuery({
     queryKey: [...SHIPMENTS_QUERY_KEY, "order-tasks", selectedWarehouseId],
@@ -686,7 +712,14 @@ export function LogisticsOrderTasksPage() {
         setCommandError(limitError)
         return
       }
+      if (shipmentSourceWarehouseIds(task, next).size > 1) {
+        setCommandError(
+          "В одну отгрузку можно выбрать бытовки только с одного склада-источника. Создайте отдельную отгрузку для другого склада."
+        )
+        return
+      }
     }
+    setCommandError(null)
     if (selectedTaskId !== task.id) {
       setSelectedTaskId(task.id)
       setSelectedLineIds(next)
@@ -723,13 +756,27 @@ export function LogisticsOrderTasksPage() {
         .filter((line) => selectedLineIds.includes(line.id))
         .map((line) => line.assetId)
       if (unitIds.length === 0) throw new Error("Выберите хотя бы одну бытовку")
+      const sourceWarehouseIds = shipmentSourceWarehouseIds(
+        task,
+        selectedLineIds
+      )
+      if (sourceWarehouseIds.size !== 1) {
+        throw new Error(
+          "В одну отгрузку можно выбрать бытовки только с одного склада-источника."
+        )
+      }
+      const inventorySourceWarehouseId = [...sourceWarehouseIds][0]
       const limitError = shipmentTaskLimitError(task, unitIds.length)
       if (limitError) throw new Error(limitError)
-      const signature = `order-shipment:${order.id}:${order.version}:${unitIds.join(",")}:${driverWorkerId}:${driverSnapshot}:${scheduledDate}`
+      const signature = `order-shipment:${order.id}:${order.version}:${inventorySourceWarehouseId}:${unitIds.join(",")}:${driverWorkerId}:${driverSnapshot}:${scheduledDate}`
       return createOrderShipment({
         accessToken: accessToken!,
         orderId: order.id,
         expectedVersion: order.version,
+        inventorySourceWarehouseId:
+          inventorySourceWarehouseId === order.warehouseId
+            ? null
+            : inventorySourceWarehouseId,
         driverSnapshot,
         driverWorkerId,
         scheduledDate,
@@ -1137,6 +1184,7 @@ export function LogisticsOrderTasksPage() {
                 <RentalOrderTaskLines
                   task={task}
                   referenceLabels={referenceLabels}
+                  warehouseNames={warehouseNames}
                   canEdit={hasWarehouseAccess(
                     currentUser,
                     task.document.warehouseId,
@@ -1311,6 +1359,7 @@ export function LogisticsOrderTasksPage() {
                   <RentalOrderTaskLines
                     task={task}
                     referenceLabels={referenceLabels}
+                    warehouseNames={warehouseNames}
                     canEdit={hasWarehouseAccess(
                       currentUser,
                       task.document.warehouseId,
@@ -1419,6 +1468,7 @@ export function LogisticsOrderTasksPage() {
             selectedTaskId === scheduleTarget.id ? selectedLineIds : []
           }
           referenceLabels={referenceLabels}
+          warehouseNames={warehouseNames}
           shipmentTaskCap={shipmentTaskCap}
           pending={shipmentCreateMutation.isPending || returnMutation.isPending}
           onOpenChange={(open) => !open && setScheduleTarget(null)}
@@ -1620,6 +1670,7 @@ function SelectedCabinsActions({
 function RentalOrderTaskLines({
   task,
   referenceLabels,
+  warehouseNames,
   canEdit,
   selectedLineIds,
   shipmentTaskCap,
@@ -1631,6 +1682,7 @@ function RentalOrderTaskLines({
 }: {
   task: RentalOrderTask
   referenceLabels: LogisticsReferenceLabels
+  warehouseNames: ReadonlyMap<string, string>
   canEdit: boolean
   selectedLineIds: readonly string[]
   shipmentTaskCap: number | null
@@ -1690,6 +1742,9 @@ function RentalOrderTaskLines({
         )
         const outboundDriver = shipmentDocument?.driverSnapshot ?? "—"
         const returnDriver = returnDocument?.driverSnapshot ?? "—"
+        const shipmentLine = shipmentDocument?.lines.find(
+          (candidate) => candidate.assetId === line.assetId
+        )
         return (
           <Card key={line.id} size="sm">
             <CardHeader className="gap-3 sm:flex-row sm:items-center">
@@ -1751,6 +1806,26 @@ function RentalOrderTaskLines({
                     <span className="text-muted-foreground">Менеджер:</span>{" "}
                     {order?.managerDisplayName ?? "—"}
                   </p>
+                  <p>
+                    <span className="text-muted-foreground">
+                      Склад обслуживания:
+                    </span>{" "}
+                    {warehouseName(
+                      warehouseNames,
+                      shipmentDocument?.warehouseId ?? task.document.warehouseId
+                    )}
+                  </p>
+                  {shipmentLine ? (
+                    <p>
+                      <span className="text-muted-foreground">
+                        Склад-источник:
+                      </span>{" "}
+                      {warehouseName(
+                        warehouseNames,
+                        shipmentLine.inventorySourceWarehouseId
+                      )}
+                    </p>
+                  ) : null}
                   <p>
                     <span className="text-muted-foreground">Отгрузил:</span>{" "}
                     {outboundDriver}
@@ -1931,6 +2006,7 @@ function TaskScheduleDialog({
   selectedLineCount,
   selectedLineIds,
   referenceLabels,
+  warehouseNames,
   shipmentTaskCap,
   pending,
   onOpenChange,
@@ -1942,6 +2018,7 @@ function TaskScheduleDialog({
   selectedLineCount: number
   selectedLineIds: readonly string[]
   referenceLabels: LogisticsReferenceLabels
+  warehouseNames: ReadonlyMap<string, string>
   shipmentTaskCap: number | null
   pending: boolean
   onOpenChange: (open: boolean) => void
@@ -1976,6 +2053,10 @@ function TaskScheduleDialog({
   }
 
   const isShipment = task.kind === "SHIPMENT"
+  const sourceWarehouseIds = shipmentSourceWarehouseIds(task, selectedLineIds)
+  const inventorySourceWarehouseId = isShipment
+    ? ([...sourceWarehouseIds][0] ?? task.document.warehouseId)
+    : task.document.warehouseId
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
@@ -1995,13 +2076,31 @@ function TaskScheduleDialog({
             selectedLineIds={selectedLineIds}
             referenceLabels={referenceLabels}
           />
+          {isShipment ? (
+            <div className="grid gap-1 rounded-lg border bg-muted/30 p-3 text-sm sm:grid-cols-2">
+              <p>
+                <span className="text-muted-foreground">
+                  Склад обслуживания:
+                </span>{" "}
+                <strong>
+                  {warehouseName(warehouseNames, task.document.warehouseId)}
+                </strong>
+              </p>
+              <p>
+                <span className="text-muted-foreground">Склад-источник:</span>{" "}
+                <strong>
+                  {warehouseName(warehouseNames, inventorySourceWarehouseId)}
+                </strong>
+              </p>
+            </div>
+          ) : null}
           <FieldGroup>
             <LogisticsDriverPicker
               accessToken={accessToken}
               id="order-task-driver"
               required
               value={driver}
-              warehouseId={task.document.warehouseId}
+              warehouseId={inventorySourceWarehouseId}
               onChange={setDriver}
             />
             <DesiredTripScheduleFields

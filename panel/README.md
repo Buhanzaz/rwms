@@ -35,6 +35,13 @@ contexts and screens are usable.
   entity, and filter inputs. The server stays authoritative.
 - The selected warehouse is a non-authoritative local UI preference. It is
   revalidated against the profile returned after authentication.
+- `/settings/warehouses` creates and edits the warehouse-service aggregate directly. The form
+  persists its coordinate pair and independent `representative` checkbox; list and detail views
+  show a quiet representative badge and an explicit not-routable warning when coordinates are
+  absent. An existing representative warehouse exposes its complete directed support-link editor
+  with priority, capability switches, weekdays, date exceptions and an optional service interval.
+  The editor replaces that collection under the warehouse version fence; it never creates a second
+  logistics warehouse or map marker.
 - Task-board brigade settings submit the selected membership and the workers'
   version-fenced current-brigade changes in one group command. The panel does
   not offer a second worker-table assignment action; task-board commits or
@@ -276,13 +283,20 @@ contexts and screens are usable.
   repair statuses, plus `Возврат задним числом` for `RENTED`. For an already rented cabin with no
   shipment document, that shipment command restores the missing client/date provenance without
   repeating the physical asset transition. Once the imported shipment exists, the same action
-  edits its client and date under the document version instead of creating another document. Its
-  modal reuses the rental-client chooser:
+  edits its client, optional shipment driver and date under the document version instead of
+  creating another document. Its modal reuses the rental-client chooser:
   a new client is created first with a separate stable idempotency key, then the fenced historical
-  logistics command is retried with its own key. The UI never submits a driver or a route, and it
-  refreshes only the affected cabin, logistics and dossier queries after acceptance. See the
+  logistics command is retried with its own key. A historical shipment may select one warehouse
+  driver or explicitly keep `Неизвестен`; an unavailable or empty driver directory does not
+  invalidate that unknown choice. The UI submits a complete driver snapshot/ID pair or a null pair,
+  never creates a route or driver task, and always keeps historical returns driverless. It refreshes
+  only the affected cabin, logistics and dossier queries after acceptance. The shipment list places
+  `Отменить` immediately after `Показать состав` for failed imported shipments in `CONFLICT` or
+  `RECONCILIATION_REQUIRED`; successful imports remain non-cancellable and the service verifies
+  that no completed or unknown asset transition exists. See the
   [dossier page](src/features/rental-items/rental-item-detail-page.tsx) and
-  [historical-movement dialog](src/features/rental-items/historical-rental-movement-dialog.tsx).
+  [historical-movement dialog](src/features/rental-items/historical-rental-movement-dialog.tsx),
+  plus the [shipment list](src/features/logistics/logistics-shipments-page.tsx).
   When no live logistics shipment exists, that dossier labels an imported
   passport as `Отгружена` only when both its shipment date and non-blank tenant
   are present. Any live logistics document remains authoritative over those
@@ -367,18 +381,27 @@ contexts and screens are usable.
   first selects existing order cabins and then uses exactly one of two modes:
   the existing booking route receives ordered repeated `replacementUnitId`
   parameters for client selection, while direct replacement accepts exactly one
-  old cabin, a required reason, and a free same-warehouse candidate from the
-  order boundary. The versioned idempotent replace response updates the current
-  order with its transferred furniture projection; a conflict refreshes order
-  and candidates without clearing the replacement draft. See the [replacement
+  old cabin, a required reason, and a free candidate from the selected physical
+  source. The source selector retains the order's service warehouse and adds
+  only active support links that allow both inventory and direct fulfilment.
+  Changing it clears the stale candidate and page; the candidate read and
+  versioned idempotent replacement carry that source while the order warehouse
+  remains unchanged. A conflict refreshes order and candidates without clearing
+  the replacement draft. See the [replacement
   dialog](src/features/orders/components/order-unit-replacement-dialog.tsx) and
   [order adapter](src/features/orders/api/orders-api.ts).
 
 ## Logistics driver board
 
-- Shipment and return forms select an active driver by opaque worker ID. A
-  warehouse transfer has no responsible driver because it creates shared
-  warehouse movement work.
+- Shipment and return forms select an active driver by opaque worker ID. A planned warehouse
+  transfer may separately name its trip driver and resource-reposition intent; an unassigned
+  transfer remains visible to the qualified warehouse-driver pool instead of inventing an
+  employee identity.
+- A regional order retains its service warehouse independently from each outbound cabin's physical
+  `inventorySourceWarehouseId`. Virtual order lines derive that source from the selected cabin. A
+  shipment batch must contain exactly one source: selection and submit both reject a mixed batch,
+  the command and idempotency signature carry the source, and the driver picker reads the physical
+  source warehouse. Scheduling and expanded task rows show both warehouse names.
 - Expanded rows on `/logistics/order-tasks`, `/logistics/shipments`, and
   `/logistics/returns` show the linked order and customer overview before the
   cabin list: address, named contacts, phones, coordinates, rental term, and

@@ -57,6 +57,113 @@ export type TransferDocument = {
   updatedAt: string
 }
 
+/** Supported post-arrival intent for a driver or vehicle. */
+export type TransferResourceRepositionMode = "NONE" | "TEMPORARY" | "PERMANENT"
+
+/** Independent resource intent stored with a transfer plan. */
+export type TransferResourceReposition = {
+  resourceId: string | null
+  mode: TransferResourceRepositionMode
+  until: string | null
+}
+
+/** Furniture catalog requirement for one cabin in a typed group. */
+export type TransferFurniturePerCabinRequest = {
+  furnitureCatalogItemId: string
+  quantityPerCabin: number
+}
+
+/** Optimistically fenced physical cabin selected for a planned group. */
+export type TransferCabinAllocationRequest = {
+  assetId: string
+  assetVersion: number
+}
+
+/** Catalog-backed cabin requirement that may be saved before allocation. */
+export type TransferCabinGroupRequest = {
+  rentalTypeId: string
+  dimensionId: string | null
+  finishingId: string | null
+  characteristicIds: string[]
+  linoleum: boolean | null
+  quantity: number
+  furniturePerCabin: TransferFurniturePerCabinRequest[]
+  allocatedCabins: TransferCabinAllocationRequest[]
+}
+
+/** Independent furniture cargo that is not counted as cabin contents. */
+export type TransferLooseFurnitureRequest = {
+  furnitureCatalogItemId: string
+  quantity: number
+}
+
+/** Complete replace-on-write draft plan accepted by logistics-service. */
+export type TransferPlanRequest = {
+  plannedDepartureAt: string | null
+  plannedArrivalAt: string | null
+  logisticsComment: string | null
+  tripDriverId: string | null
+  tripVehicleId: string | null
+  driverReposition: TransferResourceReposition | null
+  vehicleReposition: TransferResourceReposition | null
+  cabinGroups: TransferCabinGroupRequest[]
+  looseFurniture: TransferLooseFurnitureRequest[]
+}
+
+/** Lifecycle of the planning projection independently from document effects. */
+export type TransferPlanState = "DRAFT" | "CONFIRMED"
+
+/** Durable asset reservation readiness reported after confirmation. */
+export type TransferReservationReadiness = "NOT_RESERVED" | "RESERVED"
+
+/** Calculated per-cabin requirement in the server plan projection. */
+export type TransferFurniturePerCabin = TransferFurniturePerCabinRequest & {
+  totalQuantity: number
+}
+
+/** Server-owned group identity and calculated totals. */
+export type TransferCabinGroup = Omit<
+  TransferCabinGroupRequest,
+  "furniturePerCabin"
+> & {
+  groupId: string
+  position: number
+  furniturePerCabin: TransferFurniturePerCabin[]
+}
+
+/** Server-calculated furniture totals without double-counting cabin contents. */
+export type TransferFurnitureTotal = {
+  furnitureCatalogItemId: string
+  cabinRequirementQuantity: number
+  looseQuantity: number
+  totalQuantity: number
+}
+
+/** Strict logistics-owned planning projection for one interwarehouse transfer. */
+export type TransferPlan = {
+  transferId: string
+  documentVersion: number
+  documentState: TransferDocumentState
+  planId: string | null
+  planVersion: number | null
+  state: TransferPlanState
+  reservationReadiness: TransferReservationReadiness
+  readinessDetail: string | null
+  legacyCompatible: boolean
+  scheduledDate: string
+  plannedDepartureAt: string | null
+  plannedArrivalAt: string | null
+  logisticsComment: string | null
+  tripDriverId: string | null
+  tripVehicleId: string | null
+  driverReposition: TransferResourceReposition
+  vehicleReposition: TransferResourceReposition
+  cabinGroups: TransferCabinGroup[]
+  looseFurniture: TransferLooseFurnitureRequest[]
+  totalCabinCount: number
+  furnitureTotals: TransferFurnitureTotal[]
+}
+
 export const TRANSFER_FURNITURE_READINESS_STATES = [
   "NOT_REQUIRED",
   "READY",

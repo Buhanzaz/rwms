@@ -718,7 +718,7 @@ describe("LogisticsBoardPage", () => {
     )
   })
 
-  it("shows grouped shipment and return trips while hiding transfers", async () => {
+  it("shows interwarehouse transfers beside grouped shipment and return trips", async () => {
     const shipment = card("00000000-0000-4000-8000-000000000031", {
       tripDetails: tripDetails(),
     })
@@ -762,9 +762,35 @@ describe("LogisticsBoardPage", () => {
     expect(screen.getByText("ИП Клиент · Бытовки: 2")).toBeTruthy()
     expect(screen.getByText("Отгрузить бытовку")).toBeTruthy()
     expect(screen.getByText("Вернуть бытовку")).toBeTruthy()
-    expect(screen.queryByText("Склад назначения · Бытовки: 2")).toBeNull()
-    expect(screen.queryByText("Перемещение")).toBeNull()
-    expect(screen.getAllByLabelText(/^Логистика на /i)).toHaveLength(2)
+    expect(screen.getByText("Склад назначения · Бытовки: 2")).toBeTruthy()
+    expect(screen.getByText("Межскладское перемещение")).toBeTruthy()
+    expect(screen.getAllByLabelText(/^Логистика на /i)).toHaveLength(3)
+  })
+
+  it("keeps a transfer card visible when only bounded task facts are available", async () => {
+    const transfer = card("00000000-0000-4000-8000-000000000034", {
+      kind: "TRANSFER",
+      title: "Межскладское перемещение",
+      taskText: "Санкт-Петербург → Великий Новгород",
+      unitNumber: null,
+      scheduledDate: "2026-08-03",
+      tripDetails: null,
+    })
+    renderPage({
+      ...board,
+      dates: [{ date: "2026-08-03", tasks: [transfer] }],
+    })
+
+    expect(
+      await screen.findByTestId(`logistics-task-${transfer.externalTaskId}`)
+    ).toBeTruthy()
+    expect(screen.getByText("Межскладское перемещение")).toBeTruthy()
+    expect(screen.getByText("Санкт-Петербург → Великий Новгород")).toBeTruthy()
+    expect(
+      screen.getByText(
+        "Состав не указан. Дополнительные факты появятся после формирования логистической проекции."
+      )
+    ).toBeTruthy()
   })
 
   it("ignores drops onto another driver, date, or lane", async () => {

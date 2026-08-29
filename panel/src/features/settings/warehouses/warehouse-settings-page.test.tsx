@@ -15,16 +15,20 @@ import { WarehouseSettingsPage } from "@/features/settings/warehouses/warehouse-
 const {
   completeWarehouseInactivation,
   createWarehouse,
+  listWarehouseSupportLinks,
   listWarehouses,
   replaceWarehouse,
+  replaceWarehouseSupportLinks,
   reloadWarehouses,
   scheduleWarehouseTimeZone,
   startWarehouseDraining,
 } = vi.hoisted(() => ({
   completeWarehouseInactivation: vi.fn(),
   createWarehouse: vi.fn(),
+  listWarehouseSupportLinks: vi.fn(),
   listWarehouses: vi.fn(),
   replaceWarehouse: vi.fn(),
+  replaceWarehouseSupportLinks: vi.fn(),
   reloadWarehouses: vi.fn(),
   scheduleWarehouseTimeZone: vi.fn(),
   startWarehouseDraining: vi.fn(),
@@ -33,8 +37,10 @@ const {
 vi.mock("@/api/warehouse-api", () => ({
   completeWarehouseInactivation,
   createWarehouse,
+  listWarehouseSupportLinks,
   listWarehouses,
   replaceWarehouse,
+  replaceWarehouseSupportLinks,
   scheduleWarehouseTimeZone,
   startWarehouseDraining,
 }))
@@ -56,10 +62,13 @@ const warehouse = {
   name: "Северный склад",
   city: "Санкт-Петербург",
   address: null,
+  latitude: 59.9343,
+  longitude: 30.3351,
   timeZone: "Europe/Moscow",
   active: true,
   lifecycleState: "ACTIVE",
   sortOrder: 2,
+  representative: false,
 }
 
 const inactiveWarehouse = {
@@ -178,6 +187,9 @@ describe("WarehouseSettingsPage", () => {
     await setField(user, "Название", "Южный склад")
     await setField(user, "Город", "Москва")
     await setField(user, "Временная зона", "Europe/Moscow")
+    await setField(user, "Широта", "55.7558")
+    await setField(user, "Долгота", "37.6173")
+    await user.click(screen.getByLabelText("Представительский склад"))
     await user.click(screen.getByRole("button", { name: "Сохранить" }))
 
     await waitFor(() =>
@@ -188,8 +200,11 @@ describe("WarehouseSettingsPage", () => {
           name: "Южный склад",
           city: "Москва",
           address: null,
+          latitude: 55.7558,
+          longitude: 37.6173,
           timeZone: "Europe/Moscow",
           sortOrder: null,
+          representative: true,
         }
       )
     )
@@ -216,13 +231,127 @@ describe("WarehouseSettingsPage", () => {
           name: warehouse.name,
           city: warehouse.city,
           address: warehouse.address,
+          latitude: warehouse.latitude,
+          longitude: warehouse.longitude,
           timeZone: warehouse.timeZone,
           sortOrder: warehouse.sortOrder,
+          representative: false,
         }
       )
       expect(reloadWarehouses).toHaveBeenCalled()
       expect(screen.queryByRole("dialog")).toBeNull()
     })
+  })
+
+  it("shows the representative badge and preserves the checked edit value", async () => {
+    const user = userEvent.setup()
+    const representativeWarehouse = { ...warehouse, representative: true }
+    listWarehouses.mockResolvedValue([representativeWarehouse])
+    listWarehouseSupportLinks.mockResolvedValue({
+      servedWarehouseId: representativeWarehouse.id,
+      warehouseVersion: representativeWarehouse.version,
+      links: [],
+    })
+    replaceWarehouse.mockResolvedValue({
+      ...representativeWarehouse,
+      version: representativeWarehouse.version + 1,
+    })
+    reloadWarehouses.mockResolvedValue(undefined)
+
+    renderPage()
+
+    expect((await screen.findAllByText("Представительский")).length).toBe(2)
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Изменить" }))[0]!
+    )
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Представительский склад" })
+        .getAttribute("data-state")
+    ).toBe("checked")
+    await user.click(screen.getByRole("button", { name: "Сохранить" }))
+
+    await waitFor(() =>
+      expect(replaceWarehouse).toHaveBeenCalledWith(
+        "access-token",
+        representativeWarehouse.id,
+        representativeWarehouse.version,
+        expect.objectContaining({ representative: true })
+      )
+    )
+  })
+
+  it("edits support warehouses through the version-fenced collection command", async () => {
+    const user = userEvent.setup()
+    const representativeWarehouse = { ...warehouse, representative: true }
+    const supportWarehouse = {
+      ...warehouse,
+      id: "00000000-0000-4000-8000-000000000005",
+      name: "Западный склад",
+      city: "Псков",
+    }
+    const link = {
+      id: "00000000-0000-4000-8000-000000000006",
+      version: 1,
+      supportWarehouseId: supportWarehouse.id,
+      servedWarehouseId: representativeWarehouse.id,
+      active: true,
+      priority: 1,
+      allowDrivers: true,
+      allowVehicles: true,
+      allowInventory: true,
+      allowDirectFulfillment: true,
+      allowInterwarehouseTransfer: true,
+      allowContractorFallback: false,
+      allowedWeekdays: ["TUESDAY"],
+      allowedDates: [],
+      excludedDates: [],
+      serviceStart: "08:00:00",
+      serviceEnd: "18:00:00",
+    }
+    listWarehouses.mockResolvedValue([
+      representativeWarehouse,
+      supportWarehouse,
+    ])
+    listWarehouseSupportLinks.mockResolvedValue({
+      servedWarehouseId: representativeWarehouse.id,
+      warehouseVersion: representativeWarehouse.version,
+      links: [link],
+    })
+    replaceWarehouseSupportLinks.mockResolvedValue({
+      servedWarehouseId: representativeWarehouse.id,
+      warehouseVersion: representativeWarehouse.version + 1,
+      links: [{ ...link, version: 2, allowContractorFallback: true }],
+    })
+    reloadWarehouses.mockResolvedValue(undefined)
+
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Изменить" }))[0]!
+    )
+    expect(await screen.findByText("Логистическое обслуживание")).toBeTruthy()
+    await user.click(screen.getByText("Предлагать наёмного водителя"))
+    await user.click(
+      screen.getByRole("button", { name: "Сохранить обслуживание" })
+    )
+
+    await waitFor(() =>
+      expect(replaceWarehouseSupportLinks).toHaveBeenCalledWith(
+        "access-token",
+        representativeWarehouse.id,
+        representativeWarehouse.version,
+        [
+          expect.objectContaining({
+            supportWarehouseId: supportWarehouse.id,
+            allowContractorFallback: true,
+            allowedWeekdays: ["TUESDAY"],
+            serviceStart: "08:00",
+            serviceEnd: "18:00",
+          }),
+        ]
+      )
+    )
   })
 
   it("starts the irreversible draining lifecycle with an expected version", async () => {

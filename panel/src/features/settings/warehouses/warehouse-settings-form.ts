@@ -4,8 +4,11 @@ export type WarehouseFormValues = {
   name: string
   city: string
   address: string
+  latitude: string
+  longitude: string
   timeZone: string
   sortOrder: string
+  representative: boolean
 }
 
 type WarehouseFormResult =
@@ -18,11 +21,20 @@ export function createWarehouseFormValues(
     name: warehouse?.name ?? "",
     city: warehouse?.city ?? "",
     address: warehouse?.address ?? "",
+    latitude:
+      warehouse?.latitude === null || warehouse === null
+        ? ""
+        : String(warehouse.latitude),
+    longitude:
+      warehouse?.longitude === null || warehouse === null
+        ? ""
+        : String(warehouse.longitude),
     timeZone: warehouse?.timeZone ?? "Europe/Moscow",
     sortOrder:
       warehouse?.sortOrder === null || warehouse?.sortOrder === undefined
         ? ""
         : String(warehouse.sortOrder),
+    representative: warehouse?.representative ?? false,
   }
 }
 
@@ -41,6 +53,10 @@ export function parseWarehouseForm(
   const name = values.name.trim()
   const city = values.city.trim()
   const address = values.address.trim() || null
+  const latitudeText = values.latitude.trim().replace(",", ".")
+  const longitudeText = values.longitude.trim().replace(",", ".")
+  const latitude = latitudeText === "" ? null : Number(latitudeText)
+  const longitude = longitudeText === "" ? null : Number(longitudeText)
   const timeZone = values.timeZone.trim()
   const sortOrderText = values.sortOrder.trim()
   const sortOrder = sortOrderText === "" ? null : Number(sortOrderText)
@@ -54,6 +70,22 @@ export function parseWarehouseForm(
 
   if (address !== null && address.length > 1000) {
     return { input: null, error: "Адрес не должен превышать 1000 символов." }
+  }
+
+  if ((latitude === null) !== (longitude === null)) {
+    return {
+      input: null,
+      error: "Укажите широту и долготу вместе либо оставьте оба поля пустыми.",
+    }
+  }
+
+  if (
+    (latitude !== null &&
+      (!Number.isFinite(latitude) || latitude < -90 || latitude > 90)) ||
+    (longitude !== null &&
+      (!Number.isFinite(longitude) || longitude < -180 || longitude > 180))
+  ) {
+    return { input: null, error: "Укажите корректные координаты WGS84." }
   }
 
   if (!timeZone || timeZone.length > 64 || !isIanaTimeZone(timeZone)) {
@@ -75,8 +107,11 @@ export function parseWarehouseForm(
       name,
       city,
       address,
+      latitude,
+      longitude,
       timeZone,
       sortOrder,
+      representative: values.representative,
     },
     error: null,
   }
