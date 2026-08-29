@@ -1,29 +1,24 @@
 import {
-  CalendarRange,
+  ArrowRightLeft,
   CalendarPlus,
   CircleAlert,
-  Copy,
-  Download,
   Edit3,
-  GitFork,
   Lock,
   LockOpen,
-  MapPinPlus,
   Plus,
-  RefreshCw,
   Scissors,
   Trash2,
-  Upload,
+  MapPinPlus,
 } from 'lucide-react';
+import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 import type {
   Driver,
   DriverShift,
   LogisticsRequest,
   PlanMetrics,
-  PlanningSettings,
   RouteCycle,
   RoutePlan,
-  ScenarioWorkspace,
+  WarehouseWorkspace,
   SimulationDerivedState,
   Trailer,
   UUID,
@@ -32,63 +27,56 @@ import type {
   Warehouse,
   Zone,
 } from '../domain/types';
-import type { RequestPlanningDetailsInput } from '../api/client';
+import type { RequestPlanningDetailsInput, WarehouseUpdateInput } from '../api/client';
 import { Badge, Button, EmptyState, ErrorPanel } from '../components/ui';
-import { isRequestVisibleOnDate, requestPlanningDates } from '../domain/request-dates';
 import { useUiStore, type MapTool } from '../stores/ui-store';
-import { formatDate, formatDistance, formatDuration, formatTime, nextDate } from '../utils/format';
+import { formatDate, formatDistance, formatDuration, formatTime } from '../utils/format';
 import { PlanPanel, type PlanMove } from '../features/planning/PlanPanel';
 import { PlanningDayRequests } from '../features/planning/PlanningDayRequests';
 import { SettingsEditor } from '../features/settings/SettingsEditor';
-import { RouteDiagnostics } from '../features/vehicles/RouteDiagnostics';
 
-export type EntityKind = 'scenario' | 'warehouse' | 'zone' | 'driver' | 'vehicle' | 'trailer' | 'shift' | 'request';
-export type EditableEntity = ScenarioWorkspace['scenario'] | Warehouse | Zone | Driver | Vehicle | Trailer | DriverShift | LogisticsRequest;
+export type EntityKind = 'warehouse' | 'zone' | 'driver' | 'vehicle' | 'trailer' | 'shift' | 'request';
+export type EditableEntity = Warehouse | Zone | Driver | Vehicle | Trailer | DriverShift | LogisticsRequest;
 
 interface InspectorProps {
-  workspace: ScenarioWorkspace;
+  workspace: WarehouseWorkspace;
   plan: RoutePlan | null;
   simulation: SimulationDerivedState | null;
   validation: ValidationResult | null;
   busy: boolean;
   onCreate: (kind: EntityKind) => void;
   onEdit: (kind: EntityKind, value: EditableEntity) => void;
-  onDelete: (kind: Exclude<EntityKind, 'scenario' | 'warehouse'>, id: UUID, label: string) => void;
-  onGenerateDemo: () => void;
-  onGenerateMultiDayDemo: () => void;
+  onDelete: (kind: Exclude<EntityKind, 'warehouse'>, id: UUID, label: string) => void;
   onGenerateWorkload: () => void;
   onDeleteGeneratedWorkload: () => void;
-  onCloneScenario: () => void;
-  onDeleteScenario: () => void;
-  onExport: () => void;
-  onImport: () => void;
-  onReclassify: () => void;
-  onZoneRelation: (fromId: UUID, toId: UUID) => void;
   onSetMapTool: (tool: MapTool) => void;
   onSelect: (kind: 'warehouse' | 'zone' | 'request' | 'driver' | 'vehicle' | 'shift' | 'cycle', id: UUID) => void;
   onMoveTask: (move: PlanMove) => void;
   onToggleCycleLock: (cycle: RouteCycle) => void;
-  onSaveSettings: (settings: PlanningSettings) => Promise<void>;
-  onClonePlan: () => void;
+  onSaveSettings: (input: WarehouseUpdateInput) => Promise<void>;
+  onConfirmPlan: () => void;
+  onResetManualChanges: () => void;
   onSimulationOverride: (kind: 'delay' | 'unavailable', driverShiftId: UUID) => void;
   planningDate: string;
   onPlanningDateChange: (date: string) => void;
-  onScheduleRequestDate: (requestId: UUID, date: string, addIfMissing: boolean) => void;
-  onUnscheduleRequest: (requestId: UUID) => void;
   onSaveRequestPlanning: (requestId: UUID, input: RequestPlanningDetailsInput) => Promise<void>;
   onSplitRequest: (requestId: UUID, quantities: number[]) => Promise<void>;
+  inspectorWidth: number;
+  onInspectorWidthChange: (width: number) => void;
 }
 
 function EntityCard({ title, subtitle, badges, onClick, onEdit, onDelete }: {
   title: string; subtitle: string; badges?: React.ReactNode; onClick: () => void; onEdit: () => void; onDelete?: () => void;
 }) {
   return (
-    <article className="entity-card" onClick={onClick}>
-      <div className="entity-card__row"><strong>{title}</strong><span>{badges}</span></div>
-      <p>{subtitle}</p>
+    <article className="entity-card">
+      <button type="button" className="entity-card__select" onClick={onClick}>
+        <span className="entity-card__row"><strong>{title}</strong><span>{badges}</span></span>
+        <span className="entity-card__subtitle">{subtitle}</span>
+      </button>
       <div className="toolbar-row" style={{ margin: '8px 0 0' }}>
-        <Button size="sm" variant="ghost" onClick={(event) => { event.stopPropagation(); onEdit(); }}><Edit3 size={13} />Изменить</Button>
-        {onDelete ? <Button size="sm" variant="ghost" onClick={(event) => { event.stopPropagation(); onDelete(); }}><Trash2 size={13} />Удалить</Button> : null}
+        <Button size="sm" variant="ghost" onClick={onEdit}><Edit3 size={13} aria-hidden="true" />Изменить</Button>
+        {onDelete ? <Button size="sm" variant="ghost" onClick={onDelete}><Trash2 size={13} aria-hidden="true" />Удалить</Button> : null}
       </div>
     </article>
   );
@@ -114,64 +102,46 @@ function Metrics({ metrics }: { metrics: PlanMetrics }) {
   return <div className="metrics-grid">{values.map(([label, value]) => <div className="metric" key={label}><small>{label}</small><strong>{value}</strong></div>)}</div>;
 }
 
-function ScenarioSection({ props }: { props: InspectorProps }) {
-  const { workspace } = props;
+function WarehouseSection({ props }: { props: InspectorProps }) {
+  const warehouse = props.workspace.warehouse;
   return <>
-    <h2 className="section-title">{workspace.scenario.name}</h2>
-    <p className="section-subtitle">{workspace.scenario.description || 'Без описания'}</p>
+    <h2 className="section-title">{warehouse.name}</h2><p className="section-subtitle">{warehouse.address} · {warehouse.city ?? 'город не указан'}</p>
     <div className="detail-grid">
-      <div className="detail-item"><small>Часовой пояс</small><strong>{workspace.scenario.timezone}</strong></div>
-      <div className="detail-item"><small>Дата по умолчанию</small><strong>{formatDate(workspace.scenario.default_planning_date)}</strong></div>
-      <div className="detail-item"><small>Seed</small><strong>{workspace.scenario.seed ?? 'не задан'}</strong></div>
-      <div className="detail-item"><small>Обновлён</small><strong>{new Date(workspace.scenario.updated_at).toLocaleString('ru-RU')}</strong></div>
+      <div className="detail-item"><small>Часовой пояс</small><strong>{warehouse.timezone}</strong></div>
+      <div className="detail-item"><small>Рабочий день</small><strong>{warehouse.working_day_start}–{warehouse.working_day_end}</strong></div>
+      <div className="detail-item"><small>Координаты</small><strong>{warehouse.latitude.toFixed(5)}, {warehouse.longitude.toFixed(5)}</strong></div>
+      <div className="detail-item"><small>RWMS</small><strong>подключён автоматически</strong></div>
     </div>
     <div className="divider" />
-    <div className="toolbar-row">
-      <Button onClick={() => props.onCreate('scenario')}><Plus size={14} />Новый сценарий</Button>
-      <Button variant="primary" onClick={() => props.onGenerateDemo()} disabled={props.busy}><RefreshCw size={14} />Demo scenario</Button>
-      <Button onClick={() => props.onGenerateMultiDayDemo()} disabled={props.busy}><CalendarRange size={14} />Тест на 3 дня</Button>
-      <Button onClick={props.onGenerateWorkload} disabled={props.busy}><CalendarPlus size={14} />Сгенерировать нагрузку</Button>
-      <Button variant="danger" onClick={props.onDeleteGeneratedWorkload} disabled={props.busy}><Trash2 size={14} />Удалить нагрузку</Button>
-      <Button onClick={() => props.onEdit('scenario', workspace.scenario)}><Edit3 size={14} />Изменить</Button>
-      <Button onClick={props.onCloneScenario}><Copy size={14} />Клонировать</Button>
-      <Button onClick={props.onExport}><Download size={14} />Экспорт JSON</Button>
-      <Button onClick={props.onImport}><Upload size={14} />Импорт JSON</Button>
-      <Button variant="danger" onClick={props.onDeleteScenario}><Trash2 size={14} />Удалить</Button>
+    <div className="warehouse-actions" aria-label="Действия со складом">
+      <div className="warehouse-actions__row">
+        <a
+          className="button button--primary button--md"
+          href={`/logistics/transfers?destinationWarehouseId=${encodeURIComponent(warehouse.external_warehouse_id)}`}
+        >
+          <ArrowRightLeft size={14} aria-hidden="true" />
+          Создать перемещение
+        </a>
+        <Button variant="primary" onClick={() => props.onEdit('warehouse', warehouse)}><Edit3 size={14} aria-hidden="true" />Настроить склад</Button>
+        <Button onClick={props.onGenerateWorkload} disabled={props.busy}><CalendarPlus size={14} aria-hidden="true" />Создать нагрузку</Button>
+        <Button variant="danger" onClick={props.onDeleteGeneratedWorkload} disabled={props.busy}><Trash2 size={14} aria-hidden="true" />Удалить нагрузку</Button>
+      </div>
     </div>
-    <div className="explanation"><strong>Внутренний стенд.</strong><br />Нет клиентской регистрации, оплаты, GPS, приложения водителя и внешних API-ключей.</div>
-  </>;
-}
-
-function WarehouseSection({ props }: { props: InspectorProps }) {
-  return <>
-    <h2 className="section-title">Склад</h2><p className="section-subtitle">Точка начала и завершения каждого рейсового цикла.</p>
-    <div className="toolbar-row"><Button variant="primary" onClick={() => props.onSetMapTool('PLACE_WAREHOUSE')}><MapPinPlus size={14} />Поставить на карте</Button><Button onClick={() => props.onCreate('warehouse')}><Plus size={14} />Координатами</Button></div>
-    <div className="entity-list">{props.workspace.warehouses.map((warehouse) => <EntityCard key={warehouse.id} title={warehouse.name} subtitle={`${warehouse.latitude.toFixed(5)}, ${warehouse.longitude.toFixed(5)} · ${warehouse.working_day_start}–${warehouse.working_day_end}`} onClick={() => props.onSelect('warehouse', warehouse.id)} onEdit={() => props.onEdit('warehouse', warehouse)} />)}</div>
-    {!props.workspace.warehouses.length ? <EmptyState title="Склад не задан" description="Поставьте склад на карте. Без него планирование невозможно." /> : null}
+    <div className="explanation">Выбор склада в верхнем левом углу переключает его доставки, вывозы, зоны, водителей, машины, смены и планы. На общей карте остальные склады остаются доступными для быстрого перехода.</div>
   </>;
 }
 
 function ZonesSection({ props }: { props: InspectorProps }) {
+  const labels = {
+    FORBIDDEN: 'доставка запрещена',
+    NO_TRAILER: 'проезд с прицепом запрещён',
+    SPECIAL_PRICE: 'особая цена',
+  } as const;
   return <>
-    <h2 className="section-title">Логистические зоны</h2><p className="section-subtitle">Принадлежность заявки определяет только backend. Изменение полигона не переклассифицирует старые заявки молча.</p>
-    <div className="toolbar-row"><Button variant="primary" onClick={() => props.onSetMapTool('DRAW_ZONE')}><Plus size={14} />Нарисовать</Button><Button onClick={() => props.onSetMapTool('CUT_ZONE')}><Scissors size={14} aria-hidden="true" />Сделать вырез</Button><Button onClick={() => props.onSetMapTool('EDIT_ZONE')}><Edit3 size={14} />Вершины</Button><Button onClick={props.onReclassify}><RefreshCw size={14} />Пересчитать заявки</Button></div>
-    <div className="entity-list">{props.workspace.zones.map((zone) => <EntityCard key={zone.id} title={`${zone.code} · ${zone.name}`} subtitle={`доставка ${zone.delivery_price} ₽ · вывоз ${zone.pickup_price} ₽ · ${zone.route_group} · приоритет ${zone.priority} · версия ${zone.version}${zone.stale_request_count ? ` · устарело ${zone.stale_request_count}` : ''}`} badges={<>{zone.locked ? <Badge tone="warning"><Lock size={10} />locked</Badge> : <Badge tone="neutral"><LockOpen size={10} />editable</Badge>}</>} onClick={() => props.onSelect('zone', zone.id)} onEdit={() => props.onEdit('zone', zone)} onDelete={() => props.onDelete('zone', zone.id, zone.name)} />)}</div>
-  </>;
-}
-
-function RelationSection({ props }: { props: InspectorProps }) {
-  const zones = props.workspace.zones;
-  return <>
-    <h2 className="section-title">Матрица связей зон</h2><p className="section-subtitle">Строка — откуда, столбец — куда. Направления редактируются независимо.</p>
-    <div className="toolbar-row"><Button disabled={zones.length < 2} onClick={() => props.onSetMapTool('RELATE_ZONES')}><GitFork size={14} />Выбрать две зоны на карте</Button></div>
-    {zones.length < 2 ? <EmptyState title="Недостаточно зон" description="Создайте минимум две зоны для настройки переходов." /> : <div className="relation-table-wrap"><table className="relation-table"><thead><tr><th>из \ в</th>{zones.map((zone) => <th key={zone.id}>{zone.code}</th>)}</tr></thead><tbody>{zones.map((from) => <tr key={from.id}><th>{from.code}</th>{zones.map((to) => {
-      if (from.id === to.id) return <td key={to.id}>—</td>;
-      const relation = props.workspace.zone_relations.find((item) =>
-        (item.from_zone_id === from.id && item.to_zone_id === to.id) ||
-        (item.is_bidirectional && item.from_zone_id === to.id && item.to_zone_id === from.id),
-      );
-      return <td key={to.id}><button className={`relation-cell ${relation?.relation_type === 'BLOCKED' ? 'relation-cell--blocked' : relation ? 'relation-cell--allowed' : ''}`} onClick={() => props.onZoneRelation(from.id, to.id)} aria-label={`Связь ${from.code} в ${to.code}`}>{relation?.relation_type === 'BLOCKED' ? '×' : relation ? '✓' : '·'}</button></td>;
-    })}</tr>)}</tbody></table></div>}
+    <h2 className="section-title">Особые зоны доставки</h2><p className="section-subtitle">Обычная стоимость считается по изохронам склада. Полигон нужен только для запрета доставки, запрета прицепа или специальной цены.</p>
+    <div className="toolbar-row"><Button variant="primary" onClick={() => props.onSetMapTool('DRAW_ZONE')}><Plus size={14} />Нарисовать</Button><Button onClick={() => props.onSetMapTool('CUT_ZONE')}><Scissors size={14} aria-hidden="true" />Сделать вырез</Button></div>
+    <div className="entity-list">{props.workspace.zones.map((zone) => <EntityCard key={zone.id} title={zone.name} subtitle={`${labels[zone.kind]}${zone.kind === 'SPECIAL_PRICE' ? ` · доставка ${zone.delivery_price} ₽ · вывоз ${zone.pickup_price} ₽` : ''} · версия ${zone.version}`} badges={<><span className="zone-color-dot" style={{ backgroundColor: zone.color }} aria-label={`Цвет ${zone.color}`} /><Badge tone={zone.kind === 'FORBIDDEN' ? 'danger' : zone.kind === 'NO_TRAILER' ? 'warning' : 'neutral'}>{labels[zone.kind]}</Badge>{zone.locked ? <Badge tone="warning"><Lock size={10} />заблокирована</Badge> : <Badge tone="neutral"><LockOpen size={10} />доступна</Badge>}</>} onClick={() => props.onSelect('zone', zone.id)} onEdit={() => props.onEdit('zone', zone)} onDelete={() => props.onDelete('zone', zone.id, zone.name)} />)}</div>
+    {!props.workspace.zones.length ? <EmptyState title="Зоны не созданы" description="Нарисуйте зону, когда для склада потребуется отдельный тариф или ограничение проезда." /> : null}
   </>;
 }
 
@@ -179,7 +149,7 @@ function CatalogSection({ props, kind }: { props: InspectorProps; kind: 'driver'
   const values = kind === 'driver' ? props.workspace.drivers : props.workspace.vehicles;
   const trailers = props.workspace.trailers;
   return <>
-    <h2 className="section-title">{kind === 'driver' ? 'Водители' : 'Машины'}</h2><p className="section-subtitle">{kind === 'driver' ? 'Группа — мягкое предпочтение при назначении.' : 'Вместимость и физическая конфигурация проверяются до безопасного расчёта каждого участка.'}</p>
+    <h2 className="section-title">{kind === 'driver' ? 'Водители' : 'Машины'}</h2><p className="section-subtitle">{kind === 'driver' ? 'Конкретный работник или общий пул квалифицированных водителей выбранного склада RWMS.' : 'Вместимость и физическая конфигурация проверяются до безопасного расчёта каждого участка.'}</p>
     <Button variant="primary" onClick={() => props.onCreate(kind)}><Plus size={14} />{kind === 'driver' ? 'Добавить' : 'Добавить машину'}</Button><div className="divider" />
     <div className="entity-list">{values.map((value) => {
       const driver = kind === 'driver' ? value as Driver : null;
@@ -187,11 +157,13 @@ function CatalogSection({ props, kind }: { props: InspectorProps; kind: 'driver'
       const physicalSummary = vehicle?.length_mm && vehicle.width_mm && vehicle.height_mm
         ? ` · ${vehicle.length_mm}×${vehicle.width_mm}×${vehicle.height_mm} мм`
         : vehicle ? ' · профиль не заполнен' : '';
-      return <EntityCard key={value.id} title={value.name} subtitle={driver ? `Группа ${driver.preferred_route_group || 'не задана'}` : `${vehicle?.registration_number} · вместимость ${vehicle?.capacity}${physicalSummary}`} badges={<Badge tone={value.active ? 'success' : 'neutral'}>{value.active ? 'активен' : 'выключен'}</Badge>} onClick={() => props.onSelect(kind, value.id)} onEdit={() => props.onEdit(kind, value)} onDelete={() => props.onDelete(kind, value.id, value.name)} />;
+      return <EntityCard key={value.id} title={value.name} subtitle={driver ? (driver.rwms_assignment_mode === 'WAREHOUSE_DRIVERS' ? 'Общий пул водителей RWMS' : 'Конкретный водитель RWMS') : `${vehicle?.registration_number} · вместимость ${vehicle?.capacity}${physicalSummary}`} badges={<Badge tone={value.active ? 'success' : 'neutral'}>{value.active ? 'активен' : 'выключен'}</Badge>} onClick={() => props.onSelect(kind, value.id)} onEdit={() => props.onEdit(kind, value)} onDelete={() => props.onDelete(kind, value.id, value.name)} />;
     })}</div>
+    {kind === 'vehicle' && !values.length ? <EmptyState title="Машины не созданы" description="Добавьте машину, чтобы назначать её на смены и маршруты склада." /> : null}
     {kind === 'vehicle' ? <>
       <div className="divider" />
-      <div className="entity-card__row"><span><h3 className="section-title">Прицепы</h3><p className="section-subtitle">Прицеп не исчезает после разгрузки и остаётся частью автопоезда до отдельного отсоединения.</p></span><Button variant="primary" onClick={() => props.onCreate('trailer')}><Plus size={14} />Добавить прицеп</Button></div>
+      <h3 className="section-title">Прицепы</h3><p className="section-subtitle">Прицеп не исчезает после разгрузки и остаётся частью автопоезда до отдельного отсоединения.</p>
+      <Button variant="primary" onClick={() => props.onCreate('trailer')}><Plus size={14} />Добавить прицеп</Button><div className="divider" />
       {trailers === undefined ? <p className="field__hint">Загружаем каталог прицепов и эксплуатационные профили…</p> : <div className="entity-list">{trailers.map((trailer) => <EntityCard
         key={trailer.id}
         title={trailer.name}
@@ -208,109 +180,97 @@ function CatalogSection({ props, kind }: { props: InspectorProps; kind: 'driver'
 
 function ShiftsSection({ props }: { props: InspectorProps }) {
   return <>
-    <h2 className="section-title">Смены</h2><p className="section-subtitle">Одна смена связывает водителя, машину и доступный интервал.</p>
+    <h2 className="section-title">Смены</h2><p className="section-subtitle">Одна запись задаёт повторяющийся рабочий интервал водителя на период внутри месяца.</p>
     <Button variant="primary" disabled={!props.workspace.drivers.length || !props.workspace.vehicles.length} onClick={() => props.onCreate('shift')}><CalendarPlus size={14} />Добавить смену</Button><div className="divider" />
     <div className="entity-list">{props.workspace.shifts.map((shift) => {
       const driver = props.workspace.drivers.find((item) => item.id === shift.driver_id);
       const vehicle = props.workspace.vehicles.find((item) => item.id === shift.vehicle_id);
-      const duration = (new Date(shift.end_at).getTime() - new Date(shift.start_at).getTime()) / 1000;
-      return <EntityCard key={shift.id} title={`${driver?.name ?? 'Водитель'} · ${vehicle?.registration_number ?? 'машина'}`} subtitle={`${formatDate(shift.date)} · ${formatTime(shift.start_at, props.workspace.scenario.timezone)}–${formatTime(shift.end_at, props.workspace.scenario.timezone)} · ${formatDuration(duration)}`} badges={<Badge tone={shift.active ? 'success' : 'neutral'}>{shift.active ? 'активна' : 'выкл.'}</Badge>} onClick={() => props.onSelect('shift', shift.id)} onEdit={() => props.onEdit('shift', shift)} onDelete={() => props.onDelete('shift', shift.id, `смену ${driver?.name ?? ''}`)} />;
+      return <EntityCard key={shift.id} title={`${driver?.name ?? 'Водитель'} · ${vehicle?.registration_number ?? 'машина'}`} subtitle={`${formatDate(shift.date_from)}–${formatDate(shift.date_to)} · ежедневно ${shift.start_time.slice(0, 5)}–${shift.end_time.slice(0, 5)} · перерыв ${shift.break_minutes} мин`} badges={<Badge tone={shift.active ? 'success' : 'neutral'}>{shift.active ? 'активна' : 'выкл.'}</Badge>} onClick={() => props.onSelect('shift', shift.id)} onEdit={() => props.onEdit('shift', shift)} onDelete={() => props.onDelete('shift', shift.id, `смену ${driver?.name ?? ''}`)} />;
     })}</div>
+    {!props.workspace.shifts.length ? <EmptyState title="Смены не добавлены" description="Добавьте смену после создания водителя и машины." /> : null}
   </>;
 }
 
-function RequestsSection({ props }: { props: InspectorProps }) {
-  const requestDates = [...new Set(props.workspace.requests.flatMap(requestPlanningDates))].sort();
-  const availableRequests = props.workspace.requests.filter((request) => isRequestVisibleOnDate(request, props.planningDate));
-  const nextPlanningDate = nextDate(props.planningDate, 1);
+function DeliveriesSection({ props }: { props: InspectorProps }) {
   return <>
-    <h2 className="section-title">Заявки</h2><p className="section-subtitle">Количество больше двух backend разбивает на транспортные части 2 + 2 + 1.</p>
-    <div className="toolbar-row"><Button variant="primary" onClick={() => props.onSetMapTool('ADD_DELIVERY')}><MapPinPlus size={14} />Доставка</Button><Button onClick={() => props.onSetMapTool('ADD_PICKUP')}><MapPinPlus size={14} />Вывоз</Button><Button onClick={() => props.onCreate('request')}><Plus size={14} />Координатами</Button></div>
-    <div className="date-board" aria-label="Заявки по допустимым датам">
-      <strong>Показать дату</strong>
-      <div>{requestDates.map((date) => {
-        const count = props.workspace.requests.filter((request) => isRequestVisibleOnDate(request, date)).length;
-        return <button type="button" key={date} aria-pressed={date === props.planningDate} onClick={() => props.onPlanningDateChange(date)}>{formatDate(date)} <small>{count}</small></button>;
-      })}</div>
-      <p>{formatDate(props.planningDate)}: доступно {availableRequests.length} из {props.workspace.requests.length}. Список ниже отфильтрован по этой дате.</p>
-    </div>
-    <div className="entity-list">{availableRequests.map((request) => {
-      const zone = props.workspace.zones.find((item) => item.id === request.zone_id);
-      const tone = request.zone_status === 'OUTSIDE_ZONES' ? 'danger' : request.zone_status === 'STALE' ? 'warning' : 'neutral';
-      const selectedOption = request.date_options.find((option) => option.date === props.planningDate);
-      const hasTomorrow = request.date_options.some((option) => option.date === nextPlanningDate);
-      const sourceOwned = request.source_system === 'RWMS';
-      return <article className="entity-card" key={request.id} onClick={() => props.onSelect('request', request.id)}>
-        <div className="entity-card__row"><strong>{request.type === 'DELIVERY' ? 'Д' : 'В'} · {request.name}</strong><span>{sourceOwned ? <Badge tone="accent">RWMS</Badge> : null}<Badge tone={request.type === 'DELIVERY' ? 'accent' : 'warning'}>{request.type}</Badge><Badge tone={tone}>{request.zone_status ?? 'CURRENT'}</Badge></span></div>
-        <p>{request.quantity} бытов. · зона {zone?.code ?? 'OUTSIDE_ZONES'} v{request.zone_version ?? '—'}</p>
-        <p>{request.scheduled_date ? `Выставлено на ${formatDate(request.scheduled_date)}` : 'Дата логистики не выбрана'}</p>
-        <div className="request-date-options">{request.date_options.map((option) => <span key={option.date} className={option.date === props.planningDate ? 'request-date-options__active' : undefined}>{formatDate(option.date)}{option.is_hard ? ' · жёстко' : ''}</span>)}</div>
-        <div className="toolbar-row" style={{ margin: '8px 0 0' }}>
-          <Button size="sm" variant={request.scheduled_date === props.planningDate ? 'primary' : 'ghost'} disabled={sourceOwned && !selectedOption} onClick={(event) => { event.stopPropagation(); props.onScheduleRequestDate(request.id, props.planningDate, !selectedOption); }}>
-            {request.scheduled_date === props.planningDate ? `Назначено ${formatDate(props.planningDate)}` : selectedOption ? `Выставить ${formatDate(props.planningDate)}` : sourceOwned ? `Не согласовано ${formatDate(props.planningDate)}` : `Добавить ${formatDate(props.planningDate)}`}
-          </Button>
-          <Button size="sm" variant="ghost" disabled={sourceOwned && !hasTomorrow} onClick={(event) => { event.stopPropagation(); props.onScheduleRequestDate(request.id, nextPlanningDate, !hasTomorrow); }}>
-            {hasTomorrow ? `Выставить ${formatDate(nextPlanningDate)}` : sourceOwned ? `Не согласовано ${formatDate(nextPlanningDate)}` : `Согласовать ${formatDate(nextPlanningDate)}`}
-          </Button>
-          {request.scheduled_date ? <Button size="sm" variant="ghost" onClick={(event) => { event.stopPropagation(); props.onUnscheduleRequest(request.id); }}>Снять дату</Button> : null}
-          {!sourceOwned ? <Button size="sm" variant="ghost" onClick={(event) => { event.stopPropagation(); props.onEdit('request', request); }}><Edit3 size={13} />Изменить</Button> : null}
-          {!sourceOwned ? <Button size="sm" variant="ghost" onClick={(event) => { event.stopPropagation(); props.onDelete('request', request.id, request.name); }}><Trash2 size={13} />Удалить</Button> : null}
-        </div>
-      </article>;
-    })}</div>
-    {!availableRequests.length ? <EmptyState title="На выбранную дату заявок нет" description="Выберите другую дату выше или добавьте допустимую дату после согласования с клиентом." /> : null}
+    <h2 className="section-title">Доставки и вывозы</h2><p className="section-subtitle">Здесь задаются время, допуск прицепа и обязательность. Количество больше двух backend разбивает на транспортные части 2 + 2 + 1.</p>
+    <div className="toolbar-row"><Button variant="primary" onClick={() => props.onSetMapTool('ADD_DELIVERY')}><MapPinPlus size={14} />Доставка</Button><Button onClick={() => props.onSetMapTool('ADD_PICKUP')}><MapPinPlus size={14} />Вывоз</Button></div>
+    <div className="divider" />
+    <PlanningDayRequests
+      workspace={props.workspace}
+      planningDate={props.planningDate}
+      busy={props.busy}
+      onPlanningDateChange={props.onPlanningDateChange}
+      onSave={props.onSaveRequestPlanning}
+      onSplit={props.onSplitRequest}
+      onSelect={(id) => props.onSelect('request', id)}
+    />
   </>;
 }
 
 function SimulationDrivers({ props }: { props: InspectorProps }) {
   if (!props.simulation) return null;
-  return <section className="simulation-route-statuses" aria-label="Текущее состояние маршрутов"><h2 className="section-title">Машины сейчас</h2><p className="section-subtitle">План остаётся ниже целиком. Здесь показаны текущий этап, адрес назначения и расчётное время прибытия.</p><div className="entity-list">{props.simulation.vehicles.map((vehicle) => <article className="entity-card simulation-route-status" key={vehicle.driver_shift_id} data-testid={`simulation-route-${vehicle.driver_shift_id}`}><div className="entity-card__row"><button type="button" className="simulation-route-status__driver" onClick={() => props.onSelect('driver', vehicle.driver_shift_id)}><strong>{vehicle.driver_name}</strong><small>{vehicle.vehicle_name} · {vehicle.registration_number}</small></button><Badge tone={vehicle.status === 'DELAYED' ? 'danger' : vehicle.status === 'FINISHED' ? 'neutral' : 'success'}>{vehicle.status}</Badge></div><div className="simulation-route-status__destination"><small>Адрес назначения</small><strong>{vehicle.next_stop_label ?? (vehicle.status === 'FINISHED' ? 'Маршрут завершён' : 'Не определён')}</strong><span>ETA: {vehicle.eta ? formatTime(vehicle.eta, props.workspace.scenario.timezone) : '—'} · загрузка {vehicle.load}</span></div><div className="toolbar-row" style={{ margin: '8px 0 0' }}><Button size="sm" onClick={() => props.onSimulationOverride('delay', vehicle.driver_shift_id)}>+ Задержка</Button><Button size="sm" variant="danger" onClick={() => props.onSimulationOverride('unavailable', vehicle.driver_shift_id)}>Недоступен</Button></div></article>)}</div>{props.simulation.warnings.map((warning) => <div className="error-panel" key={`${warning.code}-${warning.message}`}><strong>{warning.code}</strong><p>{warning.message}</p></div>)}</section>;
+  return <section className="simulation-route-statuses" aria-label="Текущее состояние маршрутов"><h2 className="section-title">Машины сейчас</h2><p className="section-subtitle">План остаётся ниже целиком. Здесь показаны текущий этап, адрес назначения и расчётное время прибытия.</p><div className="entity-list">{props.simulation.vehicles.map((vehicle) => <article className="entity-card simulation-route-status" key={vehicle.driver_shift_id} data-testid={`simulation-route-${vehicle.driver_shift_id}`}><div className="entity-card__row"><button type="button" className="simulation-route-status__driver" onClick={() => props.onSelect('driver', vehicle.driver_shift_id)}><strong>{vehicle.driver_name}</strong><small>{vehicle.vehicle_name} · {vehicle.registration_number}</small></button><Badge tone={vehicle.status === 'DELAYED' ? 'danger' : vehicle.status === 'FINISHED' ? 'neutral' : 'success'}>{vehicle.status}</Badge></div><div className="simulation-route-status__destination"><small>Адрес назначения</small><strong>{vehicle.next_stop_label ?? (vehicle.status === 'FINISHED' ? 'Маршрут завершён' : 'Не определён')}</strong><span>ETA: {vehicle.eta ? formatTime(vehicle.eta, props.workspace.warehouse.timezone) : '—'} · загрузка {vehicle.load}</span></div><div className="toolbar-row" style={{ margin: '8px 0 0' }}><Button size="sm" onClick={() => props.onSimulationOverride('delay', vehicle.driver_shift_id)}>+ Задержка</Button><Button size="sm" variant="danger" onClick={() => props.onSimulationOverride('unavailable', vehicle.driver_shift_id)}>Недоступен</Button></div></article>)}</div>{props.simulation.warnings.map((warning) => <div className="error-panel" key={`${warning.code}-${warning.message}`}><strong>{warning.code}</strong><p>{warning.message}</p></div>)}</section>;
 }
 
 export function Inspector(props: InspectorProps) {
   const section = useUiStore((state) => state.section);
   const mode = useUiStore((state) => state.mode);
-  const selected = useUiStore((state) => state.selected);
-  const allCycles = props.plan?.driver_routes.flatMap((route) => route.cycles) ?? [];
-  const diagnosticCycles = selected?.kind === 'cycle'
-    ? allCycles.filter((cycle) => cycle.id === selected.id)
-    : selected?.kind === 'driver'
-      ? props.plan?.driver_routes
-        .filter((route) => route.driver_shift_id === selected.id || route.driver_id === selected.id)
-        .flatMap((route) => route.cycles) ?? []
-      : allCycles;
+  const beginResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    const resize = (pointerEvent: PointerEvent) => props.onInspectorWidthChange(window.innerWidth - pointerEvent.clientX);
+    const stop = () => {
+      window.removeEventListener('pointermove', resize);
+      window.removeEventListener('pointerup', stop);
+      window.removeEventListener('pointercancel', stop);
+    };
+    window.addEventListener('pointermove', resize);
+    window.addEventListener('pointerup', stop);
+    window.addEventListener('pointercancel', stop);
+  };
+  const resizeWithKeyboard = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    if (event.key === 'ArrowLeft') props.onInspectorWidthChange(props.inspectorWidth + 24);
+    else if (event.key === 'ArrowRight') props.onInspectorWidthChange(props.inspectorWidth - 24);
+    else if (event.key === 'Home') props.onInspectorWidthChange(320);
+    else props.onInspectorWidthChange(Math.floor(window.innerWidth / 2));
+  };
   let content: React.ReactNode;
   switch (section) {
-    case 'SCENARIO': content = <ScenarioSection props={props} />; break;
     case 'WAREHOUSE': content = <WarehouseSection props={props} />; break;
     case 'ZONES': content = <ZonesSection props={props} />; break;
-    case 'ZONE_RELATIONS': content = <RelationSection props={props} />; break;
     case 'DRIVERS': content = <CatalogSection props={props} kind="driver" />; break;
     case 'VEHICLES': content = <CatalogSection props={props} kind="vehicle" />; break;
     case 'SHIFTS': content = <ShiftsSection props={props} />; break;
-    case 'REQUESTS': content = <RequestsSection props={props} />; break;
+    case 'REQUESTS': content = <DeliveriesSection props={props} />; break;
     case 'PLAN_DAY': content = <>
-      <div className="entity-card__row"><span><h2 className="section-title">План на {formatDate(props.planningDate)}</h2><p className="section-subtitle">Сначала задайте обязательные условия заявок, затем постройте маршруты и при необходимости переместите подзадачи.</p></span>{props.plan ? <Button size="sm" onClick={props.onClonePlan}><Copy size={13} />Клон</Button> : null}</div>
-      <PlanningDayRequests
-        workspace={props.workspace}
-        planningDate={props.planningDate}
-        busy={props.busy}
-        onPlanningDateChange={props.onPlanningDateChange}
-        onSave={props.onSaveRequestPlanning}
-        onSplit={props.onSplitRequest}
-        onSelect={(id) => props.onSelect('request', id)}
-      />
-      {props.plan ? <><div className="divider" /><Metrics metrics={props.plan.metrics} /><div className="divider" /><PlanPanel plan={props.plan} timeZone={props.workspace.scenario.timezone} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} /></> : <div className="explanation"><strong>Маршрут ещё не построен.</strong><br />Кнопка сверху станет результативной только после заполнения окна и допуска прицепа у всех READY-заявок выбранного дня.</div>}
+      <div className="entity-card__row"><span><h2 className="section-title">План на {formatDate(props.planningDate)}</h2><p className="section-subtitle">Здесь только итоговый план и его показатели. Время, прицеп и обязательность редактируются в разделе «Доставки».</p></span><span className="toolbar-row">{props.plan?.manually_changed && props.plan.status !== 'CONFIRMED' ? <Button size="sm" onClick={props.onResetManualChanges} disabled={props.busy}>Отменить изменения</Button> : null}{props.plan && props.plan.status !== 'CONFIRMED' ? <Button size="sm" variant="primary" onClick={props.onConfirmPlan} disabled={props.busy}>Утвердить</Button> : null}</span></div>
+      {props.plan ? <><Metrics metrics={props.plan.metrics} /><div className="divider" /><PlanPanel plan={props.plan} timeZone={props.workspace.warehouse.timezone} readOnly={props.plan.status === 'CONFIRMED'} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} /></> : <EmptyState title="План дня не составлен" description="Заполните условия доставок и вывозов — план пересчитается автоматически." />}
     </>; break;
     case 'ROUTES': content = <>
-      <div className="entity-card__row"><span><h2 className="section-title">Маршруты</h2><p className="section-subtitle">Нажмите водителя, чтобы выделить все его рейсы на карте; цикл — чтобы выделить один рейс.</p></span>{props.plan ? <Button size="sm" onClick={props.onClonePlan}><Copy size={13} />Клон</Button> : null}</div>
+      <div className="entity-card__row"><span><h2 className="section-title">Маршруты</h2><p className="section-subtitle">Нажмите водителя, чтобы выделить все его рейсы на карте; цикл — чтобы выделить один рейс.</p></span></div>
       {props.plan ? <><Metrics metrics={props.plan.metrics} /><div className="divider" /></> : null}
       {mode === 'SIMULATION' && props.simulation ? <><SimulationDrivers props={props} /><div className="divider" /></> : null}
-      <PlanPanel plan={props.plan} timeZone={props.workspace.scenario.timezone} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} />
-      {diagnosticCycles.length ? <><div className="divider" /><RouteDiagnostics cycles={diagnosticCycles} timeZone={props.workspace.scenario.timezone} /></> : null}
+      {props.plan?.driver_routes.some((route) => route.cycles.length) ? <PlanPanel plan={props.plan} timeZone={props.workspace.warehouse.timezone} readOnly={props.plan.status === 'CONFIRMED'} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} /> : <EmptyState title="Маршруты не построены" description="После расчёта допустимые рейсы появятся здесь." />}
     </>; break;
-    case 'UNASSIGNED': content = <PlanPanel plan={props.plan} timeZone={props.workspace.scenario.timezone} showUnassignedOnly onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} />; break;
-    case 'SETTINGS': content = <SettingsEditor settings={props.workspace.scenario.settings} busy={props.busy} onSave={props.onSaveSettings} />; break;
+    case 'UNASSIGNED': content = props.plan?.unassigned.length ? <PlanPanel plan={props.plan} timeZone={props.workspace.warehouse.timezone} showUnassignedOnly readOnly={props.plan.status === 'CONFIRMED'} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} /> : <EmptyState title="Нераспределённых заданий нет" description={props.plan ? 'Все задачи выбранного дня распределены.' : 'После расчёта плана здесь появятся задачи без назначенного маршрута.'} />; break;
+    case 'SETTINGS': content = <SettingsEditor warehouse={props.workspace.warehouse} busy={props.busy} onSave={props.onSaveSettings} />; break;
   }
-  return <aside className="inspector" aria-label="Инспектор"><header className="inspector__head"><strong>Инспектор</strong><Badge tone="accent">{props.workspace.scenario.timezone}</Badge></header><div className="inspector__body">{props.validation && !props.validation.valid ? <><ErrorPanel title="План содержит ошибки" error={new Error(props.validation.errors.map((error) => `${error.code}: ${error.message}`).join('\n'))} /><div className="divider" /></> : null}{props.validation?.warnings.map((warning) => <div className="explanation" key={`${warning.code}-${warning.message}`}><CircleAlert size={12} /> {warning.message}</div>)}{content}</div></aside>;
+  return <aside className="inspector" aria-label="Инспектор">
+    <button
+      type="button"
+      className="inspector__resize-handle"
+      role="separator"
+      aria-label="Изменить ширину инспектора"
+      aria-orientation="vertical"
+      aria-valuemin={320}
+      aria-valuemax={Math.floor(window.innerWidth / 2)}
+      aria-valuenow={Math.round(props.inspectorWidth)}
+      onPointerDown={beginResize}
+      onKeyDown={resizeWithKeyboard}
+      onDoubleClick={() => props.onInspectorWidthChange(420)}
+    />
+    <header className="inspector__head"><strong>Инспектор</strong><Badge tone="accent">{props.workspace.warehouse.timezone}</Badge></header><div className="inspector__body">{props.validation && !props.validation.valid ? <><ErrorPanel title="План содержит ошибки" error={new Error(props.validation.errors.map((error) => `${error.code}: ${error.message}`).join('\n'))} /><div className="divider" /></> : null}{props.validation?.warnings.map((warning) => <div className="explanation" key={`${warning.code}-${warning.message}`}><CircleAlert size={12} /> {warning.message}</div>)}{content}</div>
+  </aside>;
 }

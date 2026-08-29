@@ -1,48 +1,62 @@
-"""CRUD workflows for scenario-owned logistics inputs and zone classification."""
+"""CRUD workflows for warehouse-owned logistics inputs and zone classification."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import date, datetime, time
+from datetime import date, time
 from uuid import UUID
 
 from geoalchemy2.shape import from_shape, to_shape
 from pydantic import BaseModel
 from sqlalchemy import delete, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db import Base
 from app.errors import ApiError, not_found
-from app.geo import classify_point, geometry_from_geojson, subtract_polygonal_cutout
+from app.geo import (
+    classify_zone_policies,
+    geometry_from_geojson,
+    subtract_polygonal_cutout,
+)
 from app.models import (
     Driver,
     DriverShift,
     LogisticsRequest,
     PlanningTask,
     RequestDateOption,
+    RoutePlan,
     RouteStop,
-    Scenario,
     Trailer,
     UnassignedTask,
     Vehicle,
     VehicleLoadProfile,
     Warehouse,
     Zone,
-    ZoneRelation,
 )
-from app.models.domain import RequestStatus, RequestType, TaskStatus, ZoneClassificationStatus
-from app.repositories import get_required, list_for_scenario
+from app.models.domain import (
+    PlanStatus,
+    RequestStatus,
+    RequestType,
+    TaskStatus,
+    ZoneClassificationStatus,
+    ZoneKind,
+)
+from app.repositories import get_required, list_for_warehouse
 from app.schemas.domain import (
     DriverCreate,
     DriverUpdate,
     LogisticsRequestCreate,
     LogisticsRequestUpdate,
+    PlanningSettings,
     RequestDateOptionInput,
     RequestDateOptionUpdate,
     RequestPlanningDetailsInput,
     RequestScheduleInput,
+    RwmsDriverIdentity,
     RwmsPlanningRequest,
+    RwmsWarehouseIdentity,
     ShiftCreate,
     ShiftUpdate,
     TrailerCreate,
@@ -50,17 +64,15 @@ from app.schemas.domain import (
     VehicleConfigurationCreate,
     VehicleConfigurationUpdate,
     VehicleCreate,
-    VehicleLoadProfileCreate,
-    VehicleLoadProfileUpdate,
     VehicleUpdate,
     WarehouseCreate,
     WarehouseUpdate,
     ZoneCreate,
     ZoneCutoutRequest,
-    ZoneRelationCreate,
-    ZoneRelationUpdate,
     ZoneUpdate,
 )
+from app.schemas.geocoding import ResolvedAddress
+from app.services import plans as plan_service
 
 RWMS_SOURCE_SYSTEM = "RWMS"
 RWMS_SOURCE_FIELDS = frozenset(
@@ -72,6 +84,7 @@ RWMS_SOURCE_FIELDS = frozenset(
         "longitude",
         "quantity",
         "date_options",
+        "trailer_access_allowed",
     }
 )
 CARGO_PHYSICAL_FIELDS = (
@@ -80,6 +93,61 @@ CARGO_PHYSICAL_FIELDS = (
     "cargo_height_mm",
     "cargo_weight_kg",
 )
+
+
+def _warehouse_default_cargo(warehouse: Warehouse) -> dict[str, int]:
+    """Return the explicit warehouse cargo profile used for RWMS orders without cargo facts."""
+
+    settings = PlanningSettings.model_validate(warehouse.settings)
+    return {
+        "cargo_length_mm": settings.default_cargo_length_mm,
+        "cargo_width_mm": settings.default_cargo_width_mm,
+        "cargo_height_mm": settings.default_cargo_height_mm,
+        "cargo_weight_kg": settings.default_cargo_weight_kg,
+    }
+
+
+async def _invalidate_route_plans_for_dates(
+    session: AsyncSession,
+    warehouse_id: UUID,
+    dates: set[date],
+) -> None:
+    """Delete stale plans before authoritative RWMS demand changes their inputs."""
+
+    if not dates:
+        return
+    await session.execute(
+        delete(RoutePlan).where(
+            RoutePlan.warehouse_id == warehouse_id,
+            RoutePlan.date.in_(dates),
+        )
+    )
+    await session.flush()
+
+
+async def _invalidate_mutable_route_plans_for_warehouse(
+    session: AsyncSession,
+    warehouse_id: UUID,
+) -> None:
+    """Remove only recomputable route artifacts for one changed warehouse projection."""
+
+    await session.execute(
+        delete(RoutePlan).where(
+            RoutePlan.warehouse_id == warehouse_id,
+            RoutePlan.status.in_(
+                (PlanStatus.DRAFT, PlanStatus.GENERATED, PlanStatus.VALIDATED)
+            ),
+        )
+    )
+    await session.flush()
+
+
+def _request_effective_dates(request: LogisticsRequest) -> set[date]:
+    """Return dates on which the request can participate in an automatic plan."""
+
+    if request.scheduled_date is not None:
+        return {request.scheduled_date}
+    return {option.date for option in request.date_options}
 
 
 def split_quantities(quantity: int, capacity: int = 2) -> list[int]:
@@ -154,21 +222,215 @@ def apply_update(entity: object, payload: BaseModel, *, exclude: set[str] | None
         setattr(entity, field, value)
 
 
-async def require_scenario(session: AsyncSession, scenario_id: UUID) -> Scenario:
-    """Resolve the owning scenario for nested resources."""
+async def require_warehouse(session: AsyncSession, warehouse_id: UUID) -> Warehouse:
+    """Resolve the owning warehouse for nested resources."""
 
-    return await get_required(session, Scenario, scenario_id, "scenario")
+    return await get_required(session, Warehouse, warehouse_id, "warehouse")
+
+
+async def _lock_warehouse(session: AsyncSession, warehouse_id: UUID) -> Warehouse:
+    """Serialize geometry mutations through their owning warehouse row."""
+
+    warehouse = await session.scalar(
+        select(Warehouse).where(Warehouse.id == warehouse_id).with_for_update()
+    )
+    if warehouse is None:
+        raise not_found("warehouse", warehouse_id)
+    return warehouse
+
+
+async def require_zone(
+    session: AsyncSession,
+    warehouse_id: UUID,
+    zone_id: UUID,
+    *,
+    for_update: bool = False,
+) -> Zone:
+    """Resolve a nested zone without revealing a zone owned by another warehouse."""
+
+    statement = select(Zone).where(
+        Zone.id == zone_id,
+        Zone.warehouse_id == warehouse_id,
+    )
+    if for_update:
+        statement = statement.with_for_update()
+    entity = await session.scalar(statement)
+    if entity is None:
+        raise not_found("zone", zone_id)
+    return entity
+
+
+async def _insert_canonical_warehouse(
+    session: AsyncSession,
+    identity: RwmsWarehouseIdentity,
+) -> Warehouse:
+    """Insert one routing-ready canonical identity, tolerating a concurrent first discovery."""
+
+    assert identity.latitude is not None
+    assert identity.longitude is not None
+    entity = Warehouse(
+        external_warehouse_id=identity.warehouse_id,
+        external_warehouse_version=identity.warehouse_version,
+        name=identity.name,
+        city=identity.city,
+        address=identity.address,
+        timezone=identity.timezone,
+        latitude=identity.latitude,
+        longitude=identity.longitude,
+        representative=identity.representative,
+        routing_ready=True,
+        settings=PlanningSettings().model_dump(mode="json"),
+    )
+    try:
+        async with session.begin_nested():
+            session.add(entity)
+            await session.flush()
+    except IntegrityError:
+        concurrent = await session.scalar(
+            select(Warehouse)
+            .where(Warehouse.external_warehouse_id == identity.warehouse_id)
+            .with_for_update()
+        )
+        if concurrent is None:
+            raise
+        return concurrent
+    return entity
+
+
+async def reconcile_warehouse_directory(
+    session: AsyncSession,
+    identities: Sequence[RwmsWarehouseIdentity],
+) -> list[Warehouse]:
+    """Reconcile RWMS identities while retaining a valid address-derived local point."""
+
+    if len({identity.warehouse_id for identity in identities}) != len(identities):
+        raise ApiError(
+            502,
+            "RWMS_WAREHOUSE_DIRECTORY_RESPONSE_INVALID",
+            "RWMS warehouse directory contains duplicate identities",
+        )
+    materialized: list[Warehouse] = []
+    for identity in identities:
+        entity = await session.scalar(
+            select(Warehouse)
+            .where(Warehouse.external_warehouse_id == identity.warehouse_id)
+            .with_for_update()
+        )
+        if entity is None:
+            if not identity.routing_ready:
+                continue
+            entity = await _insert_canonical_warehouse(session, identity)
+
+        owner_coordinates_available = (
+            identity.routing_ready
+            and identity.latitude is not None
+            and identity.longitude is not None
+        )
+        address_derived_point_still_valid = (
+            not owner_coordinates_available
+            and entity.routing_ready
+            and identity.address is not None
+            and entity.address == identity.address
+            and entity.city == identity.city
+        )
+        effective_routing_ready = (
+            owner_coordinates_available or address_derived_point_still_valid
+        )
+        route_facts_changed = (
+            entity.external_warehouse_version != identity.warehouse_version
+            or entity.routing_ready != effective_routing_ready
+            or (
+                owner_coordinates_available
+                and (
+                    entity.latitude != identity.latitude
+                    or entity.longitude != identity.longitude
+                )
+            )
+        )
+        entity.external_warehouse_version = identity.warehouse_version
+        entity.name = identity.name
+        entity.city = identity.city
+        entity.address = identity.address
+        entity.timezone = identity.timezone
+        entity.representative = identity.representative
+        entity.routing_ready = effective_routing_ready
+        if owner_coordinates_available:
+            assert identity.latitude is not None
+            assert identity.longitude is not None
+            entity.latitude = identity.latitude
+            entity.longitude = identity.longitude
+        if route_facts_changed:
+            await _invalidate_mutable_route_plans_for_warehouse(session, entity.id)
+        if effective_routing_ready:
+            materialized.append(entity)
+    await session.flush()
+    for entity in materialized:
+        await session.refresh(entity)
+    return materialized
 
 
 async def create_warehouse(
-    session: AsyncSession, scenario_id: UUID, payload: WarehouseCreate
+    session: AsyncSession,
+    payload: WarehouseCreate,
+    identity: RwmsWarehouseIdentity,
+    resolved: ResolvedAddress | None = None,
 ) -> Warehouse:
-    """Create a warehouse after confirming scenario ownership."""
+    """Bind a canonical RWMS identity and an optional server-resolved address fallback."""
 
-    await require_scenario(session, scenario_id)
-    entity = Warehouse(scenario_id=scenario_id, **payload.model_dump())
+    if identity.warehouse_id != payload.external_warehouse_id:
+        raise ApiError(422, "RWMS_WAREHOUSE_ID_MISMATCH", "RWMS warehouse identity mismatch")
+    duplicate = await session.scalar(
+        select(Warehouse.id).where(Warehouse.external_warehouse_id == identity.warehouse_id)
+    )
+    if duplicate is not None:
+        raise ApiError(409, "WAREHOUSE_ALREADY_BOUND", "RWMS warehouse is already configured")
+    if identity.routing_ready:
+        assert identity.latitude is not None
+        assert identity.longitude is not None
+        address = identity.address
+        latitude = identity.latitude
+        longitude = identity.longitude
+    elif resolved is not None:
+        assert identity.address is not None
+        address = identity.address
+        latitude = resolved.latitude
+        longitude = resolved.longitude
+    else:
+        raise ApiError(
+            422,
+            "WAREHOUSE_COORDINATES_REQUIRED",
+            "Не заданы координаты для использования склада в логистике",  # noqa: RUF001
+        )
+    entity = Warehouse(
+        external_warehouse_id=identity.warehouse_id,
+        external_warehouse_version=identity.warehouse_version,
+        name=identity.name,
+        city=identity.city,
+        address=address,
+        timezone=identity.timezone,
+        latitude=latitude,
+        longitude=longitude,
+        representative=identity.representative,
+        routing_ready=True,
+        settings=PlanningSettings().model_dump(mode="json"),
+        **payload.model_dump(exclude={"external_warehouse_id", "initial_zone"}),
+    )
     session.add(entity)
     await session.flush()
+    if payload.initial_zone is not None:
+        _validate_zone_semantics(
+            payload.initial_zone.kind,
+            payload.initial_zone.delivery_price,
+            payload.initial_zone.pickup_price,
+        )
+        initial_zone = Zone(
+            warehouse_id=entity.id,
+            geometry=geometry_from_geojson(payload.initial_zone.geometry),
+            version=1,
+            **payload.initial_zone.model_dump(exclude={"geometry"}),
+        )
+        session.add(initial_zone)
+        await session.flush()
     return entity
 
 
@@ -188,13 +450,36 @@ async def update_warehouse(
     return entity
 
 
-async def create_zone(session: AsyncSession, scenario_id: UUID, payload: ZoneCreate) -> Zone:
-    """Persist a validated zone as normalized MultiPolygon version one."""
+def _validate_zone_semantics(
+    kind: ZoneKind | str,
+    delivery_price: int,
+    pickup_price: int,
+) -> None:
+    """Keep ordinary isochrone tariffs out of access-restriction polygons."""
 
-    await require_scenario(session, scenario_id)
+    resolved_kind = ZoneKind(kind)
+    if resolved_kind is not ZoneKind.SPECIAL_PRICE and (
+        delivery_price != 0 or pickup_price != 0
+    ):
+        raise ApiError(
+            422,
+            "ZONE_PRICE_NOT_ALLOWED",
+            "Only a SPECIAL_PRICE zone may define delivery or pickup prices",
+        )
+
+
+async def create_zone(
+    session: AsyncSession,
+    warehouse_id: UUID,
+    payload: ZoneCreate,
+) -> Zone:
+    """Persist a validated zone under one locked warehouse root."""
+
+    await _lock_warehouse(session, warehouse_id)
+    _validate_zone_semantics(payload.kind, payload.delivery_price, payload.pickup_price)
     values = payload.model_dump(exclude={"geometry"})
     entity = Zone(
-        scenario_id=scenario_id,
+        warehouse_id=warehouse_id,
         geometry=geometry_from_geojson(payload.geometry),
         version=1,
         **values,
@@ -204,15 +489,24 @@ async def create_zone(session: AsyncSession, scenario_id: UUID, payload: ZoneCre
     return entity
 
 
-async def update_zone(session: AsyncSession, zone_id: UUID, payload: ZoneUpdate) -> Zone:
-    """Update an unlocked zone and increment version only for geometry changes."""
+async def update_zone(
+    session: AsyncSession,
+    warehouse_id: UUID,
+    zone_id: UUID,
+    payload: ZoneUpdate,
+) -> Zone:
+    """Update an owner exceptional zone under the warehouse command lock."""
 
-    entity = await session.scalar(select(Zone).where(Zone.id == zone_id).with_for_update())
-    if entity is None:
-        raise not_found("zone", zone_id)
+    await _lock_warehouse(session, warehouse_id)
+    entity = await require_zone(session, warehouse_id, zone_id, for_update=True)
     if entity.locked:
         raise ApiError(409, "ZONE_LOCKED", "Unlock the zone before editing it")
     values = payload.model_dump(exclude_unset=True, exclude={"geometry"})
+    _validate_zone_semantics(
+        values.get("kind", entity.kind),
+        values.get("delivery_price", entity.delivery_price),
+        values.get("pickup_price", entity.pickup_price),
+    )
     for field, value in values.items():
         setattr(entity, field, value)
     if payload.geometry is not None:
@@ -225,31 +519,19 @@ async def update_zone(session: AsyncSession, zone_id: UUID, payload: ZoneUpdate)
 
 async def cut_zone(
     session: AsyncSession,
+    warehouse_id: UUID,
     zone_id: UUID,
     payload: ZoneCutoutRequest,
 ) -> tuple[Zone, Zone]:
-    """Atomically cut a source zone and create the operational zone occupying the hole."""
+    """Cut an owner zone and create an inner zone under the same warehouse."""
 
-    entity = await session.scalar(select(Zone).where(Zone.id == zone_id).with_for_update())
-    if entity is None:
-        raise not_found("zone", zone_id)
+    await _lock_warehouse(session, warehouse_id)
+    entity = await require_zone(session, warehouse_id, zone_id, for_update=True)
     if entity.locked:
         raise ApiError(
             409,
             "ZONE_LOCKED",
             "Сначала разблокируйте зону, чтобы создать в ней вырез.",
-        )
-    conflicting_zone_id = await session.scalar(
-        select(Zone.id).where(
-            Zone.scenario_id == entity.scenario_id,
-            Zone.code == payload.inner_zone.code,
-        )
-    )
-    if conflicting_zone_id is not None:
-        raise ApiError(
-            409,
-            "ZONE_CODE_CONFLICT",
-            "Указанный код уже используется другой зоной этого сценария.",
         )
     try:
         geometry = subtract_polygonal_cutout(
@@ -267,8 +549,13 @@ async def cut_zone(
         ) from exc
     entity.geometry = from_shape(geometry, srid=4326, extended=True)
     entity.version += 1
+    _validate_zone_semantics(
+        payload.inner_zone.kind,
+        payload.inner_zone.delivery_price,
+        payload.inner_zone.pickup_price,
+    )
     inner_zone = Zone(
-        scenario_id=entity.scenario_id,
+        warehouse_id=warehouse_id,
         geometry=geometry_from_geojson(payload.geometry),
         version=1,
         **payload.inner_zone.model_dump(),
@@ -280,20 +567,26 @@ async def cut_zone(
     return entity, inner_zone
 
 
-async def set_zone_lock(session: AsyncSession, zone_id: UUID, locked: bool) -> Zone:
-    """Set a zone's explicit editor lock without changing its geometry version."""
+async def set_zone_lock(
+    session: AsyncSession,
+    warehouse_id: UUID,
+    zone_id: UUID,
+    locked: bool,
+) -> Zone:
+    """Set an owner zone's editor lock without changing capacity facts."""
 
-    entity = await get_required(session, Zone, zone_id, "zone")
+    entity = await require_zone(session, warehouse_id, zone_id, for_update=True)
     entity.locked = locked
     await session.flush()
     await session.refresh(entity)
     return entity
 
 
-async def delete_zone(session: AsyncSession, zone_id: UUID) -> None:
-    """Delete a zone and mark formerly classified requests outside pending reclassification."""
+async def delete_zone(session: AsyncSession, warehouse_id: UUID, zone_id: UUID) -> None:
+    """Delete one exceptional zone without affecting isochrone delivery coverage."""
 
-    entity = await get_required(session, Zone, zone_id, "zone")
+    await _lock_warehouse(session, warehouse_id)
+    entity = await require_zone(session, warehouse_id, zone_id, for_update=True)
     requests = list(
         await session.scalars(select(LogisticsRequest).where(LogisticsRequest.zone_id == zone_id))
     )
@@ -323,85 +616,98 @@ async def count_stale_requests(session: AsyncSession, zone: Zone) -> int:
     )
 
 
-async def _validate_relation_zones(
-    session: AsyncSession, scenario_id: UUID, from_zone_id: UUID, to_zone_id: UUID
-) -> None:
-    """Ensure both relation endpoints exist and belong to the requested scenario."""
+async def create_driver(
+    session: AsyncSession,
+    warehouse_id: UUID,
+    payload: DriverCreate,
+    identity: RwmsDriverIdentity | None,
+) -> Driver:
+    """Create a driver with a validated exact or warehouse-wide RWMS audience."""
 
-    count = int(
-        await session.scalar(
-            select(func.count(Zone.id)).where(
-                Zone.scenario_id == scenario_id, Zone.id.in_([from_zone_id, to_zone_id])
-            )
-        )
-        or 0
-    )
-    if count != 2:
-        raise ApiError(
-            422,
-            "ZONE_RELATION_SCENARIO_MISMATCH",
-            "Both relation zones must belong to the scenario",
-        )
-
-
-async def create_zone_relation(
-    session: AsyncSession, scenario_id: UUID, payload: ZoneRelationCreate
-) -> ZoneRelation:
-    """Create one directed relation; bidirectionality remains explicit metadata."""
-
-    await require_scenario(session, scenario_id)
-    await _validate_relation_zones(session, scenario_id, payload.from_zone_id, payload.to_zone_id)
-    entity = ZoneRelation(scenario_id=scenario_id, **payload.model_dump())
+    await require_warehouse(session, warehouse_id)
+    values = payload.model_dump()
+    name = "Водители склада"
+    if payload.rwms_assignment_mode == "ASSIGNED_DRIVER":
+        if identity is None or identity.worker_id != payload.external_worker_id:
+            raise ApiError(422, "RWMS_DRIVER_NOT_FOUND", "RWMS worker is not eligible")
+        name = identity.display_name
+    entity = Driver(warehouse_id=warehouse_id, name=name, **values)
     session.add(entity)
     await session.flush()
     return entity
 
 
-async def update_zone_relation(
-    session: AsyncSession, relation_id: UUID, payload: ZoneRelationUpdate
-) -> ZoneRelation:
-    """Update transition behavior while retaining immutable endpoints."""
-
-    entity = await get_required(session, ZoneRelation, relation_id, "zone_relation")
-    apply_update(entity, payload)
-    await session.flush()
-    return entity
-
-
-async def create_driver(session: AsyncSession, scenario_id: UUID, payload: DriverCreate) -> Driver:
-    """Create a driver within one scenario."""
-
-    await require_scenario(session, scenario_id)
-    entity = Driver(scenario_id=scenario_id, **payload.model_dump())
-    session.add(entity)
-    await session.flush()
-    return entity
-
-
-async def update_driver(session: AsyncSession, driver_id: UUID, payload: DriverUpdate) -> Driver:
-    """Update a driver without altering existing plan history."""
+async def update_driver(
+    session: AsyncSession,
+    driver_id: UUID,
+    payload: DriverUpdate,
+    identity: RwmsDriverIdentity | None,
+) -> Driver:
+    """Update a driver while preserving explicit RWMS audience invariants."""
 
     entity = await get_required(session, Driver, driver_id, "driver")
-    apply_update(entity, payload)
+    values = payload.model_dump(exclude_unset=True)
+    mode = values.get("rwms_assignment_mode", entity.rwms_assignment_mode)
+    worker_id = values.get("external_worker_id", entity.external_worker_id)
+    if mode == "ASSIGNED_DRIVER":
+        if worker_id is None or identity is None or identity.worker_id != worker_id:
+            raise ApiError(422, "RWMS_DRIVER_NOT_FOUND", "RWMS worker is not eligible")
+        entity.name = identity.display_name
+    else:
+        if worker_id is not None:
+            raise ApiError(
+                422,
+                "RWMS_DRIVER_ASSIGNMENT_INVALID",
+                "WAREHOUSE_DRIVERS requires external_worker_id to be null",
+            )
+        entity.name = "Водители склада"
+    for field, value in values.items():
+        setattr(entity, field, value)
     await session.flush()
     return entity
 
 
 async def create_vehicle(
-    session: AsyncSession, scenario_id: UUID, payload: VehicleCreate
+    session: AsyncSession, warehouse_id: UUID, payload: VehicleCreate
 ) -> Vehicle:
-    """Create a vehicle within one scenario."""
+    """Create a vehicle within one warehouse."""
 
-    await require_scenario(session, scenario_id)
+    await require_warehouse(session, warehouse_id)
     await _validate_vehicle_trailer_assignment(
         session,
-        scenario_id=scenario_id,
+        warehouse_id=warehouse_id,
         can_use_trailer=payload.can_use_trailer,
         trailer_id=payload.default_trailer_id,
     )
-    entity = Vehicle(scenario_id=scenario_id, **payload.model_dump())
+    entity = Vehicle(warehouse_id=warehouse_id, **payload.model_dump())
     session.add(entity)
     await session.flush()
+    return entity
+
+
+async def list_vehicles(session: AsyncSession, warehouse_id: UUID) -> list[Vehicle]:
+    """List warehouse vehicles with their complete embedded axle-load profiles."""
+
+    await require_warehouse(session, warehouse_id)
+    result = await session.scalars(
+        select(Vehicle)
+        .where(Vehicle.warehouse_id == warehouse_id)
+        .options(selectinload(Vehicle.load_profiles))
+        .order_by(Vehicle.id)
+    )
+    return list(result.unique())
+
+
+async def _load_vehicle_with_profiles(session: AsyncSession, vehicle_id: UUID) -> Vehicle:
+    """Reload one vehicle with its response-owned axle-load profile aggregate."""
+
+    entity = await session.scalar(
+        select(Vehicle)
+        .where(Vehicle.id == vehicle_id)
+        .options(selectinload(Vehicle.load_profiles))
+    )
+    if entity is None:
+        raise not_found("vehicle", vehicle_id)
     return entity
 
 
@@ -414,29 +720,29 @@ async def update_vehicle(
     values = payload.model_dump(exclude_unset=True)
     await _validate_vehicle_trailer_assignment(
         session,
-        scenario_id=entity.scenario_id,
+        warehouse_id=entity.warehouse_id,
         can_use_trailer=values.get("can_use_trailer", entity.can_use_trailer),
         trailer_id=values.get("default_trailer_id", entity.default_trailer_id),
     )
     apply_update(entity, payload)
     await session.flush()
-    return entity
+    return await _load_vehicle_with_profiles(session, entity.id)
 
 
 async def create_vehicle_configuration(
     session: AsyncSession,
-    scenario_id: UUID,
+    warehouse_id: UUID,
     payload: VehicleConfigurationCreate,
 ) -> Vehicle:
     """Create a vehicle and its complete axle-profile set in one transaction."""
 
-    entity = await create_vehicle(session, scenario_id, payload.vehicle)
+    entity = await create_vehicle(session, warehouse_id, payload.vehicle)
     session.add_all(
         VehicleLoadProfile(vehicle_id=entity.id, **profile.model_dump(mode="json"))
         for profile in payload.load_profiles
     )
     await session.flush()
-    return entity
+    return await _load_vehicle_with_profiles(session, entity.id)
 
 
 async def update_vehicle_configuration(
@@ -457,7 +763,7 @@ async def update_vehicle_configuration(
     values = payload.vehicle.model_dump(exclude_unset=True)
     await _validate_vehicle_trailer_assignment(
         session,
-        scenario_id=entity.scenario_id,
+        warehouse_id=entity.warehouse_id,
         can_use_trailer=values.get("can_use_trailer", entity.can_use_trailer),
         trailer_id=values.get("default_trailer_id", entity.default_trailer_id),
     )
@@ -474,11 +780,11 @@ async def update_vehicle_configuration(
 async def _validate_vehicle_trailer_assignment(
     session: AsyncSession,
     *,
-    scenario_id: UUID,
+    warehouse_id: UUID,
     can_use_trailer: object,
     trailer_id: object,
 ) -> None:
-    """Ensure a default trailer is explicitly supported and scenario-owned."""
+    """Ensure a default trailer is explicitly supported and warehouse-owned."""
 
     if trailer_id is None:
         return
@@ -491,21 +797,21 @@ async def _validate_vehicle_trailer_assignment(
     if not isinstance(trailer_id, UUID):
         raise ApiError(422, "INVALID_TRAILER_ID", "default_trailer_id must be a UUID")
     trailer = await get_required(session, Trailer, trailer_id, "trailer")
-    if trailer.scenario_id != scenario_id:
+    if trailer.warehouse_id != warehouse_id:
         raise ApiError(
             422,
-            "TRAILER_SCENARIO_MISMATCH",
-            "The default trailer must belong to the vehicle scenario",
+            "TRAILER_WAREHOUSE_MISMATCH",
+            "The default trailer must belong to the vehicle warehouse",
         )
 
 
 async def create_trailer(
-    session: AsyncSession, scenario_id: UUID, payload: TrailerCreate
+    session: AsyncSession, warehouse_id: UUID, payload: TrailerCreate
 ) -> Trailer:
-    """Create a trailer owned by one scenario."""
+    """Create a trailer owned by one warehouse."""
 
-    await require_scenario(session, scenario_id)
-    entity = Trailer(scenario_id=scenario_id, **payload.model_dump())
+    await require_warehouse(session, warehouse_id)
+    entity = Trailer(warehouse_id=warehouse_id, **payload.model_dump())
     session.add(entity)
     await session.flush()
     return entity
@@ -522,87 +828,18 @@ async def update_trailer(
     return entity
 
 
-async def list_vehicle_load_profiles(
-    session: AsyncSession, vehicle_id: UUID
-) -> list[VehicleLoadProfile]:
-    """List one vehicle's operational axle-load profiles in stable type order."""
-
-    await get_required(session, Vehicle, vehicle_id, "vehicle")
-    result = await session.scalars(
-        select(VehicleLoadProfile)
-        .where(VehicleLoadProfile.vehicle_id == vehicle_id)
-        .order_by(VehicleLoadProfile.configuration_type, VehicleLoadProfile.id)
-    )
-    return list(result)
-
-
-async def create_vehicle_load_profile(
-    session: AsyncSession,
-    vehicle_id: UUID,
-    payload: VehicleLoadProfileCreate,
-) -> VehicleLoadProfile:
-    """Create one exact operational axle-load value for a vehicle state."""
-
-    await get_required(session, Vehicle, vehicle_id, "vehicle")
-    duplicate = await session.scalar(
-        select(VehicleLoadProfile.id).where(
-            VehicleLoadProfile.vehicle_id == vehicle_id,
-            VehicleLoadProfile.configuration_type == payload.configuration_type.value,
-        )
-    )
-    if duplicate is not None:
-        raise ApiError(
-            409,
-            "VEHICLE_LOAD_PROFILE_DUPLICATE",
-            "This vehicle already has the requested operational load profile",
-        )
-    entity = VehicleLoadProfile(vehicle_id=vehicle_id, **payload.model_dump(mode="json"))
-    session.add(entity)
-    await session.flush()
-    return entity
-
-
-async def update_vehicle_load_profile(
-    session: AsyncSession,
-    profile_id: UUID,
-    payload: VehicleLoadProfileUpdate,
-) -> VehicleLoadProfile:
-    """Update an operational axle-load value without creating duplicate states."""
-
-    entity = await get_required(session, VehicleLoadProfile, profile_id, "vehicle_load_profile")
-    values = payload.model_dump(exclude_unset=True, mode="json")
-    configuration_type = values.get("configuration_type", entity.configuration_type)
-    duplicate = await session.scalar(
-        select(VehicleLoadProfile.id).where(
-            VehicleLoadProfile.vehicle_id == entity.vehicle_id,
-            VehicleLoadProfile.configuration_type == configuration_type,
-            VehicleLoadProfile.id != entity.id,
-        )
-    )
-    if duplicate is not None:
-        raise ApiError(
-            409,
-            "VEHICLE_LOAD_PROFILE_DUPLICATE",
-            "This vehicle already has the requested operational load profile",
-        )
-    for field, value in values.items():
-        setattr(entity, field, value)
-    await session.flush()
-    return entity
-
-
-async def _require_same_scenario_shift_resources(
-    session: AsyncSession, scenario_id: UUID, driver_id: UUID, vehicle_id: UUID
+async def _require_same_warehouse_shift_resources(
+    session: AsyncSession, warehouse_id: UUID, driver_id: UUID, vehicle_id: UUID
 ) -> None:
-    """Ensure a shift cannot bind resources from a different scenario."""
+    """Ensure a shift cannot bind resources from a different warehouse."""
 
     driver = await get_required(session, Driver, driver_id, "driver")
     vehicle = await get_required(session, Vehicle, vehicle_id, "vehicle")
-    if driver.scenario_id != scenario_id or vehicle.scenario_id != scenario_id:
+    if driver.warehouse_id != warehouse_id or vehicle.warehouse_id != warehouse_id:
         raise ApiError(
             422,
-            "SHIFT_SCENARIO_MISMATCH",
-            "Driver and vehicle must belong to the shift scenario",
+            "SHIFT_WAREHOUSE_MISMATCH",
+            "Driver and vehicle must belong to the shift warehouse",
         )
 
 
@@ -611,16 +848,16 @@ async def _ensure_shift_available(
     *,
     driver_id: UUID,
     vehicle_id: UUID,
-    start_at: datetime,
-    end_at: datetime,
+    date_from: date,
+    date_to: date,
     exclude_id: UUID | None = None,
 ) -> None:
-    """Reject overlapping active intervals for either driver or vehicle."""
+    """Reject overlapping active date ranges for either driver or vehicle."""
 
     statement = select(DriverShift).where(
         DriverShift.active.is_(True),
-        DriverShift.start_at < end_at,
-        DriverShift.end_at > start_at,
+        DriverShift.date_from <= date_to,
+        DriverShift.date_to >= date_from,
         or_(DriverShift.driver_id == driver_id, DriverShift.vehicle_id == vehicle_id),
     )
     if exclude_id is not None:
@@ -634,23 +871,23 @@ async def _ensure_shift_available(
 
 
 async def create_shift(
-    session: AsyncSession, scenario_id: UUID, payload: ShiftCreate
+    session: AsyncSession, warehouse_id: UUID, payload: ShiftCreate
 ) -> DriverShift:
-    """Create a non-overlapping aware shift for scenario-owned resources."""
+    """Create a non-overlapping aware shift for warehouse-owned resources."""
 
-    await require_scenario(session, scenario_id)
-    await _require_same_scenario_shift_resources(
-        session, scenario_id, payload.driver_id, payload.vehicle_id
+    await require_warehouse(session, warehouse_id)
+    await _require_same_warehouse_shift_resources(
+        session, warehouse_id, payload.driver_id, payload.vehicle_id
     )
     if payload.active:
         await _ensure_shift_available(
             session,
             driver_id=payload.driver_id,
             vehicle_id=payload.vehicle_id,
-            start_at=payload.start_at,
-            end_at=payload.end_at,
+            date_from=payload.date_from,
+            date_to=payload.date_to,
         )
-    entity = DriverShift(scenario_id=scenario_id, **payload.model_dump())
+    entity = DriverShift(warehouse_id=warehouse_id, **payload.model_dump())
     session.add(entity)
     await session.flush()
     return entity
@@ -663,19 +900,30 @@ async def update_shift(session: AsyncSession, shift_id: UUID, payload: ShiftUpda
     values = payload.model_dump(exclude_unset=True)
     driver_id = values.get("driver_id", entity.driver_id)
     vehicle_id = values.get("vehicle_id", entity.vehicle_id)
-    start_at = values.get("start_at", entity.start_at)
-    end_at = values.get("end_at", entity.end_at)
+    date_from = values.get("date_from", entity.date_from)
+    date_to = values.get("date_to", entity.date_to)
+    start_time = values.get("start_time", entity.start_time)
+    end_time = values.get("end_time", entity.end_time)
     active = values.get("active", entity.active)
-    if end_at <= start_at:
-        raise ApiError(422, "INVALID_SHIFT_INTERVAL", "end_at must be after start_at")
-    await _require_same_scenario_shift_resources(session, entity.scenario_id, driver_id, vehicle_id)
+    if date_to < date_from or (date_to - date_from).days > 30:
+        raise ApiError(422, "INVALID_SHIFT_DATE_RANGE", "Shift date range must be 1-31 days")
+    if (date_from.year, date_from.month) != (date_to.year, date_to.month):
+        raise ApiError(422, "INVALID_SHIFT_MONTH", "Shift date range must stay in one month")
+    if end_time <= start_time:
+        raise ApiError(422, "INVALID_SHIFT_INTERVAL", "end_time must be after start_time")
+    await _require_same_warehouse_shift_resources(
+        session,
+        entity.warehouse_id,
+        driver_id,
+        vehicle_id,
+    )
     if active:
         await _ensure_shift_available(
             session,
             driver_id=driver_id,
             vehicle_id=vehicle_id,
-            start_at=start_at,
-            end_at=end_at,
+            date_from=date_from,
+            date_to=date_to,
             exclude_id=entity.id,
         )
     apply_update(entity, payload)
@@ -694,17 +942,32 @@ async def delete_catalog_entity[MutableModel: Base](
 
 
 async def _set_request_classification(session: AsyncSession, request: LogisticsRequest) -> None:
-    """Overwrite classification exclusively from stored coordinates and PostGIS."""
+    """Apply special-price identity and hard access policies at stored coordinates."""
 
-    match = await classify_point(session, request.scenario_id, request.latitude, request.longitude)
+    policies = await classify_zone_policies(
+        session,
+        request.warehouse_id,
+        request.latitude,
+        request.longitude,
+    )
+    if policies.forbidden is not None:
+        raise ApiError(
+            422,
+            "DELIVERY_FORBIDDEN_ZONE",
+            "The address is inside a warehouse zone where delivery is prohibited",
+            extra={"zone_id": str(policies.forbidden.id), "zone_name": policies.forbidden.name},
+        )
+    match = policies.special_price
     if match is None:
         request.zone_id = None
         request.zone_version = None
         request.zone_classification_status = ZoneClassificationStatus.OUTSIDE_ZONES
     else:
-        request.zone_id = match.zone_id
-        request.zone_version = match.zone_version
+        request.zone_id = match.id
+        request.zone_version = match.version
         request.zone_classification_status = ZoneClassificationStatus.CLASSIFIED
+    if policies.no_trailer is not None:
+        request.trailer_access_allowed = False
 
 
 def _build_task(request: LogisticsRequest, part_number: int, quantity: int) -> PlanningTask:
@@ -725,8 +988,27 @@ def _build_task(request: LogisticsRequest, part_number: int, quantity: int) -> P
         zone_version=request.zone_version,
         service_minutes=request.service_minutes,
         priority=request.priority,
+        mandatory=request.mandatory,
         status=TaskStatus.READY,
     )
+
+
+async def _request_tasks_have_plan_references(
+    session: AsyncSession,
+    request: LogisticsRequest,
+) -> bool:
+    """Return whether any stable task identity is retained by a saved plan."""
+
+    existing_ids = [task.id for task in request.tasks]
+    if not existing_ids:
+        return False
+    assigned_reference = await session.scalar(
+        select(RouteStop.id).where(RouteStop.task_id.in_(existing_ids)).limit(1)
+    )
+    unassigned_reference = await session.scalar(
+        select(UnassignedTask.id).where(UnassignedTask.task_id.in_(existing_ids)).limit(1)
+    )
+    return assigned_reference is not None or unassigned_reference is not None
 
 
 async def _replace_request_tasks(
@@ -741,17 +1023,11 @@ async def _replace_request_tasks(
         await session.scalars(select(PlanningTask.id).where(PlanningTask.request_id == request.id))
     )
     if existing_ids:
-        assigned_reference = await session.scalar(
-            select(RouteStop.id).where(RouteStop.task_id.in_(existing_ids)).limit(1)
-        )
-        unassigned_reference = await session.scalar(
-            select(UnassignedTask.id).where(UnassignedTask.task_id.in_(existing_ids)).limit(1)
-        )
-        if assigned_reference is not None or unassigned_reference is not None:
+        if await _request_tasks_have_plan_references(session, request):
             raise ApiError(
                 409,
                 "REQUEST_TASKS_ALREADY_PLANNED",
-                "Clone or archive the plan before changing fields that regenerate tasks",
+                "Archive the plan before changing fields that regenerate tasks",
             )
         await session.execute(delete(PlanningTask).where(PlanningTask.id.in_(existing_ids)))
     for part_number, quantity in enumerate(quantities, start=1):
@@ -784,13 +1060,18 @@ def _date_option_facts(
 
 
 async def create_request(
-    session: AsyncSession, scenario_id: UUID, payload: LogisticsRequestCreate
+    session: AsyncSession, warehouse_id: UUID, payload: LogisticsRequestCreate
 ) -> LogisticsRequest:
     """Create, classify, date, and split a source request atomically."""
 
-    await require_scenario(session, scenario_id)
+    await require_warehouse(session, warehouse_id)
+    await _invalidate_route_plans_for_dates(
+        session,
+        warehouse_id,
+        {option.date for option in payload.date_options},
+    )
     values = payload.model_dump(exclude={"date_options"})
-    entity = LogisticsRequest(scenario_id=scenario_id, **values)
+    entity = LogisticsRequest(warehouse_id=warehouse_id, **values)
     session.add(entity)
     await session.flush()
     await _set_request_classification(session, entity)
@@ -803,25 +1084,34 @@ async def create_request(
 
 async def upsert_rwms_request(
     session: AsyncSession,
-    scenario_id: UUID,
+    warehouse_id: UUID,
     source: RwmsPlanningRequest,
 ) -> str:
-    """Idempotently import one versioned RWMS order while preserving local-only edits."""
+    """Import one revisioned planning snapshot while retaining the order command fence.
+
+    A planning revision may advance without an order-version change because the feed also contains
+    customer-slot and asset-reservation facts owned by separate aggregates. Pre-revision stored
+    snapshots are upgraded once from the authenticated source and thereafter obey the same strict
+    revision replay check.
+    """
 
     if source.latitude is None or source.longitude is None:
         raise ApiError(
             422,
             "RWMS_COORDINATES_REQUIRED",
-            "RWMS order coordinates are required for simulator synchronization",
+            "RWMS order coordinates are required for warehouse synchronization",
         )
-    scenario = await require_scenario(session, scenario_id)
+    warehouse = await require_warehouse(session, warehouse_id)
+    default_cargo = _warehouse_default_cargo(warehouse)
     source_payload = source.model_dump(mode="json", by_alias=True)
     entity = await session.scalar(
-        select(LogisticsRequest).where(
-            LogisticsRequest.scenario_id == scenario_id,
+        select(LogisticsRequest)
+        .where(
+            LogisticsRequest.warehouse_id == warehouse_id,
             LogisticsRequest.source_system == RWMS_SOURCE_SYSTEM,
             LogisticsRequest.external_id == source.order_id,
         )
+        .options(selectinload(LogisticsRequest.date_options))
     )
     date_options = [
         RequestDateOptionInput(
@@ -835,10 +1125,15 @@ async def upsert_rwms_request(
         for option in source.date_options
     ]
     if entity is None:
-        service_minutes = int(scenario.settings.get("default_service_minutes", 30))
+        await _invalidate_route_plans_for_dates(
+            session,
+            warehouse_id,
+            {option.date for option in source.date_options},
+        )
+        service_minutes = int(warehouse.settings.get("default_service_minutes", 30))
         created = await create_request(
             session,
-            scenario_id,
+            warehouse_id,
             LogisticsRequestCreate(
                 type=RequestType.DELIVERY,
                 name=f"Заказ {source.order_number}",
@@ -846,9 +1141,11 @@ async def upsert_rwms_request(
                 latitude=source.latitude,
                 longitude=source.longitude,
                 quantity=source.quantity,
+                **default_cargo,
                 service_minutes=service_minutes,
                 status=RequestStatus.READY,
                 contact_name=source.client_name,
+                trailer_access_allowed=source.trailer_access_allowed,
                 date_options=date_options,
             ),
         )
@@ -861,21 +1158,38 @@ async def upsert_rwms_request(
 
     if entity.external_version is not None and source.order_version < entity.external_version:
         return "skipped"
+    cargo_is_missing = all(getattr(entity, field) is None for field in CARGO_PHYSICAL_FIELDS)
     if entity.external_version == source.order_version:
         if entity.external_payload == source_payload:
-            return "skipped"
-        raise ApiError(
-            409,
-            "RWMS_SOURCE_VERSION_CONFLICT",
-            "RWMS returned different order data with an unchanged version",
-        )
+            if not cargo_is_missing:
+                return "skipped"
+        else:
+            stored_revision = (entity.external_payload or {}).get("sourceRevision")
+            if stored_revision == source.source_revision:
+                raise ApiError(
+                    409,
+                    "RWMS_SOURCE_VERSION_CONFLICT",
+                    "RWMS returned different planning data with an unchanged source revision",
+                )
+
+    await _invalidate_route_plans_for_dates(
+        session,
+        warehouse_id,
+        {
+            *(option.date for option in entity.date_options),
+            *(option.date for option in source.date_options),
+        },
+    )
 
     update_values: dict[str, object] = {
         "name": f"Заказ {source.order_number}",
         "address_label": source.address,
         "contact_name": source.client_name,
+        "trailer_access_allowed": source.trailer_access_allowed,
         "date_options": date_options,
     }
+    if cargo_is_missing:
+        update_values.update(default_cargo)
     if entity.latitude != source.latitude or entity.longitude != source.longitude:
         update_values["latitude"] = source.latitude
         update_values["longitude"] = source.longitude
@@ -919,12 +1233,12 @@ async def get_request(
     return entity
 
 
-async def list_requests(session: AsyncSession, scenario_id: UUID) -> list[LogisticsRequest]:
-    """List scenario requests with date options and task parts eagerly loaded."""
+async def list_requests(session: AsyncSession, warehouse_id: UUID) -> list[LogisticsRequest]:
+    """List warehouse requests with date options and task parts eagerly loaded."""
 
     statement = (
         select(LogisticsRequest)
-        .where(LogisticsRequest.scenario_id == scenario_id)
+        .where(LogisticsRequest.warehouse_id == warehouse_id)
         .options(
             selectinload(LogisticsRequest.date_options),
             selectinload(LogisticsRequest.tasks),
@@ -944,6 +1258,7 @@ async def update_request(
     """Update local fields or apply a trusted feed refresh under the request lock."""
 
     entity = await get_request(session, request_id, for_update=True)
+    previous_dates = _request_effective_dates(entity)
     supplied_values = payload.model_dump(exclude_unset=True, exclude={"date_options"})
     supplied_fields = set(payload.model_fields_set)
     if (
@@ -978,15 +1293,21 @@ async def update_request(
         "quantity",
         "service_minutes",
         "priority",
-        "trailer_access_allowed",
         *CARGO_PHYSICAL_FIELDS,
     }
     regenerate_tasks = bool(task_fields.intersection(changed))
     moved = "latitude" in changed or "longitude" in changed
     for field, value in changed.items():
         setattr(entity, field, value)
-    if moved:
+    if moved or "trailer_access_allowed" in changed:
         await _set_request_classification(session, entity)
+    if "trailer_access_allowed" in changed:
+        current_quantities = [
+            task.quantity for task in sorted(entity.tasks, key=lambda task: task.part_number)
+        ]
+        regenerate_tasks = regenerate_tasks or current_quantities != _request_task_quantities(
+            entity
+        )
     date_options_changed = payload.date_options is not None and sorted(
         (_date_option_facts(option) for option in payload.date_options),
         key=lambda facts: (facts[0], facts[1]),
@@ -1003,6 +1324,23 @@ async def update_request(
         await session.flush()
         for option in payload.date_options:
             entity.date_options.append(RequestDateOption(**option.model_dump()))
+    mandatory_only = bool(changed) and set(changed) == {"mandatory"} and not date_options_changed
+    if mandatory_only:
+        await plan_service.mark_plans_for_request_refresh(
+            session,
+            entity.warehouse_id,
+            previous_dates | _request_effective_dates(entity),
+            entity.id,
+        )
+    elif changed or date_options_changed:
+        await _invalidate_route_plans_for_dates(
+            session,
+            entity.warehouse_id,
+            previous_dates | _request_effective_dates(entity),
+        )
+    if "mandatory" in changed:
+        for task in entity.tasks:
+            task.mandatory = entity.mandatory
     if regenerate_tasks:
         await _replace_request_tasks(session, entity)
     await session.flush()
@@ -1017,8 +1355,14 @@ async def schedule_request(
     """Assign one accepted date, optionally recording an explicitly agreed new date."""
 
     entity = await get_request(session, request_id, for_update=True)
+    previous_dates = _request_effective_dates(entity)
     if payload.date is None:
         entity.scheduled_date = None
+        await _invalidate_route_plans_for_dates(
+            session,
+            entity.warehouse_id,
+            previous_dates | _request_effective_dates(entity),
+        )
         await session.flush()
         return await get_request(session, entity.id)
 
@@ -1049,6 +1393,11 @@ async def schedule_request(
             )
         )
     entity.scheduled_date = payload.date
+    await _invalidate_route_plans_for_dates(
+        session,
+        entity.warehouse_id,
+        previous_dates | _request_effective_dates(entity),
+    )
     await session.flush()
     return await get_request(session, entity.id)
 
@@ -1093,15 +1442,69 @@ async def set_request_planning_details(
             "RWMS_FIXED_WINDOW_IMMUTABLE",
             "A fixed RWMS customer window can only be changed in the authoritative source",
         )
-    trailer_access_changed = entity.trailer_access_allowed != payload.trailer_access_allowed
+    source_flexible_day = (
+        entity.source_system == RWMS_SOURCE_SYSTEM
+        and not option.is_hard
+        and option.window_start is None
+        and option.window_end is None
+    )
+    if source_flexible_day and (
+        payload.window_start is not None
+        or payload.window_end is not None
+        or payload.is_hard
+    ):
+        raise ApiError(
+            409,
+            "RWMS_FLEXIBLE_DAY_IMMUTABLE",
+            "A CustomerApp full-day option must remain flexible in logistics",
+        )
+    previous_dates = _request_effective_dates(entity)
+    planning_dates = previous_dates | {payload.date}
+    previous_trailer_access = entity.trailer_access_allowed
+    entity.trailer_access_allowed = payload.trailer_access_allowed
+    await _set_request_classification(session, entity)
+    trailer_access_changed = previous_trailer_access != entity.trailer_access_allowed
+    scheduled_date_changed = (
+        entity.scheduled_date is not None and entity.scheduled_date != payload.date
+    )
+    if scheduled_date_changed:
+        active_plan_id = await session.scalar(
+            select(RoutePlan.id)
+            .where(
+                RoutePlan.warehouse_id == entity.warehouse_id,
+                RoutePlan.date.in_(planning_dates),
+                RoutePlan.status != PlanStatus.ARCHIVED,
+            )
+            .limit(1)
+        )
+        if active_plan_id is not None:
+            raise ApiError(
+                409,
+                "REQUEST_DATE_ALREADY_PLANNED",
+                "Archive the existing plan before moving a request to another date",
+            )
+    if trailer_access_changed and await _request_tasks_have_plan_references(session, entity):
+        raise ApiError(
+            409,
+            "REQUEST_TASKS_ALREADY_PLANNED",
+            "Archive the plan before changing fields that regenerate tasks",
+        )
+    await plan_service.mark_plans_for_request_refresh(
+        session,
+        entity.warehouse_id,
+        planning_dates | _request_effective_dates(entity),
+        entity.id,
+    )
     option.window_start = payload.window_start
     option.window_end = payload.window_end
     option.is_hard = payload.is_hard
     entity.scheduled_date = payload.date
-    entity.trailer_access_allowed = payload.trailer_access_allowed
+    entity.mandatory = payload.mandatory
     entity.include_driver_passport_in_notification = payload.include_driver_passport_in_notification
     entity.contact_name = payload.contact_name
     entity.contact_phone = payload.contact_phone
+    for task in entity.tasks:
+        task.mandatory = payload.mandatory
     if trailer_access_changed:
         await _replace_request_tasks(session, entity)
     await session.flush()
@@ -1116,6 +1519,11 @@ async def split_request(
     """Regenerate automatic or explicitly-sized transport subtasks."""
 
     entity = await get_request(session, request_id, for_update=True)
+    await _invalidate_route_plans_for_dates(
+        session,
+        entity.warehouse_id,
+        _request_effective_dates(entity),
+    )
     await _replace_request_tasks(session, entity, part_quantities)
     return await get_request(session, entity.id)
 
@@ -1138,9 +1546,15 @@ async def create_date_option(
     )
     if duplicate is not None:
         raise ApiError(409, "REQUEST_DATE_DUPLICATE", "This request date already exists")
+    previous_dates = _request_effective_dates(request)
     entity = _date_option_entity(request, payload)
     session.add(entity)
     await session.flush()
+    await _invalidate_route_plans_for_dates(
+        session,
+        request.warehouse_id,
+        previous_dates | _request_effective_dates(request),
+    )
     return entity
 
 
@@ -1155,6 +1569,7 @@ async def update_date_option(
         request,
         "RWMS-owned accepted dates can only be changed by synchronizing the source feed",
     )
+    previous_dates = _request_effective_dates(request)
     previous_date = entity.date
     values = payload.model_dump(exclude_unset=True)
     start = values.get("window_start", entity.window_start)
@@ -1178,6 +1593,11 @@ async def update_date_option(
     apply_update(entity, payload)
     if request.scheduled_date == previous_date:
         request.scheduled_date = entity.date
+    await _invalidate_route_plans_for_dates(
+        session,
+        request.warehouse_id,
+        previous_dates | _request_effective_dates(request),
+    )
     await session.flush()
     return entity
 
@@ -1191,10 +1611,16 @@ async def delete_date_option(session: AsyncSession, option_id: UUID) -> None:
         request,
         "RWMS-owned accepted dates can only be changed by synchronizing the source feed",
     )
+    previous_dates = _request_effective_dates(request)
     if request.scheduled_date == entity.date:
         request.scheduled_date = None
     await session.delete(entity)
     await session.flush()
+    await _invalidate_route_plans_for_dates(
+        session,
+        request.warehouse_id,
+        previous_dates | _request_effective_dates(request),
+    )
 
 
 async def delete_request(session: AsyncSession, request_id: UUID) -> None:
@@ -1204,6 +1630,11 @@ async def delete_request(session: AsyncSession, request_id: UUID) -> None:
     _reject_rwms_source_edit(
         entity,
         "An RWMS-owned request can only be removed or cancelled in the authoritative service",
+    )
+    await _invalidate_route_plans_for_dates(
+        session,
+        entity.warehouse_id,
+        _request_effective_dates(entity),
     )
     task_ids = [task.id for task in entity.tasks]
     referenced = False
@@ -1225,35 +1656,10 @@ async def delete_request(session: AsyncSession, request_id: UUID) -> None:
     await session.flush()
 
 
-async def reclassify_requests(session: AsyncSession, scenario_id: UUID) -> tuple[int, int, int]:
-    """Explicitly refresh every request and task classification snapshot."""
-
-    await require_scenario(session, scenario_id)
-    requests = await list_requests(session, scenario_id)
-    updated = 0
-    outside = 0
-    unchanged = 0
-    for request in requests:
-        previous = (request.zone_id, request.zone_version, request.zone_classification_status)
-        await _set_request_classification(session, request)
-        current = (request.zone_id, request.zone_version, request.zone_classification_status)
-        if current == previous:
-            unchanged += 1
-        else:
-            updated += 1
-        if request.zone_classification_status == ZoneClassificationStatus.OUTSIDE_ZONES:
-            outside += 1
-        for task in request.tasks:
-            task.zone_id = request.zone_id
-            task.zone_version = request.zone_version
-    await session.flush()
-    return updated, outside, unchanged
-
-
 async def list_catalog[MutableModel: Base](
-    session: AsyncSession, model: type[MutableModel], scenario_id: UUID
+    session: AsyncSession, model: type[MutableModel], warehouse_id: UUID
 ) -> Sequence[MutableModel]:
-    """Expose the generic scenario-list query to thin API routes."""
+    """Expose the generic warehouse-list query to thin API routes."""
 
-    await require_scenario(session, scenario_id)
-    return await list_for_scenario(session, model, scenario_id)
+    await require_warehouse(session, warehouse_id)
+    return await list_for_warehouse(session, model, warehouse_id)

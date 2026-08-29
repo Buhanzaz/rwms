@@ -1,461 +1,405 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, ApiError, getScenarioWorkspace } from '../src/api/client';
-import { normalizeRoutePlan, normalizeScenario, type RawRoutePlan, type RawScenario } from '../src/api/mappers';
-import type { ScenarioWorkspace, Zone } from '../src/domain/types';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError, api, getWarehouseWorkspace } from '../src/api/client';
+import { normalizeRoutePlan } from '../src/api/mappers';
+import { requestFixture, warehouseFixture, workspaceFixture } from './fixtures';
 
-const rawScenario: RawScenario = {
-  id: 'scenario-id',
-  name: 'Контрактный сценарий',
-  description: '',
-  timezone: 'Europe/Moscow',
-  default_planning_date: '2026-08-25',
-  created_at: '2026-08-22T00:00:00Z',
-  updated_at: '2026-08-22T00:00:00Z',
-  seed: 42,
-  settings: {},
-};
+function jsonResponse(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { 'Content-Type': status >= 400 ? 'application/problem+json' : 'application/json' },
+  });
+}
 
-const rawPlan: RawRoutePlan = {
-  id: 'plan-id',
-  scenario_id: 'scenario-id',
-  warehouse_id: 'warehouse-id',
-  date: '2026-08-25',
-  name: 'План A',
-  version: 1,
-  status: 'GENERATED',
-  score: 0,
-  metrics: {},
-  validation_errors: [],
-  validation_warnings: [],
-  manually_changed: false,
-  created_at: '2026-08-22T00:00:00Z',
-  updated_at: '2026-08-22T00:00:00Z',
-  cycles: [],
-  unassigned_tasks: [],
-};
+function bodyAt(mock: ReturnType<typeof vi.fn>, index: number): unknown {
+  const init = mock.mock.calls[index]?.[1] as RequestInit | undefined;
+  return typeof init?.body === 'string' ? JSON.parse(init.body) as unknown : undefined;
+}
 
-const zone: Zone = {
-  id: 'zone-id',
-  scenario_id: 'scenario-id',
-  name: 'Зона 1',
-  code: 'Z1',
-  route_group: 'WEST',
-  delivery_price: 120,
-  pickup_price: 80,
-  geometry: { type: 'Polygon', coordinates: [[[37, 55], [38, 55], [38, 56], [37, 55]]] },
-  version: 1,
-  priority: 1,
-  locked: false,
-  created_at: '2026-08-22T00:00:00Z',
-  updated_at: '2026-08-22T00:00:00Z',
-};
+function requestUrl(input: unknown): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.href;
+  if (input instanceof Request) return input.url;
+  throw new TypeError('Expected a request URL');
+}
 
-function workspaceFixture(): ScenarioWorkspace {
+function rawPlan(overrides: Record<string, unknown> = {}) {
   return {
-    scenario: normalizeScenario(rawScenario),
-    warehouses: [],
-    zones: [zone],
-    zone_relations: [],
-    drivers: [],
-    vehicles: [],
-    shifts: [],
-    requests: [],
+    id: 'plan-1',
+    warehouse_id: 'warehouse-1',
+    date: '2026-08-30',
+    version: 4,
+    status: 'GENERATED',
+    score: 10,
+    created_at: '2026-08-28T08:00:00Z',
+    updated_at: '2026-08-28T08:00:00Z',
+    cycles: [],
+    unassigned_tasks: [],
+    metrics: {},
+    manually_changed: false,
+    ...overrides,
   };
 }
 
-function jsonResponse(value: unknown): Response {
-  return new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } });
+function zoneInput() {
+  return {
+    name: 'Север',
+    kind: 'SPECIAL_PRICE' as const,
+    color: '#3366FF',
+    delivery_price: 20_000,
+    pickup_price: 15_000,
+    geometry: { type: 'Polygon' as const, coordinates: [[[30, 59], [31, 59], [31, 60], [30, 59]]] },
+    locked: false,
+  };
 }
 
-function fetchMock(...responses: unknown[]) {
-  const mock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
-  responses.forEach((response) => mock.mockResolvedValueOnce(jsonResponse(response)));
-  vi.stubGlobal('fetch', mock);
-  return mock;
-}
-
-function errorFetch(status: number, value: unknown) {
-  const mock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
-  mock.mockResolvedValueOnce(new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } }));
-  vi.stubGlobal('fetch', mock);
-  return mock;
-}
-
-function requestBody(mock: ReturnType<typeof fetchMock>, index: number): Record<string, unknown> {
-  const body = mock.mock.calls[index]?.[1]?.body;
-  if (typeof body !== 'string') return {};
-  return JSON.parse(body) as Record<string, unknown>;
-}
-
-afterEach(() => {
-  vi.useRealTimers();
+beforeEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('actual backend transport contract', () => {
-  it('delegates the current-horizon RWMS refresh to one server-owned command', async () => {
-    const mock = fetchMock(
-      rawScenario,
-      [{
-        id: 'warehouse-id',
-        scenario_id: 'scenario-id',
-        external_warehouse_id: '00000000-0000-0000-0000-000000000002',
-        name: 'Основной склад',
-        latitude: 55.7574,
-        longitude: 37.3995,
-        loading_minutes: 30,
-        unloading_minutes: 20,
-        turnaround_minutes: 20,
-        working_day_start: '08:00:00',
-        working_day_end: '20:00:00',
+describe('warehouse workspace transport', () => {
+  it('loads and normalizes the workspace through the automatically refreshing endpoint', async () => {
+    const workspace = workspaceFixture({
+      requests: [{
+        ...requestFixture(),
+        mandatory: undefined as never,
+        tasks: [{ ...requestFixture().tasks![0]!, mandatory: undefined as never }],
       }],
-      [],
-      [],
-      [],
-      [],
-      [],
-      {
-        date_from: '2026-08-26',
-        date_to: '2026-09-25',
-        warehouses: [{
-          warehouse_id: '00000000-0000-0000-0000-000000000002',
-          imported: 0,
-          updated: 0,
-          skipped: 0,
-          failures: [],
-        }],
-      },
-      [],
-    );
-
-    const workspace = await getScenarioWorkspace('scenario-id');
-
-    expect(mock.mock.calls[7]?.[0]).toBe('/api/scenarios/scenario-id/rwms/refresh');
-    expect(mock.mock.calls[7]?.[1]?.method).toBe('POST');
-    expect(mock.mock.calls[7]?.[1]?.body).toBeUndefined();
-    expect(mock.mock.calls[8]?.[0]).toBe('/api/scenarios/scenario-id/requests');
-    expect(workspace.requests).toEqual([]);
-  });
-
-  it('uses body-free demo/export and wraps an imported document', async () => {
-    const mock = fetchMock(rawScenario, { schema_version: 1 }, rawScenario);
-    await api.generateDemo('scenario-id');
-    await api.exportScenario('scenario-id', true);
-    await api.importScenario({ schema_version: 1 });
-
-    expect(mock.mock.calls[0]?.[0]).toBe('/api/scenarios/scenario-id/generate-demo');
-    expect(mock.mock.calls[0]?.[1]?.body).toBeUndefined();
-    expect(mock.mock.calls[1]?.[0]).toBe('/api/scenarios/scenario-id/export?include_plans=true');
-    expect(mock.mock.calls[1]?.[1]?.body).toBeUndefined();
-    expect(requestBody(mock, 2)).toEqual({ document: { schema_version: 1 } });
-  });
-
-  it('clones a plan with only the optional name', async () => {
-    const mock = fetchMock(rawPlan);
-    await api.clonePlan('plan-id', 'План B', workspaceFixture());
-    expect(requestBody(mock, 0)).toEqual({ name: 'План B' });
-  });
-
-  it('rejects incomplete plan state instead of fabricating tasks or route geometry', () => {
-    const missingTaskPlan: RawRoutePlan = {
-      ...rawPlan,
-      unassigned_tasks: [{
-        id: 'unassigned-id',
-        task_id: 'missing-task-id',
-        reason_codes: ['NO_SHIFT'],
-        descriptions_ru: ['Нет доступной смены'],
-        nearest_option: null,
-        recommendation_ru: null,
-      }],
-    };
-    expect(() => normalizeRoutePlan(missingTaskPlan, workspaceFixture()))
-      .toThrow('Route plan plan-id references missing task missing-task-id');
-
-    const invalidGeometryPlan = {
-      ...rawPlan,
-      cycles: [{
-        id: 'cycle-id',
-        driver_shift_id: 'shift-id',
-        sequence: 1,
-        planned_start: '2026-08-25T08:00:00Z',
-        planned_finish: '2026-08-25T09:00:00Z',
-        total_distance_meters: 100,
-        total_travel_seconds: 60,
-        total_service_seconds: 0,
-        empty_distance_meters: 100,
-        detour_seconds: 0,
-        score: 0,
-        locked: false,
-        manually_changed: false,
-        metrics: {},
-        stops: [],
-        segments: [{
-          id: 'segment-id',
-          sequence: 1,
-          from_stop_id: 'from-stop-id',
-          to_stop_id: 'to-stop-id',
-          departure_at: '2026-08-25T08:00:00Z',
-          arrival_at: '2026-08-25T08:01:00Z',
-          distance_meters: 100,
-          travel_seconds: 60,
-          geometry: {},
-        }],
-        explanations: [],
-      }],
-    } as RawRoutePlan;
-    expect(() => normalizeRoutePlan(invalidGeometryPlan, workspaceFixture()))
-      .toThrow('Route segment segment-id has invalid GeoJSON geometry');
-  });
-
-  it('keeps zone geometry bare and locking on its dedicated endpoint', async () => {
-    const mock = fetchMock({ ...zone, name: 'Зона новая' }, { ...zone, locked: true });
-    await api.updateZone('zone-id', { name: 'Зона новая', geometry: zone.geometry });
-    await api.setZoneLocked('zone-id', true);
-
-    expect(requestBody(mock, 0)).toEqual({ name: 'Зона новая', geometry: zone.geometry });
-    expect(requestBody(mock, 0)).not.toHaveProperty('locked');
-    expect(mock.mock.calls[1]?.[0]).toBe('/api/zones/zone-id/lock');
-    expect(requestBody(mock, 1)).toEqual({ locked: true });
-  });
-
-  it('sends an atomic polygon cutout with inner-zone metadata and an explicit request scheduling command', async () => {
-    const cutout = { type: 'Polygon' as const, coordinates: [[[37.2, 55.2], [37.4, 55.2], [37.4, 55.4], [37.2, 55.2]]] };
-    const innerZone = { ...zone, id: 'inner-zone-id', name: 'Внутренняя', code: 'Z1-IN1', geometry: cutout };
-    const mock = fetchMock({ source_zone: { ...zone, version: 2 }, inner_zone: innerZone }, { id: 'request-id', scheduled_date: '2026-08-26' });
-
-    const result = await api.cutZone('zone-id', {
-      name: 'Внутренняя',
-      code: 'Z1-IN1',
-      route_group: 'WEST',
-      delivery_price: 120,
-      pickup_price: 80,
-      geometry: cutout,
-      priority: 2,
-      locked: false,
     });
-    await api.scheduleRequest('request-id', { date: '2026-08-26', add_if_missing: true });
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(workspace));
+    vi.stubGlobal('fetch', fetchMock);
 
-    expect(mock.mock.calls[0]?.[0]).toBe('/api/zones/zone-id/cutouts');
-    expect(requestBody(mock, 0)).toEqual({
-      geometry: cutout,
-      inner_zone: { name: 'Внутренняя', code: 'Z1-IN1', route_group: 'WEST', delivery_price: 120, pickup_price: 80, priority: 2, locked: false },
-    });
-    expect(result.inner_zone.id).toBe('inner-zone-id');
-    expect(mock.mock.calls[1]?.[0]).toBe('/api/requests/request-id/schedule');
-    expect(requestBody(mock, 1)).toEqual({ date: '2026-08-26', add_if_missing: true });
+    const result = await getWarehouseWorkspace('warehouse-1');
+
+    expect(fetchMock.mock.calls.map(([url]) => requestUrl(url))).toEqual([
+      '/api/warehouses/warehouse-1/workspace',
+    ]);
+    expect(result.warehouse.address).toContain('Шоссе Революции');
+    expect(result.requests[0]).toMatchObject({ mandatory: false });
+    expect(result.requests[0]?.tasks?.[0]).toMatchObject({ mandatory: false });
   });
 
-  it('posts deterministic workload generation with the scenario-scoped endpoint', async () => {
-    const mock = fetchMock({
-      scenario_id: 'scenario-id',
-      seed: 99,
-      start_date: '2026-08-25',
-      end_date: '2026-08-27',
-      created_requests: 24,
-      created_deliveries: 12,
-      created_pickups: 12,
-      replaced_requests: 0,
-      deleted_plans: 0,
-      daily_counts: [
-        { date: '2026-08-25', deliveries: 4, pickups: 4 },
-        { date: '2026-08-26', deliveries: 4, pickups: 4 },
-        { date: '2026-08-27', deliveries: 4, pickups: 4 },
-      ],
+  it('keeps saved demand visible when automatic refresh reports a partial failure', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        title: 'Синхронизация неполная',
+        code: 'RWMS_WORKSPACE_SYNC_INCOMPLETE',
+        failures: [{ id: 'request-2' }, { id: 'request-3' }],
+      }, 422))
+      .mockResolvedValueOnce(jsonResponse(workspaceFixture()));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await getWarehouseWorkspace('warehouse-1');
+
+    expect(result.requests).toHaveLength(1);
+    expect(result.rwms_refresh_warning).toContain('2');
+    expect(fetchMock.mock.calls.map(([url]) => requestUrl(url))).toEqual([
+      '/api/warehouses/warehouse-1/workspace',
+      '/api/warehouses/warehouse-1/workspace?refresh_rwms=false',
+    ]);
+  });
+
+  it('lists RWMS warehouses and connects one by its canonical identity', async () => {
+    const warehouse = warehouseFixture();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse([{ warehouse_id: warehouse.external_warehouse_id, name: warehouse.name, address: warehouse.address, timezone: warehouse.timezone }]))
+      .mockResolvedValueOnce(jsonResponse(warehouse));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const available = await api.listAvailableWarehouses();
+    const created = await api.createWarehouse({
+      external_warehouse_id: warehouse.external_warehouse_id,
     });
-    const input = {
-      start_date: '2026-08-25',
+
+    expect(available[0]?.address).toBe(warehouse.address);
+    expect(created.id).toBe(warehouse.id);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/warehouses/available');
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/warehouses');
+    expect(bodyAt(fetchMock, 1)).toEqual({
+      external_warehouse_id: warehouse.external_warehouse_id,
+    });
+  });
+});
+
+describe('warehouse-owned catalogs and zones', () => {
+  it('sends zone color and tariffs through the owning warehouse without obsolete routing metadata', async () => {
+    const input = zoneInput();
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      id: 'zone-1',
+      warehouse_id: 'warehouse-1',
+      ...input,
+      version: 1,
+      created_at: '2026-08-28T00:00:00Z',
+      updated_at: '2026-08-28T00:00:00Z',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.createZone('warehouse-1', input);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/warehouses/warehouse-1/zones');
+    expect(bodyAt(fetchMock, 0)).toEqual(input);
+    expect(bodyAt(fetchMock, 0)).not.toHaveProperty('code');
+    expect(bodyAt(fetchMock, 0)).not.toHaveProperty('priority');
+  });
+
+  it('uses the active warehouse for drivers, shifts and requests', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ id: 'driver-1' }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'shift-1' }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'request-1' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.createDriver('warehouse-1', {
+      external_worker_id: null,
+      rwms_assignment_mode: 'WAREHOUSE_DRIVERS',
+      active: true,
+      notes: '',
+    });
+    await api.createShift('warehouse-1', {
+      driver_id: 'driver-1',
+      vehicle_id: 'vehicle-1',
+      date_from: '2026-08-01',
+      date_to: '2026-08-31',
+      start_time: '08:00',
+      end_time: '20:00',
+      break_minutes: 60,
+      active: true,
+    });
+    await api.createRequest('warehouse-1', {
+      type: 'DELIVERY',
+      name: 'Обязательная доставка',
+      address_label: 'Невский проспект, 1',
+      latitude: 59.93,
+      longitude: 30.32,
+      quantity: 2,
+      cargo_length_mm: null,
+      cargo_width_mm: null,
+      cargo_height_mm: null,
+      cargo_weight_kg: null,
+      service_minutes: 30,
+      priority: 10,
+      mandatory: true,
+      status: 'READY',
+      split_allowed: true,
+      notes: '',
+      date_options: [{ date: '2026-08-30', priority: 1, window_start: '12:00', window_end: '15:00', is_hard: true }],
+    });
+
+    expect(fetchMock.mock.calls.map(([url]) => requestUrl(url))).toEqual([
+      '/api/warehouses/warehouse-1/drivers',
+      '/api/warehouses/warehouse-1/shifts',
+      '/api/warehouses/warehouse-1/requests',
+    ]);
+    expect(bodyAt(fetchMock, 1)).toMatchObject({ date_from: '2026-08-01', date_to: '2026-08-31' });
+    expect(bodyAt(fetchMock, 2)).toMatchObject({ type: 'DELIVERY', mandatory: true });
+  });
+});
+
+describe('planning lifecycle', () => {
+  it('uses warehouse endpoints for generated load and day closing', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ warehouse_id: 'warehouse-1', created_requests: 8 }))
+      .mockResolvedValueOnce(jsonResponse({ warehouse_id: 'warehouse-1', date: '2026-08-30', accepting_requests: false }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.generateWorkload('warehouse-1', {
+      start_date: '2026-08-30',
       days: 3,
       deliveries_per_day: 4,
       pickups_per_day: 4,
-      alternative_dates_count: 2,
+      alternative_dates_count: 1,
       cargo_length_mm: 6000,
       cargo_width_mm: 2400,
       cargo_height_mm: 2400,
-      cargo_weight_kg: 2500,
-      seed: 99,
-    };
-
-    const result = await api.generateWorkload('scenario-id', input);
-
-    expect(mock.mock.calls[0]?.[0]).toBe('/api/scenarios/scenario-id/generate-workload');
-    expect(mock.mock.calls[0]?.[1]?.method).toBe('POST');
-    expect(requestBody(mock, 0)).toEqual(input);
-    expect(result.created_requests).toBe(24);
-    expect(result.replaced_requests).toBe(0);
-    expect(result.deleted_plans).toBe(0);
-    expect(result.daily_counts).toHaveLength(3);
-  });
-
-  it('deletes generator-owned workload and plans for the requested planning date', async () => {
-    const mock = fetchMock({ scenario_id: 'scenario-id', date: '2026-08-25', deleted_requests: 8, deleted_plans: 2 });
-
-    const result = await api.deleteGeneratedWorkload('scenario-id', '2026-08-25');
-
-    expect(mock.mock.calls[0]?.[0]).toBe('/api/scenarios/scenario-id/generated-workload?date=2026-08-25');
-    expect(mock.mock.calls[0]?.[1]?.method).toBe('DELETE');
-    expect(mock.mock.calls[0]?.[1]?.body).toBeUndefined();
-    expect(result).toEqual({ scenario_id: 'scenario-id', date: '2026-08-25', deleted_requests: 8, deleted_plans: 2 });
-  });
-
-  it('saves dispatcher planning details atomically and sends explicit subtask quantities', async () => {
-    const mock = fetchMock({}, {});
-
-    await api.saveRequestPlanningDetails('request-id', {
-      date: '2026-08-25',
-      window_start: '09:00',
-      window_end: '15:00',
-      is_hard: true,
-      trailer_access_allowed: false,
-      include_driver_passport_in_notification: true,
-      contact_name: 'Иван Петров',
-      contact_phone: '+79991234567',
+      cargo_weight_kg: 1200,
+      seed: 42,
     });
-    await api.splitRequest('request-id', [1, 1]);
+    await api.closePlanningDay('warehouse-1', '2026-08-30');
 
-    expect(mock.mock.calls[0]?.[0]).toBe('/api/requests/request-id/planning-details');
-    expect(requestBody(mock, 0)).toEqual({
-      date: '2026-08-25',
-      window_start: '09:00',
-      window_end: '15:00',
-      is_hard: true,
-      trailer_access_allowed: false,
-      include_driver_passport_in_notification: true,
-      contact_name: 'Иван Петров',
-      contact_phone: '+79991234567',
-    });
-    expect(mock.mock.calls[1]?.[0]).toBe('/api/requests/request-id/split');
-    expect(requestBody(mock, 1)).toEqual({ part_quantities: [1, 1] });
+    expect(fetchMock.mock.calls.map(([url]) => requestUrl(url))).toEqual([
+      '/api/warehouses/warehouse-1/generate-workload',
+      '/api/warehouses/warehouse-1/planning-days/2026-08-30/close',
+    ]);
   });
 
-  it('nests manual-change payload but leaves dedicated simulation bodies raw', async () => {
+  it('approves a plan and resets pre-approval manual changes with version fencing', async () => {
     const workspace = workspaceFixture();
-    const currentPlan = normalizeRoutePlan(rawPlan, workspace);
-    const mock = fetchMock(rawPlan, rawPlan, rawPlan);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(rawPlan({ status: 'CONFIRMED', version: 5 })))
+      .mockResolvedValueOnce(jsonResponse(rawPlan({ version: 6, manually_changed: false })));
+    vi.stubGlobal('fetch', fetchMock);
 
-    await api.manualChange('plan-id', {
-      expected_version: 1,
-      change_type: 'MOVE_TASK',
-      task_id: 'task-id',
-      target_cycle_id: 'cycle-id',
-      target_sequence: 2,
-      changed_by: 'local-admin',
-      reason: 'Проверка контракта',
-    }, workspace, currentPlan);
-    await api.applyDelay('plan-id', {
-      expected_version: 1,
-      driver_shift_id: 'shift-id',
-      effective_at: '2026-08-25T08:00:00Z',
-      delay_minutes: 20,
-      reason: 'Пробка',
-      persist: false,
-    }, workspace, currentPlan);
-    await api.markDriverUnavailable('plan-id', {
-      expected_version: 1,
-      driver_shift_id: 'shift-id',
-      effective_at: '2026-08-25T08:00:00Z',
-      reason: 'Недоступен',
-      persist: false,
-    }, workspace, currentPlan);
+    const approved = await api.confirmPlan('plan-1', 4, true, workspace);
+    const reset = await api.resetManualChanges('plan-1', 5, workspace);
 
-    expect(requestBody(mock, 0)).toEqual({
-      expected_version: 1,
-      change_type: 'MOVE_TASK',
-      changed_by: 'local-admin',
-      reason: 'Проверка контракта',
-      payload: { task_id: 'task-id', target_cycle_id: 'cycle-id', target_sequence: 2 },
-    });
-    expect(requestBody(mock, 1)).toEqual({
-      expected_version: 1,
-      driver_shift_id: 'shift-id',
-      effective_at: '2026-08-25T08:00:00Z',
-      delay_minutes: 20,
-      reason: 'Пробка',
-      persist: false,
-    });
-    expect(mock.mock.calls[2]?.[0]).toBe('/api/plans/plan-id/simulation/driver-unavailable');
-    expect(requestBody(mock, 2)).toEqual({
-      expected_version: 1,
-      driver_shift_id: 'shift-id',
-      effective_at: '2026-08-25T08:00:00Z',
-      reason: 'Недоступен',
-      persist: false,
-    });
+    expect(approved.status).toBe('CONFIRMED');
+    expect(reset.manually_changed).toBe(false);
+    expect(fetchMock.mock.calls.map(([url]) => requestUrl(url))).toEqual([
+      '/api/plans/plan-1/confirm',
+      '/api/plans/plan-1/manual-changes/reset',
+    ]);
+    expect(bodyAt(fetchMock, 0)).toEqual({ expected_version: 4, accept_warnings: true });
+    expect(bodyAt(fetchMock, 1)).toEqual({ expected_version: 5 });
   });
 
-  it('turns FastAPI validation arrays into a readable error instead of rendering objects', async () => {
-    errorFetch(422, { detail: [{ loc: ['body', 'document'], msg: 'Field required', type: 'missing' }] });
-    const failure = await api.importScenario({}).catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(ApiError);
-    expect((failure as ApiError).message).toBe('Field required');
-  });
+  it('sends an explicit empty-positioning reason when a support route is approved', async () => {
+    const workspace = workspaceFixture();
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(rawPlan({
+      status: 'CONFIRMED',
+      version: 5,
+    })));
+    vi.stubGlobal('fetch', fetchMock);
 
-  it('sends explicit RWMS warehouse and driver linkage fields without renaming them', async () => {
-    const warehouseId = '35b8738c-d405-4c42-ac2b-e9f4a26d7c19';
-    const workerId = '2de75998-c1f9-4d0f-b5d0-59bcb75cf103';
-    const mock = fetchMock({}, {});
-
-    await api.updateWarehouse('warehouse-id', { external_warehouse_id: warehouseId });
-    await api.updateDriver('driver-id', { external_worker_id: workerId });
-
-    expect(mock.mock.calls[0]?.[0]).toBe('/api/warehouses/warehouse-id');
-    expect(requestBody(mock, 0)).toEqual({ external_warehouse_id: warehouseId });
-    expect(mock.mock.calls[1]?.[0]).toBe('/api/drivers/driver-id');
-    expect(requestBody(mock, 1)).toEqual({ external_worker_id: workerId });
-  });
-
-  it('uses the selected date for RWMS sync and the exact plan version for apply', async () => {
-    const mock = fetchMock(
-      { imported: 2, updated: 1, skipped: 3, failures: [] },
-      {
-        applied: [{ orderId: '57ca2992-702f-4cc7-b478-6a2c64146241', documentId: '41b0e409-53d2-40af-a68c-d4de750005cc', replayed: false }],
-        rejected: [{ orderId: '927a16a4-b40c-42a6-8f4d-d3b08eb0a1df', code: 'ORDER_VERSION_CONFLICT', message: 'order changed' }],
-      },
-      {
-        plan_id: 'plan-id',
-        plan_version: 7,
-        tasks: [{
-          task_id: 'task-id',
-          request_id: 'request-id',
-          order_id: '57ca2992-702f-4cc7-b478-6a2c64146241',
-          document_id: '41b0e409-53d2-40af-a68c-d4de750005cc',
-          driver_audience_mode: 'WAREHOUSE_DRIVERS',
-          driver_worker_id: null,
-          driver_name: 'Свободная доставка',
-          task_state: 'SCHEDULED',
-        }],
-      },
+    await api.confirmPlan(
+      'plan-1',
+      4,
+      true,
+      workspace,
+      'Нет подходящего попутного груза',
     );
 
-    const sync = await api.syncRwmsRequests('scenario-id', {
-      warehouse_id: '35b8738c-d405-4c42-ac2b-e9f4a26d7c19',
-      date_from: '2026-08-25',
-      date_to: '2026-08-25',
+    expect(bodyAt(fetchMock, 0)).toEqual({
+      expected_version: 4,
+      accept_warnings: true,
+      empty_positioning_reason: 'Нет подходящего попутного груза',
     });
-    const applied = await api.applyPlanToRwms('plan-id', 7);
-    const statuses = await api.getPlanRwmsStatus('plan-id', 7);
+  });
 
-    expect(mock.mock.calls[0]?.[0]).toBe('/api/scenarios/scenario-id/rwms/sync');
-    expect(requestBody(mock, 0)).toEqual({
-      warehouse_id: '35b8738c-d405-4c42-ac2b-e9f4a26d7c19',
-      date_from: '2026-08-25',
-      date_to: '2026-08-25',
+  it('renders a machine-readable nearest option as a local, readable date', () => {
+    const workspace = workspaceFixture();
+    const plan = normalizeRoutePlan(rawPlan({
+      unassigned_tasks: [{
+        task_id: 'task-1',
+        reason_codes: ['TIME_WINDOW_CONFLICT'],
+        descriptions_ru: ['Окно не помещается в смену'],
+        nearest_option: { possible_at: '2026-08-30T18:19:55+03:00' },
+        recommendation_ru: 'Расширьте окно',
+      }],
+    }) as never, workspace);
+
+    expect(plan.unassigned[0]?.closest_option).toContain('Можно назначить');
+    expect(plan.unassigned[0]?.closest_option).toContain('18:19');
+    expect(plan.unassigned[0]?.closest_option).not.toContain('possible_at');
+  });
+
+  it('keeps support-warehouse execution facts and exact resource names in the day plan', () => {
+    const supportWarehouse = warehouseFixture({
+      id: 'support-local',
+      external_warehouse_id: '22222222-2222-4222-8222-222222222222',
+      name: 'Опорный склад',
     });
-    expect(sync).toEqual({ imported: 2, updated: 1, skipped: 3, failures: [] });
-    expect(mock.mock.calls[1]?.[0]).toBe('/api/plans/plan-id/rwms/apply');
-    expect(requestBody(mock, 1)).toEqual({
-      expected_version: 7,
-      publish_unassigned_task_ids: [],
+    const workspace = workspaceFixture({
+      warehouses: [warehouseFixture(), supportWarehouse],
+      drivers: [],
+      vehicles: [],
+      shifts: [],
     });
-    expect(applied).toEqual({
-      applied: [{ order_id: '57ca2992-702f-4cc7-b478-6a2c64146241', document_id: '41b0e409-53d2-40af-a68c-d4de750005cc', replayed: false }],
-      rejected: [{ order_id: '927a16a4-b40c-42a6-8f4d-d3b08eb0a1df', code: 'ORDER_VERSION_CONFLICT', message: 'order changed' }],
+    const plan = normalizeRoutePlan(rawPlan({
+      cycles: [{
+        id: 'cycle-support',
+        driver_shift_id: 'shift-support',
+        sequence: 1,
+        planned_start: '2026-08-30T09:00:00Z',
+        planned_finish: '2026-08-30T12:00:00Z',
+        total_distance_meters: 100_000,
+        total_travel_seconds: 7_200,
+        total_service_seconds: 1_800,
+        empty_distance_meters: 0,
+        detour_seconds: 0,
+        score: 1,
+        locked: false,
+        manually_changed: false,
+        metrics: {
+          execution_mode: 'CROSS_WAREHOUSE_SERVICE',
+          service_warehouse_id: workspace.warehouse.external_warehouse_id,
+          resource_origin_warehouse_id: supportWarehouse.external_warehouse_id,
+          support_warehouse_link_id: '33333333-3333-4333-8333-333333333333',
+          driver_id: '44444444-4444-4444-8444-444444444444',
+          driver_worker_id: '55555555-5555-4555-8555-555555555555',
+          driver_name: 'Петров Алексей',
+          vehicle_id: '66666666-6666-4666-8666-666666666666',
+          vehicle_name: 'МАЗ поддержки',
+          vehicle_registration_number: 'А456ВС',
+          available_at_served: '2026-08-30T09:00:00Z',
+          latest_served_finish: '2026-08-30T15:00:00Z',
+          inbound_travel_minutes: 180,
+          return_travel_minutes: 190,
+          inbound_distance_meters: 185_000,
+          return_distance_meters: 195_000,
+          positioning_distance_meters: 380_000,
+          positioning_outbound_geometry: {
+            type: 'LineString',
+            coordinates: [[30, 59], [30.5, 58.7], [31, 58]],
+          },
+          positioning_return_geometry: {
+            type: 'LineString',
+            coordinates: [[31, 58], [30.4, 58.8], [30, 59]],
+          },
+          available_transfer_cabin_capacity: 2,
+          trailer_available: true,
+          outbound_positioning_empty: true,
+          empty_positioning_reason_required: true,
+          returns_to_origin: true,
+          changes_operational_warehouse: false,
+          reason_codes: ['NO_LOCAL_DRIVER', 'SUPPORT_DRIVER_AVAILABLE'],
+        },
+        stops: [],
+        segments: [],
+        explanations: [{ summary_ru: 'Выбран опорный склад' }],
+      }],
+    }) as never, workspace);
+
+    expect(plan.driver_routes[0]).toMatchObject({
+      driver_name: 'Петров Алексей',
+      vehicle_name: 'МАЗ поддержки',
+      registration_number: 'А456ВС',
+      cross_warehouse_service: {
+        resource_origin_warehouse_name: 'Опорный склад',
+        returns_to_origin: true,
+        changes_operational_warehouse: false,
+      },
     });
-    expect(mock.mock.calls[2]?.[0]).toBe('/api/plans/plan-id/rwms/status?expected_version=7');
-    expect(mock.mock.calls[2]?.[1]?.body).toBeUndefined();
-    expect(statuses.tasks[0]).toMatchObject({
-      task_id: 'task-id',
-      driver_audience_mode: 'WAREHOUSE_DRIVERS',
-      driver_worker_id: null,
-    });
+    expect(plan.driver_routes[0]?.cycles[0]?.cross_warehouse_service?.reason_codes).toEqual([
+      'NO_LOCAL_DRIVER',
+      'SUPPORT_DRIVER_AVAILABLE',
+    ]);
+    expect(
+      plan.driver_routes[0]?.cycles[0]?.cross_warehouse_service
+        ?.positioning_outbound_geometry?.geometry.coordinates,
+    ).toHaveLength(3);
+    expect(
+      plan.driver_routes[0]?.cycles[0]?.cross_warehouse_service
+        ?.positioning_return_geometry?.geometry.coordinates,
+    ).toHaveLength(3);
+  });
+});
+
+describe('transport errors', () => {
+  it('preserves Problem Details status, code and detail', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      title: 'Склад RWMS не найден',
+      detail: 'Выбранный склад отсутствует в справочнике RWMS',
+      code: 'RWMS_WAREHOUSE_NOT_FOUND',
+    }, 422)));
+
+    const error = await api.createWarehouse({
+      external_warehouse_id: '11111111-1111-4111-8111-111111111111',
+    })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 422, code: 'RWMS_WAREHOUSE_NOT_FOUND' });
+    expect((error as Error).message).toContain('справочнике RWMS');
+  });
+
+  it('ensures the automatic plan through the active warehouse endpoint', async () => {
+    const workspace = workspaceFixture();
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(rawPlan()));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const plan = await api.ensureAutomaticPlan('warehouse-1', '2026-08-30', workspace);
+
+    expect(plan?.warehouse_id).toBe('warehouse-1');
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/warehouses/warehouse-1/plans/ensure?date=2026-08-30');
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).method).toBe('POST');
   });
 });

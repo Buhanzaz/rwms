@@ -22,7 +22,7 @@ from app.planner import (
     PlanningInput,
     PlanningResult,
     PlanningSettings,
-    RelationType,
+    PlanningTask,
     RequestDateOption,
     RequestStatus,
     RouteCycle,
@@ -34,8 +34,6 @@ from app.planner import (
     ValidationWarningCode,
     Vehicle,
     Warehouse,
-    ZoneRelation,
-    ZoneSnapshot,
     split_request,
 )
 from app.routing import GeoPoint, MockRoutingProvider, RoutingSettings
@@ -97,20 +95,8 @@ def planning_input(
     requests: tuple[LogisticsRequest, ...],
     *,
     shift_end: datetime | None = None,
-    preferred_group: str | None = "WEST",
-    relations: tuple[ZoneRelation, ...] | None = None,
     shifts: tuple[DriverShift, ...] | None = None,
 ) -> PlanningInput:
-    default_relations = (
-        ZoneRelation(
-            "z1",
-            "z2",
-            RelationType.ADJACENT,
-            max_detour_minutes=120,
-            max_detour_ratio=5,
-            is_bidirectional=True,
-        ),
-    )
     vehicle = Vehicle("vehicle-1", "А123БВ", capacity=2)
     default_shifts = (
         DriverShift(
@@ -120,19 +106,13 @@ def planning_input(
             vehicle.id,
             aware(8),
             shift_end or aware(20),
-            preferred_group,
         ),
     )
     return PlanningInput(
-        scenario_id="scenario-1",
+        warehouse_id="warehouse-1",
         planning_date=PLANNING_DATE,
         warehouse=Warehouse("warehouse-1", "Склад", GeoPoint(37.6, 55.7, True), 5, 5, 5),
         requests=requests,
-        zones=(
-            ZoneSnapshot("z1", "Z1", "WEST"),
-            ZoneSnapshot("z2", "Z2", "EAST"),
-        ),
-        zone_relations=default_relations if relations is None else relations,
         shifts=default_shifts if shifts is None else shifts,
         vehicles=(vehicle,),
     )
@@ -157,7 +137,6 @@ def three_shift_input(
             vehicles[index - 1].id,
             aware(8),
             shift_ends[index - 1] if shift_ends is not None else shift_end or aware(20),
-            ("WEST", "EAST", "REGION")[index - 1],
         )
         for index in range(1, 4)
     )
@@ -178,6 +157,24 @@ def run_plan(
             NullProgressPublisher(),
         )
     )
+
+
+class PassThroughCandidateEvaluator:
+    """Exercise the exact-route planner branch without changing mock schedules."""
+
+    async def route_candidate(
+        self,
+        cycle: RouteCycle,
+        *,
+        tasks: tuple[PlanningTask, ...],
+        vehicle: Vehicle,
+        shift: DriverShift,
+        settings: PlanningSettings,
+    ) -> RouteCycle:
+        """Return the already feasible mock candidate unchanged."""
+
+        del tasks, vehicle, shift, settings
+        return cycle
 
 
 def customer_stops(cycle: RouteCycle, stop_type: StopType) -> list[RouteStop]:
@@ -259,8 +256,8 @@ def test_two_single_deliveries_are_paired_and_load_never_exceeds_capacity() -> N
     assert cycle.stops[-1].stop_type is StopType.DEPOT_RETURN
 
 
-def test_travel_zone_changes_multi_stop_candidate_grouping() -> None:
-    """Equal-priority CustomerApp work is grouped by its depot travel-time band."""
+def test_travel_zone_band_does_not_change_planning() -> None:
+    """Customer travel bands cannot influence exact road and schedule feasibility."""
 
     def paired_request_ids(result: PlanningResult) -> set[str]:
         paired_cycle = next(
@@ -290,20 +287,20 @@ def test_travel_zone_changes_multi_stop_candidate_grouping() -> None:
     assert not near_pair.unassigned
     assert not regrouped.unassigned
     assert paired_request_ids(near_pair) == {"zone-a", "zone-b"}
-    assert paired_request_ids(regrouped) == {"zone-a", "zone-c"}
+    assert paired_request_ids(regrouped) == paired_request_ids(near_pair)
 
 
-def test_invalid_travel_zone_requires_one_to_four_hours_and_hard_window() -> None:
-    """The pure planner rejects bands that cannot represent a CustomerApp slot."""
+def test_legacy_travel_zone_has_no_upper_routing_limit_but_requires_hard_window() -> None:
+    """A retained display band cannot impose a one-to-four-hour route restriction."""
 
-    with pytest.raises(ValueError, match="between 1 and 4"):
-        RequestDateOption(
-            PLANNING_DATE,
-            window_start=aware(9),
-            window_end=aware(12),
-            is_hard=True,
-            travel_zone_hours=5,
-        )
+    option = RequestDateOption(
+        PLANNING_DATE,
+        window_start=aware(9),
+        window_end=aware(12),
+        is_hard=True,
+        travel_zone_hours=99,
+    )
+    assert option.travel_zone_hours == 99
     with pytest.raises(ValueError, match="complete hard time window"):
         RequestDateOption(
             PLANNING_DATE,
@@ -370,7 +367,7 @@ def test_duplicate_generated_source_is_reported_instead_of_visited_twice() -> No
 
     first = replace(
         request("generated-original", TaskType.DELIVERY, quantity=2),
-        source_key="SIMULATOR_GENERATOR:20260822:2026-08-25:DELIVERY:1",
+        source_key="WAREHOUSE_WORKLOAD_GENERATOR:20260822:2026-08-25:DELIVERY:1",
     )
     repeated = replace(
         first,
@@ -437,6 +434,168 @@ def test_all_deliveries_precede_pickups_in_mixed_cycle() -> None:
     assert all(stop_type is StopType.PICKUP for stop_type in customer_types[first_pickup:])
 
 
+def test_open_day_attaches_pickups_after_single_cabin_delivery() -> None:
+    """Open request intake does not block compatible return work on a delivery cycle."""
+
+    source = replace(
+        planning_input(
+            (
+                request("single-delivery", TaskType.DELIVERY, lon=37.70),
+                request("return-1", TaskType.PICKUP, lon=37.705),
+                request("return-2", TaskType.PICKUP, lon=37.71),
+            )
+        ),
+        accepting_requests=True,
+    )
+
+    result = run_plan(
+        source,
+        PlanningSettings(seed=17, max_detour_minutes=120, max_detour_ratio=5),
+    )
+
+    assert not result.unassigned
+    assert len(result.cycles) == 1
+    assert [stop.request_id for stop in customer_stops(result.cycles[0], StopType.DELIVERY)] == [
+        "single-delivery"
+    ]
+    assert [
+        stop.request_id for stop in customer_stops(result.cycles[0], StopType.PICKUP)
+    ] == ["return-1", "return-2"]
+    assert [stop.load_after for stop in result.cycles[0].stops] == [1, 0, 1, 2, 0]
+
+
+def test_open_day_builds_pickup_only_cycle() -> None:
+    """Pickup-only work remains plannable while new delivery requests are accepted."""
+
+    source = replace(
+        planning_input(
+            (
+                request("return-1", TaskType.PICKUP, lon=37.705),
+                request("return-2", TaskType.PICKUP, lon=37.71),
+            )
+        ),
+        accepting_requests=True,
+    )
+
+    result = run_plan(
+        source,
+        PlanningSettings(seed=17, max_detour_minutes=120, max_detour_ratio=5),
+    )
+
+    assert not result.unassigned
+    assert len(result.cycles) == 1
+    assert not customer_stops(result.cycles[0], StopType.DELIVERY)
+    assert [
+        stop.request_id for stop in customer_stops(result.cycles[0], StopType.PICKUP)
+    ] == ["return-1", "return-2"]
+    assert [stop.load_after for stop in result.cycles[0].stops] == [0, 1, 2, 0]
+
+
+def test_open_day_attaches_pickups_after_full_two_cabin_outbound_load() -> None:
+    """Selection prefers a full two-delivery and two-pickup compatible cycle."""
+
+    source = replace(
+        planning_input(
+            (
+                request("delivery-1", TaskType.DELIVERY, lon=37.70),
+                request("delivery-2", TaskType.DELIVERY, lon=37.71),
+                request("return-1", TaskType.PICKUP, lon=37.705),
+                request("return-2", TaskType.PICKUP, lon=37.70),
+            )
+        ),
+        accepting_requests=True,
+    )
+
+    result = run_plan(
+        source,
+        PlanningSettings(seed=17, max_detour_minutes=120, max_detour_ratio=5),
+    )
+
+    assert not result.unassigned
+    assert len(result.cycles) == 1
+    assert [stop.load_after for stop in result.cycles[0].stops] == [2, 1, 0, 1, 2, 0]
+
+
+def test_open_day_quantity_two_delivery_to_one_address_unlocks_return_pickups() -> None:
+    """Two cabins for one address are a full outbound load, not a singleton trip."""
+
+    source = replace(
+        planning_input(
+            (
+                request("delivery-two", TaskType.DELIVERY, quantity=2, lon=37.70),
+                request("return-1", TaskType.PICKUP, lon=37.705),
+                request("return-2", TaskType.PICKUP, lon=37.71),
+            )
+        ),
+        accepting_requests=True,
+    )
+
+    result = run_plan(
+        source,
+        PlanningSettings(seed=17, max_detour_minutes=120, max_detour_ratio=5),
+    )
+
+    assert not result.unassigned
+    assert len(result.cycles) == 1
+    assert [stop.load_after for stop in result.cycles[0].stops] == [2, 0, 1, 2, 0]
+
+
+def test_open_day_builds_later_mixed_cycle_only_after_depot_turnaround() -> None:
+    """A later full cycle starts after the prior backhaul is unloaded at the depot."""
+
+    settings = PlanningSettings(seed=17, max_detour_minutes=120, max_detour_ratio=5)
+    source = replace(
+        planning_input(
+            (
+                request("delivery-a", TaskType.DELIVERY, quantity=2, lon=37.70),
+                request("delivery-b", TaskType.DELIVERY, quantity=2, lon=37.72),
+                request("return-a", TaskType.PICKUP, quantity=2, lon=37.705),
+                request("return-b", TaskType.PICKUP, quantity=2, lon=37.725),
+            )
+        ),
+        accepting_requests=True,
+    )
+
+    result = run_plan(source, settings)
+
+    assert not result.unassigned
+    assert len(result.cycles) == 2
+    for cycle in result.cycles:
+        delivered = sum(
+            stop.quantity_delta * -1
+            for stop in customer_stops(cycle, StopType.DELIVERY)
+        )
+        assert delivered == 2
+        assert sum(stop.quantity_delta for stop in customer_stops(cycle, StopType.PICKUP)) == 2
+    for previous, following in pairwise(result.cycles):
+        assert following.planned_start >= previous.planned_finish + timedelta(
+            minutes=(
+                source.warehouse.turnaround_minutes
+                + settings.default_route_buffer_minutes
+            )
+        )
+
+
+def test_closed_day_finalizes_pickups_after_single_cabin_delivery() -> None:
+    """Closing acceptance permits the best return work even after a singleton delivery."""
+
+    result = run_plan(
+        planning_input(
+            (
+                request("single-delivery", TaskType.DELIVERY, lon=37.70),
+                request("return-1", TaskType.PICKUP, lon=37.705),
+                request("return-2", TaskType.PICKUP, lon=37.71),
+            )
+        ),
+        PlanningSettings(seed=17, max_detour_minutes=120, max_detour_ratio=5),
+    )
+
+    assert not result.unassigned
+    assert len(result.cycles) == 1
+    assert len(customer_stops(result.cycles[0], StopType.DELIVERY)) == 1
+    assert len(customer_stops(result.cycles[0], StopType.PICKUP)) == 2
+
+
 def test_feasible_delivery_and_pickup_pairs_prefer_one_combined_cycle() -> None:
     """Candidate ranking must not penalize a bundle for aggregate date counts."""
 
@@ -458,16 +617,6 @@ def test_feasible_delivery_and_pickup_pairs_prefer_one_combined_cycle() -> None:
             ),
         )
 
-    relations = (
-        ZoneRelation(
-            "z1",
-            "z2",
-            RelationType.ADJACENT,
-            max_detour_minutes=35,
-            max_detour_ratio=PlanningSettings().max_detour_ratio,
-            is_bidirectional=True,
-        ),
-    )
     result = run_plan(
         planning_input(
             tuple(
@@ -479,7 +628,6 @@ def test_feasible_delivery_and_pickup_pairs_prefer_one_combined_cycle() -> None:
                     request("p2", TaskType.PICKUP, lon=37.69, zone_id="z1"),
                 )
             ),
-            relations=relations,
         ),
         PlanningSettings(seed=17),
     )
@@ -664,19 +812,27 @@ def test_one_driver_can_run_multiple_mixed_cycles_with_per_cycle_ordering() -> N
 
 
 def test_one_driver_can_receive_multiple_cycles() -> None:
-    result = run_plan(
-        planning_input(
-            tuple(
-                request(f"d{index}", TaskType.DELIVERY, quantity=2, lon=37.7 + index / 100)
-                for index in range(3)
-            )
+    settings = PlanningSettings(seed=17)
+    source = planning_input(
+        tuple(
+            request(f"d{index}", TaskType.DELIVERY, quantity=2, lon=37.7 + index / 100)
+            for index in range(3)
         )
+    )
+    result = run_plan(
+        source,
+        settings,
     )
 
     assert len(result.cycles) == 3
     assert {cycle.driver_shift_id for cycle in result.cycles} == {"shift-1"}
     for previous, following in pairwise(result.cycles):
-        assert previous.planned_finish < following.planned_start
+        assert following.planned_start >= previous.planned_finish + timedelta(
+            minutes=(
+                source.warehouse.turnaround_minutes
+                + settings.default_route_buffer_minutes
+            )
+        )
 
 
 def test_feasible_work_is_consolidated_without_activating_all_three_resources() -> None:
@@ -851,8 +1007,6 @@ def test_delivery_reference_attaches_near_pickup_without_dropping_later_delivery
         vehicles={vehicle.id: vehicle for vehicle in source.vehicles},
         matrix=matrix,
         matrix_index=matrix_index,
-        zones={zone.id: zone for zone in source.zones},
-        relations={},
         settings=settings,
         cycles=delivery_result.cycles,
         task_by_id={task.id: task for task in tasks},
@@ -900,6 +1054,101 @@ def test_delivery_reference_restores_coverage_when_main_search_has_no_candidate(
     assert not result.unassigned
     assert len(result.cycles) == 1
     assert result.cycles[0].task_ids == ("reference-delivery:part:1",)
+
+
+@pytest.mark.parametrize("with_route_evaluator", (False, True))
+def test_delivery_reference_protects_an_earlier_window_from_later_equal_width_work(
+    with_route_evaluator: bool,
+) -> None:
+    """Later equal-width cycles cannot consume a feasible earlier full-load delivery."""
+
+    source = planning_input(
+        (
+            request(
+                "morning-full-load",
+                TaskType.DELIVERY,
+                quantity=2,
+                lon=37.80,
+                window_start=aware(8),
+                window_end=aware(11),
+            ),
+            request(
+                "late-near-full-load",
+                TaskType.DELIVERY,
+                quantity=2,
+                lon=37.61,
+                window_start=aware(11),
+                window_end=aware(14),
+            ),
+            request(
+                "late-far-full-load",
+                TaskType.DELIVERY,
+                quantity=2,
+                lon=38.00,
+                window_start=aware(11),
+                window_end=aware(14),
+            ),
+        ),
+        shift_end=aware(16),
+    )
+    provider = MockRoutingProvider(
+        RoutingSettings(seed=17, deterministic_noise_ratio=0, road_factor=1.1)
+    )
+    planner = HeuristicPlanner(
+        provider,
+        PassThroughCandidateEvaluator() if with_route_evaluator else None,
+    )
+    result = asyncio.run(
+        planner.generate_plan(
+            source,
+            PlanningSettings(seed=17),
+            NullProgressPublisher(),
+        )
+    )
+
+    assert not result.unassigned
+    assert {
+        stop.request_id
+        for cycle in result.cycles
+        for stop in customer_stops(cycle, StopType.DELIVERY)
+    } == {
+        "morning-full-load",
+        "late-near-full-load",
+        "late-far-full-load",
+    }
+    first_delivery = next(
+        stop
+        for cycle in sorted(result.cycles, key=lambda item: item.planned_start)
+        for stop in customer_stops(cycle, StopType.DELIVERY)
+    )
+    assert first_delivery.request_id == "morning-full-load"
+
+
+def test_windowed_delivery_precedes_unbounded_equal_priority_work() -> None:
+    """Missing optional windows sort after bounded work without incomparable values."""
+
+    bounded = request(
+        "bounded",
+        TaskType.DELIVERY,
+        quantity=1,
+        lon=37.75,
+        window_start=aware(8),
+        window_end=aware(11),
+    )
+    unbounded = replace(
+        request("unbounded", TaskType.DELIVERY, quantity=1, lon=37.65),
+        date_options=(RequestDateOption(date=PLANNING_DATE, priority=100),),
+    )
+
+    result = run_plan(planning_input((unbounded, bounded), shift_end=aware(16)))
+
+    assert not result.unassigned
+    first_delivery = next(
+        stop
+        for cycle in sorted(result.cycles, key=lambda item: item.planned_start)
+        for stop in customer_stops(cycle, StopType.DELIVERY)
+    )
+    assert first_delivery.request_id == "bounded"
 
 
 def test_additional_driver_is_activated_when_hard_windows_require_parallel_work() -> None:
@@ -973,6 +1222,38 @@ def test_multi_stop_cycles_are_distributed_between_drivers_for_parallel_windows(
     } == {f"parallel-{index}" for index in range(4)}
 
 
+def test_along_route_delivery_is_inserted_before_a_cross_route_detour() -> None:
+    """Multi-stop ranking uses the latest delivery front, not depot rings alone."""
+
+    result = run_plan(
+        planning_input(
+            (
+                request("east-near", TaskType.DELIVERY, lon=37.70, lat=55.70),
+                request("east-far", TaskType.DELIVERY, lon=37.80, lat=55.70),
+                request("north", TaskType.DELIVERY, lon=37.60, lat=55.82),
+            )
+        )
+    )
+
+    paired_cycle = next(
+        cycle for cycle in result.cycles if len(customer_stops(cycle, StopType.DELIVERY)) == 2
+    )
+    paired_ids = {
+        stop.request_id for stop in customer_stops(paired_cycle, StopType.DELIVERY)
+    }
+    delivery_sequences = [
+        stop.sequence for stop in customer_stops(paired_cycle, StopType.DELIVERY)
+    ]
+
+    assert not result.unassigned
+    assert paired_ids == {"east-near", "east-far"}
+    assert any(
+        leg.from_stop_sequence == delivery_sequences[0]
+        and leg.to_stop_sequence == delivery_sequences[1]
+        for leg in paired_cycle.legs
+    )
+
+
 def test_first_resource_prefers_enough_shift_reserve_for_all_feasible_cycles() -> None:
     """A short shift is not activated first when one long shift can finish all work."""
 
@@ -996,6 +1277,62 @@ def test_first_resource_prefers_enough_shift_reserve_for_all_feasible_cycles() -
     assert len(result.cycles) == 3
     assert len(used_shift_ids) == 1
     assert "shift-1" not in used_shift_ids
+
+
+def test_active_fleet_preserves_the_later_shift_for_work_only_it_can_finish() -> None:
+    """A flexible late vehicle remains free when a shorter active shift fits current work."""
+
+    source = three_shift_input(
+        (
+            request(
+                "parallel-morning-1",
+                TaskType.DELIVERY,
+                quantity=2,
+                lon=37.70,
+                window_end=aware(9),
+            ),
+            request(
+                "parallel-morning-2",
+                TaskType.DELIVERY,
+                quantity=2,
+                lon=37.72,
+                window_end=aware(9),
+            ),
+            request(
+                "afternoon-delivery",
+                TaskType.DELIVERY,
+                quantity=2,
+                lon=37.75,
+                window_start=aware(14),
+                window_end=aware(16),
+            ),
+            request(
+                "late-return",
+                TaskType.PICKUP,
+                quantity=2,
+                lon=38.00,
+                window_start=aware(17, 50),
+                window_end=aware(18),
+            ),
+        ),
+        shift_ends=(aware(18), aware(20), aware(20)),
+    )
+    source = replace(
+        source,
+        shifts=(source.shifts[0], source.shifts[1], replace(source.shifts[2], active=False)),
+    )
+
+    result = run_plan(source)
+
+    assert not result.unassigned
+    afternoon_cycle = next(
+        cycle for cycle in result.cycles if "afternoon-delivery:part:1" in cycle.task_ids
+    )
+    late_cycle = next(cycle for cycle in result.cycles if "late-return:part:1" in cycle.task_ids)
+    assert afternoon_cycle.driver_shift_id == "shift-1"
+    assert late_cycle.driver_shift_id == "shift-2"
+    assert late_cycle.planned_finish > source.shifts[0].end_at
+    assert late_cycle.planned_finish <= source.shifts[1].end_at
 
 
 def test_driver_workload_can_activate_a_second_shift_before_the_hard_end() -> None:
@@ -1037,7 +1374,7 @@ def test_driver_workload_can_activate_a_second_shift_before_the_hard_end() -> No
     )
 
 
-def test_driver_route_group_is_soft_and_cross_group_pickup_can_be_on_return() -> None:
+def test_different_zone_ids_do_not_block_pickup_on_the_return_leg() -> None:
     settings = PlanningSettings(seed=17, max_detour_minutes=240, max_detour_ratio=10)
     result = run_plan(
         planning_input(
@@ -1045,8 +1382,6 @@ def test_driver_route_group_is_soft_and_cross_group_pickup_can_be_on_return() ->
                 request("east-delivery", TaskType.DELIVERY, lon=38.2, zone_id="z2"),
                 request("west-pickup", TaskType.PICKUP, lon=37.9, zone_id="z1"),
             ),
-            preferred_group="NORTH",
-            relations=(),
         ),
         settings,
     )
@@ -1058,26 +1393,6 @@ def test_driver_route_group_is_soft_and_cross_group_pickup_can_be_on_return() ->
         if customer_stops(cycle, StopType.DELIVERY) and customer_stops(cycle, StopType.PICKUP)
     ]
     assert mixed
-    assert ValidationWarningCode.CROSS_ROUTE_GROUP in mixed[0].warnings
-
-
-def test_blocked_transition_prevents_mixed_cycle() -> None:
-    blocked = ZoneRelation("z1", "z2", RelationType.BLOCKED, is_bidirectional=True)
-    result = run_plan(
-        planning_input(
-            (
-                request("delivery", TaskType.DELIVERY, lon=37.8, zone_id="z1"),
-                request("pickup", TaskType.PICKUP, lon=38.5, zone_id="z2"),
-            ),
-            relations=(blocked,),
-        ),
-        PlanningSettings(seed=17),
-    )
-
-    assert not any(
-        customer_stops(cycle, StopType.DELIVERY) and customer_stops(cycle, StopType.PICKUP)
-        for cycle in result.cycles
-    )
 
 
 def test_large_detour_forces_a_separate_pickup_cycle() -> None:
@@ -1089,7 +1404,6 @@ def test_large_detour_forces_a_separate_pickup_cycle() -> None:
                 request("delivery", TaskType.DELIVERY, lon=37.8, zone_id="z1"),
                 request("pickup", TaskType.PICKUP, lon=38.5, zone_id="z1"),
             ),
-            relations=(),
         ),
         PlanningSettings(seed=17, max_detour_minutes=1, max_detour_ratio=0.01),
     )
@@ -1328,7 +1642,6 @@ def test_candidate_evaluations_stay_bounded_across_driver_shifts() -> None:
             vehicles[index].id,
             aware(8),
             aware(20),
-            ("WEST", "EAST", "REGION")[index],
         )
         for index in range(3)
     )

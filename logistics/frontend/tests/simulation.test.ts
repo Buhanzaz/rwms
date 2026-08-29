@@ -6,16 +6,16 @@ import { deriveSimulationRouteLayers } from '../src/simulation/route-layers';
 
 function planFixture(): RoutePlan {
   return {
-    id: 'plan-1', scenario_id: 'scenario-1', warehouse_id: 'warehouse-1', date: '2026-08-25', version: 1,
+    id: 'plan-1', warehouse_id: 'warehouse-1', date: '2026-08-25', version: 1,
     status: 'GENERATED', score: 10, created_at: '2026-08-24T00:00:00Z', updated_at: '2026-08-24T00:00:00Z',
-    metrics: { ...EMPTY_METRICS }, unassigned: [],
+    metrics: { ...EMPTY_METRICS }, unassigned: [], manually_changed: false,
     driver_routes: [{
-      driver_shift_id: 'shift-1', shift_start_at: '2026-08-25T04:00:00Z', shift_end_at: '2026-08-25T17:00:00Z', driver_id: 'driver-1', driver_name: 'Водитель 1', vehicle_id: 'vehicle-1', vehicle_name: 'МАЗ', registration_number: 'А123БВ', preferred_route_group: 'WEST', metrics: { ...EMPTY_METRICS },
+      driver_shift_id: 'shift-1', shift_start_at: '2026-08-25T04:00:00Z', shift_end_at: '2026-08-25T17:00:00Z', driver_id: 'driver-1', driver_name: 'Водитель 1', vehicle_id: 'vehicle-1', vehicle_name: 'МАЗ', registration_number: 'А123БВ', metrics: { ...EMPTY_METRICS },
       cycles: [{
         id: 'cycle-1', route_plan_id: 'plan-1', driver_shift_id: 'shift-1', sequence: 1,
         planned_start: '2026-08-25T05:00:00Z', planned_finish: '2026-08-25T07:30:00Z', total_distance_meters: 10000,
         total_travel_seconds: 3600, total_service_seconds: 5400, empty_distance_meters: 4000, detour_seconds: 0, score: 10, locked: false,
-        explanation: ['Совместимые окна'], warnings: [],
+        explanation: ['Совместимые окна'], warnings: [], manually_changed: false,
         stops: [
           { id: 'stop-depot-start', route_cycle_id: 'cycle-1', sequence: 0, task_id: null, stop_type: 'DEPOT_LOAD', planned_arrival: '2026-08-25T05:00:00Z', planned_departure: '2026-08-25T05:30:00Z', service_seconds: 1800, quantity_delta: 2, load_before: 0, load_after: 2, latitude: 55.75, longitude: 37.6, label: 'Склад' },
           { id: 'stop-delivery', route_cycle_id: 'cycle-1', sequence: 1, task_id: 'task-1', stop_type: 'DELIVERY', planned_arrival: '2026-08-25T06:00:00Z', planned_departure: '2026-08-25T06:15:00Z', service_seconds: 900, quantity_delta: -1, load_before: 2, load_after: 1, latitude: 55.75, longitude: 37.63, label: 'Москва, Тверская улица, 10' },

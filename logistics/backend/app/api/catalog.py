@@ -1,37 +1,51 @@
-"""REST endpoints for depots, zones, resources, shifts, and logistics requests."""
+"""REST endpoints for warehouse workspaces, zones, resources, and requests."""
 
+from datetime import date, datetime, timedelta
+from typing import Annotated
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Query, Response, status
+from sqlalchemy import select
 
-from app.api.dependencies import SessionDep
+from app.api.dependencies import (
+    CapacityRwmsClientDep,
+    PlannerDep,
+    RoadSnapperDep,
+    SessionDep,
+    SettingsDep,
+)
+from app.api.geocoding import GeocodingClientDep
 from app.api.serializers import request_read, zone_read
+from app.errors import ApiError
+from app.integrations.rwms_sync import refresh_warehouse_directory, refresh_warehouse_requests
 from app.models import (
     Driver,
     DriverShift,
+    LogisticsRequest,
     RequestDateOption,
     Trailer,
     Vehicle,
-    VehicleLoadProfile,
     Warehouse,
     Zone,
-    ZoneRelation,
 )
 from app.repositories import get_required
 from app.schemas.domain import (
+    AvailableDriverRead,
+    AvailableWarehouseRead,
     DriverCreate,
     DriverRead,
     DriverUpdate,
     LogisticsRequestCreate,
     LogisticsRequestRead,
     LogisticsRequestUpdate,
-    ReclassificationResult,
     RequestDateOptionInput,
     RequestDateOptionRead,
     RequestDateOptionUpdate,
     RequestPlanningDetailsInput,
     RequestScheduleInput,
     RequestTaskSplitInput,
+    RwmsWarehouseIdentity,
     ShiftCreate,
     ShiftRead,
     ShiftUpdate,
@@ -40,48 +54,206 @@ from app.schemas.domain import (
     TrailerUpdate,
     VehicleConfigurationCreate,
     VehicleConfigurationUpdate,
-    VehicleCreate,
-    VehicleLoadProfileCreate,
-    VehicleLoadProfileRead,
-    VehicleLoadProfileUpdate,
     VehicleRead,
     VehicleUpdate,
     WarehouseCreate,
     WarehouseRead,
     WarehouseUpdate,
+    WarehouseWorkspaceRead,
+    WorkloadDeletionResult,
+    WorkloadGenerationResult,
+    WorkloadGeneratorInput,
     ZoneCreate,
     ZoneCutoutRead,
     ZoneCutoutRequest,
     ZoneLockRequest,
     ZoneRead,
-    ZoneRelationCreate,
-    ZoneRelationRead,
-    ZoneRelationUpdate,
     ZoneUpdate,
 )
 from app.services import catalog as service
+from app.services.auto_planning import generate_missing_draft_plans
+from app.services.capacity_mutations import publish_capacity_after_mutation
+from app.services.capacity_projection import publish_warehouse_capacity
+from app.services.workload_generator import (
+    GENERATOR_SOURCE_SYSTEM,
+    delete_generated_workload,
+    generate_warehouse_workload,
+)
 
 router = APIRouter(tags=["catalog"])
 
 
-@router.get("/scenarios/{scenario_id}/warehouses", response_model=list[WarehouseRead])
-async def list_warehouses(scenario_id: UUID, session: SessionDep) -> object:
-    """List scenario depots."""
+def _warehouse_geocoding_query(identity: RwmsWarehouseIdentity) -> str:
+    """Qualify a canonical warehouse address with its city for forward geocoding."""
 
-    return await service.list_catalog(session, Warehouse, scenario_id)
+    address = (identity.address or "").strip()
+    if not address:
+        raise ApiError(
+            422,
+            "WAREHOUSE_COORDINATES_REQUIRED",
+            "Не заданы координаты для использования склада в логистике",  # noqa: RUF001
+        )
+    city = identity.city.strip()
+    if city and city.casefold() not in address.casefold():
+        return f"{city}, {address}"
+    return address
+
+
+async def _publish_resource_capacity(
+    session: SessionDep,
+    warehouse_id: UUID,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> None:
+    """Delegate one catalog mutation to the shared capacity transaction boundary."""
+
+    await publish_capacity_after_mutation(session, warehouse_id, settings, client)
+
+
+async def _publish_generated_request_capacity(
+    session: SessionDep,
+    request: LogisticsRequest,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> None:
+    """Publish only mutations that alter generator-owned anonymous capacity facts."""
+
+    if request.source_system == GENERATOR_SOURCE_SYSTEM:
+        await publish_capacity_after_mutation(session, request.warehouse_id, settings, client)
+
+
+@router.get("/warehouses", response_model=list[WarehouseRead])
+async def list_warehouses(
+    session: SessionDep,
+    client: CapacityRwmsClientDep,
+) -> list[Warehouse]:
+    """Reconcile and list routing-ready canonical RWMS warehouse workspaces."""
+
+    return await refresh_warehouse_directory(session, client)
+
+
+@router.get("/warehouses/available", response_model=list[AvailableWarehouseRead])
+async def list_available_warehouses(
+    session: SessionDep,
+    client: CapacityRwmsClientDep,
+) -> list[AvailableWarehouseRead]:
+    """List authoritative RWMS warehouse candidates and their local binding state."""
+
+    identities = await client.list_warehouses()
+    await service.reconcile_warehouse_directory(session, identities)
+    local_by_external = {
+        warehouse.external_warehouse_id: warehouse.id
+        for warehouse in await session.scalars(select(Warehouse))
+    }
+    return [
+        AvailableWarehouseRead(
+            warehouse_id=identity.warehouse_id,
+            warehouse_version=identity.warehouse_version,
+            name=identity.name,
+            city=identity.city,
+            address=identity.address,
+            latitude=identity.latitude,
+            longitude=identity.longitude,
+            timezone=identity.timezone,
+            representative=identity.representative,
+            routing_ready=identity.routing_ready,
+            routing_unavailable_reason=(
+                None
+                if identity.routing_ready
+                else "Не заданы координаты для использования склада в логистике"  # noqa: RUF001
+            ),
+            local_warehouse_id=local_by_external.get(identity.warehouse_id),
+        )
+        for identity in identities
+    ]
 
 
 @router.post(
-    "/scenarios/{scenario_id}/warehouses",
+    "/warehouses",
     response_model=WarehouseRead,
     status_code=status.HTTP_201_CREATED,
 )
 async def create_warehouse(
-    scenario_id: UUID, payload: WarehouseCreate, session: SessionDep
+    payload: WarehouseCreate,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+    geocoder: GeocodingClientDep,
 ) -> Warehouse:
-    """Create a scenario depot."""
+    """Bind one RWMS identity, resolving its canonical address when coordinates are absent."""
 
-    return await service.create_warehouse(session, scenario_id, payload)
+    identity = next(
+        (
+            candidate
+            for candidate in await client.list_warehouses()
+            if candidate.warehouse_id == payload.external_warehouse_id
+        ),
+        None,
+    )
+    if identity is None:
+        raise ApiError(422, "RWMS_WAREHOUSE_NOT_FOUND", "RWMS warehouse is not available")
+    resolved = None
+    if not identity.routing_ready:
+        resolved = await geocoder.forward(_warehouse_geocoding_query(identity))
+    entity = await service.create_warehouse(session, payload, identity, resolved)
+    await _publish_resource_capacity(session, entity.id, settings, client)
+    await session.refresh(entity)
+    return entity
+
+
+@router.post(
+    "/warehouses/{warehouse_id}/generate-workload",
+    response_model=WorkloadGenerationResult,
+    status_code=status.HTTP_201_CREATED,
+)
+async def generate_workload(
+    warehouse_id: UUID,
+    payload: WorkloadGeneratorInput,
+    session: SessionDep,
+    snapper: RoadSnapperDep,
+    planner: PlannerDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> WorkloadGenerationResult:
+    """Replace deterministic load for one warehouse and rebuild missing draft plans."""
+
+    result = await generate_warehouse_workload(session, warehouse_id, payload, snapper)
+    runs = await generate_missing_draft_plans(
+        session,
+        planner,
+        warehouse_id,
+        (result.start_date + timedelta(days=offset) for offset in range(payload.days)),
+    )
+    result = result.model_copy(
+        update={
+            "auto_plan_run_ids": [run.id for run in runs],
+            "auto_plan_ids": [run.plan_id for run in runs if run.plan_id is not None],
+        }
+    )
+    if settings.rwms_capacity_publish_enabled:
+        await session.commit()
+        await publish_warehouse_capacity(session, warehouse_id, client)
+    return result
+
+
+@router.delete(
+    "/warehouses/{warehouse_id}/generated-workload",
+    response_model=WorkloadDeletionResult,
+)
+async def delete_workload(
+    warehouse_id: UUID,
+    target_date: Annotated[date, Query(alias="date")],
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> WorkloadDeletionResult:
+    """Delete generated workload and plans for one exact warehouse date."""
+
+    result = await delete_generated_workload(session, warehouse_id, target_date)
+    if settings.rwms_capacity_publish_enabled and result.deleted_requests > 0:
+        await session.commit()
+        await publish_warehouse_capacity(session, warehouse_id, client)
+    return result
 
 
 @router.get("/warehouses/{warehouse_id}", response_model=WarehouseRead)
@@ -91,193 +263,346 @@ async def get_warehouse(warehouse_id: UUID, session: SessionDep) -> Warehouse:
     return await get_required(session, Warehouse, warehouse_id, "warehouse")
 
 
+@router.get("/warehouses/{warehouse_id}/workspace", response_model=WarehouseWorkspaceRead)
+async def get_warehouse_workspace(
+    warehouse_id: UUID,
+    session: SessionDep,
+    planner: PlannerDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+    refresh_rwms: Annotated[bool, Query()] = True,
+) -> WarehouseWorkspaceRead:
+    """Refresh RWMS demand by default, or read persisted state for explicit recovery."""
+
+    warehouse = await service.require_warehouse(session, warehouse_id)
+    if refresh_rwms and settings.rwms_sync_enabled:
+        date_from = datetime.now(ZoneInfo(warehouse.timezone)).date()
+        refresh = await refresh_warehouse_requests(
+            session,
+            warehouse_id,
+            date_from=date_from,
+            date_to=date_from + timedelta(days=30),
+            client=client,
+            planner=planner,
+        )
+        failures = [
+            {
+                "warehouse_id": str(result.warehouse_id),
+                **failure.model_dump(mode="json"),
+            }
+            for result in refresh.warehouses
+            for failure in result.failures
+        ]
+        if failures:
+            await session.commit()
+            raise ApiError(
+                422,
+                "RWMS_WORKSPACE_SYNC_INCOMPLETE",
+                "RWMS workspace refresh contains orders that could not be synchronized",
+                extra={
+                    "date_from": refresh.date_from.isoformat(),
+                    "date_to": refresh.date_to.isoformat(),
+                    "failures": failures,
+                },
+            )
+        warehouse = await service.require_warehouse(session, warehouse_id)
+    warehouses = list(
+        await session.scalars(
+            select(Warehouse)
+            .where(Warehouse.routing_ready.is_(True))
+            .order_by(Warehouse.name)
+        )
+    )
+    zones = list(
+        await session.scalars(
+            select(Zone)
+            .where(Zone.warehouse_id == warehouse_id)
+            .order_by(Zone.name, Zone.id)
+        )
+    )
+    requests = await service.list_requests(session, warehouse_id)
+    return WarehouseWorkspaceRead(
+        warehouse=WarehouseRead.model_validate(warehouse),
+        warehouses=[WarehouseRead.model_validate(item) for item in warehouses],
+        zones=[await zone_read(session, item) for item in zones],
+        drivers=[
+            DriverRead.model_validate(item)
+            for item in await service.list_catalog(session, Driver, warehouse_id)
+        ],
+        vehicles=[
+            VehicleRead.model_validate(item)
+            for item in await service.list_vehicles(session, warehouse_id)
+        ],
+        trailers=[
+            TrailerRead.model_validate(item)
+            for item in await service.list_catalog(session, Trailer, warehouse_id)
+        ],
+        shifts=[
+            ShiftRead.model_validate(item)
+            for item in await service.list_catalog(session, DriverShift, warehouse_id)
+        ],
+        requests=[await request_read(session, item) for item in requests],
+    )
+
+
 @router.patch("/warehouses/{warehouse_id}", response_model=WarehouseRead)
 async def update_warehouse(
-    warehouse_id: UUID, payload: WarehouseUpdate, session: SessionDep
+    warehouse_id: UUID,
+    payload: WarehouseUpdate,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
 ) -> Warehouse:
     """Update a depot."""
 
-    return await service.update_warehouse(session, warehouse_id, payload)
+    entity = await service.update_warehouse(session, warehouse_id, payload)
+    await _publish_resource_capacity(session, entity.id, settings, client)
+    return entity
 
 
-@router.delete("/warehouses/{warehouse_id}", status_code=204)
-async def delete_warehouse(warehouse_id: UUID, session: SessionDep) -> Response:
-    """Delete an unused depot."""
+@router.get("/warehouses/{warehouse_id}/zones", response_model=list[ZoneRead])
+async def list_zones(warehouse_id: UUID, session: SessionDep) -> list[ZoneRead]:
+    """List only the zones belonging to one warehouse workspace."""
 
-    await service.delete_catalog_entity(session, Warehouse, warehouse_id, "warehouse")
-    return Response(status_code=204)
-
-
-@router.get("/scenarios/{scenario_id}/zones", response_model=list[ZoneRead])
-async def list_zones(scenario_id: UUID, session: SessionDep) -> list[ZoneRead]:
-    """List zones with geometry and stale-classification counts."""
-
-    zones = await service.list_catalog(session, Zone, scenario_id)
+    await service.require_warehouse(session, warehouse_id)
+    zones = list(
+        await session.scalars(
+            select(Zone)
+            .where(Zone.warehouse_id == warehouse_id)
+            .order_by(Zone.name, Zone.id)
+        )
+    )
     return [await zone_read(session, zone) for zone in zones]
 
 
-@router.post("/scenarios/{scenario_id}/zones", response_model=ZoneRead, status_code=201)
-async def create_zone(scenario_id: UUID, payload: ZoneCreate, session: SessionDep) -> ZoneRead:
-    """Create a validated version-one zone."""
+@router.post("/warehouses/{warehouse_id}/zones", response_model=ZoneRead, status_code=201)
+async def create_zone(
+    warehouse_id: UUID,
+    payload: ZoneCreate,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> ZoneRead:
+    """Create and publish a validated warehouse-owned version-one zone."""
 
-    return await zone_read(session, await service.create_zone(session, scenario_id, payload))
-
-
-@router.get("/zones/{zone_id}", response_model=ZoneRead)
-async def get_zone(zone_id: UUID, session: SessionDep) -> ZoneRead:
-    """Read a zone and its current stale-request count."""
-
-    return await zone_read(session, await get_required(session, Zone, zone_id, "zone"))
-
-
-@router.patch("/zones/{zone_id}", response_model=ZoneRead)
-async def update_zone(zone_id: UUID, payload: ZoneUpdate, session: SessionDep) -> ZoneRead:
-    """Update an unlocked zone and version geometry changes."""
-
-    return await zone_read(session, await service.update_zone(session, zone_id, payload))
+    entity = await service.create_zone(session, warehouse_id, payload)
+    await _publish_resource_capacity(session, warehouse_id, settings, client)
+    return await zone_read(session, entity)
 
 
-@router.post("/zones/{zone_id}/cutouts", response_model=ZoneCutoutRead)
+@router.get("/warehouses/{warehouse_id}/zones/{zone_id}", response_model=ZoneRead)
+async def get_zone(warehouse_id: UUID, zone_id: UUID, session: SessionDep) -> ZoneRead:
+    """Read an owner zone and its current stale-request count."""
+
+    return await zone_read(
+        session,
+        await service.require_zone(session, warehouse_id, zone_id),
+    )
+
+
+@router.patch("/warehouses/{warehouse_id}/zones/{zone_id}", response_model=ZoneRead)
+async def update_zone(
+    warehouse_id: UUID,
+    zone_id: UUID,
+    payload: ZoneUpdate,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> ZoneRead:
+    """Update and publish an unlocked owner zone and version geometry changes."""
+
+    entity = await service.update_zone(session, warehouse_id, zone_id, payload)
+    await _publish_resource_capacity(session, warehouse_id, settings, client)
+    return await zone_read(session, entity)
+
+
+@router.post(
+    "/warehouses/{warehouse_id}/zones/{zone_id}/cutouts",
+    response_model=ZoneCutoutRead,
+)
 async def cut_zone(
+    warehouse_id: UUID,
     zone_id: UUID,
     payload: ZoneCutoutRequest,
     session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
 ) -> ZoneCutoutRead:
-    """Atomically cut an unlocked source zone and create its inner operational zone."""
+    """Atomically cut and publish two zones owned by the same warehouse."""
 
-    source_zone, inner_zone = await service.cut_zone(session, zone_id, payload)
+    source_zone, inner_zone = await service.cut_zone(
+        session,
+        warehouse_id,
+        zone_id,
+        payload,
+    )
+    await _publish_resource_capacity(session, warehouse_id, settings, client)
     return ZoneCutoutRead(
         source_zone=await zone_read(session, source_zone),
         inner_zone=await zone_read(session, inner_zone),
     )
 
 
-@router.delete("/zones/{zone_id}", status_code=204)
-async def delete_zone(zone_id: UUID, session: SessionDep) -> Response:
-    """Delete one zone and explicitly mark its request snapshots outside."""
+@router.delete("/warehouses/{warehouse_id}/zones/{zone_id}", status_code=204)
+async def delete_zone(
+    warehouse_id: UUID,
+    zone_id: UUID,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> Response:
+    """Delete and publish an owner zone without uncovering its warehouse."""
 
-    await service.delete_zone(session, zone_id)
+    await service.delete_zone(session, warehouse_id, zone_id)
+    await _publish_resource_capacity(session, warehouse_id, settings, client)
     return Response(status_code=204)
 
 
-@router.post("/zones/{zone_id}/lock", response_model=ZoneRead)
-async def lock_zone(zone_id: UUID, payload: ZoneLockRequest, session: SessionDep) -> ZoneRead:
-    """Set or clear a zone editor lock."""
+@router.post("/warehouses/{warehouse_id}/zones/{zone_id}/lock", response_model=ZoneRead)
+async def lock_zone(
+    warehouse_id: UUID,
+    zone_id: UUID,
+    payload: ZoneLockRequest,
+    session: SessionDep,
+) -> ZoneRead:
+    """Set or clear an owner zone's editor lock without capacity publication."""
 
-    return await zone_read(session, await service.set_zone_lock(session, zone_id, payload.locked))
+    return await zone_read(
+        session,
+        await service.set_zone_lock(
+            session,
+            warehouse_id,
+            zone_id,
+            payload.locked,
+        ),
+    )
 
 
-@router.post(
-    "/scenarios/{scenario_id}/reclassify-requests",
-    response_model=ReclassificationResult,
+@router.get(
+    "/warehouses/{warehouse_id}/available-drivers",
+    response_model=list[AvailableDriverRead],
 )
-async def reclassify_requests(scenario_id: UUID, session: SessionDep) -> ReclassificationResult:
-    """Run the deliberate scenario-wide request classification action."""
+async def list_available_drivers(
+    warehouse_id: UUID,
+    session: SessionDep,
+    client: CapacityRwmsClientDep,
+) -> list[AvailableDriverRead]:
+    """List canonical RWMS workers eligible for exact-driver assignment."""
 
-    updated, outside_zones, unchanged = await service.reclassify_requests(session, scenario_id)
-    return ReclassificationResult(updated=updated, outside_zones=outside_zones, unchanged=unchanged)
-
-
-@router.get("/scenarios/{scenario_id}/zone-relations", response_model=list[ZoneRelationRead])
-async def list_zone_relations(scenario_id: UUID, session: SessionDep) -> object:
-    """List directed zone transition policies."""
-
-    return await service.list_catalog(session, ZoneRelation, scenario_id)
-
-
-@router.post(
-    "/scenarios/{scenario_id}/zone-relations",
-    response_model=ZoneRelationRead,
-    status_code=201,
-)
-async def create_zone_relation(
-    scenario_id: UUID, payload: ZoneRelationCreate, session: SessionDep
-) -> ZoneRelation:
-    """Create a relation after verifying both zones belong to the scenario."""
-
-    return await service.create_zone_relation(session, scenario_id, payload)
+    warehouse = await service.require_warehouse(session, warehouse_id)
+    return [
+        AvailableDriverRead(worker_id=item.worker_id, display_name=item.display_name)
+        for item in await client.list_drivers(warehouse.external_warehouse_id)
+    ]
 
 
-@router.patch("/zone-relations/{relation_id}", response_model=ZoneRelationRead)
-async def update_zone_relation(
-    relation_id: UUID, payload: ZoneRelationUpdate, session: SessionDep
-) -> ZoneRelation:
-    """Update a zone relation's routing policy."""
+@router.post("/warehouses/{warehouse_id}/drivers", response_model=DriverRead, status_code=201)
+async def create_driver(
+    warehouse_id: UUID,
+    payload: DriverCreate,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> Driver:
+    """Create a warehouse driver."""
 
-    return await service.update_zone_relation(session, relation_id, payload)
-
-
-@router.delete("/zone-relations/{relation_id}", status_code=204)
-async def delete_zone_relation(relation_id: UUID, session: SessionDep) -> Response:
-    """Delete one directed zone relation."""
-
-    await service.delete_catalog_entity(session, ZoneRelation, relation_id, "zone_relation")
-    return Response(status_code=204)
-
-
-@router.get("/scenarios/{scenario_id}/drivers", response_model=list[DriverRead])
-async def list_drivers(scenario_id: UUID, session: SessionDep) -> object:
-    """List scenario drivers."""
-
-    return await service.list_catalog(session, Driver, scenario_id)
-
-
-@router.post("/scenarios/{scenario_id}/drivers", response_model=DriverRead, status_code=201)
-async def create_driver(scenario_id: UUID, payload: DriverCreate, session: SessionDep) -> Driver:
-    """Create a scenario driver."""
-
-    return await service.create_driver(session, scenario_id, payload)
+    warehouse = await service.require_warehouse(session, warehouse_id)
+    identity = None
+    if payload.external_worker_id is not None:
+        identity = next(
+            (
+                item
+                for item in await client.list_drivers(warehouse.external_warehouse_id)
+                if item.worker_id == payload.external_worker_id
+            ),
+            None,
+        )
+    entity = await service.create_driver(session, warehouse_id, payload, identity)
+    await _publish_resource_capacity(session, warehouse_id, settings, client)
+    return entity
 
 
 @router.patch("/drivers/{driver_id}", response_model=DriverRead)
-async def update_driver(driver_id: UUID, payload: DriverUpdate, session: SessionDep) -> Driver:
+async def update_driver(
+    driver_id: UUID,
+    payload: DriverUpdate,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> Driver:
     """Update a driver."""
 
-    return await service.update_driver(session, driver_id, payload)
+    driver = await get_required(session, Driver, driver_id, "driver")
+    mode = payload.rwms_assignment_mode or driver.rwms_assignment_mode
+    worker_id = (
+        payload.external_worker_id
+        if "external_worker_id" in payload.model_fields_set
+        else driver.external_worker_id
+    )
+    identity = None
+    if mode == "ASSIGNED_DRIVER" and worker_id is not None:
+        warehouse = await service.require_warehouse(session, driver.warehouse_id)
+        identity = next(
+            (
+                item
+                for item in await client.list_drivers(warehouse.external_warehouse_id)
+                if item.worker_id == worker_id
+            ),
+            None,
+        )
+    entity = await service.update_driver(session, driver_id, payload, identity)
+    await _publish_resource_capacity(session, entity.warehouse_id, settings, client)
+    return entity
 
 
 @router.delete("/drivers/{driver_id}", status_code=204)
-async def delete_driver(driver_id: UUID, session: SessionDep) -> Response:
+async def delete_driver(
+    driver_id: UUID,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> Response:
     """Delete a driver not retained by plan history."""
 
+    entity = await get_required(session, Driver, driver_id, "driver")
+    warehouse_id = entity.warehouse_id
     await service.delete_catalog_entity(session, Driver, driver_id, "driver")
+    await _publish_resource_capacity(session, warehouse_id, settings, client)
     return Response(status_code=204)
 
 
-@router.get("/scenarios/{scenario_id}/vehicles", response_model=list[VehicleRead])
-async def list_vehicles(scenario_id: UUID, session: SessionDep) -> object:
-    """List scenario vehicles."""
-
-    return await service.list_catalog(session, Vehicle, scenario_id)
-
-
-@router.post("/scenarios/{scenario_id}/vehicles", response_model=VehicleRead, status_code=201)
-async def create_vehicle(scenario_id: UUID, payload: VehicleCreate, session: SessionDep) -> Vehicle:
-    """Create a scenario vehicle."""
-
-    return await service.create_vehicle(session, scenario_id, payload)
-
-
 @router.post(
-    "/scenarios/{scenario_id}/vehicle-configurations",
+    "/warehouses/{warehouse_id}/vehicle-configurations",
     response_model=VehicleRead,
     status_code=status.HTTP_201_CREATED,
 )
 async def create_vehicle_configuration(
-    scenario_id: UUID,
+    warehouse_id: UUID,
     payload: VehicleConfigurationCreate,
     session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
 ) -> Vehicle:
     """Atomically create a vehicle and its operational axle-load profiles."""
 
-    return await service.create_vehicle_configuration(session, scenario_id, payload)
+    entity = await service.create_vehicle_configuration(session, warehouse_id, payload)
+    await _publish_resource_capacity(session, warehouse_id, settings, client)
+    return entity
 
 
 @router.patch("/vehicles/{vehicle_id}", response_model=VehicleRead)
-async def update_vehicle(vehicle_id: UUID, payload: VehicleUpdate, session: SessionDep) -> Vehicle:
+async def update_vehicle(
+    vehicle_id: UUID,
+    payload: VehicleUpdate,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> Vehicle:
     """Update a vehicle."""
 
-    return await service.update_vehicle(session, vehicle_id, payload)
+    entity = await service.update_vehicle(session, vehicle_id, payload)
+    await _publish_resource_capacity(session, entity.warehouse_id, settings, client)
+    return entity
 
 
 @router.put("/vehicles/{vehicle_id}/configuration", response_model=VehicleRead)
@@ -285,156 +610,139 @@ async def update_vehicle_configuration(
     vehicle_id: UUID,
     payload: VehicleConfigurationUpdate,
     session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
 ) -> Vehicle:
     """Atomically replace vehicle fields and its complete axle-profile set."""
 
-    return await service.update_vehicle_configuration(session, vehicle_id, payload)
+    entity = await service.update_vehicle_configuration(session, vehicle_id, payload)
+    await _publish_resource_capacity(session, entity.warehouse_id, settings, client)
+    return entity
 
 
 @router.delete("/vehicles/{vehicle_id}", status_code=204)
-async def delete_vehicle(vehicle_id: UUID, session: SessionDep) -> Response:
+async def delete_vehicle(
+    vehicle_id: UUID,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> Response:
     """Delete a vehicle not retained by plan history."""
 
+    entity = await get_required(session, Vehicle, vehicle_id, "vehicle")
+    warehouse_id = entity.warehouse_id
     await service.delete_catalog_entity(session, Vehicle, vehicle_id, "vehicle")
+    await _publish_resource_capacity(session, warehouse_id, settings, client)
     return Response(status_code=204)
 
 
-@router.get("/scenarios/{scenario_id}/trailers", response_model=list[TrailerRead])
-async def list_trailers(scenario_id: UUID, session: SessionDep) -> object:
-    """List scenario-owned trailers."""
-
-    return await service.list_catalog(session, Trailer, scenario_id)
-
-
 @router.post(
-    "/scenarios/{scenario_id}/trailers",
+    "/warehouses/{warehouse_id}/trailers",
     response_model=TrailerRead,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_trailer(scenario_id: UUID, payload: TrailerCreate, session: SessionDep) -> Trailer:
-    """Create a scenario-owned trailer."""
+async def create_trailer(
+    warehouse_id: UUID,
+    payload: TrailerCreate,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> Trailer:
+    """Create a warehouse-owned trailer."""
 
-    return await service.create_trailer(session, scenario_id, payload)
-
-
-@router.get("/trailers/{trailer_id}", response_model=TrailerRead)
-async def get_trailer(trailer_id: UUID, session: SessionDep) -> Trailer:
-    """Read one trailer by UUID."""
-
-    return await get_required(session, Trailer, trailer_id, "trailer")
+    entity = await service.create_trailer(session, warehouse_id, payload)
+    await _publish_resource_capacity(session, warehouse_id, settings, client)
+    return entity
 
 
 @router.patch("/trailers/{trailer_id}", response_model=TrailerRead)
-async def update_trailer(trailer_id: UUID, payload: TrailerUpdate, session: SessionDep) -> Trailer:
+async def update_trailer(
+    trailer_id: UUID,
+    payload: TrailerUpdate,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> Trailer:
     """Update a trailer's label, availability, or physical limits."""
 
-    return await service.update_trailer(session, trailer_id, payload)
+    entity = await service.update_trailer(session, trailer_id, payload)
+    await _publish_resource_capacity(session, entity.warehouse_id, settings, client)
+    return entity
 
 
 @router.delete("/trailers/{trailer_id}", status_code=204)
-async def delete_trailer(trailer_id: UUID, session: SessionDep) -> Response:
+async def delete_trailer(
+    trailer_id: UUID,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> Response:
     """Delete a trailer while vehicle defaults are cleared by the database."""
 
+    entity = await get_required(session, Trailer, trailer_id, "trailer")
+    warehouse_id = entity.warehouse_id
     await service.delete_catalog_entity(session, Trailer, trailer_id, "trailer")
+    await _publish_resource_capacity(session, warehouse_id, settings, client)
     return Response(status_code=204)
 
 
-@router.get(
-    "/vehicles/{vehicle_id}/load-profiles",
-    response_model=list[VehicleLoadProfileRead],
-)
-async def list_vehicle_load_profiles(
-    vehicle_id: UUID, session: SessionDep
-) -> list[VehicleLoadProfile]:
-    """List configured operational peak axle loads for one vehicle."""
-
-    return await service.list_vehicle_load_profiles(session, vehicle_id)
-
-
-@router.post(
-    "/vehicles/{vehicle_id}/load-profiles",
-    response_model=VehicleLoadProfileRead,
-    status_code=status.HTTP_201_CREATED,
-)
-async def create_vehicle_load_profile(
-    vehicle_id: UUID,
-    payload: VehicleLoadProfileCreate,
+@router.post("/warehouses/{warehouse_id}/shifts", response_model=ShiftRead, status_code=201)
+async def create_shift(
+    warehouse_id: UUID,
+    payload: ShiftCreate,
     session: SessionDep,
-) -> VehicleLoadProfile:
-    """Create one vehicle operational axle-load profile."""
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> DriverShift:
+    """Create a non-overlapping warehouse shift."""
 
-    return await service.create_vehicle_load_profile(session, vehicle_id, payload)
-
-
-@router.patch("/vehicle-load-profiles/{profile_id}", response_model=VehicleLoadProfileRead)
-async def update_vehicle_load_profile(
-    profile_id: UUID,
-    payload: VehicleLoadProfileUpdate,
-    session: SessionDep,
-) -> VehicleLoadProfile:
-    """Update one operational axle-load profile."""
-
-    return await service.update_vehicle_load_profile(session, profile_id, payload)
-
-
-@router.delete("/vehicle-load-profiles/{profile_id}", status_code=204)
-async def delete_vehicle_load_profile(profile_id: UUID, session: SessionDep) -> Response:
-    """Delete one operational axle-load profile."""
-
-    await service.delete_catalog_entity(
-        session, VehicleLoadProfile, profile_id, "vehicle_load_profile"
-    )
-    return Response(status_code=204)
-
-
-@router.get("/scenarios/{scenario_id}/shifts", response_model=list[ShiftRead])
-async def list_shifts(scenario_id: UUID, session: SessionDep) -> object:
-    """List scenario driver and vehicle assignments."""
-
-    return await service.list_catalog(session, DriverShift, scenario_id)
-
-
-@router.post("/scenarios/{scenario_id}/shifts", response_model=ShiftRead, status_code=201)
-async def create_shift(scenario_id: UUID, payload: ShiftCreate, session: SessionDep) -> DriverShift:
-    """Create a non-overlapping scenario shift."""
-
-    return await service.create_shift(session, scenario_id, payload)
+    entity = await service.create_shift(session, warehouse_id, payload)
+    await _publish_resource_capacity(session, warehouse_id, settings, client)
+    return entity
 
 
 @router.patch("/shifts/{shift_id}", response_model=ShiftRead)
-async def update_shift(shift_id: UUID, payload: ShiftUpdate, session: SessionDep) -> DriverShift:
+async def update_shift(
+    shift_id: UUID,
+    payload: ShiftUpdate,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> DriverShift:
     """Update a shift with repeated overlap validation."""
 
-    return await service.update_shift(session, shift_id, payload)
+    entity = await service.update_shift(session, shift_id, payload)
+    await _publish_resource_capacity(session, entity.warehouse_id, settings, client)
+    return entity
 
 
 @router.delete("/shifts/{shift_id}", status_code=204)
-async def delete_shift(shift_id: UUID, session: SessionDep) -> Response:
+async def delete_shift(
+    shift_id: UUID,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> Response:
     """Delete a shift not retained by plan history."""
 
+    entity = await get_required(session, DriverShift, shift_id, "shift")
+    warehouse_id = entity.warehouse_id
     await service.delete_catalog_entity(session, DriverShift, shift_id, "shift")
+    await _publish_resource_capacity(session, warehouse_id, settings, client)
     return Response(status_code=204)
 
 
-@router.get("/scenarios/{scenario_id}/requests", response_model=list[LogisticsRequestRead])
-async def list_requests(scenario_id: UUID, session: SessionDep) -> list[LogisticsRequestRead]:
-    """List source requests with date options, tasks, and stale-zone signals."""
-
-    requests = await service.list_requests(session, scenario_id)
-    return [await request_read(session, request) for request in requests]
-
-
 @router.post(
-    "/scenarios/{scenario_id}/requests",
+    "/warehouses/{warehouse_id}/requests",
     response_model=LogisticsRequestRead,
     status_code=201,
 )
 async def create_request(
-    scenario_id: UUID, payload: LogisticsRequestCreate, session: SessionDep
+    warehouse_id: UUID, payload: LogisticsRequestCreate, session: SessionDep
 ) -> LogisticsRequestRead:
     """Create, server-classify, and split a delivery or pickup request."""
 
-    entity = await service.create_request(session, scenario_id, payload)
+    entity = await service.create_request(session, warehouse_id, payload)
     return await request_read(session, entity)
 
 
@@ -447,18 +755,31 @@ async def get_request(request_id: UUID, session: SessionDep) -> LogisticsRequest
 
 @router.patch("/requests/{request_id}", response_model=LogisticsRequestRead)
 async def update_request(
-    request_id: UUID, payload: LogisticsRequestUpdate, session: SessionDep
+    request_id: UUID,
+    payload: LogisticsRequestUpdate,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
 ) -> LogisticsRequestRead:
     """Update a request and reclassify coordinate changes on the backend."""
 
-    return await request_read(session, await service.update_request(session, request_id, payload))
+    entity = await service.update_request(session, request_id, payload)
+    await _publish_generated_request_capacity(session, entity, settings, client)
+    return await request_read(session, entity)
 
 
 @router.delete("/requests/{request_id}", status_code=204)
-async def delete_request(request_id: UUID, session: SessionDep) -> Response:
+async def delete_request(
+    request_id: UUID,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> Response:
     """Delete one request when no saved plan references its tasks."""
 
+    entity = await service.get_request(session, request_id)
     await service.delete_request(session, request_id)
+    await _publish_generated_request_capacity(session, entity, settings, client)
     return Response(status_code=204)
 
 
@@ -467,14 +788,17 @@ async def set_request_planning_details(
     request_id: UUID,
     payload: RequestPlanningDetailsInput,
     session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
 ) -> LogisticsRequestRead:
-    """Store the dispatcher-approved date, service window, and access decision."""
+    """Store dispatcher-owned obligation, date, window, access, and contact details."""
 
     entity = await service.set_request_planning_details(
         session,
         request_id,
         payload,
     )
+    await _publish_generated_request_capacity(session, entity, settings, client)
     return await request_read(session, entity)
 
 
@@ -498,13 +822,14 @@ async def schedule_request(
     request_id: UUID,
     payload: RequestScheduleInput,
     session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
 ) -> LogisticsRequestRead:
     """Assign the request to one accepted or explicitly agreed date."""
 
-    return await request_read(
-        session,
-        await service.schedule_request(session, request_id, payload),
-    )
+    entity = await service.schedule_request(session, request_id, payload)
+    await _publish_generated_request_capacity(session, entity, settings, client)
+    return await request_read(session, entity)
 
 
 @router.post(
@@ -513,25 +838,47 @@ async def schedule_request(
     status_code=201,
 )
 async def create_date_option(
-    request_id: UUID, payload: RequestDateOptionInput, session: SessionDep
+    request_id: UUID,
+    payload: RequestDateOptionInput,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
 ) -> RequestDateOption:
     """Add one acceptable date option."""
 
-    return await service.create_date_option(session, request_id, payload)
+    entity = await service.create_date_option(session, request_id, payload)
+    request = await service.get_request(session, request_id)
+    await _publish_generated_request_capacity(session, request, settings, client)
+    return entity
 
 
 @router.patch("/request-date-options/{option_id}", response_model=RequestDateOptionRead)
 async def update_date_option(
-    option_id: UUID, payload: RequestDateOptionUpdate, session: SessionDep
+    option_id: UUID,
+    payload: RequestDateOptionUpdate,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
 ) -> RequestDateOption:
     """Update one acceptable request date and window."""
 
-    return await service.update_date_option(session, option_id, payload)
+    entity = await service.update_date_option(session, option_id, payload)
+    request = await service.get_request(session, entity.request_id)
+    await _publish_generated_request_capacity(session, request, settings, client)
+    return entity
 
 
 @router.delete("/request-date-options/{option_id}", status_code=204)
-async def delete_date_option(option_id: UUID, session: SessionDep) -> Response:
+async def delete_date_option(
+    option_id: UUID,
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> Response:
     """Delete one acceptable request date."""
 
+    entity = await get_required(session, RequestDateOption, option_id, "request_date_option")
+    request = await service.get_request(session, entity.request_id)
     await service.delete_date_option(session, option_id)
+    await _publish_generated_request_capacity(session, request, settings, client)
     return Response(status_code=204)

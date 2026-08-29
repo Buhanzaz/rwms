@@ -1,4 +1,4 @@
-"""SQLAlchemy persistence model for simulator inputs, plans, and trace data."""
+"""SQLAlchemy persistence models for warehouse inputs, plans, and trace data."""
 
 from __future__ import annotations
 
@@ -69,14 +69,12 @@ class ZoneClassificationStatus(StrEnum):
     OUTSIDE_ZONES = "OUTSIDE_ZONES"
 
 
-class RelationType(StrEnum):
-    """Operational meaning of a directed zone transition."""
+class ZoneKind(StrEnum):
+    """Operational meaning of a warehouse-owned exceptional polygon."""
 
-    ADJACENT = "ADJACENT"
-    PREFERRED = "PREFERRED"
-    ALLOWED = "ALLOWED"
-    DISCOURAGED = "DISCOURAGED"
-    BLOCKED = "BLOCKED"
+    FORBIDDEN = "FORBIDDEN"
+    NO_TRAILER = "NO_TRAILER"
+    SPECIAL_PRICE = "SPECIAL_PRICE"
 
 
 class PlanStatus(StrEnum):
@@ -185,82 +183,122 @@ class OsmTruckRestriction(UuidPrimaryKeyMixin, Base):
     )
 
 
-class Scenario(UuidPrimaryKeyMixin, TimestampMixin, Base):
-    """Independent, reproducible logistics experiment and its configuration."""
+class PlanningDayClosure(UuidPrimaryKeyMixin, TimestampMixin, Base):
+    """Irreversible operator decision that finalizes one depot planning date."""
 
-    __tablename__ = "scenarios"
+    __tablename__ = "planning_day_closures"
     __table_args__ = (
+        UniqueConstraint("warehouse_id", "date", name="uq_planning_day_closures_warehouse_date"),
+        Index("ix_planning_day_closures_warehouse_date", "warehouse_id", "date"),
+    )
+
+    warehouse_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("warehouses.id", ondelete="CASCADE"), nullable=False
+    )
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    closed_by: Mapped[str] = mapped_column(String(100), nullable=False, default="local-admin")
+
+class SlotDayPlan(UuidPrimaryKeyMixin, TimestampMixin, Base):
+    """Version fence for customer slot holds on one warehouse-local date."""
+
+    __tablename__ = "slot_day_plans"
+    __table_args__ = (
+        UniqueConstraint("warehouse_id", "date", name="uq_slot_day_plans_warehouse_date"),
+        CheckConstraint("version >= 1", name="positive_version"),
+        CheckConstraint("length(source_revision) = 64", name="valid_source_revision"),
+        Index("ix_slot_day_plans_warehouse_date", "warehouse_id", "date"),
+    )
+
+    warehouse_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("warehouses.id", ondelete="CASCADE"), nullable=False
+    )
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    version: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
+    source_revision: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class SlotHold(UuidPrimaryKeyMixin, TimestampMixin, Base):
+    """Expiring, plan-versioned reservation of one calculated insertion candidate."""
+
+    __tablename__ = "slot_holds"
+    __table_args__ = (
+        CheckConstraint("plan_version >= 1", name="positive_plan_version"),
+        CheckConstraint("expires_at > created_at", name="positive_expiration"),
+        CheckConstraint("length(source_revision) = 64", name="valid_source_revision"),
         CheckConstraint(
-            "capacity_generation >= 0",
-            name="nonnegative_capacity_generation",
+            "price_isochrone_minutes IS NULL OR "
+            "price_isochrone_minutes IN (60, 120, 180, 240)",
+            name="supported_price_isochrone",
+        ),
+        UniqueConstraint("confirmation_key", name="uq_slot_holds_confirmation_key"),
+        Index("ix_slot_holds_day_status_expiration", "day_plan_id", "status", "expires_at"),
+    )
+
+    day_plan_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("slot_day_plans.id", ondelete="CASCADE"), nullable=False
+    )
+    plan_version: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    source_revision: Mapped[str] = mapped_column(String(64), nullable=False)
+    client_session_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="HELD")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    request_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        MutableDict.as_mutable(JSONB), nullable=False
+    )
+    candidate_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        MutableDict.as_mutable(JSONB), nullable=False
+    )
+    delivery_price_rubles: Mapped[int | None] = mapped_column(Integer)
+    price_isochrone_minutes: Mapped[int | None] = mapped_column(Integer)
+    price_zone_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("zones.id", ondelete="SET NULL")
+    )
+    confirmation_key: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    confirmed_request_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("logistics_requests.id", ondelete="SET NULL")
+    )
+
+
+class Warehouse(UuidPrimaryKeyMixin, TimestampMixin, Base):
+    """RWMS-bound planning root from which route cycles depart and return."""
+
+    __tablename__ = "warehouses"
+    __table_args__ = (
+        UniqueConstraint("external_warehouse_id", name="uq_warehouses_external_warehouse"),
+        CheckConstraint(
+            "external_warehouse_version >= 0", name="nonnegative_external_warehouse_version"
+        ),
+        CheckConstraint("capacity_generation >= 0", name="nonnegative_capacity_generation"),
+        CheckConstraint("latitude BETWEEN -90 AND 90", name="valid_latitude"),
+        CheckConstraint("longitude BETWEEN -180 AND 180", name="valid_longitude"),
+        CheckConstraint("loading_minutes >= 0", name="nonnegative_loading"),
+        CheckConstraint("unloading_minutes >= 0", name="nonnegative_unloading"),
+        CheckConstraint("turnaround_minutes >= 0", name="nonnegative_turnaround"),
+        CheckConstraint(
+            "isochrone_price_60_minutes >= 0 AND "
+            "isochrone_price_120_minutes >= 0 AND "
+            "isochrone_price_180_minutes >= 0 AND "
+            "isochrone_price_240_minutes >= 0",
+            name="nonnegative_isochrone_prices",
         ),
     )
 
+    external_warehouse_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    external_warehouse_version: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    city: Mapped[str | None] = mapped_column(String(200))
+    address: Mapped[str | None] = mapped_column(String(500))
     timezone: Mapped[str] = mapped_column(String(100), nullable=False, default="Europe/Moscow")
+    representative: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    routing_ready: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     default_planning_date: Mapped[date | None] = mapped_column(Date)
     seed: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     capacity_generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     settings: Mapped[dict[str, Any]] = mapped_column(
         MutableDict.as_mutable(JSONB), nullable=False, default=dict
     )
-
-    warehouses: Mapped[list[Warehouse]] = relationship(
-        back_populates="scenario", cascade="all, delete-orphan", passive_deletes=True
-    )
-    zones: Mapped[list[Zone]] = relationship(
-        back_populates="scenario", cascade="all, delete-orphan", passive_deletes=True
-    )
-    zone_relations: Mapped[list[ZoneRelation]] = relationship(
-        back_populates="scenario", cascade="all, delete-orphan", passive_deletes=True
-    )
-    drivers: Mapped[list[Driver]] = relationship(
-        back_populates="scenario", cascade="all, delete-orphan", passive_deletes=True
-    )
-    vehicles: Mapped[list[Vehicle]] = relationship(
-        back_populates="scenario", cascade="all, delete-orphan", passive_deletes=True
-    )
-    trailers: Mapped[list[Trailer]] = relationship(
-        back_populates="scenario", cascade="all, delete-orphan", passive_deletes=True
-    )
-    shifts: Mapped[list[DriverShift]] = relationship(
-        back_populates="scenario", cascade="all, delete-orphan", passive_deletes=True
-    )
-    requests: Mapped[list[LogisticsRequest]] = relationship(
-        back_populates="scenario", cascade="all, delete-orphan", passive_deletes=True
-    )
-    plans: Mapped[list[RoutePlan]] = relationship(
-        back_populates="scenario", cascade="all, delete-orphan", passive_deletes=True
-    )
-    optimization_runs: Mapped[list[OptimizationRun]] = relationship(
-        back_populates="scenario", cascade="all, delete-orphan", passive_deletes=True
-    )
-
-
-class Warehouse(UuidPrimaryKeyMixin, Base):
-    """Depot from which route cycles load, depart, return, and unload."""
-
-    __tablename__ = "warehouses"
-    __table_args__ = (
-        UniqueConstraint(
-            "scenario_id",
-            "external_warehouse_id",
-            name="uq_warehouses_scenario_external_warehouse",
-        ),
-        CheckConstraint("latitude BETWEEN -90 AND 90", name="valid_latitude"),
-        CheckConstraint("longitude BETWEEN -180 AND 180", name="valid_longitude"),
-        CheckConstraint("loading_minutes >= 0", name="nonnegative_loading"),
-        CheckConstraint("unloading_minutes >= 0", name="nonnegative_unloading"),
-        CheckConstraint("turnaround_minutes >= 0", name="nonnegative_turnaround"),
-        Index("ix_warehouses_scenario_id", "scenario_id"),
-    )
-
-    scenario_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False
-    )
-    external_warehouse_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
     latitude: Mapped[float] = mapped_column(Float, nullable=False)
     longitude: Mapped[float] = mapped_column(Float, nullable=False)
     loading_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
@@ -268,114 +306,122 @@ class Warehouse(UuidPrimaryKeyMixin, Base):
     turnaround_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=15)
     working_day_start: Mapped[time] = mapped_column(Time, nullable=False, default=time(8))
     working_day_end: Mapped[time] = mapped_column(Time, nullable=False, default=time(20))
+    isochrone_price_60_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=10_000
+    )
+    isochrone_price_120_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=15_000
+    )
+    isochrone_price_180_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=20_000
+    )
+    isochrone_price_240_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=25_000
+    )
 
-    scenario: Mapped[Scenario] = relationship(back_populates="warehouses")
     plans: Mapped[list[RoutePlan]] = relationship(back_populates="warehouse")
+    drivers: Mapped[list[Driver]] = relationship(
+        back_populates="warehouse", cascade="all, delete-orphan", passive_deletes=True
+    )
+    vehicles: Mapped[list[Vehicle]] = relationship(
+        back_populates="warehouse", cascade="all, delete-orphan", passive_deletes=True
+    )
+    trailers: Mapped[list[Trailer]] = relationship(
+        back_populates="warehouse", cascade="all, delete-orphan", passive_deletes=True
+    )
+    shifts: Mapped[list[DriverShift]] = relationship(
+        back_populates="warehouse", cascade="all, delete-orphan", passive_deletes=True
+    )
+    requests: Mapped[list[LogisticsRequest]] = relationship(
+        back_populates="warehouse", cascade="all, delete-orphan", passive_deletes=True
+    )
+    optimization_runs: Mapped[list[OptimizationRun]] = relationship(
+        back_populates="warehouse", cascade="all, delete-orphan", passive_deletes=True
+    )
+    zones: Mapped[list[Zone]] = relationship(
+        back_populates="warehouse", cascade="all, delete-orphan", passive_deletes=True
+    )
 
 
 class Zone(UuidPrimaryKeyMixin, TimestampMixin, Base):
-    """Versioned operational polygon with direction-specific test tariffs."""
+    """Warehouse-owned exceptional polygon for access or a special tariff."""
 
     __tablename__ = "zones"
     __table_args__ = (
-        UniqueConstraint("scenario_id", "code", name="uq_zones_scenario_code"),
         CheckConstraint("version >= 1", name="positive_version"),
+        CheckConstraint("color ~ '^#[0-9A-Fa-f]{6}$'", name="valid_color"),
         CheckConstraint("delivery_price >= 0", name="nonnegative_delivery_price"),
         CheckConstraint("pickup_price >= 0", name="nonnegative_pickup_price"),
-        Index("ix_zones_scenario_priority", "scenario_id", "priority"),
+        CheckConstraint(
+            "kind IN ('FORBIDDEN', 'NO_TRAILER', 'SPECIAL_PRICE')",
+            name="supported_kind",
+        ),
+        Index("ix_zones_warehouse_id", "warehouse_id"),
         Index("ix_zones_geometry_gist", "geometry", postgresql_using="gist"),
     )
 
-    scenario_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False
+    warehouse_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("warehouses.id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    code: Mapped[str] = mapped_column(String(64), nullable=False)
-    route_group: Mapped[str] = mapped_column(String(100), nullable=False)
+    kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=ZoneKind.SPECIAL_PRICE
+    )
+    color: Mapped[str] = mapped_column(String(7), nullable=False, default="#22C55E")
     geometry: Mapped[Any] = mapped_column(
         Geometry("MULTIPOLYGON", srid=4326, spatial_index=False), nullable=False
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     delivery_price: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     pickup_price: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    scenario: Mapped[Scenario] = relationship(back_populates="zones")
+    warehouse: Mapped[Warehouse] = relationship(back_populates="zones")
     requests: Mapped[list[LogisticsRequest]] = relationship(back_populates="zone")
     tasks: Mapped[list[PlanningTask]] = relationship(back_populates="zone")
 
 
-class ZoneRelation(UuidPrimaryKeyMixin, Base):
-    """Directed compatibility and detour policy between two operational zones."""
-
-    __tablename__ = "zone_relations"
-    __table_args__ = (
-        UniqueConstraint(
-            "scenario_id", "from_zone_id", "to_zone_id", name="uq_zone_relations_direction"
-        ),
-        CheckConstraint("from_zone_id <> to_zone_id", name="different_zones"),
-        CheckConstraint("max_detour_minutes >= 0", name="nonnegative_detour_minutes"),
-        CheckConstraint("max_detour_ratio >= 0", name="nonnegative_detour_ratio"),
-        Index("ix_zone_relations_scenario_id", "scenario_id"),
-    )
-
-    scenario_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False
-    )
-    from_zone_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("zones.id", ondelete="CASCADE"), nullable=False
-    )
-    to_zone_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("zones.id", ondelete="CASCADE"), nullable=False
-    )
-    relation_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    delivery_pair_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    pickup_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    max_detour_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=35)
-    max_detour_ratio: Mapped[float] = mapped_column(Float, nullable=False, default=1.5)
-    penalty: Mapped[float] = mapped_column(Float, nullable=False, default=0)
-    is_bidirectional: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-
-    scenario: Mapped[Scenario] = relationship(back_populates="zone_relations")
-    from_zone: Mapped[Zone] = relationship(foreign_keys=[from_zone_id])
-    to_zone: Mapped[Zone] = relationship(foreign_keys=[to_zone_id])
-
-
 class Driver(UuidPrimaryKeyMixin, Base):
-    """Assignable operator whose route-group preference remains a soft signal."""
+    """Warehouse driver with an explicit RWMS audience assignment mode."""
 
     __tablename__ = "drivers"
     __table_args__ = (
         UniqueConstraint(
-            "scenario_id", "external_worker_id", name="uq_drivers_scenario_external_worker"
+            "warehouse_id", "external_worker_id", name="uq_drivers_warehouse_external_worker"
         ),
-        Index("ix_drivers_scenario_active", "scenario_id", "active"),
+        CheckConstraint(
+            "(rwms_assignment_mode = 'ASSIGNED_DRIVER' AND external_worker_id IS NOT NULL) OR "
+            "(rwms_assignment_mode = 'WAREHOUSE_DRIVERS' AND external_worker_id IS NULL)",
+            name="valid_rwms_assignment",
+        ),
+        Index("ix_drivers_warehouse_active", "warehouse_id", "active"),
     )
 
-    scenario_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False
+    warehouse_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("warehouses.id", ondelete="CASCADE"), nullable=False
     )
     external_worker_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    rwms_assignment_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="WAREHOUSE_DRIVERS"
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    preferred_route_group: Mapped[str | None] = mapped_column(String(100))
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     passport_details: Mapped[str] = mapped_column(Text, nullable=False, default="")
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
-    scenario: Mapped[Scenario] = relationship(back_populates="drivers")
+    warehouse: Mapped[Warehouse] = relationship(back_populates="drivers")
     shifts: Mapped[list[DriverShift]] = relationship(
         back_populates="driver", cascade="all, delete-orphan", passive_deletes=True
     )
 
 
 class Trailer(UuidPrimaryKeyMixin, Base):
-    """Scenario-owned trailer whose physical limits participate in truck routing."""
+    """Warehouse-owned trailer whose physical limits participate in routing."""
 
     __tablename__ = "trailers"
     __table_args__ = (
         UniqueConstraint(
-            "scenario_id", "registration_number", name="uq_trailers_scenario_registration"
+            "warehouse_id", "registration_number", name="uq_trailers_warehouse_registration"
         ),
         CheckConstraint(
             "(tare_weight_kg IS NULL OR tare_weight_kg > 0) AND "
@@ -401,11 +447,11 @@ class Trailer(UuidPrimaryKeyMixin, Base):
             "max_gross_weight_kg >= tare_weight_kg",
             name="gross_not_below_tare",
         ),
-        Index("ix_trailers_scenario_active", "scenario_id", "active"),
+        Index("ix_trailers_warehouse_active", "warehouse_id", "active"),
     )
 
-    scenario_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False
+    warehouse_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("warehouses.id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     registration_number: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -428,7 +474,7 @@ class Trailer(UuidPrimaryKeyMixin, Base):
     max_cargo_weight_kg: Mapped[int | None] = mapped_column(Integer)
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
-    scenario: Mapped[Scenario] = relationship(back_populates="trailers")
+    warehouse: Mapped[Warehouse] = relationship(back_populates="trailers")
     default_for_vehicles: Mapped[list[Vehicle]] = relationship(
         back_populates="default_trailer", foreign_keys="Vehicle.default_trailer_id"
     )
@@ -440,7 +486,7 @@ class Vehicle(UuidPrimaryKeyMixin, Base):
     __tablename__ = "vehicles"
     __table_args__ = (
         UniqueConstraint(
-            "scenario_id", "registration_number", name="uq_vehicles_scenario_registration"
+            "warehouse_id", "registration_number", name="uq_vehicles_warehouse_registration"
         ),
         CheckConstraint("capacity BETWEEN 1 AND 2", name="valid_capacity"),
         CheckConstraint("average_speed_city > 0", name="positive_city_speed"),
@@ -477,12 +523,12 @@ class Vehicle(UuidPrimaryKeyMixin, Base):
             "weight_safety_margin_kg >= 0",
             name="nonnegative_routing_safety_margins",
         ),
-        Index("ix_vehicles_scenario_active", "scenario_id", "active"),
+        Index("ix_vehicles_warehouse_active", "warehouse_id", "active"),
         Index("ix_vehicles_default_trailer_id", "default_trailer_id"),
     )
 
-    scenario_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False
+    warehouse_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("warehouses.id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     registration_number: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -521,7 +567,7 @@ class Vehicle(UuidPrimaryKeyMixin, Base):
     weight_safety_margin_kg: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
-    scenario: Mapped[Scenario] = relationship(back_populates="vehicles")
+    warehouse: Mapped[Warehouse] = relationship(back_populates="vehicles")
     default_trailer: Mapped[Trailer | None] = relationship(
         back_populates="default_for_vehicles", foreign_keys=[default_trailer_id]
     )
@@ -558,19 +604,25 @@ class VehicleLoadProfile(UuidPrimaryKeyMixin, Base):
 
 
 class DriverShift(UuidPrimaryKeyMixin, Base):
-    """Dated availability interval binding one active driver to one vehicle."""
+    """Monthly date range with one repeated daily driver/vehicle availability interval."""
 
     __tablename__ = "driver_shifts"
     __table_args__ = (
-        CheckConstraint("end_at > start_at", name="positive_duration"),
+        CheckConstraint("date_to >= date_from", name="positive_date_range"),
+        CheckConstraint("date_to - date_from <= 30", name="bounded_date_range"),
+        CheckConstraint(
+            "date_trunc('month', date_from) = date_trunc('month', date_to)",
+            name="single_month_range",
+        ),
+        CheckConstraint("end_time > start_time", name="positive_daily_duration"),
         CheckConstraint("break_minutes >= 0", name="nonnegative_break"),
-        Index("ix_driver_shifts_scenario_date", "scenario_id", "date"),
-        Index("ix_driver_shifts_driver_interval", "driver_id", "start_at", "end_at"),
-        Index("ix_driver_shifts_vehicle_interval", "vehicle_id", "start_at", "end_at"),
+        Index("ix_driver_shifts_warehouse_dates", "warehouse_id", "date_from", "date_to"),
+        Index("ix_driver_shifts_driver_dates", "driver_id", "date_from", "date_to"),
+        Index("ix_driver_shifts_vehicle_dates", "vehicle_id", "date_from", "date_to"),
     )
 
-    scenario_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False
+    warehouse_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("warehouses.id", ondelete="CASCADE"), nullable=False
     )
     driver_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("drivers.id", ondelete="CASCADE"), nullable=False
@@ -578,14 +630,14 @@ class DriverShift(UuidPrimaryKeyMixin, Base):
     vehicle_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("vehicles.id", ondelete="CASCADE"), nullable=False
     )
-    date: Mapped[date] = mapped_column(Date, nullable=False)
-    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    date_from: Mapped[date] = mapped_column(Date, nullable=False)
+    date_to: Mapped[date] = mapped_column(Date, nullable=False)
+    start_time: Mapped[time] = mapped_column(Time, nullable=False)
+    end_time: Mapped[time] = mapped_column(Time, nullable=False)
     break_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    preferred_route_group: Mapped[str | None] = mapped_column(String(100))
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
-    scenario: Mapped[Scenario] = relationship(back_populates="shifts")
+    warehouse: Mapped[Warehouse] = relationship(back_populates="shifts")
     driver: Mapped[Driver] = relationship(back_populates="shifts")
     vehicle: Mapped[Vehicle] = relationship(back_populates="shifts")
     cycles: Mapped[list[RouteCycle]] = relationship(back_populates="driver_shift")
@@ -597,7 +649,7 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "logistics_requests"
     __table_args__ = (
         UniqueConstraint(
-            "scenario_id",
+            "warehouse_id",
             "source_system",
             "external_id",
             name="uq_logistics_requests_external_source",
@@ -617,17 +669,17 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
             "external_version IS NULL OR external_version >= 0",
             name="nonnegative_external_version",
         ),
-        Index("ix_logistics_requests_scenario_status", "scenario_id", "status"),
+        Index("ix_logistics_requests_warehouse_status", "warehouse_id", "status"),
         Index(
-            "ix_logistics_requests_scenario_scheduled_date",
-            "scenario_id",
+            "ix_logistics_requests_warehouse_scheduled_date",
+            "warehouse_id",
             "scheduled_date",
         ),
         Index("ix_logistics_requests_zone_version", "zone_id", "zone_version"),
     )
 
-    scenario_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False
+    warehouse_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("warehouses.id", ondelete="CASCADE"), nullable=False
     )
     source_system: Mapped[str | None] = mapped_column(String(64))
     external_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
@@ -655,6 +707,7 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
         String(32), nullable=False, default=ZoneClassificationStatus.OUTSIDE_ZONES
     )
     split_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    mandatory: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     trailer_access_allowed: Mapped[bool | None] = mapped_column(Boolean)
     include_driver_passport_in_notification: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
@@ -663,7 +716,7 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
     contact_phone: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
-    scenario: Mapped[Scenario] = relationship(back_populates="requests")
+    warehouse: Mapped[Warehouse] = relationship(back_populates="requests")
     zone: Mapped[Zone | None] = relationship(back_populates="requests")
     date_options: Mapped[list[RequestDateOption]] = relationship(
         back_populates="request",
@@ -683,7 +736,7 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
 
 
 class RequestDateOption(UuidPrimaryKeyMixin, Base):
-    """One acceptable local scenario date and optional service window."""
+    """One acceptable warehouse-local date and optional service window."""
 
     __tablename__ = "request_date_options"
     __table_args__ = (
@@ -693,7 +746,7 @@ class RequestDateOption(UuidPrimaryKeyMixin, Base):
             name="valid_window",
         ),
         CheckConstraint(
-            "travel_zone_hours IS NULL OR travel_zone_hours BETWEEN 1 AND 4",
+            "travel_zone_hours IS NULL OR travel_zone_hours >= 1",
             name="valid_travel_zone_hours",
         ),
         Index("ix_request_date_options_date", "date"),
@@ -752,6 +805,7 @@ class PlanningTask(UuidPrimaryKeyMixin, Base):
     zone_version: Mapped[int | None] = mapped_column(Integer)
     service_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, nullable=False)
+    mandatory: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=TaskStatus.READY)
     locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
@@ -766,12 +820,9 @@ class RoutePlan(UuidPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "route_plans"
     __table_args__ = (
         CheckConstraint("version >= 1", name="positive_version"),
-        Index("ix_route_plans_scenario_date", "scenario_id", "date"),
+        Index("ix_route_plans_warehouse_date", "warehouse_id", "date"),
     )
 
-    scenario_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False
-    )
     warehouse_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("warehouses.id", ondelete="RESTRICT"), nullable=False
     )
@@ -791,7 +842,6 @@ class RoutePlan(UuidPrimaryKeyMixin, TimestampMixin, Base):
     )
     manually_changed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    scenario: Mapped[Scenario] = relationship(back_populates="plans")
     warehouse: Mapped[Warehouse] = relationship(back_populates="plans")
     cycles: Mapped[list[RouteCycle]] = relationship(
         back_populates="route_plan",
@@ -1043,10 +1093,12 @@ class OptimizationRun(UuidPrimaryKeyMixin, Base):
     """Auditable asynchronous optimizer execution independent of a saved plan."""
 
     __tablename__ = "optimization_runs"
-    __table_args__ = (Index("ix_optimization_runs_scenario_started", "scenario_id", "started_at"),)
+    __table_args__ = (
+        Index("ix_optimization_runs_warehouse_started", "warehouse_id", "started_at"),
+    )
 
-    scenario_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False
+    warehouse_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("warehouses.id", ondelete="CASCADE"), nullable=False
     )
     plan_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("route_plans.id", ondelete="SET NULL")
@@ -1064,7 +1116,7 @@ class OptimizationRun(UuidPrimaryKeyMixin, Base):
     stopped_by_limit: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    scenario: Mapped[Scenario] = relationship(back_populates="optimization_runs")
+    warehouse: Mapped[Warehouse] = relationship(back_populates="optimization_runs")
     plan: Mapped[RoutePlan | None] = relationship(back_populates="optimization_runs")
     trace_events: Mapped[list[OptimizationTraceEvent]] = relationship(
         back_populates="optimization_run",

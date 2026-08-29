@@ -6,26 +6,26 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 
-from app.api.dependencies import SessionDep, SettingsDep
+from app.api.dependencies import PlannerDep, SessionDep, SettingsDep
 from app.errors import ApiError
 from app.integrations.rwms import RwmsPlanningClient, get_rwms_planning_client
 from app.integrations.rwms_sync import (
     apply_plan_to_rwms,
     get_plan_rwms_status,
-    refresh_scenario_requests,
-    sync_scenario_requests,
+    refresh_warehouse_requests,
+    sync_warehouse_requests,
 )
 from app.schemas.domain import (
     RwmsApplyResult,
     RwmsCapacitySnapshotResult,
     RwmsPlanApplyRequest,
     RwmsPlanStatusResult,
-    RwmsScenarioRefreshResult,
     RwmsSyncRequest,
     RwmsSyncResult,
+    RwmsWarehouseRefreshResult,
 )
-from app.services.capacity_generation import advance_scenario_capacity_generation
-from app.services.capacity_projection import publish_scenario_capacity
+from app.services.capacity_generation import advance_warehouse_capacity_generation
+from app.services.capacity_projection import publish_warehouse_capacity
 
 router = APIRouter(tags=["rwms-integration"])
 
@@ -45,36 +45,39 @@ def utc_today() -> date:
     return datetime.now(UTC).date()
 
 
-@router.post("/scenarios/{scenario_id}/rwms/sync", response_model=RwmsSyncResult)
+@router.post("/warehouses/{warehouse_id}/rwms/sync", response_model=RwmsSyncResult)
 async def sync_rwms_requests(
-    scenario_id: UUID,
+    warehouse_id: UUID,
     payload: RwmsSyncRequest,
     session: SessionDep,
     client: RwmsClientDep,
+    planner: PlannerDep,
 ) -> RwmsSyncResult:
     """Import a bounded RWMS delivery feed without geocoding address-only orders."""
 
-    return await sync_scenario_requests(session, scenario_id, payload, client)
+    return await sync_warehouse_requests(session, warehouse_id, payload, client, planner)
 
 
 @router.post(
-    "/scenarios/{scenario_id}/rwms/refresh",
-    response_model=RwmsScenarioRefreshResult,
+    "/warehouses/{warehouse_id}/rwms/refresh",
+    response_model=RwmsWarehouseRefreshResult,
 )
 async def refresh_rwms_requests(
-    scenario_id: UUID,
+    warehouse_id: UUID,
     session: SessionDep,
     client: RwmsClientDep,
-) -> RwmsScenarioRefreshResult:
+    planner: PlannerDep,
+) -> RwmsWarehouseRefreshResult:
     """Refresh the current 31-day horizon for every linked warehouse server-side."""
 
     date_from = utc_today()
-    result = await refresh_scenario_requests(
+    result = await refresh_warehouse_requests(
         session,
-        scenario_id,
+        warehouse_id,
         date_from=date_from,
         date_to=date_from + timedelta(days=30),
         client=client,
+        planner=planner,
     )
     failures = [
         {
@@ -102,19 +105,19 @@ async def refresh_rwms_requests(
 
 
 @router.post(
-    "/scenarios/{scenario_id}/rwms/capacity",
+    "/warehouses/{warehouse_id}/rwms/capacity",
     response_model=RwmsCapacitySnapshotResult,
 )
 async def reconcile_rwms_capacity(
-    scenario_id: UUID,
+    warehouse_id: UUID,
     session: SessionDep,
     client: RwmsClientDep,
 ) -> RwmsCapacitySnapshotResult:
     """Publish the complete current generated-delivery capacity snapshot to RWMS."""
 
     client.ensure_capacity_publish_enabled()
-    await advance_scenario_capacity_generation(session, scenario_id)
-    return await publish_scenario_capacity(session, scenario_id, client)
+    await advance_warehouse_capacity_generation(session, warehouse_id)
+    return await publish_warehouse_capacity(session, warehouse_id, client)
 
 
 @router.post("/plans/{plan_id}/rwms/apply", response_model=RwmsApplyResult)

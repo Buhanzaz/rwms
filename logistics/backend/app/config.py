@@ -20,7 +20,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = "RWMS Logistics Simulator"
+    app_name: str = "RWMS Logistics Planning"
     environment: str = "development"
     database_url: str = Field(
         default="postgresql+psycopg://logistics:logistics@db:5432/logistics",
@@ -58,14 +58,49 @@ class Settings(BaseSettings):
             "LOGISTICS_VALHALLA_TIMEOUT_SECONDS", "VALHALLA_TIMEOUT_SECONDS"
         ),
     )
+    yandex_geosuggest_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "LOGISTICS_YANDEX_GEOSUGGEST_API_KEY",
+            "YANDEX_GEOSUGGEST_API_KEY",
+        ),
+    )
+    yandex_geocoder_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "LOGISTICS_YANDEX_GEOCODER_API_KEY",
+            "YANDEX_GEOCODER_API_KEY",
+        ),
+    )
+    yandex_geosuggest_url: str = Field(
+        default="https://suggest-maps.yandex.ru/v1/suggest",
+        validation_alias=AliasChoices(
+            "LOGISTICS_YANDEX_GEOSUGGEST_URL",
+            "YANDEX_GEOSUGGEST_URL",
+        ),
+    )
+    yandex_geocoder_url: str = Field(
+        default="https://geocode-maps.yandex.ru/v1",
+        validation_alias=AliasChoices(
+            "LOGISTICS_YANDEX_GEOCODER_URL",
+            "YANDEX_GEOCODER_URL",
+        ),
+    )
+    yandex_geocoding_timeout_seconds: float = Field(
+        default=5.0,
+        validation_alias=AliasChoices(
+            "LOGISTICS_YANDEX_GEOCODING_TIMEOUT_SECONDS",
+            "YANDEX_GEOCODING_TIMEOUT_SECONDS",
+        ),
+    )
     osm_data_version: str = Field(
         default="unknown",
         validation_alias=AliasChoices("LOGISTICS_OSM_DATA_VERSION", "OSM_DATA_VERSION"),
     )
-    default_scenario_timezone: str = Field(
+    default_warehouse_timezone: str = Field(
         default="Europe/Moscow",
         validation_alias=AliasChoices(
-            "LOGISTICS_DEFAULT_SCENARIO_TIMEZONE", "DEFAULT_SCENARIO_TIMEZONE"
+            "LOGISTICS_DEFAULT_WAREHOUSE_TIMEZONE", "DEFAULT_WAREHOUSE_TIMEZONE"
         ),
     )
     planner_default_seed: int = Field(
@@ -201,6 +236,38 @@ class Settings(BaseSettings):
             raise ValueError("VALHALLA_TIMEOUT_SECONDS must be non-negative")
         return value
 
+    @field_validator("yandex_geosuggest_api_key", "yandex_geocoder_api_key")
+    @classmethod
+    def normalize_optional_yandex_key(cls, value: str | None) -> str | None:
+        """Treat blank optional provider credentials as absent configuration."""
+
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("yandex_geosuggest_url", "yandex_geocoder_url")
+    @classmethod
+    def validate_yandex_url(cls, value: str) -> str:
+        """Require absolute HTTPS provider endpoints without embedded parameters."""
+
+        normalized = value.strip()
+        parsed = urlparse(normalized)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise ValueError("Yandex geocoding endpoint must be an absolute HTTPS URL")
+        if parsed.query or parsed.fragment:
+            raise ValueError("Yandex geocoding endpoint must not contain a query or fragment")
+        return normalized
+
+    @field_validator("yandex_geocoding_timeout_seconds")
+    @classmethod
+    def validate_yandex_timeout(cls, value: float) -> float:
+        """Bound external geocoding latency so an unavailable provider cannot stall the UI."""
+
+        if not isfinite(value) or value <= 0 or value > 30:
+            raise ValueError("YANDEX_GEOCODING_TIMEOUT_SECONDS must be between 0 and 30 seconds")
+        return value
+
     @field_validator("osm_data_version")
     @classmethod
     def validate_osm_data_version(cls, value: str) -> str:
@@ -274,17 +341,17 @@ class Settings(BaseSettings):
             raise ValueError("ROUTING_PROVIDER=valhalla requires VALHALLA_ENABLED=true")
         return self
 
-    @field_validator("default_scenario_timezone")
+    @field_validator("default_warehouse_timezone")
     @classmethod
     def validate_default_timezone(cls, value: str) -> str:
-        """Require a valid IANA default scenario timezone."""
+        """Require a valid IANA default warehouse timezone."""
 
         from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
         try:
             ZoneInfo(value)
         except ZoneInfoNotFoundError as exc:
-            raise ValueError("DEFAULT_SCENARIO_TIMEZONE must be a valid IANA name") from exc
+            raise ValueError("DEFAULT_WAREHOUSE_TIMEZONE must be a valid IANA name") from exc
         return value
 
 

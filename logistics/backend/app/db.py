@@ -26,7 +26,7 @@ NAMING_CONVENTION = {
 
 
 class Base(AsyncAttrs, DeclarativeBase):
-    """Declarative root shared by all simulator persistence models."""
+    """Declarative root shared by all warehouse-planning persistence models."""
 
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 

@@ -9,6 +9,7 @@ from app.models.domain import (
     OptimizationTraceEvent,
     OsmRestrictionImport,
     OsmTruckRestriction,
+    PlanningDayClosure,
     PlanningTask,
     PlanNotificationLog,
     RequestDateOption,
@@ -17,7 +18,8 @@ from app.models.domain import (
     RoutePlan,
     RouteSegment,
     RouteStop,
-    Scenario,
+    SlotDayPlan,
+    SlotHold,
     Trailer,
     UnassignedTask,
     Vehicle,
@@ -25,7 +27,7 @@ from app.models.domain import (
     VehicleLoadProfileType,
     Warehouse,
     Zone,
-    ZoneRelation,
+    ZoneKind,
 )
 
 __all__ = [
@@ -38,6 +40,7 @@ __all__ = [
     "OsmRestrictionImport",
     "OsmTruckRestriction",
     "PlanNotificationLog",
+    "PlanningDayClosure",
     "PlanningTask",
     "RequestDateOption",
     "RouteCycle",
@@ -45,7 +48,8 @@ __all__ = [
     "RoutePlan",
     "RouteSegment",
     "RouteStop",
-    "Scenario",
+    "SlotDayPlan",
+    "SlotHold",
     "Trailer",
     "UnassignedTask",
     "Vehicle",
@@ -53,5 +57,5 @@ __all__ = [
     "VehicleLoadProfileType",
     "Warehouse",
     "Zone",
-    "ZoneRelation",
+    "ZoneKind",
 ]

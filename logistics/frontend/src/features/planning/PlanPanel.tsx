@@ -40,14 +40,14 @@ function isTargetData(value: unknown): value is TargetData {
   return typeof data.cycleId === 'string' && typeof data.sequence === 'number';
 }
 
-function stopSymbol(stop: RouteStop): string {
-  if (stop.stop_type === 'DELIVERY') return 'D';
-  if (stop.stop_type === 'PICKUP') return 'V';
-  return 'С';
+function stopTypeLabel(stop: RouteStop): string {
+  if (stop.stop_type === 'DELIVERY') return 'Доставка';
+  if (stop.stop_type === 'PICKUP') return 'Вывоз';
+  return 'Склад';
 }
 
-function SortableStop({ stop, cycleId, locked, timeZone }: { stop: RouteStop; cycleId: UUID; locked: boolean; timeZone: string }) {
-  const draggable = Boolean(stop.task_id) && !locked && !stop.locked;
+function SortableStop({ stop, cycleId, locked, readOnly, timeZone }: { stop: RouteStop; cycleId: UUID; locked: boolean; readOnly: boolean; timeZone: string }) {
+  const draggable = Boolean(stop.task_id) && !locked && !stop.locked && !readOnly;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: stop.task_id ?? stop.id,
     disabled: !draggable,
@@ -63,22 +63,23 @@ function SortableStop({ stop, cycleId, locked, timeZone }: { stop: RouteStop; cy
       {...listeners}
     >
       <time>{formatTime(stop.planned_arrival, timeZone)}</time>
-      <span className="stop-row__type" title={stop.stop_type}>{stopSymbol(stop)}</span>
-      <span>{stop.label ?? stop.stop_type}{stop.zone_code ? ` · ${stop.zone_code}` : ''}</span>
+      <span className={`stop-row__type stop-row__type--${stop.stop_type.toLowerCase()}`} title={stop.stop_type}>{stopTypeLabel(stop)}</span>
+      <span>{stop.label ?? stop.stop_type}</span>
       <span className="stop-row__load">{stop.load_before}→{stop.load_after}</span>
     </div>
   );
 }
 
-function CycleCard({ cycle, timeZone, onSelect, onToggleLock }: {
+function CycleCard({ cycle, timeZone, readOnly, onSelect, onToggleLock }: {
   cycle: RouteCycle;
   timeZone: string;
+  readOnly: boolean;
   onSelect: (id: UUID) => void;
   onToggleLock: (cycle: RouteCycle) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: `cycle-${cycle.id}`,
-    disabled: cycle.locked,
+    disabled: cycle.locked || readOnly,
     data: { cycleId: cycle.id, sequence: cycle.stops.length } satisfies TargetData,
   });
   const taskIds = cycle.stops.flatMap((stop) => stop.task_id ? [stop.task_id] : []);
@@ -88,13 +89,13 @@ function CycleCard({ cycle, timeZone, onSelect, onToggleLock }: {
         <button type="button" className="button button--ghost button--sm" onClick={() => onSelect(cycle.id)}>
           <strong>Цикл {cycle.sequence}</strong> · {formatTime(cycle.planned_start, timeZone)}–{formatTime(cycle.planned_finish, timeZone)}
         </button>
-        <Button size="sm" variant="ghost" onClick={() => onToggleLock(cycle)} aria-label={cycle.locked ? `Разблокировать цикл ${cycle.sequence}` : `Заблокировать цикл ${cycle.sequence}`}>
+        <Button size="sm" variant="ghost" disabled={readOnly} onClick={() => onToggleLock(cycle)} aria-label={cycle.locked ? `Разблокировать цикл ${cycle.sequence}` : `Заблокировать цикл ${cycle.sequence}`}>
           {cycle.locked ? <Lock size={13} /> : <LockOpen size={13} />}
         </Button>
       </header>
       <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
         <div className="stop-list">
-          {cycle.stops.map((stop) => <SortableStop key={stop.id} stop={stop} cycleId={cycle.id} locked={cycle.locked} timeZone={timeZone} />)}
+          {cycle.stops.map((stop) => <SortableStop key={stop.id} stop={stop} cycleId={cycle.id} locked={cycle.locked} readOnly={readOnly} timeZone={timeZone} />)}
         </div>
       </SortableContext>
       <div className="load-chain" aria-label={`Цепочка загрузки цикла ${cycle.sequence}`}>
@@ -110,14 +111,15 @@ function CycleCard({ cycle, timeZone, onSelect, onToggleLock }: {
   );
 }
 
-function DraggableUnassigned({ item }: { item: UnassignedTask }) {
+function DraggableUnassigned({ item, readOnly }: { item: UnassignedTask; readOnly: boolean }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useSortable({
     id: `unassigned-${item.task.id}`,
+    disabled: readOnly,
     data: { taskId: item.task.id, sourceCycleId: null, sourceSequence: 0 } satisfies DragData,
   });
   return (
     <article ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), opacity: isDragging ? .5 : 1 }} className="unassigned-card" {...attributes} {...listeners}>
-      <div className="entity-card__row"><strong>№{shortId(item.request?.id ?? item.task.request_id)}</strong><GripVertical size={15} /></div>
+      <div className="entity-card__row"><strong>№{shortId(item.request?.id ?? item.task.request_id)}</strong><span>{item.task.mandatory ? <Badge tone="danger">обязательно</Badge> : null}{!readOnly ? <GripVertical size={15} /> : null}</span></div>
       <p>{item.request?.type === 'PICKUP' ? 'Вывоз' : 'Доставка'}, {item.task.quantity} бытов.</p>
       <ul>{item.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
       {item.closest_option ? <p>Ближайший вариант: {item.closest_option}</p> : null}
@@ -135,10 +137,11 @@ export interface PlanMove {
   kind: 'MOVE_TASK' | 'REORDER_TASK';
 }
 
-export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, onSelectCycle, onSelectDriverRoute, onMove, onToggleLock }: {
+export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, readOnly = false, onSelectCycle, onSelectDriverRoute, onMove, onToggleLock }: {
   plan: RoutePlan | null;
   timeZone: string;
   showUnassignedOnly?: boolean;
+  readOnly?: boolean;
   onSelectCycle: (id: UUID) => void;
   onSelectDriverRoute: (driverShiftId: UUID) => void;
   onMove: (move: PlanMove) => void;
@@ -148,12 +151,13 @@ export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, onSelect
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
-  if (!plan) return <EmptyState title="План ещё не построен" description="Выберите дату и нажмите «Построить маршруты»." />;
+  if (!plan) return <EmptyState title="Автоплан пока не готов" description="Заполните для доставок и вывозов время, количество и проезд с прицепом. После этого рейсы появятся автоматически." />;
   const firstCycles = plan.driver_routes.flatMap((route) => route.cycles[0] ? [route.cycles[0]] : []);
   const earliestStart = firstCycles.reduce<string | null>((earliest, cycle) => !earliest || cycle.planned_start < earliest ? cycle.planned_start : earliest, null);
   const parallelStarts = earliestStart ? firstCycles.filter((cycle) => cycle.planned_start === earliestStart).length : 0;
 
   const onDragEnd = (event: DragEndEvent) => {
+    if (readOnly) return;
     if (!isDragData(event.active.data.current) || !event.over) return;
     let target = event.over.data.current;
     if (!isTargetData(target)) {
@@ -184,7 +188,7 @@ export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, onSelect
           <p className="section-subtitle">Причины сформированы планировщиком. Перетаскивание запускает серверную валидацию.</p>
           <SortableContext items={plan.unassigned.map((item) => `unassigned-${item.task.id}`)} strategy={verticalListSortingStrategy}>
             <div className="entity-list">
-              {plan.unassigned.map((item) => <DraggableUnassigned item={item} key={item.task.id} />)}
+              {plan.unassigned.map((item) => <DraggableUnassigned item={item} readOnly={readOnly} key={item.task.id} />)}
               {!plan.unassigned.length ? <EmptyState title="Все задачи распределены" description="Для выбранной даты необработанных задач нет." /> : null}
             </div>
           </SortableContext>
@@ -192,7 +196,7 @@ export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, onSelect
       ) : (
         <>
           <h2 className="section-title">План · версия {plan.version}</h2>
-          <p className="section-subtitle">Перетаскивайте транспортные части между циклами. Ошибочные изменения backend отклонит.</p>
+          <p className="section-subtitle">{readOnly ? 'План утверждён и доступен только для просмотра.' : 'Перетаскивайте транспортные части между циклами. Ошибочные изменения backend отклонит.'}</p>
           {earliestStart ? <div className="parallel-start-summary"><strong>Параллельный старт</strong><span>{parallelStarts} из {firstCycles.length} первых рейсов начинаются в {formatTime(earliestStart, timeZone)}. Остальные могут стартовать позже только из-за окна или занятости своей смены.</span></div> : null}
           {plan.driver_routes.map((route) => (
             <section className="route-driver" key={route.driver_shift_id} data-testid="driver-route">
@@ -202,9 +206,43 @@ export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, onSelect
                   <p>{route.vehicle_name} · {route.registration_number}</p>
                   <p className="route-driver__workload">Нагрузка смены: {integerFormatter.format(route.metrics.shift_utilization_percent)}% · циклов: {integerFormatter.format(route.cycles.length)}</p>
                 </button>
-                <Badge tone="accent">{route.preferred_route_group}</Badge>
+                <Badge tone={plan.status === 'CONFIRMED' ? 'success' : 'accent'}>{plan.status === 'CONFIRMED' ? 'утверждён' : `${route.cycles.length} рейс.`}</Badge>
               </header>
-              {route.cycles.map((cycle) => <CycleCard key={cycle.id} cycle={cycle} timeZone={timeZone} onSelect={onSelectCycle} onToggleLock={onToggleLock} />)}
+              {route.cross_warehouse_service ? (
+                <div className="parallel-start-summary" data-testid={`cross-warehouse-service-${route.driver_shift_id}`}>
+                  <strong><Badge tone="warning">Привлечённый ресурс</Badge> {route.cross_warehouse_service.resource_origin_warehouse_name}</strong>
+                  <span>
+                    Прибытие и доступность: {formatTime(route.cross_warehouse_service.available_at_served, timeZone)} ·
+                    возврат на исходный склад: {route.cross_warehouse_service.returns_to_origin ? 'да' : 'нет'} ·
+                    базирование {route.cross_warehouse_service.changes_operational_warehouse ? 'изменится' : 'не меняется'}
+                  </span>
+                  <span>
+                    Позиционирование: {formatDistance(route.cross_warehouse_service.positioning_distance_meters)} ·
+                    дорога туда {formatDuration(route.cross_warehouse_service.inbound_travel_minutes * 60)} ·
+                    обратно {formatDuration(route.cross_warehouse_service.return_travel_minutes * 60)}
+                  </span>
+                  {route.cross_warehouse_service.outbound_positioning_empty ? (
+                    <span>
+                      <strong>Попутное перемещение:</strong> участок до представительского склада пока пустой ·
+                      доступно {route.cross_warehouse_service.available_transfer_cabin_capacity} бытовк.
+                      {route.cross_warehouse_service.available_transfer_cabin_capacity > 1
+                        ? ' с прицепом'
+                        : route.cross_warehouse_service.reason_codes.includes('TRAILER_REQUIRED')
+                          ? ' · для второй бытовки требуется прицеп'
+                          : route.cross_warehouse_service.reason_codes.includes('VEHICLE_CAPACITY_ONE_CABIN')
+                            ? ' · автомобиль вмещает только одну бытовку'
+                            : ''}
+                      {' · '}
+                      <a
+                        href={`/logistics/transfers?sourceWarehouseId=${encodeURIComponent(route.cross_warehouse_service.resource_origin_warehouse_id)}&destinationWarehouseId=${encodeURIComponent(route.cross_warehouse_service.service_warehouse_id)}`}
+                      >
+                        Добавить бытовки
+                      </a>
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
+              {route.cycles.map((cycle) => <CycleCard key={cycle.id} cycle={cycle} timeZone={timeZone} readOnly={readOnly} onSelect={onSelectCycle} onToggleLock={onToggleLock} />)}
             </section>
           ))}
           {!plan.driver_routes.length ? <EmptyState icon={<TriangleAlert />} title="Нет маршрутов" description="Планировщик не смог создать ни одного допустимого цикла. Проверьте нераспределённые задачи." /> : null}

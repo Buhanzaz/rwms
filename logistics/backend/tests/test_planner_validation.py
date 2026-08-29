@@ -27,7 +27,6 @@ from app.planner import (
     ValidationWarningCode,
     Vehicle,
     Warehouse,
-    ZoneSnapshot,
     validate_route_plan,
 )
 from app.routing import GeoPoint, MockRoutingProvider, RoutingSettings
@@ -65,14 +64,12 @@ def generated_cycle(
         for index, request_type in enumerate(request_types)
     )
     data = PlanningInput(
-        "scenario",
-        DAY,
-        warehouse,
-        requests,
-        (ZoneSnapshot("z", "Z", "WEST"),),
-        (),
-        (shift,),
-        (vehicle,),
+        warehouse_id="warehouse",
+        planning_date=DAY,
+        warehouse=warehouse,
+        requests=requests,
+        shifts=(shift,),
+        vehicles=(vehicle,),
     )
     result = asyncio.run(
         HeuristicPlanner(
@@ -158,23 +155,102 @@ def test_domain_and_validator_reject_load_and_aggregate_metric_mismatches() -> N
     assert ValidationErrorCode.INVALID_TIME in codes
 
 
-def test_validator_detects_delivery_after_pickup() -> None:
-    cycle, data, _ = generated_cycle((TaskType.DELIVERY, TaskType.PICKUP))
-    customer_stops = [stop for stop in cycle.stops if stop.task_id]
-    assert len(customer_stops) == 2
-    first = replace(customer_stops[0], stop_type=StopType.PICKUP)
-    second = replace(customer_stops[1], stop_type=StopType.DELIVERY)
-    bad_cycle = replace(cycle, stops=(cycle.stops[0], first, second, cycle.stops[-1]))
+def test_validator_allows_capacity_safe_manual_pickup_delivery_interleaving() -> None:
+    """A pickup can precede a later delivery when every load transition remains safe."""
+
+    cycle, data, _ = generated_cycle(
+        (TaskType.DELIVERY, TaskType.DELIVERY, TaskType.PICKUP)
+    )
+    depot, first_delivery, second_delivery, pickup, depot_return = cycle.stops
+    interleaved = replace(
+        cycle,
+        stops=(
+            depot,
+            first_delivery,
+            replace(
+                second_delivery,
+                stop_type=StopType.PICKUP,
+                task_id=pickup.task_id,
+                quantity_delta=1,
+                load_before=1,
+                load_after=2,
+            ),
+            replace(
+                pickup,
+                stop_type=StopType.DELIVERY,
+                task_id=second_delivery.task_id,
+                quantity_delta=-1,
+                load_before=2,
+                load_after=1,
+            ),
+            replace(depot_return, load_before=1, quantity_delta=-1),
+        ),
+    )
 
     validation = validate_route_plan(
-        (bad_cycle,),
+        (interleaved,),
         warehouse=data.warehouse,
         shifts=data.shifts,
         vehicles=data.vehicles,
         settings=PlanningSettings(max_detour_ratio=10),
     )
 
-    assert ValidationErrorCode.PICKUP_BEFORE_DELIVERY in error_codes(validation)
+    assert validation.valid
+
+
+def test_validator_rejects_interleaving_that_exceeds_capacity() -> None:
+    """Removing the blanket ordering rule does not weaken dynamic load validation."""
+
+    cycle, data, _ = generated_cycle(
+        (
+            TaskType.DELIVERY,
+            TaskType.DELIVERY,
+            TaskType.PICKUP,
+            TaskType.PICKUP,
+        )
+    )
+    depot, delivery_one, delivery_two, pickup_one, pickup_two, depot_return = cycle.stops
+    overloaded = replace(
+        cycle,
+        stops=(
+            depot,
+            delivery_one,
+            replace(
+                delivery_two,
+                stop_type=StopType.PICKUP,
+                task_id=pickup_one.task_id,
+                quantity_delta=1,
+                load_before=1,
+                load_after=2,
+            ),
+            replace(
+                pickup_one,
+                task_id=pickup_two.task_id,
+                quantity_delta=1,
+                load_before=2,
+                load_after=3,
+            ),
+            replace(
+                pickup_two,
+                stop_type=StopType.DELIVERY,
+                task_id=delivery_two.task_id,
+                quantity_delta=-1,
+                load_before=3,
+                load_after=2,
+            ),
+            replace(depot_return, load_before=2, quantity_delta=-2),
+        ),
+    )
+
+    validation = validate_route_plan(
+        (overloaded,),
+        warehouse=data.warehouse,
+        shifts=data.shifts,
+        vehicles=data.vehicles,
+        settings=PlanningSettings(max_detour_ratio=10),
+    )
+
+    assert ValidationErrorCode.CAPACITY_EXCEEDED in error_codes(validation)
 
 
 def test_validator_rejects_pickup_load_disguised_as_delivery() -> None:
@@ -200,7 +276,6 @@ def test_validator_rejects_pickup_load_disguised_as_delivery() -> None:
         settings=PlanningSettings(max_detour_ratio=10),
     )
 
-    assert ValidationErrorCode.PICKUP_BEFORE_DELIVERY not in error_codes(validation)
     assert ValidationErrorCode.LOAD_DISCONTINUITY in error_codes(validation)
 
 
@@ -264,7 +339,7 @@ def test_validator_allows_delivery_in_later_depot_cycle_after_pickup() -> None:
         settings=PlanningSettings(),
     )
 
-    assert ValidationErrorCode.PICKUP_BEFORE_DELIVERY not in error_codes(validation)
+    assert validation.valid
 
 
 def test_validator_keeps_different_driver_shifts_independent() -> None:
@@ -301,7 +376,7 @@ def test_validator_keeps_different_driver_shifts_independent() -> None:
         settings=PlanningSettings(),
     )
 
-    assert ValidationErrorCode.PICKUP_BEFORE_DELIVERY not in error_codes(validation)
+    assert validation.valid
 
 
 def test_validator_detects_duplicate_assignment_driver_and_vehicle_overlap() -> None:
@@ -365,7 +440,9 @@ def test_overtime_is_error_unless_explicitly_allowed_as_soft() -> None:
     assert ValidationWarningCode.OVERTIME_WARNING in {issue.code for issue in soft.warnings}
 
 
-def test_hard_window_requires_service_completion_before_window_end() -> None:
+def test_start_within_window_allows_service_completion_after_window_end() -> None:
+    """START_WITHIN_SLOT checks arrival/service start, not the end of unloading."""
+
     cycle, data, _ = generated_cycle((TaskType.DELIVERY,))
     stop = cycle.stops[1]
     constrained = replace(
@@ -374,17 +451,17 @@ def test_hard_window_requires_service_completion_before_window_end() -> None:
         window_end=stop.planned_departure - timedelta(seconds=1),
         window_is_hard=True,
     )
-    bad_cycle = replace(cycle, stops=(cycle.stops[0], constrained, cycle.stops[-1]))
+    valid_cycle = replace(cycle, stops=(cycle.stops[0], constrained, cycle.stops[-1]))
 
     validation = validate_route_plan(
-        (bad_cycle,),
+        (valid_cycle,),
         warehouse=data.warehouse,
         shifts=data.shifts,
         vehicles=data.vehicles,
         settings=PlanningSettings(),
     )
 
-    assert ValidationErrorCode.TIME_WINDOW_VIOLATION in error_codes(validation)
+    assert ValidationErrorCode.TIME_WINDOW_VIOLATION not in error_codes(validation)
 
 
 def test_validator_rejects_early_customer_arrival_hidden_inside_long_stop() -> None:

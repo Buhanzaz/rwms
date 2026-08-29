@@ -283,20 +283,35 @@ class ValhallaRoutingProvider:
     async def get_truck_travel_time_contours(
         self,
         origin: GeoPoint,
+        *,
+        departure_at: datetime | None = None,
+        profile: EffectiveTruckProfile | None = None,
+        contour_minutes: tuple[int, ...] = _TRAVEL_TIME_CONTOURS_MINUTES,
     ) -> list[dict[str, object]]:
-        """Return fixed one-to-four-hour truck isochrones with validated GeoJSON areas."""
+        """Return time/profile-aware truck isochrones with validated GeoJSON areas."""
+
+        require_aware(departure_at, "departure_at")
+        if not contour_minutes or any(value < 1 or value > 240 for value in contour_minutes):
+            raise ValueError("isochrone contours must contain minutes in [1, 240]")
+        if len(set(contour_minutes)) != len(contour_minutes):
+            raise ValueError("isochrone contour minutes must be unique")
+        payload: dict[str, object] = {
+            "locations": [self._location(origin)],
+            "costing": "truck",
+            "contours": [{"time": minutes} for minutes in contour_minutes],
+            "polygons": True,
+        }
+        if profile is not None:
+            payload["costing_options"] = {"truck": self._truck_costing(profile)}
+        if departure_at is not None:
+            payload["date_time"] = self._date_time(departure_at)
 
         raw_payload = await self._request_json(
             "/isochrone",
-            {
-                "locations": [self._location(origin)],
-                "costing": "truck",
-                "contours": [{"time": minutes} for minutes in _TRAVEL_TIME_CONTOURS_MINUTES],
-                "polygons": True,
-            },
+            payload,
         )
-        payload = self._mapping(raw_payload, "isochrone response")
-        return self._parse_travel_time_contours(payload)
+        response = self._mapping(raw_payload, "isochrone response")
+        return self._parse_travel_time_contours(response, contour_minutes)
 
     def _route_request(
         self,
@@ -527,6 +542,7 @@ class ValhallaRoutingProvider:
     def _parse_travel_time_contours(
         self,
         payload: Mapping[str, object],
+        requested_contours: tuple[int, ...],
     ) -> list[dict[str, object]]:
         """Canonicalize exactly the requested Valhalla Polygon/MultiPolygon contours."""
 
@@ -546,7 +562,9 @@ class ValhallaRoutingProvider:
                 feature.get("properties"), f"isochrone features[{index}].properties"
             )
             contour_minutes = self._isochrone_contour_minutes(
-                properties.get("contour"), f"isochrone features[{index}].properties.contour"
+                properties.get("contour"),
+                f"isochrone features[{index}].properties.contour",
+                requested_contours,
             )
             if contour_minutes in contours:
                 raise RoutingProviderUnavailableError(
@@ -560,11 +578,11 @@ class ValhallaRoutingProvider:
                 "geometry": geometry,
                 "properties": {"contour_minutes": contour_minutes},
             }
-        if set(contours) != set(_TRAVEL_TIME_CONTOURS_MINUTES):
+        if set(contours) != set(requested_contours):
             raise RoutingProviderUnavailableError(
                 "Valhalla did not return all requested travel-time contours."
             )
-        return [contours[minutes] for minutes in reversed(_TRAVEL_TIME_CONTOURS_MINUTES)]
+        return [contours[minutes] for minutes in sorted(requested_contours, reverse=True)]
 
     def _isochrone_geometry(self, value: object, field: str) -> dict[str, object]:
         """Validate and normalize one GeoJSON Polygon or MultiPolygon geometry."""
@@ -629,18 +647,22 @@ class ValhallaRoutingProvider:
         return rings
 
     @staticmethod
-    def _isochrone_contour_minutes(value: object, field: str) -> int:
-        """Require one unique member of the fixed visual contour set."""
+    def _isochrone_contour_minutes(
+        value: object,
+        field: str,
+        requested_contours: tuple[int, ...],
+    ) -> int:
+        """Require one unique member of the contours requested for this calculation."""
 
         if (
             not isinstance(value, int | float)
             or isinstance(value, bool)
             or not isfinite(value)
             or int(value) != value
-            or int(value) not in _TRAVEL_TIME_CONTOURS_MINUTES
+            or int(value) not in requested_contours
         ):
             raise RoutingProviderUnavailableError(
-                f"Valhalla {field} must be one of {_TRAVEL_TIME_CONTOURS_MINUTES}."
+                f"Valhalla {field} must be one of {requested_contours}."
             )
         return int(value)
 

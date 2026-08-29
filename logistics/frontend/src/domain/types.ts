@@ -47,12 +47,14 @@ export interface PlanningSettings {
   evening_traffic_multiplier: number;
   default_service_minutes: number;
   default_buffer_minutes: number;
+  default_cargo_length_mm: number;
+  default_cargo_width_mm: number;
+  default_cargo_height_mm: number;
+  default_cargo_weight_kg: number;
   max_optimization_seconds: number;
   max_local_search_iterations: number;
   empty_travel_weight: number;
   detour_weight: number;
-  cross_group_penalty: number;
-  driver_preference_bonus: number;
   additional_resource_activation_penalty: number;
   preferred_shift_utilization_percent: number;
   driver_workload_weight: number;
@@ -67,70 +69,78 @@ export interface PlanningSettings {
   trace_enabled?: boolean;
 }
 
-export interface Scenario {
-  id: UUID;
-  name: string;
-  description: string;
-  timezone: string;
-  default_planning_date: IsoDate;
-  created_at: IsoDateTime;
-  updated_at: IsoDateTime;
-  settings: PlanningSettings;
-  seed?: number | null;
-}
-
+/** One RWMS-bound warehouse that owns its operational planning workspace. */
 export interface Warehouse {
   id: UUID;
-  scenario_id: UUID;
-  external_warehouse_id?: UUID | null;
+  external_warehouse_id: UUID;
+  external_warehouse_version: number;
   name: string;
+  city?: string | null;
+  address: string | null;
+  timezone: string;
   latitude: number;
   longitude: number;
+  representative: boolean;
+  routing_ready: boolean;
+  default_planning_date: IsoDate | null;
+  seed: number;
+  settings: PlanningSettings;
+  capacity_generation: number;
   loading_minutes: number;
   unloading_minutes: number;
   turnaround_minutes: number;
   working_day_start: string;
   working_day_end: string;
+  isochrone_price_60_minutes: number;
+  isochrone_price_120_minutes: number;
+  isochrone_price_180_minutes: number;
+  isochrone_price_240_minutes: number;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
 }
 
+/** Canonical RWMS warehouse identity offered for a new local binding. */
+export interface AvailableWarehouse {
+  warehouse_id: UUID;
+  warehouse_version: number;
+  name: string;
+  city: string;
+  address: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  timezone: string;
+  representative: boolean;
+  routing_ready: boolean;
+  routing_unavailable_reason?: string | null;
+  local_warehouse_id?: UUID | null;
+}
+
+/** Supported operational meaning of a warehouse-owned exceptional polygon. */
+export type ZoneKind = 'FORBIDDEN' | 'NO_TRAILER' | 'SPECIAL_PRICE';
+
+/** Access restriction or special-price polygon owned by one warehouse workspace. */
 export interface Zone {
   id: UUID;
-  scenario_id: UUID;
+  warehouse_id: UUID;
   name: string;
-  code: string;
-  route_group: string;
+  kind: ZoneKind;
+  color: string;
   delivery_price: number;
   pickup_price: number;
   geometry: Polygon | MultiPolygon;
   version: number;
-  priority: number;
   locked: boolean;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
   stale_request_count?: number;
 }
 
-export type ZoneRelationType = 'ADJACENT' | 'PREFERRED' | 'ALLOWED' | 'DISCOURAGED' | 'BLOCKED';
-
-export interface ZoneRelation {
-  id: UUID;
-  from_zone_id: UUID;
-  to_zone_id: UUID;
-  relation_type: ZoneRelationType;
-  delivery_pair_allowed: boolean;
-  pickup_allowed: boolean;
-  max_detour_minutes: number;
-  max_detour_ratio: number;
-  penalty: number;
-  is_bidirectional: boolean;
-}
-
 export interface Driver {
   id: UUID;
-  scenario_id: UUID;
+  warehouse_id: UUID;
   external_worker_id?: UUID | null;
   name: string;
-  preferred_route_group: string;
+  rwms_assignment_mode: 'ASSIGNED_DRIVER' | 'WAREHOUSE_DRIVERS';
   passport_details?: string;
   active: boolean;
   notes: string;
@@ -138,7 +148,7 @@ export interface Driver {
 
 export interface Vehicle {
   id: UUID;
-  scenario_id: UUID;
+  warehouse_id: UUID;
   name: string;
   registration_number: string;
   capacity: number;
@@ -178,7 +188,7 @@ export interface Vehicle {
 
 export interface Trailer {
   id: UUID;
-  scenario_id: UUID;
+  warehouse_id: UUID;
   name: string;
   registration_number: string;
   active: boolean;
@@ -210,22 +220,21 @@ export type VehicleLoadConfigurationType =
   | 'TWO_CARGO_SPLIT';
 
 export interface VehicleLoadProfile {
-  id: UUID;
-  vehicle_id: UUID;
   configuration_type: VehicleLoadConfigurationType;
   max_actual_axle_load_kg: number;
 }
 
+/** Repeating daily driver assignment for an inclusive period inside one month. */
 export interface DriverShift {
   id: UUID;
-  scenario_id?: UUID;
+  warehouse_id: UUID;
   driver_id: UUID;
   vehicle_id: UUID;
-  date: IsoDate;
-  start_at: IsoDateTime;
-  end_at: IsoDateTime;
+  date_from: IsoDate;
+  date_to: IsoDate;
+  start_time: string;
+  end_time: string;
   break_minutes: number;
-  preferred_route_group: string;
   active: boolean;
 }
 
@@ -242,7 +251,7 @@ export interface RequestDateOption {
 
 export interface LogisticsRequest {
   id: UUID;
-  scenario_id: UUID;
+  warehouse_id: UUID;
   source_system?: string | null;
   external_id?: UUID | null;
   type: RequestType;
@@ -257,6 +266,7 @@ export interface LogisticsRequest {
   contact_phone?: string;
   service_minutes: number;
   priority: number;
+  mandatory: boolean;
   status: RequestStatus;
   zone_id: UUID | null;
   zone_version: number | null;
@@ -287,6 +297,7 @@ export interface PlanningTask {
   zone_version: number | null;
   service_minutes: number;
   priority: number;
+  mandatory: boolean;
   status: string;
   locked?: boolean;
 }
@@ -351,7 +362,7 @@ export interface RouteStop {
   latitude: number;
   longitude: number;
   label?: string;
-  zone_code?: string | null;
+  zone_id?: UUID | null;
   completed?: boolean;
   locked?: boolean;
 }
@@ -375,6 +386,38 @@ export interface RouteCycle {
   legs: RouteLeg[];
   explanation: string[];
   warnings: ValidationMessage[];
+  cross_warehouse_service?: CrossWarehouseServiceContext;
+}
+
+/** Immutable planning facts for a one-off visit from a supporting warehouse. */
+export interface CrossWarehouseServiceContext {
+  execution_mode: 'CROSS_WAREHOUSE_SERVICE';
+  service_warehouse_id: UUID;
+  resource_origin_warehouse_id: UUID;
+  resource_origin_warehouse_name: string;
+  support_warehouse_link_id: UUID;
+  driver_id: UUID;
+  driver_worker_id: UUID;
+  driver_name: string;
+  vehicle_id: UUID;
+  vehicle_name: string;
+  vehicle_registration_number: string;
+  available_at_served: IsoDateTime;
+  latest_served_finish: IsoDateTime;
+  inbound_travel_minutes: number;
+  return_travel_minutes: number;
+  positioning_distance_meters: number;
+  inbound_distance_meters: number;
+  return_distance_meters: number;
+  positioning_outbound_geometry?: Feature<LineString>;
+  positioning_return_geometry?: Feature<LineString>;
+  available_transfer_cabin_capacity: number;
+  trailer_available: boolean;
+  outbound_positioning_empty: boolean;
+  empty_positioning_reason_required: boolean;
+  returns_to_origin: boolean;
+  changes_operational_warehouse: boolean;
+  reason_codes: string[];
 }
 
 export interface DriverRoute {
@@ -386,9 +429,9 @@ export interface DriverRoute {
   vehicle_id: UUID;
   vehicle_name: string;
   registration_number: string;
-  preferred_route_group: string;
   cycles: RouteCycle[];
   metrics: PlanMetrics;
+  cross_warehouse_service?: CrossWarehouseServiceContext;
 }
 
 export interface PlanMetrics {
@@ -419,7 +462,6 @@ export type UnassignedReasonCode =
   | 'NO_SHIFT_CAPACITY'
   | 'TIME_WINDOW_CONFLICT'
   | 'SHIFT_LIMIT_EXCEEDED'
-  | 'ZONE_RELATION_BLOCKED'
   | 'DETOUR_TOO_LARGE'
   | 'OUTSIDE_ZONES'
   | 'REQUEST_NOT_READY'
@@ -427,6 +469,17 @@ export type UnassignedReasonCode =
   | 'DUPLICATE_ASSIGNMENT_CONFLICT'
   | 'NO_FEASIBLE_DELIVERY_PAIR'
   | 'NO_FEASIBLE_PICKUP_PAIR'
+  | 'TRAILER_ACCESS_NOT_ALLOWED'
+  | 'CARGO_TOO_HEAVY'
+  | 'CARGO_TOO_LONG'
+  | 'CARGO_TOO_WIDE'
+  | 'CARGO_TOO_HIGH'
+  | 'TRAILER_REQUIRED'
+  | 'NO_COMPATIBLE_TRAILER'
+  | 'AXLE_LOAD_EXCEEDED'
+  | 'NO_SAFE_ROUTE'
+  | 'ROUTING_PROVIDER_UNAVAILABLE'
+  | 'ROUTING_PROFILE_INCOMPLETE'
   | 'UNKNOWN';
 
 export interface UnassignedTask {
@@ -440,7 +493,6 @@ export interface UnassignedTask {
 
 export interface RoutePlan {
   id: UUID;
-  scenario_id: UUID;
   warehouse_id: UUID;
   date: IsoDate;
   version: number;
@@ -452,6 +504,7 @@ export interface RoutePlan {
   unassigned: UnassignedTask[];
   metrics: PlanMetrics;
   notification_logs?: PlanNotificationLog[];
+  manually_changed: boolean;
 }
 
 /** Simulated contact notification written only after final plan confirmation. */
@@ -494,7 +547,7 @@ export interface OptimizationTraceEvent {
 
 export interface OptimizationRun {
   id: UUID;
-  scenario_id: UUID;
+  warehouse_id: UUID;
   plan_id: UUID | null;
   status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'TIMED_OUT';
   phase?: string;
@@ -510,17 +563,19 @@ export interface OptimizationRun {
   cancel_requested: boolean;
 }
 
-export interface ScenarioWorkspace {
-  scenario: Scenario;
+/** Selected warehouse resources and zones plus all warehouses shown on the common map. */
+export interface WarehouseWorkspace {
+  warehouse: Warehouse;
   warehouses: Warehouse[];
   zones: Zone[];
-  zone_relations: ZoneRelation[];
   drivers: Driver[];
   vehicles: Vehicle[];
   trailers?: Trailer[];
   shifts: DriverShift[];
   requests: LogisticsRequest[];
   plans?: RoutePlan[];
+  /** Explicit non-fatal warning when saved demand is shown after an incomplete RWMS refresh. */
+  rwms_refresh_warning?: string;
 }
 
 export type MapSelection =
@@ -537,7 +592,7 @@ export type MapSelection =
 export interface MapClickDraft {
   longitude: number;
   latitude: number;
-  kind: 'warehouse' | 'request';
+  kind: 'request';
 }
 
 export interface SimulationOverride {

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from datetime import date
 from time import monotonic
 from typing import Annotated
 from uuid import UUID
@@ -12,43 +13,131 @@ from uuid import UUID
 from fastapi import APIRouter, Header, Query, Request
 from fastapi.responses import StreamingResponse
 
-from app.api.dependencies import PlannerDep, SessionDep, SettingsDep
+from app.api.dependencies import (
+    CapacityRwmsClientDep,
+    PlannerDep,
+    SessionDep,
+    SettingsDep,
+)
 from app.config import Settings
 from app.db import async_session_factory
 from app.errors import ApiError
+from app.integrations.rwms_sync import apply_plan_to_rwms, prepare_plan_for_rwms_apply
 from app.models.domain import OptimizationStatus
 from app.schemas.domain import (
-    CloneRequest,
     ConfirmPlanRequest,
     CyclePatch,
     DriverUnavailableRequest,
     ExpectedVersionRequest,
-    GeneratePlanRequest,
     ManualChangeRequest,
     OptimizationRunRead,
+    PlanningDayStatusRead,
     RoutePlanRead,
+    RwmsPlanApplyRequest,
     SimulationDelayRequest,
     TraceEventRead,
 )
+from app.services import catalog
 from app.services import plans as service
+from app.services.auto_planning import generate_missing_draft_plans
+from app.services.capacity_mutations import publish_capacity_after_mutation
+from app.services.capacity_projection import publish_warehouse_capacity
+from app.services.planning_days import close_planning_day, get_planning_day_status
 
 router = APIRouter(tags=["plans"])
 
 
-@router.post(
-    "/scenarios/{scenario_id}/plans/generate",
-    response_model=OptimizationRunRead,
-    status_code=202,
+@router.get(
+    "/warehouses/{warehouse_id}/planning-days/{planning_date}",
+    response_model=PlanningDayStatusRead,
 )
-async def generate_plan(
-    scenario_id: UUID,
-    payload: GeneratePlanRequest,
+async def planning_day_status(
+    warehouse_id: UUID,
+    planning_date: date,
+    session: SessionDep,
+) -> PlanningDayStatusRead:
+    """Read whether a depot date still accepts new delivery demand."""
+
+    return await get_planning_day_status(
+        session,
+        warehouse_id,
+        planning_date,
+    )
+
+
+@router.post(
+    "/warehouses/{warehouse_id}/planning-days/{planning_date}/close",
+    response_model=PlanningDayStatusRead,
+)
+async def close_day_acceptance(
+    warehouse_id: UUID,
+    planning_date: date,
     session: SessionDep,
     planner: PlannerDep,
-) -> object:
-    """Start a real planner run through the configured integration facade."""
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+) -> PlanningDayStatusRead:
+    """Finalize one date and automatically apply its assigned RWMS deliveries when enabled."""
 
-    return await planner.generate_plan(session, scenario_id, payload)
+    result = await close_planning_day(
+        session,
+        planner,
+        warehouse_id,
+        planning_date,
+    )
+    final_plan_to_apply: tuple[UUID, int] | None = None
+    if settings.rwms_sync_enabled and result.status.plan_id is not None:
+        final_plan = await service.get_plan(session, result.status.plan_id)
+        try:
+            client.ensure_enabled()
+            await prepare_plan_for_rwms_apply(
+                session,
+                final_plan.id,
+                RwmsPlanApplyRequest(expected_version=final_plan.version),
+            )
+        except ApiError as exc:
+            if exc.code != "RWMS_NO_DELIVERIES":
+                raise
+        else:
+            final_plan_to_apply = (final_plan.id, final_plan.version)
+    if result.changed:
+        await publish_capacity_after_mutation(session, warehouse_id, settings, client)
+    elif settings.rwms_capacity_publish_enabled:
+        # A repeated close retries the same committed capacity generation after
+        # a lost or failed remote response without advancing business state.
+        await publish_warehouse_capacity(session, warehouse_id, client)
+    if final_plan_to_apply is not None:
+        plan_id, plan_version = final_plan_to_apply
+        await apply_plan_to_rwms(
+            session,
+            plan_id,
+            RwmsPlanApplyRequest(expected_version=plan_version),
+            client,
+        )
+    return result.status
+
+
+@router.post(
+    "/warehouses/{warehouse_id}/plans/ensure",
+    response_model=RoutePlanRead | None,
+)
+async def ensure_automatic_plan(
+    warehouse_id: UUID,
+    planning_date: Annotated[date, Query(alias="date")],
+    session: SessionDep,
+    planner: PlannerDep,
+) -> RoutePlanRead | None:
+    """Refresh a marked plan in place or create a missing pre-plan for a complete day."""
+
+    await catalog.require_warehouse(session, warehouse_id)
+    await generate_missing_draft_plans(
+        session,
+        planner,
+        warehouse_id,
+        (planning_date,),
+    )
+    plan = await service.get_latest_plan_for_date(session, warehouse_id, planning_date)
+    return service.plan_read(plan) if plan is not None else None
 
 
 @router.get("/plans/{plan_id}", response_model=RoutePlanRead)
@@ -71,13 +160,6 @@ async def validate_plan(
     return service.plan_read(await service.get_plan(session, plan.id))
 
 
-@router.post("/plans/{plan_id}/clone", response_model=RoutePlanRead, status_code=201)
-async def clone_plan(plan_id: UUID, payload: CloneRequest, session: SessionDep) -> RoutePlanRead:
-    """Clone a saved plan before experimentation or manual editing."""
-
-    return service.plan_read(await service.clone_plan(session, plan_id, name=payload.name))
-
-
 @router.post("/plans/{plan_id}/confirm", response_model=RoutePlanRead)
 async def confirm_plan(
     plan_id: UUID, payload: ConfirmPlanRequest, session: SessionDep
@@ -89,6 +171,8 @@ async def confirm_plan(
         plan_id,
         payload.expected_version,
         accept_warnings=payload.accept_warnings,
+        empty_positioning_reason=payload.empty_positioning_reason,
+        confirmed_by=payload.confirmed_by,
     )
     return service.plan_read(plan)
 
@@ -129,6 +213,23 @@ async def manual_change(
     """Apply an audited, planner-validated drag-and-drop or structural edit."""
 
     plan = await planner.apply_manual_change(session, plan_id, payload)
+    return service.plan_read(await service.get_plan(session, plan.id))
+
+
+@router.post("/plans/{plan_id}/manual-changes/reset", response_model=RoutePlanRead)
+async def reset_manual_changes(
+    plan_id: UUID,
+    payload: ExpectedVersionRequest,
+    session: SessionDep,
+    planner: PlannerDep,
+) -> RoutePlanRead:
+    """Discard pre-confirmation manual edits and return a rebuilt automatic plan."""
+
+    plan = await planner.reset_manual_changes(
+        session,
+        plan_id,
+        payload.expected_version,
+    )
     return service.plan_read(await service.get_plan(session, plan.id))
 
 

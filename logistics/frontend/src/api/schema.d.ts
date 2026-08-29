@@ -28,6 +28,66 @@ export interface paths {
         patch: operations["update_driver_api_drivers__driver_id__patch"];
         trace?: never;
     };
+    "/api/geocoding/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolve Address
+         * @description Resolve an autocomplete result to the canonical address and map point.
+         */
+        get: operations["resolve_address_api_geocoding_resolve_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/geocoding/reverse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reverse Geocode
+         * @description Return the address known for a point placed directly on the map.
+         */
+        get: operations["reverse_geocode_api_geocoding_reverse_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/geocoding/suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Suggest Addresses
+         * @description Return address autocomplete results without exposing the provider credential.
+         */
+        get: operations["suggest_addresses_api_geocoding_suggestions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -128,6 +188,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/planning/slot-availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Calculate Slot Availability
+         * @description Return only slots that pass complete truck schedule simulation.
+         */
+        post: operations["calculate_slot_availability_api_planning_slot_availability_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/planning/slot-holds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Hold Slot
+         * @description Recalculate and hold one best insertion for a bounded TTL.
+         */
+        post: operations["hold_slot_api_planning_slot_holds_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/planning/slot-holds/{hold_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm Slot
+         * @description Confirm a hold atomically after version and route revalidation.
+         */
+        post: operations["confirm_slot_api_planning_slot_holds__hold_id__confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/plans/{plan_id}": {
         parameters: {
             query?: never;
@@ -142,26 +262,6 @@ export interface paths {
         get: operations["get_plan_api_plans__plan_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/plans/{plan_id}/clone": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Clone Plan
-         * @description Clone a saved plan before experimentation or manual editing.
-         */
-        post: operations["clone_plan_api_plans__plan_id__clone_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -222,6 +322,26 @@ export interface paths {
          * @description Apply an audited, planner-validated drag-and-drop or structural edit.
          */
         post: operations["manual_change_api_plans__plan_id__manual_change_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plans/{plan_id}/manual-changes/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Manual Changes
+         * @description Discard pre-confirmation manual edits and return a rebuilt automatic plan.
+         */
+        post: operations["reset_manual_changes_api_plans__plan_id__manual_changes_reset_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -451,7 +571,7 @@ export interface paths {
         put?: never;
         /**
          * Set Request Planning Details
-         * @description Store the dispatcher-approved date, service window, and access decision.
+         * @description Store dispatcher-owned obligation, date, window, access, and contact details.
          */
         post: operations["set_request_planning_details_api_requests__request_id__planning_details_post"];
         delete?: never;
@@ -540,510 +660,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/scenarios": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Scenarios
-         * @description List all local logistics experiments.
-         */
-        get: operations["list_scenarios_api_scenarios_get"];
-        put?: never;
-        /**
-         * Create Scenario
-         * @description Create an empty scenario using configured defaults for omitted fields.
-         */
-        post: operations["create_scenario_api_scenarios_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/generate-multi-day-demo": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Multi Day Demo
-         * @description Create a separate three-day scenario with parallel shifts and alternatives.
-         */
-        post: operations["generate_multi_day_demo_api_scenarios_generate_multi_day_demo_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/import": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Import Scenario
-         * @description Atomically import a validated scenario or create nothing on failure.
-         */
-        post: operations["import_scenario_api_scenarios_import_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Scenario
-         * @description Read one scenario by UUID.
-         */
-        get: operations["get_scenario_api_scenarios__scenario_id__get"];
-        put?: never;
-        post?: never;
-        /**
-         * Delete Scenario
-         * @description Delete one explicitly selected test scenario.
-         */
-        delete: operations["delete_scenario_api_scenarios__scenario_id__delete"];
-        options?: never;
-        head?: never;
-        /**
-         * Update Scenario
-         * @description Update scenario metadata or planner settings.
-         */
-        patch: operations["update_scenario_api_scenarios__scenario_id__patch"];
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}/clone": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Clone Scenario
-         * @description Clone scenario inputs and plans with remapped UUIDs.
-         */
-        post: operations["clone_scenario_api_scenarios__scenario_id__clone_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}/drivers": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Drivers
-         * @description List scenario drivers.
-         */
-        get: operations["list_drivers_api_scenarios__scenario_id__drivers_get"];
-        put?: never;
-        /**
-         * Create Driver
-         * @description Create a scenario driver.
-         */
-        post: operations["create_driver_api_scenarios__scenario_id__drivers_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}/export": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Export Scenario
-         * @description Export one reproducible, schema-versioned scenario JSON document.
-         */
-        post: operations["export_scenario_api_scenarios__scenario_id__export_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}/generate-demo": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Demo
-         * @description Explicitly reset one scenario to deterministic demo contents.
-         */
-        post: operations["generate_demo_api_scenarios__scenario_id__generate_demo_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}/generate-workload": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Workload
-         * @description Delete affected plans, then replace deterministic workload inside current zones.
-         */
-        post: operations["generate_workload_api_scenarios__scenario_id__generate_workload_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}/generated-workload": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Delete Workload
-         * @description Delete generator-owned workload and every saved plan for one exact date.
-         */
-        delete: operations["delete_workload_api_scenarios__scenario_id__generated_workload_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}/plans/generate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Plan
-         * @description Start a real planner run through the configured integration facade.
-         */
-        post: operations["generate_plan_api_scenarios__scenario_id__plans_generate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}/reclassify-requests": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reclassify Requests
-         * @description Run the deliberate scenario-wide request classification action.
-         */
-        post: operations["reclassify_requests_api_scenarios__scenario_id__reclassify_requests_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}/requests": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Requests
-         * @description List source requests with date options, tasks, and stale-zone signals.
-         */
-        get: operations["list_requests_api_scenarios__scenario_id__requests_get"];
-        put?: never;
-        /**
-         * Create Request
-         * @description Create, server-classify, and split a delivery or pickup request.
-         */
-        post: operations["create_request_api_scenarios__scenario_id__requests_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}/rwms/capacity": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reconcile Rwms Capacity
-         * @description Publish the complete current generated-delivery capacity snapshot to RWMS.
-         */
-        post: operations["reconcile_rwms_capacity_api_scenarios__scenario_id__rwms_capacity_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}/rwms/refresh": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Refresh Rwms Requests
-         * @description Refresh the current 31-day horizon for every linked warehouse server-side.
-         */
-        post: operations["refresh_rwms_requests_api_scenarios__scenario_id__rwms_refresh_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}/rwms/sync": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Sync Rwms Requests
-         * @description Import a bounded RWMS delivery feed without geocoding address-only orders.
-         */
-        post: operations["sync_rwms_requests_api_scenarios__scenario_id__rwms_sync_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}/shifts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Shifts
-         * @description List scenario driver and vehicle assignments.
-         */
-        get: operations["list_shifts_api_scenarios__scenario_id__shifts_get"];
-        put?: never;
-        /**
-         * Create Shift
-         * @description Create a non-overlapping scenario shift.
-         */
-        post: operations["create_shift_api_scenarios__scenario_id__shifts_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}/trailers": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Trailers
-         * @description List scenario-owned trailers.
-         */
-        get: operations["list_trailers_api_scenarios__scenario_id__trailers_get"];
-        put?: never;
-        /**
-         * Create Trailer
-         * @description Create a scenario-owned trailer.
-         */
-        post: operations["create_trailer_api_scenarios__scenario_id__trailers_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}/vehicle-configurations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Create Vehicle Configuration
-         * @description Atomically create a vehicle and its operational axle-load profiles.
-         */
-        post: operations["create_vehicle_configuration_api_scenarios__scenario_id__vehicle_configurations_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}/vehicles": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Vehicles
-         * @description List scenario vehicles.
-         */
-        get: operations["list_vehicles_api_scenarios__scenario_id__vehicles_get"];
-        put?: never;
-        /**
-         * Create Vehicle
-         * @description Create a scenario vehicle.
-         */
-        post: operations["create_vehicle_api_scenarios__scenario_id__vehicles_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}/warehouses": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Warehouses
-         * @description List scenario depots.
-         */
-        get: operations["list_warehouses_api_scenarios__scenario_id__warehouses_get"];
-        put?: never;
-        /**
-         * Create Warehouse
-         * @description Create a scenario depot.
-         */
-        post: operations["create_warehouse_api_scenarios__scenario_id__warehouses_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}/zone-relations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Zone Relations
-         * @description List directed zone transition policies.
-         */
-        get: operations["list_zone_relations_api_scenarios__scenario_id__zone_relations_get"];
-        put?: never;
-        /**
-         * Create Zone Relation
-         * @description Create a relation after verifying both zones belong to the scenario.
-         */
-        post: operations["create_zone_relation_api_scenarios__scenario_id__zone_relations_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/scenarios/{scenario_id}/zones": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Zones
-         * @description List zones with geometry and stale-classification counts.
-         */
-        get: operations["list_zones_api_scenarios__scenario_id__zones_get"];
-        put?: never;
-        /**
-         * Create Zone
-         * @description Create a validated version-one zone.
-         */
-        post: operations["create_zone_api_scenarios__scenario_id__zones_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/shifts/{shift_id}": {
         parameters: {
             query?: never;
@@ -1075,11 +691,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Get Trailer
-         * @description Read one trailer by UUID.
-         */
-        get: operations["get_trailer_api_trailers__trailer_id__get"];
+        get?: never;
         put?: never;
         post?: never;
         /**
@@ -1094,30 +706,6 @@ export interface paths {
          * @description Update a trailer's label, availability, or physical limits.
          */
         patch: operations["update_trailer_api_trailers__trailer_id__patch"];
-        trace?: never;
-    };
-    "/api/vehicle-load-profiles/{profile_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Delete Vehicle Load Profile
-         * @description Delete one operational axle-load profile.
-         */
-        delete: operations["delete_vehicle_load_profile_api_vehicle_load_profiles__profile_id__delete"];
-        options?: never;
-        head?: never;
-        /**
-         * Update Vehicle Load Profile
-         * @description Update one operational axle-load profile.
-         */
-        patch: operations["update_vehicle_load_profile_api_vehicle_load_profiles__profile_id__patch"];
         trace?: never;
     };
     "/api/vehicles/{vehicle_id}": {
@@ -1164,7 +752,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/vehicles/{vehicle_id}/load-profiles": {
+    "/api/warehouses": {
         parameters: {
             query?: never;
             header?: never;
@@ -1172,16 +760,36 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Vehicle Load Profiles
-         * @description List configured operational peak axle loads for one vehicle.
+         * List Warehouses
+         * @description Reconcile and list routing-ready canonical RWMS warehouse workspaces.
          */
-        get: operations["list_vehicle_load_profiles_api_vehicles__vehicle_id__load_profiles_get"];
+        get: operations["list_warehouses_api_warehouses_get"];
         put?: never;
         /**
-         * Create Vehicle Load Profile
-         * @description Create one vehicle operational axle-load profile.
+         * Create Warehouse
+         * @description Bind one RWMS identity, resolving its canonical address when coordinates are absent.
          */
-        post: operations["create_vehicle_load_profile_api_vehicles__vehicle_id__load_profiles_post"];
+        post: operations["create_warehouse_api_warehouses_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/available": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Available Warehouses
+         * @description List authoritative RWMS warehouse candidates and their local binding state.
+         */
+        get: operations["list_available_warehouses_api_warehouses_available_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1202,11 +810,7 @@ export interface paths {
         get: operations["get_warehouse_api_warehouses__warehouse_id__get"];
         put?: never;
         post?: never;
-        /**
-         * Delete Warehouse
-         * @description Delete an unused depot.
-         */
-        delete: operations["delete_warehouse_api_warehouses__warehouse_id__delete"];
+        delete?: never;
         options?: never;
         head?: never;
         /**
@@ -1216,7 +820,67 @@ export interface paths {
         patch: operations["update_warehouse_api_warehouses__warehouse_id__patch"];
         trace?: never;
     };
-    "/api/zone-relations/{relation_id}": {
+    "/api/warehouses/{warehouse_id}/available-drivers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Available Drivers
+         * @description List canonical RWMS workers eligible for exact-driver assignment.
+         */
+        get: operations["list_available_drivers_api_warehouses__warehouse_id__available_drivers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/drivers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Driver
+         * @description Create a warehouse driver.
+         */
+        post: operations["create_driver_api_warehouses__warehouse_id__drivers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/generate-workload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Generate Workload
+         * @description Replace deterministic load for one warehouse and rebuild missing draft plans.
+         */
+        post: operations["generate_workload_api_warehouses__warehouse_id__generate_workload_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/generated-workload": {
         parameters: {
             query?: never;
             header?: never;
@@ -1227,20 +891,260 @@ export interface paths {
         put?: never;
         post?: never;
         /**
-         * Delete Zone Relation
-         * @description Delete one directed zone relation.
+         * Delete Workload
+         * @description Delete generated workload and plans for one exact warehouse date.
          */
-        delete: operations["delete_zone_relation_api_zone_relations__relation_id__delete"];
+        delete: operations["delete_workload_api_warehouses__warehouse_id__generated_workload_delete"];
         options?: never;
         head?: never;
-        /**
-         * Update Zone Relation
-         * @description Update a zone relation's routing policy.
-         */
-        patch: operations["update_zone_relation_api_zone_relations__relation_id__patch"];
+        patch?: never;
         trace?: never;
     };
-    "/api/zones/{zone_id}": {
+    "/api/warehouses/{warehouse_id}/planning-days/{planning_date}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Planning Day Status
+         * @description Read whether a depot date still accepts new delivery demand.
+         */
+        get: operations["planning_day_status_api_warehouses__warehouse_id__planning_days__planning_date__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/planning-days/{planning_date}/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Close Day Acceptance
+         * @description Finalize one date and automatically apply its assigned RWMS deliveries when enabled.
+         */
+        post: operations["close_day_acceptance_api_warehouses__warehouse_id__planning_days__planning_date__close_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/plans/ensure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ensure Automatic Plan
+         * @description Refresh a marked plan in place or create a missing pre-plan for a complete day.
+         */
+        post: operations["ensure_automatic_plan_api_warehouses__warehouse_id__plans_ensure_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Request
+         * @description Create, server-classify, and split a delivery or pickup request.
+         */
+        post: operations["create_request_api_warehouses__warehouse_id__requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/rwms/capacity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile Rwms Capacity
+         * @description Publish the complete current generated-delivery capacity snapshot to RWMS.
+         */
+        post: operations["reconcile_rwms_capacity_api_warehouses__warehouse_id__rwms_capacity_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/rwms/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Rwms Requests
+         * @description Refresh the current 31-day horizon for every linked warehouse server-side.
+         */
+        post: operations["refresh_rwms_requests_api_warehouses__warehouse_id__rwms_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/rwms/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sync Rwms Requests
+         * @description Import a bounded RWMS delivery feed without geocoding address-only orders.
+         */
+        post: operations["sync_rwms_requests_api_warehouses__warehouse_id__rwms_sync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/shifts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Shift
+         * @description Create a non-overlapping warehouse shift.
+         */
+        post: operations["create_shift_api_warehouses__warehouse_id__shifts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/trailers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Trailer
+         * @description Create a warehouse-owned trailer.
+         */
+        post: operations["create_trailer_api_warehouses__warehouse_id__trailers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/vehicle-configurations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Vehicle Configuration
+         * @description Atomically create a vehicle and its operational axle-load profiles.
+         */
+        post: operations["create_vehicle_configuration_api_warehouses__warehouse_id__vehicle_configurations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/workspace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Warehouse Workspace
+         * @description Refresh RWMS demand by default, or read persisted state for explicit recovery.
+         */
+        get: operations["get_warehouse_workspace_api_warehouses__warehouse_id__workspace_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/zones": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Zones
+         * @description List only the zones belonging to one warehouse workspace.
+         */
+        get: operations["list_zones_api_warehouses__warehouse_id__zones_get"];
+        put?: never;
+        /**
+         * Create Zone
+         * @description Create and publish a validated warehouse-owned version-one zone.
+         */
+        post: operations["create_zone_api_warehouses__warehouse_id__zones_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/zones/{zone_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1249,26 +1153,26 @@ export interface paths {
         };
         /**
          * Get Zone
-         * @description Read a zone and its current stale-request count.
+         * @description Read an owner zone and its current stale-request count.
          */
-        get: operations["get_zone_api_zones__zone_id__get"];
+        get: operations["get_zone_api_warehouses__warehouse_id__zones__zone_id__get"];
         put?: never;
         post?: never;
         /**
          * Delete Zone
-         * @description Delete one zone and explicitly mark its request snapshots outside.
+         * @description Delete and publish an owner zone without uncovering its warehouse.
          */
-        delete: operations["delete_zone_api_zones__zone_id__delete"];
+        delete: operations["delete_zone_api_warehouses__warehouse_id__zones__zone_id__delete"];
         options?: never;
         head?: never;
         /**
          * Update Zone
-         * @description Update an unlocked zone and version geometry changes.
+         * @description Update and publish an unlocked owner zone and version geometry changes.
          */
-        patch: operations["update_zone_api_zones__zone_id__patch"];
+        patch: operations["update_zone_api_warehouses__warehouse_id__zones__zone_id__patch"];
         trace?: never;
     };
-    "/api/zones/{zone_id}/cutouts": {
+    "/api/warehouses/{warehouse_id}/zones/{zone_id}/cutouts": {
         parameters: {
             query?: never;
             header?: never;
@@ -1279,16 +1183,16 @@ export interface paths {
         put?: never;
         /**
          * Cut Zone
-         * @description Atomically cut an unlocked source zone and create its inner operational zone.
+         * @description Atomically cut and publish two zones owned by the same warehouse.
          */
-        post: operations["cut_zone_api_zones__zone_id__cutouts_post"];
+        post: operations["cut_zone_api_warehouses__warehouse_id__zones__zone_id__cutouts_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/zones/{zone_id}/lock": {
+    "/api/warehouses/{warehouse_id}/zones/{zone_id}/lock": {
         parameters: {
             query?: never;
             header?: never;
@@ -1299,9 +1203,9 @@ export interface paths {
         put?: never;
         /**
          * Lock Zone
-         * @description Set or clear a zone editor lock.
+         * @description Set or clear an owner zone's editor lock without capacity publication.
          */
-        post: operations["lock_zone_api_zones__zone_id__lock_post"];
+        post: operations["lock_zone_api_warehouses__warehouse_id__zones__zone_id__lock_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1313,15 +1217,70 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * CloneRequest
-         * @description Optional name override for a cloned scenario or plan.
+         * AddressSuggestion
+         * @description One navigator-style address option whose URI can be resolved to a point.
          */
-        CloneRequest: {
-            name?: components["schemas"]["NonBlank"] | null;
+        AddressSuggestion: {
+            /** Address */
+            address?: string | null;
+            /** Id */
+            id: string;
+            /** Subtitle */
+            subtitle?: string | null;
+            /** Title */
+            title: string;
+            /** Uri */
+            uri: string;
+        };
+        /**
+         * AvailableDriverRead
+         * @description Canonical RWMS worker eligible for one warehouse planning audience.
+         */
+        AvailableDriverRead: {
+            /** Display Name */
+            display_name: string;
+            /**
+             * Worker Id
+             * Format: uuid
+             */
+            worker_id: string;
+        };
+        /**
+         * AvailableWarehouseRead
+         * @description RWMS warehouse candidate with an optional existing local binding.
+         */
+        AvailableWarehouseRead: {
+            /** Address */
+            address: string | null;
+            /** City */
+            city: string;
+            /** Latitude */
+            latitude: number | null;
+            /** Local Warehouse Id */
+            local_warehouse_id?: string | null;
+            /** Longitude */
+            longitude: number | null;
+            /** Name */
+            name: string;
+            /** Representative */
+            representative: boolean;
+            /** Routing Ready */
+            routing_ready: boolean;
+            /** Routing Unavailable Reason */
+            routing_unavailable_reason?: string | null;
+            /** Timezone */
+            timezone: string;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+            /** Warehouse Version */
+            warehouse_version: number;
         };
         /**
          * ConfirmPlanRequest
-         * @description Plan confirmation request with explicit warning acknowledgement.
+         * @description Plan confirmation with warning consent and audited empty-positioning approval.
          */
         ConfirmPlanRequest: {
             /**
@@ -1329,8 +1288,39 @@ export interface components {
              * @default false
              */
             accept_warnings: boolean;
+            /** @default local-admin */
+            confirmed_by: components["schemas"]["NonBlank"];
+            empty_positioning_reason?: components["schemas"]["NonBlank"] | null;
             /** Expected Version */
             expected_version: number;
+        };
+        /**
+         * CustomerSlotRead
+         * @description One standard customer slot with feasibility and structured explanations.
+         */
+        CustomerSlotRead: {
+            best_candidate: components["schemas"]["SlotBestCandidateRead"] | null;
+            /** Candidate Count */
+            candidate_count: number;
+            /**
+             * End
+             * Format: time
+             */
+            end: string;
+            /** Explanation */
+            explanation?: string[];
+            /** Reasons */
+            reasons?: string[];
+            /**
+             * Start
+             * Format: time
+             */
+            start: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "AVAILABLE" | "UNAVAILABLE";
         };
         /**
          * CyclePatch
@@ -1359,7 +1349,6 @@ export interface components {
             active: boolean;
             /** External Worker Id */
             external_worker_id?: string | null;
-            name: components["schemas"]["NonBlank"];
             /**
              * Notes
              * @default
@@ -1370,8 +1359,11 @@ export interface components {
              * @default
              */
             passport_details: string;
-            /** Preferred Route Group */
-            preferred_route_group?: string | null;
+            /**
+             * Rwms Assignment Mode
+             * @enum {string}
+             */
+            rwms_assignment_mode: "ASSIGNED_DRIVER" | "WAREHOUSE_DRIVERS";
         };
         /**
          * DriverRead
@@ -1390,7 +1382,8 @@ export interface components {
              * Format: uuid
              */
             id: string;
-            name: components["schemas"]["NonBlank"];
+            /** Name */
+            name: string;
             /**
              * Notes
              * @default
@@ -1401,13 +1394,16 @@ export interface components {
              * @default
              */
             passport_details: string;
-            /** Preferred Route Group */
-            preferred_route_group?: string | null;
             /**
-             * Scenario Id
+             * Rwms Assignment Mode
+             * @enum {string}
+             */
+            rwms_assignment_mode: "ASSIGNED_DRIVER" | "WAREHOUSE_DRIVERS";
+            /**
+             * Warehouse Id
              * Format: uuid
              */
-            scenario_id: string;
+            warehouse_id: string;
         };
         /**
          * DriverUnavailableRequest
@@ -1443,13 +1439,12 @@ export interface components {
             active?: boolean | null;
             /** External Worker Id */
             external_worker_id?: string | null;
-            name?: components["schemas"]["NonBlank"] | null;
             /** Notes */
             notes?: string | null;
             /** Passport Details */
             passport_details?: string | null;
-            /** Preferred Route Group */
-            preferred_route_group?: string | null;
+            /** Rwms Assignment Mode */
+            rwms_assignment_mode?: ("ASSIGNED_DRIVER" | "WAREHOUSE_DRIVERS") | null;
         };
         /**
          * ExpectedVersionRequest
@@ -1458,401 +1453,6 @@ export interface components {
         ExpectedVersionRequest: {
             /** Expected Version */
             expected_version: number;
-        };
-        /**
-         * ExportDriver
-         * @description Driver record inside a scenario document.
-         */
-        ExportDriver: {
-            data: components["schemas"]["DriverCreate"];
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-        };
-        /**
-         * ExportPlanNotificationLog
-         * @description Simulated contact message retained with an exported confirmed plan.
-         */
-        ExportPlanNotificationLog: {
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Includes Driver Passport */
-            includes_driver_passport: boolean;
-            /** Message */
-            message: string;
-            /** Recipient Contact */
-            recipient_contact: string;
-            /** Recipient Name */
-            recipient_name: string;
-            /**
-             * Request Id
-             * Format: uuid
-             */
-            request_id: string;
-            /**
-             * Status
-             * @constant
-             */
-            status: "SIMULATED_DELIVERED";
-        };
-        /**
-         * ExportRelation
-         * @description Zone relation record inside a scenario document.
-         */
-        ExportRelation: {
-            data: components["schemas"]["ZoneRelationCreate"];
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-        };
-        /**
-         * ExportRequest
-         * @description Source request record with optional upstream lineage for reproducible imports.
-         */
-        ExportRequest: {
-            data: components["schemas"]["LogisticsRequestCreate"];
-            /** External Id */
-            external_id?: string | null;
-            /** External Payload */
-            external_payload?: {
-                [key: string]: unknown;
-            } | null;
-            /** External Version */
-            external_version?: number | null;
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Scheduled Date */
-            scheduled_date?: string | null;
-            /** Source System */
-            source_system?: string | null;
-            zone_classification_status: components["schemas"]["ZoneClassificationStatus"];
-            /** Zone Id */
-            zone_id: string | null;
-            /** Zone Version */
-            zone_version: number | null;
-        };
-        /**
-         * ExportRouteCycle
-         * @description Complete depot-to-depot cycle inside an exported plan.
-         */
-        ExportRouteCycle: {
-            /** Detour Seconds */
-            detour_seconds: number;
-            /**
-             * Driver Shift Id
-             * Format: uuid
-             */
-            driver_shift_id: string;
-            /** Empty Distance Meters */
-            empty_distance_meters: number;
-            /** Explanations */
-            explanations: {
-                [key: string]: unknown;
-            }[];
-            /** Locked */
-            locked: boolean;
-            /** Manually Changed */
-            manually_changed: boolean;
-            /** Metrics */
-            metrics: {
-                [key: string]: unknown;
-            };
-            /**
-             * Planned Finish
-             * Format: date-time
-             */
-            planned_finish: string;
-            /**
-             * Planned Start
-             * Format: date-time
-             */
-            planned_start: string;
-            /** Score */
-            score: number;
-            /** Segments */
-            segments: components["schemas"]["ExportRouteSegment"][];
-            /** Sequence */
-            sequence: number;
-            /** Stops */
-            stops: components["schemas"]["ExportRouteStop"][];
-            /** Total Distance Meters */
-            total_distance_meters: number;
-            /** Total Service Seconds */
-            total_service_seconds: number;
-            /** Total Travel Seconds */
-            total_travel_seconds: number;
-        };
-        /**
-         * ExportRoutePlan
-         * @description Validated saved plan representation in a scenario export.
-         */
-        ExportRoutePlan: {
-            /** Cycles */
-            cycles: components["schemas"]["ExportRouteCycle"][];
-            /**
-             * Date
-             * Format: date
-             */
-            date: string;
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Manually Changed */
-            manually_changed: boolean;
-            /** Metrics */
-            metrics: {
-                [key: string]: unknown;
-            };
-            /** Name */
-            name: string;
-            /** Notification Logs */
-            notification_logs?: components["schemas"]["ExportPlanNotificationLog"][];
-            /** Score */
-            score: number;
-            status: components["schemas"]["PlanStatus"];
-            /** Unassigned Tasks */
-            unassigned_tasks: components["schemas"]["ExportUnassignedTask"][];
-            /** Validation Errors */
-            validation_errors: {
-                [key: string]: unknown;
-            }[];
-            /** Validation Warnings */
-            validation_warnings: {
-                [key: string]: unknown;
-            }[];
-            /** Version */
-            version: number;
-            /**
-             * Warehouse Id
-             * Format: uuid
-             */
-            warehouse_id: string;
-        };
-        /**
-         * ExportRouteSegment
-         * @description Route segment record addressing endpoint stops by sequence.
-         */
-        ExportRouteSegment: {
-            /**
-             * Arrival At
-             * Format: date-time
-             */
-            arrival_at: string;
-            /**
-             * Departure At
-             * Format: date-time
-             */
-            departure_at: string;
-            /** Distance Meters */
-            distance_meters: number;
-            /** From Stop Sequence */
-            from_stop_sequence: number;
-            /** Geometry */
-            geometry: {
-                [key: string]: unknown;
-            };
-            /** Osm Data Version */
-            osm_data_version?: string | null;
-            /** Routed At */
-            routed_at?: string | null;
-            /** Routing Profile Snapshot */
-            routing_profile_snapshot?: {
-                [key: string]: unknown;
-            } | null;
-            /** Routing Provider */
-            routing_provider?: string | null;
-            /** Sequence */
-            sequence: number;
-            /** To Stop Sequence */
-            to_stop_sequence: number;
-            /** Travel Seconds */
-            travel_seconds: number;
-        };
-        /**
-         * ExportRouteStop
-         * @description Route stop record using a stable task reference when applicable.
-         */
-        ExportRouteStop: {
-            /** Latitude */
-            latitude: number;
-            /** Load After */
-            load_after: number;
-            /** Load Before */
-            load_before: number;
-            /**
-             * Locked
-             * @default false
-             */
-            locked: boolean;
-            /** Longitude */
-            longitude: number;
-            /**
-             * Planned Arrival
-             * Format: date-time
-             */
-            planned_arrival: string;
-            /**
-             * Planned Departure
-             * Format: date-time
-             */
-            planned_departure: string;
-            /** Quantity Delta */
-            quantity_delta: number;
-            /** Sequence */
-            sequence: number;
-            /** Service Seconds */
-            service_seconds: number;
-            stop_type: components["schemas"]["StopType"];
-            task: components["schemas"]["ExportTaskReference"] | null;
-            /** Warnings */
-            warnings?: {
-                [key: string]: unknown;
-            }[];
-        };
-        /**
-         * ExportShift
-         * @description Driver shift record inside a scenario document.
-         */
-        ExportShift: {
-            data: components["schemas"]["ShiftCreate"];
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-        };
-        /**
-         * ExportTaskReference
-         * @description Stable request-part reference independent of database UUID remapping.
-         */
-        ExportTaskReference: {
-            /** Part Number */
-            part_number: number;
-            /**
-             * Request Id
-             * Format: uuid
-             */
-            request_id: string;
-        };
-        /**
-         * ExportTrailer
-         * @description Trailer record inside a reproducible scenario document.
-         */
-        ExportTrailer: {
-            data: components["schemas"]["TrailerCreate"];
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-        };
-        /**
-         * ExportUnassignedTask
-         * @description Unassigned task result inside an exported plan.
-         */
-        ExportUnassignedTask: {
-            /** Descriptions Ru */
-            descriptions_ru: string[];
-            /** Nearest Option */
-            nearest_option: {
-                [key: string]: unknown;
-            } | null;
-            /** Reason Codes */
-            reason_codes: string[];
-            /** Recommendation Ru */
-            recommendation_ru: string | null;
-            task: components["schemas"]["ExportTaskReference"];
-        };
-        /**
-         * ExportVehicle
-         * @description Vehicle record inside a scenario document.
-         */
-        ExportVehicle: {
-            data: components["schemas"]["VehicleCreate"];
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-        };
-        /**
-         * ExportVehicleLoadProfile
-         * @description Vehicle operational axle-load profile inside a scenario document.
-         */
-        ExportVehicleLoadProfile: {
-            data: components["schemas"]["VehicleLoadProfileCreate"];
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Vehicle Id
-             * Format: uuid
-             */
-            vehicle_id: string;
-        };
-        /**
-         * ExportWarehouse
-         * @description Warehouse record inside a reproducible scenario document.
-         */
-        ExportWarehouse: {
-            data: components["schemas"]["WarehouseCreate"];
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-        };
-        /**
-         * ExportZone
-         * @description Version-preserving zone record inside a scenario document.
-         */
-        ExportZone: {
-            data: components["schemas"]["ZoneCreate"];
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Version */
-            version: number;
-        };
-        /**
-         * GeneratePlanRequest
-         * @description Asynchronous plan-generation command passed to the configured engine.
-         */
-        GeneratePlanRequest: {
-            /**
-             * Date
-             * Format: date
-             */
-            date: string;
-            /** Seed */
-            seed?: number | null;
-            /** Settings */
-            settings?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Show Trace
-             * @default false
-             */
-            show_trace: boolean;
-            /** Warehouse Id */
-            warehouse_id?: string | null;
         };
         /**
          * GeoJsonGeometry
@@ -1932,6 +1532,11 @@ export interface components {
             latitude: number;
             /** Longitude */
             longitude: number;
+            /**
+             * Mandatory
+             * @default false
+             */
+            mandatory: boolean;
             name: components["schemas"]["NonBlank"];
             /**
              * Notes
@@ -2000,6 +1605,8 @@ export interface components {
             latitude: number;
             /** Longitude */
             longitude: number;
+            /** Mandatory */
+            mandatory: boolean;
             /** Name */
             name: string;
             /** Notes */
@@ -2008,11 +1615,6 @@ export interface components {
             priority: number;
             /** Quantity */
             quantity: number;
-            /**
-             * Scenario Id
-             * Format: uuid
-             */
-            scenario_id: string;
             /** Scheduled Date */
             scheduled_date: string | null;
             /** Service Minutes */
@@ -2032,6 +1634,11 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
             zone_classification_status: components["schemas"]["ZoneClassificationStatus"];
             /** Zone Id */
             zone_id: string | null;
@@ -2070,6 +1677,8 @@ export interface components {
             latitude?: number | null;
             /** Longitude */
             longitude?: number | null;
+            /** Mandatory */
+            mandatory?: boolean | null;
             name?: components["schemas"]["NonBlank"] | null;
             /** Notes */
             notes?: string | null;
@@ -2103,6 +1712,17 @@ export interface components {
             reason: components["schemas"]["NonBlank"];
         };
         MultiPolygonCoordinates: components["schemas"]["PolygonCoordinates"][];
+        /**
+         * NearestOptionRead
+         * @description Earliest typed scheduling alternative for one unassigned task.
+         */
+        NearestOptionRead: {
+            /**
+             * Possible At
+             * Format: date-time
+             */
+            possible_at: string;
+        };
         NonBlank: string;
         /**
          * OptimizationRunRead
@@ -2126,11 +1746,6 @@ export interface components {
             initial_score: number | null;
             /** Plan Id */
             plan_id: string | null;
-            /**
-             * Scenario Id
-             * Format: uuid
-             */
-            scenario_id: string;
             /** Seed */
             seed: number;
             /** Settings Snapshot */
@@ -2142,6 +1757,11 @@ export interface components {
             status: components["schemas"]["OptimizationStatus"];
             /** Stopped By Limit */
             stopped_by_limit: boolean;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
         };
         /**
          * OptimizationStatus
@@ -2195,6 +1815,233 @@ export interface components {
          */
         PlanStatus: "DRAFT" | "GENERATED" | "VALIDATED" | "CONFIRMED" | "ARCHIVED";
         /**
+         * PlanningDayStatusRead
+         * @description Operator-visible acceptance and finalization state for one depot date.
+         */
+        PlanningDayStatusRead: {
+            /** Accepting Requests */
+            accepting_requests: boolean;
+            /** Closed At */
+            closed_at?: string | null;
+            /** Closed By */
+            closed_by?: string | null;
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Plan Id */
+            plan_id?: string | null;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+        };
+        /**
+         * PlanningSettings
+         * @description Tunable deterministic planner and mock-routing settings.
+         */
+        PlanningSettings: {
+            /**
+             * Additional Resource Activation Penalty
+             * @default 180
+             */
+            additional_resource_activation_penalty: number;
+            /**
+             * Allow Soft Overtime
+             * @default false
+             */
+            allow_soft_overtime: boolean;
+            /**
+             * City Speed Kmh
+             * @default 35
+             */
+            city_speed_kmh: number;
+            /**
+             * Default Buffer Minutes
+             * @default 15
+             */
+            default_buffer_minutes: number;
+            /**
+             * Default Cargo Height Mm
+             * @default 2400
+             */
+            default_cargo_height_mm: number;
+            /**
+             * Default Cargo Length Mm
+             * @default 6000
+             */
+            default_cargo_length_mm: number;
+            /**
+             * Default Cargo Weight Kg
+             * @default 1200
+             */
+            default_cargo_weight_kg: number;
+            /**
+             * Default Cargo Width Mm
+             * @default 2400
+             */
+            default_cargo_width_mm: number;
+            /**
+             * Default Depot Turnaround Minutes
+             * @default 15
+             */
+            default_depot_turnaround_minutes: number;
+            /**
+             * Default Load Minutes
+             * @default 30
+             */
+            default_load_minutes: number;
+            /**
+             * Default Pickup Minutes
+             * @default 30
+             */
+            default_pickup_minutes: number;
+            /**
+             * Default Route Buffer Minutes
+             * @default 15
+             */
+            default_route_buffer_minutes: number;
+            /**
+             * Default Service Minutes
+             * @default 30
+             */
+            default_service_minutes: number;
+            /**
+             * Default Unload Minutes
+             * @default 30
+             */
+            default_unload_minutes: number;
+            /**
+             * Deliveries Before Pickups
+             * @default true
+             * @constant
+             */
+            deliveries_before_pickups: true;
+            /**
+             * Detour Weight
+             * @default 1.2
+             */
+            detour_weight: number;
+            /**
+             * Driver Workload Weight
+             * @default 3
+             */
+            driver_workload_weight: number;
+            /**
+             * Empty Travel Weight
+             * @default 1.5
+             */
+            empty_travel_weight: number;
+            /**
+             * Evening Traffic Multiplier
+             * @default 1.2
+             */
+            evening_traffic_multiplier: number;
+            /**
+             * Last Available Date Penalty
+             * @default 10000
+             */
+            last_available_date_penalty: number;
+            /**
+             * Max Candidate Neighbors
+             * @default 8
+             */
+            max_candidate_neighbors: number;
+            /**
+             * Max Customer Wait Minutes
+             * @default 120
+             */
+            max_customer_wait_minutes: number;
+            /**
+             * Max Delivery Stops
+             * @default 2
+             */
+            max_delivery_stops: number;
+            /**
+             * Max Detour Minutes
+             * @default 35
+             */
+            max_detour_minutes: number;
+            /**
+             * Max Detour Ratio
+             * @default 1.5
+             */
+            max_detour_ratio: number;
+            /**
+             * Max Local Search Iterations
+             * @default 100
+             */
+            max_local_search_iterations: number;
+            /**
+             * Max Optimization Seconds
+             * @default 5
+             */
+            max_optimization_seconds: number;
+            /**
+             * Max Pickup Stops
+             * @default 2
+             */
+            max_pickup_stops: number;
+            /**
+             * Max Trace Events
+             * @default 2000
+             */
+            max_trace_events: number;
+            /**
+             * Morning Traffic Multiplier
+             * @default 1.25
+             */
+            morning_traffic_multiplier: number;
+            /**
+             * Paired Delivery Bonus
+             * @default 20
+             */
+            paired_delivery_bonus: number;
+            /**
+             * Paired Pickup Bonus
+             * @default 15
+             */
+            paired_pickup_bonus: number;
+            /**
+             * Preferred Shift Utilization Percent
+             * @default 80
+             */
+            preferred_shift_utilization_percent: number;
+            /**
+             * Region Speed Kmh
+             * @default 65
+             */
+            region_speed_kmh: number;
+            /**
+             * Road Factor
+             * @default 1.25
+             */
+            road_factor: number;
+            /**
+             * Soft Overtime Limit Minutes
+             * @default 0
+             */
+            soft_overtime_limit_minutes: number;
+            /**
+             * Trace Sample Rate
+             * @default 1
+             */
+            trace_sample_rate: number;
+            /**
+             * Unassigned Hard Task Penalty
+             * @default 100000
+             */
+            unassigned_hard_task_penalty: number;
+            /**
+             * Vehicle Capacity
+             * @default 2
+             * @constant
+             */
+            vehicle_capacity: 2;
+        };
+        /**
          * PlanningTaskRead
          * @description Persisted vehicle-sized planning part.
          */
@@ -2218,6 +2065,8 @@ export interface components {
             locked: boolean;
             /** Longitude */
             longitude: number;
+            /** Mandatory */
+            mandatory: boolean;
             /** Part Number */
             part_number: number;
             /** Priority */
@@ -2243,24 +2092,6 @@ export interface components {
             number,
             number
         ];
-        /**
-         * ReclassificationResult
-         * @description Counted outcome of an explicit scenario-wide zone reclassification.
-         */
-        ReclassificationResult: {
-            /** Outside Zones */
-            outside_zones: number;
-            /** Unchanged */
-            unchanged: number;
-            /** Updated */
-            updated: number;
-        };
-        /**
-         * RelationType
-         * @description Operational meaning of a directed zone transition.
-         * @enum {string}
-         */
-        RelationType: "ADJACENT" | "PREFERRED" | "ALLOWED" | "DISCOURAGED" | "BLOCKED";
         /**
          * RequestDateOptionInput
          * @description Acceptable request date with a hard or soft local time window.
@@ -2345,7 +2176,7 @@ export interface components {
         };
         /**
          * RequestPlanningDetailsInput
-         * @description Dispatcher-approved date, service window, access, and notification details.
+         * @description Dispatcher-owned date, window, obligation, access, and notification details.
          */
         RequestPlanningDetailsInput: {
             /** Contact Name */
@@ -2367,18 +2198,14 @@ export interface components {
              * @default false
              */
             is_hard: boolean;
+            /** Mandatory */
+            mandatory: boolean;
             /** Trailer Access Allowed */
             trailer_access_allowed: boolean;
-            /**
-             * Window End
-             * Format: time
-             */
-            window_end: string;
-            /**
-             * Window Start
-             * Format: time
-             */
-            window_start: string;
+            /** Window End */
+            window_end?: string | null;
+            /** Window Start */
+            window_start?: string | null;
         };
         /**
          * RequestScheduleInput
@@ -2413,6 +2240,18 @@ export interface components {
          * @enum {string}
          */
         RequestType: "DELIVERY" | "PICKUP";
+        /**
+         * ResolvedAddress
+         * @description A provider-confirmed address paired with its WGS84 coordinates.
+         */
+        ResolvedAddress: {
+            /** Address */
+            address: string;
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+        };
         /**
          * RestrictionSupportStatus
          * @description Truthful Valhalla support level for one source restriction.
@@ -2507,11 +2346,6 @@ export interface components {
             name: string;
             /** Notification Logs */
             notification_logs?: components["schemas"]["PlanNotificationLogRead"][];
-            /**
-             * Scenario Id
-             * Format: uuid
-             */
-            scenario_id: string;
             /** Score */
             score: number;
             status: components["schemas"]["PlanStatus"];
@@ -2668,17 +2502,21 @@ export interface components {
         RwmsCapacitySnapshotResult: {
             /** Jobcount */
             jobCount: number;
+            /** Pricezonecount */
+            priceZoneCount: number;
             /** Replayed */
             replayed: boolean;
+            /**
+             * Restrictionzonecount
+             * @default 0
+             */
+            restrictionZoneCount: number;
+            /** Shiftcount */
+            shiftCount: number;
             /** Sourcegeneration */
             sourceGeneration: number;
             /** Sourcerevision */
             sourceRevision: string;
-            /**
-             * Sourcescenarioid
-             * Format: uuid
-             */
-            sourceScenarioId: string;
             /**
              * Updatedat
              * Format: date-time
@@ -2719,7 +2557,7 @@ export interface components {
         };
         /**
          * RwmsPlanTaskStatus
-         * @description RWMS publication or claim state mapped back to one exact simulator task.
+         * @description RWMS publication or claim state mapped back to one exact planning task.
          */
         RwmsPlanTaskStatus: {
             /**
@@ -2768,24 +2606,6 @@ export interface components {
             orderId: string;
         };
         /**
-         * RwmsScenarioRefreshResult
-         * @description Server-owned current-horizon refresh across every linked scenario warehouse.
-         */
-        RwmsScenarioRefreshResult: {
-            /**
-             * Date From
-             * Format: date
-             */
-            date_from: string;
-            /**
-             * Date To
-             * Format: date
-             */
-            date_to: string;
-            /** Warehouses */
-            warehouses?: components["schemas"]["RwmsWarehouseSyncResult"][];
-        };
-        /**
          * RwmsSyncFailure
          * @description One source order that could not be synchronized safely.
          */
@@ -2823,6 +2643,10 @@ export interface components {
          * @description Counted synchronization result with explicit per-order failures.
          */
         RwmsSyncResult: {
+            /** Auto Plan Ids */
+            auto_plan_ids?: string[];
+            /** Auto Plan Run Ids */
+            auto_plan_run_ids?: string[];
             /** Failures */
             failures?: components["schemas"]["RwmsSyncFailure"][];
             /** Imported */
@@ -2833,10 +2657,32 @@ export interface components {
             updated: number;
         };
         /**
+         * RwmsWarehouseRefreshResult
+         * @description Server-owned current-horizon refresh for one warehouse workspace.
+         */
+        RwmsWarehouseRefreshResult: {
+            /**
+             * Date From
+             * Format: date
+             */
+            date_from: string;
+            /**
+             * Date To
+             * Format: date
+             */
+            date_to: string;
+            /** Warehouses */
+            warehouses?: components["schemas"]["RwmsWarehouseSyncResult"][];
+        };
+        /**
          * RwmsWarehouseSyncResult
-         * @description One linked warehouse outcome inside a server-owned scenario refresh.
+         * @description One warehouse outcome inside a server-owned planning refresh.
          */
         RwmsWarehouseSyncResult: {
+            /** Auto Plan Ids */
+            auto_plan_ids?: string[];
+            /** Auto Plan Run Ids */
+            auto_plan_run_ids?: string[];
             /** Failures */
             failures?: components["schemas"]["RwmsSyncFailure"][];
             /** Imported */
@@ -2852,325 +2698,8 @@ export interface components {
             warehouse_id: string;
         };
         /**
-         * ScenarioCreate
-         * @description Input for creating an empty scenario.
-         */
-        ScenarioCreate: {
-            /** Default Planning Date */
-            default_planning_date?: string | null;
-            /**
-             * Description
-             * @default
-             */
-            description: string;
-            name: components["schemas"]["NonBlank"];
-            /**
-             * Seed
-             * @default 1
-             */
-            seed: number;
-            settings?: components["schemas"]["ScenarioSettings"];
-            /**
-             * Timezone
-             * @default Europe/Moscow
-             */
-            timezone: string;
-        };
-        /**
-         * ScenarioExportDocument
-         * @description Versioned, fully validated interchange document for reproducible scenarios.
-         */
-        ScenarioExportDocument: {
-            /** Drivers */
-            drivers: components["schemas"]["ExportDriver"][];
-            /**
-             * Exported At
-             * Format: date-time
-             */
-            exported_at: string;
-            /** Plans */
-            plans?: components["schemas"]["ExportRoutePlan"][];
-            /** Requests */
-            requests: components["schemas"]["ExportRequest"][];
-            scenario: components["schemas"]["ScenarioCreate"];
-            /**
-             * Schema Version
-             * @default 1
-             * @constant
-             */
-            schema_version: 1;
-            /** Shifts */
-            shifts: components["schemas"]["ExportShift"][];
-            /** Trailers */
-            trailers?: components["schemas"]["ExportTrailer"][];
-            /** Vehicle Load Profiles */
-            vehicle_load_profiles?: components["schemas"]["ExportVehicleLoadProfile"][];
-            /** Vehicles */
-            vehicles: components["schemas"]["ExportVehicle"][];
-            /** Warehouses */
-            warehouses: components["schemas"]["ExportWarehouse"][];
-            /** Zone Relations */
-            zone_relations: components["schemas"]["ExportRelation"][];
-            /** Zones */
-            zones: components["schemas"]["ExportZone"][];
-        };
-        /**
-         * ScenarioImportRequest
-         * @description Atomic import request with an optional conflict-free name override.
-         */
-        ScenarioImportRequest: {
-            document: components["schemas"]["ScenarioExportDocument"];
-            name?: components["schemas"]["NonBlank"] | null;
-        };
-        /**
-         * ScenarioRead
-         * @description Scenario metadata returned to clients.
-         */
-        ScenarioRead: {
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Default Planning Date */
-            default_planning_date: string | null;
-            /** Description */
-            description: string;
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Name */
-            name: string;
-            /** Seed */
-            seed: number;
-            /** Settings */
-            settings: {
-                [key: string]: unknown;
-            };
-            /** Timezone */
-            timezone: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-        };
-        /**
-         * ScenarioSettings
-         * @description Tunable deterministic planner and mock-routing settings.
-         */
-        ScenarioSettings: {
-            /**
-             * Additional Resource Activation Penalty
-             * @default 180
-             */
-            additional_resource_activation_penalty: number;
-            /**
-             * Allow Soft Overtime
-             * @default false
-             */
-            allow_soft_overtime: boolean;
-            /**
-             * City Speed Kmh
-             * @default 35
-             */
-            city_speed_kmh: number;
-            /**
-             * Cross Group Penalty
-             * @default 15
-             */
-            cross_group_penalty: number;
-            /**
-             * Default Buffer Minutes
-             * @default 15
-             */
-            default_buffer_minutes: number;
-            /**
-             * Default Depot Turnaround Minutes
-             * @default 15
-             */
-            default_depot_turnaround_minutes: number;
-            /**
-             * Default Load Minutes
-             * @default 30
-             */
-            default_load_minutes: number;
-            /**
-             * Default Pickup Minutes
-             * @default 30
-             */
-            default_pickup_minutes: number;
-            /**
-             * Default Route Buffer Minutes
-             * @default 15
-             */
-            default_route_buffer_minutes: number;
-            /**
-             * Default Service Minutes
-             * @default 30
-             */
-            default_service_minutes: number;
-            /**
-             * Default Unload Minutes
-             * @default 30
-             */
-            default_unload_minutes: number;
-            /**
-             * Deliveries Before Pickups
-             * @default true
-             * @constant
-             */
-            deliveries_before_pickups: true;
-            /**
-             * Detour Weight
-             * @default 1.2
-             */
-            detour_weight: number;
-            /**
-             * Driver Preference Bonus
-             * @default 10
-             */
-            driver_preference_bonus: number;
-            /**
-             * Driver Workload Weight
-             * @default 3
-             */
-            driver_workload_weight: number;
-            /**
-             * Empty Travel Weight
-             * @default 1.5
-             */
-            empty_travel_weight: number;
-            /**
-             * Evening Traffic Multiplier
-             * @default 1.2
-             */
-            evening_traffic_multiplier: number;
-            /**
-             * Last Available Date Penalty
-             * @default 10000
-             */
-            last_available_date_penalty: number;
-            /**
-             * Max Candidate Neighbors
-             * @default 8
-             */
-            max_candidate_neighbors: number;
-            /**
-             * Max Customer Wait Minutes
-             * @default 120
-             */
-            max_customer_wait_minutes: number;
-            /**
-             * Max Delivery Stops
-             * @default 2
-             */
-            max_delivery_stops: number;
-            /**
-             * Max Detour Minutes
-             * @default 35
-             */
-            max_detour_minutes: number;
-            /**
-             * Max Detour Ratio
-             * @default 1.5
-             */
-            max_detour_ratio: number;
-            /**
-             * Max Local Search Iterations
-             * @default 100
-             */
-            max_local_search_iterations: number;
-            /**
-             * Max Optimization Seconds
-             * @default 5
-             */
-            max_optimization_seconds: number;
-            /**
-             * Max Pickup Stops
-             * @default 2
-             */
-            max_pickup_stops: number;
-            /**
-             * Max Trace Events
-             * @default 2000
-             */
-            max_trace_events: number;
-            /**
-             * Morning Traffic Multiplier
-             * @default 1.25
-             */
-            morning_traffic_multiplier: number;
-            /**
-             * Paired Delivery Bonus
-             * @default 20
-             */
-            paired_delivery_bonus: number;
-            /**
-             * Paired Pickup Bonus
-             * @default 15
-             */
-            paired_pickup_bonus: number;
-            /**
-             * Preferred Shift Utilization Percent
-             * @default 80
-             */
-            preferred_shift_utilization_percent: number;
-            /**
-             * Region Speed Kmh
-             * @default 65
-             */
-            region_speed_kmh: number;
-            /**
-             * Road Factor
-             * @default 1.25
-             */
-            road_factor: number;
-            /**
-             * Soft Overtime Limit Minutes
-             * @default 0
-             */
-            soft_overtime_limit_minutes: number;
-            /**
-             * Trace Sample Rate
-             * @default 1
-             */
-            trace_sample_rate: number;
-            /**
-             * Unassigned Hard Task Penalty
-             * @default 100000
-             */
-            unassigned_hard_task_penalty: number;
-            /**
-             * Vehicle Capacity
-             * @default 2
-             * @constant
-             */
-            vehicle_capacity: 2;
-        } & {
-            [key: string]: unknown;
-        };
-        /**
-         * ScenarioUpdate
-         * @description Partial scenario metadata and settings update.
-         */
-        ScenarioUpdate: {
-            /** Default Planning Date */
-            default_planning_date?: string | null;
-            /** Description */
-            description?: string | null;
-            name?: components["schemas"]["NonBlank"] | null;
-            /** Seed */
-            seed?: number | null;
-            settings?: components["schemas"]["ScenarioSettings"] | null;
-            /** Timezone */
-            timezone?: string | null;
-        };
-        /**
          * ShiftCreate
-         * @description Input for an aware driver and vehicle availability interval.
+         * @description Input for one repeated daily shift over an inclusive monthly date range.
          */
         ShiftCreate: {
             /**
@@ -3184,27 +2713,30 @@ export interface components {
              */
             break_minutes: number;
             /**
-             * Date
+             * Date From
              * Format: date
              */
-            date: string;
+            date_from: string;
+            /**
+             * Date To
+             * Format: date
+             */
+            date_to: string;
             /**
              * Driver Id
              * Format: uuid
              */
             driver_id: string;
             /**
-             * End At
-             * Format: date-time
+             * End Time
+             * Format: time
              */
-            end_at: string;
-            /** Preferred Route Group */
-            preferred_route_group?: string | null;
+            end_time: string;
             /**
-             * Start At
-             * Format: date-time
+             * Start Time
+             * Format: time
              */
-            start_at: string;
+            start_time: string;
             /**
              * Vehicle Id
              * Format: uuid
@@ -3227,42 +2759,45 @@ export interface components {
              */
             break_minutes: number;
             /**
-             * Date
+             * Date From
              * Format: date
              */
-            date: string;
+            date_from: string;
+            /**
+             * Date To
+             * Format: date
+             */
+            date_to: string;
             /**
              * Driver Id
              * Format: uuid
              */
             driver_id: string;
             /**
-             * End At
-             * Format: date-time
+             * End Time
+             * Format: time
              */
-            end_at: string;
+            end_time: string;
             /**
              * Id
              * Format: uuid
              */
             id: string;
-            /** Preferred Route Group */
-            preferred_route_group?: string | null;
             /**
-             * Scenario Id
-             * Format: uuid
+             * Start Time
+             * Format: time
              */
-            scenario_id: string;
-            /**
-             * Start At
-             * Format: date-time
-             */
-            start_at: string;
+            start_time: string;
             /**
              * Vehicle Id
              * Format: uuid
              */
             vehicle_id: string;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
         };
         /**
          * ShiftUpdate
@@ -3273,16 +2808,16 @@ export interface components {
             active?: boolean | null;
             /** Break Minutes */
             break_minutes?: number | null;
-            /** Date */
-            date?: string | null;
+            /** Date From */
+            date_from?: string | null;
+            /** Date To */
+            date_to?: string | null;
             /** Driver Id */
             driver_id?: string | null;
-            /** End At */
-            end_at?: string | null;
-            /** Preferred Route Group */
-            preferred_route_group?: string | null;
-            /** Start At */
-            start_at?: string | null;
+            /** End Time */
+            end_time?: string | null;
+            /** Start Time */
+            start_time?: string | null;
             /** Vehicle Id */
             vehicle_id?: string | null;
         };
@@ -3311,6 +2846,310 @@ export interface components {
              */
             persist: boolean;
             reason: components["schemas"]["NonBlank"];
+        };
+        /**
+         * SlotAvailabilityRead
+         * @description Complete three-slot answer and price classified independently from routing.
+         */
+        SlotAvailabilityRead: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Delivery Price Rubles */
+            delivery_price_rubles?: number | null;
+            /** Plan Version */
+            plan_version: number;
+            /** Price Isochrone Minutes */
+            price_isochrone_minutes?: (60 | 120 | 180 | 240) | null;
+            /** Price Zone Id */
+            price_zone_id?: string | null;
+            /** Price Zone Name */
+            price_zone_name?: string | null;
+            /** Slots */
+            slots: components["schemas"]["CustomerSlotRead"][];
+            /**
+             * Trailer Access Allowed
+             * @default true
+             */
+            trailer_access_allowed: boolean;
+        };
+        /**
+         * SlotAvailabilityRequest
+         * @description Address and cabin facts needed to calculate three exact customer slots.
+         */
+        SlotAvailabilityRequest: {
+            address: components["schemas"]["NonBlank"];
+            /** Cabin Count */
+            cabin_count: number;
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+            /** Service Duration Minutes */
+            service_duration_minutes?: number | null;
+            /** Site Cabin Capacity */
+            site_cabin_capacity: number;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+        };
+        /**
+         * SlotBestCandidateRead
+         * @description Dispatcher-safe metrics and focused route detail for the best insertion.
+         */
+        SlotBestCandidateRead: {
+            /** Affected Stops */
+            affected_stops: string[];
+            /**
+             * Availability Kind
+             * @enum {string}
+             */
+            availability_kind: "HOME" | "ACTIVE_ASSIGNMENT" | "INCOMING";
+            /**
+             * Available From
+             * Format: date-time
+             */
+            available_from: string;
+            /** Driver Id */
+            driver_id: string;
+            /**
+             * Employment Type
+             * @enum {string}
+             */
+            employment_type: "STAFF" | "CONTRACTOR";
+            /**
+             * Estimated Finish
+             * Format: date-time
+             */
+            estimated_finish: string;
+            /**
+             * Estimated Service Start
+             * Format: date-time
+             */
+            estimated_service_start: string;
+            /** Incremental Distance Meters */
+            incremental_distance_meters: number;
+            /** Incremental Travel Minutes */
+            incremental_travel_minutes: number;
+            /** Insert After Stop Id */
+            insert_after_stop_id: string | null;
+            /** Insert Before Stop Id */
+            insert_before_stop_id: string | null;
+            /** Minimum Slack Minutes */
+            minimum_slack_minutes: number;
+            /** Pickup Candidates Geojson */
+            pickup_candidates_geojson?: {
+                [key: string]: unknown;
+            } | null;
+            /** Pickup Count */
+            pickup_count: number;
+            /** Reason Codes */
+            reason_codes?: string[];
+            /** Resource Origin Warehouse Id */
+            resource_origin_warehouse_id: string | null;
+            /** Return Required */
+            return_required: boolean;
+            /** Route After */
+            route_after?: {
+                [key: string]: unknown;
+            } | null;
+            /** Route Before */
+            route_before?: {
+                [key: string]: unknown;
+            } | null;
+            /** Shift Id */
+            shift_id: string;
+            /** Support Link Id */
+            support_link_id: string | null;
+            /** Timeline */
+            timeline: components["schemas"]["SlotTimelineStopRead"][];
+            /** Trip Id */
+            trip_id: string;
+            /** Vehicle Id */
+            vehicle_id: string;
+            /** Waiting Minutes */
+            waiting_minutes: number;
+            /**
+             * Warehouse Return Time
+             * Format: date-time
+             */
+            warehouse_return_time: string;
+        };
+        /**
+         * SlotConfirmRead
+         * @description Atomic confirmation result and incremented day-plan version.
+         */
+        SlotConfirmRead: {
+            /**
+             * Hold Id
+             * Format: uuid
+             */
+            hold_id: string;
+            /** Plan Version */
+            plan_version: number;
+            /** Replayed */
+            replayed: boolean;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "CONFIRMED";
+        };
+        /**
+         * SlotConfirmRequest
+         * @description Idempotent confirmation key for one previously calculated slot hold.
+         */
+        SlotConfirmRequest: {
+            /**
+             * Confirmation Key
+             * Format: uuid
+             */
+            confirmation_key: string;
+        };
+        /**
+         * SlotHoldCreate
+         * @description Command to recalculate and temporarily hold one available insertion.
+         */
+        SlotHoldCreate: {
+            address: components["schemas"]["NonBlank"];
+            /** Cabin Count */
+            cabin_count: number;
+            client_session_id: components["schemas"]["NonBlank"];
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+            /** Service Duration Minutes */
+            service_duration_minutes?: number | null;
+            /** Site Cabin Capacity */
+            site_cabin_capacity: number;
+            /**
+             * Slot End
+             * Format: time
+             */
+            slot_end: string;
+            /**
+             * Slot Start
+             * Format: time
+             */
+            slot_start: string;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+        };
+        /**
+         * SlotHoldRead
+         * @description Expiring plan-versioned hold returned after successful recalculation.
+         */
+        SlotHoldRead: {
+            /** Delivery Price Rubles */
+            delivery_price_rubles?: number | null;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /**
+             * Hold Id
+             * Format: uuid
+             */
+            hold_id: string;
+            /** Plan Version */
+            plan_version: number;
+            /** Price Isochrone Minutes */
+            price_isochrone_minutes?: (60 | 120 | 180 | 240) | null;
+            /** Price Zone Id */
+            price_zone_id?: string | null;
+            /**
+             * Slot End
+             * Format: time
+             */
+            slot_end: string;
+            /**
+             * Slot Start
+             * Format: time
+             */
+            slot_start: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "HELD" | "CONFIRMED" | "EXPIRED";
+            /**
+             * Trailer Access Allowed
+             * @default true
+             */
+            trailer_access_allowed: boolean;
+        };
+        /**
+         * SlotTimelineStopRead
+         * @description One movement, wait, service, or warehouse operation in the best timeline.
+         */
+        SlotTimelineStopRead: {
+            /**
+             * Arrival
+             * Format: date-time
+             */
+            arrival: string;
+            /**
+             * Departure
+             * Format: date-time
+             */
+            departure: string;
+            /** Id */
+            id: string;
+            /** Latitude */
+            latitude: number;
+            /** Load After */
+            load_after: number;
+            /** Load Before */
+            load_before: number;
+            /** Locked */
+            locked: boolean;
+            /** Longitude */
+            longitude: number;
+            /**
+             * Service End
+             * Format: date-time
+             */
+            service_end: string;
+            /** Service Minutes */
+            service_minutes: number;
+            /**
+             * Service Start
+             * Format: date-time
+             */
+            service_start: string;
+            /**
+             * Stop Type
+             * @enum {string}
+             */
+            stop_type: "WAREHOUSE_LOAD" | "DELIVERY" | "PICKUP" | "WAREHOUSE_UNLOAD" | "WAREHOUSE_FINISH";
+            /** Task Id */
+            task_id: string | null;
+            /** Waiting Minutes */
+            waiting_minutes: number;
         };
         /**
          * StopType
@@ -3355,7 +3194,7 @@ export interface components {
         };
         /**
          * TrailerCreate
-         * @description Input for a scenario-owned trailer and its optional physical limits.
+         * @description Input for a warehouse-owned trailer and its optional physical limits.
          */
         TrailerCreate: {
             /**
@@ -3453,13 +3292,13 @@ export interface components {
             /** Platform Width Mm */
             platform_width_mm?: number | null;
             registration_number: components["schemas"]["NonBlank"];
-            /**
-             * Scenario Id
-             * Format: uuid
-             */
-            scenario_id: string;
             /** Tare Weight Kg */
             tare_weight_kg?: number | null;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
             /** Width Mm */
             width_mm?: number | null;
         };
@@ -3692,10 +3531,7 @@ export interface components {
              * Format: uuid
              */
             id: string;
-            /** Nearest Option */
-            nearest_option: {
-                [key: string]: unknown;
-            } | null;
+            nearest_option: components["schemas"]["NearestOptionRead"] | null;
             /** Reason Codes */
             reason_codes: string[];
             /** Recommendation Ru */
@@ -3835,31 +3671,12 @@ export interface components {
         };
         /**
          * VehicleLoadProfileCreate
-         * @description Input for one measured operational peak axle-load value.
+         * @description One measured operational peak axle-load value embedded in a vehicle.
          */
         VehicleLoadProfileCreate: {
             configuration_type: components["schemas"]["VehicleLoadProfileType"];
             /** Max Actual Axle Load Kg */
             max_actual_axle_load_kg: number;
-        };
-        /**
-         * VehicleLoadProfileRead
-         * @description Persisted vehicle operational axle-load profile.
-         */
-        VehicleLoadProfileRead: {
-            configuration_type: components["schemas"]["VehicleLoadProfileType"];
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Max Actual Axle Load Kg */
-            max_actual_axle_load_kg: number;
-            /**
-             * Vehicle Id
-             * Format: uuid
-             */
-            vehicle_id: string;
         };
         /**
          * VehicleLoadProfileType
@@ -3868,17 +3685,8 @@ export interface components {
          */
         VehicleLoadProfileType: "EMPTY_TRUCK" | "CARGO_ON_TRUCK" | "EMPTY_COMBINATION" | "CARGO_ON_TRUCK_WITH_TRAILER" | "CARGO_ON_TRAILER_WITH_TRAILER" | "TWO_CARGO_SPLIT";
         /**
-         * VehicleLoadProfileUpdate
-         * @description Partial update of one vehicle operational axle-load profile.
-         */
-        VehicleLoadProfileUpdate: {
-            configuration_type?: components["schemas"]["VehicleLoadProfileType"] | null;
-            /** Max Actual Axle Load Kg */
-            max_actual_axle_load_kg?: number | null;
-        };
-        /**
          * VehicleRead
-         * @description Persisted vehicle representation.
+         * @description Persisted vehicle with its complete operational axle-load profile set.
          */
         VehicleRead: {
             /**
@@ -3927,6 +3735,8 @@ export interface components {
             is_hgv?: boolean | null;
             /** Length Mm */
             length_mm?: number | null;
+            /** Load Profiles */
+            load_profiles: components["schemas"]["VehicleLoadProfileCreate"][];
             /** Manufacturer */
             manufacturer?: string | null;
             /** Max Axle Load Kg */
@@ -3960,15 +3770,15 @@ export interface components {
             /** Platform Width Mm */
             platform_width_mm?: number | null;
             registration_number: components["schemas"]["NonBlank"];
-            /**
-             * Scenario Id
-             * Format: uuid
-             */
-            scenario_id: string;
             /** Tare Weight Kg */
             tare_weight_kg?: number | null;
             /** Vehicle Type */
             vehicle_type?: string | null;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
             /**
              * Weight Safety Margin Kg
              * @default 0
@@ -4056,21 +3866,40 @@ export interface components {
         };
         /**
          * WarehouseCreate
-         * @description Input for creating a depot in a scenario.
+         * @description Input that binds one RWMS warehouse and optional first exceptional zone.
          */
         WarehouseCreate: {
-            /** External Warehouse Id */
-            external_warehouse_id?: string | null;
-            /** Latitude */
-            latitude: number;
+            /**
+             * External Warehouse Id
+             * Format: uuid
+             */
+            external_warehouse_id: string;
+            initial_zone?: components["schemas"]["ZoneCreate"] | null;
+            /**
+             * Isochrone Price 120 Minutes
+             * @default 15000
+             */
+            isochrone_price_120_minutes: number;
+            /**
+             * Isochrone Price 180 Minutes
+             * @default 20000
+             */
+            isochrone_price_180_minutes: number;
+            /**
+             * Isochrone Price 240 Minutes
+             * @default 25000
+             */
+            isochrone_price_240_minutes: number;
+            /**
+             * Isochrone Price 60 Minutes
+             * @default 10000
+             */
+            isochrone_price_60_minutes: number;
             /**
              * Loading Minutes
              * @default 30
              */
             loading_minutes: number;
-            /** Longitude */
-            longitude: number;
-            name: components["schemas"]["NonBlank"];
             /**
              * Turnaround Minutes
              * @default 15
@@ -4096,68 +3925,102 @@ export interface components {
         };
         /**
          * WarehouseRead
-         * @description Persisted warehouse representation.
+         * @description Canonical RWMS identity plus warehouse-local planning configuration.
          */
         WarehouseRead: {
-            /** External Warehouse Id */
-            external_warehouse_id?: string | null;
+            /** Address */
+            address: string | null;
+            /** Capacity Generation */
+            capacity_generation: number;
+            /** City */
+            city: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Default Planning Date */
+            default_planning_date: string | null;
+            /**
+             * External Warehouse Id
+             * Format: uuid
+             */
+            external_warehouse_id: string;
+            /** External Warehouse Version */
+            external_warehouse_version: number;
             /**
              * Id
              * Format: uuid
              */
             id: string;
+            /** Isochrone Price 120 Minutes */
+            isochrone_price_120_minutes: number;
+            /** Isochrone Price 180 Minutes */
+            isochrone_price_180_minutes: number;
+            /** Isochrone Price 240 Minutes */
+            isochrone_price_240_minutes: number;
+            /** Isochrone Price 60 Minutes */
+            isochrone_price_60_minutes: number;
             /** Latitude */
             latitude: number;
-            /**
-             * Loading Minutes
-             * @default 30
-             */
+            /** Loading Minutes */
             loading_minutes: number;
             /** Longitude */
             longitude: number;
-            name: components["schemas"]["NonBlank"];
-            /**
-             * Scenario Id
-             * Format: uuid
-             */
-            scenario_id: string;
-            /**
-             * Turnaround Minutes
-             * @default 15
-             */
+            /** Name */
+            name: string;
+            /** Representative */
+            representative: boolean;
+            /** Routing Ready */
+            routing_ready: boolean;
+            /** Seed */
+            seed: number;
+            /** Settings */
+            settings: {
+                [key: string]: unknown;
+            };
+            /** Timezone */
+            timezone: string;
+            /** Turnaround Minutes */
             turnaround_minutes: number;
-            /**
-             * Unloading Minutes
-             * @default 30
-             */
+            /** Unloading Minutes */
             unloading_minutes: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
             /**
              * Working Day End
              * Format: time
-             * @default 20:00:00
              */
             working_day_end: string;
             /**
              * Working Day Start
              * Format: time
-             * @default 08:00:00
              */
             working_day_start: string;
         };
         /**
          * WarehouseUpdate
-         * @description Partial update for depot location and service timings.
+         * @description Partial update for warehouse planning configuration and depot timings.
          */
         WarehouseUpdate: {
-            /** External Warehouse Id */
-            external_warehouse_id?: string | null;
-            /** Latitude */
-            latitude?: number | null;
+            /** Default Planning Date */
+            default_planning_date?: string | null;
+            /** Isochrone Price 120 Minutes */
+            isochrone_price_120_minutes?: number | null;
+            /** Isochrone Price 180 Minutes */
+            isochrone_price_180_minutes?: number | null;
+            /** Isochrone Price 240 Minutes */
+            isochrone_price_240_minutes?: number | null;
+            /** Isochrone Price 60 Minutes */
+            isochrone_price_60_minutes?: number | null;
             /** Loading Minutes */
             loading_minutes?: number | null;
-            /** Longitude */
-            longitude?: number | null;
-            name?: components["schemas"]["NonBlank"] | null;
+            /** Seed */
+            seed?: number | null;
+            settings?: components["schemas"]["PlanningSettings"] | null;
             /** Turnaround Minutes */
             turnaround_minutes?: number | null;
             /** Unloading Minutes */
@@ -4166,6 +4029,27 @@ export interface components {
             working_day_end?: string | null;
             /** Working Day Start */
             working_day_start?: string | null;
+        };
+        /**
+         * WarehouseWorkspaceRead
+         * @description Selected warehouse resources plus connected warehouse markers in one read.
+         */
+        WarehouseWorkspaceRead: {
+            /** Drivers */
+            drivers: components["schemas"]["DriverRead"][];
+            /** Requests */
+            requests: components["schemas"]["LogisticsRequestRead"][];
+            /** Shifts */
+            shifts: components["schemas"]["ShiftRead"][];
+            /** Trailers */
+            trailers: components["schemas"]["TrailerRead"][];
+            /** Vehicles */
+            vehicles: components["schemas"]["VehicleRead"][];
+            warehouse: components["schemas"]["WarehouseRead"];
+            /** Warehouses */
+            warehouses: components["schemas"]["WarehouseRead"][];
+            /** Zones */
+            zones: components["schemas"]["ZoneRead"][];
         };
         /**
          * WorkloadDeletionResult
@@ -4185,10 +4069,10 @@ export interface components {
             /** Deleted Requests */
             deleted_requests: number;
             /**
-             * Scenario Id
+             * Warehouse Id
              * Format: uuid
              */
-            scenario_id: string;
+            warehouse_id: string;
         };
         /**
          * WorkloadGenerationDailyCount
@@ -4210,6 +4094,10 @@ export interface components {
          * @description Auditable summary of one workload generation command.
          */
         WorkloadGenerationResult: {
+            /** Auto Plan Ids */
+            auto_plan_ids?: string[];
+            /** Auto Plan Run Ids */
+            auto_plan_run_ids?: string[];
             /** Created Deliveries */
             created_deliveries: number;
             /** Created Pickups */
@@ -4233,11 +4121,6 @@ export interface components {
              * @default 0
              */
             replaced_requests: number;
-            /**
-             * Scenario Id
-             * Format: uuid
-             */
-            scenario_id: string;
             /** Seed */
             seed: number;
             /**
@@ -4245,10 +4128,15 @@ export interface components {
              * Format: date
              */
             start_date: string;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
         };
         /**
          * WorkloadGeneratorInput
-         * @description Bounded deterministic request workload generated for one scenario horizon.
+         * @description Bounded deterministic request workload generated for one warehouse horizon.
          */
         WorkloadGeneratorInput: {
             /**
@@ -4301,16 +4189,22 @@ export interface components {
         ZoneClassificationStatus: "CLASSIFIED" | "OUTSIDE_ZONES";
         /**
          * ZoneCreate
-         * @description Input for a new version-one operational zone.
+         * @description Input for a version-one forbidden, no-trailer, or special-price polygon.
          */
         ZoneCreate: {
-            code: components["schemas"]["NonBlank"];
+            /**
+             * Color
+             * @default #22C55E
+             */
+            color: string;
             /**
              * Delivery Price
              * @default 0
              */
             delivery_price: number;
             geometry: components["schemas"]["GeoJsonGeometry"];
+            /** @default SPECIAL_PRICE */
+            kind: components["schemas"]["ZoneKind"];
             /**
              * Locked
              * @default false
@@ -4322,24 +4216,24 @@ export interface components {
              * @default 0
              */
             pickup_price: number;
-            /**
-             * Priority
-             * @default 0
-             */
-            priority: number;
-            route_group: components["schemas"]["NonBlank"];
         };
         /**
          * ZoneCutoutInnerZone
          * @description Required metadata for the operational zone occupying a new cutout.
          */
         ZoneCutoutInnerZone: {
-            code: components["schemas"]["NonBlank"];
+            /**
+             * Color
+             * @default #22C55E
+             */
+            color: string;
             /**
              * Delivery Price
              * @default 0
              */
             delivery_price: number;
+            /** @default SPECIAL_PRICE */
+            kind: components["schemas"]["ZoneKind"];
             /** Locked */
             locked: boolean;
             name: components["schemas"]["NonBlank"];
@@ -4348,9 +4242,6 @@ export interface components {
              * @default 0
              */
             pickup_price: number;
-            /** Priority */
-            priority: number;
-            route_group: components["schemas"]["NonBlank"];
         };
         /**
          * ZoneCutoutRead
@@ -4369,6 +4260,12 @@ export interface components {
             inner_zone: components["schemas"]["ZoneCutoutInnerZone"];
         };
         /**
+         * ZoneKind
+         * @description Operational meaning of a warehouse-owned exceptional polygon.
+         * @enum {string}
+         */
+        ZoneKind: "FORBIDDEN" | "NO_TRAILER" | "SPECIAL_PRICE";
+        /**
          * ZoneLockRequest
          * @description Explicit desired editing-lock state.
          */
@@ -4381,11 +4278,11 @@ export interface components {
         };
         /**
          * ZoneRead
-         * @description Versioned zone geometry and stale-request count.
+         * @description Versioned warehouse-owned exceptional zone and stale-request count.
          */
         ZoneRead: {
-            /** Code */
-            code: string;
+            /** Color */
+            color: string;
             /**
              * Created At
              * Format: date-time
@@ -4399,21 +4296,13 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            kind: components["schemas"]["ZoneKind"];
             /** Locked */
             locked: boolean;
             /** Name */
             name: string;
             /** Pickup Price */
             pickup_price: number;
-            /** Priority */
-            priority: number;
-            /** Route Group */
-            route_group: string;
-            /**
-             * Scenario Id
-             * Format: uuid
-             */
-            scenario_id: string;
             /**
              * Stale Request Count
              * @default 0
@@ -4426,147 +4315,26 @@ export interface components {
             updated_at: string;
             /** Version */
             version: number;
-        };
-        /**
-         * ZoneRelationCreate
-         * @description Input for a directed zone transition policy.
-         */
-        ZoneRelationCreate: {
             /**
-             * Delivery Pair Allowed
-             * @default true
-             */
-            delivery_pair_allowed: boolean;
-            /**
-             * From Zone Id
+             * Warehouse Id
              * Format: uuid
              */
-            from_zone_id: string;
-            /**
-             * Is Bidirectional
-             * @default false
-             */
-            is_bidirectional: boolean;
-            /**
-             * Max Detour Minutes
-             * @default 35
-             */
-            max_detour_minutes: number;
-            /**
-             * Max Detour Ratio
-             * @default 1.5
-             */
-            max_detour_ratio: number;
-            /**
-             * Penalty
-             * @default 0
-             */
-            penalty: number;
-            /**
-             * Pickup Allowed
-             * @default true
-             */
-            pickup_allowed: boolean;
-            /** @default ADJACENT */
-            relation_type: components["schemas"]["RelationType"];
-            /**
-             * To Zone Id
-             * Format: uuid
-             */
-            to_zone_id: string;
-        };
-        /**
-         * ZoneRelationRead
-         * @description Persisted directed zone relation.
-         */
-        ZoneRelationRead: {
-            /**
-             * Delivery Pair Allowed
-             * @default true
-             */
-            delivery_pair_allowed: boolean;
-            /**
-             * From Zone Id
-             * Format: uuid
-             */
-            from_zone_id: string;
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Is Bidirectional
-             * @default false
-             */
-            is_bidirectional: boolean;
-            /**
-             * Max Detour Minutes
-             * @default 35
-             */
-            max_detour_minutes: number;
-            /**
-             * Max Detour Ratio
-             * @default 1.5
-             */
-            max_detour_ratio: number;
-            /**
-             * Penalty
-             * @default 0
-             */
-            penalty: number;
-            /**
-             * Pickup Allowed
-             * @default true
-             */
-            pickup_allowed: boolean;
-            /** @default ADJACENT */
-            relation_type: components["schemas"]["RelationType"];
-            /**
-             * Scenario Id
-             * Format: uuid
-             */
-            scenario_id: string;
-            /**
-             * To Zone Id
-             * Format: uuid
-             */
-            to_zone_id: string;
-        };
-        /**
-         * ZoneRelationUpdate
-         * @description Partial update of relation behavior without changing its endpoints.
-         */
-        ZoneRelationUpdate: {
-            /** Delivery Pair Allowed */
-            delivery_pair_allowed?: boolean | null;
-            /** Is Bidirectional */
-            is_bidirectional?: boolean | null;
-            /** Max Detour Minutes */
-            max_detour_minutes?: number | null;
-            /** Max Detour Ratio */
-            max_detour_ratio?: number | null;
-            /** Penalty */
-            penalty?: number | null;
-            /** Pickup Allowed */
-            pickup_allowed?: boolean | null;
-            relation_type?: components["schemas"]["RelationType"] | null;
+            warehouse_id: string;
         };
         /**
          * ZoneUpdate
          * @description Partial zone update; geometry changes increment version server-side.
          */
         ZoneUpdate: {
-            code?: components["schemas"]["NonBlank"] | null;
+            /** Color */
+            color?: string | null;
             /** Delivery Price */
             delivery_price?: number | null;
             geometry?: components["schemas"]["GeoJsonGeometry"] | null;
+            kind?: components["schemas"]["ZoneKind"] | null;
             name?: components["schemas"]["NonBlank"] | null;
             /** Pickup Price */
             pickup_price?: number | null;
-            /** Priority */
-            priority?: number | null;
-            route_group?: components["schemas"]["NonBlank"] | null;
         };
     };
     responses: never;
@@ -4628,6 +4396,102 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DriverRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_address_api_geocoding_resolve_get: {
+        parameters: {
+            query: {
+                uri: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolvedAddress"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reverse_geocode_api_geocoding_reverse_get: {
+        parameters: {
+            query: {
+                latitude: number;
+                longitude: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolvedAddress"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    suggest_addresses_api_geocoding_suggestions_get: {
+        parameters: {
+            query: {
+                text: string;
+                latitude?: number | null;
+                longitude?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddressSuggestion"][];
                 };
             };
             /** @description Validation Error */
@@ -4790,16 +4654,18 @@ export interface operations {
             };
         };
     };
-    get_plan_api_plans__plan_id__get: {
+    calculate_slot_availability_api_planning_slot_availability_post: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                plan_id: string;
-            };
+            path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SlotAvailabilityRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -4807,7 +4673,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RoutePlanRead"];
+                    "application/json": components["schemas"]["SlotAvailabilityRead"];
                 };
             };
             /** @description Validation Error */
@@ -4821,7 +4687,75 @@ export interface operations {
             };
         };
     };
-    clone_plan_api_plans__plan_id__clone_post: {
+    hold_slot_api_planning_slot_holds_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SlotHoldCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlotHoldRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_slot_api_planning_slot_holds__hold_id__confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                hold_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SlotConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlotConfirmRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_plan_api_plans__plan_id__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -4830,14 +4764,10 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CloneRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
-            201: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4939,6 +4869,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ManualChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutePlanRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_manual_changes_api_plans__plan_id__manual_changes_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedVersionRequest"];
             };
         };
         responses: {
@@ -5571,1100 +5536,6 @@ export interface operations {
             };
         };
     };
-    list_scenarios_api_scenarios_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScenarioRead"][];
-                };
-            };
-        };
-    };
-    create_scenario_api_scenarios_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScenarioCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScenarioRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    generate_multi_day_demo_api_scenarios_generate_multi_day_demo_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScenarioRead"];
-                };
-            };
-        };
-    };
-    import_scenario_api_scenarios_import_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScenarioImportRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScenarioRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_scenario_api_scenarios__scenario_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScenarioRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_scenario_api_scenarios__scenario_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_scenario_api_scenarios__scenario_id__patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScenarioUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScenarioRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    clone_scenario_api_scenarios__scenario_id__clone_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CloneRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScenarioRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_drivers_api_scenarios__scenario_id__drivers_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DriverRead"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_driver_api_scenarios__scenario_id__drivers_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DriverCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DriverRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    export_scenario_api_scenarios__scenario_id__export_post: {
-        parameters: {
-            query?: {
-                include_plans?: boolean;
-            };
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScenarioExportDocument"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    generate_demo_api_scenarios__scenario_id__generate_demo_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScenarioRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    generate_workload_api_scenarios__scenario_id__generate_workload_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WorkloadGeneratorInput"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkloadGenerationResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_workload_api_scenarios__scenario_id__generated_workload_delete: {
-        parameters: {
-            query: {
-                date: string;
-            };
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkloadDeletionResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    generate_plan_api_scenarios__scenario_id__plans_generate_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GeneratePlanRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OptimizationRunRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reclassify_requests_api_scenarios__scenario_id__reclassify_requests_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReclassificationResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_requests_api_scenarios__scenario_id__requests_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LogisticsRequestRead"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_request_api_scenarios__scenario_id__requests_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LogisticsRequestCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LogisticsRequestRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reconcile_rwms_capacity_api_scenarios__scenario_id__rwms_capacity_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RwmsCapacitySnapshotResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    refresh_rwms_requests_api_scenarios__scenario_id__rwms_refresh_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RwmsScenarioRefreshResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    sync_rwms_requests_api_scenarios__scenario_id__rwms_sync_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RwmsSyncRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RwmsSyncResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_shifts_api_scenarios__scenario_id__shifts_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ShiftRead"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_shift_api_scenarios__scenario_id__shifts_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ShiftCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ShiftRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_trailers_api_scenarios__scenario_id__trailers_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TrailerRead"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_trailer_api_scenarios__scenario_id__trailers_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TrailerCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TrailerRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_vehicle_configuration_api_scenarios__scenario_id__vehicle_configurations_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["VehicleConfigurationCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VehicleRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_vehicles_api_scenarios__scenario_id__vehicles_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VehicleRead"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_vehicle_api_scenarios__scenario_id__vehicles_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["VehicleCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VehicleRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_warehouses_api_scenarios__scenario_id__warehouses_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WarehouseRead"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_warehouse_api_scenarios__scenario_id__warehouses_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WarehouseCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WarehouseRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_zone_relations_api_scenarios__scenario_id__zone_relations_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ZoneRelationRead"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_zone_relation_api_scenarios__scenario_id__zone_relations_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ZoneRelationCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ZoneRelationRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_zones_api_scenarios__scenario_id__zones_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ZoneRead"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_zone_api_scenarios__scenario_id__zones_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                scenario_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ZoneCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ZoneRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     delete_shift_api_shifts__shift_id__delete: {
         parameters: {
             query?: never;
@@ -6729,37 +5600,6 @@ export interface operations {
             };
         };
     };
-    get_trailer_api_trailers__trailer_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                trailer_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TrailerRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     delete_trailer_api_trailers__trailer_id__delete: {
         parameters: {
             query?: never;
@@ -6811,70 +5651,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrailerRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_vehicle_load_profile_api_vehicle_load_profiles__profile_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                profile_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_vehicle_load_profile_api_vehicle_load_profiles__profile_id__patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                profile_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["VehicleLoadProfileUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VehicleLoadProfileRead"];
                 };
             };
             /** @description Validation Error */
@@ -6987,13 +5763,11 @@ export interface operations {
             };
         };
     };
-    list_vehicle_load_profiles_api_vehicles__vehicle_id__load_profiles_get: {
+    list_warehouses_api_warehouses_get: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                vehicle_id: string;
-            };
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
@@ -7004,7 +5778,31 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["VehicleLoadProfileRead"][];
+                    "application/json": components["schemas"]["WarehouseRead"][];
+                };
+            };
+        };
+    };
+    create_warehouse_api_warehouses_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WarehouseCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WarehouseRead"];
                 };
             };
             /** @description Validation Error */
@@ -7018,37 +5816,22 @@ export interface operations {
             };
         };
     };
-    create_vehicle_load_profile_api_vehicles__vehicle_id__load_profiles_post: {
+    list_available_warehouses_api_warehouses_available_get: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                vehicle_id: string;
-            };
+            path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["VehicleLoadProfileCreate"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
-            201: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["VehicleLoadProfileRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["AvailableWarehouseRead"][];
                 };
             };
         };
@@ -7072,35 +5855,6 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["WarehouseRead"];
                 };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_warehouse_api_warehouses__warehouse_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                warehouse_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -7148,23 +5902,25 @@ export interface operations {
             };
         };
     };
-    delete_zone_relation_api_zone_relations__relation_id__delete: {
+    list_available_drivers_api_warehouses__warehouse_id__available_drivers_get: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                relation_id: string;
+                warehouse_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            204: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["AvailableDriverRead"][];
+                };
             };
             /** @description Validation Error */
             422: {
@@ -7177,18 +5933,315 @@ export interface operations {
             };
         };
     };
-    update_zone_relation_api_zone_relations__relation_id__patch: {
+    create_driver_api_warehouses__warehouse_id__drivers_post: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                relation_id: string;
+                warehouse_id: string;
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ZoneRelationUpdate"];
+                "application/json": components["schemas"]["DriverCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriverRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    generate_workload_api_warehouses__warehouse_id__generate_workload_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkloadGeneratorInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkloadGenerationResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_workload_api_warehouses__warehouse_id__generated_workload_delete: {
+        parameters: {
+            query: {
+                date: string;
+            };
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkloadDeletionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    planning_day_status_api_warehouses__warehouse_id__planning_days__planning_date__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+                planning_date: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningDayStatusRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    close_day_acceptance_api_warehouses__warehouse_id__planning_days__planning_date__close_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+                planning_date: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningDayStatusRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ensure_automatic_plan_api_warehouses__warehouse_id__plans_ensure_post: {
+        parameters: {
+            query: {
+                date: string;
+            };
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutePlanRead"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_request_api_warehouses__warehouse_id__requests_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LogisticsRequestCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogisticsRequestRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconcile_rwms_capacity_api_warehouses__warehouse_id__rwms_capacity_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RwmsCapacitySnapshotResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_rwms_requests_api_warehouses__warehouse_id__rwms_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RwmsWarehouseRefreshResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sync_rwms_requests_api_warehouses__warehouse_id__rwms_sync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RwmsSyncRequest"];
             };
         };
         responses: {
@@ -7198,7 +6251,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ZoneRelationRead"];
+                    "application/json": components["schemas"]["RwmsSyncResult"];
                 };
             };
             /** @description Validation Error */
@@ -7212,11 +6265,216 @@ export interface operations {
             };
         };
     };
-    get_zone_api_zones__zone_id__get: {
+    create_shift_api_warehouses__warehouse_id__shifts_post: {
         parameters: {
             query?: never;
             header?: never;
             path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShiftCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShiftRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_trailer_api_warehouses__warehouse_id__trailers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrailerCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrailerRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_vehicle_configuration_api_warehouses__warehouse_id__vehicle_configurations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VehicleConfigurationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VehicleRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_warehouse_workspace_api_warehouses__warehouse_id__workspace_get: {
+        parameters: {
+            query?: {
+                refresh_rwms?: boolean;
+            };
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WarehouseWorkspaceRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_zones_api_warehouses__warehouse_id__zones_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ZoneRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_zone_api_warehouses__warehouse_id__zones_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ZoneCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ZoneRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_zone_api_warehouses__warehouse_id__zones__zone_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
                 zone_id: string;
             };
             cookie?: never;
@@ -7243,11 +6501,12 @@ export interface operations {
             };
         };
     };
-    delete_zone_api_zones__zone_id__delete: {
+    delete_zone_api_warehouses__warehouse_id__zones__zone_id__delete: {
         parameters: {
             query?: never;
             header?: never;
             path: {
+                warehouse_id: string;
                 zone_id: string;
             };
             cookie?: never;
@@ -7272,11 +6531,12 @@ export interface operations {
             };
         };
     };
-    update_zone_api_zones__zone_id__patch: {
+    update_zone_api_warehouses__warehouse_id__zones__zone_id__patch: {
         parameters: {
             query?: never;
             header?: never;
             path: {
+                warehouse_id: string;
                 zone_id: string;
             };
             cookie?: never;
@@ -7307,11 +6567,12 @@ export interface operations {
             };
         };
     };
-    cut_zone_api_zones__zone_id__cutouts_post: {
+    cut_zone_api_warehouses__warehouse_id__zones__zone_id__cutouts_post: {
         parameters: {
             query?: never;
             header?: never;
             path: {
+                warehouse_id: string;
                 zone_id: string;
             };
             cookie?: never;
@@ -7342,11 +6603,12 @@ export interface operations {
             };
         };
     };
-    lock_zone_api_zones__zone_id__lock_post: {
+    lock_zone_api_warehouses__warehouse_id__zones__zone_id__lock_post: {
         parameters: {
             query?: never;
             header?: never;
             path: {
+                warehouse_id: string;
                 zone_id: string;
             };
             cookie?: never;

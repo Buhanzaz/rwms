@@ -35,7 +35,7 @@ function previewEndDate(startDate: string, days: number): string | null {
   return nextDate(startDate, days - 1);
 }
 
-/** Form for generating deterministic delivery and pickup workload in the current scenario. */
+/** Form for generating deterministic delivery and pickup workload for the selected warehouse. */
 export function WorkloadGeneratorDialog({ planningDate, seed, busy, onClose, onSubmit }: {
   planningDate: string;
   seed: number;
@@ -81,7 +81,7 @@ export function WorkloadGeneratorDialog({ planningDate, seed, busy, onClose, onS
     <Modal
       wide
       title="Сгенерировать рабочую нагрузку"
-      description="Создаст воспроизводимые доставки и вывозы. Для выбранного дня или периода прежняя нагрузка генератора и все сохранённые планы этих дат удаляются атомарно; ручные и RWMS-заявки, а также другие даты не затрагиваются."
+      description="Создаст воспроизводимые доставки и вывозы. Для выбранного дня или периода прежняя нагрузка генератора и все сохранённые планы этих дат удаляются атомарно; ручные и RWMS-операции, а также другие даты не затрагиваются."
       onClose={onClose}
     >
       <form className="form-grid" onSubmit={handleSubmit((values) => onSubmit(values))}>
@@ -94,7 +94,7 @@ export function WorkloadGeneratorDialog({ planningDate, seed, busy, onClose, onS
 
         <div className="span-2 section-heading">
           <strong>Параметры одной грузовой единицы</strong>
-          <small>Генератор сохранит эти фактические габариты и массу в каждой заявке.</small>
+          <small>Генератор сохранит эти фактические габариты и массу для каждой доставки и вывоза.</small>
         </div>
         <Field label="Длина груза, мм" type="number" min="1" max="30000" {...register('cargo_length_mm', { valueAsNumber: true })} error={errors.cargo_length_mm?.message} />
         <Field label="Ширина груза, мм" type="number" min="1" max="10000" {...register('cargo_width_mm', { valueAsNumber: true })} error={errors.cargo_width_mm?.message} />
@@ -103,7 +103,7 @@ export function WorkloadGeneratorDialog({ planningDate, seed, busy, onClose, onS
 
         <div className="span-2 detail-grid" data-testid="workload-preview">
           <div className="detail-item"><small>Горизонт</small><strong>{endDate ? `${formatDate(values.start_date)} — ${formatDate(endDate)}` : 'Укажите период'}</strong></div>
-          <div className="detail-item"><small>Всего заявок</small><strong>{deliveriesTotal + pickupsTotal}</strong></div>
+          <div className="detail-item"><small>Всего позиций</small><strong>{deliveriesTotal + pickupsTotal}</strong></div>
           <div className="detail-item"><small>Доставки</small><strong>{deliveriesTotal}</strong></div>
           <div className="detail-item"><small>Вывозы</small><strong>{pickupsTotal}</strong></div>
         </div>

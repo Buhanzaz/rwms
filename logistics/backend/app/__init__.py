@@ -1,1 +1,1 @@
-"""Logistics simulator backend application package."""
+"""Warehouse logistics planning backend application package."""

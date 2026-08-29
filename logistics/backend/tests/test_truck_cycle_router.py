@@ -25,9 +25,9 @@ from app.planner import (
     StopType,
     TaskType,
     UnassignedReasonCode,
+    ValidationWarningCode,
     Vehicle,
     Warehouse,
-    ZoneSnapshot,
 )
 from app.routing import (
     GeoPoint,
@@ -612,6 +612,66 @@ async def test_one_cargo_uses_short_truck_without_trailer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_exact_route_replaces_stale_approximate_time_warnings() -> None:
+    """Exact timings remove matrix warnings that no longer describe the cycle."""
+
+    provider = RecordingTruckProvider()
+    router = ExactTruckCycleRouter(
+        provider,
+        provider_name="valhalla",
+        osm_data_version="2026-08-24",
+        now=lambda: START,
+    )
+    task = _task("only", FIRST, 1)
+    approximate = replace(
+        _cycle((task,)),
+        warnings=(
+            ValidationWarningCode.OVERTIME_WARNING,
+            ValidationWarningCode.SOFT_WINDOW_RISK,
+        ),
+    )
+
+    result = await router.route_candidate(
+        approximate,
+        tasks=(task,),
+        vehicle=_vehicle(),
+        shift=_shift(),
+        settings=PlanningSettings(),
+    )
+
+    assert ValidationWarningCode.OVERTIME_WARNING not in result.warnings
+    assert ValidationWarningCode.SOFT_WINDOW_RISK not in result.warnings
+
+
+@pytest.mark.asyncio
+async def test_exact_route_keeps_warning_for_actual_allowed_overtime() -> None:
+    """A cycle that really exceeds the shift keeps the soft-overtime warning."""
+
+    provider = RecordingTruckProvider()
+    router = ExactTruckCycleRouter(
+        provider,
+        provider_name="valhalla",
+        osm_data_version="2026-08-24",
+        now=lambda: START,
+    )
+    task = _task("only", FIRST, 1)
+
+    result = await router.route_candidate(
+        _cycle((task,)),
+        tasks=(task,),
+        vehicle=_vehicle(),
+        shift=replace(_shift(), end_at=START + timedelta(minutes=50)),
+        settings=PlanningSettings(
+            allow_soft_overtime=True,
+            soft_overtime_limit_minutes=10,
+        ),
+    )
+
+    assert result.planned_finish == START + timedelta(hours=1)
+    assert ValidationWarningCode.OVERTIME_WARNING in result.warnings
+
+
+@pytest.mark.asyncio
 async def test_no_safe_truck_route_is_rejected_without_car_fallback() -> None:
     """A truck graph rejection remains NO_SAFE_ROUTE and invokes no alternate provider."""
 
@@ -759,7 +819,7 @@ async def test_optimizer_does_not_assign_candidate_rejected_by_exact_truck_route
         cargo_dimensions=CARGO,
     )
     input_data = PlanningInput(
-        scenario_id="scenario",
+        warehouse_id="warehouse",
         planning_date=START.date(),
         warehouse=Warehouse(
             id="warehouse",
@@ -770,8 +830,6 @@ async def test_optimizer_does_not_assign_candidate_rejected_by_exact_truck_route
             turnaround_minutes=10,
         ),
         requests=(request,),
-        zones=(ZoneSnapshot("zone", "Z", "CITY", 1),),
-        zone_relations=(),
         shifts=(_shift(),),
         vehicles=(_vehicle(),),
     )

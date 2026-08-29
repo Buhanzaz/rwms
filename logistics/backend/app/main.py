@@ -13,6 +13,7 @@ from app.api.router import api_router
 from app.config import get_settings
 from app.db import engine
 from app.errors import ApiError, api_error_handler
+from app.integrations.rwms import get_rwms_planning_client
 from app.services.planner_runtime import RuntimePlannerFacade
 from app.services.plans import PlannerFacade, UnavailablePlannerFacade
 
@@ -80,6 +81,11 @@ app = create_app(
         valhalla_url=runtime_settings.valhalla_url,
         valhalla_timeout_seconds=runtime_settings.valhalla_timeout_seconds,
         osm_data_version=runtime_settings.osm_data_version,
+        rwms_client=(
+            get_rwms_planning_client(runtime_settings)
+            if runtime_settings.rwms_sync_enabled
+            else None
+        ),
     )
 )
 

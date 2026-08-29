@@ -39,7 +39,7 @@ export function TruckConfigurationPreview({ vehicle, trailer, cargo, profiles }:
   return (
     <section className="span-2" aria-label="Предпросмотр конфигураций">
       <h3 className="section-title">Предпросмотр конфигураций</h3>
-      <p className="section-subtitle">Расчёт только для проверки введённых данных. Фактический маршрут использует параметры бытовок из заявки.</p>
+      <p className="section-subtitle">Расчёт только для проверки введённых данных. Фактический маршрут использует параметры бытовок из доставки или вывоза.</p>
       <div className="entity-list"><PreviewCard result={preview.one} /><PreviewCard result={preview.two} /></div>
       {preview.retained_trailer_length_meters !== null ? <p className="explanation" data-testid="retained-trailer-preview">
         После выгрузки бытовки с прицепа прицеп остаётся присоединён. Длина автопоезда для следующего участка остаётся {formatMeters(preview.retained_trailer_length_meters)} до отдельного действия отсоединения.

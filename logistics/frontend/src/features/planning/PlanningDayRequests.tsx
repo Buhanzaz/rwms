@@ -4,11 +4,18 @@ import type { RequestPlanningDetailsInput } from '../../api/client';
 import { Badge, Button, CheckboxField, EmptyState, Field, SelectField } from '../../components/ui';
 import { requestPlanningMissingFields } from '../../domain/planning-readiness';
 import { isRequestVisibleOnDate, requestPlanningDates } from '../../domain/request-dates';
-import type { LogisticsRequest, ScenarioWorkspace, UUID } from '../../domain/types';
+import type { LogisticsRequest, WarehouseWorkspace, UUID } from '../../domain/types';
 import { formatDate } from '../../utils/format';
 
 /** Tri-state operator answer before trailer access has been explicitly confirmed. */
 type TrailerAgreement = '' | 'true' | 'false';
+
+function deliveryReference(name: string): string {
+  const explicitReference = name.match(/№\s*[\p{L}\p{N}-]+/u)?.[0];
+  if (explicitReference) return explicitReference;
+  const legacyReference = name.match(/(?:Заказ|Доставка|Вывоз)\s+([\p{L}\p{N}-]+)$/iu)?.[1];
+  return legacyReference ? `№${legacyReference}` : name;
+}
 
 function RequestPlanningCard({ request, planningDate, busy, onSave, onSplit, onSelect }: {
   request: LogisticsRequest;
@@ -24,6 +31,9 @@ function RequestPlanningCard({ request, planningDate, busy, onSave, onSplit, onS
     && option.window_start != null
     && option.window_end != null;
   const sourceRequiresHardWindow = sourceFixedWindow || option?.travel_zone_hours != null;
+  const flexibleDay = Boolean(
+    option && !option.is_hard && option.window_start == null && option.window_end == null,
+  );
   const [windowStart, setWindowStart] = useState(option?.window_start ?? '');
   const [windowEnd, setWindowEnd] = useState(option?.window_end ?? '');
   const [isHard, setIsHard] = useState(sourceRequiresHardWindow || (option?.is_hard ?? true));
@@ -33,6 +43,7 @@ function RequestPlanningCard({ request, planningDate, busy, onSave, onSplit, onS
       : '',
   );
   const [includePassport, setIncludePassport] = useState(request.include_driver_passport_in_notification ?? false);
+  const [mandatory, setMandatory] = useState(request.mandatory);
   const [contactName, setContactName] = useState(request.contact_name ?? '');
   const [contactPhone, setContactPhone] = useState(request.contact_phone ?? '');
 
@@ -46,13 +57,19 @@ function RequestPlanningCard({ request, planningDate, busy, onSave, onSplit, onS
         : '',
     );
     setIncludePassport(request.include_driver_passport_in_notification ?? false);
+    setMandatory(request.mandatory);
     setContactName(request.contact_name ?? '');
     setContactPhone(request.contact_phone ?? '');
-  }, [option?.is_hard, option?.window_end, option?.window_start, planningDate, request.contact_name, request.contact_phone, request.include_driver_passport_in_notification, request.trailer_access_allowed, sourceRequiresHardWindow]);
+  }, [option?.is_hard, option?.window_end, option?.window_start, planningDate, request.contact_name, request.contact_phone, request.include_driver_passport_in_notification, request.mandatory, request.trailer_access_allowed, sourceRequiresHardWindow]);
 
   const missing = requestPlanningMissingFields(request, planningDate);
   const windowInvalid = Boolean(windowStart && windowEnd && windowEnd <= windowStart);
-  const canSave = Boolean(option && windowStart && windowEnd && trailerAgreement && !windowInvalid && !busy);
+  const canSave = Boolean(
+    option
+    && (flexibleDay || (windowStart && windowEnd && !windowInvalid))
+    && trailerAgreement
+    && !busy,
+  );
   const taskParts = request.tasks?.map((task) => task.quantity) ?? [];
   const alreadyUnitSplit = taskParts.length === request.quantity && taskParts.every((quantity) => quantity === 1);
 
@@ -61,9 +78,10 @@ function RequestPlanningCard({ request, planningDate, busy, onSave, onSplit, onS
     if (!canSave) return;
     void onSave(request.id, {
       date: planningDate,
-      window_start: windowStart,
-      window_end: windowEnd,
-      is_hard: sourceRequiresHardWindow || isHard,
+      window_start: flexibleDay ? null : windowStart,
+      window_end: flexibleDay ? null : windowEnd,
+      is_hard: flexibleDay ? false : sourceRequiresHardWindow || isHard,
+      mandatory,
       trailer_access_allowed: trailerAgreement === 'true',
       include_driver_passport_in_notification: includePassport,
       contact_name: contactName.trim(),
@@ -75,12 +93,15 @@ function RequestPlanningCard({ request, planningDate, busy, onSave, onSplit, onS
     <article className="planning-request-card" data-testid={`planning-request-${request.id}`} onClick={() => onSelect(request.id)}>
       <header className="planning-request-card__head">
         <span>
-          <strong>{request.type === 'DELIVERY' ? 'Доставка' : 'Вывоз'} · {request.name}</strong>
+          <span className="planning-request-card__title">
+            <Badge tone={request.type === 'DELIVERY' ? 'accent' : 'warning'}>{request.type === 'DELIVERY' ? 'Доставка' : 'Вывоз'}</Badge>
+            <strong>· {deliveryReference(request.name)}</strong>
+          </span>
           <small>{request.address_label || 'Адрес не подписан'}</small>
         </span>
         <span>
-          <Badge tone={request.type === 'DELIVERY' ? 'accent' : 'warning'}>{request.type === 'DELIVERY' ? 'Д' : 'В'}</Badge>
-          <Badge tone={missing.length ? 'danger' : 'success'}>{missing.length ? 'нужно заполнить' : 'готово'}</Badge>
+          {mandatory ? <Badge tone="danger">Обязательно</Badge> : null}
+          <Badge tone={missing.length ? 'danger' : 'success'}>{missing.length ? 'Нужно заполнить' : 'Готово'}</Badge>
         </span>
       </header>
       <div className="planning-request-card__facts">
@@ -91,8 +112,17 @@ function RequestPlanningCard({ request, planningDate, busy, onSave, onSplit, onS
       </div>
       {missing.length ? <p className="planning-request-card__missing">{missing.join(' · ')}</p> : null}
       <form className="planning-request-form" onSubmit={submit} onClick={(event) => event.stopPropagation()}>
-        <Field label="Доставка/вывоз с" type="time" value={windowStart} onChange={(event) => setWindowStart(event.target.value)} disabled={!option || busy || sourceFixedWindow} />
-        <Field label="До" type="time" value={windowEnd} onChange={(event) => setWindowEnd(event.target.value)} disabled={!option || busy || sourceFixedWindow} error={windowInvalid ? 'Окончание должно быть позже начала' : undefined} />
+        {flexibleDay ? (
+          <div className="span-2 planning-request-form__flexible-window">
+            <Clock3 size={15} aria-hidden="true" />
+            <span><strong>В течение дня</strong><small>Планировщик поставит доставку в свободное место маршрута с учётом смены и допустимой переработки.</small></span>
+          </div>
+        ) : (
+          <>
+            <Field label="Доставка/вывоз с" type="time" value={windowStart} onChange={(event) => setWindowStart(event.target.value)} disabled={!option || busy || sourceFixedWindow} />
+            <Field label="До" type="time" value={windowEnd} onChange={(event) => setWindowEnd(event.target.value)} disabled={!option || busy || sourceFixedWindow} error={windowInvalid ? 'Окончание должно быть позже начала' : undefined} />
+          </>
+        )}
         <SelectField className="span-2" label="Машина с прицепом проедет к адресу" value={trailerAgreement} onChange={(event) => setTrailerAgreement(event.target.value as TrailerAgreement)} disabled={!option || busy} error={!trailerAgreement ? 'Обязательно зафиксируйте ответ клиента/логиста' : undefined}>
           <option value="">Не согласовано</option>
           <option value="true">Да, проезд с прицепом согласован</option>
@@ -102,11 +132,12 @@ function RequestPlanningCard({ request, planningDate, busy, onSave, onSplit, onS
         <Field label="Телефон / контакт" value={contactPhone} onChange={(event) => setContactPhone(event.target.value)} disabled={busy} />
         <div className="span-2 planning-request-form__checks">
           <CheckboxField
-            label={sourceFixedWindow ? 'Жёсткое временное окно · зафиксировано RWMS/CustomerApp' : sourceRequiresHardWindow ? 'Жёсткое временное окно · зафиксировано CustomerApp' : 'Жёсткое временное окно'}
-            checked={sourceRequiresHardWindow || isHard}
+            label={flexibleDay ? 'Гибкое окно «В течение дня» · выбрано клиентом' : sourceFixedWindow ? 'Жёсткое временное окно · зафиксировано RWMS/CustomerApp' : sourceRequiresHardWindow ? 'Жёсткое временное окно · зафиксировано CustomerApp' : 'Жёсткое временное окно'}
+            checked={flexibleDay ? false : sourceRequiresHardWindow || isHard}
             onChange={setIsHard}
-            disabled={!option || busy || sourceRequiresHardWindow}
+            disabled={!option || busy || sourceRequiresHardWindow || flexibleDay}
           />
+          <CheckboxField label={request.type === 'DELIVERY' ? 'Обязательная доставка' : 'Обязательный вывоз'} checked={mandatory} onChange={setMandatory} disabled={busy} />
           <CheckboxField label="Оповещение с паспортными данными водителя" checked={includePassport} onChange={setIncludePassport} disabled={busy} />
         </div>
         <div className="span-2 planning-request-form__actions">
@@ -123,9 +154,9 @@ function RequestPlanningCard({ request, planningDate, busy, onSave, onSplit, onS
   );
 }
 
-/** Dispatcher preparation board for all requests visible on one planning day. */
+/** Dispatcher preparation board for all deliveries and pickups visible on one planning day. */
 export function PlanningDayRequests({ workspace, planningDate, busy, onPlanningDateChange, onSave, onSplit, onSelect }: {
-  workspace: ScenarioWorkspace;
+  workspace: WarehouseWorkspace;
   planningDate: string;
   busy: boolean;
   onPlanningDateChange: (date: string) => void;
@@ -142,14 +173,14 @@ export function PlanningDayRequests({ workspace, planningDate, busy, onPlanningD
   const ready = requests.filter((request) => request.status === 'READY').length;
 
   return (
-    <section className="planning-day-requests" aria-label="Подготовка заявок на день">
+    <section className="planning-day-requests" aria-label="Подготовка доставок и вывозов на день">
       <div className="date-board">
         <strong>Планируемый день</strong>
         <div>{dates.map((date) => {
           const count = workspace.requests.filter((request) => isRequestVisibleOnDate(request, date)).length;
           return <button type="button" key={date} aria-pressed={date === planningDate} onClick={() => onPlanningDateChange(date)}>{formatDate(date)} <small>{count}</small></button>;
         })}</div>
-        <p>К маршрутизации готовы {prepared} из {ready} заявок со статусом READY. Сначала сохраните окно времени и фактический допуск прицепа для каждой заявки.</p>
+        <p>К маршрутизации готовы {prepared} из {ready} доставок и вывозов со статусом «Готово». Сначала сохраните окно времени и фактический допуск прицепа для каждой доставки или вывоза.</p>
       </div>
       <div className="entity-list">
         {requests.map((request) => (
@@ -164,7 +195,7 @@ export function PlanningDayRequests({ workspace, planningDate, busy, onPlanningD
           />
         ))}
       </div>
-      {!requests.length ? <EmptyState title="На выбранный день заявок нет" description="Выберите другую дату или согласуйте новую дату в разделе заявок." /> : null}
+      {!requests.length ? <EmptyState title="На выбранный день доставок и вывозов нет" description="Выберите другую дату или согласуйте новую дату в разделе «Доставки»." /> : null}
     </section>
   );
 }

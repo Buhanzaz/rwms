@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
-import type { PlanningSettings } from '../../domain/types';
-import { Button, CheckboxField, Field } from '../../components/ui';
+import type { PlanningSettings, Warehouse } from '../../domain/types';
+import type { WarehouseUpdateInput } from '../../api/client';
+import { Button, CheckboxField, Field, SwitchField } from '../../components/ui';
+import { useUiStore } from '../../stores/ui-store';
 
 interface NumericSetting {
   key: Exclude<keyof PlanningSettings, 'deliveries_before_pickups' | 'allow_soft_overtime' | 'trace_enabled'>;
@@ -10,6 +12,14 @@ interface NumericSetting {
   max?: number;
   disabled?: boolean;
   hint?: string;
+}
+
+/** Editable warehouse tariff values keyed by their inclusive travel-time boundary. */
+interface IsochroneTariffs {
+  isochrone_price_60_minutes: number;
+  isochrone_price_120_minutes: number;
+  isochrone_price_180_minutes: number;
+  isochrone_price_240_minutes: number;
 }
 
 const routingFields: NumericSetting[] = [
@@ -51,7 +61,16 @@ const operationFields: NumericSetting[] = [
   },
   { key: 'default_service_minutes', label: 'Обслуживание по умолчанию, мин', min: 0 },
   { key: 'default_buffer_minutes', label: 'Общий резерв по умолчанию, мин', min: 0 },
-  { key: 'soft_overtime_limit_minutes', label: 'Мягкая переработка, мин', min: 0 },
+  { key: 'default_cargo_length_mm', label: 'Стандартная длина бытовки, мм', min: 1, max: 30_000 },
+  { key: 'default_cargo_width_mm', label: 'Стандартная ширина бытовки, мм', min: 1, max: 10_000 },
+  { key: 'default_cargo_height_mm', label: 'Стандартная высота бытовки, мм', min: 1, max: 10_000 },
+  {
+    key: 'default_cargo_weight_kg',
+    label: 'Стандартная масса бытовки, кг',
+    min: 1,
+    max: 100_000,
+    hint: 'Автоматически применяется к доставкам из RWMS, если источник не передал физические параметры груза',
+  },
 ];
 
 const optimizationFields: NumericSetting[] = [
@@ -59,8 +78,6 @@ const optimizationFields: NumericSetting[] = [
   { key: 'max_local_search_iterations', label: 'Итераций локального поиска', min: 0 },
   { key: 'empty_travel_weight', label: 'Вес пустого пробега', step: '0.1', min: 0 },
   { key: 'detour_weight', label: 'Вес крюка', step: '0.1', min: 0 },
-  { key: 'cross_group_penalty', label: 'Штраф другой группы', step: '0.1', min: 0 },
-  { key: 'driver_preference_bonus', label: 'Бонус предпочтения водителя', step: '0.1', min: 0 },
   {
     key: 'additional_resource_activation_penalty',
     label: 'Штраф дополнительной машины/водителя',
@@ -104,24 +121,102 @@ function SettingGroup({ title, fields, settings, onNumber }: {
   );
 }
 
-export function SettingsEditor({ settings, busy, onSave }: { settings: PlanningSettings; busy: boolean; onSave: (settings: PlanningSettings) => Promise<void> }) {
-  const [draft, setDraft] = useState(settings);
-  useEffect(() => setDraft(settings), [settings]);
+export function SettingsEditor({ warehouse, busy, onSave }: {
+  warehouse: Warehouse;
+  busy: boolean;
+  onSave: (input: WarehouseUpdateInput) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState(warehouse.settings);
+  const [tariffs, setTariffs] = useState<IsochroneTariffs>({
+    isochrone_price_60_minutes: warehouse.isochrone_price_60_minutes,
+    isochrone_price_120_minutes: warehouse.isochrone_price_120_minutes,
+    isochrone_price_180_minutes: warehouse.isochrone_price_180_minutes,
+    isochrone_price_240_minutes: warehouse.isochrone_price_240_minutes,
+  });
+  const notificationDurationSeconds = useUiStore((state) => state.notificationDurationSeconds);
+  const setNotificationDurationSeconds = useUiStore((state) => state.setNotificationDurationSeconds);
+  useEffect(() => {
+    setDraft(warehouse.settings);
+    setTariffs({
+      isochrone_price_60_minutes: warehouse.isochrone_price_60_minutes,
+      isochrone_price_120_minutes: warehouse.isochrone_price_120_minutes,
+      isochrone_price_180_minutes: warehouse.isochrone_price_180_minutes,
+      isochrone_price_240_minutes: warehouse.isochrone_price_240_minutes,
+    });
+  }, [warehouse]);
   const onNumber = (key: NumericSetting['key'], value: number) => setDraft((current) => ({ ...current, [key]: value }));
   return (
     <div>
       <h2 className="section-title">Настройки алгоритма</h2>
       <p className="section-subtitle">Снимок настроек сохраняется в каждом запуске оптимизации.</p>
+      <section style={{ marginBottom: 16 }}>
+        <h3>Интерфейс</h3>
+        <div className="form-grid">
+          <Field
+            label="Показывать уведомление, секунд"
+            type="number"
+            min="1"
+            max="60"
+            value={notificationDurationSeconds}
+            onChange={(event) => setNotificationDurationSeconds(Number(event.target.value))}
+            hint="После этого уведомление остаётся в истории под колокольчиком"
+          />
+        </div>
+      </section>
+      <section style={{ marginBottom: 16 }}>
+        <h3>Стоимость доставки по изохронам</h3>
+        <p className="section-subtitle">Используется первая достигнутая граница времени пути от склада. Полигон «Особая цена» переопределяет этот тариф.</p>
+        <div className="form-grid">
+          {([
+            ['isochrone_price_60_minutes', 'До 1 часа, ₽'],
+            ['isochrone_price_120_minutes', 'До 2 часов, ₽'],
+            ['isochrone_price_180_minutes', 'До 3 часов, ₽'],
+            ['isochrone_price_240_minutes', 'До 4 часов, ₽'],
+          ] as const).map(([key, label]) => <Field
+            key={key}
+            label={label}
+            type="number"
+            min="0"
+            step="1"
+            value={tariffs[key]}
+            onChange={(event) => setTariffs((current) => ({
+              ...current,
+              [key]: Number(event.target.value),
+            }))}
+          />)}
+        </div>
+      </section>
       <SettingGroup title="Маршрутизация" fields={routingFields} settings={draft} onNumber={onNumber} />
       <SettingGroup title="Операции" fields={operationFields} settings={draft} onNumber={onNumber} />
+      <section className="settings-overtime" aria-label="Настройки переработки">
+        <SwitchField
+          label="Разрешить переработку"
+          description="Планировщик сможет поставить ещё одну совместимую доставку или вывоз после обычного окончания смены"
+          checked={draft.allow_soft_overtime}
+          onCheckedChange={(value) => setDraft((current) => ({ ...current, allow_soft_overtime: value }))}
+        />
+        <Field
+          label="Максимальная переработка, ч"
+          type="number"
+          step="0.25"
+          min="0"
+          max="12"
+          disabled={!draft.allow_soft_overtime}
+          value={draft.soft_overtime_limit_minutes / 60}
+          onChange={(event) => setDraft((current) => ({
+            ...current,
+            soft_overtime_limit_minutes: Math.round(Math.max(0, Number(event.target.value)) * 60),
+          }))}
+          hint="Учитывается при построении маршрута и публикации доступных клиентских слотов; предел остаётся внутри календарного дня"
+        />
+      </section>
       <SettingGroup title="Целевая функция" fields={optimizationFields} settings={draft} onNumber={onNumber} />
       <div className="entity-list">
         <CheckboxField label="В каждом цикле доставки раньше вывозов" checked disabled onChange={() => undefined} />
-        <CheckboxField label="Разрешить мягкую переработку" checked={draft.allow_soft_overtime} onChange={(value) => setDraft((current) => ({ ...current, allow_soft_overtime: value }))} />
         <CheckboxField label="Показывать процесс поиска маршрута" checked={draft.trace_enabled ?? false} onChange={(value) => setDraft((current) => ({ ...current, trace_enabled: value }))} />
       </div>
       <div className="divider" />
-      <Button variant="primary" disabled={busy} onClick={() => void onSave(draft)}>{busy ? 'Сохраняем…' : 'Сохранить настройки'}</Button>
+      <Button variant="primary" disabled={busy} onClick={() => void onSave({ settings: draft, ...tariffs })}>{busy ? 'Сохраняем…' : 'Сохранить настройки'}</Button>
     </div>
   );
 }

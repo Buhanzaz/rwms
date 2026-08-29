@@ -20,17 +20,17 @@ async def get_required[ModelT: Base](
     return entity
 
 
-async def list_for_scenario[ModelT: Base](
-    session: AsyncSession, model: type[ModelT], scenario_id: UUID
+async def list_for_warehouse[ModelT: Base](
+    session: AsyncSession, model: type[ModelT], warehouse_id: UUID
 ) -> list[ModelT]:
-    """List scenario-owned rows in stable UUID order."""
+    """List warehouse-owned rows in stable UUID order."""
 
-    scenario_column = model.scenario_id  # type: ignore[attr-defined]
+    warehouse_column = model.warehouse_id  # type: ignore[attr-defined]
     id_column = model.id  # type: ignore[attr-defined]
     return list(
         (
             await session.scalars(
-                select(model).where(scenario_column == scenario_id).order_by(id_column)
+                select(model).where(warehouse_column == warehouse_id).order_by(id_column)
             )
         )
         .unique()

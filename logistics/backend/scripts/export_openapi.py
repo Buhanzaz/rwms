@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+# The script directory is Python's first import root when this file is executed
+# directly. Prefer the checked-out backend source over any previously installed
+# ``app`` package so a container-mounted worktree cannot export a stale schema.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.main import openapi_document
 

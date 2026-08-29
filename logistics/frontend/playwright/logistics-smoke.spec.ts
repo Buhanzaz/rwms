@@ -1,222 +1,199 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { z } from 'zod';
 
-const optimizationRunSchema = z.object({ plan_id: z.string().nullable() });
+const warehouseSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  city: z.string().nullable(),
+});
+
+const workloadSchema = z.object({
+  warehouse_id: z.string().uuid(),
+  start_date: z.string(),
+  end_date: z.string(),
+  created_requests: z.number().int(),
+  created_deliveries: z.number().int(),
+  created_pickups: z.number().int(),
+  daily_counts: z.array(z.object({
+    date: z.string(),
+    deliveries: z.number().int(),
+    pickups: z.number().int(),
+  })),
+  auto_plan_ids: z.array(z.string().uuid()).optional(),
+});
+
 const stopTypeSchema = z.enum(['DEPOT_LOAD', 'DELIVERY', 'PICKUP', 'DEPOT_UNLOAD', 'DEPOT_RETURN']);
-const planScheduleSchema = z.object({
-  unassigned_tasks: z.array(z.unknown()),
+const planSchema = z.object({
+  id: z.string().uuid(),
+  warehouse_id: z.string().uuid(),
   cycles: z.array(z.object({
-    id: z.string(),
     stops: z.array(z.object({
-      task_id: z.string().nullable(),
+      task_id: z.string().uuid().nullable(),
       stop_type: stopTypeSchema,
-      quantity_delta: z.number(),
-      load_before: z.number(),
-      load_after: z.number(),
+      load_before: z.number().int(),
+      load_after: z.number().int(),
     })),
-    segments: z.array(z.object({ departure_at: z.string(), arrival_at: z.string() })),
   })),
 });
 
-let createdScenarioId: string | undefined;
+async function availableWarehouses(request: APIRequestContext) {
+  const response = await request.get('/api/warehouses');
+  expect(response.ok()).toBe(true);
+  return z.array(warehouseSchema).parse(await response.json());
+}
 
-test.afterEach(async ({ request }) => {
-  if (!createdScenarioId) return;
-  const cleanup = await request.delete(`/api/scenarios/${createdScenarioId}`);
-  expect(cleanup.ok()).toBe(true);
-  createdScenarioId = undefined;
+async function selectWarehouse(page: Page, warehouse: z.infer<typeof warehouseSchema>) {
+  const picker = page.getByRole('combobox', { name: 'Текущий склад' });
+  await expect(picker).toBeVisible();
+  await picker.click();
+  const option = page.getByRole('option').filter({ hasText: warehouse.name });
+  await expect(option).toBeVisible();
+  await option.click();
+  await expect(picker).toContainText(warehouse.name);
+}
+
+test('рабочая область привязана к складу и не содержит сценарного legacy UI', async ({ page, request }) => {
+  const warehouses = await availableWarehouses(request);
+  test.skip(warehouses.length === 0, 'Для browser smoke нужен хотя бы один подключённый склад RWMS');
+  const warehouse = warehouses[0];
+
+  await page.goto('/');
+  await expect(page.getByTestId('map-stage')).toBeVisible();
+  await selectWarehouse(page, warehouse);
+
+  await expect(page.getByRole('button', { name: /Сценарий|Demo scenario|Демо/i })).toHaveCount(0);
+  await expect(page.getByLabel('Текущий сценарий')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Сегодня' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Завтра' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Обмен с RWMS' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Сохранить план' })).toHaveCount(0);
+  await expect(page.getByText('Valhalla · OpenStreetMap · грузовой граф')).toHaveCount(0);
+  await expect(page.getByText(/Map mode · MapLibre|Grid mode/)).toHaveCount(0);
+
+  const sidebar = page.getByLabel('Разделы логистического стенда');
+  await sidebar.getByRole('button', { name: 'Склад' }).click();
+  await expect(page.getByRole('heading', { name: warehouse.name })).toBeVisible();
+  await expect(page.getByText('RWMS', { exact: true })).toBeVisible();
+  await expect(page.getByText('подключён автоматически')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Тест на 3 дня' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Создать нагрузку' })).toBeVisible();
+
+  await sidebar.getByRole('button', { name: /^Зоны/ }).click();
+  await expect(page.getByRole('heading', { name: 'Особые зоны доставки' })).toBeVisible();
+  await expect(page.getByText('Вершины', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Код', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Приоритет', { exact: true })).toHaveCount(0);
+
+  await sidebar.getByRole('button', { name: /^Смены/ }).click();
+  await expect(page.getByText('Одна запись задаёт повторяющийся рабочий интервал водителя на период внутри месяца.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Добавить смену' })).toBeVisible();
+
+  await sidebar.getByRole('button', { name: /^Доставки/ }).click();
+  await expect(page.getByRole('button', { name: 'Доставка', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Вывоз', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /координат/i })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Доставка', exact: true }).click();
+  await expect(page.getByText('Инструмент карты включён')).toBeVisible();
+
+  const notificationButton = page.getByRole('button', { name: /Уведомления/ });
+  await expect(notificationButton).toBeVisible();
+  await notificationButton.click();
+  await expect(page.getByLabel('История уведомлений')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Очистить всё' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Очистить всё' }).click();
+  await expect(page.getByText('История пуста')).toBeVisible();
+  await notificationButton.click();
+
+  await sidebar.getByRole('button', { name: 'План дня' }).click();
+  await expect(page.getByText('Здесь только итоговый план и его показатели. Время, прицеп и обязательность редактируются в разделе «Доставки».')).toBeVisible();
+  await expect(page.getByLabel('Доставка/вывоз с')).toHaveCount(0);
+  await expect(page.getByLabel('Машина с прицепом проедет к адресу')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Слои карты' }).click();
+  const layerMenu = page.getByLabel('Видимость слоёв');
+  await expect(layerMenu).toBeVisible();
+  await expect(layerMenu.getByLabel('Изохроны склада')).not.toBeChecked();
+  await expect(layerMenu.getByLabel('Изохроны задания')).not.toBeChecked();
+  const overlaySections = page.locator('.map-overlay-stack > div');
+  if (await page.getByLabel('Все участки построенного плана').isVisible().catch(() => false)) {
+    await expect(overlaySections.nth(0)).toHaveAttribute('aria-label', 'Все участки построенного плана');
+    await expect(overlaySections.nth(1)).toHaveAttribute('aria-label', 'Видимость слоёв');
+  }
+
+  await page.getByRole('button', { name: 'Проверить слот' }).click();
+  const slotPanel = page.getByLabel('Проверка клиентского слота');
+  await expect(slotPanel).toBeVisible();
+  await expect(slotPanel.getByLabel('Изохроны склада')).not.toBeChecked();
+  await expect(slotPanel.getByLabel('Изохроны задания')).toBeDisabled();
+  await expect(slotPanel.getByLabel('Адрес нового клиента')).toHaveAttribute('placeholder', 'Начните вводить адрес');
+  await slotPanel.getByRole('button', { name: 'Закрыть проверку слотов' }).click();
+
+  await sidebar.getByRole('button', { name: 'Настройки' }).click();
+  await expect(page.getByLabel('Показывать уведомление, секунд')).toHaveValue('8');
 });
 
-test('создание, demo-план, симуляция, задержка и экспорт', async ({ page, request }) => {
-  await page.goto('/');
+test('настраиваемая трёхдневная нагрузка автоматически создаёт складские планы', async ({ page, request }) => {
+  test.skip(
+    process.env.RWMS_E2E_DISPOSABLE_DATABASE !== 'true',
+    'Мутационный smoke разрешён только на явно одноразовой базе',
+  );
+  const warehouses = await availableWarehouses(request);
+  test.skip(warehouses.length === 0, 'Для генератора нужен подключённый склад RWMS');
+  const warehouse = warehouses[0];
+  const generatedDates: string[] = [];
 
-  const scenarioName = `E2E логистика ${Date.now()}`;
-  const emptyWorkspaceCreate = page.getByRole('button', { name: 'Создать сценарий' });
-  const mapStage = page.getByTestId('map-stage');
-  await expect.poll(async () => (
-    await emptyWorkspaceCreate.isVisible().catch(() => false)
-    || await mapStage.isVisible().catch(() => false)
-  )).toBe(true);
-  if (await emptyWorkspaceCreate.isVisible()) {
-    await emptyWorkspaceCreate.click();
-  } else {
-    const currentSidebar = page.getByLabel('Разделы логистического стенда');
-    await currentSidebar.getByRole('button', { name: /Сценарий/ }).click();
-    await page.getByRole('button', { name: /Новый сценарий/ }).click();
+  try {
+    await page.goto('/');
+    await selectWarehouse(page, warehouse);
+    await page.getByLabel('Разделы логистического стенда').getByRole('button', { name: 'Склад' }).click();
+    const generatedResponsePromise = page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && response.url().endsWith('/api/warehouses/' + warehouse.id + '/generate-workload')
+    ));
+    await page.getByRole('button', { name: 'Создать нагрузку' }).click();
+    await page.getByLabel('Дней').fill('3');
+    await page.getByLabel('Вывозов в день').fill('2');
+    await page.getByLabel('Альтернативных дат').fill('1');
+    await page.getByRole('button', { name: 'Сгенерировать и заменить нагрузку' }).click();
+    const generatedResponse = await generatedResponsePromise;
+    expect(generatedResponse.ok()).toBe(true);
+    const generated = workloadSchema.parse(await generatedResponse.json());
+    generatedDates.push(...generated.daily_counts.map((entry) => entry.date));
+
+    expect(generated.warehouse_id).toBe(warehouse.id);
+    expect(generated.daily_counts).toHaveLength(3);
+    expect(generated.created_deliveries).toBeGreaterThan(0);
+    expect(generated.created_pickups).toBeGreaterThan(0);
+    expect(generated.created_requests).toBe(generated.created_deliveries + generated.created_pickups);
+    await expect(page.getByLabel('Дата планирования')).toHaveValue(generated.start_date);
+    await expect(page.getByText(/Нагрузка (создана|заменена):/)).toBeVisible();
+
+    for (const planId of generated.auto_plan_ids ?? []) {
+      const planResponse = await request.get('/api/plans/' + planId);
+      expect(planResponse.ok()).toBe(true);
+      const plan = planSchema.parse(await planResponse.json());
+      expect(plan.warehouse_id).toBe(warehouse.id);
+      const taskIds = plan.cycles.flatMap((cycle) => cycle.stops.flatMap((stop) => (
+        stop.task_id === null ? [] : [stop.task_id]
+      )));
+      expect(new Set(taskIds).size).toBe(taskIds.length);
+      for (const cycle of plan.cycles) {
+        expect(cycle.stops[0]?.stop_type).toBe('DEPOT_LOAD');
+        expect(cycle.stops.at(-1)?.stop_type).toBe('DEPOT_RETURN');
+        expect(cycle.stops.every((stop) => (
+          stop.load_before >= 0
+          && stop.load_before <= 2
+          && stop.load_after >= 0
+          && stop.load_after <= 2
+        ))).toBe(true);
+      }
+    }
+  } finally {
+    for (const date of generatedDates) {
+      const cleanup = await request.delete(
+        '/api/warehouses/' + warehouse.id + '/generated-workload?date=' + encodeURIComponent(date),
+      );
+      expect(cleanup.ok() || cleanup.status() === 404).toBe(true);
+    }
   }
-  await page.getByLabel('Название').fill(scenarioName);
-  await page.getByLabel('Описание').fill('Воспроизводимый Playwright smoke scenario');
-  await page.getByRole('dialog').getByRole('button', { name: 'Сохранить' }).click();
-  const scenarioSelect = page.getByLabel('Текущий сценарий');
-  await expect(scenarioSelect.locator('option:checked')).toHaveText(scenarioName);
-  createdScenarioId = await scenarioSelect.inputValue();
-  await expect(mapStage).toBeVisible();
-  const sidebar = page.getByLabel('Разделы логистического стенда');
-
-  await page.getByRole('button', { name: /Demo scenario/ }).click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Создать demo' }).click();
-  await expect(page.getByText('Demo scenario готов')).toBeVisible();
-  await expect(page.getByRole('button', { name: /Склад 1/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Зоны 4/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Смены 3/ })).toBeVisible();
-
-  // Demo is the deterministic equivalent of the manual setup: one depot,
-  // four polygon zones and their links, three drivers/vehicles/shifts,
-  // paired deliveries and paired pickups.
-  await sidebar.getByRole('button', { name: /Склад/ }).click();
-  await expect(page.getByText('Основной склад')).toBeVisible();
-  await sidebar.getByRole('button', { name: /^Зоны/ }).click();
-  await expect(page.locator('.entity-card')).toHaveCount(4);
-  await sidebar.getByRole('button', { name: /Связи зон/ }).click();
-  await expect(page.locator('.relation-cell--allowed')).toHaveCount(8);
-  await sidebar.getByRole('button', { name: /Водители/ }).click();
-  await expect(page.locator('.entity-card')).toHaveCount(3);
-  await sidebar.getByRole('button', { name: /Машины/ }).click();
-  await expect(page.locator('.entity-card')).toHaveCount(3);
-  await sidebar.getByRole('button', { name: /Смены/ }).click();
-  await expect(page.locator('.entity-card')).toHaveCount(3);
-  await sidebar.getByRole('button', { name: /Заявки/ }).click();
-  await expect(page.getByText(/Д ·/).first()).toBeVisible();
-  await expect(page.getByText(/В ·/).first()).toBeVisible();
-
-  const generationResponsePromise = page.waitForResponse((response) =>
-    response.request().method() === 'POST' && response.url().endsWith(`/api/scenarios/${createdScenarioId}/plans/generate`),
-  );
-  await page.getByRole('button', { name: /Построить маршруты/ }).click();
-  const generationResponse = await generationResponsePromise;
-  const { plan_id: planId } = optimizationRunSchema.parse(await generationResponse.json());
-  if (!planId) throw new Error('Optimization run did not return a route plan id');
-  const progress = page.getByTestId('optimization-progress');
-  if (await progress.isVisible().catch(() => false)) await expect(progress).toBeHidden({ timeout: 30_000 });
-  await sidebar.getByRole('button', { name: /Маршруты/ }).click();
-  await expect(page.getByTestId('driver-route').first()).toBeVisible();
-  const initialPlanResponse = await request.get(`/api/plans/${planId}`);
-  expect(initialPlanResponse.ok()).toBe(true);
-  const initialPlan = planScheduleSchema.parse(await initialPlanResponse.json());
-  expect(initialPlan.unassigned_tasks).toHaveLength(0);
-
-  const taskIds = initialPlan.cycles.flatMap((cycle) =>
-    cycle.stops.flatMap((stop) => stop.task_id ? [stop.task_id] : []),
-  );
-  expect(new Set(taskIds).size).toBe(taskIds.length);
-  const deliveryQuantity = initialPlan.cycles.reduce((total, cycle) => total + cycle.stops
-    .filter((stop) => stop.stop_type === 'DELIVERY')
-    .reduce((cycleTotal, stop) => cycleTotal - stop.quantity_delta, 0), 0);
-  const pickupQuantity = initialPlan.cycles.reduce((total, cycle) => total + cycle.stops
-    .filter((stop) => stop.stop_type === 'PICKUP')
-    .reduce((cycleTotal, stop) => cycleTotal + stop.quantity_delta, 0), 0);
-  expect(initialPlan.cycles).toHaveLength(Math.ceil(Math.max(deliveryQuantity, pickupQuantity) / 2));
-
-  for (const cycle of initialPlan.cycles) {
-    expect(cycle.stops[0]?.stop_type).toBe('DEPOT_LOAD');
-    expect(cycle.stops.at(-1)?.stop_type).toBe('DEPOT_RETURN');
-    expect(cycle.stops.every((stop) => stop.load_before >= 0 && stop.load_before <= 2
-      && stop.load_after >= 0 && stop.load_after <= 2)).toBe(true);
-    const deliveryIndexes = cycle.stops.flatMap((stop, index) => stop.stop_type === 'DELIVERY' ? [index] : []);
-    const pickupIndexes = cycle.stops.flatMap((stop, index) => stop.stop_type === 'PICKUP' ? [index] : []);
-    expect(deliveryIndexes.length).toBeGreaterThan(0);
-    expect(pickupIndexes.length).toBeGreaterThan(0);
-    expect(Math.max(...deliveryIndexes)).toBeLessThan(Math.min(...pickupIndexes));
-  }
-
-  const deliveryPairCycleData = initialPlan.cycles.find((cycle) =>
-    cycle.stops.filter((stop) => stop.stop_type === 'DELIVERY').length === 2,
-  );
-  if (!deliveryPairCycleData) throw new Error('Generated route plan has no paired-delivery cycle');
-  expect(initialPlan.cycles.some((cycle) =>
-    cycle.stops.filter((stop) => stop.stop_type === 'PICKUP').length === 2,
-  )).toBe(true);
-  const deliveryPairCycle = page.getByTestId(`cycle-${deliveryPairCycleData.id}`);
-  await expect(deliveryPairCycle).toBeVisible();
-  await expect(deliveryPairCycle.locator('.stop-row__type')).toHaveText(
-    deliveryPairCycleData.stops.map((stop) => stop.stop_type === 'DELIVERY' ? 'D' : stop.stop_type === 'PICKUP' ? 'V' : 'С'),
-  );
-
-  // Exercise the real dnd-kit keyboard sensor: swap the two delivery stops,
-  // then require the backend-validated plan version returned by the mutation.
-  const firstDelivery = deliveryPairCycle.locator('.stop-row:has(.stop-row__type[title="DELIVERY"])').first();
-  await firstDelivery.focus();
-  await firstDelivery.press('Space');
-  await firstDelivery.press('ArrowDown');
-  await firstDelivery.press('Space');
-  await expect(page.getByText('Изменение проверено и применено')).toBeVisible();
-  await expect(page.getByText('План · версия 2')).toBeVisible();
-
-  await page.getByRole('button', { name: 'Проверить' }).click();
-  await expect(page.getByText('Проверка плана завершена')).toBeVisible();
-  await page.getByRole('button', { name: 'Сохранить план' }).click();
-  const warningDialog = page.getByRole('dialog', { name: 'Подтвердить план с предупреждениями?' });
-  const planConfirmedToast = page.getByText('План подтверждён');
-  await expect.poll(async () => (
-    await warningDialog.isVisible().catch(() => false)
-    || await planConfirmedToast.isVisible().catch(() => false)
-  )).toBe(true);
-  if (await warningDialog.isVisible()) {
-    await warningDialog.getByRole('button', { name: 'Подтвердить с предупреждениями' }).click();
-  }
-  await expect(planConfirmedToast).toBeVisible();
-  const notificationJournal = page.getByLabel('Журнал тестовых уведомлений');
-  await expect(notificationJournal).toBeVisible();
-  const notificationJournalBox = await notificationJournal.boundingBox();
-  expect(notificationJournalBox).not.toBeNull();
-  expect(notificationJournalBox?.x).toBeLessThan(700);
-  expect(900 - ((notificationJournalBox?.y ?? 0) + (notificationJournalBox?.height ?? 0))).toBeCloseTo(18, 0);
-  const firstNotification = notificationJournal.locator('details').first();
-  await firstNotification.locator('summary').click();
-  await expect(firstNotification).toContainText('госномер');
-
-  await page.getByRole('button', { name: 'Симуляция' }).click();
-  await page.getByRole('button', { name: 'Запустить симуляцию' }).click();
-  await page.getByRole('button', { name: 'Пауза' }).click();
-  await page.getByLabel('Скорость симуляции').selectOption('20');
-  const slider = page.getByLabel('Время симуляции');
-  const min = Number(await slider.getAttribute('min'));
-  const max = Number(await slider.getAttribute('max'));
-  const planResponse = await request.get(`/api/plans/${planId}`);
-  expect(planResponse.ok()).toBe(true);
-  const planSchedule = planScheduleSchema.parse(await planResponse.json());
-  const movingLeg = planSchedule.cycles
-    .flatMap((cycle) => cycle.segments)
-    .map((leg) => ({ ...leg, duration: Date.parse(leg.arrival_at) - Date.parse(leg.departure_at) }))
-    .filter((leg) => leg.duration > 2_000)
-    .sort((left, right) => right.duration - left.duration)[0];
-  if (!movingLeg) throw new Error('Generated route plan has no travel leg');
-  const travelMidpoint = Math.round(
-    ((Date.parse(movingLeg.departure_at) + Date.parse(movingLeg.arrival_at)) / 2) / 1000,
-  ) * 1000;
-  expect(travelMidpoint).toBeGreaterThan(min);
-  expect(travelMidpoint).toBeLessThan(max);
-  await slider.evaluate((element, timestamp) => {
-    const input = element as HTMLInputElement;
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, String(timestamp));
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  }, travelMidpoint);
-  await expect(slider).toHaveValue(String(travelMidpoint));
-  await expect(page.getByTestId('simulation-current-time')).not.toHaveText('08:00:00');
-  await expect(page.locator('.map-marker--truck').first()).toBeVisible();
-  const movingTruck = page.locator(
-    '.map-marker--truck[aria-label*="DRIVING"], .map-marker--truck[aria-label*="RETURNING"]',
-  ).first();
-  await expect(movingTruck).toBeVisible();
-  await expect.poll(async () => {
-    const truckBox = await movingTruck.boundingBox();
-    const warehouseBox = await page.locator('.map-marker--warehouse').first().boundingBox();
-    if (!truckBox || !warehouseBox) return false;
-    const truckCenter = [truckBox.x + truckBox.width / 2, truckBox.y + truckBox.height / 2];
-    const warehouseCenter = [warehouseBox.x + warehouseBox.width / 2, warehouseBox.y + warehouseBox.height / 2];
-    return Math.hypot(truckCenter[0] - warehouseCenter[0], truckCenter[1] - warehouseCenter[1]) > 5;
-  }).toBe(true);
-
-  await page.getByRole('button', { name: '+ Задержка' }).first().click();
-  await page.getByLabel('Задержка, мин').fill('30');
-  await page.getByRole('dialog').getByRole('button', { name: 'Применить к симуляции' }).click();
-  await expect(page.getByText('Задержка применена к симуляции')).toBeVisible();
-  await expect(page.getByText(/расписание сдвинуто на 30 мин/)).toBeVisible();
-
-  await page.getByRole('button', { name: 'Редактор' }).click();
-  await sidebar.getByRole('button', { name: /Сценарий/ }).click();
-  const download = page.waitForEvent('download');
-  await page.getByRole('button', { name: /Экспорт JSON/ }).click();
-  expect((await download).suggestedFilename()).toMatch(/^logistics-.*\.json$/);
-
 });

@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { WorkloadGenerationInput } from '../src/api/client';
-import { WorkloadGeneratorDialog } from '../src/features/scenarios/WorkloadGeneratorDialog';
+import { WorkloadGeneratorDialog } from '../src/features/workload/WorkloadGeneratorDialog';
 
 function renderDialog(onSubmit: (input: WorkloadGenerationInput) => Promise<void> = () => Promise.resolve()) {
   return render(
@@ -32,9 +32,9 @@ describe('workload generator dialog', () => {
     expect(screen.getByLabelText('Seed')).toHaveValue(42);
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
     expect(screen.getByText(/прежняя нагрузка генератора и все сохранённые планы этих дат удаляются атомарно/)).toBeVisible();
-    expect(screen.getByText(/ручные и RWMS-заявки, а также другие даты не затрагиваются/)).toBeVisible();
+    expect(screen.getByText(/ручные и RWMS-операции, а также другие даты не затрагиваются/)).toBeVisible();
     expect(screen.getByTestId('workload-preview')).toHaveTextContent('25 августа 2026 г. — 25 августа 2026 г.');
-    expect(screen.getByTestId('workload-preview')).toHaveTextContent('Всего заявок8');
+    expect(screen.getByTestId('workload-preview')).toHaveTextContent('Всего позиций8');
   });
 
   it('automatically clamps alternatives when the selected horizon shrinks', async () => {

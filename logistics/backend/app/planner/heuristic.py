@@ -21,7 +21,6 @@ from .models import (
     PlanningResult,
     PlanningSettings,
     PlanningTask,
-    RelationType,
     RequestDateOption,
     RequestStatus,
     RouteCycle,
@@ -36,8 +35,6 @@ from .models import (
     ValidationWarningCode,
     Vehicle,
     Warehouse,
-    ZoneRelation,
-    ZoneSnapshot,
 )
 from .validation import calculate_plan_metrics, validate_route_plan
 from .workload import (
@@ -209,8 +206,6 @@ class HeuristicPlanner:
             point_count=len(matrix_points),
         )
 
-        zone_by_id = {zone.id: zone for zone in input_data.zones}
-        relation_index = _build_relation_index(input_data.zone_relations)
         cycles: list[RouteCycle] = list(input_data.locked_cycles)
         available_at, next_sequence = _initial_shift_state(
             active_shifts,
@@ -255,13 +250,16 @@ class HeuristicPlanner:
                     vehicles=active_vehicles,
                     matrix=matrix,
                     matrix_index=matrix_index,
-                    zones=zone_by_id,
-                    relations=relation_index,
                     settings=settings,
                     cycles=tuple(cycles),
+                    deadline_first=deadline_first,
                     longest_first=longest_first,
                 )
-                for longest_first in (True, False)
+                for deadline_first, longest_first in (
+                    (True, False),
+                    (False, True),
+                    (False, False),
+                )
             )
             delivery_reference_cycles, delivery_reference_available, _ = max(
                 delivery_references,
@@ -290,7 +288,6 @@ class HeuristicPlanner:
                 tuple(remaining.values()),
                 matrix,
                 matrix_index,
-                relation_index,
                 settings,
             )
             delivery_phase = (
@@ -302,6 +299,9 @@ class HeuristicPlanner:
             else:
                 candidate_specs = tuple(spec for spec in all_candidate_specs if not spec.deliveries)
             activated_shift_ids = frozenset(cycle.driver_shift_id for cycle in cycles)
+            fleet_fully_activated = activated_shift_ids == frozenset(
+                shift.id for shift in active_shifts
+            )
             best_per_shift: list[_Candidate] = []
             for shift in active_shifts:
                 candidates, evaluated, exhausted = self._candidates_for_shift(
@@ -313,12 +313,11 @@ class HeuristicPlanner:
                     vehicle=active_vehicles[shift.vehicle_id],
                     matrix=matrix,
                     matrix_index=matrix_index,
-                    zones=zone_by_id,
-                    relations=relation_index,
                     settings=settings,
                     existing_cycles=tuple(cycles),
                     cycle_count=cycle_counts[shift.id],
                     activated_shift_ids=activated_shift_ids,
+                    prefer_tight_fit=fleet_fully_activated,
                     max_evaluations=evaluation_budget - evaluation_count,
                 )
                 evaluation_count += evaluated
@@ -453,8 +452,6 @@ class HeuristicPlanner:
                             vehicles=active_vehicles,
                             matrix=matrix,
                             matrix_index=matrix_index,
-                            zones=zone_by_id,
-                            relations=relation_index,
                             settings=settings,
                             cycles=delivery_reference_cycles,
                             task_by_id=task_by_id,
@@ -562,8 +559,6 @@ class HeuristicPlanner:
                 vehicles=active_vehicles,
                 matrix=matrix,
                 matrix_index=matrix_index,
-                zones=zone_by_id,
-                relations=relation_index,
                 settings=settings,
             )
         else:
@@ -603,6 +598,8 @@ class HeuristicPlanner:
         final_unassigned = list(initial_unassigned)
         missing_resource_reason = _missing_resource_reason(input_data)
         for task in sorted(remaining.values(), key=_task_priority_key):
+            reasons: tuple[UnassignedReasonCode, ...]
+            nearest: datetime | None
             if task.id in route_rejections:
                 reasons = tuple(sorted(route_rejections[task.id], key=lambda item: item.value))
                 nearest = None
@@ -618,8 +615,6 @@ class HeuristicPlanner:
                     vehicles=active_vehicles,
                     matrix=matrix,
                     matrix_index=matrix_index,
-                    zones=zone_by_id,
-                    relations=relation_index,
                     settings=settings,
                     cycles=tuple(cycles),
                 )
@@ -698,12 +693,11 @@ class HeuristicPlanner:
         vehicle: Vehicle,
         matrix: TravelMatrix,
         matrix_index: Mapping[str, int],
-        zones: Mapping[str, ZoneSnapshot],
-        relations: Mapping[tuple[str, str], ZoneRelation],
         settings: PlanningSettings,
         existing_cycles: tuple[RouteCycle, ...],
         cycle_count: int,
         activated_shift_ids: frozenset[str],
+        prefer_tight_fit: bool,
         max_evaluations: int,
     ) -> tuple[list[_Candidate], int, bool]:
         """Evaluate complete rank buckets until the first feasible bucket is found."""
@@ -736,16 +730,20 @@ class HeuristicPlanner:
                 vehicle=vehicle,
                 matrix=matrix,
                 matrix_index=matrix_index,
-                zones=zones,
-                relations=relations,
                 settings=settings,
                 cycle_count=cycle_count,
                 resource_activation_penalty=(
-                    settings.additional_resource_activation_penalty
-                    if activates_additional_resource
+                    (
+                        settings.additional_resource_activation_penalty
+                        if activates_additional_resource
+                        else 0.0
+                    )
+                    + _support_positioning_cost(shift, settings)
+                    if cycle_count == 0
                     else 0.0
                 ),
                 prefer_shift_reserve=not activated_shift_ids,
+                prefer_tight_fit=prefer_tight_fit,
                 activates_additional_resource=activates_additional_resource,
                 existing_shift_cycles=existing_shift_cycles,
             )
@@ -763,13 +761,12 @@ class HeuristicPlanner:
         vehicles: Mapping[str, Vehicle],
         matrix: TravelMatrix,
         matrix_index: Mapping[str, int],
-        zones: Mapping[str, ZoneSnapshot],
-        relations: Mapping[tuple[str, str], ZoneRelation],
         settings: PlanningSettings,
         cycles: tuple[RouteCycle, ...],
+        deadline_first: bool = False,
         longest_first: bool = True,
     ) -> tuple[tuple[RouteCycle, ...], dict[str, datetime], frozenset[str]]:
-        """Build one bounded delivery-only reference in the selected distance order."""
+        """Build one bounded delivery-only reference in the selected priority order."""
 
         pending = {task.id: task for task in remaining_deliveries}
         projected_cycles = list(cycles)
@@ -785,6 +782,7 @@ class HeuristicPlanner:
                     task,
                     matrix,
                     matrix_index,
+                    deadline_first=deadline_first,
                     longest_first=longest_first,
                 ),
             )
@@ -807,7 +805,6 @@ class HeuristicPlanner:
                         for task in pending.values()
                         if task.id != anchor.id
                         and task.quantity == 1
-                        and _pair_zones_allowed(anchor, task, relations, True)
                     ),
                     key=lambda task: (
                         matrix.at(
@@ -819,8 +816,7 @@ class HeuristicPlanner:
                 )[:reference_neighbor_limit]
                 for neighbor in neighbors:
                     groups.append((anchor, neighbor))
-                    if _pair_zones_allowed(neighbor, anchor, relations, True):
-                        groups.append((neighbor, anchor))
+                    groups.append((neighbor, anchor))
 
             candidates: list[_Candidate] = []
             activated_shift_ids = frozenset(cycle.driver_shift_id for cycle in projected_cycles)
@@ -843,13 +839,16 @@ class HeuristicPlanner:
                         vehicle=vehicles[shift.vehicle_id],
                         matrix=matrix,
                         matrix_index=matrix_index,
-                        zones=zones,
-                        relations=relations,
                         settings=settings,
                         cycle_count=len(own_cycles),
                         resource_activation_penalty=(
-                            settings.additional_resource_activation_penalty
-                            if activated_shift_ids and shift.id not in activated_shift_ids
+                            (
+                                settings.additional_resource_activation_penalty
+                                if activated_shift_ids and shift.id not in activated_shift_ids
+                                else 0.0
+                            )
+                            + _support_positioning_cost(shift, settings)
+                            if not own_cycles
                             else 0.0
                         ),
                         prefer_shift_reserve=not activated_shift_ids,
@@ -890,8 +889,6 @@ class HeuristicPlanner:
         vehicles: Mapping[str, Vehicle],
         matrix: TravelMatrix,
         matrix_index: Mapping[str, int],
-        zones: Mapping[str, ZoneSnapshot],
-        relations: Mapping[tuple[str, str], ZoneRelation],
         settings: PlanningSettings,
         cycles: tuple[RouteCycle, ...],
         task_by_id: Mapping[str, PlanningTask],
@@ -953,8 +950,6 @@ class HeuristicPlanner:
                     nearby_pickups,
                     matrix,
                     matrix_index,
-                    relations,
-                    for_delivery=False,
                     max_neighbors=settings.max_candidate_neighbors,
                     anchor_limit=settings.max_candidate_neighbors,
                 )
@@ -978,8 +973,6 @@ class HeuristicPlanner:
                         vehicle=vehicles[shift.vehicle_id],
                         matrix=matrix,
                         matrix_index=matrix_index,
-                        zones=zones,
-                        relations=relations,
                         settings=settings,
                         cycles=tuple(rebuilt_cycles),
                         task_by_id=task_by_id,
@@ -1038,8 +1031,6 @@ class HeuristicPlanner:
         vehicle: Vehicle,
         matrix: TravelMatrix,
         matrix_index: Mapping[str, int],
-        zones: Mapping[str, ZoneSnapshot],
-        relations: Mapping[tuple[str, str], ZoneRelation],
         settings: PlanningSettings,
         cycles: tuple[RouteCycle, ...],
         task_by_id: Mapping[str, PlanningTask],
@@ -1111,8 +1102,6 @@ class HeuristicPlanner:
                 vehicle=vehicle,
                 matrix=matrix,
                 matrix_index=matrix_index,
-                zones=zones,
-                relations=relations,
                 settings=settings,
                 cycle_count=len(existing_shift_cycles),
                 existing_shift_cycles=existing_shift_cycles,
@@ -1136,16 +1125,16 @@ class HeuristicPlanner:
         vehicle: Vehicle,
         matrix: TravelMatrix,
         matrix_index: Mapping[str, int],
-        zones: Mapping[str, ZoneSnapshot],
-        relations: Mapping[tuple[str, str], ZoneRelation],
         settings: PlanningSettings,
         cycle_count: int,
         resource_activation_penalty: float = 0.0,
         prefer_shift_reserve: bool = False,
+        prefer_tight_fit: bool = False,
         activates_additional_resource: bool = False,
         existing_shift_cycles: tuple[RouteCycle, ...] = (),
+        ordered_tasks: tuple[PlanningTask, ...] | None = None,
     ) -> _Candidate | None:
-        """Schedule one sequence with just-in-time customer arrivals.
+        """Schedule one sequence, optionally preserving an explicit operator order.
 
         A future window first shifts the complete routed prefix, including
         depot loading, as far as earlier customer windows permit. Only the
@@ -1153,8 +1142,13 @@ class HeuristicPlanner:
         the candidate infeasible so it can be split into another depot cycle.
         """
 
-        if not deliveries and not pickups:
+        task_sequence = ordered_tasks if ordered_tasks is not None else deliveries + pickups
+        if not task_sequence:
             return None
+        if {task.id for task in task_sequence} != {
+            task.id for task in deliveries + pickups
+        }:
+            raise ValueError("ordered_tasks must contain exactly the candidate tasks")
         if (
             len(deliveries) > settings.max_delivery_stops
             or len(pickups) > settings.max_pickup_stops
@@ -1178,7 +1172,6 @@ class HeuristicPlanner:
         load_seconds = (
             (warehouse.loading_minutes or settings.default_load_minutes) * 60 if deliveries else 0
         )
-        task_sequence = deliveries + pickups
         first_task = task_sequence[0]
         first_window_start = first_task.selected_option.window_start
         if first_window_start is not None:
@@ -1208,13 +1201,8 @@ class HeuristicPlanner:
         waiting_seconds = 0
         soft_window_seconds = 0
         empty_distance = 0
-        relation_penalty = 0.0
         warnings: set[ValidationWarningCode] = set()
-        pickup_started = False
         for task in task_sequence:
-            if pickup_started and task.task_type is TaskType.DELIVERY:
-                return None
-            pickup_started = pickup_started or task.task_type is TaskType.PICKUP
             next_index = matrix_index[task.id]
             metric = matrix.at(current_index, next_index)
             leg_departure = cursor
@@ -1256,8 +1244,8 @@ class HeuristicPlanner:
                 arrival = window.window_start
             service_seconds = task.service_minutes * 60
             service_finish = arrival + timedelta(seconds=service_seconds)
-            if window.window_end is not None and service_finish > window.window_end:
-                violation = round((service_finish - window.window_end).total_seconds())
+            if window.window_end is not None and arrival > window.window_end:
+                violation = round((arrival - window.window_end).total_seconds())
                 if window.is_hard:
                     return None
                 soft_window_seconds += violation
@@ -1271,8 +1259,6 @@ class HeuristicPlanner:
             stop_type = (
                 StopType.DELIVERY if task.task_type is TaskType.DELIVERY else StopType.PICKUP
             )
-            zone = zones.get(task.zone_id or "")
-            route_group = zone.route_group if zone is not None else None
             geometry: GeoJsonLineString = {
                 "type": "LineString",
                 "coordinates": [
@@ -1306,20 +1292,11 @@ class HeuristicPlanner:
                     request_id=task.request_id,
                     address_label=task.address_label,
                     zone_id=task.zone_id,
-                    route_group=route_group,
                     window_start=window.window_start,
                     window_end=window.window_end,
                     window_is_hard=window.is_hard,
                 )
             )
-            if len(stops) > 2:
-                previous_zone = stops[-2].zone_id
-                if previous_zone and task.zone_id and previous_zone != task.zone_id:
-                    relation = relations.get((previous_zone, task.zone_id))
-                    if relation is not None:
-                        if relation.relation_type is RelationType.BLOCKED:
-                            return None
-                        relation_penalty += relation.penalty
             cursor = service_finish
             current_load = next_load
             current_index = next_index
@@ -1382,32 +1359,14 @@ class HeuristicPlanner:
             matrix,
             matrix_index,
         )
-        if not _pickup_transition_allowed(
-            deliveries,
-            pickups,
-            relations,
-        ):
-            return None
         if _pickup_detour_exceeds_limit(
             deliveries,
             pickups,
             detour_seconds,
             detour_ratio,
-            relations,
             settings,
         ):
             return None
-        route_groups = tuple(
-            zone.route_group
-            for task in task_sequence
-            if (zone := zones.get(task.zone_id or "")) is not None
-        )
-        cross_group_count = max(0, len(set(route_groups)) - 1)
-        if cross_group_count:
-            warnings.add(ValidationWarningCode.CROSS_ROUTE_GROUP)
-        preferred_match = bool(
-            shift.preferred_route_group and shift.preferred_route_group in route_groups
-        )
         travel_seconds = sum(leg.travel_seconds for leg in legs)
         service_seconds_total = sum(stop.service_seconds for stop in stops)
         score = (
@@ -1419,21 +1378,16 @@ class HeuristicPlanner:
             + waiting_seconds / 60.0 * settings.waiting_weight
             + soft_window_seconds / 60.0 * settings.soft_window_violation_penalty
             + overtime_seconds / 60.0 * settings.overtime_penalty_per_minute
-            + cross_group_count * settings.cross_group_penalty
-            + relation_penalty
             - (settings.paired_delivery_bonus if len(deliveries) == 2 else 0.0)
             - (settings.paired_pickup_bonus if len(pickups) == 2 else 0.0)
-            - (settings.driver_preference_bonus if preferred_match else 0.0)
         )
-        all_tasks = deliveries + pickups
-        task_ids = tuple(task.id for task in all_tasks)
+        task_ids = tuple(task.id for task in task_sequence)
         cycle_id = f"cycle:{shift.id}:{sequence}:{'|'.join(task_ids)}"
         explanation = _cycle_explanation(
             deliveries,
             pickups,
             shift,
             detour_seconds,
-            preferred_match,
             resource_reused=cycle_count > 0,
             activates_additional_resource=activates_additional_resource,
         )
@@ -1500,7 +1454,13 @@ class HeuristicPlanner:
                 *warning_rank,
                 -int(bool(deliveries and pickups)),
                 -sum(task.quantity for task in pickups),
-                -remaining_shift_seconds if prefer_shift_reserve else 0,
+                (
+                    remaining_shift_seconds
+                    if prefer_tight_fit
+                    else -remaining_shift_seconds
+                    if prefer_shift_reserve
+                    else 0
+                ),
                 cycle.score + resource_activation_penalty + workload_penalty,
                 cycle.planned_finish,
                 cycle_count,
@@ -1523,8 +1483,6 @@ class HeuristicPlanner:
         vehicles: Mapping[str, Vehicle],
         matrix: TravelMatrix,
         matrix_index: Mapping[str, int],
-        zones: Mapping[str, ZoneSnapshot],
-        relations: Mapping[tuple[str, str], ZoneRelation],
         settings: PlanningSettings,
         cycles: tuple[RouteCycle, ...],
     ) -> tuple[tuple[UnassignedReasonCode, ...], datetime | None]:
@@ -1549,8 +1507,6 @@ class HeuristicPlanner:
                 vehicle=vehicles[shift.vehicle_id],
                 matrix=matrix,
                 matrix_index=matrix_index,
-                zones=zones,
-                relations=relations,
                 settings=settings,
                 cycle_count=0,
             )
@@ -1558,19 +1514,13 @@ class HeuristicPlanner:
                 candidates.append(candidate)
         if candidates:
             return (UnassignedReasonCode.NO_SHIFT_CAPACITY,), nearest
-        attachment_reasons = _pickup_attachment_failures(
-            task,
-            cycles,
-            relations,
-        )
         option = task.selected_option
         if option.window_end is not None and nearest is not None:
             if nearest + timedelta(minutes=task.service_minutes) > option.window_end:
                 return (
                     UnassignedReasonCode.TIME_WINDOW_CONFLICT,
-                    *attachment_reasons,
                 ), nearest
-        return (UnassignedReasonCode.SHIFT_LIMIT_EXCEEDED, *attachment_reasons), nearest
+        return (UnassignedReasonCode.SHIFT_LIMIT_EXCEEDED,), nearest
 
     def _local_improve(
         self,
@@ -1582,8 +1532,6 @@ class HeuristicPlanner:
         vehicles: Mapping[str, Vehicle],
         matrix: TravelMatrix,
         matrix_index: Mapping[str, int],
-        zones: Mapping[str, ZoneSnapshot],
-        relations: Mapping[tuple[str, str], ZoneRelation],
         settings: PlanningSettings,
     ) -> tuple[list[RouteCycle], int]:
         """Try bounded delivery/pickup reversals and retain strict improvements."""
@@ -1630,8 +1578,6 @@ class HeuristicPlanner:
                     vehicle=vehicle,
                     matrix=matrix,
                     matrix_index=matrix_index,
-                    zones=zones,
-                    relations=relations,
                     settings=settings,
                     cycle_count=max(0, cycle.sequence - 1),
                     existing_shift_cycles=tuple(
@@ -1703,6 +1649,7 @@ def split_request(
             is_last_available_date=is_last_available_date,
             cargo_dimensions=request.cargo_dimensions,
             trailer_access_allowed=request.trailer_access_allowed,
+            mandatory=request.mandatory,
         )
         for part_number, quantity in enumerate(quantities, start=1)
     )
@@ -1720,9 +1667,6 @@ def split_requests_for_date(
     for request in sorted(requests, key=lambda item: (item.created_at, item.id)):
         if request.status is not RequestStatus.READY:
             unassigned.append(_unassigned_task(request, (UnassignedReasonCode.REQUEST_NOT_READY,)))
-            continue
-        if request.zone_id is None:
-            unassigned.append(_unassigned_task(request, (UnassignedReasonCode.OUTSIDE_ZONES,)))
             continue
         matching = [option for option in request.date_options if option.date == planning_date]
         if not matching:
@@ -1767,7 +1711,6 @@ def _candidate_specs(
     remaining: tuple[PlanningTask, ...],
     matrix: TravelMatrix,
     matrix_index: Mapping[str, int],
-    relations: Mapping[tuple[str, str], ZoneRelation],
     settings: PlanningSettings,
 ) -> tuple[_CandidateSpec, ...]:
     """Build each bounded task combination once for all shifts in an iteration."""
@@ -1783,8 +1726,6 @@ def _candidate_specs(
         deliveries,
         matrix,
         matrix_index,
-        relations,
-        for_delivery=True,
         max_neighbors=settings.max_candidate_neighbors,
         anchor_limit=anchor_limit,
     )
@@ -1803,13 +1744,9 @@ def _candidate_specs(
             eligible_pickups,
             matrix,
             matrix_index,
-            relations,
-            for_delivery=False,
             max_neighbors=settings.max_candidate_neighbors,
             anchor_limit=settings.max_candidate_neighbors,
         ):
-            if not _pickup_transition_allowed(delivery_group, pickup_group, relations):
-                continue
             detour_seconds, detour_ratio = _pickup_detour(
                 delivery_group,
                 pickup_group,
@@ -1821,7 +1758,6 @@ def _candidate_specs(
                 pickup_group,
                 detour_seconds,
                 detour_ratio,
-                relations,
                 settings,
             ):
                 continue
@@ -1849,8 +1785,6 @@ def _candidate_specs(
         pickups,
         matrix,
         matrix_index,
-        relations,
-        for_delivery=False,
         max_neighbors=settings.max_candidate_neighbors,
         anchor_limit=anchor_limit,
     )
@@ -1894,8 +1828,7 @@ def _candidate_priority_key(
 
     Delivery-bearing candidates are ranked only by delivery urgency and outbound
     packing. Pickup urgency therefore cannot pull a less urgent delivery ahead of
-    a mandatory one. Mixed-cycle preference is applied later, after the delivery
-    rank and the delivery-capacity reservation check.
+    a mandatory one. Mixed-cycle fill is ranked only after the delivery rank.
     """
 
     tasks = deliveries or pickups
@@ -1906,6 +1839,8 @@ def _candidate_priority_key(
         not anchor.is_last_available_date,
         -anchor.priority,
         anchor.remaining_date_count,
+        anchor.selected_option.window_end is None,
+        anchor.selected_option.window_end,
         anchor.selected_option.width,
         -sum(task.quantity for task in tasks),
         -sum(task.is_hard for task in tasks),
@@ -1947,14 +1882,7 @@ def _candidate_route_rank(
         matrix_index,
     )
     pickup_anchor = min(pickups, key=_task_priority_key) if pickups else None
-    travel_zone_overflow, travel_zone_spread = _travel_zone_route_rank(
-        deliveries or pickups,
-        matrix,
-        matrix_index,
-    )
     return (
-        travel_zone_overflow,
-        travel_zone_spread,
         delivery_distance,
         delivery_travel,
         -sum(task.quantity for task in pickups),
@@ -1968,33 +1896,6 @@ def _candidate_route_rank(
         full_distance,
         full_travel,
     )
-
-
-def _travel_zone_route_rank(
-    tasks: Sequence[PlanningTask],
-    matrix: TravelMatrix,
-    matrix_index: Mapping[str, int],
-) -> tuple[int, int]:
-    """Prefer depot-consistent CustomerApp bands when constructing multi-stop cycles.
-
-    The candidate matrix supplies a cheap deterministic depot prefilter. Missing
-    bands remain neutral for legacy/manual requests. Exact directed routing, time
-    windows, vehicle capacity, and shift feasibility still decide whether the
-    resulting candidate can be assigned.
-    """
-
-    travel_zones = tuple(task.selected_option.travel_zone_hours for task in tasks)
-    if not travel_zones or any(hours is None for hours in travel_zones):
-        return (0, 0)
-    resolved_zones = tuple(int(hours) for hours in travel_zones if hours is not None)
-    overflow_seconds = sum(
-        max(
-            0,
-            matrix.at(0, matrix_index[task.id]).travel_seconds - hours * 60 * 60,
-        )
-        for task, hours in zip(tasks, resolved_zones, strict=True)
-    )
-    return (overflow_seconds, max(resolved_zones) - min(resolved_zones))
 
 
 def _pickup_attachment_rank(
@@ -2093,9 +1994,7 @@ def _ordered_groups(
     tasks: Sequence[PlanningTask],
     matrix: TravelMatrix,
     matrix_index: Mapping[str, int],
-    relations: Mapping[tuple[str, str], ZoneRelation],
     *,
-    for_delivery: bool,
     max_neighbors: int,
     anchor_limit: int,
 ) -> list[tuple[PlanningTask, ...]]:
@@ -2113,7 +2012,6 @@ def _ordered_groups(
                 for second in tasks
                 if second.id != first.id
                 and second.quantity == 1
-                and _pair_zones_allowed(first, second, relations, for_delivery)
             ),
             key=lambda second: (
                 matrix.at(matrix_index[first.id], matrix_index[second.id]).travel_seconds,
@@ -2127,44 +2025,6 @@ def _ordered_groups(
                 seen.add(key)
                 groups.append(pair)
     return groups
-
-
-def _pair_zones_allowed(
-    first: PlanningTask,
-    second: PlanningTask,
-    relations: Mapping[tuple[str, str], ZoneRelation],
-    for_delivery: bool,
-) -> bool:
-    """Use directed zone policy as a cheap prefilter before route timing."""
-
-    if first.zone_id == second.zone_id:
-        return True
-    if first.zone_id is None or second.zone_id is None:
-        return False
-    relation = relations.get((first.zone_id, second.zone_id))
-    if relation is None or relation.relation_type is RelationType.BLOCKED:
-        return False
-    return relation.delivery_pair_allowed if for_delivery else relation.pickup_allowed
-
-
-def _build_relation_index(
-    relations: Iterable[ZoneRelation],
-) -> dict[tuple[str, str], ZoneRelation]:
-    """Expand explicitly bidirectional relations without overriding directed ones."""
-
-    result: dict[tuple[str, str], ZoneRelation] = {}
-    ordered = sorted(relations, key=lambda item: (item.from_zone_id, item.to_zone_id))
-    for relation in ordered:
-        result[(relation.from_zone_id, relation.to_zone_id)] = relation
-    for relation in ordered:
-        reverse_key = (relation.to_zone_id, relation.from_zone_id)
-        if relation.is_bidirectional and reverse_key not in result:
-            result[reverse_key] = replace(
-                relation,
-                from_zone_id=relation.to_zone_id,
-                to_zone_id=relation.from_zone_id,
-            )
-    return result
 
 
 def _pickup_detour(
@@ -2196,31 +2056,11 @@ def _pickup_detour(
     return travel_detour, travel_detour / max(1, direct)
 
 
-def _pickup_transition_allowed(
-    deliveries: tuple[PlanningTask, ...],
-    pickups: tuple[PlanningTask, ...],
-    relations: Mapping[tuple[str, str], ZoneRelation],
-) -> bool:
-    """Apply only hard directed-zone policy to a delivery-to-pickup transition."""
-
-    if not deliveries or not pickups:
-        return True
-    transition_relation = relations.get((deliveries[-1].zone_id or "", pickups[0].zone_id or ""))
-    return not (
-        transition_relation is not None
-        and (
-            transition_relation.relation_type is RelationType.BLOCKED
-            or not transition_relation.pickup_allowed
-        )
-    )
-
-
 def _pickup_detour_exceeds_limit(
     deliveries: tuple[PlanningTask, ...],
     pickups: tuple[PlanningTask, ...],
     detour_seconds: int,
     detour_ratio: float,
-    relations: Mapping[tuple[str, str], ZoneRelation],
     settings: PlanningSettings,
 ) -> bool:
     """Return whether a backhaul exceeds its configured feasibility thresholds."""
@@ -2229,23 +2069,19 @@ def _pickup_detour_exceeds_limit(
         return False
     minute_limit = settings.max_detour_minutes
     ratio_limit = settings.max_detour_ratio
-    transition_relation = relations.get((deliveries[-1].zone_id or "", pickups[0].zone_id or ""))
-    if transition_relation is not None:
-        if transition_relation.max_detour_minutes is not None:
-            minute_limit = min(minute_limit, transition_relation.max_detour_minutes)
-        if transition_relation.max_detour_ratio is not None:
-            ratio_limit = min(ratio_limit, transition_relation.max_detour_ratio)
     return detour_seconds > minute_limit * 60 or detour_ratio > ratio_limit
 
 
 def _task_priority_key(task: PlanningTask) -> tuple[object, ...]:
-    """Implement mandatory-date-first stable task ordering."""
+    """Implement mandatory-date-first, earliest-deadline stable task ordering."""
 
     return (
         not task.is_hard,
         not task.is_last_available_date,
         -task.priority,
         task.remaining_date_count,
+        task.selected_option.window_end is None,
+        task.selected_option.window_end,
         task.selected_option.width,
         task.created_at,
         task.id,
@@ -2257,13 +2093,15 @@ def _task_priority_with_distance(
     matrix: TravelMatrix,
     matrix_index: Mapping[str, int],
 ) -> tuple[object, ...]:
-    """Extend business priority with nearest-first deterministic batching."""
+    """Extend deadline-aware business priority with nearest-first batching."""
 
     return (
         not task.is_hard,
         not task.is_last_available_date,
         -task.priority,
         task.remaining_date_count,
+        task.selected_option.window_end is None,
+        task.selected_option.window_end,
         task.selected_option.width,
         matrix.at(0, matrix_index[task.id]).distance_meters,
         task.created_at,
@@ -2276,16 +2114,32 @@ def _delivery_reference_priority_key(
     matrix: TravelMatrix,
     matrix_index: Mapping[str, int],
     *,
+    deadline_first: bool,
     longest_first: bool,
 ) -> tuple[object, ...]:
-    """Build a delivery coverage order using one explicit distance direction.
+    """Build one deadline-first or distance-directed delivery coverage order.
 
-    The planner compares longest-first protection against nearest-first packing.
-    This preserves a long mandatory trip when it increases coverage without
-    sacrificing a larger number of cabins that fit into compact nearby cycles.
+    The planner compares an earliest-deadline fence with longest-first protection
+    and nearest-first packing. The deadline fence prevents a feasible morning
+    delivery from being consumed by later work with an equally narrow window.
     """
 
     travel_seconds = matrix.at(0, matrix_index[task.id]).travel_seconds
+
+    if deadline_first:
+        return (
+            not task.is_hard,
+            not task.is_last_available_date,
+            -task.priority,
+            task.remaining_date_count,
+            task.selected_option.window_end is None,
+            task.selected_option.window_end,
+            task.selected_option.window_start,
+            task.selected_option.width,
+            travel_seconds,
+            task.created_at,
+            task.id,
+        )
 
     return (
         not task.is_hard,
@@ -2297,36 +2151,6 @@ def _delivery_reference_priority_key(
         task.created_at,
         task.id,
     )
-
-
-def _pickup_attachment_failures(
-    task: PlanningTask,
-    cycles: Iterable[RouteCycle],
-    relations: Mapping[tuple[str, str], ZoneRelation],
-) -> tuple[UnassignedReasonCode, ...]:
-    """Explain why a leftover pickup could not join a completed delivery return."""
-
-    if task.task_type is not TaskType.PICKUP:
-        return ()
-    considered = 0
-    blocked = 0
-    for cycle in cycles:
-        deliveries = [stop for stop in cycle.stops if stop.stop_type is StopType.DELIVERY]
-        pickups = [stop for stop in cycle.stops if stop.stop_type is StopType.PICKUP]
-        if not deliveries or pickups:
-            continue
-        last_delivery = deliveries[-1]
-        considered += 1
-        relation = relations.get((last_delivery.zone_id or "", task.zone_id or ""))
-        if relation is not None and (
-            relation.relation_type is RelationType.BLOCKED or not relation.pickup_allowed
-        ):
-            blocked += 1
-            continue
-        return ()
-    if considered and blocked == considered:
-        return (UnassignedReasonCode.ZONE_RELATION_BLOCKED,)
-    return ()
 
 
 def _initial_shift_state(
@@ -2370,7 +2194,6 @@ def _cycle_explanation(
     pickups: tuple[PlanningTask, ...],
     shift: DriverShift,
     detour_seconds: int,
-    preferred_match: bool,
     *,
     resource_reused: bool,
     activates_additional_resource: bool,
@@ -2381,7 +2204,7 @@ def _cycle_explanation(
     if len(deliveries) == 2:
         reasons.append(
             f"Доставки {deliveries[0].request_id} и {deliveries[1].request_id} "
-            "объединены: обе части по одной бытовке, зоны и окна совместимы."
+            "объединены: обе части по одной бытовке, дорожный маршрут и окна совместимы."
         )
     elif deliveries:
         reasons.append(
@@ -2408,16 +2231,10 @@ def _cycle_explanation(
             f"Дополнительная смена водителя {shift.driver_name} подключена только после "
             "учёта временных окон, вместимости, совместных точек и стоимости активации."
         )
-    if preferred_match:
-        reasons.append(
-            f"Водитель {shift.driver_name} выбран с учётом предпочтительной группы "
-            f"{shift.preferred_route_group}."
-        )
-    else:
-        reasons.append(
-            f"Водитель {shift.driver_name} свободен в рассчитанное время; предпочтение "
-            "группы использовано как мягкий фактор."
-        )
+    reasons.append(
+        f"Водитель {shift.driver_name} свободен в рассчитанное время по точному "
+        "дорожному расчёту."
+    )
     return tuple(reasons)
 
 
@@ -2464,7 +2281,6 @@ def _unassigned_task(
         UnassignedReasonCode.SHIFT_LIMIT_EXCEEDED: (
             "Возврат на склад выходит за допустимый конец смены."
         ),
-        UnassignedReasonCode.ZONE_RELATION_BLOCKED: "Переход между зонами запрещён настройками.",
         UnassignedReasonCode.DETOUR_TOO_LARGE: "Крюк за точкой превышает допустимый лимит.",
         UnassignedReasonCode.OUTSIDE_ZONES: "Точка находится вне настроенных логистических зон.",
         UnassignedReasonCode.REQUEST_NOT_READY: "Заявка не находится в статусе READY.",
@@ -2515,8 +2331,6 @@ def _unassigned_task(
         recommendations.append("Добавьте зону или осознанно пересчитайте принадлежность точки.")
     if UnassignedReasonCode.DETOUR_TOO_LARGE in reasons:
         recommendations.append("Увеличьте допустимый крюк или оставьте отдельный pickup-only рейс.")
-    if UnassignedReasonCode.ZONE_RELATION_BLOCKED in reasons:
-        recommendations.append("Проверьте направленную связь между логистическими зонами.")
     if UnassignedReasonCode.ROUTING_PROFILE_INCOMPLETE in reasons:
         recommendations.append(
             "Заполните физические параметры машины, груза, прицепа и осевой нагрузки."
@@ -2557,6 +2371,36 @@ def calculate_resource_activation_cost(
     return max(0, active_shift_count - 1) * settings.additional_resource_activation_penalty
 
 
+def _support_positioning_cost(
+    shift: DriverShift,
+    settings: PlanningSettings,
+) -> float:
+    """Score one external depot visit as high-cost empty road plus a soft link priority."""
+
+    if shift.resource_origin_warehouse_id is None:
+        return 0.0
+    return round(
+        shift.positioning_travel_minutes * settings.empty_travel_weight
+        + max(shift.support_priority - 1, 0),
+        6,
+    )
+
+
+def _plan_support_positioning_cost(
+    cycles: Iterable[RouteCycle],
+    shifts: Iterable[DriverShift],
+    settings: PlanningSettings,
+) -> float:
+    """Charge the full support positioning exactly once for every activated shift."""
+
+    active_shift_ids = {cycle.driver_shift_id for cycle in cycles}
+    return sum(
+        _support_positioning_cost(shift, settings)
+        for shift in shifts
+        if shift.id in active_shift_ids
+    )
+
+
 def _plan_score(
     cycles: Iterable[RouteCycle],
     unassigned: Iterable[UnassignedTask],
@@ -2566,9 +2410,11 @@ def _plan_score(
     """Calculate the documented weighted objective without hiding hard failures."""
 
     cycle_list = tuple(cycles)
+    shift_list = tuple(shifts)
     score = sum(cycle.score for cycle in cycle_list)
     score += calculate_resource_activation_cost(cycle_list, settings)
-    score += calculate_driver_workload_cost(cycle_list, shifts, settings)
+    score += _plan_support_positioning_cost(cycle_list, shift_list, settings)
+    score += calculate_driver_workload_cost(cycle_list, shift_list, settings)
     for item in unassigned:
         task = item.task
         is_hard = isinstance(task, PlanningTask) and task.is_hard

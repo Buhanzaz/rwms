@@ -1,9 +1,11 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { isRequestVisibleOnDate, requestPlanningDates } from '../src/domain/request-dates';
-import type { LogisticsRequest, Zone } from '../src/domain/types';
+import { EMPTY_METRICS } from '../src/domain/defaults';
+import type { LogisticsRequest, RouteCycle, Zone } from '../src/domain/types';
 import { RequestMapCard, RequestMapPopup } from '../src/map/RequestMapCard';
+import { planFixture, requestFixture } from './fixtures';
 
 const popupMock = vi.hoisted(() => ({
   addTo: vi.fn(),
@@ -47,47 +49,65 @@ vi.mock('maplibre-gl', () => ({
   },
 }));
 
-const request: LogisticsRequest = {
+const request: LogisticsRequest = requestFixture({
   id: 'request-142',
-  scenario_id: 'scenario-id',
-  type: 'DELIVERY',
   name: 'Доставка №142',
   address_label: 'Москва, Тестовая улица, 25',
   latitude: 55.8,
   longitude: 37.6,
-  quantity: 2,
   service_minutes: 35,
-  priority: 10,
-  status: 'READY',
   zone_id: 'zone-z1',
   zone_version: 3,
-  split_allowed: true,
   notes: 'Позвонить за час',
-  created_at: '2026-08-20T08:00:00Z',
-  updated_at: '2026-08-22T08:00:00Z',
   scheduled_date: null,
   date_options: [
     { date: '2026-08-25', priority: 20, window_start: '09:00', window_end: '11:00', is_hard: true, travel_zone_hours: 2 },
     { date: '2026-08-26', priority: 10, window_start: null, window_end: null, is_hard: false },
   ],
   zone_status: 'CURRENT',
-};
+});
 
 const zone: Zone = {
   id: 'zone-z1',
-  scenario_id: 'scenario-id',
+  warehouse_id: 'warehouse-1',
   name: 'Запад',
-  code: 'Z1',
-  route_group: 'WEST',
+  kind: 'SPECIAL_PRICE',
+  color: '#3366FF',
   delivery_price: 125,
   pickup_price: 75,
   geometry: { type: 'Polygon', coordinates: [[[37, 55], [38, 55], [38, 56], [37, 55]]] },
   version: 3,
-  priority: 1,
   locked: false,
   created_at: '2026-08-20T08:00:00Z',
   updated_at: '2026-08-22T08:00:00Z',
 };
+
+function cycle(id: string, shiftId: string, taskId: string | null): RouteCycle {
+  return {
+    id,
+    route_plan_id: 'plan-1',
+    driver_shift_id: shiftId,
+    sequence: 1,
+    planned_start: '2026-08-25T08:00:00+03:00',
+    planned_finish: '2026-08-25T11:00:00+03:00',
+    total_distance_meters: 10_000,
+    total_travel_seconds: 1_800,
+    total_service_seconds: 1_200,
+    empty_distance_meters: 2_000,
+    detour_seconds: 0,
+    score: 10,
+    locked: false,
+    stops: taskId ? [{
+      id: `${id}-stop`, route_cycle_id: id, sequence: 1, task_id: taskId, stop_type: 'DELIVERY',
+      planned_arrival: '2026-08-25T09:00:00+03:00', planned_departure: '2026-08-25T09:30:00+03:00',
+      service_seconds: 1_800, quantity_delta: -2, load_before: 2, load_after: 0,
+      latitude: 55.8, longitude: 37.6, label: 'Доставка №142',
+    }] : [],
+    legs: [],
+    explanation: [],
+    warnings: [],
+  };
+}
 
 describe('request map card', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -135,7 +155,7 @@ describe('request map card', () => {
     await waitFor(() => expect(popupMock.setLngLat).toHaveBeenLastCalledWith([37.72, 55.91]));
     expect(popupMock.remove).toHaveBeenCalledOnce();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Закрыть карточку заявки' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Закрыть карточку доставки или вывоза' }));
     expect(onClose).toHaveBeenCalledOnce();
 
     view.unmount();
@@ -160,7 +180,7 @@ describe('request map card', () => {
     expect(screen.getByText('Доставка №142')).toBeVisible();
     expect(screen.getByText('Москва, Тестовая улица, 25')).toBeVisible();
     expect(screen.getByText('2 бытов. · обслуживание 35 мин')).toBeVisible();
-    expect(screen.getByText('Зона Z1 · версия 3')).toBeVisible();
+    expect(screen.getByText('Особая зона «Запад» · версия 3')).toBeVisible();
     expect(screen.getByText('Доставка · 125 ₽')).toBeVisible();
     expect(screen.getByText(/25 августа 2026.*09:00–11:00.*зона 2 ч.*жёстко/)).toBeVisible();
 
@@ -199,7 +219,8 @@ describe('request map card', () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText('Дата для логистики'), { target: { value: '2026-08-29' } });
+    await user.click(screen.getByRole('button', { name: 'Дата для логистики' }));
+    await user.click(screen.getByRole('button', { name: /29 августа 2026/ }));
     expect(screen.getByText(/не входила в варианты клиента/)).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Добавить дату и выставить на 29 августа 2026 г.' }));
     expect(onSchedule).toHaveBeenCalledWith('request-142', '2026-08-29', true);
@@ -223,6 +244,58 @@ describe('request map card', () => {
     expect(screen.getByText(/Выставлено на/)).toHaveTextContent('Выставлено на 26 августа 2026 г.');
     await user.click(screen.getByRole('button', { name: 'Снять с назначенной даты' }));
     expect(onUnschedule).toHaveBeenCalledWith('request-142');
+  });
+
+  it('shows the assigned driver and moves the delivery task to another cycle', async () => {
+    const user = userEvent.setup();
+    const onMoveTask = vi.fn();
+    const requestWithTask = {
+      ...request,
+      tasks: [{
+        id: 'task-142', request_id: request.id, part_number: 1, quantity: 2, type: 'DELIVERY' as const,
+        latitude: request.latitude, longitude: request.longitude, zone_id: zone.id, zone_version: zone.version,
+        service_minutes: request.service_minutes, priority: 10, mandatory: false, status: 'READY',
+      }],
+    };
+    const source = cycle('cycle-1', 'shift-1', 'task-142');
+    const target = cycle('cycle-2', 'shift-2', 'pickup-task');
+    target.stops[0]!.stop_type = 'PICKUP';
+    const plan = planFixture({
+      date: '2026-08-25',
+      driver_routes: [
+        {
+          driver_shift_id: 'shift-1', shift_start_at: '2026-08-25T08:00:00+03:00', shift_end_at: '2026-08-25T20:00:00+03:00',
+          driver_id: 'driver-1', driver_name: 'Антон', vehicle_id: 'vehicle-1', vehicle_name: 'МАЗ', registration_number: 'А123БВ',
+          cycles: [source], metrics: { ...EMPTY_METRICS },
+        },
+        {
+          driver_shift_id: 'shift-2', shift_start_at: '2026-08-25T08:00:00+03:00', shift_end_at: '2026-08-25T20:00:00+03:00',
+          driver_id: 'driver-2', driver_name: 'Борис', vehicle_id: 'vehicle-2', vehicle_name: 'КАМАЗ', registration_number: 'В456ГД',
+          cycles: [target], metrics: { ...EMPTY_METRICS },
+        },
+      ],
+    });
+
+    render(
+      <RequestMapCard
+        request={requestWithTask}
+        zone={zone}
+        plan={plan}
+        planningDate="2026-08-25"
+        busy={false}
+        onSchedule={() => undefined}
+        onUnschedule={() => undefined}
+        onMoveTask={onMoveTask}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText('Водитель и рейс')).toBeVisible();
+    expect(screen.getByLabelText('Рейс для Доставка №142')).toHaveDisplayValue(/Антон · цикл 1/);
+    await user.selectOptions(screen.getByLabelText('Рейс для Доставка №142'), 'cycle-2');
+    expect(onMoveTask).toHaveBeenCalledWith({
+      taskId: 'task-142', sourceCycleId: 'cycle-1', targetCycleId: 'cycle-2', targetSequence: 1, kind: 'MOVE_TASK',
+    });
   });
 });
 

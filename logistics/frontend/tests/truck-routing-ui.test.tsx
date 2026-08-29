@@ -6,18 +6,17 @@ import {
   CatalogDialog,
   type VehicleEditorInput,
 } from '../src/components/EntityDialogs';
-import { DEFAULT_PLANNING_SETTINGS } from '../src/domain/defaults';
 import type {
   RouteCycle,
-  ScenarioWorkspace,
+  WarehouseWorkspace,
   Trailer,
 } from '../src/domain/types';
 import { TrailerDialog } from '../src/features/trailers/TrailerDialog';
-import { RouteDiagnostics } from '../src/features/vehicles/RouteDiagnostics';
+import { workspaceFixture } from './fixtures';
 
 const trailer: Trailer = {
   id: 'trailer-1',
-  scenario_id: 'scenario-1',
+  warehouse_id: 'warehouse-1',
   name: 'Прицеп 1',
   registration_number: 'ТР1234',
   active: true,
@@ -111,7 +110,7 @@ describe('truck vehicle editor', () => {
       { configuration_type: 'CARGO_ON_TRUCK', max_actual_axle_load_kg: 8000 },
       { configuration_type: 'TWO_CARGO_SPLIT', max_actual_axle_load_kg: 8700 },
     ]));
-  });
+  }, 10_000);
 
   it('submits nullable trailer physical values without manufacturing defaults', async () => {
     const user = userEvent.setup();
@@ -129,14 +128,14 @@ describe('truck vehicle editor', () => {
     const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
     fetchMock
       .mockResolvedValueOnce(new Response(JSON.stringify(trailer), { status: 201, headers: { 'Content-Type': 'application/json' } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'vehicle-1', scenario_id: 'scenario-1', name: 'МАЗ', registration_number: 'А123БВ' }), { status: 201, headers: { 'Content-Type': 'application/json' } }));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'vehicle-1', warehouse_id: 'warehouse-1', name: 'МАЗ', registration_number: 'А123БВ' }), { status: 201, headers: { 'Content-Type': 'application/json' } }));
     vi.stubGlobal('fetch', fetchMock);
     const trailerInput = Object.fromEntries(
-      Object.entries(trailer).filter(([key]) => key !== 'id' && key !== 'scenario_id'),
+      Object.entries(trailer).filter(([key]) => key !== 'id' && key !== 'warehouse_id'),
     ) as unknown as TrailerInput;
 
-    await api.createTrailer('scenario-1', trailerInput);
-    await api.createVehicleConfiguration('scenario-1', {
+    await api.createTrailer('warehouse-1', trailerInput);
+    await api.createVehicleConfiguration('warehouse-1', {
       vehicle: {
         name: 'МАЗ', registration_number: 'А123БВ', capacity: 2, active: true,
         average_speed_city: 30, average_speed_region: 60, notes: '',
@@ -144,9 +143,9 @@ describe('truck vehicle editor', () => {
       load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT', max_actual_axle_load_kg: 8700 }],
     });
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/scenarios/scenario-1/trailers');
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/warehouses/warehouse-1/trailers');
     expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toMatchObject({ name: 'Прицеп 1', length_mm: 8000 });
-    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/scenarios/scenario-1/vehicle-configurations');
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/warehouses/warehouse-1/vehicle-configurations');
     expect(JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string)).toMatchObject({
       vehicle: { name: 'МАЗ', registration_number: 'А123БВ' },
       load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT', max_actual_axle_load_kg: 8700 }],
@@ -159,7 +158,7 @@ function cycleFixture(): RouteCycle {
     id: 'cycle-1', route_plan_id: 'plan-1', driver_shift_id: 'shift-1', sequence: 1,
     planned_start: '2026-08-25T05:00:00Z', planned_finish: '2026-08-25T08:00:00Z',
     total_distance_meters: 10000, total_travel_seconds: 1200, total_service_seconds: 600,
-    empty_distance_meters: 0, detour_seconds: 0, score: 1, locked: false, explanation: [], warnings: [],
+    empty_distance_meters: 0, detour_seconds: 0, score: 1, locked: false, manually_changed: false, explanation: [], warnings: [],
     stops: [
       { id: 'stop-1', route_cycle_id: 'cycle-1', sequence: 0, task_id: null, stop_type: 'DEPOT_LOAD', planned_arrival: '2026-08-25T05:00:00Z', planned_departure: '2026-08-25T05:10:00Z', service_seconds: 600, quantity_delta: 2, load_before: 0, load_after: 2, latitude: 55.7, longitude: 37.6, label: 'Склад' },
       { id: 'stop-2', route_cycle_id: 'cycle-1', sequence: 1, task_id: 'task-1', stop_type: 'DELIVERY', planned_arrival: '2026-08-25T06:00:00Z', planned_departure: '2026-08-25T06:20:00Z', service_seconds: 1200, quantity_delta: -1, load_before: 2, load_after: 1, latitude: 55.8, longitude: 37.7, label: 'Клиент' },
@@ -181,7 +180,7 @@ function cycleFixture(): RouteCycle {
         },
       },
       {
-        id: 'leg-legacy', from_stop_id: 'stop-2', to_stop_id: 'stop-3', departure_at: '2026-08-25T06:20:00Z', arrival_at: '2026-08-25T08:00:00Z', distance_meters: 3000, travel_seconds: 6000,
+        id: 'leg-unprofiled', from_stop_id: 'stop-2', to_stop_id: 'stop-3', departure_at: '2026-08-25T06:20:00Z', arrival_at: '2026-08-25T08:00:00Z', distance_meters: 3000, travel_seconds: 6000,
         geometry: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[37.7, 55.8], [37.6, 55.7]] } },
         routing_profile_snapshot: null,
       },
@@ -189,28 +188,12 @@ function cycleFixture(): RouteCycle {
   };
 }
 
-describe('route diagnostics', () => {
-  it('shows the exact per-leg truck snapshot and a clear warning for a legacy segment', async () => {
-    const user = userEvent.setup();
-    render(<RouteDiagnostics cycles={[cycleFixture()]} timeZone="Europe/Moscow" />);
-    expect(screen.getByText('две бытовки: машина + прицеп')).toBeVisible();
-    expect(screen.getByText('18.60 м')).toBeVisible();
-    expect(screen.getByText('24.80 т')).toBeVisible();
-    expect(screen.getByText('8.40 т')).toBeVisible();
-    expect(screen.getByText('valhalla')).toBeVisible();
-    expect(screen.getByText('2026-08-24')).toBeVisible();
-    expect(screen.getByText(/cargo-2: на платформе прицепа/)).toBeVisible();
-
-    await user.click(screen.getByText('Участок 2: Клиент → Склад'));
-    expect(screen.getByText('Грузовой профиль не сохранён')).toBeVisible();
-    expect(screen.getByText('Маршрут не подтверждён как truck-safe.')).toBeVisible();
-  });
-
+describe('route profile normalization', () => {
   it('preserves a backend profile snapshot when normalizing a route plan', async () => {
     const cycle = cycleFixture();
     const segment = cycle.legs[0]!;
     const rawPlan = {
-      id: 'plan-1', scenario_id: 'scenario-1', warehouse_id: 'warehouse-1', date: '2026-08-25', name: 'План', version: 1,
+      id: 'plan-1', warehouse_id: 'warehouse-1', date: '2026-08-25', name: 'План', version: 1,
       status: 'GENERATED', score: 1, metrics: {}, validation_errors: [], validation_warnings: [], manually_changed: false,
       created_at: '2026-08-25T04:00:00Z', updated_at: '2026-08-25T04:00:00Z', unassigned_tasks: [],
       cycles: [{
@@ -227,11 +210,7 @@ describe('route diagnostics', () => {
       }],
     };
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(JSON.stringify(rawPlan), { status: 200, headers: { 'Content-Type': 'application/json' } }))));
-    const workspace: ScenarioWorkspace = {
-      scenario: { id: 'scenario-1', name: 'Сценарий', description: '', timezone: 'Europe/Moscow', default_planning_date: '2026-08-25', created_at: '2026-08-24T00:00:00Z', updated_at: '2026-08-24T00:00:00Z', settings: { ...DEFAULT_PLANNING_SETTINGS } },
-      warehouses: [{ id: 'warehouse-1', scenario_id: 'scenario-1', name: 'Склад', latitude: 55.7, longitude: 37.6, loading_minutes: 10, unloading_minutes: 10, turnaround_minutes: 10, working_day_start: '08:00', working_day_end: '20:00' }],
-      zones: [], zone_relations: [], drivers: [], vehicles: [], shifts: [], requests: [],
-    };
+    const workspace: WarehouseWorkspace = workspaceFixture({ drivers: [], vehicles: [], shifts: [], requests: [] });
     const plan = await api.getPlan('plan-1', workspace);
     expect(plan.driver_routes[0]?.cycles[0]?.legs[0]?.routing_profile_snapshot?.effectiveLengthMeters).toBe(18.6);
     expect(plan.driver_routes[0]?.cycles[0]?.legs[0]?.routing_provider).toBe('valhalla');

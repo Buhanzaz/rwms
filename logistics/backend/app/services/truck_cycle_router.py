@@ -133,7 +133,12 @@ class ExactTruckCycleRouter:
         routed_legs: list[PlannedLeg] = []
         waiting_seconds = 0
         empty_distance_meters = 0
-        warnings = set(cycle.warnings)
+        warnings = set(cycle.warnings).difference(
+            {
+                ValidationWarningCode.SOFT_WINDOW_RISK,
+                ValidationWarningCode.OVERTIME_WARNING,
+            }
+        )
         calculated_at = self._now()
 
         for source, target in pairwise(ordered_stops):
@@ -225,12 +230,12 @@ class ExactTruckCycleRouter:
                             UnassignedReasonCode.TIME_WINDOW_CONFLICT,
                             (
                                 "Exact route requires more waiting between customer "
-                                "stops than the scenario permits"
+                                "stops than the workspace permits"
                             ),
                         )
                     waiting_seconds += source_waiting_seconds
             departure = arrival + timedelta(seconds=target.service_seconds)
-            if target.window_end is not None and departure > target.window_end:
+            if target.window_end is not None and arrival > target.window_end:
                 if target.window_is_hard:
                     raise CandidateRouteRejected(
                         UnassignedReasonCode.TIME_WINDOW_CONFLICT,

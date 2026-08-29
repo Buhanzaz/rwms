@@ -23,7 +23,6 @@ from .models import (
     PlanningResult,
     PlanningSettings,
     PlanningTask,
-    RelationType,
     RequestDateOption,
     RequestStatus,
     RouteCycle,
@@ -41,8 +40,6 @@ from .models import (
     ValidationWarningCode,
     Vehicle,
     Warehouse,
-    ZoneRelation,
-    ZoneSnapshot,
 )
 from .validation import calculate_plan_metrics, validate_route_plan
 from .workload import (
@@ -68,7 +65,6 @@ __all__ = [
     "PlanningTask",
     "ProgressPublisher",
     "RecordingProgressPublisher",
-    "RelationType",
     "RequestDateOption",
     "RequestStatus",
     "RouteCycle",
@@ -86,8 +82,6 @@ __all__ = [
     "ValidationWarningCode",
     "Vehicle",
     "Warehouse",
-    "ZoneRelation",
-    "ZoneSnapshot",
     "calculate_driver_workload_cost",
     "calculate_plan_metrics",
     "calculate_resource_activation_cost",

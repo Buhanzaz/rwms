@@ -1,292 +1,136 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
-import { DEFAULT_PLANNING_SETTINGS } from '../src/domain/defaults';
+import { useUiStore } from '../src/stores/ui-store';
+import { warehouseFixture, workspaceFixture } from './fixtures';
 
-vi.mock('maplibre-gl', () => {
-  class MapStub {
-    addControl(): void {}
-    on(): void {}
-    off(): void {}
-    remove(): void {}
-  }
+vi.mock('../src/map/MapCanvas', () => ({
+  MapCanvas: () => <div data-testid="common-map">common map</div>,
+}));
 
+function response(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { 'Content-Type': status >= 400 ? 'application/problem+json' : 'application/json' },
+  });
+}
+
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === 'string') return input;
+  return input instanceof URL ? input.href : input.url;
+}
+
+function rawPlan(overrides: Record<string, unknown> = {}) {
   return {
-    default: {
-      Map: MapStub,
-      NavigationControl: class NavigationControlStub {},
-      AttributionControl: class AttributionControlStub {},
-    },
+    id: 'plan-1',
+    warehouse_id: 'warehouse-1',
+    date: '2026-08-30',
+    version: 1,
+    status: 'GENERATED',
+    score: 0,
+    created_at: '2026-08-28T08:00:00Z',
+    updated_at: '2026-08-28T08:00:00Z',
+    cycles: [],
+    unassigned_tasks: [],
+    metrics: {},
+    manually_changed: false,
+    ...overrides,
   };
-});
-
-class EventSourceStub {
-  static instances: EventSourceStub[] = [];
-
-  readonly url: string;
-  onmessage: ((event: MessageEvent<string>) => void) | null = null;
-  onerror: (() => void) | null = null;
-  private readonly listeners = new Map<string, Set<EventListener>>();
-
-  constructor(url: string | URL) {
-    this.url = String(url);
-    EventSourceStub.instances.push(this);
-  }
-
-  addEventListener(type: string, listener: EventListenerOrEventListenerObject | null): void {
-    if (typeof listener !== 'function') return;
-    const listeners = this.listeners.get(type) ?? new Set<EventListener>();
-    listeners.add(listener);
-    this.listeners.set(type, listeners);
-  }
-
-  removeEventListener(type: string, listener: EventListenerOrEventListenerObject | null): void {
-    if (typeof listener === 'function') this.listeners.get(type)?.delete(listener);
-  }
-
-  close(): void {}
-
-  emit(type: string, value: unknown): void {
-    const event = new MessageEvent(type, { data: JSON.stringify(value) });
-    this.listeners.get(type)?.forEach((listener) => listener(event));
-    if (type === 'message') this.onmessage?.(event);
-  }
 }
 
-const scenario = {
-  id: 'scenario-id',
-  name: 'Тестовый сценарий',
-  description: '',
-  timezone: 'Europe/Moscow',
-  default_planning_date: '2026-08-25',
-  created_at: '2026-08-20T08:00:00Z',
-  updated_at: '2026-08-22T08:00:00Z',
-  seed: 42,
-  settings: { ...DEFAULT_PLANNING_SETTINGS, trace_enabled: true },
-};
-
-function jsonResponse(value: unknown): Response {
-  return new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } });
-}
-
-function installFetchRouter(options: { requestOutside?: boolean; deletedRequests?: number; deletedPlans?: number } = {}) {
-  let reclassified = false;
-  const routeFetch = (input: RequestInfo | URL, init?: RequestInit): Response => {
-    const url = typeof input === 'string'
-      ? input
-      : input instanceof URL
-        ? input.href
-        : input.url;
+function installRouter(options: { partialWorkspaceOnce?: boolean; acceptingRequests?: boolean } = {}) {
+  let partialPending = options.partialWorkspaceOnce ?? false;
+  let accepting = options.acceptingRequests ?? true;
+  let ensureCalls = 0;
+  const warehouse = warehouseFixture();
+  const workspace = workspaceFixture();
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = requestUrl(input);
     const method = init?.method ?? 'GET';
-    if (url === '/api/scenarios') return jsonResponse([scenario]);
-    if (url === '/api/scenarios/scenario-id') return jsonResponse(scenario);
-    if (url === '/api/scenarios/scenario-id/rwms/refresh' && method === 'POST') {
-      return jsonResponse({
-        scenario_id: 'scenario-id',
-        date_from: '2026-08-27',
-        date_to: '2026-09-26',
-        warehouses: [],
-      });
+    if (url === '/api/warehouses') return response([warehouse]);
+    if (url === '/api/warehouses/available') return response([]);
+    if (url === '/api/warehouses/warehouse-1/workspace' && partialPending) {
+      partialPending = false;
+      return response({ code: 'RWMS_WORKSPACE_SYNC_INCOMPLETE', detail: 'Одна заявка не обновлена', failures: [{ id: 'request-2' }] }, 422);
     }
-    if (url === '/api/scenarios/scenario-id/warehouses') {
-      return jsonResponse([{
-        id: 'warehouse-id', scenario_id: 'scenario-id', name: 'Основной склад', latitude: 55.75, longitude: 37.61,
-        loading_minutes: 30, unloading_minutes: 20, turnaround_minutes: 20, working_day_start: '08:00:00', working_day_end: '20:00:00',
-      }]);
+    if (url === '/api/warehouses/warehouse-1/workspace' || url === '/api/warehouses/warehouse-1/workspace?refresh_rwms=false') return response(workspace);
+    if (url === '/api/warehouses/warehouse-1/plans/ensure?date=2026-08-30' && method === 'POST') {
+      ensureCalls += 1;
+      return response(rawPlan({ version: ensureCalls }));
     }
-    if (url === '/api/scenarios/scenario-id/zones') {
-      return jsonResponse([{
-        id: 'zone-id', scenario_id: 'scenario-id', name: 'Центр', code: 'CITY', route_group: 'CITY',
-        geometry: { type: 'Polygon', coordinates: [[[37, 55], [38, 55], [38, 56], [37, 56], [37, 55]]] },
-        version: 1, priority: 1, locked: false, stale_request_count: options.requestOutside && !reclassified ? 1 : 0,
-        created_at: '2026-08-20T08:00:00Z', updated_at: '2026-08-22T08:00:00Z',
-      }]);
+    if (url === '/api/plans/plan-1' && method === 'GET') return response(rawPlan({ version: ensureCalls || 1 }));
+    if (url === '/api/requests/request-1/planning-details' && method === 'POST') {
+      const payload = JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as { mandatory: boolean };
+      workspace.requests[0] = { ...workspace.requests[0]!, mandatory: payload.mandatory };
+      return response(workspace.requests[0]);
     }
-    if (url === '/api/scenarios/scenario-id/zone-relations') return jsonResponse([]);
-    if (url === '/api/scenarios/scenario-id/drivers') {
-      return jsonResponse([{ id: 'driver-id', scenario_id: 'scenario-id', name: 'Водитель 1', preferred_route_group: 'WEST', active: true, notes: '' }]);
+    if (url === '/api/warehouses/warehouse-1/planning-days/2026-08-30' && method === 'GET') {
+      return response({ warehouse_id: 'warehouse-1', date: '2026-08-30', accepting_requests: accepting, closed_at: null, closed_by: null, plan_id: 'plan-1' });
     }
-    if (url === '/api/scenarios/scenario-id/vehicles') {
-      return jsonResponse([{
-        id: 'vehicle-id', scenario_id: 'scenario-id', name: 'МАЗ', registration_number: 'А123БВ', capacity: 2,
-        active: true, average_speed_city: 35, average_speed_region: 65, notes: '',
-      }]);
+    if (url === '/api/warehouses/warehouse-1/planning-days/2026-08-30/close' && method === 'POST') {
+      accepting = false;
+      return response({ warehouse_id: 'warehouse-1', date: '2026-08-30', accepting_requests: false, closed_at: '2026-08-28T10:00:00Z', closed_by: 'manager', plan_id: 'plan-1' });
     }
-    if (url === '/api/scenarios/scenario-id/shifts') {
-      return jsonResponse([{
-        id: 'shift-id', scenario_id: 'scenario-id', driver_id: 'driver-id', vehicle_id: 'vehicle-id', date: '2026-08-25',
-        start_at: '2026-08-25T05:00:00Z', end_at: '2026-08-25T17:00:00Z', break_minutes: 30,
-        preferred_route_group: 'WEST', active: true,
-      }]);
-    }
-    if (url === '/api/scenarios/scenario-id/requests') {
-      return jsonResponse([{
-        id: 'request-id', scenario_id: 'scenario-id', type: 'DELIVERY', name: 'Доставка 1', address_label: 'Адрес',
-        latitude: 55.8, longitude: 37.7, quantity: 1, service_minutes: 30, priority: 1, status: 'READY',
-        zone_id: options.requestOutside && !reclassified ? null : 'zone-id', zone_version: options.requestOutside && !reclassified ? null : 1,
-        split_allowed: true, notes: '', created_at: '2026-08-20T08:00:00Z', updated_at: '2026-08-22T08:00:00Z',
-        trailer_access_allowed: true,
-        include_driver_passport_in_notification: false,
-        contact_name: '',
-        contact_phone: '',
-        zone_classification_status: options.requestOutside && !reclassified ? 'OUTSIDE_ZONES' : 'CLASSIFIED', zone_is_stale: false,
-        scheduled_date: null,
-        date_options: [{ id: 'date-id', request_id: 'request-id', date: '2026-08-25', priority: 1, window_start: '09:00:00', window_end: '15:00:00', is_hard: true }],
-        tasks: [],
-      }]);
-    }
-    if (url === '/api/scenarios/scenario-id/generated-workload?date=2026-08-25' && method === 'DELETE') {
-      return jsonResponse({
-        scenario_id: 'scenario-id',
-        date: '2026-08-25',
-        deleted_requests: options.deletedRequests ?? 1,
-        deleted_plans: options.deletedPlans ?? 0,
-      });
-    }
-    if (url === '/api/scenarios/scenario-id/reclassify-requests' && method === 'POST') {
-      reclassified = true;
-      return jsonResponse({ updated: 1, outside_zones: 0, unchanged: 0 });
-    }
-    if (url === '/api/scenarios/scenario-id/plans/generate' && method === 'POST') {
-      return jsonResponse({ run_id: 'run-id', plan_id: null, status: 'PENDING' });
-    }
-    if (url === '/api/optimization-runs/run-id') {
-      return jsonResponse({
-        id: 'run-id', scenario_id: 'scenario-id', plan_id: null, status: 'RUNNING', started_at: '2026-08-22T08:00:00Z',
-        finished_at: null, seed: 42, settings_snapshot: {}, initial_score: null, final_score: null, error_message: null,
-        stopped_by_limit: false, cancel_requested: false,
-      });
-    }
-    throw new Error(`Unexpected request: ${method} ${url}`);
-  };
-  const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
-    (input, init) => Promise.resolve(routeFetch(input, init)),
-  );
+    throw new Error(`Unexpected request ${method} ${url}`);
+  });
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 }
 
+function renderApp() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  return render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+}
+
 beforeEach(() => {
-  EventSourceStub.instances = [];
-  vi.stubGlobal('EventSource', EventSourceStub);
+  useUiStore.setState({ mode: 'EDITOR', section: 'WAREHOUSE', notifications: [], selected: null });
 });
 
-describe('optimization progress', () => {
-  it('renders a named SSE phase and normalized percentage after generation', async () => {
-    const fetchMock = installFetchRouter();
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-    const user = userEvent.setup();
-    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+describe('warehouse automatic planning', () => {
+  it('loads one common map and automatically requests the selected warehouse plan', async () => {
+    const fetchMock = installRouter();
+    renderApp();
 
-    const generate = await screen.findByRole('button', { name: /Построить маршруты/ });
-    await user.click(generate);
-
-    const progress = await screen.findByTestId('optimization-progress');
-    expect(progress).toHaveTextContent('VALIDATING_INPUT');
-    await waitFor(() => expect(EventSourceStub.instances.length).toBeGreaterThan(0));
-    const activeStream = EventSourceStub.instances.at(-1);
-    expect(activeStream?.url).toBe('/api/optimization-runs/run-id/stream');
-
-    act(() => {
-      activeStream?.emit('phase_progress', {
-        id: 'event-id',
-        optimization_run_id: 'run-id',
-        sequence: 3,
-        event_type: 'phase_progress',
-        payload: { phase: 'BUILDING_TRAVEL_MATRIX', progress: 42 },
-        created_at: '2026-08-22T08:00:01Z',
-      });
-    });
-
-    expect(progress).toHaveTextContent('BUILDING_TRAVEL_MATRIX');
-    expect(progress).toHaveTextContent('42%');
-    expect(progress).toHaveTextContent('seed 42 · события поиска 1');
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/scenarios/scenario-id/plans/generate',
-      expect.objectContaining({ method: 'POST' }),
-    );
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Текущий склад' })).toHaveTextContent('Склад СПб'));
+    expect(screen.getByTestId('common-map')).toBeVisible();
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) =>
+      url === '/api/warehouses/warehouse-1/plans/ensure?date=2026-08-30'
+      && init?.method === 'POST')).toBe(true));
+    expect(screen.queryByRole('button', { name: 'Сегодня' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Завтра' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Обмен с RWMS/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Сохранить план/ })).not.toBeInTheDocument();
   });
 
-  it('explicitly reclassifies visible requests before starting a plan', async () => {
-    const fetchMock = installFetchRouter({ requestOutside: true });
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-    const user = userEvent.setup();
-    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+  it('falls back to persisted workspace state and visibly reports an incomplete automatic refresh', async () => {
+    const fetchMock = installRouter({ partialWorkspaceOnce: true });
+    renderApp();
 
-    await user.click(await screen.findByRole('button', { name: /Построить маршруты/ }));
-
-    expect(await screen.findByText('Пересчитать зоны заявок перед построением?')).toBeVisible();
-    expect(screen.getAllByText(/без зоны — 1/)[0]).toBeVisible();
-    expect(fetchMock).not.toHaveBeenCalledWith(
-      '/api/scenarios/scenario-id/plans/generate',
-      expect.objectContaining({ method: 'POST' }),
-    );
-
-    await user.click(screen.getByRole('button', { name: 'Пересчитать и построить' }));
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      '/api/scenarios/scenario-id/reclassify-requests',
-      expect.objectContaining({ method: 'POST' }),
-    ));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      '/api/scenarios/scenario-id/plans/generate',
-      expect.objectContaining({ method: 'POST' }),
-    ));
-    expect(await screen.findByTestId('optimization-progress')).toBeVisible();
-  });
-});
-
-describe('generated workload deletion', () => {
-  it('confirms the selected date and waits for the scenario workspace refresh', async () => {
-    const fetchMock = installFetchRouter({ deletedRequests: 1, deletedPlans: 1 });
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-    client.setQueryData(['plan', 'deleted-plan'], { id: 'deleted-plan' });
-    client.setQueryData(['optimization-run', 'deleted-run'], { id: 'deleted-run' });
-    const user = userEvent.setup();
-    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
-
-    await user.click(await screen.findByRole('button', { name: 'Удалить нагрузку' }));
-    const dialog = screen.getByRole('dialog', { name: 'Удалить нагрузку за 25 августа 2026 г.?' });
-    expect(dialog).toHaveTextContent('все сохранённые планы этой даты');
-    expect(dialog).toHaveTextContent('нагрузка и планы других дат останутся без изменений');
-    await user.click(within(dialog).getByRole('button', { name: 'Удалить нагрузку' }));
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      '/api/scenarios/scenario-id/generated-workload?date=2026-08-25',
-      expect.objectContaining({ method: 'DELETE' }),
-    ));
-    expect(await screen.findByText('Удалено заявок: 1 · планов: 1')).toBeVisible();
-    expect(screen.queryByRole('dialog', { name: /Удалить нагрузку за/ })).not.toBeInTheDocument();
-    expect(fetchMock.mock.calls.filter(([input]) => input === '/api/scenarios/scenario-id').length).toBeGreaterThan(1);
-    expect(client.getQueryData(['plan', 'deleted-plan'])).toBeUndefined();
-    expect(client.getQueryData(['optimization-run', 'deleted-run'])).toBeUndefined();
+    expect(await screen.findByRole('alert')).toHaveTextContent('RWMS не обновил доставки и вывозы: 1');
+    expect(fetchMock.mock.calls.some(([url]) => url === '/api/warehouses/warehouse-1/workspace?refresh_rwms=false')).toBe(true);
+    expect(screen.getByTestId('common-map')).toBeVisible();
   });
 
-  it('reports a removed plan even when no generated request remains', async () => {
-    installFetchRouter({ deletedRequests: 0, deletedPlans: 1 });
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  it('offers an explicit route refresh after mandatory delivery changes and rebuilds only on demand', async () => {
     const user = userEvent.setup();
-    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+    const fetchMock = installRouter();
+    renderApp();
 
-    await user.click(await screen.findByRole('button', { name: 'Удалить нагрузку' }));
-    const dialog = screen.getByRole('dialog', { name: 'Удалить нагрузку за 25 августа 2026 г.?' });
-    await user.click(within(dialog).getByRole('button', { name: 'Удалить нагрузку' }));
+    await screen.findByLabelText('Текущий склад');
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) =>
+      url === '/api/warehouses/warehouse-1/plans/ensure?date=2026-08-30').length).toBe(1));
+    await user.click(screen.getByRole('button', { name: /^Доставки/ }));
+    await user.click(await screen.findByLabelText('Обязательная доставка'));
+    await user.click(screen.getByRole('button', { name: 'Сохранить условия' }));
 
-    expect(await screen.findByText('Удалено заявок: 0 · планов: 1')).toBeVisible();
-  });
-
-  it('reports a clear neutral result when the day has no generator workload', async () => {
-    installFetchRouter({ deletedRequests: 0 });
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-    const user = userEvent.setup();
-    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
-
-    await user.click(await screen.findByRole('button', { name: 'Удалить нагрузку' }));
-    const dialog = screen.getByRole('dialog', { name: 'Удалить нагрузку за 25 августа 2026 г.?' });
-    await user.click(within(dialog).getByRole('button', { name: 'Удалить нагрузку' }));
-
-    expect(await screen.findByText('На выбранную дату нагрузки генератора нет')).toBeVisible();
+    const refreshButton = await screen.findByRole('button', { name: 'Обновить маршруты' });
+    expect(fetchMock.mock.calls.filter(([url]) =>
+      url === '/api/warehouses/warehouse-1/plans/ensure?date=2026-08-30').length).toBe(1);
+    await user.click(refreshButton);
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) =>
+      url === '/api/warehouses/warehouse-1/plans/ensure?date=2026-08-30').length).toBe(2));
+    expect(screen.queryByRole('button', { name: 'Обновить маршруты' })).not.toBeInTheDocument();
   });
 });

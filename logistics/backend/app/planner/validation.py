@@ -167,7 +167,7 @@ def validate_route_plan(
                         ValidationErrorCode.TIME_WINDOW_VIOLATION,
                         (
                             "Ожидание у клиентской точки превышает лимит "
-                            "сценария; задания нужно разделить на рейсы со склада."
+                            "планирования склада; задания нужно разделить на отдельные рейсы."
                         ),
                         cycle.id,
                         from_stop.task_id,
@@ -212,7 +212,6 @@ def validate_route_plan(
                 )
             )
 
-        pickup_seen = False
         previous_departure = None
         previous_load_after: int | None = None
         for expected_sequence, stop in enumerate(cycle.stops):
@@ -285,17 +284,6 @@ def validate_route_plan(
                         stop.task_id,
                     )
                 )
-            if stop.stop_type is StopType.PICKUP:
-                pickup_seen = True
-            if stop.stop_type is StopType.DELIVERY and pickup_seen:
-                errors.append(
-                    ValidationIssue(
-                        ValidationErrorCode.PICKUP_BEFORE_DELIVERY,
-                        "Все доставки должны выполняться раньше всех вывозов.",
-                        cycle.id,
-                        stop.task_id,
-                    )
-                )
             if (stop.stop_type is StopType.DELIVERY and stop.quantity_delta >= 0) or (
                 stop.stop_type is StopType.PICKUP and stop.quantity_delta <= 0
             ):
@@ -324,7 +312,7 @@ def validate_route_plan(
             if stop.window_start is not None and stop.window_end is not None:
                 outside = (
                     stop.planned_arrival < stop.window_start
-                    or stop.planned_departure > stop.window_end
+                    or stop.planned_arrival > stop.window_end
                 )
                 if outside and stop.window_is_hard:
                     errors.append(
@@ -421,15 +409,6 @@ def validate_route_plan(
                 ValidationIssue(
                     ValidationWarningCode.HIGH_DETOUR,
                     "Крюк за вывозом превышает рекомендуемый лимит.",
-                    cycle.id,
-                )
-            )
-        route_groups = {stop.route_group for stop in cycle.stops if stop.route_group is not None}
-        if len(route_groups) > 1:
-            warnings.append(
-                ValidationIssue(
-                    ValidationWarningCode.CROSS_ROUTE_GROUP,
-                    "Рейс проходит через несколько маршрутных групп.",
                     cycle.id,
                 )
             )

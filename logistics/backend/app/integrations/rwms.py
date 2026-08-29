@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from datetime import datetime
 from functools import lru_cache
 from time import monotonic
 from uuid import UUID
@@ -18,8 +19,11 @@ from app.schemas.domain import (
     RwmsAssignmentsCommand,
     RwmsCapacitySnapshotCommand,
     RwmsCapacitySnapshotResult,
+    RwmsDriverIdentity,
     RwmsPlanningAssignmentStatusFeed,
     RwmsPlanningFeed,
+    RwmsWarehouseIdentity,
+    RwmsWarehouseSupportLink,
 )
 
 RWMS_PLANNING_SCOPE = "logistics.planning"
@@ -67,7 +71,7 @@ class RwmsPlanningClient:
             )
 
     def ensure_capacity_publish_enabled(self) -> None:
-        """Fail explicitly when simulator capacity publication is not opted in."""
+        """Fail explicitly when planning-capacity publication is not opted in."""
 
         if not self._capacity_publish_enabled:
             raise ApiError(
@@ -97,6 +101,101 @@ class RwmsPlanningClient:
             },
         )
         return self._validate_response(response, RwmsPlanningFeed, "RWMS_PLANNING_RESPONSE_INVALID")
+
+    async def list_warehouses(self) -> list[RwmsWarehouseIdentity]:
+        """Read canonical warehouse identities available to the planning client."""
+
+        self.ensure_enabled()
+        response = await self._authorized_request(
+            "GET", "/api/internal/logistics/v1/planning/warehouses"
+        )
+        warehouses = self._validate_response_list(
+            response,
+            RwmsWarehouseIdentity,
+            "RWMS_WAREHOUSE_DIRECTORY_RESPONSE_INVALID",
+        )
+        if len({warehouse.warehouse_id for warehouse in warehouses}) != len(warehouses):
+            raise ApiError(
+                502,
+                "RWMS_WAREHOUSE_DIRECTORY_RESPONSE_INVALID",
+                "RWMS logistics-service response contains duplicate warehouses",
+            )
+        return warehouses
+
+    async def list_support_links(
+        self,
+        served_warehouse_id: UUID,
+        *,
+        at: datetime,
+    ) -> list[RwmsWarehouseSupportLink]:
+        """Read owner-filtered support links for one exact timezone-aware planning instant."""
+
+        if at.utcoffset() is None:
+            raise ValueError("at must include a UTC offset")
+        self.ensure_enabled()
+        response = await self._authorized_request(
+            "GET",
+            (
+                "/api/internal/logistics/v1/planning/warehouses/"
+                f"{served_warehouse_id}/support-links"
+            ),
+            params={"at": at.isoformat()},
+        )
+        links = self._validate_response_list(
+            response,
+            RwmsWarehouseSupportLink,
+            "RWMS_WAREHOUSE_SUPPORT_LINK_RESPONSE_INVALID",
+        )
+        if len({link.support_link_id for link in links}) != len(links):
+            raise ApiError(
+                502,
+                "RWMS_WAREHOUSE_SUPPORT_LINK_RESPONSE_INVALID",
+                "RWMS logistics-service response contains duplicate support links",
+            )
+        if any(link.served_warehouse.warehouse_id != served_warehouse_id for link in links):
+            raise ApiError(
+                502,
+                "RWMS_WAREHOUSE_SUPPORT_LINK_RESPONSE_INVALID",
+                "RWMS logistics-service response belongs to a different served warehouse",
+            )
+        return links
+
+    async def list_drivers(
+        self,
+        warehouse_id: UUID,
+        *,
+        at: datetime | None = None,
+        include_incoming: bool = False,
+    ) -> list[RwmsDriverIdentity]:
+        """Read canonical workers eligible at an optional exact planning instant."""
+
+        if at is not None and at.utcoffset() is None:
+            raise ValueError("at must include a UTC offset")
+
+        self.ensure_enabled()
+        params = {
+            "warehouseId": str(warehouse_id),
+            "includeIncoming": "true" if include_incoming else "false",
+        }
+        if at is not None:
+            params["at"] = at.isoformat()
+        response = await self._authorized_request(
+            "GET",
+            "/api/internal/logistics/v1/planning/drivers",
+            params=params,
+        )
+        drivers = self._validate_response_list(
+            response,
+            RwmsDriverIdentity,
+            "RWMS_DRIVER_DIRECTORY_RESPONSE_INVALID",
+        )
+        if len({driver.worker_id for driver in drivers}) != len(drivers):
+            raise ApiError(
+                502,
+                "RWMS_DRIVER_DIRECTORY_RESPONSE_INVALID",
+                "RWMS logistics-service response contains duplicate drivers",
+            )
+        return drivers
 
     async def apply_assignments(
         self,
@@ -137,17 +236,17 @@ class RwmsPlanningClient:
 
     async def replace_capacity_snapshot(
         self,
-        scenario_id: UUID,
+        warehouse_id: UUID,
         command: RwmsCapacitySnapshotCommand,
         *,
         idempotency_key: UUID,
     ) -> RwmsCapacitySnapshotResult:
-        """Replace one scenario's active anonymous capacity projection idempotently."""
+        """Replace one warehouse's active anonymous capacity projection idempotently."""
 
         self.ensure_capacity_publish_enabled()
         response = await self._authorized_request(
             "PUT",
-            f"/api/internal/logistics/v1/planning/capacity-snapshots/{scenario_id}",
+            f"/api/internal/logistics/v1/planning/capacity-snapshots/{warehouse_id}",
             headers={"Idempotency-Key": str(idempotency_key)},
             json_body=command.model_dump(mode="json", by_alias=True),
         )
@@ -266,6 +365,22 @@ class RwmsPlanningClient:
 
         try:
             return model.model_validate(response.json())
+        except ValueError as exc:
+            raise ApiError(502, code, "RWMS logistics-service response is invalid") from exc
+
+    @staticmethod
+    def _validate_response_list[ResponseModel: BaseModel](
+        response: httpx.Response,
+        model: type[ResponseModel],
+        code: str,
+    ) -> list[ResponseModel]:
+        """Validate a strict upstream JSON array without accepting partial entries."""
+
+        try:
+            payload = response.json()
+            if not isinstance(payload, list):
+                raise ValueError("response must be a JSON array")
+            return [model.model_validate(item) for item in payload]
         except ValueError as exc:
             raise ApiError(502, code, "RWMS logistics-service response is invalid") from exc
 

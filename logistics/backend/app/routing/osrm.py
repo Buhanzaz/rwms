@@ -347,7 +347,7 @@ class OsrmRoutingProvider:
 
     @staticmethod
     def _metric_value(value: object, field: str) -> int:
-        """Convert a finite non-negative metric to the simulator integer contract."""
+        """Convert a finite non-negative metric to the planning integer contract."""
 
         if isinstance(value, bool) or not isinstance(value, (float, int)):
             raise OsrmRoutingProviderError(

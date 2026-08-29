@@ -1,35 +1,38 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_PLANNING_SETTINGS, EMPTY_METRICS } from '../src/domain/defaults';
-import type { RoutePlan, ScenarioWorkspace, SimulationDerivedState } from '../src/domain/types';
+import { EMPTY_METRICS } from '../src/domain/defaults';
+import type { RoutePlan, SimulationDerivedState, WarehouseWorkspace } from '../src/domain/types';
 import { PlanPanel } from '../src/features/planning/PlanPanel';
 import { SimulationBar } from '../src/features/simulation/SimulationBar';
 import { Inspector } from '../src/app/Inspector';
 import { Sidebar } from '../src/app/Sidebar';
+import { EmptyPositioningConfirmDialog } from '../src/components/EntityDialogs';
 import { useUiStore } from '../src/stores/ui-store';
+import { requestFixture, workspaceFixture as baseWorkspaceFixture } from './fixtures';
 
 function planFixture(): RoutePlan {
   return {
-    id: 'plan', scenario_id: 'scenario', warehouse_id: 'warehouse', date: '2026-08-25', version: 3, status: 'GENERATED', score: 42,
+    id: 'plan', warehouse_id: 'warehouse-1', date: '2026-08-25', version: 3, status: 'GENERATED', score: 42,
     created_at: '2026-08-24T00:00:00Z', updated_at: '2026-08-24T00:00:00Z', metrics: { ...EMPTY_METRICS, request_count: 5, assigned_count: 4, unassigned_count: 1, assignment_percent: 80, cycle_count: 1 },
+    manually_changed: false,
     unassigned: [{
-      task: { id: 'task-5', request_id: 'request-5', part_number: 1, quantity: 2, type: 'DELIVERY', latitude: 55.8, longitude: 37.7, zone_id: 'z4', zone_version: 1, service_minutes: 30, priority: 5, status: 'UNASSIGNED' },
-      reason_codes: ['TIME_WINDOW_CONFLICT'], reasons: ['временное окно 09:00–11:00 не помещается ни в одну смену'], closest_option: '12:15', recommendations: ['увеличить временное окно'],
+      task: { id: 'task-5', request_id: 'request-5', part_number: 1, quantity: 2, type: 'DELIVERY', latitude: 55.8, longitude: 37.7, zone_id: 'z4', zone_version: 1, service_minutes: 30, priority: 5, mandatory: true, status: 'UNASSIGNED' },
+      reason_codes: ['TIME_WINDOW_CONFLICT'], reasons: ['временное окно 09:00–11:00 не помещается ни в одну смену'], closest_option: 'Можно назначить 30 августа 2026 г. в 18:19', recommendations: ['увеличить временное окно'],
     }],
     driver_routes: [{
-      driver_shift_id: 'shift', shift_start_at: '2026-08-25T04:00:00Z', shift_end_at: '2026-08-25T17:00:00Z', driver_id: 'driver', driver_name: 'Водитель 1', vehicle_id: 'vehicle', vehicle_name: 'МАЗ', registration_number: 'А123БВ', preferred_route_group: 'WEST', metrics: { ...EMPTY_METRICS, shift_utilization_percent: 67 },
+      driver_shift_id: 'shift', shift_start_at: '2026-08-25T04:00:00Z', shift_end_at: '2026-08-25T17:00:00Z', driver_id: 'driver', driver_name: 'Водитель 1', vehicle_id: 'vehicle', vehicle_name: 'МАЗ', registration_number: 'А123БВ', metrics: { ...EMPTY_METRICS, shift_utilization_percent: 67 },
       cycles: [{
         id: 'cycle', route_plan_id: 'plan', driver_shift_id: 'shift', sequence: 1, planned_start: '2026-08-25T05:00:00Z', planned_finish: '2026-08-25T10:00:00Z', total_distance_meters: 146000,
         total_travel_seconds: 12300, total_service_seconds: 6000, empty_distance_meters: 25000, detour_seconds: 1320, score: 12.5, locked: false,
-        explanation: ['зоны Z1 и Z2 являются соседними', 'дополнительный путь составляет 14 минут'], warnings: [],
+        explanation: ['окна доставок совместимы', 'дополнительный путь составляет 14 минут'], warnings: [], manually_changed: false,
         stops: [
           { id: 's0', route_cycle_id: 'cycle', sequence: 0, task_id: null, stop_type: 'DEPOT_LOAD', planned_arrival: '2026-08-25T05:00:00Z', planned_departure: '2026-08-25T05:30:00Z', service_seconds: 1800, quantity_delta: 2, load_before: 0, load_after: 2, latitude: 55.7, longitude: 37.6, label: 'Склад' },
-          { id: 's1', route_cycle_id: 'cycle', sequence: 1, task_id: 'task-1', stop_type: 'DELIVERY', planned_arrival: '2026-08-25T06:00:00Z', planned_departure: '2026-08-25T06:20:00Z', service_seconds: 1200, quantity_delta: -1, load_before: 2, load_after: 1, latitude: 55.8, longitude: 37.6, label: 'Москва, Тверская улица, 10', zone_code: 'Z1' },
-          { id: 's2', route_cycle_id: 'cycle', sequence: 2, task_id: 'task-2', stop_type: 'DELIVERY', planned_arrival: '2026-08-25T07:00:00Z', planned_departure: '2026-08-25T07:20:00Z', service_seconds: 1200, quantity_delta: -1, load_before: 1, load_after: 0, latitude: 55.8, longitude: 37.7, label: 'Доставка 151', zone_code: 'Z2' },
-          { id: 's3', route_cycle_id: 'cycle', sequence: 3, task_id: 'task-3', stop_type: 'PICKUP', planned_arrival: '2026-08-25T08:00:00Z', planned_departure: '2026-08-25T08:20:00Z', service_seconds: 1200, quantity_delta: 1, load_before: 0, load_after: 1, latitude: 55.8, longitude: 37.7, label: 'Вывоз 98', zone_code: 'Z2' },
-          { id: 's4', route_cycle_id: 'cycle', sequence: 4, task_id: 'task-4', stop_type: 'PICKUP', planned_arrival: '2026-08-25T09:00:00Z', planned_departure: '2026-08-25T09:20:00Z', service_seconds: 1200, quantity_delta: 1, load_before: 1, load_after: 2, latitude: 55.8, longitude: 37.6, label: 'Вывоз 103', zone_code: 'Z1' },
+          { id: 's1', route_cycle_id: 'cycle', sequence: 1, task_id: 'task-1', stop_type: 'DELIVERY', planned_arrival: '2026-08-25T06:00:00Z', planned_departure: '2026-08-25T06:20:00Z', service_seconds: 1200, quantity_delta: -1, load_before: 2, load_after: 1, latitude: 55.8, longitude: 37.6, label: 'Москва, Тверская улица, 10', zone_id: 'zone-1' },
+          { id: 's2', route_cycle_id: 'cycle', sequence: 2, task_id: 'task-2', stop_type: 'DELIVERY', planned_arrival: '2026-08-25T07:00:00Z', planned_departure: '2026-08-25T07:20:00Z', service_seconds: 1200, quantity_delta: -1, load_before: 1, load_after: 0, latitude: 55.8, longitude: 37.7, label: 'Доставка 151', zone_id: 'zone-2' },
+          { id: 's3', route_cycle_id: 'cycle', sequence: 3, task_id: 'task-3', stop_type: 'PICKUP', planned_arrival: '2026-08-25T08:00:00Z', planned_departure: '2026-08-25T08:20:00Z', service_seconds: 1200, quantity_delta: 1, load_before: 0, load_after: 1, latitude: 55.8, longitude: 37.7, label: 'Вывоз 98', zone_id: 'zone-2' },
+          { id: 's4', route_cycle_id: 'cycle', sequence: 4, task_id: 'task-4', stop_type: 'PICKUP', planned_arrival: '2026-08-25T09:00:00Z', planned_departure: '2026-08-25T09:20:00Z', service_seconds: 1200, quantity_delta: 1, load_before: 1, load_after: 2, latitude: 55.8, longitude: 37.6, label: 'Вывоз 103', zone_id: 'zone-1' },
           { id: 's5', route_cycle_id: 'cycle', sequence: 5, task_id: null, stop_type: 'DEPOT_RETURN', planned_arrival: '2026-08-25T10:00:00Z', planned_departure: '2026-08-25T10:00:00Z', service_seconds: 0, quantity_delta: -2, load_before: 2, load_after: 0, latitude: 55.7, longitude: 37.6, label: 'Склад' },
         ], legs: [],
       }],
@@ -37,26 +40,8 @@ function planFixture(): RoutePlan {
   };
 }
 
-function workspaceFixture(): ScenarioWorkspace {
-  return {
-    scenario: {
-      id: 'scenario',
-      name: 'Тестовая логистика',
-      description: '',
-      timezone: 'Europe/Moscow',
-      default_planning_date: '2026-08-25',
-      created_at: '2026-08-24T00:00:00Z',
-      updated_at: '2026-08-24T00:00:00Z',
-      settings: { ...DEFAULT_PLANNING_SETTINGS },
-    },
-    warehouses: [],
-    zones: [],
-    zone_relations: [],
-    drivers: [],
-    vehicles: [],
-    shifts: [],
-    requests: [],
-  };
+function workspaceFixture(): WarehouseWorkspace {
+  return baseWorkspaceFixture({ requests: [] });
 }
 
 function inspectorProps(plan: RoutePlan, simulation: SimulationDerivedState): ComponentProps<typeof Inspector> {
@@ -69,42 +54,87 @@ function inspectorProps(plan: RoutePlan, simulation: SimulationDerivedState): Co
     onCreate: () => undefined,
     onEdit: () => undefined,
     onDelete: () => undefined,
-    onGenerateDemo: () => undefined,
-    onGenerateMultiDayDemo: () => undefined,
     onGenerateWorkload: () => undefined,
     onDeleteGeneratedWorkload: () => undefined,
-    onCloneScenario: () => undefined,
-    onDeleteScenario: () => undefined,
-    onExport: () => undefined,
-    onImport: () => undefined,
-    onReclassify: () => undefined,
-    onZoneRelation: () => undefined,
     onSetMapTool: () => undefined,
     onSelect: () => undefined,
     onMoveTask: () => undefined,
     onToggleCycleLock: () => undefined,
     onSaveSettings: () => Promise.resolve(),
-    onClonePlan: () => undefined,
+    onConfirmPlan: () => undefined,
+    onResetManualChanges: () => undefined,
     onSimulationOverride: () => undefined,
     planningDate: '2026-08-25',
     onPlanningDateChange: () => undefined,
-    onScheduleRequestDate: () => undefined,
-    onUnscheduleRequest: () => undefined,
     onSaveRequestPlanning: () => Promise.resolve(),
     onSplitRequest: () => Promise.resolve(),
+    inspectorWidth: 420,
+    onInspectorWidthChange: () => undefined,
   };
 }
 
 afterEach(() => {
-  useUiStore.setState({ mode: 'EDITOR', section: 'SCENARIO' });
+  useUiStore.setState({ mode: 'EDITOR', section: 'WAREHOUSE' });
 });
 
 describe('application shell', () => {
-  it('identifies the active truck routing stack', () => {
+  it('keeps implementation-provider text out of the working sidebar', () => {
     render(<Sidebar workspace={workspaceFixture()} plan={null} />);
 
-    expect(screen.getByText('Valhalla · OpenStreetMap · грузовой граф')).toBeVisible();
+    expect(screen.queryByText('Valhalla · OpenStreetMap · грузовой граф')).not.toBeInTheDocument();
     expect(screen.queryByText(/OSRM/)).not.toBeInTheDocument();
+  });
+
+  it('keeps only the supported warehouse actions in one equal row', () => {
+    const plan = planFixture();
+    const simulation: SimulationDerivedState = { timestamp: '2026-08-25T05:45:00Z', vehicles: [], events: [], completed_stop_ids: [], active_stop_ids: [], affected_task_ids: [], warnings: [] };
+    const props = inspectorProps(plan, simulation);
+    render(<Inspector {...props} />);
+
+    const actions = screen.getByLabelText('Действия со складом');
+    const rows = Array.from(actions.querySelectorAll(':scope > .warehouse-actions__row'));
+    expect(rows).toHaveLength(1);
+    expect(within(rows[0] as HTMLElement).getAllByRole('button')).toHaveLength(3);
+    expect(within(actions).getByRole('link', { name: 'Создать перемещение' })).toHaveAttribute(
+      'href',
+      `/logistics/transfers?destinationWarehouseId=${encodeURIComponent(props.workspace.warehouse.external_warehouse_id)}`,
+    );
+    expect(within(actions).getByRole('button', { name: 'Настроить склад' })).toBeVisible();
+    expect(within(actions).getByRole('button', { name: 'Создать нагрузку' })).toBeVisible();
+    expect(within(actions).getByRole('button', { name: 'Удалить нагрузку' })).toBeVisible();
+    expect(within(actions).queryByRole('button', { name: 'Обновить из RWMS' })).not.toBeInTheDocument();
+    expect(within(actions).queryByRole('button', { name: 'Подключить склад' })).not.toBeInTheDocument();
+    expect(within(actions).queryByRole('button', { name: 'Тест на 3 дня' })).not.toBeInTheDocument();
+  });
+
+  it('shows consistent empty states for warehouse planning collections', () => {
+    const simulation: SimulationDerivedState = { timestamp: '2026-08-25T05:45:00Z', vehicles: [], events: [], completed_stop_ids: [], active_stop_ids: [], affected_task_ids: [], warnings: [] };
+    const props = inspectorProps(planFixture(), simulation);
+    props.workspace = baseWorkspaceFixture({ zones: [], vehicles: [], trailers: [], shifts: [] });
+    const view = render(<Inspector {...props} />);
+
+    act(() => useUiStore.setState({ section: 'ZONES' }));
+    expect(screen.getByText('Зоны не созданы')).toBeVisible();
+
+    act(() => useUiStore.setState({ section: 'VEHICLES' }));
+    expect(screen.getByText('Машины не созданы')).toBeVisible();
+    expect(screen.getByText('Прицепы не созданы')).toBeVisible();
+    const trailerDescription = screen.getByText(/Прицеп не исчезает после разгрузки/);
+    const trailerButton = screen.getByRole('button', { name: 'Добавить прицеп' });
+    expect(trailerDescription.compareDocumentPosition(trailerButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    act(() => useUiStore.setState({ section: 'SHIFTS' }));
+    expect(screen.getByText('Смены не добавлены')).toBeVisible();
+
+    act(() => useUiStore.setState({ section: 'PLAN_DAY' }));
+    view.rerender(<Inspector {...props} plan={null} />);
+    expect(screen.getByText('План дня не составлен')).toBeVisible();
+
+    act(() => useUiStore.setState({ section: 'ROUTES' }));
+    expect(screen.getByText('Маршруты не построены')).toBeVisible();
+
+    act(() => useUiStore.setState({ section: 'UNASSIGNED' }));
+    expect(screen.getByText('Нераспределённых заданий нет')).toBeVisible();
   });
 });
 
@@ -119,37 +149,151 @@ describe('built plan UI', () => {
     await user.click(screen.getByRole('button', { name: /Водитель 1/i }));
     expect(onSelectDriverRoute).toHaveBeenCalledWith('shift');
     expect(screen.getByLabelText('Цепочка загрузки цикла 1')).toHaveTextContent('2 → 1 → 0 → 1 → 2 → 0');
-    expect(screen.getByText(/зоны Z1 и Z2 являются соседними/)).toBeVisible();
+    expect(screen.getByText(/окна доставок совместимы/)).toBeVisible();
     rerender(<PlanPanel plan={plan} timeZone="Europe/Moscow" showUnassignedOnly onSelectCycle={() => undefined} onSelectDriverRoute={() => undefined} onMove={() => undefined} onToggleLock={() => undefined} />);
     expect(screen.getByText(/временное окно 09:00–11:00/)).toBeVisible();
+    expect(screen.getByText('обязательно')).toBeVisible();
+    expect(screen.getByText(/Можно назначить.*18:19/)).toBeVisible();
     expect(screen.getByText('увеличить временное окно')).toBeVisible();
   });
 
-  it('renders the selected plan leg truck profile inside the route inspector', () => {
+  it('shows one-off support warehouse service without presenting it as a reposition', () => {
     const plan = planFixture();
-    const cycle = plan.driver_routes[0]!.cycles[0]!;
-    cycle.legs = [{
-      id: 'leg-profile', from_stop_id: 's0', to_stop_id: 's1', departure_at: '2026-08-25T05:30:00Z', arrival_at: '2026-08-25T06:00:00Z',
-      distance_meters: 10000, travel_seconds: 1800,
-      geometry: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[37.6, 55.7], [37.6, 55.8]] } },
-      routing_provider: 'valhalla', osm_data_version: '2026-08-24', routed_at: '2026-08-25T05:20:00Z',
-      routing_profile_snapshot: {
-        vehicleId: 'vehicle', trailerId: null, trailerAttached: false, isHgv: true, cargoCount: 1,
-        cargoPlacements: [{ cargoId: 'cargo-1', position: 'TRUCK_PLATFORM', lengthMm: 6000, widthMm: 2400, heightMm: 2400, weightKg: 2500 }],
-        configurationType: 'CARGO_ON_TRUCK', effectiveHeightMeters: 3.95, effectiveWidthMeters: 2.5,
-        effectiveLengthMeters: 9, actualWeightTons: 18.2, maxAxleLoadTons: 7.8, axleCount: 3,
-      },
-    }];
-    const simulation: SimulationDerivedState = { timestamp: '2026-08-25T05:45:00Z', vehicles: [], events: [], completed_stop_ids: [], active_stop_ids: [], affected_task_ids: [], warnings: [] };
-    useUiStore.setState({ section: 'ROUTES' });
+    const route = plan.driver_routes[0]!;
+    const cycle = route.cycles[0]!;
+    const context = {
+      execution_mode: 'CROSS_WAREHOUSE_SERVICE' as const,
+      service_warehouse_id: 'served-warehouse',
+      resource_origin_warehouse_id: 'support-warehouse',
+      resource_origin_warehouse_name: 'Опорный склад',
+      support_warehouse_link_id: 'support-link',
+      driver_id: 'support-driver',
+      driver_worker_id: 'support-worker',
+      driver_name: 'Петров Алексей',
+      vehicle_id: 'support-vehicle',
+      vehicle_name: 'МАЗ поддержки',
+      vehicle_registration_number: 'А456ВС',
+      available_at_served: '2026-08-25T09:00:00Z',
+      latest_served_finish: '2026-08-25T14:00:00Z',
+      inbound_travel_minutes: 180,
+      return_travel_minutes: 190,
+      inbound_distance_meters: 185_000,
+      return_distance_meters: 195_000,
+      positioning_distance_meters: 380_000,
+      available_transfer_cabin_capacity: 2,
+      trailer_available: true,
+      outbound_positioning_empty: true,
+      empty_positioning_reason_required: true,
+      returns_to_origin: true,
+      changes_operational_warehouse: false,
+      reason_codes: ['NO_LOCAL_DRIVER', 'SUPPORT_DRIVER_AVAILABLE'],
+    };
+    route.driver_id = context.driver_id;
+    route.driver_name = context.driver_name;
+    route.vehicle_id = context.vehicle_id;
+    route.vehicle_name = context.vehicle_name;
+    route.registration_number = context.vehicle_registration_number;
+    route.cross_warehouse_service = context;
+    cycle.cross_warehouse_service = context;
 
-    render(<Inspector {...inspectorProps(plan, simulation)} />);
+    const view = render(<PlanPanel plan={plan} timeZone="Europe/Moscow" onSelectCycle={() => undefined} onSelectDriverRoute={() => undefined} onMove={() => undefined} onToggleLock={() => undefined} />);
 
-    expect(screen.getByRole('heading', { name: 'Диагностика грузовых маршрутов' })).toBeVisible();
-    expect(screen.getByText('груз на машине')).toBeVisible();
-    expect(screen.getByText('9.00 м')).toBeVisible();
-    expect(screen.getByText('valhalla')).toBeVisible();
+    const support = screen.getByTestId('cross-warehouse-service-shift');
+    expect(within(support).getByText('Привлечённый ресурс')).toBeVisible();
+    expect(within(support).getByText(/Опорный склад/)).toBeVisible();
+    expect(within(support).getByText(/Прибытие и доступность: 12:00/)).toBeVisible();
+    expect(within(support).getByText(/возврат на исходный склад: да/)).toBeVisible();
+    expect(within(support).getByText(/базирование не меняется/)).toBeVisible();
+    expect(within(support).getByText(/Попутное перемещение/)).toBeVisible();
+    expect(within(support).getByText(/доступно 2 бытовк.*с прицепом/)).toBeVisible();
+    expect(within(support).getByRole('link', { name: 'Добавить бытовки' })).toHaveAttribute(
+      'href',
+      '/logistics/transfers?sourceWarehouseId=support-warehouse&destinationWarehouseId=served-warehouse',
+    );
+    expect(screen.getByText('Петров Алексей')).toBeVisible();
+    expect(screen.getByText(/МАЗ поддержки · А456ВС/)).toBeVisible();
+
+    const oneCabinContext = {
+      ...context,
+      available_transfer_cabin_capacity: 1,
+      trailer_available: false,
+      reason_codes: [...context.reason_codes, 'VEHICLE_CAPACITY_ONE_CABIN'],
+    };
+    route.cross_warehouse_service = oneCabinContext;
+    cycle.cross_warehouse_service = oneCabinContext;
+    view.rerender(<PlanPanel plan={plan} timeZone="Europe/Moscow" onSelectCycle={() => undefined} onSelectDriverRoute={() => undefined} onMove={() => undefined} onToggleLock={() => undefined} />);
+    expect(
+      within(screen.getByTestId('cross-warehouse-service-shift')).getByText(
+        /доступно 1 бытовк.*автомобиль вмещает только одну бытовку/,
+      ),
+    ).toBeVisible();
   });
+
+  it('requires a reason before the operator approves an empty positioning leg', async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn<(reason: string) => Promise<void>>().mockResolvedValue(undefined);
+    render(
+      <EmptyPositioningConfirmDialog
+        busy={false}
+        onClose={() => undefined}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Утвердить пустой перегон' }));
+    expect(screen.getByText('Укажите причину пустого перегона')).toBeVisible();
+    await user.type(
+      screen.getByRole('textbox', { name: 'Причина пустого перегона' }),
+      'Нет подходящего попутного груза',
+    );
+    await user.click(screen.getByRole('button', { name: 'Утвердить пустой перегон' }));
+
+    expect(onConfirm).toHaveBeenCalledWith('Нет подходящего попутного груза');
+  });
+
+  it('keeps the day view plan-only and exposes approval plus manual-change reset before approval', async () => {
+    const user = userEvent.setup();
+    const plan = planFixture();
+    plan.manually_changed = true;
+    const simulation: SimulationDerivedState = { timestamp: '2026-08-25T05:45:00Z', vehicles: [], events: [], completed_stop_ids: [], active_stop_ids: [], affected_task_ids: [], warnings: [] };
+    const onConfirmPlan = vi.fn();
+    const onResetManualChanges = vi.fn();
+    useUiStore.setState({ section: 'PLAN_DAY' });
+
+    render(<Inspector {...inspectorProps(plan, simulation)} onConfirmPlan={onConfirmPlan} onResetManualChanges={onResetManualChanges} />);
+
+    expect(screen.queryByLabelText('Доставка/вывоз с')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Машина с прицепом проедет к адресу')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Отменить изменения' }));
+    await user.click(screen.getByRole('button', { name: 'Утвердить' }));
+    expect(onResetManualChanges).toHaveBeenCalledOnce();
+    expect(onConfirmPlan).toHaveBeenCalledOnce();
+  });
+
+  it('shows each delivery once without the duplicate dated card list', () => {
+    const plan = planFixture();
+    const simulation: SimulationDerivedState = { timestamp: '2026-08-25T05:45:00Z', vehicles: [], events: [], completed_stop_ids: [], active_stop_ids: [], affected_task_ids: [], warnings: [] };
+    const props = inspectorProps(plan, simulation);
+    props.workspace = baseWorkspaceFixture({ requests: [requestFixture({ scheduled_date: '2026-08-25', date_options: [{ date: '2026-08-25', priority: 1, window_start: '09:00', window_end: '12:00', is_hard: true }] })] });
+    useUiStore.setState({ section: 'REQUESTS' });
+
+    render(<Inspector {...props} />);
+
+    expect(screen.getAllByTestId('planning-request-request-1')).toHaveLength(1);
+    expect(screen.queryByText(/Карточки заявок на/)).not.toBeInTheDocument();
+  });
+
+  it('resizes the inspector with its accessible separator', () => {
+    const plan = planFixture();
+    const simulation: SimulationDerivedState = { timestamp: '2026-08-25T05:45:00Z', vehicles: [], events: [], completed_stop_ids: [], active_stop_ids: [], affected_task_ids: [], warnings: [] };
+    const onInspectorWidthChange = vi.fn();
+
+    render(<Inspector {...inspectorProps(plan, simulation)} onInspectorWidthChange={onInspectorWidthChange} />);
+    const separator = screen.getByRole('separator', { name: 'Изменить ширину инспектора' });
+    fireEvent.keyDown(separator, { key: 'ArrowLeft' });
+    expect(onInspectorWidthChange).toHaveBeenCalledWith(444);
+  });
+
 });
 
 describe('simulation controls', () => {

@@ -1,7 +1,8 @@
-import { X } from 'lucide-react';
+import { Bell, Moon, Sun, Trash2, X } from 'lucide-react';
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useUiStore } from '../stores/ui-store';
+import type { NotificationMessage } from '../stores/ui-store';
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
@@ -57,6 +58,61 @@ export function CheckboxField({ label, checked, onChange, disabled = false }: {
       <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} disabled={disabled} />
       <span>{label}</span>
     </label>
+  );
+}
+
+/** Accessible binary switch used for immediate settings such as theme and overtime. */
+export function Switch({ checked, onCheckedChange, disabled = false, label }: {
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+  disabled?: boolean;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      className="switch"
+      disabled={disabled}
+      onClick={() => onCheckedChange(!checked)}
+    >
+      <span className="switch__thumb" aria-hidden="true" />
+    </button>
+  );
+}
+
+export function SwitchField({ label, description, checked, onCheckedChange, disabled = false }: {
+  label: string;
+  description?: string;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className={`switch-field ${disabled ? 'switch-field--disabled' : ''}`}>
+      <span><strong>{label}</strong>{description ? <small>{description}</small> : null}</span>
+      <Switch checked={checked} onCheckedChange={onCheckedChange} disabled={disabled} label={label} />
+    </div>
+  );
+}
+
+/** Persistent single-button light/dark theme toggle shown in the logistics header. */
+export function ThemeSwitch() {
+  const theme = useUiStore((state) => state.theme);
+  const setTheme = useUiStore((state) => state.setTheme);
+  const dark = theme === 'dark';
+  return (
+    <Button
+      className="theme-switch"
+      aria-label={dark ? 'Включить светлую тему' : 'Включить тёмную тему'}
+      aria-pressed={dark}
+      title={dark ? 'Включить светлую тему' : 'Включить тёмную тему'}
+      onClick={() => setTheme(dark ? 'light' : 'dark')}
+    >
+      {dark ? <Moon size={17} aria-hidden="true" /> : <Sun size={17} aria-hidden="true" />}
+    </Button>
   );
 }
 
@@ -124,16 +180,76 @@ export function ErrorPanel({ title = 'Не удалось загрузить д�
 }
 
 export function Toasts() {
-  const toasts = useUiStore((state) => state.toasts);
+  const notifications = useUiStore((state) => state.notifications);
+  const durationSeconds = useUiStore((state) => state.notificationDurationSeconds);
   const dismiss = useUiStore((state) => state.dismissToast);
   return (
     <div className="toasts" aria-live="polite" aria-label="Уведомления">
-      {toasts.map((toast) => (
-        <div className={`toast toast--${toast.tone}`} key={toast.id} role={toast.tone === 'error' ? 'alert' : 'status'}>
-          <div><strong>{toast.title}</strong>{toast.detail ? <p>{toast.detail}</p> : null}</div>
-          <button onClick={() => dismiss(toast.id)} aria-label="Закрыть уведомление"><X size={15} /></button>
-        </div>
+      {notifications.filter((notification) => notification.visible).slice(-4).map((notification) => (
+        <ToastItem key={notification.id} notification={notification} durationSeconds={durationSeconds} onDismiss={dismiss} />
       ))}
+    </div>
+  );
+}
+
+function ToastItem({ notification, durationSeconds, onDismiss }: {
+  notification: NotificationMessage;
+  durationSeconds: number;
+  onDismiss: (id: string) => void;
+}) {
+  useEffect(() => {
+    const timeout = window.setTimeout(() => onDismiss(notification.id), durationSeconds * 1000);
+    return () => window.clearTimeout(timeout);
+  }, [durationSeconds, notification.createdAt, notification.id, onDismiss]);
+  return (
+    <div className={`toast toast--${notification.tone}`} role={notification.tone === 'error' ? 'alert' : 'status'}>
+      <div><strong>{notification.title}</strong>{notification.detail ? <p>{notification.detail}</p> : null}</div>
+      <button onClick={() => onDismiss(notification.id)} aria-label="Скрыть уведомление"><X size={15} /></button>
+    </div>
+  );
+}
+
+export function NotificationCenter() {
+  const [open, setOpen] = useState(false);
+  const notifications = useUiStore((state) => state.notifications);
+  const markRead = useUiStore((state) => state.markNotificationsRead);
+  const clear = useUiStore((state) => state.clearNotifications);
+  const unread = notifications.filter((notification) => !notification.read).length;
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next) markRead();
+  };
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('keydown', close);
+    return () => window.removeEventListener('keydown', close);
+  }, [open]);
+  return (
+    <div className="notification-center">
+      <Button size="sm" onClick={toggle} aria-label={`Уведомления${unread ? `: ${unread} новых` : ''}`} aria-expanded={open}>
+        <Bell size={17} />
+        {unread ? <span className="notification-center__badge">{unread > 99 ? '99+' : unread}</span> : null}
+      </Button>
+      {open ? (
+        <section className="notification-center__panel" aria-label="История уведомлений">
+          <header><strong>Уведомления</strong><small>{notifications.length}</small></header>
+          <div className="notification-center__list">
+            {[...notifications].reverse().map((notification) => (
+              <article className={`notification-history notification-history--${notification.tone}`} key={notification.id}>
+                <strong>{notification.title}</strong>
+                {notification.detail ? <p>{notification.detail}</p> : null}
+                <time>{new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(notification.createdAt))}</time>
+              </article>
+            ))}
+            {!notifications.length ? <p className="notification-center__empty">История пуста</p> : null}
+          </div>
+          <Button size="sm" variant="ghost" disabled={!notifications.length} onClick={clear}><Trash2 size={14} />Очистить всё</Button>
+        </section>
+      ) : null}
     </div>
   );
 }

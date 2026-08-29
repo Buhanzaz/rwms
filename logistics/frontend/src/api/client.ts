@@ -3,32 +3,33 @@ import type {
   Driver,
   DriverShift,
   LogisticsRequest,
-  OptimizationRun,
   PlanningSettings,
   RequestDateOption,
   RoutePlan,
   RoutingCargoPlacementSnapshot,
   RoutingProfileSnapshot,
-  ScenarioWorkspace,
+  AvailableWarehouse,
   Trailer,
   UUID,
   Vehicle,
   VehicleLoadConfigurationType,
-  VehicleLoadProfile,
-  Warehouse,
+  WarehouseWorkspace,
   Zone,
-  ZoneRelation,
 } from '../domain/types';
 import {
   normalizeOptimizationRun,
   normalizeRoutePlan,
-  normalizeScenario,
+  normalizeWarehouse,
   normalizeValidationResult,
   normalizeWorkspace,
   type RawOptimizationRun,
   type RawRoutePlan,
-  type RawScenario,
+  type RawWarehouse,
 } from './mappers';
+import {
+  normalizeSlotAvailabilityResponse,
+  type SlotAvailabilityInput,
+} from '../features/slot-availability/types';
 
 const configuredApiPrefix = import.meta.env.VITE_API_BASE_URL?.trim();
 const API_PREFIX = configuredApiPrefix?.replace(/\/+$/, '') || '/api';
@@ -41,6 +42,7 @@ export interface ProblemDetails {
   instance?: unknown;
   code?: unknown;
   errors?: Record<string, string[]>;
+  failures?: unknown;
 }
 
 function problemMessage(problem: ProblemDetails | null, fallback: string): string {
@@ -169,42 +171,81 @@ export interface TravelTimeContourCollection extends FeatureCollection<Polygon |
   metadata: TravelTimeContourMetadata;
 }
 
+/** One provider suggestion kept unresolved until the operator selects it. */
+export interface AddressSuggestion {
+  id: string;
+  title: string;
+  subtitle?: string;
+  address?: string;
+  uri: string;
+}
+
+/** Address and WGS84 point resolved by the server-side geocoder. */
+export interface GeocodedAddress {
+  address: string;
+  latitude: number;
+  longitude: number;
+}
+
 function jsonBody(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export interface ScenarioCreateInput {
-  name: string;
-  description: string;
-  timezone: string;
-  default_planning_date: string;
-  settings?: Partial<PlanningSettings>;
+/** Persisted acceptance state for one warehouse and planning date. */
+export interface PlanningDayStatus {
+  warehouse_id: UUID;
+  date: string;
+  accepting_requests: boolean;
+  closed_at: string | null;
+  closed_by: string | null;
+  plan_id: UUID | null;
 }
 
-export interface WarehouseInput {
-  external_warehouse_id?: UUID | null;
-  name: string;
-  latitude: number;
-  longitude: number;
-  loading_minutes: number;
-  unloading_minutes: number;
-  turnaround_minutes: number;
-  working_day_start: string;
-  working_day_end: string;
+/** RWMS identity, local timings, and optional isochrone tariffs for a warehouse binding. */
+export interface WarehouseConnectionInput {
+  external_warehouse_id: UUID;
+  loading_minutes?: number;
+  unloading_minutes?: number;
+  turnaround_minutes?: number;
+  working_day_start?: string;
+  working_day_end?: string;
+  isochrone_price_60_minutes?: number;
+  isochrone_price_120_minutes?: number;
+  isochrone_price_180_minutes?: number;
+  isochrone_price_240_minutes?: number;
+}
+
+/** Warehouse binding command; an exceptional zone may be created atomically when supplied. */
+export interface WarehouseInput extends WarehouseConnectionInput {
+  initial_zone?: ZoneInput;
+}
+
+export interface WarehouseUpdateInput {
+  loading_minutes?: number;
+  unloading_minutes?: number;
+  turnaround_minutes?: number;
+  working_day_start?: string;
+  working_day_end?: string;
+  default_planning_date?: string;
+  seed?: number;
+  settings?: Partial<PlanningSettings>;
+  isochrone_price_60_minutes?: number;
+  isochrone_price_120_minutes?: number;
+  isochrone_price_180_minutes?: number;
+  isochrone_price_240_minutes?: number;
 }
 
 export interface ZoneInput {
   name: string;
-  code: string;
-  route_group: string;
+  kind: Zone['kind'];
+  color: string;
   delivery_price: number;
   pickup_price: number;
   geometry: Zone['geometry'];
-  priority: number;
   locked: boolean;
 }
 
-/** Request body for generating reproducible workload in one scenario. */
+/** Request body for generating reproducible workload in one warehouse. */
 export interface WorkloadGenerationInput {
   start_date: string;
   days: number;
@@ -227,7 +268,7 @@ export interface WorkloadGenerationDailyCount {
 
 /** Result of a workload-generation command. */
 export interface WorkloadGenerationResult {
-  scenario_id: UUID;
+  warehouse_id: UUID;
   seed: number;
   start_date: string;
   end_date: string;
@@ -237,11 +278,13 @@ export interface WorkloadGenerationResult {
   replaced_requests: number;
   deleted_plans: number;
   daily_counts: WorkloadGenerationDailyCount[];
+  auto_plan_run_ids?: UUID[];
+  auto_plan_ids?: UUID[];
 }
 
 /** Result of deleting generator-owned workload for one planning day. */
 export interface GeneratedWorkloadDeletionResult {
-  scenario_id: UUID;
+  warehouse_id: UUID;
   date: string;
   deleted_requests: number;
   deleted_plans: number;
@@ -254,11 +297,15 @@ export interface ZoneCutoutResult {
 
 export interface DriverInput {
   external_worker_id?: UUID | null;
-  name: string;
-  preferred_route_group: string;
+  rwms_assignment_mode: Driver['rwms_assignment_mode'];
   passport_details?: string;
   active: boolean;
   notes: string;
+}
+
+export interface AvailableDriver {
+  worker_id: UUID;
+  display_name: string;
 }
 
 export interface VehicleInput {
@@ -334,11 +381,11 @@ export interface VehicleConfigurationInput {
 export interface ShiftInput {
   driver_id: UUID;
   vehicle_id: UUID;
-  date: string;
-  start_at: string;
-  end_at: string;
+  date_from: string;
+  date_to: string;
+  start_time: string;
+  end_time: string;
   break_minutes: number;
-  preferred_route_group: string;
   active: boolean;
 }
 
@@ -359,6 +406,7 @@ export interface LogisticsRequestInput {
   cargo_weight_kg: number | null;
   service_minutes: number;
   priority: number;
+  mandatory: boolean;
   status: LogisticsRequest['status'];
   split_allowed: boolean;
   notes: string;
@@ -373,9 +421,10 @@ export interface RequestScheduleInput {
 /** Atomic dispatcher preparation required before a request can enter planning. */
 export interface RequestPlanningDetailsInput {
   date: string;
-  window_start: string;
-  window_end: string;
+  window_start: string | null;
+  window_end: string | null;
   is_hard: boolean;
+  mandatory: boolean;
   trailer_access_allowed: boolean;
   include_driver_passport_in_notification: boolean;
   contact_name: string;
@@ -392,106 +441,6 @@ export interface ManualChangeInput {
   locked?: boolean;
   changed_by: 'local-admin';
   reason: string;
-}
-
-export interface GenerationAccepted {
-  run_id: UUID;
-  plan_id: UUID | null;
-  status: OptimizationRun['status'];
-}
-
-export interface RwmsSyncFailure {
-  order_id: UUID | null;
-  code: string;
-  message: string;
-}
-
-export interface RwmsSyncResult {
-  imported: number;
-  updated: number;
-  skipped: number;
-  failures: RwmsSyncFailure[];
-}
-
-/** One warehouse result returned by the server-owned workspace refresh. */
-export interface RwmsWarehouseSyncResult extends RwmsSyncResult {
-  warehouse_id: UUID;
-}
-
-/** Exact current-horizon refresh performed across linked warehouses by the backend. */
-export interface RwmsScenarioRefreshResult {
-  date_from: string;
-  date_to: string;
-  warehouses: RwmsWarehouseSyncResult[];
-}
-
-export interface RwmsAppliedAssignment {
-  order_id: UUID;
-  document_id: UUID;
-  replayed: boolean;
-}
-
-export interface RwmsRejectedAssignment {
-  order_id: UUID;
-  code: string;
-  message: string;
-}
-
-export interface RwmsApplyResult {
-  applied: RwmsAppliedAssignment[];
-  rejected: RwmsRejectedAssignment[];
-}
-
-export type RwmsDriverAudienceMode = 'ASSIGNED_DRIVER' | 'WAREHOUSE_DRIVERS';
-
-export interface RwmsPlanTaskStatus {
-  task_id: UUID;
-  request_id: UUID;
-  order_id: UUID;
-  document_id: UUID;
-  driver_audience_mode: RwmsDriverAudienceMode;
-  driver_worker_id: UUID | null;
-  driver_name: string | null;
-  task_state: string;
-}
-
-export interface RwmsPlanStatusResult {
-  plan_id: UUID;
-  plan_version: number;
-  tasks: RwmsPlanTaskStatus[];
-}
-
-function stringField(record: Record<string, unknown>, snakeCase: string, camelCase: string): string {
-  const value = record[snakeCase] ?? record[camelCase];
-  if (typeof value !== 'string') throw new ApiError(502, null, `Backend не вернул поле ${snakeCase}`);
-  return value;
-}
-
-function normalizeRwmsApplyResult(value: unknown): RwmsApplyResult {
-  if (!value || typeof value !== 'object') throw new ApiError(502, null, 'Backend вернул некорректный результат отправки в RWMS');
-  const record = value as Record<string, unknown>;
-  const applied = Array.isArray(record.applied) ? record.applied : [];
-  const rejected = Array.isArray(record.rejected) ? record.rejected : [];
-  return {
-    applied: applied.map((item) => {
-      if (!item || typeof item !== 'object') throw new ApiError(502, null, 'Backend вернул некорректное назначение RWMS');
-      const assignment = item as Record<string, unknown>;
-      return {
-        order_id: stringField(assignment, 'order_id', 'orderId'),
-        document_id: stringField(assignment, 'document_id', 'documentId'),
-        replayed: assignment.replayed === true,
-      };
-    }),
-    rejected: rejected.map((item) => {
-      if (!item || typeof item !== 'object') throw new ApiError(502, null, 'Backend вернул некорректный отказ RWMS');
-      const rejection = item as Record<string, unknown>;
-      return {
-        order_id: stringField(rejection, 'order_id', 'orderId'),
-        code: stringField(rejection, 'code', 'code'),
-        message: stringField(rejection, 'message', 'message'),
-      };
-    }),
-  };
 }
 
 const loadConfigurationTypes: readonly VehicleLoadConfigurationType[] = [
@@ -624,7 +573,7 @@ function segmentDiagnostics(rawPlan: unknown): Map<UUID, SegmentDiagnostics> {
   return result;
 }
 
-function normalizeRoutePlanWithDiagnostics(raw: RawRoutePlan, workspace: ScenarioWorkspace): RoutePlan {
+function normalizeRoutePlanWithDiagnostics(raw: RawRoutePlan, workspace: WarehouseWorkspace): RoutePlan {
   const normalized = normalizeRoutePlan(raw, workspace);
   const diagnostics = segmentDiagnostics(raw);
   return {
@@ -644,7 +593,7 @@ function normalizeRoutePlanWithDiagnostics(raw: RawRoutePlan, workspace: Scenari
 
 function normalizeValidationWithDiagnostics(
   value: unknown,
-  workspace: ScenarioWorkspace,
+  workspace: WarehouseWorkspace,
   currentPlan: RoutePlan,
 ) {
   const normalized = normalizeValidationResult(value, workspace, currentPlan);
@@ -656,6 +605,36 @@ function normalizeValidationWithDiagnostics(
 
 export const api = {
   health: () => request<{ status: string }>('/health'),
+
+  calculateSlotAvailability: async (input: SlotAvailabilityInput, signal?: AbortSignal) =>
+    normalizeSlotAvailabilityResponse(await request<unknown>('/planning/slot-availability', {
+      method: 'POST',
+      body: jsonBody(input),
+      ...(signal ? { signal } : {}),
+    })),
+
+  suggestAddresses: (
+    text: string,
+    point?: { latitude: number; longitude: number } | null,
+    signal?: AbortSignal,
+  ) => {
+    const query = new URLSearchParams({ text });
+    if (point) {
+      query.set('latitude', String(point.latitude));
+      query.set('longitude', String(point.longitude));
+    }
+    return request<AddressSuggestion[]>(`/geocoding/suggestions?${query.toString()}`, signal ? { signal } : {});
+  },
+
+  resolveAddressSuggestion: (uri: string, signal?: AbortSignal) => {
+    const query = new URLSearchParams({ uri });
+    return request<GeocodedAddress>(`/geocoding/resolve?${query.toString()}`, signal ? { signal } : {});
+  },
+
+  reverseGeocode: (latitude: number, longitude: number, signal?: AbortSignal) => {
+    const query = new URLSearchParams({ latitude: String(latitude), longitude: String(longitude) });
+    return request<GeocodedAddress>(`/geocoding/reverse?${query.toString()}`, signal ? { signal } : {});
+  },
 
   getTruckRestrictions: (
     bounds: TruckRestrictionBounds,
@@ -686,103 +665,73 @@ export const api = {
     return request<TravelTimeContourCollection>(`/routing/travel-time-contours?${query.toString()}`, init);
   },
 
-  listScenarios: async () => (await request<RawScenario[]>('/scenarios')).map((scenario) => normalizeScenario(scenario)),
-  getScenario: async (id: UUID) => normalizeScenario(await request<RawScenario>(`/scenarios/${id}`)),
-  createScenario: async (input: ScenarioCreateInput) =>
-    normalizeScenario(await request<RawScenario>('/scenarios', { method: 'POST', body: jsonBody(input) })),
-  updateScenario: async (id: UUID, input: Partial<ScenarioCreateInput>) =>
-    normalizeScenario(await request<RawScenario>(`/scenarios/${id}`, { method: 'PATCH', body: jsonBody(input) })),
-  deleteScenario: (id: UUID) => request<void>(`/scenarios/${id}`, { method: 'DELETE' }),
-  cloneScenario: async (id: UUID, name?: string) =>
-    normalizeScenario(await request<RawScenario>(`/scenarios/${id}/clone`, { method: 'POST', body: jsonBody(name ? { name } : {}) })),
-  generateDemo: async (id: UUID) =>
-    normalizeScenario(await request<RawScenario>(`/scenarios/${id}/generate-demo`, { method: 'POST' })),
-  generateMultiDayDemo: async () =>
-    normalizeScenario(await request<RawScenario>('/scenarios/generate-multi-day-demo', { method: 'POST' })),
-  generateWorkload: (scenarioId: UUID, input: WorkloadGenerationInput) =>
-    request<WorkloadGenerationResult>(`/scenarios/${scenarioId}/generate-workload`, { method: 'POST', body: jsonBody(input) }),
-  deleteGeneratedWorkload: (scenarioId: UUID, date: string) =>
-    request<GeneratedWorkloadDeletionResult>(`/scenarios/${scenarioId}/generated-workload?date=${encodeURIComponent(date)}`, { method: 'DELETE' }),
-  exportScenario: (id: UUID, includePlans = true) =>
-    request<Record<string, unknown>>(`/scenarios/${id}/export?include_plans=${includePlans ? 'true' : 'false'}`, { method: 'POST' }),
-  importScenario: async (payload: unknown) =>
-    normalizeScenario(await request<RawScenario>('/scenarios/import', { method: 'POST', body: jsonBody({ document: payload }) })),
+  listWarehouses: async () => (await request<RawWarehouse[]>('/warehouses')).map((warehouse) => normalizeWarehouse(warehouse)),
+  listAvailableWarehouses: () => request<AvailableWarehouse[]>('/warehouses/available'),
+  createWarehouse: async (input: WarehouseInput) => normalizeWarehouse(await request<RawWarehouse>('/warehouses', {
+    method: 'POST',
+    body: jsonBody(input),
+  })),
+  updateWarehouse: async (id: UUID, input: WarehouseUpdateInput) => normalizeWarehouse(await request<RawWarehouse>(`/warehouses/${id}`, {
+    method: 'PATCH',
+    body: jsonBody(input),
+  })),
+  getWarehouseWorkspace: (id: UUID, refreshRwms = true) => {
+    const query = refreshRwms ? '' : '?refresh_rwms=false';
+    return request<WarehouseWorkspace>(`/warehouses/${id}/workspace${query}`);
+  },
+  generateWorkload: (warehouseId: UUID, input: WorkloadGenerationInput) =>
+    request<WorkloadGenerationResult>(`/warehouses/${warehouseId}/generate-workload`, { method: 'POST', body: jsonBody(input) }),
+  deleteGeneratedWorkload: (warehouseId: UUID, date: string) =>
+    request<GeneratedWorkloadDeletionResult>(`/warehouses/${warehouseId}/generated-workload?date=${encodeURIComponent(date)}`, { method: 'DELETE' }),
+  getPlanningDayStatus: (warehouseId: UUID, date: string) =>
+    request<PlanningDayStatus>(`/warehouses/${warehouseId}/planning-days/${encodeURIComponent(date)}`),
+  closePlanningDay: (warehouseId: UUID, date: string) =>
+    request<PlanningDayStatus>(`/warehouses/${warehouseId}/planning-days/${encodeURIComponent(date)}/close`, { method: 'POST' }),
 
-  listWarehouses: (scenarioId: UUID) => request<Warehouse[]>(`/scenarios/${scenarioId}/warehouses`),
-  createWarehouse: (scenarioId: UUID, input: WarehouseInput) =>
-    request<Warehouse>(`/scenarios/${scenarioId}/warehouses`, { method: 'POST', body: jsonBody(input) }),
-  updateWarehouse: (id: UUID, input: Partial<WarehouseInput>) =>
-    request<Warehouse>(`/warehouses/${id}`, { method: 'PATCH', body: jsonBody(input) }),
-
-  listZones: (scenarioId: UUID) => request<Zone[]>(`/scenarios/${scenarioId}/zones`),
-  createZone: (scenarioId: UUID, input: ZoneInput) =>
-    request<Zone>(`/scenarios/${scenarioId}/zones`, { method: 'POST', body: jsonBody(input) }),
-  updateZone: (id: UUID, input: Partial<Omit<ZoneInput, 'locked'>>) =>
-    request<Zone>(`/zones/${id}`, { method: 'PATCH', body: jsonBody(input) }),
-  cutZone: (id: UUID, input: ZoneInput) => {
+  listZones: (warehouseId: UUID) => request<Zone[]>(`/warehouses/${warehouseId}/zones`),
+  createZone: (warehouseId: UUID, input: ZoneInput) =>
+    request<Zone>(`/warehouses/${warehouseId}/zones`, { method: 'POST', body: jsonBody(input) }),
+  updateZone: (warehouseId: UUID, id: UUID, input: Partial<Omit<ZoneInput, 'locked'>>) =>
+    request<Zone>(`/warehouses/${warehouseId}/zones/${id}`, { method: 'PATCH', body: jsonBody(input) }),
+  cutZone: (warehouseId: UUID, id: UUID, input: ZoneInput) => {
     const { geometry, ...innerZone } = input;
-    return request<ZoneCutoutResult>(`/zones/${id}/cutouts`, {
+    return request<ZoneCutoutResult>(`/warehouses/${warehouseId}/zones/${id}/cutouts`, {
       method: 'POST',
       body: jsonBody({ geometry, inner_zone: innerZone }),
     });
   },
-  deleteZone: (id: UUID) => request<void>(`/zones/${id}`, { method: 'DELETE' }),
-  setZoneLocked: (id: UUID, locked: boolean) =>
-    request<Zone>(`/zones/${id}/lock`, { method: 'POST', body: jsonBody({ locked }) }),
-  reclassifyRequests: (scenarioId: UUID) =>
-    request<{ updated: number; outside_zones: number; unchanged: number }>(`/scenarios/${scenarioId}/reclassify-requests`, { method: 'POST' }),
-
-  listZoneRelations: (scenarioId: UUID) =>
-    request<ZoneRelation[]>(`/scenarios/${scenarioId}/zone-relations`),
-  createZoneRelation: (scenarioId: UUID, input: Omit<ZoneRelation, 'id'>) =>
-    request<ZoneRelation>(`/scenarios/${scenarioId}/zone-relations`, { method: 'POST', body: jsonBody(input) }),
-  updateZoneRelation: (id: UUID, input: Partial<Omit<ZoneRelation, 'id' | 'from_zone_id' | 'to_zone_id'>>) =>
-    request<ZoneRelation>(`/zone-relations/${id}`, { method: 'PATCH', body: jsonBody(input) }),
-  deleteZoneRelation: (id: UUID) => request<void>(`/zone-relations/${id}`, { method: 'DELETE' }),
-
-  listDrivers: (scenarioId: UUID) => request<Driver[]>(`/scenarios/${scenarioId}/drivers`),
-  createDriver: (scenarioId: UUID, input: DriverInput) =>
-    request<Driver>(`/scenarios/${scenarioId}/drivers`, { method: 'POST', body: jsonBody(input) }),
+  deleteZone: (warehouseId: UUID, id: UUID) => request<void>(`/warehouses/${warehouseId}/zones/${id}`, { method: 'DELETE' }),
+  setZoneLocked: (warehouseId: UUID, id: UUID, locked: boolean) =>
+    request<Zone>(`/warehouses/${warehouseId}/zones/${id}/lock`, { method: 'POST', body: jsonBody({ locked }) }),
+  listAvailableDrivers: (warehouseId: UUID) => request<AvailableDriver[]>(`/warehouses/${warehouseId}/available-drivers`),
+  createDriver: (warehouseId: UUID, input: DriverInput) =>
+    request<Driver>(`/warehouses/${warehouseId}/drivers`, { method: 'POST', body: jsonBody(input) }),
   updateDriver: (id: UUID, input: Partial<DriverInput>) =>
     request<Driver>(`/drivers/${id}`, { method: 'PATCH', body: jsonBody(input) }),
   deleteDriver: (id: UUID) => request<void>(`/drivers/${id}`, { method: 'DELETE' }),
 
-  listVehicles: (scenarioId: UUID) => request<Vehicle[]>(`/scenarios/${scenarioId}/vehicles`),
-  createVehicle: (scenarioId: UUID, input: VehicleInput) =>
-    request<Vehicle>(`/scenarios/${scenarioId}/vehicles`, { method: 'POST', body: jsonBody(input) }),
   updateVehicle: (id: UUID, input: Partial<VehicleInput>) =>
     request<Vehicle>(`/vehicles/${id}`, { method: 'PATCH', body: jsonBody(input) }),
-  createVehicleConfiguration: (scenarioId: UUID, input: VehicleConfigurationInput) =>
-    request<Vehicle>(`/scenarios/${scenarioId}/vehicle-configurations`, { method: 'POST', body: jsonBody(input) }),
+  createVehicleConfiguration: (warehouseId: UUID, input: VehicleConfigurationInput) =>
+    request<Vehicle>(`/warehouses/${warehouseId}/vehicle-configurations`, { method: 'POST', body: jsonBody(input) }),
   updateVehicleConfiguration: (id: UUID, input: VehicleConfigurationInput) =>
     request<Vehicle>(`/vehicles/${id}/configuration`, { method: 'PUT', body: jsonBody(input) }),
   deleteVehicle: (id: UUID) => request<void>(`/vehicles/${id}`, { method: 'DELETE' }),
 
-  listTrailers: (scenarioId: UUID) => request<Trailer[]>(`/scenarios/${scenarioId}/trailers`),
-  getTrailer: (id: UUID) => request<Trailer>(`/trailers/${id}`),
-  createTrailer: (scenarioId: UUID, input: TrailerInput) =>
-    request<Trailer>(`/scenarios/${scenarioId}/trailers`, { method: 'POST', body: jsonBody(input) }),
+  createTrailer: (warehouseId: UUID, input: TrailerInput) =>
+    request<Trailer>(`/warehouses/${warehouseId}/trailers`, { method: 'POST', body: jsonBody(input) }),
   updateTrailer: (id: UUID, input: Partial<TrailerInput>) =>
     request<Trailer>(`/trailers/${id}`, { method: 'PATCH', body: jsonBody(input) }),
   deleteTrailer: (id: UUID) => request<void>(`/trailers/${id}`, { method: 'DELETE' }),
 
-  listVehicleLoadProfiles: (vehicleId: UUID) => request<VehicleLoadProfile[]>(`/vehicles/${vehicleId}/load-profiles`),
-  createVehicleLoadProfile: (vehicleId: UUID, input: VehicleLoadProfileInput) =>
-    request<VehicleLoadProfile>(`/vehicles/${vehicleId}/load-profiles`, { method: 'POST', body: jsonBody(input) }),
-  updateVehicleLoadProfile: (id: UUID, input: Partial<VehicleLoadProfileInput>) =>
-    request<VehicleLoadProfile>(`/vehicle-load-profiles/${id}`, { method: 'PATCH', body: jsonBody(input) }),
-  deleteVehicleLoadProfile: (id: UUID) => request<void>(`/vehicle-load-profiles/${id}`, { method: 'DELETE' }),
-
-  listShifts: (scenarioId: UUID) => request<DriverShift[]>(`/scenarios/${scenarioId}/shifts`),
-  createShift: (scenarioId: UUID, input: ShiftInput) =>
-    request<DriverShift>(`/scenarios/${scenarioId}/shifts`, { method: 'POST', body: jsonBody(input) }),
+  createShift: (warehouseId: UUID, input: ShiftInput) =>
+    request<DriverShift>(`/warehouses/${warehouseId}/shifts`, { method: 'POST', body: jsonBody(input) }),
   updateShift: (id: UUID, input: Partial<ShiftInput>) =>
     request<DriverShift>(`/shifts/${id}`, { method: 'PATCH', body: jsonBody(input) }),
   deleteShift: (id: UUID) => request<void>(`/shifts/${id}`, { method: 'DELETE' }),
 
-  listRequests: (scenarioId: UUID) => request<LogisticsRequest[]>(`/scenarios/${scenarioId}/requests`),
-  createRequest: (scenarioId: UUID, input: LogisticsRequestInput) =>
-    request<LogisticsRequest>(`/scenarios/${scenarioId}/requests`, { method: 'POST', body: jsonBody(input) }),
+  createRequest: (warehouseId: UUID, input: LogisticsRequestInput) =>
+    request<LogisticsRequest>(`/warehouses/${warehouseId}/requests`, { method: 'POST', body: jsonBody(input) }),
   updateRequest: (id: UUID, input: Partial<LogisticsRequestInput>) =>
     request<LogisticsRequest>(`/requests/${id}`, { method: 'PATCH', body: jsonBody(input) }),
   scheduleRequest: (id: UUID, input: RequestScheduleInput) =>
@@ -795,39 +744,6 @@ export const api = {
   saveRequestPlanningDetails: (id: UUID, input: RequestPlanningDetailsInput) =>
     request<LogisticsRequest>(`/requests/${id}/planning-details`, { method: 'POST', body: jsonBody(input) }),
 
-  syncRwmsRequests: (scenarioId: UUID, input: { warehouse_id: UUID; date_from: string; date_to: string }) =>
-    request<RwmsSyncResult>(`/scenarios/${scenarioId}/rwms/sync`, { method: 'POST', body: jsonBody(input) }),
-  refreshRwmsRequests: (scenarioId: UUID) =>
-    request<RwmsScenarioRefreshResult>(`/scenarios/${scenarioId}/rwms/refresh`, { method: 'POST' }),
-  applyPlanToRwms: async (
-    planId: UUID,
-    expectedVersion: number,
-    publishUnassignedTaskIds: UUID[] = [],
-  ) => normalizeRwmsApplyResult(
-    await request<unknown>(`/plans/${planId}/rwms/apply`, {
-      method: 'POST',
-      body: jsonBody({
-        expected_version: expectedVersion,
-        publish_unassigned_task_ids: publishUnassignedTaskIds,
-      }),
-    }),
-  ),
-  getPlanRwmsStatus: (planId: UUID, expectedVersion: number) =>
-    request<RwmsPlanStatusResult>(`/plans/${planId}/rwms/status?expected_version=${expectedVersion}`),
-
-  generatePlan: async (scenarioId: UUID, date: string, seed: number, settings: PlanningSettings) => {
-    const raw = await request<Record<string, unknown>>(`/scenarios/${scenarioId}/plans/generate`, {
-      method: 'POST',
-      body: jsonBody({ date, seed, settings, show_trace: settings.trace_enabled ?? false }),
-    });
-    const runId = typeof raw.run_id === 'string' ? raw.run_id : typeof raw.id === 'string' ? raw.id : null;
-    if (!runId) throw new ApiError(502, null, 'Backend не вернул идентификатор запуска оптимизации');
-    return {
-      run_id: runId,
-      plan_id: typeof raw.plan_id === 'string' ? raw.plan_id : null,
-      status: typeof raw.status === 'string' ? raw.status as OptimizationRun['status'] : 'PENDING',
-    } satisfies GenerationAccepted;
-  },
   getOptimizationRun: async (id: UUID, fallbackSettings: PlanningSettings) =>
     normalizeOptimizationRun(await request<RawOptimizationRun>(`/optimization-runs/${id}`), fallbackSettings),
   cancelOptimizationRun: async (id: UUID, fallbackSettings: PlanningSettings) =>
@@ -835,24 +751,46 @@ export const api = {
       await request<RawOptimizationRun>(`/optimization-runs/${id}/cancel`, { method: 'POST' }),
       fallbackSettings,
     ),
-  getPlan: async (id: UUID, workspace: ScenarioWorkspace) =>
+  getPlan: async (id: UUID, workspace: WarehouseWorkspace) =>
     normalizeRoutePlanWithDiagnostics(await request<RawRoutePlan>(`/plans/${id}`), workspace),
-  validatePlan: async (id: UUID, expectedVersion: number, workspace: ScenarioWorkspace, currentPlan: RoutePlan) =>
+  ensureAutomaticPlan: async (
+    warehouseId: UUID,
+    date: string,
+    workspace: WarehouseWorkspace,
+    signal?: AbortSignal,
+  ) => {
+    const raw = await request<RawRoutePlan | null>(
+      `/warehouses/${warehouseId}/plans/ensure?date=${encodeURIComponent(date)}`,
+      { method: 'POST', ...(signal ? { signal } : {}) },
+    );
+    return raw ? normalizeRoutePlanWithDiagnostics(raw, workspace) : null;
+  },
+  validatePlan: async (id: UUID, expectedVersion: number, workspace: WarehouseWorkspace, currentPlan: RoutePlan) =>
     normalizeValidationWithDiagnostics(await request<unknown>(`/plans/${id}/validate`, {
       method: 'POST',
       body: jsonBody({ expected_version: expectedVersion }),
     }), workspace, currentPlan),
-  clonePlan: async (id: UUID, name: string | undefined, workspace: ScenarioWorkspace) =>
-    normalizeRoutePlanWithDiagnostics(
-      await request<RawRoutePlan>(`/plans/${id}/clone`, { method: 'POST', body: jsonBody(name ? { name } : {}) }),
-      workspace,
-    ),
-  confirmPlan: async (id: UUID, expectedVersion: number, acceptWarnings: boolean, workspace: ScenarioWorkspace) =>
+  confirmPlan: async (
+    id: UUID,
+    expectedVersion: number,
+    acceptWarnings: boolean,
+    workspace: WarehouseWorkspace,
+    emptyPositioningReason?: string,
+  ) =>
     normalizeRoutePlanWithDiagnostics(await request<RawRoutePlan>(`/plans/${id}/confirm`, {
       method: 'POST',
-      body: jsonBody({ expected_version: expectedVersion, accept_warnings: acceptWarnings }),
+      body: jsonBody({
+        expected_version: expectedVersion,
+        accept_warnings: acceptWarnings,
+        ...(emptyPositioningReason ? { empty_positioning_reason: emptyPositioningReason } : {}),
+      }),
     }), workspace),
-  manualChange: async (planId: UUID, input: ManualChangeInput, workspace: ScenarioWorkspace, currentPlan: RoutePlan) => {
+  resetManualChanges: async (id: UUID, expectedVersion: number, workspace: WarehouseWorkspace) =>
+    normalizeRoutePlanWithDiagnostics(await request<RawRoutePlan>(`/plans/${id}/manual-changes/reset`, {
+      method: 'POST',
+      body: jsonBody({ expected_version: expectedVersion }),
+    }), workspace),
+  manualChange: async (planId: UUID, input: ManualChangeInput, workspace: WarehouseWorkspace, currentPlan: RoutePlan) => {
     const { expected_version, change_type, changed_by, reason, ...payload } = input;
     return normalizeValidationWithDiagnostics(
       await request<unknown>(`/plans/${planId}/manual-change`, {
@@ -867,7 +805,7 @@ export const api = {
     planId: UUID,
     cycleId: UUID,
     input: { expected_version: number; sequence?: number; driver_shift_id?: UUID; locked?: boolean; reason: string },
-    workspace: ScenarioWorkspace,
+    workspace: WarehouseWorkspace,
   ) => normalizeRoutePlanWithDiagnostics(
     await request<RawRoutePlan>(`/plans/${planId}/cycles/${cycleId}`, { method: 'PATCH', body: jsonBody(input) }),
     workspace,
@@ -879,7 +817,7 @@ export const api = {
     delay_minutes: number;
     reason: string;
     persist: boolean;
-  }, workspace: ScenarioWorkspace, currentPlan: RoutePlan) => request<unknown>(`/plans/${planId}/simulation/delay`, { method: 'POST', body: jsonBody(input) })
+  }, workspace: WarehouseWorkspace, currentPlan: RoutePlan) => request<unknown>(`/plans/${planId}/simulation/delay`, { method: 'POST', body: jsonBody(input) })
     .then((value) => normalizeValidationWithDiagnostics(value, workspace, currentPlan)),
   markDriverUnavailable: (planId: UUID, input: {
     expected_version: number;
@@ -887,34 +825,24 @@ export const api = {
     effective_at: string;
     reason: string;
     persist: boolean;
-  }, workspace: ScenarioWorkspace, currentPlan: RoutePlan) => request<unknown>(`/plans/${planId}/simulation/driver-unavailable`, {
+  }, workspace: WarehouseWorkspace, currentPlan: RoutePlan) => request<unknown>(`/plans/${planId}/simulation/driver-unavailable`, {
     method: 'POST',
     body: jsonBody(input),
   }).then((value) => normalizeValidationWithDiagnostics(value, workspace, currentPlan)),
 };
 
-export async function getScenarioWorkspace(scenarioId: UUID): Promise<ScenarioWorkspace> {
-  const [scenario, warehouses, zones, zoneRelations, drivers, vehicles, shifts] = await Promise.all([
-    api.getScenario(scenarioId),
-    api.listWarehouses(scenarioId),
-    api.listZones(scenarioId),
-    api.listZoneRelations(scenarioId),
-    api.listDrivers(scenarioId),
-    api.listVehicles(scenarioId),
-    api.listShifts(scenarioId),
-  ]);
-  await api.refreshRwmsRequests(scenarioId);
-  const requests = await api.listRequests(scenarioId);
-  return normalizeWorkspace({
-    scenario,
-    warehouses,
-    zones,
-    zone_relations: zoneRelations,
-    drivers,
-    vehicles,
-    shifts,
-    requests,
-  });
+export async function getWarehouseWorkspace(warehouseId: UUID): Promise<WarehouseWorkspace> {
+  try {
+    return normalizeWorkspace(await api.getWarehouseWorkspace(warehouseId));
+  } catch (error: unknown) {
+    if (!(error instanceof ApiError) || error.code !== 'RWMS_WORKSPACE_SYNC_INCOMPLETE') throw error;
+    const failureCount = Array.isArray(error.problem?.failures) ? error.problem.failures.length : 0;
+    const rwmsRefreshWarning = failureCount > 0
+      ? `RWMS не обновил доставки и вывозы: ${failureCount}. Показаны последние сохранённые данные; автоматическая синхронизация повторится.`
+      : 'RWMS обновил рабочую область не полностью. Показаны последние сохранённые данные; автоматическая синхронизация повторится.';
+    const workspace = normalizeWorkspace(await api.getWarehouseWorkspace(warehouseId, false));
+    return { ...workspace, rwms_refresh_warning: rwmsRefreshWarning };
+  }
 }
 
 export function optimizationStreamUrl(runId: UUID): string {

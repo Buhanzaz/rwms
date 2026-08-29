@@ -15,7 +15,7 @@ from shapely.geometry.base import BaseGeometry
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Zone
+from app.models import Zone, ZoneKind
 from app.schemas.domain import GeoJsonGeometry
 
 
@@ -25,18 +25,25 @@ class ZoneMatch:
 
     zone_id: UUID
     zone_version: int
-    zone_code: str
+
+
+@dataclass(frozen=True, slots=True)
+class ZonePolicyClassification:
+    """Most specific covering polygon for each independent operational policy."""
+
+    forbidden: Zone | None = None
+    no_trailer: Zone | None = None
+    special_price: Zone | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class InMemoryZone:
-    """Small pure-test representation of zone precedence inputs."""
+    """Small pure-test representation of geometry-specificity inputs."""
 
     id: UUID
     version: int
-    code: str
-    priority: int
     geometry: Polygon | MultiPolygon
+    kind: ZoneKind = ZoneKind.SPECIAL_PRICE
 
 
 def geometry_from_geojson(geometry: GeoJsonGeometry) -> WKBElement:
@@ -54,34 +61,77 @@ def geometry_to_geojson(value: WKBElement) -> dict[str, Any]:
 
 
 def build_classification_statement(
-    scenario_id: UUID, latitude: float, longitude: float
+    warehouse_id: UUID, latitude: float, longitude: float
 ) -> Select[tuple[Zone]]:
-    """Build priority-first, smallest-area PostGIS classification query.
+    """Build one warehouse's smallest covering special-price query.
 
-    ``ST_Covers`` intentionally includes polygon boundaries. Priority is the
-    primary discriminator; projected area provides the specified specificity
-    tie-breaker, followed by UUID for deterministic results.
+    ``ST_Covers`` intentionally includes polygon boundaries. Projected area is
+    the specificity discriminator, followed by UUID for deterministic results.
     """
 
     point = geofunc.ST_SetSRID(geofunc.ST_Point(longitude, latitude), 4326)
     area = func.ST_Area(func.ST_Transform(Zone.geometry, 3857))
     return (
         select(Zone)
-        .where(Zone.scenario_id == scenario_id, geofunc.ST_Covers(Zone.geometry, point))
-        .order_by(Zone.priority.desc(), area.asc(), Zone.id.asc())
+        .where(
+            Zone.warehouse_id == warehouse_id,
+            Zone.kind == ZoneKind.SPECIAL_PRICE,
+            geofunc.ST_Covers(Zone.geometry, point),
+        )
+        .order_by(area.asc(), Zone.id.asc())
         .limit(1)
     )
 
 
-async def classify_point(
-    session: AsyncSession, scenario_id: UUID, latitude: float, longitude: float
-) -> ZoneMatch | None:
-    """Classify a coordinate using PostGIS as the production source of truth."""
+def build_policy_classification_statement(
+    warehouse_id: UUID, latitude: float, longitude: float
+) -> Select[tuple[Zone]]:
+    """Build all covering exceptional zones ordered from most to least specific."""
 
-    zone = await session.scalar(build_classification_statement(scenario_id, latitude, longitude))
+    point = geofunc.ST_SetSRID(geofunc.ST_Point(longitude, latitude), 4326)
+    area = func.ST_Area(func.ST_Transform(Zone.geometry, 3857))
+    return (
+        select(Zone)
+        .where(
+            Zone.warehouse_id == warehouse_id,
+            geofunc.ST_Covers(Zone.geometry, point),
+        )
+        .order_by(area.asc(), Zone.id.asc())
+    )
+
+
+async def classify_point(
+    session: AsyncSession, warehouse_id: UUID, latitude: float, longitude: float
+) -> ZoneMatch | None:
+    """Classify a coordinate only within its owning warehouse's PostGIS zones."""
+
+    zone = await session.scalar(
+        build_classification_statement(warehouse_id, latitude, longitude)
+    )
     if zone is None:
         return None
-    return ZoneMatch(zone_id=zone.id, zone_version=zone.version, zone_code=zone.code)
+    return ZoneMatch(zone_id=zone.id, zone_version=zone.version)
+
+
+async def classify_zone_policies(
+    session: AsyncSession, warehouse_id: UUID, latitude: float, longitude: float
+) -> ZonePolicyClassification:
+    """Resolve independent forbidden, no-trailer, and special-price overrides."""
+
+    covering = list(
+        await session.scalars(
+            build_policy_classification_statement(warehouse_id, latitude, longitude)
+        )
+    )
+    by_kind: dict[ZoneKind, Zone] = {}
+    for zone in covering:
+        kind = ZoneKind(zone.kind)
+        by_kind.setdefault(kind, zone)
+    return ZonePolicyClassification(
+        forbidden=by_kind.get(ZoneKind.FORBIDDEN),
+        no_trailer=by_kind.get(ZoneKind.NO_TRAILER),
+        special_price=by_kind.get(ZoneKind.SPECIAL_PRICE),
+    )
 
 
 def classify_point_in_memory(
@@ -90,18 +140,22 @@ def classify_point_in_memory(
     """Mirror precedence rules purely for focused invariant tests.
 
     Runtime request classification always uses :func:`classify_point`; this
-    helper makes boundary, priority, and specificity behavior testable without
+    helper makes boundary and specificity behavior testable without
     weakening the PostGIS production path.
     """
 
     from shapely.geometry import Point
 
     point = Point(longitude, latitude)
-    covering = [zone for zone in zones if zone.geometry.covers(point)]
+    covering = [
+        zone
+        for zone in zones
+        if zone.kind is ZoneKind.SPECIAL_PRICE and zone.geometry.covers(point)
+    ]
     if not covering:
         return None
-    winner = min(covering, key=lambda zone: (-zone.priority, zone.geometry.area, str(zone.id)))
-    return ZoneMatch(winner.id, winner.version, winner.code)
+    winner = min(covering, key=lambda zone: (zone.geometry.area, str(zone.id)))
+    return ZoneMatch(winner.id, winner.version)
 
 
 def ensure_polygonal(value: BaseGeometry) -> MultiPolygon:

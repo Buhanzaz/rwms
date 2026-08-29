@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Protocol
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -24,7 +25,6 @@ from app.models import (
     PlanningTask,
     PlanNotificationLog,
     RouteCycle,
-    RouteExplanation,
     RoutePlan,
     RouteSegment,
     RouteStop,
@@ -45,6 +45,8 @@ from app.schemas.domain import (
     UnassignedTaskRead,
 )
 
+PENDING_REQUEST_REFRESH_METRIC = "pending_request_metadata_refresh"
+
 
 class PlannerFacade(Protocol):
     """Integration boundary implemented by the independently testable planner lane."""
@@ -52,7 +54,7 @@ class PlannerFacade(Protocol):
     async def generate_plan(
         self,
         session: AsyncSession,
-        scenario_id: UUID,
+        warehouse_id: UUID,
         command: GeneratePlanRequest,
     ) -> OptimizationRun:
         """Start plan generation and persist an independently addressable run."""
@@ -61,6 +63,14 @@ class PlannerFacade(Protocol):
         self, session: AsyncSession, plan_id: UUID, expected_version: int
     ) -> RoutePlan:
         """Fully validate a saved plan without accepting stale input."""
+
+    async def refresh_plan_after_request_changes(
+        self,
+        session: AsyncSession,
+        plan_id: UUID,
+        expected_version: int,
+    ) -> RoutePlan:
+        """Recalculate a marked draft without changing its task or cycle order."""
 
     async def reoptimize_plan(
         self,
@@ -86,6 +96,14 @@ class PlannerFacade(Protocol):
         command: ManualChangeRequest,
     ) -> RoutePlan:
         """Apply and fully validate a drag-and-drop or structural plan edit."""
+
+    async def reset_manual_changes(
+        self,
+        session: AsyncSession,
+        plan_id: UUID,
+        expected_version: int,
+    ) -> RoutePlan:
+        """Archive a mutable manual plan and return its automatic replacement."""
 
     async def apply_simulation_delay(
         self,
@@ -130,7 +148,7 @@ class UnavailablePlannerFacade:
     async def generate_plan(
         self,
         session: AsyncSession,
-        scenario_id: UUID,
+        warehouse_id: UUID,
         command: GeneratePlanRequest,
     ) -> OptimizationRun:
         """Reject generation instead of returning fabricated plan data."""
@@ -141,6 +159,16 @@ class UnavailablePlannerFacade:
         self, session: AsyncSession, plan_id: UUID, expected_version: int
     ) -> RoutePlan:
         """Reject validation until the real validator is attached."""
+
+        raise self._unavailable()
+
+    async def refresh_plan_after_request_changes(
+        self,
+        session: AsyncSession,
+        plan_id: UUID,
+        expected_version: int,
+    ) -> RoutePlan:
+        """Reject metadata refresh until the real planner is attached."""
 
         raise self._unavailable()
 
@@ -175,13 +203,23 @@ class UnavailablePlannerFacade:
 
         raise self._unavailable()
 
+    async def reset_manual_changes(
+        self,
+        session: AsyncSession,
+        plan_id: UUID,
+        expected_version: int,
+    ) -> RoutePlan:
+        """Reject manual reset until the real planner is attached."""
+
+        raise self._unavailable()
+
     async def apply_simulation_delay(
         self,
         session: AsyncSession,
         plan_id: UUID,
         command: ManualChangeRequest,
     ) -> RoutePlan:
-        """Reject delay commands until the simulator is attached."""
+        """Reject delay commands until the planning engine is attached."""
 
         raise self._unavailable()
 
@@ -191,7 +229,7 @@ class UnavailablePlannerFacade:
         plan_id: UUID,
         command: ManualChangeRequest,
     ) -> OptimizationRun:
-        """Reject remaining-day replanning until the simulator is attached."""
+        """Reject remaining-day replanning until the planning engine is attached."""
 
         raise self._unavailable()
 
@@ -212,8 +250,10 @@ async def get_plan(session: AsyncSession, plan_id: UUID, *, for_update: bool = F
             cycles.selectinload(RouteCycle.explanations),
             cycles.selectinload(RouteCycle.driver_shift).selectinload(DriverShift.driver),
             cycles.selectinload(RouteCycle.driver_shift).selectinload(DriverShift.vehicle),
-            selectinload(RoutePlan.scenario),
-            selectinload(RoutePlan.unassigned_tasks),
+            selectinload(RoutePlan.warehouse),
+            selectinload(RoutePlan.unassigned_tasks)
+            .selectinload(UnassignedTask.task)
+            .selectinload(PlanningTask.request),
             selectinload(RoutePlan.notification_logs),
         )
     )
@@ -223,6 +263,26 @@ async def get_plan(session: AsyncSession, plan_id: UUID, *, for_update: bool = F
     if plan is None:
         raise not_found("plan", plan_id)
     return plan
+
+
+async def get_latest_plan_for_date(
+    session: AsyncSession,
+    warehouse_id: UUID,
+    planning_date: date,
+) -> RoutePlan | None:
+    """Load the newest non-archived plan for one warehouse day and its full graph."""
+
+    plan_id = await session.scalar(
+        select(RoutePlan.id)
+        .where(
+            RoutePlan.warehouse_id == warehouse_id,
+            RoutePlan.date == planning_date,
+            RoutePlan.status != PlanStatus.ARCHIVED,
+        )
+        .order_by(RoutePlan.updated_at.desc(), RoutePlan.id.desc())
+        .limit(1)
+    )
+    return await get_plan(session, plan_id) if plan_id is not None else None
 
 
 def _segment_read(segment: RouteSegment) -> RouteSegmentRead:
@@ -254,7 +314,6 @@ def plan_read(plan: RoutePlan) -> RoutePlanRead:
 
     return RoutePlanRead(
         id=plan.id,
-        scenario_id=plan.scenario_id,
         warehouse_id=plan.warehouse_id,
         date=plan.date,
         name=plan.name,
@@ -321,6 +380,57 @@ async def assert_plan_version(
     return plan
 
 
+async def mark_plans_for_request_refresh(
+    session: AsyncSession,
+    warehouse_id: UUID,
+    dates: set[date],
+    request_id: UUID,
+) -> tuple[RoutePlan, ...]:
+    """Fence active plans and record a server-owned request-metadata refresh marker."""
+
+    if not dates:
+        return ()
+    plans = tuple(
+        await session.scalars(
+            select(RoutePlan)
+            .where(
+                RoutePlan.warehouse_id == warehouse_id,
+                RoutePlan.date.in_(dates),
+                RoutePlan.status != PlanStatus.ARCHIVED,
+            )
+            .with_for_update()
+        )
+    )
+    if any(plan.status == PlanStatus.CONFIRMED for plan in plans):
+        raise ApiError(
+            409,
+            "PLAN_ALREADY_CONFIRMED",
+            "A confirmed plan cannot be changed by request planning metadata",
+        )
+    request_id_value = str(request_id)
+    for plan in plans:
+        marker = plan.metrics.get(PENDING_REQUEST_REFRESH_METRIC)
+        marked_request_ids: set[str] = set()
+        if isinstance(marker, dict):
+            marked_request_ids.update(
+                value
+                for value in marker.get("request_ids", [])
+                if isinstance(value, str)
+            )
+        marked_request_ids.add(request_id_value)
+        plan.version += 1
+        plan.status = PlanStatus.DRAFT
+        plan.metrics = {
+            **plan.metrics,
+            PENDING_REQUEST_REFRESH_METRIC: {
+                "request_ids": sorted(marked_request_ids),
+                "marked_at_version": plan.version,
+            },
+        }
+    await session.flush()
+    return plans
+
+
 async def record_manual_change(
     session: AsyncSession,
     plan: RoutePlan,
@@ -330,6 +440,13 @@ async def record_manual_change(
     new_value: dict[str, object] | None,
 ) -> ManualChangeAudit:
     """Advance a locked plan version and append its immutable manual audit row."""
+
+    if plan.status == PlanStatus.CONFIRMED:
+        raise ApiError(
+            409,
+            "PLAN_ALREADY_CONFIRMED",
+            "A confirmed plan cannot be changed manually",
+        )
 
     version_before = plan.version
     plan.version += 1
@@ -356,10 +473,28 @@ async def confirm_plan(
     expected_version: int,
     *,
     accept_warnings: bool,
+    empty_positioning_reason: str | None = None,
+    confirmed_by: str = "local-admin",
 ) -> RoutePlan:
-    """Confirm an error-free plan after optimistic concurrency and warning consent."""
+    """Confirm a valid plan and audit an explicitly accepted empty support leg."""
 
     plan = await assert_plan_version(session, plan_id, expected_version)
+    if PENDING_REQUEST_REFRESH_METRIC in plan.metrics:
+        raise ApiError(
+            409,
+            "PLAN_REFRESH_REQUIRED",
+            "Refresh routes after changing request planning metadata",
+        )
+    mandatory_unassigned = [
+        item.task_id for item in plan.unassigned_tasks if item.task.mandatory
+    ]
+    if mandatory_unassigned:
+        raise ApiError(
+            409,
+            "MANDATORY_TASKS_UNASSIGNED",
+            "Every mandatory delivery or pickup must be assigned before plan confirmation",
+            extra={"task_ids": [str(task_id) for task_id in mandatory_unassigned]},
+        )
     if plan.validation_errors:
         raise ApiError(
             409,
@@ -376,9 +511,48 @@ async def confirm_plan(
         )
     if plan.status == PlanStatus.CONFIRMED:
         return plan
+    positioning_distance = plan.metrics.get("support_positioning_distance_meters", 0)
+    empty_positioning = (
+        isinstance(positioning_distance, (int, float)) and positioning_distance > 0
+    )
+    normalized_reason = (empty_positioning_reason or "").strip()
+    if empty_positioning and not normalized_reason:
+        raise ApiError(
+            409,
+            "EMPTY_POSITIONING_REASON_REQUIRED",
+            "Confirming an empty cross-warehouse positioning leg requires a reason",
+        )
+    version_before = plan.version
     await _create_simulated_notification_logs(session, plan)
     plan.status = PlanStatus.CONFIRMED
     plan.version += 1
+    if empty_positioning:
+        plan.metrics = {
+            **plan.metrics,
+            "empty_positioning_approved": True,
+            "empty_positioning_approved_by": confirmed_by,
+            "empty_positioning_reason": normalized_reason,
+        }
+        session.add(
+            ManualChangeAudit(
+                route_plan_id=plan.id,
+                changed_by=confirmed_by,
+                changed_at=utc_now(),
+                change_type="EMPTY_POSITIONING_APPROVED",
+                previous_value={"approved": False},
+                new_value={
+                    "approved": True,
+                    "positioningDistanceMeters": positioning_distance,
+                    "positioningTravelMinutes": plan.metrics.get(
+                        "support_positioning_travel_minutes",
+                        0,
+                    ),
+                },
+                reason=normalized_reason,
+                plan_version_before=version_before,
+                plan_version_after=plan.version,
+            )
+        )
     await session.flush()
     return await get_plan(session, plan.id)
 
@@ -403,7 +577,7 @@ def _notification_message(
     operation = "Доставка" if request.type == "DELIVERY" else "Вывоз"
     planned_word = "запланирована" if request.type == "DELIVERY" else "запланирован"
     greeting = f"{request.contact_name}, " if request.contact_name.strip() else ""
-    scenario_zone = ZoneInfo(plan.scenario.timezone)
+    warehouse_zone = ZoneInfo(plan.warehouse.timezone)
     lines = [
         f"{greeting}{operation} {assigned_quantity} БК {planned_word} "
         f"на {plan.date.strftime('%d.%m.%Y')}.",
@@ -420,7 +594,7 @@ def _notification_message(
         if assignment_key in seen_assignments:
             continue
         seen_assignments.add(assignment_key)
-        local_arrival = stop.planned_arrival.astimezone(scenario_zone)
+        local_arrival = stop.planned_arrival.astimezone(warehouse_zone)
         lines.append(
             f"Рейс {cycle_sequence}, прибытие ориентировочно "
             f"{local_arrival.strftime('%H:%M')}: водитель {driver.name}; "
@@ -505,111 +679,6 @@ async def _create_simulated_notification_logs(
         )
     await session.flush()
     session.expire(plan, ["notification_logs"])
-
-
-async def clone_plan(session: AsyncSession, plan_id: UUID, *, name: str | None = None) -> RoutePlan:
-    """Clone a loaded plan graph while retaining source tasks and shift assignments."""
-
-    source = await get_plan(session, plan_id)
-    clone = RoutePlan(
-        scenario_id=source.scenario_id,
-        warehouse_id=source.warehouse_id,
-        date=source.date,
-        name=name or f"{source.name} — копия",
-        version=1,
-        status=PlanStatus.DRAFT,
-        score=source.score,
-        metrics=dict(source.metrics),
-        validation_errors=list(source.validation_errors),
-        validation_warnings=list(source.validation_warnings),
-        manually_changed=False,
-    )
-    session.add(clone)
-    await session.flush()
-    for source_cycle in source.cycles:
-        cycle = RouteCycle(
-            route_plan_id=clone.id,
-            driver_shift_id=source_cycle.driver_shift_id,
-            sequence=source_cycle.sequence,
-            planned_start=source_cycle.planned_start,
-            planned_finish=source_cycle.planned_finish,
-            total_distance_meters=source_cycle.total_distance_meters,
-            total_travel_seconds=source_cycle.total_travel_seconds,
-            total_service_seconds=source_cycle.total_service_seconds,
-            empty_distance_meters=source_cycle.empty_distance_meters,
-            detour_seconds=source_cycle.detour_seconds,
-            score=source_cycle.score,
-            locked=source_cycle.locked,
-            manually_changed=False,
-            metrics=dict(source_cycle.metrics),
-        )
-        session.add(cycle)
-        await session.flush()
-        stop_ids: dict[UUID, UUID] = {}
-        for source_stop in source_cycle.stops:
-            stop = RouteStop(
-                route_cycle_id=cycle.id,
-                sequence=source_stop.sequence,
-                task_id=source_stop.task_id,
-                stop_type=source_stop.stop_type,
-                planned_arrival=source_stop.planned_arrival,
-                planned_departure=source_stop.planned_departure,
-                service_seconds=source_stop.service_seconds,
-                quantity_delta=source_stop.quantity_delta,
-                load_before=source_stop.load_before,
-                load_after=source_stop.load_after,
-                latitude=source_stop.latitude,
-                longitude=source_stop.longitude,
-                warnings=list(source_stop.warnings),
-                locked=source_stop.locked,
-            )
-            session.add(stop)
-            await session.flush()
-            stop_ids[source_stop.id] = stop.id
-        for source_segment in source_cycle.segments:
-            session.add(
-                RouteSegment(
-                    route_cycle_id=cycle.id,
-                    sequence=source_segment.sequence,
-                    from_stop_id=stop_ids[source_segment.from_stop_id],
-                    to_stop_id=stop_ids[source_segment.to_stop_id],
-                    departure_at=source_segment.departure_at,
-                    arrival_at=source_segment.arrival_at,
-                    distance_meters=source_segment.distance_meters,
-                    travel_seconds=source_segment.travel_seconds,
-                    geometry=source_segment.geometry,
-                    routing_profile_snapshot=(
-                        dict(source_segment.routing_profile_snapshot)
-                        if source_segment.routing_profile_snapshot is not None
-                        else None
-                    ),
-                    routing_provider=source_segment.routing_provider,
-                    osm_data_version=source_segment.osm_data_version,
-                    routed_at=source_segment.routed_at,
-                )
-            )
-        for source_explanation in source_cycle.explanations:
-            session.add(
-                RouteExplanation(
-                    route_cycle_id=cycle.id,
-                    explanation_type=source_explanation.explanation_type,
-                    summary_ru=source_explanation.summary_ru,
-                    facts=list(source_explanation.facts),
-                )
-            )
-    for item in source.unassigned_tasks:
-        session.add(
-            UnassignedTask(
-                route_plan_id=clone.id,
-                task_id=item.task_id,
-                reason_codes=list(item.reason_codes),
-                descriptions_ru=list(item.descriptions_ru),
-                nearest_option=dict(item.nearest_option) if item.nearest_option else None,
-                recommendation_ru=item.recommendation_ru,
-            )
-        )
-    await session.flush()
-    return await get_plan(session, clone.id)
 
 
 async def get_optimization_run(session: AsyncSession, run_id: UUID) -> OptimizationRun:

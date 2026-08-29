@@ -1,6 +1,7 @@
 import type { Feature, LineString } from 'geojson';
 import { DEFAULT_PLANNING_SETTINGS, EMPTY_METRICS } from '../domain/defaults';
 import type {
+  CrossWarehouseServiceContext,
   DriverRoute,
   LogisticsRequest,
   OptimizationRun,
@@ -11,17 +12,17 @@ import type {
   RouteLeg,
   RoutePlan,
   RouteStop,
-  Scenario,
-  ScenarioWorkspace,
+  Warehouse,
+  WarehouseWorkspace,
   UnassignedTask,
   UUID,
   ValidationMessage,
   ValidationResult,
 } from '../domain/types';
-import { dateInTimeZone } from '../utils/format';
+import { dateInTimeZone, localDateTimeToIso } from '../utils/format';
 import type { components } from './schema';
 
-export type RawScenario = components['schemas']['ScenarioRead'];
+export type RawWarehouse = components['schemas']['WarehouseRead'];
 
 export function normalizePlanningSettings(source: Record<string, unknown>): PlanningSettings {
   const normalized: Record<string, unknown> = { ...DEFAULT_PLANNING_SETTINGS };
@@ -32,11 +33,15 @@ export function normalizePlanningSettings(source: Record<string, unknown>): Plan
   return normalized as unknown as PlanningSettings;
 }
 
-export function normalizeScenario(raw: RawScenario | Scenario, now = new Date()): Scenario {
+export function normalizeWarehouse(raw: RawWarehouse | Warehouse, now = new Date()): Warehouse {
   const timeZone = raw.timezone || 'Europe/Moscow';
   return {
     ...raw,
     timezone: timeZone,
+    isochrone_price_60_minutes: raw.isochrone_price_60_minutes ?? 10_000,
+    isochrone_price_120_minutes: raw.isochrone_price_120_minutes ?? 15_000,
+    isochrone_price_180_minutes: raw.isochrone_price_180_minutes ?? 20_000,
+    isochrone_price_240_minutes: raw.isochrone_price_240_minutes ?? 25_000,
     default_planning_date: raw.default_planning_date ?? dateInTimeZone(now, timeZone),
     settings: normalizePlanningSettings(raw.settings as unknown as Record<string, unknown>),
   };
@@ -148,12 +153,35 @@ function lineGeometry(raw: Record<string, unknown>, segmentId: UUID): Feature<Li
   return { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates } };
 }
 
+function optionalLineGeometry(value: unknown, segmentId: UUID): Feature<LineString> | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Route segment ${segmentId} has invalid GeoJSON geometry`);
+  }
+  return lineGeometry(value as Record<string, unknown>, segmentId);
+}
+
 function textFromRecord(record: Record<string, unknown>): string {
   for (const key of ['summary_ru', 'message_ru', 'description_ru', 'message', 'reason', 'text']) {
     const value = record[key];
     if (typeof value === 'string') return value;
   }
   return JSON.stringify(record);
+}
+
+function nearestOptionText(record: Record<string, unknown>, timeZone: string): string {
+  const possibleAt = record.possible_at;
+  if (typeof possibleAt === 'string' && Number.isFinite(Date.parse(possibleAt))) {
+    return `Можно назначить ${new Intl.DateTimeFormat('ru-RU', {
+      timeZone,
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date(possibleAt))}`;
+  }
+  return textFromRecord(record);
 }
 
 function validationMessage(record: Record<string, unknown>): ValidationMessage {
@@ -172,7 +200,76 @@ function explanationLines(records: Array<Record<string, unknown>>): string[] {
   return records.map(textFromRecord).filter(Boolean);
 }
 
-function lookupTask(workspace: ScenarioWorkspace, taskId: UUID): { task: PlanningTask; request: LogisticsRequest } | null {
+function crossWarehouseServiceContext(
+  metrics: Record<string, unknown>,
+  workspace: WarehouseWorkspace,
+): CrossWarehouseServiceContext | undefined {
+  if (metrics.execution_mode !== 'CROSS_WAREHOUSE_SERVICE') return undefined;
+  const requiredStrings = [
+    'service_warehouse_id',
+    'resource_origin_warehouse_id',
+    'support_warehouse_link_id',
+    'driver_id',
+    'driver_worker_id',
+    'driver_name',
+    'vehicle_id',
+    'vehicle_name',
+    'vehicle_registration_number',
+    'available_at_served',
+    'latest_served_finish',
+  ] as const;
+  if (requiredStrings.some((key) => typeof metrics[key] !== 'string')) return undefined;
+  const originWarehouseId = metrics.resource_origin_warehouse_id as string;
+  const supportWarehouseLinkId = metrics.support_warehouse_link_id as string;
+  const originWarehouse = workspace.warehouses.find(
+    (warehouse) => warehouse.external_warehouse_id === originWarehouseId,
+  );
+  const outboundGeometry = optionalLineGeometry(
+    metrics.positioning_outbound_geometry,
+    `${supportWarehouseLinkId}:outbound`,
+  );
+  const returnGeometry = optionalLineGeometry(
+    metrics.positioning_return_geometry,
+    `${supportWarehouseLinkId}:return`,
+  );
+  return {
+    execution_mode: 'CROSS_WAREHOUSE_SERVICE',
+    service_warehouse_id: metrics.service_warehouse_id as string,
+    resource_origin_warehouse_id: originWarehouseId,
+    resource_origin_warehouse_name: originWarehouse?.name ?? `Склад ${originWarehouseId.slice(0, 8)}`,
+    support_warehouse_link_id: supportWarehouseLinkId,
+    driver_id: metrics.driver_id as string,
+    driver_worker_id: metrics.driver_worker_id as string,
+    driver_name: metrics.driver_name as string,
+    vehicle_id: metrics.vehicle_id as string,
+    vehicle_name: metrics.vehicle_name as string,
+    vehicle_registration_number: metrics.vehicle_registration_number as string,
+    available_at_served: metrics.available_at_served as string,
+    latest_served_finish: metrics.latest_served_finish as string,
+    inbound_travel_minutes: numberValue(metrics, 'inbound_travel_minutes'),
+    return_travel_minutes: numberValue(metrics, 'return_travel_minutes'),
+    positioning_distance_meters: numberValue(metrics, 'positioning_distance_meters'),
+    inbound_distance_meters: numberValue(metrics, 'inbound_distance_meters'),
+    return_distance_meters: numberValue(metrics, 'return_distance_meters'),
+    ...(outboundGeometry ? { positioning_outbound_geometry: outboundGeometry } : {}),
+    ...(returnGeometry ? { positioning_return_geometry: returnGeometry } : {}),
+    available_transfer_cabin_capacity: numberValue(
+      metrics,
+      'available_transfer_cabin_capacity',
+      1,
+    ),
+    trailer_available: metrics.trailer_available === true,
+    outbound_positioning_empty: metrics.outbound_positioning_empty === true,
+    empty_positioning_reason_required: metrics.empty_positioning_reason_required === true,
+    returns_to_origin: metrics.returns_to_origin === true,
+    changes_operational_warehouse: metrics.changes_operational_warehouse === true,
+    reason_codes: Array.isArray(metrics.reason_codes)
+      ? metrics.reason_codes.filter((value): value is string => typeof value === 'string')
+      : [],
+  };
+}
+
+function lookupTask(workspace: WarehouseWorkspace, taskId: UUID): { task: PlanningTask; request: LogisticsRequest } | null {
   for (const request of workspace.requests) {
     const task = request.tasks?.find((candidate) => candidate.id === taskId);
     if (task) return { task, request };
@@ -180,15 +277,14 @@ function lookupTask(workspace: ScenarioWorkspace, taskId: UUID): { task: Plannin
   return null;
 }
 
-function normalizeCycle(raw: RawRouteCycle, workspace: ScenarioWorkspace, planId: UUID): RouteCycle {
+function normalizeCycle(raw: RawRouteCycle, workspace: WarehouseWorkspace, planId: UUID): RouteCycle {
   const stops: RouteStop[] = raw.stops.map((stop) => {
     const task = stop.task_id ? lookupTask(workspace, stop.task_id) : null;
-    const zone = task?.task.zone_id ? workspace.zones.find((candidate) => candidate.id === task.task.zone_id) : undefined;
     return {
       ...stop,
       route_cycle_id: raw.id,
-      label: task?.request?.name ?? (stop.stop_type.startsWith('DEPOT') ? workspace.warehouses[0]?.name ?? 'Склад' : stop.stop_type),
-      zone_code: zone?.code ?? null,
+      label: task?.request?.name ?? (stop.stop_type.startsWith('DEPOT') ? workspace.warehouse.name : stop.stop_type),
+      zone_id: task?.task.zone_id ?? null,
       warnings: undefined,
     };
   });
@@ -204,6 +300,7 @@ function normalizeCycle(raw: RawRouteCycle, workspace: ScenarioWorkspace, planId
       travel_seconds: segment.travel_seconds,
       geometry: lineGeometry(segment.geometry, segment.id),
     }));
+  const crossWarehouseService = crossWarehouseServiceContext(raw.metrics, workspace);
   return {
     id: raw.id,
     route_plan_id: planId,
@@ -223,10 +320,11 @@ function normalizeCycle(raw: RawRouteCycle, workspace: ScenarioWorkspace, planId
     legs,
     explanation: explanationLines(raw.explanations),
     warnings: raw.stops.flatMap((stop) => stop.warnings.map(validationMessage)),
+    ...(crossWarehouseService ? { cross_warehouse_service: crossWarehouseService } : {}),
   };
 }
 
-export function normalizeRoutePlan(raw: RawRoutePlan, workspace: ScenarioWorkspace): RoutePlan {
+export function normalizeRoutePlan(raw: RawRoutePlan, workspace: WarehouseWorkspace): RoutePlan {
   const cycles = raw.cycles.map((cycle) => normalizeCycle(cycle, workspace, raw.id));
   const grouped = new Map<UUID, RouteCycle[]>();
   for (const cycle of cycles) grouped.set(cycle.driver_shift_id, [...(grouped.get(cycle.driver_shift_id) ?? []), cycle]);
@@ -237,11 +335,14 @@ export function normalizeRoutePlan(raw: RawRoutePlan, workspace: ScenarioWorkspa
     const orderedCycles = [...routeCycles].sort((a, b) => a.planned_start.localeCompare(b.planned_start));
     const firstCycle = orderedCycles[0];
     const lastCycle = orderedCycles.at(-1);
+    const crossWarehouseService = orderedCycles.find((cycle) => cycle.cross_warehouse_service)?.cross_warehouse_service;
     const dutySeconds = firstCycle && lastCycle
       ? Math.max(0, (Date.parse(lastCycle.planned_finish) - Date.parse(firstCycle.planned_start)) / 1000)
       : 0;
-    const usableShiftSeconds = shift
-      ? Math.max(1, (Date.parse(shift.end_at) - Date.parse(shift.start_at)) / 1000 - shift.break_minutes * 60)
+    const shiftStartAt = shift ? localDateTimeToIso(raw.date, shift.start_time, workspace.warehouse.timezone) : null;
+    const shiftEndAt = shift ? localDateTimeToIso(raw.date, shift.end_time, workspace.warehouse.timezone) : null;
+    const usableShiftSeconds = shiftStartAt && shiftEndAt
+      ? Math.max(1, (Date.parse(shiftEndAt) - Date.parse(shiftStartAt)) / 1000 - shift!.break_minutes * 60)
       : 0;
     const cycleMetrics = normalizeMetrics({
       total_tasks: routeCycles.flatMap((cycle) => cycle.stops).filter((stop) => stop.task_id).length,
@@ -257,16 +358,16 @@ export function normalizeRoutePlan(raw: RawRoutePlan, workspace: ScenarioWorkspa
     });
     return {
       driver_shift_id: shiftId,
-      shift_start_at: shift?.start_at ?? firstCycle?.planned_start ?? raw.created_at,
-      shift_end_at: shift?.end_at ?? lastCycle?.planned_finish ?? raw.updated_at,
-      driver_id: driver?.id ?? shift?.driver_id ?? shiftId,
-      driver_name: driver?.name ?? 'Неизвестный водитель',
-      vehicle_id: vehicle?.id ?? shift?.vehicle_id ?? shiftId,
-      vehicle_name: vehicle?.name ?? 'Неизвестная машина',
-      registration_number: vehicle?.registration_number ?? '—',
-      preferred_route_group: shift?.preferred_route_group || driver?.preferred_route_group || '—',
+      shift_start_at: shiftStartAt ?? firstCycle?.planned_start ?? raw.created_at,
+      shift_end_at: shiftEndAt ?? lastCycle?.planned_finish ?? raw.updated_at,
+      driver_id: crossWarehouseService?.driver_id ?? driver?.id ?? shift?.driver_id ?? shiftId,
+      driver_name: crossWarehouseService?.driver_name ?? driver?.name ?? 'Неизвестный водитель',
+      vehicle_id: crossWarehouseService?.vehicle_id ?? vehicle?.id ?? shift?.vehicle_id ?? shiftId,
+      vehicle_name: crossWarehouseService?.vehicle_name ?? vehicle?.name ?? 'Неизвестная машина',
+      registration_number: crossWarehouseService?.vehicle_registration_number ?? vehicle?.registration_number ?? '—',
       cycles: routeCycles.sort((a, b) => a.sequence - b.sequence),
       metrics: cycleMetrics,
+      ...(crossWarehouseService ? { cross_warehouse_service: crossWarehouseService } : {}),
     };
   });
   const unassigned: UnassignedTask[] = raw.unassigned_tasks.map((item) => {
@@ -274,7 +375,7 @@ export function normalizeRoutePlan(raw: RawRoutePlan, workspace: ScenarioWorkspa
     if (!found) {
       throw new Error(`Route plan ${raw.id} references missing task ${item.task_id}`);
     }
-    const nearest = item.nearest_option ? textFromRecord(item.nearest_option) : null;
+    const nearest = item.nearest_option ? nearestOptionText(item.nearest_option, workspace.warehouse.timezone) : null;
     return {
       task: found.task,
       request: found.request,
@@ -311,7 +412,6 @@ export function normalizeRoutePlan(raw: RawRoutePlan, workspace: ScenarioWorkspa
     : [];
   return {
     id: raw.id,
-    scenario_id: raw.scenario_id,
     warehouse_id: raw.warehouse_id,
     date: raw.date,
     version: raw.version,
@@ -323,6 +423,7 @@ export function normalizeRoutePlan(raw: RawRoutePlan, workspace: ScenarioWorkspa
     unassigned,
     metrics: normalizeMetrics(raw.metrics),
     notification_logs: notificationLogs,
+    manually_changed: raw.manually_changed,
   };
 }
 
@@ -334,7 +435,7 @@ export function normalizeOptimizationRun(raw: RawOptimizationRun, fallbackSettin
 
 export function normalizeValidationResult(
   value: unknown,
-  workspace: ScenarioWorkspace,
+  workspace: WarehouseWorkspace,
   currentPlan: RoutePlan,
 ): ValidationResult {
   if (typeof value !== 'object' || value === null) {
@@ -366,25 +467,25 @@ export function normalizeValidationResult(
   };
 }
 
-export function normalizeWorkspace(workspace: ScenarioWorkspace): ScenarioWorkspace {
+export function normalizeWorkspace(workspace: WarehouseWorkspace): WarehouseWorkspace {
   return {
     ...workspace,
-    scenario: normalizeScenario(workspace.scenario),
+    warehouse: normalizeWarehouse(workspace.warehouse),
+    warehouses: workspace.warehouses.map((warehouse) => normalizeWarehouse(warehouse)),
     drivers: workspace.drivers.map((driver) => ({
       ...driver,
-      preferred_route_group: driver.preferred_route_group ?? '',
       passport_details: driver.passport_details ?? '',
     })),
-    shifts: workspace.shifts.map((shift) => ({ ...shift, preferred_route_group: shift.preferred_route_group ?? '' })),
     requests: workspace.requests.map((request) => ({
       ...request,
+      mandatory: request.mandatory ?? false,
       scheduled_date: request.scheduled_date ?? null,
       trailer_access_allowed: request.trailer_access_allowed ?? null,
       include_driver_passport_in_notification: request.include_driver_passport_in_notification ?? false,
       contact_name: request.contact_name ?? '',
       contact_phone: request.contact_phone ?? '',
       date_options: request.date_options ?? [],
-      tasks: request.tasks ?? [],
+      tasks: (request.tasks ?? []).map((task) => ({ ...task, mandatory: task.mandatory ?? request.mandatory ?? false })),
       zone_status: request.zone_status ??
         ((request as LogisticsRequest & { zone_classification_status?: string }).zone_classification_status === 'OUTSIDE_ZONES'
           ? 'OUTSIDE_ZONES'

@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
 from app.db import get_session
+from app.integrations.rwms import RwmsPlanningClient, get_rwms_planning_client
 from app.routing import (
     MockRoutingProvider,
     OsrmRoutingProvider,
@@ -17,9 +18,18 @@ from app.routing import (
 from app.services.plans import PlannerFacade
 
 # Commit write transactions before the response becomes observable. This keeps an
-# immediate client-side refetch from seeing a partially old scenario snapshot.
+# immediate client-side refetch from seeing a partially old workspace snapshot.
 SessionDep = Annotated[AsyncSession, Depends(get_session, scope="function")]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+
+def get_capacity_rwms_client(settings: SettingsDep) -> RwmsPlanningClient:
+    """Resolve the shared authenticated client for optional capacity publication."""
+
+    return get_rwms_planning_client(settings)
+
+
+CapacityRwmsClientDep = Annotated[RwmsPlanningClient, Depends(get_capacity_rwms_client)]
 
 
 async def get_road_snapper(settings: SettingsDep) -> AsyncIterator[RoadSnapper]:

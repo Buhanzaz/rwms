@@ -22,7 +22,6 @@ from app.planner import (
     TaskType,
     Vehicle,
     Warehouse,
-    ZoneSnapshot,
     split_request,
     validate_route_plan,
 )
@@ -122,14 +121,12 @@ def test_generated_plans_preserve_all_hard_route_invariants(
     vehicle = Vehicle("v", "Машина", 2)
     shift = DriverShift("s", "d", "Водитель", "v", at(8), at(23))
     data = PlanningInput(
-        "scenario",
-        DAY,
-        warehouse,
-        requests,
-        (ZoneSnapshot("zone", "Z", "WEST"),),
-        (),
-        (shift,),
-        (vehicle,),
+        warehouse_id="warehouse",
+        planning_date=DAY,
+        warehouse=warehouse,
+        requests=requests,
+        shifts=(shift,),
+        vehicles=(vehicle,),
     )
     planner = HeuristicPlanner(
         MockRoutingProvider(RoutingSettings(deterministic_noise_ratio=0, road_factor=1.05))
@@ -169,7 +166,7 @@ def test_generated_plans_preserve_all_hard_route_invariants(
             for stop in cycle.stops
         )
         assert all(
-            stop.window_end is None or stop.planned_departure <= stop.window_end
+            stop.window_end is None or stop.planned_arrival <= stop.window_end
             for stop in cycle.stops
         )
         customer_types = [

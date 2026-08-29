@@ -1,245 +1,329 @@
-"""Focused PostGIS tests for deterministic simulator-capacity publication."""
-
-from __future__ import annotations
+"""Focused PostGIS tests for deterministic warehouse-capacity publication."""
 
 from datetime import UTC, date, datetime, time
 from unittest.mock import AsyncMock
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from app.config import Settings
-from app.errors import ApiError
 from app.integrations.rwms import RwmsPlanningClient
-from app.models import LogisticsRequest
-from app.models.domain import RequestStatus, RequestType
-from app.routing import MockRoutingProvider
-from app.schemas.domain import (
-    GeoJsonGeometry,
-    RwmsCapacitySnapshotResult,
-    ScenarioCreate,
-    WarehouseCreate,
-    WorkloadGeneratorInput,
-    ZoneCreate,
-)
-from app.services import catalog, scenarios
-from app.services.capacity_projection import (
-    build_capacity_projection,
-    publish_scenario_capacity,
-)
-from app.services.workload_generator import (
-    GENERATOR_SOURCE_SYSTEM,
-    generate_scenario_workload,
+from app.models import PlanningDayClosure, ZoneKind
+from app.schemas.domain import RwmsCapacitySnapshotCommand, RwmsCapacitySnapshotResult
+from app.services.capacity_projection import build_capacity_projection, publish_warehouse_capacity
+from app.services.workload_generator import GENERATOR_SOURCE_SYSTEM
+from tests.factories import (
+    make_driver,
+    make_request,
+    make_shift,
+    make_vehicle,
+    make_warehouse,
+    make_zone,
 )
 
 pytestmark = pytest.mark.integration
 
 
-async def _scenario_with_capacity_inputs(
-    session: AsyncSession,
-) -> tuple[UUID, UUID]:
-    """Create one linked depot and broad deterministic generator zone."""
-
-    scenario = await scenarios.create_scenario(
-        session,
-        ScenarioCreate(name="Capacity projection"),
-        Settings(),
-    )
-    warehouse_id = uuid4()
-    await catalog.create_warehouse(
-        session,
-        scenario.id,
-        WarehouseCreate(
-            name="RWMS depot",
-            external_warehouse_id=warehouse_id,
-            latitude=55.75,
-            longitude=37.61,
-        ),
-    )
-    await catalog.create_zone(
-        session,
-        scenario.id,
-        ZoneCreate(
-            name="Capacity zone",
-            code="CAPACITY",
-            route_group="CUSTOM",
-            geometry=GeoJsonGeometry(
-                type="Polygon",
-                coordinates=[
-                    [
-                        (37.0, 55.0),
-                        (38.0, 55.0),
-                        (38.0, 56.0),
-                        (37.0, 56.0),
-                        (37.0, 55.0),
-                    ]
-                ],
-            ),
-        ),
-    )
-    return scenario.id, warehouse_id
-
-
-async def _generate(
-    session: AsyncSession,
-    scenario_id: UUID,
-    *,
-    deliveries: int = 4,
-    pickups: int = 2,
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("allow_soft_overtime", "limit_minutes", "shift_end", "expected_end"),
+    (
+        (False, 90, time(20), time(20)),
+        (True, 0, time(20), time(20)),
+        (True, 90, time(20), time(21, 30)),
+        (True, 120, time(23, 30), time.max),
+    ),
+)
+async def test_projection_extends_shift_capacity_only_for_enabled_soft_overtime(
+    db_session: AsyncSession,
+    allow_soft_overtime: bool,
+    limit_minutes: int,
+    shift_end: time,
+    expected_end: time,
 ) -> None:
-    """Generate one exact day of delivery and pickup workload."""
+    """Published availability matches the planner's bounded overtime setting."""
 
-    await generate_scenario_workload(
-        session,
-        scenario_id,
-        WorkloadGeneratorInput(
-            start_date=date(2026, 9, 1),
-            deliveries_per_day=deliveries,
-            pickups_per_day=pickups,
-            seed=20260901,
-        ),
-        MockRoutingProvider(),
+    planning_date = date(2026, 8, 30)
+    warehouse = await make_warehouse(db_session, default_planning_date=planning_date)
+    warehouse.capacity_generation = 1
+    warehouse.settings = {
+        **warehouse.settings,
+        "allow_soft_overtime": allow_soft_overtime,
+        "soft_overtime_limit_minutes": limit_minutes,
+    }
+    await make_zone(db_session, warehouse)
+    driver = await make_driver(db_session, warehouse)
+    vehicle = await make_vehicle(db_session, warehouse)
+    await make_shift(
+        db_session,
+        warehouse,
+        driver,
+        vehicle,
+        date_from=planning_date,
+        date_to=planning_date,
+        end_time=shift_end,
     )
+    await db_session.flush()
+
+    projection = await build_capacity_projection(db_session, warehouse.id)
+
+    assert len(projection.command.shifts) == 1
+    assert projection.command.shifts[0].shift_end == expected_end
 
 
 @pytest.mark.asyncio
-async def test_projection_contains_only_active_generated_deliveries_and_is_stable(
+async def test_projection_expands_monthly_shifts_and_carries_mandatory_jobs(
     db_session: AsyncSession,
 ) -> None:
-    """Ignore pickups/manual state and derive stable sorted route-window facts."""
+    """Capacity contains generated jobs, open daily shifts, and only owner zones."""
 
-    scenario_id, warehouse_id = await _scenario_with_capacity_inputs(db_session)
-    await _generate(db_session, scenario_id)
+    start = date(2026, 8, 29)
+    warehouse = await make_warehouse(db_session, default_planning_date=start)
+    warehouse.capacity_generation = 7
+    warehouse.isochrone_price_60_minutes = 11_000
+    warehouse.isochrone_price_120_minutes = 16_000
+    warehouse.isochrone_price_180_minutes = 21_000
+    warehouse.isochrone_price_240_minutes = 26_000
+    first_zone = await make_zone(db_session, warehouse, name="Green", color="#22C55E")
+    second_zone = await make_zone(
+        db_session,
+        warehouse,
+        name="Purple",
+        color="#A855F7",
+        west=30.25,
+        south=59.85,
+        east=30.4,
+        north=59.98,
+    )
+    other_warehouse = await make_warehouse(db_session, name="Other warehouse")
+    other_zone = await make_zone(db_session, other_warehouse, name="Foreign zone")
+    forbidden = await make_zone(
+        db_session,
+        warehouse,
+        name="Forbidden",
+        kind=ZoneKind.FORBIDDEN,
+        west=10.0,
+        south=10.0,
+        east=11.0,
+        north=11.0,
+    )
+    no_trailer = await make_zone(
+        db_session,
+        warehouse,
+        name="No trailer",
+        kind=ZoneKind.NO_TRAILER,
+        west=12.0,
+        south=12.0,
+        east=13.0,
+        north=13.0,
+    )
+    request = await make_request(
+        db_session,
+        warehouse,
+        planning_date=start,
+        mandatory=True,
+    )
+    request.source_system = GENERATOR_SOURCE_SYSTEM
+    request.external_id = uuid4()
+    request.scheduled_date = start
+    driver = await make_driver(db_session, warehouse)
+    vehicle = await make_vehicle(db_session, warehouse)
+    shift = await make_shift(
+        db_session,
+        warehouse,
+        driver,
+        vehicle,
+        date_from=start,
+        date_to=date(2026, 8, 31),
+    )
+    db_session.add(
+        PlanningDayClosure(
+            warehouse_id=warehouse.id,
+            date=date(2026, 8, 30),
+            closed_by="test",
+        )
+    )
+    await db_session.flush()
 
-    first = await build_capacity_projection(db_session, scenario_id)
-    second = await build_capacity_projection(db_session, scenario_id)
+    projection = await build_capacity_projection(db_session, warehouse.id)
 
-    assert first == second
-    assert first.command.warehouse_id == warehouse_id
-    assert len(first.command.jobs) == 4
-    assert [(job.window_start, job.window_end) for job in first.command.jobs] == [
-        (time(9), time(12)),
-        (time(9), time(12)),
-        (time(12), time(15)),
-        (time(15), time(18)),
+    assert projection.command.source_generation == 7
+    assert len(projection.command.jobs) == 1
+    assert projection.command.jobs[0].mandatory is True
+    assert projection.command.jobs[0].source_job_id == request.external_id
+    assert [item.delivery_date for item in projection.command.shifts] == [
+        date(2026, 8, 29),
+        date(2026, 8, 31),
     ]
-    assert len(first.command.source_revision) == 64
-
-    pickup = await db_session.scalar(
-        select(LogisticsRequest).where(
-            LogisticsRequest.scenario_id == scenario_id,
-            LogisticsRequest.source_system == GENERATOR_SOURCE_SYSTEM,
-            LogisticsRequest.type == RequestType.PICKUP,
-        )
+    assert all(item.source_shift_id != shift.id for item in projection.command.shifts)
+    assert {zone.source_zone_id for zone in projection.command.price_zones} == {
+        first_zone.id,
+        second_zone.id,
+    }
+    assert other_zone.id not in {zone.source_zone_id for zone in projection.command.price_zones}
+    assert {
+        (zone.source_zone_id, zone.kind) for zone in projection.command.restriction_zones
+    } == {
+        (forbidden.id, "FORBIDDEN"),
+        (no_trailer.id, "NO_TRAILER"),
+    }
+    assert projection.command.isochrone_price_60_minutes == 11_000
+    assert projection.command.isochrone_price_120_minutes == 16_000
+    assert projection.command.isochrone_price_180_minutes == 21_000
+    assert projection.command.isochrone_price_240_minutes == 26_000
+    payload = projection.command.model_dump(mode="json", by_alias=True)
+    assert "warehouseId" not in payload
+    assert all(
+        set(zone) == {
+            "sourceZoneId",
+            "sourceZoneVersion",
+            "deliveryPriceRubles",
+            "pickupPriceRubles",
+            "geometry",
+        }
+        for zone in payload["priceZones"]
     )
-    assert pickup is not None
-    pickup.notes = "Pickup-only metadata must not consume delivery capacity"
-    await db_session.flush()
-    pickup_changed = await build_capacity_projection(db_session, scenario_id)
-    assert pickup_changed == first
-
-    delivery = await db_session.scalar(
-        select(LogisticsRequest).where(
-            LogisticsRequest.scenario_id == scenario_id,
-            LogisticsRequest.source_system == GENERATOR_SOURCE_SYSTEM,
-            LogisticsRequest.type == RequestType.DELIVERY,
-        )
+    assert all(
+        set(zone) == {"sourceZoneId", "sourceZoneVersion", "kind", "geometry"}
+        for zone in payload["restrictionZones"]
     )
-    assert delivery is not None
-    delivery.status = RequestStatus.COMPLETED
-    await db_session.flush()
-    completed = await build_capacity_projection(db_session, scenario_id)
-    assert len(completed.command.jobs) == 3
-    assert completed.command.source_revision != first.command.source_revision
-    assert completed.idempotency_key != first.idempotency_key
 
 
 @pytest.mark.asyncio
-async def test_projection_distinguishes_intentional_a_b_a_regeneration(
+async def test_projection_revision_is_deterministic_and_changes_with_obligation(
     db_session: AsyncSession,
 ) -> None:
-    """Do not mistake a newly regenerated prior shape for a delayed old retry."""
+    """Identical facts replay the same revision while a mandatory change advances it."""
 
-    scenario_id, _ = await _scenario_with_capacity_inputs(db_session)
-    await _generate(db_session, scenario_id, deliveries=1, pickups=0)
-    first_a = await build_capacity_projection(db_session, scenario_id)
-
-    await _generate(db_session, scenario_id, deliveries=2, pickups=0)
-    state_b = await build_capacity_projection(db_session, scenario_id)
-
-    await _generate(db_session, scenario_id, deliveries=1, pickups=0)
-    second_a = await build_capacity_projection(db_session, scenario_id)
-
-    assert len(first_a.command.jobs) == len(second_a.command.jobs) == 1
-    assert first_a.command.jobs == second_a.command.jobs
-    assert state_b.command.source_revision != first_a.command.source_revision
-    assert second_a.command.source_revision != first_a.command.source_revision
-    assert second_a.idempotency_key != first_a.idempotency_key
-
-
-@pytest.mark.asyncio
-async def test_projection_rejects_incomplete_or_soft_generated_delivery_window(
-    db_session: AsyncSession,
-) -> None:
-    """Do not silently widen legacy generated deliveries into fake slot occupancy."""
-
-    scenario_id, _ = await _scenario_with_capacity_inputs(db_session)
-    await _generate(db_session, scenario_id, deliveries=1, pickups=0)
-    delivery = await db_session.scalar(
-        select(LogisticsRequest)
-        .where(
-            LogisticsRequest.scenario_id == scenario_id,
-            LogisticsRequest.type == RequestType.DELIVERY,
-        )
-        .options(selectinload(LogisticsRequest.date_options))
+    warehouse = await make_warehouse(db_session)
+    warehouse.capacity_generation = 3
+    await make_zone(db_session, warehouse)
+    restriction = await make_zone(
+        db_session,
+        warehouse,
+        name="Revision restriction",
+        kind=ZoneKind.FORBIDDEN,
+        west=10.0,
+        south=10.0,
+        east=11.0,
+        north=11.0,
     )
-    assert delivery is not None
-    delivery.date_options[0].is_hard = False
+    request = await make_request(db_session, warehouse, mandatory=False)
+    request.source_system = GENERATOR_SOURCE_SYSTEM
+    request.external_id = uuid4()
+    request.scheduled_date = date(2026, 8, 30)
     await db_session.flush()
 
-    with pytest.raises(ApiError) as error:
-        await build_capacity_projection(db_session, scenario_id)
+    first = await build_capacity_projection(db_session, warehouse.id)
+    replay = await build_capacity_projection(db_session, warehouse.id)
+    assert replay.command.source_revision == first.command.source_revision
+    assert replay.idempotency_key == first.idempotency_key
 
-    assert error.value.code == "RWMS_CAPACITY_WINDOW_REQUIRED"
+    request.mandatory = True
+    await db_session.flush()
+    changed = await build_capacity_projection(db_session, warehouse.id)
+    assert changed.command.source_revision != first.command.source_revision
+    assert changed.idempotency_key != first.idempotency_key
+
+    warehouse.isochrone_price_60_minutes += 1
+    await db_session.flush()
+    changed_tariff = await build_capacity_projection(db_session, warehouse.id)
+    assert changed_tariff.command.source_revision != changed.command.source_revision
+    assert changed_tariff.idempotency_key != changed.idempotency_key
+
+    restriction.version += 1
+    await db_session.flush()
+    changed_restriction = await build_capacity_projection(db_session, warehouse.id)
+    assert changed_restriction.command.source_revision != changed_tariff.command.source_revision
+    assert changed_restriction.idempotency_key != changed_tariff.idempotency_key
+
+
+def test_capacity_command_defaults_omitted_isochrone_policy_fields() -> None:
+    """An older publisher receives canonical prices and no fabricated restrictions."""
+
+    command = RwmsCapacitySnapshotCommand.model_validate(
+        {
+            "sourceGeneration": 1,
+            "sourceRevision": "a" * 64,
+            "jobs": [],
+            "shifts": [],
+            "priceZones": [],
+        }
+    )
+
+    assert command.isochrone_price_60_minutes == 10_000
+    assert command.isochrone_price_120_minutes == 15_000
+    assert command.isochrone_price_180_minutes == 20_000
+    assert command.isochrone_price_240_minutes == 25_000
+    assert command.restriction_zones == []
 
 
 @pytest.mark.asyncio
-async def test_publication_releases_read_transaction_before_remote_io(
+async def test_publication_uses_external_warehouse_as_path_authority(
     db_session: AsyncSession,
 ) -> None:
-    """Never keep simulator database resources locked during authenticated HTTP."""
+    """The remote PUT path receives the canonical RWMS ID, never the local root ID."""
 
-    scenario_id, warehouse_id = await _scenario_with_capacity_inputs(db_session)
-    await _generate(db_session, scenario_id, deliveries=1, pickups=1)
+    warehouse = await make_warehouse(db_session)
+    warehouse.capacity_generation = 1
+    await make_zone(db_session, warehouse)
+    await db_session.flush()
+    projection = await build_capacity_projection(db_session, warehouse.id)
+    result = RwmsCapacitySnapshotResult(
+        warehouseId=warehouse.external_warehouse_id,
+        sourceGeneration=1,
+        version=1,
+        sourceRevision=projection.command.source_revision,
+        jobCount=0,
+        shiftCount=0,
+        priceZoneCount=1,
+        restrictionZoneCount=0,
+        replayed=False,
+        updatedAt=datetime(2026, 8, 30, tzinfo=UTC),
+    )
     client = AsyncMock(spec=RwmsPlanningClient)
+    client.replace_capacity_snapshot.return_value = result
 
-    async def replace_remote(
-        remote_scenario_id: UUID,
-        command: object,
-        *,
-        idempotency_key: UUID,
-    ) -> RwmsCapacitySnapshotResult:
-        assert remote_scenario_id == scenario_id
-        assert not db_session.in_transaction()
-        assert idempotency_key.version == 5
-        return RwmsCapacitySnapshotResult(
-            warehouse_id=warehouse_id,
-            source_scenario_id=scenario_id,
-            source_generation=command.source_generation,  # type: ignore[attr-defined]
-            version=1,
-            source_revision=command.source_revision,  # type: ignore[attr-defined]
-            job_count=len(command.jobs),  # type: ignore[attr-defined]
-            replayed=False,
-            updated_at=datetime(2026, 9, 1, 8, tzinfo=UTC),
-        )
+    published = await publish_warehouse_capacity(db_session, warehouse.id, client)
 
-    client.replace_capacity_snapshot.side_effect = replace_remote
-
-    result = await publish_scenario_capacity(db_session, scenario_id, client)
-
-    assert result.warehouse_id == warehouse_id
-    client.ensure_capacity_publish_enabled.assert_called_once_with()
+    assert published == result
     client.replace_capacity_snapshot.assert_awaited_once()
+    assert client.replace_capacity_snapshot.await_args.args[0] == warehouse.external_warehouse_id
+    submitted = client.replace_capacity_snapshot.await_args.args[1]
+    assert "warehouseId" not in submitted.model_dump(mode="json", by_alias=True)
+
+
+@pytest.mark.asyncio
+async def test_projection_never_publishes_unrouted_support_warehouse_capacity(
+    db_session: AsyncSession,
+) -> None:
+    """Anonymous capacity excludes another depot's shift until exact support routing succeeds."""
+
+    planning_date = date(2026, 9, 14)
+    served = await make_warehouse(
+        db_session,
+        name="Representative",
+        default_planning_date=planning_date,
+    )
+    served.representative = True
+    served.capacity_generation = 1
+    support = await make_warehouse(
+        db_session,
+        name="Support",
+        default_planning_date=planning_date,
+    )
+    driver = await make_driver(db_session, support)
+    vehicle = await make_vehicle(db_session, support)
+    await make_shift(
+        db_session,
+        support,
+        driver,
+        vehicle,
+        date_from=planning_date,
+        date_to=planning_date,
+    )
+    await db_session.flush()
+
+    projection = await build_capacity_projection(db_session, served.id)
+
+    assert projection.command.shifts == []

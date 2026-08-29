@@ -6,133 +6,118 @@ import type {
   Driver,
   DriverShift,
   LogisticsRequest,
-  Scenario,
+  AvailableWarehouse,
   Trailer,
-  UUID,
   Vehicle,
   VehicleLoadConfigurationType,
   Warehouse,
   Zone,
-  ZoneRelation,
 } from '../domain/types';
 import type {
   DriverInput,
   LogisticsRequestInput,
-  ScenarioCreateInput,
+  AvailableDriver,
   ShiftInput,
   VehicleInput,
   VehicleLoadProfileInput,
-  WarehouseInput,
+  WarehouseConnectionInput,
+  WarehouseUpdateInput,
   ZoneInput,
 } from '../api/client';
-import { DEFAULT_PLANNING_SETTINGS } from '../domain/defaults';
 import { Button, CheckboxField, Field, Modal, SelectField } from './ui';
-import { dateInTimeZone, localDateTimeToIso } from '../utils/format';
 import { TruckConfigurationPreview } from '../features/vehicles/TruckConfigurationPreview';
-
-const scenarioSchema = z.object({
-  name: z.string().trim().min(2, 'Введите название'),
-  description: z.string(),
-  timezone: z.string().trim().min(1, 'Укажите IANA timezone'),
-  default_planning_date: z.string().date(),
-});
-
-type ScenarioValues = z.infer<typeof scenarioSchema>;
 
 const optionalUuidSchema = z.string().trim().refine(
   (value) => value === '' || /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value),
   'Укажите корректный UUID',
 );
 
-export function ScenarioDialog({ scenario, busy, onClose, onSubmit }: {
-  scenario?: Scenario | undefined;
-  busy: boolean;
-  onClose: () => void;
-  onSubmit: (input: ScenarioCreateInput) => Promise<void>;
-}) {
-  const { register, handleSubmit, formState: { errors } } = useForm<ScenarioValues>({
-    resolver: zodResolver(scenarioSchema),
-    defaultValues: {
-      name: scenario?.name ?? '',
-      description: scenario?.description ?? '',
-      timezone: scenario?.timezone ?? 'Europe/Moscow',
-      default_planning_date: scenario?.default_planning_date ?? dateInTimeZone(new Date(), 'Europe/Moscow'),
-    },
-  });
-  return (
-    <Modal title={scenario ? 'Изменить сценарий' : 'Новый сценарий'} description="Изолированная версия логистических данных и настроек" onClose={onClose}>
-      <form id="scenario-form" className="form-grid" onSubmit={handleSubmit(onSubmit)}>
-        <Field className="span-2" label="Название" autoFocus {...register('name')} error={errors.name?.message} />
-        <label className="field span-2"><span className="field__label">Описание</span><textarea className="input" {...register('description')} /></label>
-        <Field label="Часовой пояс" {...register('timezone')} error={errors.timezone?.message} hint="Например, Europe/Moscow" />
-        <Field label="Дата планирования" type="date" {...register('default_planning_date')} error={errors.default_planning_date?.message} />
-        <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}>
-          <Button type="button" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary" disabled={busy}>{busy ? 'Сохраняем…' : 'Сохранить'}</Button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
 
 const warehouseSchema = z.object({
-  name: z.string().trim().min(2, 'Введите название'),
-  external_warehouse_id: optionalUuidSchema,
-  latitude: z.number().min(-90).max(90),
-  longitude: z.number().min(-180).max(180),
+  external_warehouse_id: z.string().uuid('Выберите склад RWMS'),
   loading_minutes: z.number().int().min(0),
   unloading_minutes: z.number().int().min(0),
   turnaround_minutes: z.number().int().min(0),
   working_day_start: z.string().min(4),
   working_day_end: z.string().min(4),
+  isochrone_price_60_minutes: z.number().int().min(0),
+  isochrone_price_120_minutes: z.number().int().min(0),
+  isochrone_price_180_minutes: z.number().int().min(0),
+  isochrone_price_240_minutes: z.number().int().min(0),
+  default_planning_date: z.string().date().optional(),
+}).refine((value) => value.working_day_end > value.working_day_start, {
+  path: ['working_day_end'],
+  message: 'Конец рабочего дня должен быть позже начала',
 });
 
 type WarehouseValues = z.infer<typeof warehouseSchema>;
 
-export function WarehouseDialog({ warehouse, point, busy, onClose, onSubmit }: {
+export function WarehouseDialog({ warehouse, availableWarehouses, busy, onClose, onSubmit }: {
   warehouse?: Warehouse | undefined;
-  point?: { latitude: number; longitude: number } | undefined;
+  availableWarehouses: AvailableWarehouse[];
   busy: boolean;
   onClose: () => void;
-  onSubmit: (input: WarehouseInput) => Promise<void>;
+  onSubmit: (input: WarehouseConnectionInput | WarehouseUpdateInput) => Promise<void>;
 }) {
   const { register, handleSubmit, formState: { errors } } = useForm<WarehouseValues>({
     resolver: zodResolver(warehouseSchema),
     defaultValues: {
-      name: warehouse?.name ?? 'Основной склад',
       external_warehouse_id: warehouse?.external_warehouse_id ?? '',
-      latitude: point?.latitude ?? warehouse?.latitude ?? 55.7558,
-      longitude: point?.longitude ?? warehouse?.longitude ?? 37.6176,
       loading_minutes: warehouse?.loading_minutes ?? 30,
       unloading_minutes: warehouse?.unloading_minutes ?? 20,
       turnaround_minutes: warehouse?.turnaround_minutes ?? 20,
       working_day_start: warehouse?.working_day_start ?? '08:00',
       working_day_end: warehouse?.working_day_end ?? '20:00',
+      isochrone_price_60_minutes: warehouse?.isochrone_price_60_minutes ?? 10_000,
+      isochrone_price_120_minutes: warehouse?.isochrone_price_120_minutes ?? 15_000,
+      isochrone_price_180_minutes: warehouse?.isochrone_price_180_minutes ?? 20_000,
+      isochrone_price_240_minutes: warehouse?.isochrone_price_240_minutes ?? 25_000,
+      default_planning_date: warehouse?.default_planning_date ?? undefined,
     },
   });
   return (
-    <Modal title={warehouse ? 'Изменить склад' : 'Добавить склад'} description="Координаты получены с карты" onClose={onClose}>
-      <form className="form-grid" onSubmit={handleSubmit((values) => onSubmit({
-        ...values,
-        external_warehouse_id: values.external_warehouse_id || null,
+    <Modal title={warehouse ? 'Настроить склад' : 'Выбрать склад RWMS'} description={warehouse ? `${warehouse.address} · ${warehouse.timezone}` : 'Название, адрес и координаты загружаются из RWMS. Особые зоны можно добавить после создания склада.'} onClose={onClose}>
+      <form className="form-grid" onSubmit={handleSubmit((values) => onSubmit(warehouse ? {
+        loading_minutes: values.loading_minutes,
+        unloading_minutes: values.unloading_minutes,
+        turnaround_minutes: values.turnaround_minutes,
+        working_day_start: values.working_day_start,
+        working_day_end: values.working_day_end,
+        isochrone_price_60_minutes: values.isochrone_price_60_minutes,
+        isochrone_price_120_minutes: values.isochrone_price_120_minutes,
+        isochrone_price_180_minutes: values.isochrone_price_180_minutes,
+        isochrone_price_240_minutes: values.isochrone_price_240_minutes,
+        ...(values.default_planning_date ? { default_planning_date: values.default_planning_date } : {}),
+      } : {
+        external_warehouse_id: values.external_warehouse_id,
+        loading_minutes: values.loading_minutes,
+        unloading_minutes: values.unloading_minutes,
+        turnaround_minutes: values.turnaround_minutes,
+        working_day_start: values.working_day_start,
+        working_day_end: values.working_day_end,
+        isochrone_price_60_minutes: values.isochrone_price_60_minutes,
+        isochrone_price_120_minutes: values.isochrone_price_120_minutes,
+        isochrone_price_180_minutes: values.isochrone_price_180_minutes,
+        isochrone_price_240_minutes: values.isochrone_price_240_minutes,
       }))}>
-        <Field className="span-2" label="Название" {...register('name')} error={errors.name?.message} />
-        <Field
-          className="span-2"
-          label="UUID склада в RWMS"
-          {...register('external_warehouse_id')}
-          error={errors.external_warehouse_id?.message}
-          hint="Необязательная явная привязка. Очистите поле, чтобы отключить обмен для этого склада."
-        />
-        <Field label="Широта" type="number" step="any" {...register('latitude', { valueAsNumber: true })} error={errors.latitude?.message} />
-        <Field label="Долгота" type="number" step="any" {...register('longitude', { valueAsNumber: true })} error={errors.longitude?.message} />
+        {!warehouse ? <SelectField className="span-2" label="Склад RWMS" {...register('external_warehouse_id')} error={errors.external_warehouse_id?.message}>
+          <option value="">Выберите склад</option>
+          {availableWarehouses.map((candidate) => <option key={candidate.warehouse_id} value={candidate.warehouse_id} disabled={Boolean(candidate.local_warehouse_id) || !candidate.address?.trim()}>
+            {candidate.name}{candidate.city ? ` · ${candidate.city}` : ''}{candidate.address ? ` · ${candidate.address}` : ' · адрес не заполнен'}{candidate.local_warehouse_id ? ' · уже подключён' : ''}
+          </option>)}
+        </SelectField> : <div className="span-2 detail-item"><small>Связь с RWMS</small><strong>{warehouse.name}</strong><span>{warehouse.address}</span></div>}
         <Field label="Загрузка, мин" type="number" {...register('loading_minutes', { valueAsNumber: true })} />
         <Field label="Выгрузка, мин" type="number" {...register('unloading_minutes', { valueAsNumber: true })} />
         <Field label="Оборот на складе, мин" type="number" {...register('turnaround_minutes', { valueAsNumber: true })} />
-        <span />
         <Field label="Начало дня" type="time" {...register('working_day_start')} />
-        <Field label="Конец дня" type="time" {...register('working_day_end')} />
-        <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}><Button type="button" onClick={onClose}>Отмена</Button><Button type="submit" variant="primary" disabled={busy}>Сохранить</Button></div>
+        <Field label="Конец дня" type="time" {...register('working_day_end')} error={errors.working_day_end?.message} />
+        <div className="span-2 detail-item"><small>Тариф по времени пути от склада</small><span>Цена выбирается по первой достигнутой изохроне. Особая ценовая зона может переопределить её.</span></div>
+        <Field label="До 1 часа, ₽" type="number" min="0" {...register('isochrone_price_60_minutes', { valueAsNumber: true })} />
+        <Field label="До 2 часов, ₽" type="number" min="0" {...register('isochrone_price_120_minutes', { valueAsNumber: true })} />
+        <Field label="До 3 часов, ₽" type="number" min="0" {...register('isochrone_price_180_minutes', { valueAsNumber: true })} />
+        <Field label="До 4 часов, ₽" type="number" min="0" {...register('isochrone_price_240_minutes', { valueAsNumber: true })} />
+        {warehouse ? <Field className="span-2" label="Дата планирования по умолчанию" type="date" {...register('default_planning_date')} /> : null}
+        <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}><Button type="button" onClick={onClose}>Отмена</Button><Button type="submit" variant="primary" disabled={busy || (!warehouse && availableWarehouses.every((candidate) => Boolean(candidate.local_warehouse_id) || !candidate.address?.trim()))}>{busy ? 'Сохраняем…' : warehouse ? 'Сохранить' : 'Добавить склад'}</Button></div>
       </form>
     </Modal>
   );
@@ -140,11 +125,10 @@ export function WarehouseDialog({ warehouse, point, busy, onClose, onSubmit }: {
 
 const zoneSchema = z.object({
   name: z.string().trim().min(1, 'Введите название'),
-  code: z.string().trim().min(1, 'Введите код'),
-  route_group: z.string().trim().min(1, 'Введите группу'),
+  kind: z.enum(['FORBIDDEN', 'NO_TRAILER', 'SPECIAL_PRICE']),
+  color: z.string().regex(/^#[0-9A-F]{6}$/i, 'Выберите цвет'),
   delivery_price: z.number().int().min(0, 'Тариф не может быть отрицательным'),
   pickup_price: z.number().int().min(0, 'Тариф не может быть отрицательным'),
-  priority: z.number().int().min(0),
   locked: z.boolean(),
 });
 type ZoneValues = z.infer<typeof zoneSchema>;
@@ -164,26 +148,37 @@ export function ZoneDialog({ zone, geometry, initialValues, title, description, 
     resolver: zodResolver(zoneSchema),
     defaultValues: {
       name: zone?.name ?? initialValues?.name ?? '',
-      code: zone?.code ?? initialValues?.code ?? '',
-      route_group: zone?.route_group ?? initialValues?.route_group ?? 'CUSTOM',
+      kind: zone?.kind ?? initialValues?.kind ?? 'SPECIAL_PRICE',
+      color: zone?.color ?? initialValues?.color ?? '#20C997',
       delivery_price: zone?.delivery_price ?? initialValues?.delivery_price ?? 0,
       pickup_price: zone?.pickup_price ?? initialValues?.pickup_price ?? 0,
-      priority: zone?.priority ?? initialValues?.priority ?? 0,
       locked: zone?.locked ?? initialValues?.locked ?? false,
     },
   });
   const locked = watch('locked');
+  const kind = watch('kind');
   const editingLockedZone = Boolean(zone?.locked && locked);
   return (
-    <Modal title={title ?? (zone ? `Зона ${zone.code} · версия ${zone.version}` : 'Новая логистическая зона')} description={description ?? 'Polygon/MultiPolygon хранится на backend; изменение геометрии увеличивает версию'} onClose={onClose}>
-      <form className="form-grid" onSubmit={handleSubmit((values) => onSubmit({ ...values, geometry }))}>
+    <Modal title={title ?? (zone ? `${zone.name} · версия ${zone.version}` : 'Новая особая зона')} description={description ?? 'Контур запрещает доставку, запрещает прицеп либо задаёт специальную цену. Обычный тариф считается по изохроне склада.'} onClose={onClose}>
+      <form className="form-grid" onSubmit={handleSubmit((values) => onSubmit({
+        ...values,
+        delivery_price: values.kind === 'SPECIAL_PRICE' ? values.delivery_price : 0,
+        pickup_price: values.kind === 'SPECIAL_PRICE' ? values.pickup_price : 0,
+        color: values.color.toUpperCase(),
+        geometry,
+      }))}>
         {editingLockedZone ? <p className="span-2 field__hint">Зона заблокирована. Снимите блокировку, чтобы изменить метаданные или геометрию.</p> : null}
         <Field label="Название" readOnly={editingLockedZone} {...register('name')} error={errors.name?.message} />
-        <Field label="Код" readOnly={editingLockedZone} {...register('code')} error={errors.code?.message} />
-        <Field label="Группа маршрута" readOnly={editingLockedZone} {...register('route_group')} error={errors.route_group?.message} hint="Можно ввести свою группу" />
-        <Field label="Тариф доставки, ₽" type="number" min="0" step="1" readOnly={editingLockedZone} {...register('delivery_price', { valueAsNumber: true })} error={errors.delivery_price?.message} />
-        <Field label="Тариф вывоза, ₽" type="number" min="0" step="1" readOnly={editingLockedZone} {...register('pickup_price', { valueAsNumber: true })} error={errors.pickup_price?.message} />
-        <Field label="Приоритет" type="number" readOnly={editingLockedZone} {...register('priority', { valueAsNumber: true })} />
+        <SelectField label="Назначение зоны" disabled={editingLockedZone} {...register('kind')}>
+          <option value="FORBIDDEN">Доставка запрещена</option>
+          <option value="NO_TRAILER">Проезд с прицепом запрещён</option>
+          <option value="SPECIAL_PRICE">Особая цена</option>
+        </SelectField>
+        <label className="field"><span className="field__label">Цвет зоны</span><span className="zone-color-picker"><input type="color" disabled={editingLockedZone} {...register('color')} /><span className="zone-color-picker__gradient" aria-hidden="true" /></span>{errors.color?.message ? <span className="field__error">{errors.color.message}</span> : null}</label>
+        {kind === 'SPECIAL_PRICE' ? <>
+          <Field label="Тариф доставки, ₽" type="number" min="0" step="1" readOnly={editingLockedZone} {...register('delivery_price', { valueAsNumber: true })} error={errors.delivery_price?.message} />
+          <Field label="Тариф вывоза, ₽" type="number" min="0" step="1" readOnly={editingLockedZone} {...register('pickup_price', { valueAsNumber: true })} error={errors.pickup_price?.message} />
+        </> : <p className="span-2 field__hint">Для зоны ограничения цена не задаётся: применяется обычный тариф по изохроне склада.</p>}
         <div className="span-2"><CheckboxField label="Заблокировать редактирование геометрии" checked={locked} onChange={(value) => setValue('locked', value)} /></div>
         <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}><Button type="button" onClick={onClose}>Отмена</Button><Button type="submit" variant="primary" disabled={busy}>{submitLabel ?? 'Сохранить зону'}</Button></div>
       </form>
@@ -213,7 +208,7 @@ const loadProfileLabels: Record<VehicleLoadConfigurationType, string> = {
 const catalogSchema = z.object({
   name: z.string().trim().min(1, 'Введите название'),
   external_worker_id: optionalUuidSchema,
-  preferred_route_group: z.string(),
+  rwms_assignment_mode: z.enum(['ASSIGNED_DRIVER', 'WAREHOUSE_DRIVERS']),
   passport_details: z.string(),
   registration_number: z.string(),
   capacity: z.number().int().min(1, 'Вместимость должна быть не меньше 1').max(2, 'Для MVP вместимость не может превышать 2'),
@@ -257,25 +252,26 @@ const catalogSchema = z.object({
     configuration_type: z.enum(loadConfigurationTypes),
     max_actual_axle_load_kg: nullablePositiveInteger,
   })),
+}).superRefine((value, context) => {
+  if (value.rwms_assignment_mode === 'ASSIGNED_DRIVER' && !value.external_worker_id) {
+    context.addIssue({ code: 'custom', path: ['external_worker_id'], message: 'Выберите водителя RWMS' });
+  }
 });
 type CatalogValues = z.infer<typeof catalogSchema>;
 
-export interface EditableVehicleLoadProfileInput extends VehicleLoadProfileInput {
-  id?: UUID;
-}
-
 export interface VehicleEditorInput extends VehicleInput {
-  load_profiles: EditableVehicleLoadProfileInput[];
+  load_profiles: VehicleLoadProfileInput[];
 }
 
 const optionalNumber = (value: unknown): number | null => typeof value !== 'string' || value.trim() === '' ? null : Number(value);
 const optionalNumberRegistration = () => ({ setValueAs: optionalNumber } as const);
 const optionalBoolean = (value: unknown): boolean | null => value === 'true' ? true : value === 'false' ? false : null;
 
-export function CatalogDialog({ kind, value, trailers = [], busy, onClose, onSubmit }: {
+export function CatalogDialog({ kind, value, trailers = [], availableDrivers = [], busy, onClose, onSubmit }: {
   kind: 'driver' | 'vehicle';
   value?: Driver | Vehicle | undefined;
   trailers?: Trailer[];
+  availableDrivers?: AvailableDriver[];
   busy: boolean;
   onClose: () => void;
   onSubmit: (input: DriverInput | VehicleEditorInput) => Promise<void>;
@@ -286,7 +282,7 @@ export function CatalogDialog({ kind, value, trailers = [], busy, onClose, onSub
   const { register, handleSubmit, watch, setValue, formState: { errors } } = useForm<CatalogValues>({
     resolver: zodResolver(catalogSchema),
     defaultValues: {
-      name: value?.name ?? '', external_worker_id: driver?.external_worker_id ?? '', preferred_route_group: driver?.preferred_route_group ?? '', passport_details: driver?.passport_details ?? '', registration_number: vehicle?.registration_number ?? '',
+      name: value?.name ?? (kind === 'driver' ? 'Водители склада' : ''), external_worker_id: driver?.external_worker_id ?? '', rwms_assignment_mode: driver?.rwms_assignment_mode ?? 'WAREHOUSE_DRIVERS', passport_details: driver?.passport_details ?? '', registration_number: vehicle?.registration_number ?? '',
       capacity: vehicle?.capacity ?? 2, average_speed_city: vehicle?.average_speed_city ?? 35, average_speed_region: vehicle?.average_speed_region ?? 65,
       notes: value?.notes ?? '', active: value?.active ?? true,
       vehicle_type: vehicle?.vehicle_type ?? '', manufacturer: vehicle?.manufacturer ?? '', model: vehicle?.model ?? '', is_hgv: vehicle?.is_hgv ?? null,
@@ -304,7 +300,7 @@ export function CatalogDialog({ kind, value, trailers = [], busy, onClose, onSub
       preview_cargo_length_mm: null, preview_cargo_width_mm: null, preview_cargo_height_mm: null, preview_cargo_weight_kg: null,
       load_profiles: loadConfigurationTypes.map((configurationType) => {
         const existing = existingProfiles.find((profile) => profile.configuration_type === configurationType);
-        return { ...(existing ? { id: existing.id } : {}), configuration_type: configurationType, max_actual_axle_load_kg: existing?.max_actual_axle_load_kg ?? null };
+        return { configuration_type: configurationType, max_actual_axle_load_kg: existing?.max_actual_axle_load_kg ?? null };
       }),
     },
   });
@@ -313,13 +309,17 @@ export function CatalogDialog({ kind, value, trailers = [], busy, onClose, onSub
   const canUseTrailer = values.can_use_trailer;
   const selectedTrailer = trailers.find((trailer) => trailer.id === values.default_trailer_id) ?? null;
   const previewProfiles = values.load_profiles.flatMap((profile) => profile.max_actual_axle_load_kg === null ? [] : [{
-    id: profile.id ?? `preview-${profile.configuration_type}`,
-    vehicle_id: vehicle?.id ?? 'preview-vehicle',
     configuration_type: profile.configuration_type,
     max_actual_axle_load_kg: profile.max_actual_axle_load_kg,
   }]);
   const submit = (formValues: CatalogValues) => kind === 'driver'
-    ? onSubmit({ name: formValues.name, external_worker_id: formValues.external_worker_id || null, preferred_route_group: formValues.preferred_route_group, passport_details: formValues.passport_details, notes: formValues.notes, active: formValues.active })
+    ? onSubmit({
+      external_worker_id: formValues.rwms_assignment_mode === 'ASSIGNED_DRIVER' ? formValues.external_worker_id || null : null,
+      rwms_assignment_mode: formValues.rwms_assignment_mode,
+      passport_details: formValues.passport_details,
+      notes: formValues.notes,
+      active: formValues.active,
+    })
     : onSubmit({
       name: formValues.name,
       registration_number: formValues.registration_number,
@@ -356,7 +356,6 @@ export function CatalogDialog({ kind, value, trailers = [], busy, onClose, onSub
       width_safety_margin_mm: formValues.width_safety_margin_mm,
       weight_safety_margin_kg: formValues.weight_safety_margin_kg,
       load_profiles: formValues.load_profiles.flatMap((profile) => profile.max_actual_axle_load_kg === null ? [] : [{
-        ...(profile.id ? { id: profile.id } : {}),
         configuration_type: profile.configuration_type,
         max_actual_axle_load_kg: profile.max_actual_axle_load_kg,
       }]),
@@ -364,17 +363,18 @@ export function CatalogDialog({ kind, value, trailers = [], busy, onClose, onSub
   return (
     <Modal wide={kind === 'vehicle'} title={`${value ? 'Изменить' : 'Добавить'} ${kind === 'driver' ? 'водителя' : 'машину'}`} onClose={onClose}>
       <form className="form-grid" onSubmit={handleSubmit(submit)}>
-        <Field className="span-2" label="Название" {...register('name')} error={errors.name?.message} />
+        {kind === 'vehicle' ? <Field className="span-2" label="Название" {...register('name')} error={errors.name?.message} /> : null}
         {kind === 'driver' ? <>
-          <Field
-            className="span-2"
-            label="UUID сотрудника в RWMS"
-            {...register('external_worker_id')}
-            error={errors.external_worker_id?.message}
-            hint="Нужен только для явной отправки назначенного плана в RWMS."
-          />
-          <Field className="span-2" label="Предпочтительная группа" {...register('preferred_route_group')} hint="Мягкое предпочтение, не запрет" />
-          <label className="field span-2"><span className="field__label">Паспортные данные водителя</span><textarea className="input" {...register('passport_details')} /><span className="field__hint">Используются только в тестовом сообщении, когда в заявке явно включена соответствующая галочка.</span></label>
+          <SelectField className="span-2" label="Назначение в RWMS" {...register('rwms_assignment_mode')}>
+            <option value="WAREHOUSE_DRIVERS">Общий пул квалифицированных водителей склада</option>
+            <option value="ASSIGNED_DRIVER">Конкретный водитель</option>
+          </SelectField>
+          {values.rwms_assignment_mode === 'ASSIGNED_DRIVER' ? <SelectField className="span-2" label="Водитель RWMS" {...register('external_worker_id')} error={errors.external_worker_id?.message}>
+            <option value="">Выберите водителя</option>
+            {driver?.external_worker_id && !availableDrivers.some((candidate) => candidate.worker_id === driver.external_worker_id) ? <option value={driver.external_worker_id}>{driver.name} · текущая связь</option> : null}
+            {availableDrivers.map((candidate) => <option key={candidate.worker_id} value={candidate.worker_id}>{candidate.display_name}</option>)}
+          </SelectField> : <div className="span-2 explanation">Планы автоматически публикуются для всех активных работников склада с квалификацией «Водители».</div>}
+          <label className="field span-2"><span className="field__label">Паспортные данные водителя</span><textarea className="input" {...register('passport_details')} /><span className="field__hint">Используются только в тестовом сообщении, когда для доставки или вывоза явно включено такое оповещение.</span></label>
         </> : <>
           <Field label="Госномер" {...register('registration_number')} />
           <Field label="Вместимость" type="number" min="1" {...register('capacity', { valueAsNumber: true })} error={errors.capacity?.message} hint="Допустимо 1–2 бытовки" />
@@ -437,7 +437,7 @@ export function CatalogDialog({ kind, value, trailers = [], busy, onClose, onSub
 
           <details className="span-2" open>
             <summary><strong>Бытовка для предпросмотра</strong></summary>
-            <p className="field__hint">Эти четыре поля не сохраняются. В реальном рейсе размеры и масса берутся из назначенной заявки.</p>
+            <p className="field__hint">Эти четыре поля не сохраняются. В реальном рейсе размеры и масса берутся из назначенной доставки или вывоза.</p>
             <div className="form-grid" style={{ marginTop: 10 }}>
               <Field label="Длина бытовки для предпросмотра, мм" type="number" min="1" {...register('preview_cargo_length_mm', optionalNumberRegistration())} />
               <Field label="Ширина бытовки для предпросмотра, мм" type="number" min="1" {...register('preview_cargo_width_mm', optionalNumberRegistration())} />
@@ -475,39 +475,41 @@ export function CatalogDialog({ kind, value, trailers = [], busy, onClose, onSub
 }
 
 const shiftSchema = z.object({
-  driver_id: z.string().min(1, 'Выберите водителя'), vehicle_id: z.string().min(1, 'Выберите машину'), date: z.string().date(),
-  start_time: z.string(), end_time: z.string(), break_minutes: z.number().int().min(0), preferred_route_group: z.string(), active: z.boolean(),
-}).refine((value) => value.end_time > value.start_time, { path: ['end_time'], message: 'Конец смены должен быть позже начала' });
+  driver_id: z.string().min(1, 'Выберите водителя'), vehicle_id: z.string().min(1, 'Выберите машину'), date_from: z.string().date(), date_to: z.string().date(),
+  start_time: z.string(), end_time: z.string(), break_minutes: z.number().int().min(0), active: z.boolean(),
+})
+  .refine((value) => value.end_time > value.start_time, { path: ['end_time'], message: 'Конец смены должен быть позже начала' })
+  .refine((value) => value.date_to >= value.date_from, { path: ['date_to'], message: 'Конец периода должен быть не раньше начала' })
+  .refine((value) => value.date_from.slice(0, 7) === value.date_to.slice(0, 7), { path: ['date_to'], message: 'Период смены должен находиться внутри одного месяца' });
 type ShiftValues = z.infer<typeof shiftSchema>;
 
-export function ShiftDialog({ shift, scenario, drivers, vehicles, busy, onClose, onSubmit }: {
-  shift?: DriverShift | undefined; scenario: Scenario; drivers: Driver[]; vehicles: Vehicle[]; busy: boolean; onClose: () => void; onSubmit: (input: ShiftInput) => Promise<void>;
+export function ShiftDialog({ shift, warehouse, drivers, vehicles, busy, onClose, onSubmit }: {
+  shift?: DriverShift | undefined; warehouse: Warehouse; drivers: Driver[]; vehicles: Vehicle[]; busy: boolean; onClose: () => void; onSubmit: (input: ShiftInput) => Promise<void>;
 }) {
   const { register, handleSubmit, watch, setValue, formState: { errors } } = useForm<ShiftValues>({
     resolver: zodResolver(shiftSchema),
     defaultValues: {
-      driver_id: shift?.driver_id ?? drivers[0]?.id ?? '', vehicle_id: shift?.vehicle_id ?? vehicles[0]?.id ?? '', date: shift?.date ?? scenario.default_planning_date,
-      start_time: shift ? new Date(shift.start_at).toLocaleTimeString('ru-RU', { timeZone: scenario.timezone, hour: '2-digit', minute: '2-digit' }) : '08:00',
-      end_time: shift ? new Date(shift.end_at).toLocaleTimeString('ru-RU', { timeZone: scenario.timezone, hour: '2-digit', minute: '2-digit' }) : '20:00',
-      break_minutes: shift?.break_minutes ?? 30, preferred_route_group: shift?.preferred_route_group ?? '', active: shift?.active ?? true,
+      driver_id: shift?.driver_id ?? drivers[0]?.id ?? '', vehicle_id: shift?.vehicle_id ?? vehicles[0]?.id ?? '', date_from: shift?.date_from ?? warehouse.default_planning_date ?? '', date_to: shift?.date_to ?? warehouse.default_planning_date ?? '',
+      start_time: shift?.start_time ?? '08:00', end_time: shift?.end_time ?? '20:00',
+      break_minutes: shift?.break_minutes ?? 30, active: shift?.active ?? true,
     },
   });
   const active = watch('active');
   const submit = (values: ShiftValues) => onSubmit({
-    driver_id: values.driver_id, vehicle_id: values.vehicle_id, date: values.date,
-    start_at: localDateTimeToIso(values.date, values.start_time, scenario.timezone), end_at: localDateTimeToIso(values.date, values.end_time, scenario.timezone),
-    break_minutes: values.break_minutes, preferred_route_group: values.preferred_route_group, active: values.active,
+    driver_id: values.driver_id, vehicle_id: values.vehicle_id, date_from: values.date_from, date_to: values.date_to,
+    start_time: values.start_time, end_time: values.end_time,
+    break_minutes: values.break_minutes, active: values.active,
   });
   return (
-    <Modal title={shift ? 'Изменить смену' : 'Добавить смену'} description={`Время интерпретируется в ${scenario.timezone}`} onClose={onClose}>
+    <Modal title={shift ? 'Изменить смену' : 'Добавить смену'} description={`Период работы водителя внутри месяца · ${warehouse.timezone}`} onClose={onClose}>
       <form className="form-grid" onSubmit={handleSubmit(submit)}>
         <SelectField label="Водитель" {...register('driver_id')} error={errors.driver_id?.message}>{drivers.map((driver) => <option key={driver.id} value={driver.id}>{driver.name}</option>)}</SelectField>
         <SelectField label="Машина" {...register('vehicle_id')} error={errors.vehicle_id?.message}>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.name} · {vehicle.registration_number}</option>)}</SelectField>
-        <Field label="Дата" type="date" {...register('date')} />
-        <Field label="Перерыв, мин" type="number" {...register('break_minutes', { valueAsNumber: true })} />
+        <Field label="Работает с" type="date" {...register('date_from')} />
+        <Field label="Работает по" type="date" {...register('date_to')} error={errors.date_to?.message} />
         <Field label="Начало" type="time" {...register('start_time')} />
         <Field label="Окончание" type="time" {...register('end_time')} error={errors.end_time?.message} />
-        <Field className="span-2" label="Предпочтительная группа смены" {...register('preferred_route_group')} />
+        <Field className="span-2" label="Перерыв, мин" type="number" {...register('break_minutes', { valueAsNumber: true })} />
         <div className="span-2"><CheckboxField label="Смена активна" checked={active} onChange={(checked) => setValue('active', checked)} /></div>
         <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}><Button type="button" onClick={onClose}>Отмена</Button><Button type="submit" variant="primary" disabled={busy}>Сохранить смену</Button></div>
       </form>
@@ -521,6 +523,7 @@ const dateOptionSchema = z.object({ date: z.string().date(), priority: z.number(
 const requestSchema = z.object({
   type: z.enum(['DELIVERY', 'PICKUP']), name: z.string().trim().min(1, 'Введите название'), address_label: z.string(), latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180),
   quantity: z.number().int().positive(), service_minutes: z.number().int().min(0), priority: z.number().int(), status: z.enum(['DRAFT', 'READY', 'PLANNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'UNASSIGNED']),
+  mandatory: z.boolean(),
   trailer_access_allowed: nullableBoolean,
   include_driver_passport_in_notification: z.boolean(),
   contact_name: z.string(),
@@ -533,14 +536,14 @@ const requestSchema = z.object({
 }, { message: 'Укажите все четыре параметра груза или оставьте все поля пустыми', path: ['cargo_weight_kg'] });
 type RequestValues = z.infer<typeof requestSchema>;
 
-export function RequestDialog({ request, point, type, defaultDate, busy, onClose, onSubmit }: {
-  request?: LogisticsRequest | undefined; point?: { latitude: number; longitude: number } | undefined; type: LogisticsRequest['type']; defaultDate: string; busy: boolean; onClose: () => void; onSubmit: (input: LogisticsRequestInput) => Promise<void>;
+export function RequestDialog({ request, point, initialAddress, type, defaultDate, busy, onClose, onSubmit }: {
+  request?: LogisticsRequest | undefined; point?: { latitude: number; longitude: number } | undefined; initialAddress?: string | undefined; type: LogisticsRequest['type']; defaultDate: string; busy: boolean; onClose: () => void; onSubmit: (input: LogisticsRequestInput) => Promise<void>;
 }) {
   const { register, control, handleSubmit, watch, setValue, formState: { errors } } = useForm<RequestValues>({
     resolver: zodResolver(requestSchema),
     defaultValues: {
-      type: request?.type ?? type, name: request?.name ?? '', address_label: request?.address_label ?? '', latitude: point?.latitude ?? request?.latitude ?? 55.75, longitude: point?.longitude ?? request?.longitude ?? 37.62,
-      quantity: request?.quantity ?? 1, service_minutes: request?.service_minutes ?? 30, priority: request?.priority ?? 0, status: request?.status ?? 'READY', split_allowed: request?.split_allowed ?? true, notes: request?.notes ?? '',
+      type: request?.type ?? type, name: request?.name ?? '', address_label: initialAddress ?? request?.address_label ?? '', latitude: point?.latitude ?? request?.latitude ?? 55.75, longitude: point?.longitude ?? request?.longitude ?? 37.62,
+      quantity: request?.quantity ?? 1, service_minutes: request?.service_minutes ?? 30, priority: request?.priority ?? 0, mandatory: request?.mandatory ?? false, status: request?.status ?? 'READY', split_allowed: request?.split_allowed ?? true, notes: request?.notes ?? '',
       trailer_access_allowed: request?.trailer_access_allowed ?? null,
       include_driver_passport_in_notification: request?.include_driver_passport_in_notification ?? false,
       contact_name: request?.contact_name ?? '',
@@ -552,16 +555,18 @@ export function RequestDialog({ request, point, type, defaultDate, busy, onClose
   });
   const { fields, append, remove } = useFieldArray({ control, name: 'date_options' });
   const splitAllowed = watch('split_allowed');
+  const mandatory = watch('mandatory');
+  const requestType = watch('type');
   const includePassport = watch('include_driver_passport_in_notification');
   return (
-    <Modal wide title={request ? 'Изменить заявку' : type === 'DELIVERY' ? 'Новая доставка' : 'Новый вывоз'} description="Зону определит backend по координатам; передать zone_id из формы невозможно" onClose={onClose}>
+    <Modal wide title={request ? requestType === 'DELIVERY' ? 'Изменить доставку' : 'Изменить вывоз' : type === 'DELIVERY' ? 'Новая доставка' : 'Новый вывоз'} description="Backend проверит запреты и особую цену; обычную стоимость рассчитает по изохроне склада" onClose={onClose}>
       <form className="form-grid" onSubmit={handleSubmit(onSubmit)}>
+        <input type="hidden" {...register('latitude', { valueAsNumber: true })} />
+        <input type="hidden" {...register('longitude', { valueAsNumber: true })} />
         <SelectField label="Тип" {...register('type')}><option value="DELIVERY">Доставка</option><option value="PICKUP">Вывоз</option></SelectField>
         <SelectField label="Статус" {...register('status')}><option value="READY">Готова</option><option value="DRAFT">Черновик</option><option value="CANCELLED">Отменена</option></SelectField>
         <Field className="span-2" label="Название / номер" {...register('name')} error={errors.name?.message} />
         <Field className="span-2" label="Адрес (подпись)" {...register('address_label')} />
-        <Field label="Широта" type="number" step="any" {...register('latitude', { valueAsNumber: true })} error={errors.latitude?.message} />
-        <Field label="Долгота" type="number" step="any" {...register('longitude', { valueAsNumber: true })} error={errors.longitude?.message} />
         <Field label="Количество бытовок" type="number" min="1" {...register('quantity', { valueAsNumber: true })} />
         <Field label="Обслуживание, мин" type="number" min="0" {...register('service_minutes', { valueAsNumber: true })} />
         <SelectField className="span-2" label="Машина с прицепом проедет к адресу" {...register('trailer_access_allowed', { setValueAs: optionalBoolean })}>
@@ -571,7 +576,10 @@ export function RequestDialog({ request, point, type, defaultDate, busy, onClose
         </SelectField>
         <Field label="Контактное лицо" {...register('contact_name')} />
         <Field label="Телефон / контакт" {...register('contact_phone')} />
-        <div className="span-2"><CheckboxField label="Оповещение с паспортными данными водителя" checked={includePassport} onChange={(checked) => setValue('include_driver_passport_in_notification', checked)} /></div>
+        <div className="span-2 planning-request-form__checks">
+          <CheckboxField label={requestType === 'DELIVERY' ? 'Обязательная доставка' : 'Обязательный вывоз'} checked={mandatory} onChange={(checked) => setValue('mandatory', checked)} />
+          <CheckboxField label="Оповещение с паспортными данными водителя" checked={includePassport} onChange={(checked) => setValue('include_driver_passport_in_notification', checked)} />
+        </div>
         <div className="span-2 entity-card__row"><strong>Фактические параметры одной бытовки</strong><span className="field__hint">Без полного набора безопасный грузовой маршрут не рассчитывается</span></div>
         <Field label="Длина бытовки, мм" type="number" min="1" {...register('cargo_length_mm', optionalNumberRegistration())} error={errors.cargo_length_mm?.message} />
         <Field label="Ширина бытовки, мм" type="number" min="1" {...register('cargo_width_mm', optionalNumberRegistration())} error={errors.cargo_width_mm?.message} />
@@ -598,48 +606,7 @@ export function RequestDialog({ request, point, type, defaultDate, busy, onClose
             ))}
           </div>
         </div>
-        <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}><Button type="button" onClick={onClose}>Отмена</Button><Button type="submit" variant="primary" disabled={busy}>Сохранить заявку</Button></div>
-      </form>
-    </Modal>
-  );
-}
-
-const relationSchema = z.object({
-  relation_type: z.enum(['ADJACENT', 'PREFERRED', 'ALLOWED', 'DISCOURAGED', 'BLOCKED']),
-  delivery_pair_allowed: z.boolean(), pickup_allowed: z.boolean(), max_detour_minutes: z.number().int().min(0),
-  max_detour_ratio: z.number().min(0), penalty: z.number().min(0), is_bidirectional: z.boolean(),
-});
-type RelationValues = z.infer<typeof relationSchema>;
-
-export function RelationDialog({ fromZone, toZone, relation, busy, onClose, onSubmit, onDelete }: {
-  fromZone: Zone; toZone: Zone; relation?: ZoneRelation | undefined; busy: boolean; onClose: () => void;
-  onSubmit: (input: Omit<ZoneRelation, 'id'>) => Promise<void>; onDelete?: (() => Promise<void>) | undefined;
-}) {
-  const { register, handleSubmit, watch, setValue } = useForm<RelationValues>({
-    resolver: zodResolver(relationSchema),
-    defaultValues: {
-      relation_type: relation?.relation_type ?? 'ADJACENT', delivery_pair_allowed: relation?.delivery_pair_allowed ?? true,
-      pickup_allowed: relation?.pickup_allowed ?? true,
-      max_detour_minutes: relation?.max_detour_minutes ?? DEFAULT_PLANNING_SETTINGS.max_detour_minutes,
-      max_detour_ratio: relation?.max_detour_ratio ?? DEFAULT_PLANNING_SETTINGS.max_detour_ratio,
-      penalty: relation?.penalty ?? 0, is_bidirectional: relation?.is_bidirectional ?? false,
-    },
-  });
-  return (
-    <Modal title={`${fromZone.code} → ${toZone.code}`} description="Запрет связи является жёстким; пороги крюка дают предупреждение и влияют на score" onClose={onClose}>
-      <form className="form-grid" onSubmit={handleSubmit((values) => onSubmit({ ...values, from_zone_id: fromZone.id, to_zone_id: toZone.id }))}>
-        <SelectField className="span-2" label="Тип связи" {...register('relation_type')}><option value="ADJACENT">Соседняя</option><option value="PREFERRED">Предпочтительная</option><option value="ALLOWED">Разрешённая</option><option value="DISCOURAGED">Нежелательная</option><option value="BLOCKED">Заблокированная</option></SelectField>
-        <Field label="Порог крюка, мин" type="number" {...register('max_detour_minutes', { valueAsNumber: true })} />
-        <Field label="Порог доли крюка" type="number" step="0.01" {...register('max_detour_ratio', { valueAsNumber: true })} />
-        <Field label="Штраф" type="number" step="0.1" {...register('penalty', { valueAsNumber: true })} />
-        <span />
-        <CheckboxField label="Можно объединять доставки" checked={watch('delivery_pair_allowed')} onChange={(checked) => setValue('delivery_pair_allowed', checked)} />
-        <CheckboxField label="Можно добавлять вывоз" checked={watch('pickup_allowed')} onChange={(checked) => setValue('pickup_allowed', checked)} />
-        <div className="span-2"><CheckboxField label="Создать обратную связь одновременно" checked={watch('is_bidirectional')} onChange={(checked) => setValue('is_bidirectional', checked)} /></div>
-        <div className="span-2 toolbar-row" style={{ justifyContent: 'space-between', margin: '8px 0 0' }}>
-          <span>{onDelete ? <Button type="button" variant="danger" onClick={() => void onDelete()} disabled={busy}><Trash2 size={13} />Удалить</Button> : null}</span>
-          <span className="toolbar-row" style={{ margin: 0 }}><Button type="button" onClick={onClose}>Отмена</Button><Button type="submit" variant="primary" disabled={busy}>Сохранить связь</Button></span>
-        </div>
+        <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}><Button type="button" onClick={onClose}>Отмена</Button><Button type="submit" variant="primary" disabled={busy}>Сохранить {requestType === 'DELIVERY' ? 'доставку' : 'вывоз'}</Button></div>
       </form>
     </Modal>
   );
@@ -669,6 +636,43 @@ export function ConfirmDialog({ title, description, confirmLabel, dangerous = fa
   return (
     <Modal title={title} description={description} onClose={onClose} footer={<><Button onClick={onClose}>Отмена</Button><Button variant={dangerous ? 'danger' : 'primary'} disabled={busy} onClick={() => void onConfirm()}>{confirmLabel}</Button></>}>
       <p className={dangerous ? 'error-panel' : 'section-subtitle'}>{description}</p>
+    </Modal>
+  );
+}
+
+/** Collect the mandatory audit reason before accepting an empty support positioning leg. */
+export function EmptyPositioningConfirmDialog({ busy, onClose, onConfirm }: {
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: (reason: string) => Promise<void>;
+}) {
+  const schema = z.object({
+    reason: z.string().trim().min(3, 'Укажите причину пустого перегона'),
+  });
+  type Values = z.infer<typeof schema>;
+  const { register, handleSubmit, formState: { errors } } = useForm<Values>({
+    resolver: zodResolver(schema),
+    defaultValues: { reason: '' },
+  });
+  return (
+    <Modal
+      title="Разрешить пустой перегон"
+      description="Попутный груз не выбран. Причина сохранится в истории плана."
+      onClose={onClose}
+    >
+      <form className="form-grid" onSubmit={handleSubmit(({ reason }) => onConfirm(reason.trim()))}>
+        <Field
+          className="span-2"
+          label="Причина пустого перегона"
+          placeholder="Почему рейс нужно выполнить без попутного груза"
+          {...register('reason')}
+          error={errors.reason?.message}
+        />
+        <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}>
+          <Button type="button" onClick={onClose}>Отмена</Button>
+          <Button type="submit" variant="primary" disabled={busy}>Утвердить пустой перегон</Button>
+        </div>
+      </form>
     </Modal>
   );
 }

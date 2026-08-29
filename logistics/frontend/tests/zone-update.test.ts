@@ -10,15 +10,14 @@ const geometry: Zone['geometry'] = {
 
 const zone: Zone = {
   id: '00000000-0000-0000-0000-000000000001',
-  scenario_id: '00000000-0000-0000-0000-000000000002',
+  warehouse_id: 'warehouse-1',
   name: 'Москва',
-  code: 'MSK',
-  route_group: 'CITY',
+  kind: 'SPECIAL_PRICE',
+  color: '#20C997',
   delivery_price: 12_500,
   pickup_price: 9_000,
   geometry,
   version: 4,
-  priority: 10,
   locked: false,
   created_at: '2026-08-24T08:00:00Z',
   updated_at: '2026-08-24T08:00:00Z',
@@ -27,12 +26,11 @@ const zone: Zone = {
 function input(overrides: Partial<ZoneInput> = {}): ZoneInput {
   return {
     name: zone.name,
-    code: zone.code,
-    route_group: zone.route_group,
+    kind: zone.kind,
+    color: zone.color,
     delivery_price: zone.delivery_price,
     pickup_price: zone.pickup_price,
     geometry,
-    priority: zone.priority,
     locked: zone.locked,
     ...overrides,
   };
@@ -44,6 +42,14 @@ describe('zone update payload', () => {
 
     expect(payload).toMatchObject({ delivery_price: 13_000, pickup_price: 9_500 });
     expect(payload).not.toHaveProperty('geometry');
+  });
+
+  it('updates the zone gradient color without adding obsolete metadata', () => {
+    const payload = buildZoneUpdatePayload(zone, input({ color: '#3366FF' }));
+
+    expect(payload).toMatchObject({ color: '#3366FF' });
+    expect(payload).not.toHaveProperty('code');
+    expect(payload).not.toHaveProperty('priority');
   });
 
   it('includes geometry only when its coordinates change', () => {

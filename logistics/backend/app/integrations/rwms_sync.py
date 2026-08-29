@@ -1,8 +1,8 @@
-"""RWMS synchronization and plan-application orchestration for the simulator."""
+"""RWMS synchronization and plan-application orchestration for warehouse planning."""
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import ValidationError
@@ -32,36 +32,48 @@ from app.schemas.domain import (
     RwmsPlanningRequest,
     RwmsPlanStatusResult,
     RwmsPlanTaskStatus,
-    RwmsScenarioRefreshResult,
     RwmsSyncFailure,
     RwmsSyncRequest,
     RwmsSyncResult,
+    RwmsWarehouseRefreshResult,
     RwmsWarehouseSyncResult,
 )
 from app.services import catalog
+from app.services.auto_planning import generate_missing_draft_plans
+from app.services.plans import PlannerFacade
 
 
-async def sync_scenario_requests(
+async def refresh_warehouse_directory(
     session: AsyncSession,
-    scenario_id: UUID,
+    client: RwmsPlanningClient,
+) -> list[Warehouse]:
+    """Fetch and reconcile the owner-held warehouse directory without geocoding."""
+
+    return await catalog.reconcile_warehouse_directory(session, await client.list_warehouses())
+
+
+async def sync_warehouse_requests(
+    session: AsyncSession,
+    warehouse_id: UUID,
     command: RwmsSyncRequest,
     client: RwmsPlanningClient,
+    planner: PlannerFacade | None = None,
 ) -> RwmsSyncResult:
     """Synchronize one warehouse feed with per-order savepoints and explicit failures."""
 
     client.ensure_enabled()
-    await catalog.require_scenario(session, scenario_id)
-    linked_warehouse = await session.scalar(
-        select(Warehouse).where(
-            Warehouse.scenario_id == scenario_id,
-            Warehouse.external_warehouse_id == command.warehouse_id,
+    linked_warehouse = await catalog.require_warehouse(session, warehouse_id)
+    if not linked_warehouse.routing_ready:
+        raise ApiError(
+            422,
+            "WAREHOUSE_COORDINATES_REQUIRED",
+            "Не заданы координаты для использования склада в логистике",  # noqa: RUF001
         )
-    )
-    if linked_warehouse is None:
+    if linked_warehouse.external_warehouse_id != command.warehouse_id:
         raise ApiError(
             422,
             "RWMS_WAREHOUSE_NOT_LINKED",
-            "Link a scenario warehouse to the requested RWMS warehouse before synchronization",
+            "The selected workspace is linked to a different RWMS warehouse",
         )
     await session.commit()
 
@@ -94,7 +106,7 @@ async def sync_scenario_requests(
             continue
         try:
             async with session.begin_nested():
-                outcome = await catalog.upsert_rwms_request(session, scenario_id, source)
+                outcome = await catalog.upsert_rwms_request(session, warehouse_id, source)
         except ApiError as exc:
             failures.append(
                 RwmsSyncFailure(
@@ -115,58 +127,60 @@ async def sync_scenario_requests(
             continue
         counts[outcome] += 1
     await session.flush()
-    return RwmsSyncResult(**counts, failures=failures)
+    runs = (
+        await generate_missing_draft_plans(
+            session,
+            planner,
+            warehouse_id,
+            (
+                command.date_from + timedelta(days=offset)
+                for offset in range((command.date_to - command.date_from).days + 1)
+            ),
+        )
+        if planner is not None
+        else ()
+    )
+    return RwmsSyncResult(
+        **counts,
+        failures=failures,
+        auto_plan_run_ids=[run.id for run in runs],
+        auto_plan_ids=[run.plan_id for run in runs if run.plan_id is not None],
+    )
 
 
-async def refresh_scenario_requests(
+async def refresh_warehouse_requests(
     session: AsyncSession,
-    scenario_id: UUID,
+    warehouse_id: UUID,
     *,
     date_from: date,
     date_to: date,
     client: RwmsPlanningClient,
-) -> RwmsScenarioRefreshResult:
-    """Refresh every linked warehouse without delegating the cross-warehouse saga to a browser.
+    planner: PlannerFacade | None = None,
+) -> RwmsWarehouseRefreshResult:
+    """Refresh one selected warehouse while keeping remote I/O outside local locks."""
 
-    Each warehouse uses the ordinary strict synchronization workflow. That workflow commits
-    before remote I/O, so a slow or failed upstream call never retains a local database lock.
-    Successfully imported earlier warehouses remain retry-safe if a later warehouse fails.
-    """
-
-    await catalog.require_scenario(session, scenario_id)
-    warehouse_ids = list(
-        await session.scalars(
-            select(Warehouse.external_warehouse_id)
-            .where(
-                Warehouse.scenario_id == scenario_id,
-                Warehouse.external_warehouse_id.is_not(None),
-            )
-            .order_by(Warehouse.external_warehouse_id)
-        )
+    await refresh_warehouse_directory(session, client)
+    warehouse = await catalog.require_warehouse(session, warehouse_id)
+    result = await sync_warehouse_requests(
+        session,
+        warehouse_id,
+        RwmsSyncRequest(
+            warehouse_id=warehouse.external_warehouse_id,
+            date_from=date_from,
+            date_to=date_to,
+        ),
+        client,
+        planner,
     )
-    results: list[RwmsWarehouseSyncResult] = []
-    for warehouse_id in warehouse_ids:
-        assert warehouse_id is not None
-        result = await sync_scenario_requests(
-            session,
-            scenario_id,
-            RwmsSyncRequest(
-                warehouse_id=warehouse_id,
-                date_from=date_from,
-                date_to=date_to,
-            ),
-            client,
-        )
-        results.append(
-            RwmsWarehouseSyncResult(
-                warehouse_id=warehouse_id,
-                **result.model_dump(),
-            )
-        )
-    return RwmsScenarioRefreshResult(
+    return RwmsWarehouseRefreshResult(
         date_from=date_from,
         date_to=date_to,
-        warehouses=results,
+        warehouses=[
+            RwmsWarehouseSyncResult(
+                warehouse_id=warehouse.external_warehouse_id,
+                **result.model_dump(),
+            )
+        ],
     )
 
 
@@ -175,14 +189,6 @@ def build_assignments_command(
     publish_unassigned_task_ids: set[UUID] | frozenset[UUID] = frozenset(),
 ) -> RwmsAssignmentsCommand:
     """Map assigned and explicitly published delivery parts to stable RWMS unit slices."""
-
-    warehouse_id = plan.warehouse.external_warehouse_id
-    if warehouse_id is None:
-        raise ApiError(
-            422,
-            "RWMS_WAREHOUSE_NOT_LINKED",
-            "The plan warehouse has no RWMS warehouse identity",
-        )
 
     delivery_stops: list[tuple[RouteCycle, RouteStop, PlanningTask, LogisticsRequest]] = []
     assigned_task_ids: set[UUID] = set()
@@ -233,6 +239,14 @@ def build_assignments_command(
 
     if not delivery_stops and not shared_tasks:
         raise ApiError(422, "RWMS_NO_DELIVERIES", "The plan contains no delivery assignments")
+
+    warehouse_id = plan.warehouse.external_warehouse_id
+    if warehouse_id is None:
+        raise ApiError(
+            422,
+            "RWMS_WAREHOUSE_NOT_LINKED",
+            "The plan warehouse has no RWMS warehouse identity",
+        )
 
     unit_slices: dict[UUID, list[UUID]] = {}
     source_by_request: dict[UUID, RwmsPlanningRequest] = {}
@@ -308,7 +322,10 @@ def build_assignments_command(
     )
     for cycle, _, task, request in ordered_stops:
         driver = cycle.driver_shift.driver
-        if driver.external_worker_id is None:
+        if (
+            driver.rwms_assignment_mode == "ASSIGNED_DRIVER"
+            and driver.external_worker_id is None
+        ):
             raise ApiError(
                 422,
                 "RWMS_DRIVER_NOT_LINKED",
@@ -320,7 +337,7 @@ def build_assignments_command(
                 order_id=source.order_id,
                 expected_order_version=source.order_version,
                 scheduled_date=plan.date,
-                driver_audience_mode="ASSIGNED_DRIVER",
+                driver_audience_mode=driver.rwms_assignment_mode,
                 driver_worker_id=driver.external_worker_id,
                 driver_name=driver.name,
                 unit_ids=unit_slices[task.id],
@@ -388,6 +405,25 @@ async def apply_plan_to_rwms(
     """Freeze an exact plan command, release local locks, then call RWMS idempotently."""
 
     client.ensure_enabled()
+    assignments, idempotency_key = await prepare_plan_for_rwms_apply(
+        session,
+        plan_id,
+        command,
+    )
+    await session.commit()
+    return await client.apply_assignments(
+        assignments,
+        idempotency_key=idempotency_key,
+    )
+
+
+async def prepare_plan_for_rwms_apply(
+    session: AsyncSession,
+    plan_id: UUID,
+    command: RwmsPlanApplyRequest,
+) -> tuple[RwmsAssignmentsCommand, str]:
+    """Build and validate one immutable assignment command without committing it."""
+
     plan = await _load_plan_for_rwms_apply(session, plan_id)
     if plan.version != command.expected_version:
         raise ApiError(
@@ -398,11 +434,7 @@ async def apply_plan_to_rwms(
         )
     assignments = build_assignments_command(plan, set(command.publish_unassigned_task_ids))
     idempotency_key = str(rwms_plan_idempotency_key(plan.id, plan.version))
-    await session.commit()
-    return await client.apply_assignments(
-        assignments,
-        idempotency_key=idempotency_key,
-    )
+    return assignments, idempotency_key
 
 
 def rwms_plan_idempotency_key(plan_id: UUID, plan_version: int) -> UUID:

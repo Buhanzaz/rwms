@@ -19,13 +19,12 @@ async def zone_read(session: AsyncSession, zone: Zone) -> ZoneRead:
 
     return ZoneRead(
         id=zone.id,
-        scenario_id=zone.scenario_id,
+        warehouse_id=zone.warehouse_id,
         name=zone.name,
-        code=zone.code,
-        route_group=zone.route_group,
+        kind=zone.kind,
+        color=zone.color,
         geometry=GeoJsonGeometry.model_validate(geometry_to_geojson(zone.geometry)),
         version=zone.version,
-        priority=zone.priority,
         delivery_price=zone.delivery_price,
         pickup_price=zone.pickup_price,
         locked=zone.locked,
@@ -44,7 +43,7 @@ async def request_read(session: AsyncSession, request: LogisticsRequest) -> Logi
         zone_is_stale = zone is None or zone.version != request.zone_version
     return LogisticsRequestRead(
         id=request.id,
-        scenario_id=request.scenario_id,
+        warehouse_id=request.warehouse_id,
         source_system=request.source_system,
         external_id=request.external_id,
         type=request.type,
@@ -66,6 +65,7 @@ async def request_read(session: AsyncSession, request: LogisticsRequest) -> Logi
         zone_classification_status=request.zone_classification_status,
         zone_is_stale=zone_is_stale,
         split_allowed=request.split_allowed,
+        mandatory=request.mandatory,
         trailer_access_allowed=request.trailer_access_allowed,
         include_driver_passport_in_notification=(request.include_driver_passport_in_notification),
         contact_name=request.contact_name,

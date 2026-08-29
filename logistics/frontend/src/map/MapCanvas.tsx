@@ -3,18 +3,15 @@ import {
   TerraDrawPolygonMode,
   TerraDrawSelectMode,
   ValidateNotSelfIntersecting,
-  type GeoJSONStoreFeatures,
 } from 'terra-draw';
 import { TerraDrawMapLibreGLAdapter } from 'terra-draw-maplibre-gl-adapter';
 import maplibregl, { type GeoJSONSource, type Map as MapLibreMap, type Marker, type Popup } from 'maplibre-gl';
 import {
-  Box,
+  ArrowRight,
   Crosshair,
-  GitFork,
   Layers3,
   MapPin,
   MousePointer2,
-  Pencil,
   Scissors,
   Truck,
 } from 'lucide-react';
@@ -31,19 +28,21 @@ import type {
   OptimizationTraceEvent,
   OptimizationRun,
   RoutePlan,
-  ScenarioWorkspace,
+  WarehouseWorkspace,
   SimulationDerivedState,
   SimulationVehicleState,
   UUID,
   Zone,
 } from '../domain/types';
 import { api, type TruckRestrictionCategory, type TruckRestrictionMetadata } from '../api/client';
-import { CheckboxField } from '../components/ui';
+import { Button, CheckboxField } from '../components/ui';
 import { isRequestVisibleOnDate } from '../domain/request-dates';
 import { useUiStore, type LayerVisibility, type MapTool } from '../stores/ui-store';
 import { formatTime } from '../utils/format';
 import { deriveSimulationRouteLayers } from '../simulation/route-layers';
 import { RequestMapPopup } from './RequestMapCard';
+import type { PlanMove } from '../features/planning/PlanPanel';
+import type { SlotPlanningGeoJson, SlotPlanningMapPresentation } from '../features/slot-availability/types';
 import {
   buildTruckRestrictionPopupContent,
   truckRestrictionKey,
@@ -53,15 +52,15 @@ import {
   type TruckRestrictionLayerState,
 } from './TruckRestrictions';
 import { TruckRestrictionLayerMenuItem } from './TruckRestrictionsLayer';
+import { ROUTE_COLORS, routeFeatures } from './route-features';
 import {
-  TRAVEL_TIME_CONTOUR_LAYER_IDS,
   TRAVEL_TIME_CONTOUR_SOURCE_ID,
   TRAVEL_TIME_CONTOUR_STYLES,
+  TASK_TRAVEL_TIME_CONTOUR_LAYER_IDS,
+  WAREHOUSE_TRAVEL_TIME_CONTOUR_LAYER_IDS,
   deriveTravelTimeContourOrigins,
-  scenarioViewportCoordinates,
   travelTimeContourFeaturesForOrigin,
   travelTimeContourLayerSpecifications,
-  travelTimeContourStatusText,
   type TravelTimeContourLayerState,
   type TravelTimeContourOrigin,
 } from './TravelTimeContours';
@@ -74,8 +73,20 @@ const BLANK_STYLE: maplibregl.StyleSpecification = {
 };
 
 const EMPTY_COLLECTION: FeatureCollection = { type: 'FeatureCollection', features: [] };
-const SOURCE_IDS = [TRAVEL_TIME_CONTOUR_SOURCE_ID, 'rwms-zones', 'rwms-corridor', 'rwms-routes', 'rwms-traveled', 'rwms-active', 'rwms-candidates', 'rwms-selected', 'rwms-truck-restrictions'] as const;
-const ROUTE_COLORS = ['#5ee2b2', '#60a5fa', '#fb923c', '#c084fc', '#facc15', '#22d3ee'];
+const SOURCE_IDS = [
+  TRAVEL_TIME_CONTOUR_SOURCE_ID,
+  'rwms-zones',
+  'rwms-corridor',
+  'rwms-routes',
+  'rwms-traveled',
+  'rwms-active',
+  'rwms-candidates',
+  'rwms-selected',
+  'rwms-truck-restrictions',
+  'rwms-slot-route-before',
+  'rwms-slot-route-after',
+  'rwms-slot-pickup-candidates',
+] as const;
 const TRUCK_RESTRICTION_MIN_ZOOM = 8;
 const TRAVEL_TIME_CONTOUR_MAX_CONCURRENCY = 4;
 const TRUCK_RESTRICTION_LAYER_IDS = [
@@ -122,9 +133,11 @@ async function loadTravelTimeContourFeatures(
 
 const layerLabels: Record<keyof LayerVisibility, string> = {
   base: 'Базовая карта / сетка',
-  zones: 'Заливка зон',
-  zoneBorders: 'Границы зон',
-  warehouse: 'Склады и изохроны маршрутов',
+  zones: 'Особые зоны доставки',
+  zoneBorders: 'Границы особых зон',
+  warehouse: 'Склады',
+  warehouseIsochrones: 'Изохроны склада',
+  taskIsochrones: 'Изохроны задания',
   deliveries: 'Доставки (Д)',
   pickups: 'Возвраты (В)',
   unassigned: 'Нераспределённые',
@@ -138,29 +151,70 @@ const layerLabels: Record<keyof LayerVisibility, string> = {
   truckRestrictions: 'Ограничения грузового транспорта',
 };
 
+/** Optional unpersisted warehouse point retained for compatible map callers. */
+export interface PendingWarehouseMapPoint {
+  id: UUID;
+  latitude: number;
+  longitude: number;
+  label: string;
+}
+
 interface MapCanvasProps {
-  workspace: ScenarioWorkspace;
+  workspace: WarehouseWorkspace;
   plan: RoutePlan | null;
   simulation: SimulationDerivedState | null;
   traceEvents: OptimizationTraceEvent[];
   selected: MapSelection;
   onSelect: (selection: MapSelection) => void;
-  onPlacePoint: (kind: 'warehouse' | 'request', longitude: number, latitude: number) => void;
+  onPlacePoint: (kind: 'request', longitude: number, latitude: number) => void;
+  onWarehouseActivate: (warehouseId: UUID) => void;
   onZoneDrawn: (geometry: Polygon) => void;
   onZoneCutout: (zoneId: UUID, geometry: Polygon) => void;
-  onZoneGeometryChanged: (zoneId: UUID, geometry: Polygon | MultiPolygon) => void;
   onMapError: (message: string) => void;
   optimizationRun: OptimizationRun | null;
   onRequestMoveDraft: (requestId: UUID, longitude: number, latitude: number) => void;
-  onZoneRelation: (fromId: UUID, toId: UUID) => void;
   planningDate: string;
   busy: boolean;
   onScheduleRequestDate: (requestId: UUID, date: string, addIfMissing: boolean) => void;
   onUnscheduleRequest: (requestId: UUID) => void;
+  onMoveTask: (move: PlanMove) => void;
+  planningCheck: SlotPlanningMapPresentation | null;
+  onPlanningCheckPoint: (point: { latitude: number; longitude: number }) => void;
+  pendingWarehousePoint: PendingWarehouseMapPoint | null;
+}
+
+/** Explicit navigation control for a warehouse selected on the shared map. */
+export function WarehouseActivationControl({ currentWarehouseId, warehouses, selected, onActivate }: {
+  currentWarehouseId: UUID;
+  warehouses: WarehouseWorkspace['warehouses'];
+  selected: MapSelection;
+  onActivate: (warehouseId: UUID) => void;
+}) {
+  if (selected?.kind !== 'warehouse' || selected.id === currentWarehouseId) return null;
+  const target = warehouses.find((warehouse) => warehouse.id === selected.id);
+  if (!target) return null;
+  return (
+    <Button
+      size="sm"
+      className="map-toolbar__warehouse-activate"
+      aria-label={`Перейти к складу ${target.name}`}
+      title={`Перейти к складу «${target.name}»`}
+      onClick={() => onActivate(target.id)}
+    >
+      <span>Перейти к складу</span><ArrowRight size={15} aria-hidden="true" />
+    </Button>
+  );
 }
 
 function featureCollection(features: Feature[]): FeatureCollection {
   return { type: 'FeatureCollection', features };
+}
+
+function geoJsonFeatureCollection(value: SlotPlanningGeoJson | undefined): FeatureCollection {
+  if (!value) return EMPTY_COLLECTION;
+  if (value.type === 'FeatureCollection') return value;
+  if (value.type === 'Feature') return featureCollection([value]);
+  return featureCollection([{ type: 'Feature', properties: {}, geometry: value }]);
 }
 
 function zoneFeatures(zones: Zone[]): Feature[] {
@@ -170,38 +224,14 @@ function zoneFeatures(zones: Zone[]): Feature[] {
     properties: {
       id: zone.id,
       name: zone.name,
-      code: zone.code,
-      group: zone.route_group,
+      kind: zone.kind,
+      color: zone.color,
+      deliveryPrice: zone.delivery_price,
+      pickupPrice: zone.pickup_price,
       locked: zone.locked,
-      priority: zone.priority,
     },
     geometry: zone.geometry,
   }));
-}
-
-function routeFeatures(
-  plan: RoutePlan | null,
-  selectedCycleId: UUID | null,
-  selectedDriverShiftId: UUID | null,
-): Feature<LineString>[] {
-  if (!plan) return [];
-  return plan.driver_routes.flatMap((driverRoute, driverIndex) =>
-    driverRoute.cycles.flatMap((cycle, cycleIndex) =>
-      cycle.legs.map((leg, legIndex) => ({
-        ...leg.geometry,
-        properties: {
-          cycleId: cycle.id,
-          driver: driverRoute.driver_name,
-          driverIndex,
-          color: ROUTE_COLORS[(driverIndex * 3 + cycleIndex) % ROUTE_COLORS.length],
-          isSelected: selectedCycleId === cycle.id || selectedDriverShiftId === driverRoute.driver_shift_id,
-          hasSelectedCycle: selectedCycleId !== null || selectedDriverShiftId !== null,
-          label: `${driverRoute.driver_name} · рейс ${cycle.sequence} · участок ${legIndex + 1}/${cycle.legs.length}`,
-          legIndex,
-        },
-      })),
-    ),
-  );
 }
 
 function candidateFeatures(events: OptimizationTraceEvent[]): Feature<LineString>[] {
@@ -219,7 +249,7 @@ function candidateFeatures(events: OptimizationTraceEvent[]): Feature<LineString
   });
 }
 
-function selectedFeatures(selection: MapSelection, workspace: ScenarioWorkspace, plan: RoutePlan | null): Feature[] {
+function selectedFeatures(selection: MapSelection, workspace: WarehouseWorkspace, plan: RoutePlan | null): Feature[] {
   if (!selection) return [];
   if (selection.kind === 'zone') {
     const zone = workspace.zones.find((candidate) => candidate.id === selection.id);
@@ -227,7 +257,16 @@ function selectedFeatures(selection: MapSelection, workspace: ScenarioWorkspace,
   }
   if (selection.kind === 'cycle' && plan) {
     const cycle = plan.driver_routes.flatMap((route) => route.cycles).find((candidate) => candidate.id === selection.id);
-    return cycle?.legs.map((leg) => leg.geometry) ?? [];
+    if (!cycle) return [];
+    return [
+      ...(cycle.cross_warehouse_service?.positioning_outbound_geometry
+        ? [cycle.cross_warehouse_service.positioning_outbound_geometry]
+        : []),
+      ...cycle.legs.map((leg) => leg.geometry),
+      ...(cycle.cross_warehouse_service?.positioning_return_geometry
+        ? [cycle.cross_warehouse_service.positioning_return_geometry]
+        : []),
+    ];
   }
   return [];
 }
@@ -325,17 +364,14 @@ function addOverlaySources(map: MapLibreMap): void {
   travelTimeContourLayerSpecifications().forEach(addLayer);
   addLayer({
     id: 'rwms-zones-fill', type: 'fill', source: 'rwms-zones',
-    paint: { 'fill-color': ['case', ['==', ['get', 'group'], 'WEST'], '#60a5fa', ['==', ['get', 'group'], 'EAST'], '#fb923c', ['==', ['get', 'group'], 'REGION'], '#a78bfa', '#5ee2b2'], 'fill-opacity': 0.16 },
+    paint: { 'fill-color': ['coalesce', ['get', 'color'], '#5ee2b2'], 'fill-opacity': 0.2 },
   });
-  addLayer({ id: 'rwms-zones-line', type: 'line', source: 'rwms-zones', paint: { 'line-color': '#8ba8c7', 'line-width': 1.5, 'line-opacity': 0.75 } });
+  addLayer({ id: 'rwms-zones-line', type: 'line', source: 'rwms-zones', paint: { 'line-color': ['coalesce', ['get', 'color'], '#8ba8c7'], 'line-width': 2, 'line-opacity': 0.82 } });
   addLayer({ id: 'rwms-candidates-line', type: 'line', source: 'rwms-candidates', paint: { 'line-color': ['case', ['get', 'rejected'], '#fb7185', '#fbbf24'], 'line-width': 2, 'line-opacity': 0.48, 'line-dasharray': [2, 2] } });
   addLayer({ id: 'rwms-corridor-line', type: 'line', source: 'rwms-corridor', paint: { 'line-color': '#38bdf8', 'line-width': 18, 'line-opacity': 0.1 } });
-  addLayer({ id: 'rwms-routes-halo', type: 'line', source: 'rwms-routes', paint: { 'line-color': ['case', ['get', 'isSelected'], '#f8fafc', '#06111d'], 'line-width': ['case', ['get', 'isSelected'], 10, 8], 'line-opacity': ['case', ['get', 'hasSelectedCycle'], ['case', ['get', 'isSelected'], 0.9, 0.28], 0.58] } });
-  addLayer({ id: 'rwms-routes-line', type: 'line', source: 'rwms-routes', paint: { 'line-color': ['case', ['get', 'hasSelectedCycle'], ['case', ['get', 'isSelected'], ['get', 'color'], '#94a3b8'], ['get', 'color']], 'line-width': ['case', ['get', 'isSelected'], 6, 4.5], 'line-opacity': ['case', ['get', 'hasSelectedCycle'], ['case', ['get', 'isSelected'], 1, 0.28], 0.9] } });
-  addLayer({ id: 'rwms-traveled-line', type: 'line', source: 'rwms-traveled', paint: { 'line-color': '#cbd5e1', 'line-width': 5, 'line-opacity': 0.82 } });
-  addLayer({ id: 'rwms-active-line', type: 'line', source: 'rwms-active', paint: { 'line-color': '#fbbf24', 'line-width': 7, 'line-opacity': 0.95 } });
   addLayer({ id: 'rwms-selected-fill', type: 'fill', source: 'rwms-selected', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#fbbf24', 'fill-opacity': 0.22 } });
-  addLayer({ id: 'rwms-selected-line', type: 'line', source: 'rwms-selected', paint: { 'line-color': '#fbbf24', 'line-width': 6, 'line-opacity': 0.9 } });
+  addLayer({ id: 'rwms-slot-pickup-candidates-points', type: 'circle', source: 'rwms-slot-pickup-candidates', filter: ['==', ['geometry-type'], 'Point'], layout: { visibility: 'none' }, paint: { 'circle-color': ['case', ['==', ['get', 'selected'], true], '#5ee2b2', '#fb923c'], 'circle-radius': 7, 'circle-stroke-color': '#07101d', 'circle-stroke-width': 2 } });
+  addLayer({ id: 'rwms-slot-pickup-candidates-lines', type: 'line', source: 'rwms-slot-pickup-candidates', filter: ['!=', ['geometry-type'], 'Point'], layout: { visibility: 'none' }, paint: { 'line-color': '#fb923c', 'line-width': 3, 'line-opacity': 0.8, 'line-dasharray': [2, 2] } });
   addLayer({
     id: 'rwms-truck-restrictions-lines',
     type: 'line',
@@ -388,24 +424,13 @@ function addOverlaySources(map: MapLibreMap): void {
       'icon-allow-overlap': false,
     },
   });
-}
-
-function splitZoneForDraw(zone: Zone): GeoJSONStoreFeatures<Polygon>[] {
-  if (zone.geometry.type === 'Polygon') {
-    return [{ type: 'Feature', id: `${zone.id}:0`, properties: { mode: 'polygon', zoneId: zone.id, part: 0 }, geometry: zone.geometry }];
-  }
-  return zone.geometry.coordinates.map((coordinates, part) => ({
-    type: 'Feature',
-    id: `${zone.id}:${part}`,
-    properties: { mode: 'polygon', zoneId: zone.id, part },
-    geometry: { type: 'Polygon', coordinates },
-  }));
-}
-
-function recombineZone(zone: Zone, part: number, polygon: Polygon): Polygon | MultiPolygon {
-  if (zone.geometry.type === 'Polygon') return polygon;
-  const coordinates = zone.geometry.coordinates.map((value, index) => index === part ? polygon.coordinates : value);
-  return { type: 'MultiPolygon', coordinates };
+  addLayer({ id: 'rwms-slot-route-before-line', type: 'line', source: 'rwms-slot-route-before', layout: { visibility: 'none' }, paint: { 'line-color': '#94a3b8', 'line-width': 5, 'line-opacity': 0.72, 'line-dasharray': [2, 1.5] } });
+  addLayer({ id: 'rwms-routes-halo', type: 'line', source: 'rwms-routes', paint: { 'line-color': ['case', ['get', 'isSelected'], '#f8fafc', '#06111d'], 'line-width': ['case', ['get', 'isSelected'], 10, 8], 'line-opacity': ['case', ['get', 'hasSelectedCycle'], ['case', ['get', 'isSelected'], 0.9, 0.28], 0.58] } });
+  addLayer({ id: 'rwms-routes-line', type: 'line', source: 'rwms-routes', paint: { 'line-color': ['case', ['get', 'hasSelectedCycle'], ['case', ['get', 'isSelected'], ['get', 'color'], '#94a3b8'], ['get', 'color']], 'line-width': ['case', ['get', 'isSelected'], 6, 4.5], 'line-opacity': ['case', ['get', 'hasSelectedCycle'], ['case', ['get', 'isSelected'], 1, 0.28], 0.9] } });
+  addLayer({ id: 'rwms-slot-route-after-line', type: 'line', source: 'rwms-slot-route-after', layout: { visibility: 'none' }, paint: { 'line-color': '#5ee2b2', 'line-width': 7, 'line-opacity': 0.96 } });
+  addLayer({ id: 'rwms-traveled-line', type: 'line', source: 'rwms-traveled', paint: { 'line-color': '#cbd5e1', 'line-width': 5, 'line-opacity': 0.82 } });
+  addLayer({ id: 'rwms-active-line', type: 'line', source: 'rwms-active', paint: { 'line-color': '#fbbf24', 'line-width': 7, 'line-opacity': 0.95 } });
+  addLayer({ id: 'rwms-selected-line', type: 'line', source: 'rwms-selected', paint: { 'line-color': '#fbbf24', 'line-width': 6, 'line-opacity': 0.9 } });
 }
 
 export function MapCanvas({
@@ -416,17 +441,20 @@ export function MapCanvas({
   selected,
   onSelect,
   onPlacePoint,
+  onWarehouseActivate,
   onZoneDrawn,
   onZoneCutout,
-  onZoneGeometryChanged,
   onMapError,
   optimizationRun,
   onRequestMoveDraft,
-  onZoneRelation,
   planningDate,
   busy,
   onScheduleRequestDate,
   onUnscheduleRequest,
+  onMoveTask,
+  planningCheck,
+  onPlanningCheckPoint,
+  pendingWarehousePoint,
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -438,38 +466,55 @@ export function MapCanvas({
   const truckRestrictionLookupRef = useRef<ReturnType<typeof truckRestrictionLookup>>(new Map());
   const truckRestrictionMetadataRef = useRef<TruckRestrictionMetadata | null>(null);
   const hydratedRef = useRef(false);
-  const fittedScenarioIdRef = useRef<UUID | null>(null);
+  const fittedWarehouseIdRef = useRef<UUID | null>(null);
+  const fittedPendingWarehouseIdRef = useRef<UUID | null>(null);
   const fittedPlanIdRef = useRef<UUID | null>(null);
-  const zonesRef = useRef(workspace.zones);
   const [mapReady, setMapReady] = useState(false);
-  const [offlineMode, setOfflineMode] = useState(!import.meta.env.VITE_MAP_STYLE_URL);
   const [layersOpen, setLayersOpen] = useState(false);
   const [truckRestrictionState, setTruckRestrictionState] = useState<TruckRestrictionLayerState>(EMPTY_TRUCK_RESTRICTION_STATE);
   const [travelTimeContourState, setTravelTimeContourState] = useState<TravelTimeContourLayerState>({ status: 'idle' });
   const mapTool = useUiStore((state) => state.mapTool);
   const setMapTool = useUiStore((state) => state.setMapTool);
-  const relationSourceZoneId = useUiStore((state) => state.relationSourceZoneId);
-  const setRelationSourceZoneId = useUiStore((state) => state.setRelationSourceZoneId);
   const layers = useUiStore((state) => state.layers);
   const toggleLayer = useUiStore((state) => state.toggleLayer);
   const styleUrl = import.meta.env.VITE_MAP_STYLE_URL;
   const cutoutZone = mapTool === 'CUT_ZONE' && selected?.kind === 'zone'
     ? workspace.zones.find((zone) => zone.id === selected.id) ?? null
     : null;
+  const selectedTaskContourOrigin = useMemo<TravelTimeContourOrigin | null>(() => {
+    if (planningCheck?.active && planningCheck.point) {
+      return {
+        kind: 'TASK',
+        id: 'slot-check-point',
+        name: 'Проверяемое задание',
+        ...planningCheck.point,
+      };
+    }
+    if (selected?.kind !== 'request') return null;
+    const request = workspace.requests.find((candidate) => candidate.id === selected.id);
+    return request ? {
+      kind: 'TASK',
+      id: request.id,
+      name: request.name,
+      latitude: request.latitude,
+      longitude: request.longitude,
+    } : null;
+  }, [planningCheck?.active, planningCheck?.point, selected, workspace.requests]);
   const travelTimeContourOrigins = useMemo(
-    () => deriveTravelTimeContourOrigins(workspace.warehouses, plan),
-    [plan, workspace.warehouses],
+    () => deriveTravelTimeContourOrigins(
+      workspace.warehouses,
+      selectedTaskContourOrigin,
+      layers.warehouseIsochrones,
+      layers.taskIsochrones,
+    ),
+    [layers.taskIsochrones, layers.warehouseIsochrones, selectedTaskContourOrigin, workspace.warehouses],
   );
-  zonesRef.current = workspace.zones;
-
   const onZoneDrawnRef = useRef(onZoneDrawn);
   const onZoneCutoutRef = useRef(onZoneCutout);
-  const onZoneGeometryChangedRef = useRef(onZoneGeometryChanged);
   const mapToolRef = useRef(mapTool);
   const cutoutZoneRef = useRef(cutoutZone);
   onZoneDrawnRef.current = onZoneDrawn;
   onZoneCutoutRef.current = onZoneCutout;
-  onZoneGeometryChangedRef.current = onZoneGeometryChanged;
   mapToolRef.current = mapTool;
   cutoutZoneRef.current = cutoutZone;
 
@@ -486,7 +531,6 @@ export function MapCanvas({
     });
     mapRef.current = map;
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
-    map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-left');
 
     const prepare = () => {
       addOverlaySources(map);
@@ -498,7 +542,6 @@ export function MapCanvas({
       const message = errorValue instanceof Error ? errorValue.message : 'неизвестная ошибка рендеринга';
       if (styleUrl && !map.isStyleLoaded() && !fellBack) {
         fellBack = true;
-        setOfflineMode(true);
         setMapReady(false);
         onMapError('Стиль карты не загрузился — включён автономный координатный фон. Рисование и маршруты доступны.');
         map.setStyle(BLANK_STYLE);
@@ -608,7 +651,7 @@ export function MapCanvas({
     const map = mapRef.current;
     travelTimeContourAbortRef.current?.abort();
     travelTimeContourAbortRef.current = null;
-    if (!layers.warehouse) {
+    if (!layers.warehouseIsochrones && !layers.taskIsochrones) {
       if (map && mapReady) setSource(map, TRAVEL_TIME_CONTOUR_SOURCE_ID, EMPTY_COLLECTION);
       setTravelTimeContourState({ status: 'idle' });
       return;
@@ -628,8 +671,8 @@ export function MapCanvas({
       setSource(map, TRAVEL_TIME_CONTOUR_SOURCE_ID, featureCollection(features));
       setTravelTimeContourState({
         status: 'loaded',
-        depotCount: travelTimeContourOrigins.filter((origin) => origin.kind === 'DEPOT').length,
-        routeFrontCount: travelTimeContourOrigins.filter((origin) => origin.kind === 'ROUTE_FRONT').length,
+        warehouseCount: travelTimeContourOrigins.filter((origin) => origin.kind === 'DEPOT').length,
+        taskCount: travelTimeContourOrigins.filter((origin) => origin.kind === 'TASK').length,
       });
     }).catch((error: unknown) => {
       if (controller.signal.aborted || travelTimeContourAbortRef.current !== controller) return;
@@ -646,7 +689,7 @@ export function MapCanvas({
       controller.abort();
       if (travelTimeContourAbortRef.current === controller) travelTimeContourAbortRef.current = null;
     };
-  }, [layers.warehouse, mapReady, travelTimeContourOrigins]);
+  }, [layers.taskIsochrones, layers.warehouseIsochrones, mapReady, travelTimeContourOrigins]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -729,11 +772,6 @@ export function MapCanvas({
         draw.setMode('polygon');
         return;
       }
-      const zoneId = feature.properties.zoneId;
-      const part = feature.properties.part;
-      if (typeof zoneId !== 'string' || typeof part !== 'number') return;
-      const zone = zonesRef.current.find((candidate) => candidate.id === zoneId);
-      if (zone && !zone.locked) onZoneGeometryChangedRef.current(zone.id, recombineZone(zone, part, feature.geometry));
     };
     draw.on('finish', onFinish);
     drawRef.current = draw;
@@ -749,11 +787,7 @@ export function MapCanvas({
     if (!draw) return;
     hydratedRef.current = true;
     draw.clear();
-    if (mapTool === 'EDIT_ZONE') {
-      const features = workspace.zones.filter((zone) => !zone.locked).flatMap(splitZoneForDraw);
-      if (features.length) draw.addFeatures(features);
-      draw.setMode('select');
-    } else if (mapTool === 'DRAW_ZONE') {
+    if (mapTool === 'DRAW_ZONE') {
       draw.setMode('polygon');
     } else if (mapTool === 'CUT_ZONE' && cutoutZone && !cutoutZone.locked) {
       draw.setMode('polygon');
@@ -761,13 +795,13 @@ export function MapCanvas({
       draw.setMode('select');
     }
     queueMicrotask(() => { hydratedRef.current = false; });
-  }, [cutoutZone, mapTool, workspace.zones]);
+  }, [cutoutZone, mapTool]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
     const onClick = (event: maplibregl.MapMouseEvent) => {
-      if (mapTool === 'PLACE_WAREHOUSE') onPlacePoint('warehouse', event.lngLat.lng, event.lngLat.lat);
+      if (planningCheck?.active) onPlanningCheckPoint({ longitude: event.lngLat.lng, latitude: event.lngLat.lat });
       else if (mapTool === 'ADD_DELIVERY' || mapTool === 'ADD_PICKUP') onPlacePoint('request', event.lngLat.lng, event.lngLat.lat);
       else if (mapTool === 'SELECT') onSelect(null);
     };
@@ -775,17 +809,6 @@ export function MapCanvas({
     const onZoneClick = (event: maplibregl.MapLayerMouseEvent) => {
       const id = featureProperty(event.features?.[0], 'id');
       if (!id) return;
-      if (mapTool === 'RELATE_ZONES') {
-        if (!relationSourceZoneId) {
-          setRelationSourceZoneId(id);
-          onSelect({ kind: 'zone', id });
-        } else if (relationSourceZoneId !== id) {
-          onZoneRelation(relationSourceZoneId, id);
-          setRelationSourceZoneId(null);
-          setMapTool('SELECT');
-        }
-        return;
-      }
       onSelect({ kind: 'zone', id });
     };
     const onRouteClick = (event: maplibregl.MapLayerMouseEvent) => {
@@ -799,11 +822,7 @@ export function MapCanvas({
       map.off('click', 'rwms-zones-fill', onZoneClick);
       map.off('click', 'rwms-routes-line', onRouteClick);
     };
-  }, [mapReady, mapTool, onPlacePoint, onSelect, onZoneRelation, relationSourceZoneId, setMapTool, setRelationSourceZoneId]);
-
-  useEffect(() => {
-    if (mapTool !== 'RELATE_ZONES' && relationSourceZoneId) setRelationSourceZoneId(null);
-  }, [mapTool, relationSourceZoneId, setRelationSourceZoneId]);
+  }, [mapReady, mapTool, onPlacePoint, onPlanningCheckPoint, onSelect, planningCheck?.active]);
 
   const selectedCycleId = selected?.kind === 'cycle' ? selected.id : null;
   const selectedDriverShiftId = selected?.kind === 'driver' ? selected.id : null;
@@ -822,7 +841,7 @@ export function MapCanvas({
   const routeLegend = useMemo(() => plan?.driver_routes.flatMap((route, driverIndex) => route.cycles.map((cycle, cycleIndex) => ({
     id: cycle.id,
     label: `${route.driver_name} · рейс ${cycle.sequence}`,
-    detail: `${cycle.legs.length} участк. · ${cycle.stops.length} точек`,
+    detail: `${cycle.legs.length + (cycle.cross_warehouse_service?.positioning_outbound_geometry ? 1 : 0) + (cycle.cross_warehouse_service?.positioning_return_geometry ? 1 : 0)} участк. · ${cycle.stops.length} точек`,
     color: ROUTE_COLORS[(driverIndex * 3 + cycleIndex) % ROUTE_COLORS.length],
   }))) ?? [], [plan]);
   const unassignedRequestIds = useMemo(
@@ -847,25 +866,36 @@ export function MapCanvas({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapReady || fittedScenarioIdRef.current === workspace.scenario.id) return;
-    const coordinates = scenarioViewportCoordinates(workspace.warehouses, workspace.zones);
-    if (!coordinates.length) return;
-    fittedScenarioIdRef.current = workspace.scenario.id;
+    if (!map || !mapReady) return;
+    const candidate = planningCheck?.selectedSlot?.best_candidate;
+    setSource(map, 'rwms-slot-route-before', geoJsonFeatureCollection(candidate?.route_before_geojson));
+    setSource(map, 'rwms-slot-route-after', geoJsonFeatureCollection(candidate?.route_after_geojson));
+    setSource(map, 'rwms-slot-pickup-candidates', geoJsonFeatureCollection(candidate?.pickup_candidates_geojson));
+  }, [mapReady, planningCheck?.selectedSlot]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady || fittedWarehouseIdRef.current === workspace.warehouse.id) return;
+    fittedWarehouseIdRef.current = workspace.warehouse.id;
     fittedPlanIdRef.current = null;
-    if (coordinates.length === 1) {
-      map.easeTo({ center: coordinates[0]!, zoom: 11, duration: 450 });
+    map.easeTo({ center: [workspace.warehouse.longitude, workspace.warehouse.latitude], zoom: 11, duration: 550 });
+  }, [mapReady, workspace.warehouse.id, workspace.warehouse.latitude, workspace.warehouse.longitude]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    if (!pendingWarehousePoint) {
+      fittedPendingWarehouseIdRef.current = null;
       return;
     }
-    const bounds = coordinates.reduce(
-      (current, coordinate) => current.extend(coordinate),
-      new maplibregl.LngLatBounds(coordinates[0], coordinates[0]),
-    );
-    map.fitBounds(bounds, {
-      padding: { top: 74, bottom: 74, left: 74, right: 290 },
-      maxZoom: 12,
-      duration: 450,
+    if (fittedPendingWarehouseIdRef.current === pendingWarehousePoint.id) return;
+    fittedPendingWarehouseIdRef.current = pendingWarehousePoint.id;
+    map.easeTo({
+      center: [pendingWarehousePoint.longitude, pendingWarehousePoint.latitude],
+      zoom: 11,
+      duration: 550,
     });
-  }, [mapReady, workspace.scenario.id, workspace.warehouses, workspace.zones]);
+  }, [mapReady, pendingWarehousePoint]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -887,12 +917,35 @@ export function MapCanvas({
     if (!map || !mapReady) return;
     markersRef.current.forEach((marker) => marker.remove());
     const markers: Marker[] = [];
-    if (layers.warehouse) {
+    if (layers.warehouse || planningCheck?.active) {
       workspace.warehouses.forEach((warehouse) => {
         const element = markerElement('warehouse', `Склад: ${warehouse.name}`, selected?.kind === 'warehouse' && selected.id === warehouse.id);
-        element.addEventListener('click', (event) => { event.stopPropagation(); onSelect({ kind: 'warehouse', id: warehouse.id }); });
+        element.addEventListener('click', (event) => {
+          event.stopPropagation();
+          onSelect({ kind: 'warehouse', id: warehouse.id });
+        });
         markers.push(new maplibregl.Marker({ element, anchor: 'center' }).setLngLat([warehouse.longitude, warehouse.latitude]).addTo(map));
       });
+    }
+    if (pendingWarehousePoint) {
+      const element = markerElement('warehouse', pendingWarehousePoint.label, false);
+      element.classList.add('map-marker--planning-check');
+      const markerLabel = element.querySelector('span');
+      if (markerLabel) markerLabel.textContent = 'Н';
+      markers.push(new maplibregl.Marker({ element, anchor: 'bottom' })
+        .setLngLat([pendingWarehousePoint.longitude, pendingWarehousePoint.latitude])
+        .setPopup(new maplibregl.Popup({ offset: 18 }).setText(pendingWarehousePoint.label))
+        .addTo(map));
+    }
+    if (planningCheck?.active && planningCheck.point) {
+      const element = markerElement('delivery', 'Новый адрес для проверки слотов', false);
+      element.classList.add('map-marker--planning-check');
+      const markerLabel = element.querySelector('span');
+      if (markerLabel) markerLabel.textContent = 'Н';
+      markers.push(new maplibregl.Marker({ element, anchor: 'bottom' })
+        .setLngLat([planningCheck.point.longitude, planningCheck.point.latitude])
+        .setPopup(new maplibregl.Popup({ offset: 18 }).setText('Новый адрес для проверки слотов'))
+        .addTo(map));
     }
     requestsForPlanningDate.forEach((request) => {
       const visible = request.type === 'DELIVERY' ? layers.deliveries : layers.pickups;
@@ -902,7 +955,7 @@ export function MapCanvas({
       if (isUnassigned) {
         element.classList.add('map-marker--unassigned');
         element.style.borderColor = '#fb7185';
-        element.setAttribute('aria-label', `Нераспределённая заявка: ${request.name}`);
+        element.setAttribute('aria-label', `Нераспределённая ${request.type === 'DELIVERY' ? 'доставка' : 'точка вывоза'}: ${request.name}`);
         const markerLabel = element.querySelector('span');
         if (markerLabel) markerLabel.textContent = `${request.type === 'DELIVERY' ? 'Д' : 'В'}!`;
       }
@@ -917,7 +970,7 @@ export function MapCanvas({
     if (layers.trucks && simulation) {
       simulation.vehicles.forEach((vehicle) => {
         const coordinates = vehicle.position.geometry.coordinates;
-        const vehicleLabel = simulationVehicleMapLabel(vehicle, workspace.scenario.timezone);
+        const vehicleLabel = simulationVehicleMapLabel(vehicle, workspace.warehouse.timezone);
         const element = markerElement('truck', vehicleLabel, selected?.kind === 'driver' && selected.id === vehicle.driver_shift_id);
         element.addEventListener('click', (event) => { event.stopPropagation(); onSelect({ kind: 'driver', id: vehicle.driver_shift_id }); });
         const popup = new maplibregl.Popup({ offset: 18 }).setText(vehicleLabel);
@@ -926,7 +979,7 @@ export function MapCanvas({
     }
     markersRef.current = markers;
     return () => markers.forEach((marker) => marker.remove());
-  }, [layers.deliveries, layers.pickups, layers.trucks, layers.unassigned, layers.warehouse, mapReady, onRequestMoveDraft, onSelect, requestsForPlanningDate, selected, simulation, unassignedRequestIds, workspace.scenario.timezone, workspace.warehouses]);
+  }, [layers.deliveries, layers.pickups, layers.trucks, layers.unassigned, layers.warehouse, mapReady, onRequestMoveDraft, onSelect, pendingWarehousePoint, planningCheck?.active, planningCheck?.point, requestsForPlanningDate, selected, simulation, unassignedRequestIds, workspace.warehouse.id, workspace.warehouse.timezone, workspace.warehouses]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -946,76 +999,71 @@ export function MapCanvas({
       ['rwms-truck-restrictions-points', layers.truckRestrictions],
       ['rwms-truck-restrictions-line-labels', layers.truckRestrictions],
       ['rwms-truck-restrictions-point-labels', layers.truckRestrictions],
-      ...TRAVEL_TIME_CONTOUR_LAYER_IDS.map((id): [string, boolean] => [id, layers.warehouse]),
+      ...WAREHOUSE_TRAVEL_TIME_CONTOUR_LAYER_IDS.map((id): [string, boolean] => [id, layers.warehouseIsochrones]),
+      ...TASK_TRAVEL_TIME_CONTOUR_LAYER_IDS.map((id): [string, boolean] => [id, layers.taskIsochrones && selectedTaskContourOrigin !== null]),
+      ['rwms-slot-route-before-line', Boolean(planningCheck?.active && planningCheck.layers.routeBefore)],
+      ['rwms-slot-route-after-line', Boolean(planningCheck?.active && planningCheck.layers.routeAfter)],
+      ['rwms-slot-pickup-candidates-points', Boolean(planningCheck?.active && planningCheck.layers.pickupCandidates)],
+      ['rwms-slot-pickup-candidates-lines', Boolean(planningCheck?.active && planningCheck.layers.pickupCandidates)],
     ];
     visibility.forEach(([id, visible]) => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none'));
     const overlayIds = new Set(visibility.map(([id]) => id));
     map.getStyle().layers.forEach((layer) => {
       if (!overlayIds.has(layer.id) && !layer.id.startsWith('td-')) map.setLayoutProperty(layer.id, 'visibility', layers.base ? 'visible' : 'none');
     });
-  }, [layers, mapReady]);
+  }, [layers, mapReady, planningCheck?.active, planningCheck?.layers, selectedTaskContourOrigin]);
 
   const toolButton = useCallback((tool: MapTool, label: string, icon: React.ReactNode) => (
     <button type="button" aria-label={label} title={label} aria-pressed={mapTool === tool} onClick={() => setMapTool(tool)}>{icon}</button>
   ), [mapTool, setMapTool]);
-  const travelTimeContourStatus = travelTimeContourStatusText(travelTimeContourState, layers.warehouse);
-
   return (
     <main className="map-stage" data-testid="map-stage">
       <div className="map-container" ref={containerRef} aria-label="Интерактивная логистическая карта" />
       <div className="map-overlay map-toolbar" role="toolbar" aria-label="Инструменты карты">
         {toolButton('SELECT', 'Выбрать объект', <MousePointer2 size={17} aria-hidden="true" />)}
-        {toolButton('PLACE_WAREHOUSE', 'Поставить склад', <Box size={17} aria-hidden="true" />)}
         {toolButton('ADD_DELIVERY', 'Добавить доставку', <MapPin size={17} aria-hidden="true" />)}
         {toolButton('ADD_PICKUP', 'Добавить вывоз', <Truck size={17} aria-hidden="true" />)}
         {toolButton('DRAW_ZONE', 'Нарисовать зону', <Crosshair size={17} aria-hidden="true" />)}
         {toolButton('CUT_ZONE', 'Вырезать область внутри зоны', <Scissors size={17} aria-hidden="true" />)}
-        {toolButton('EDIT_ZONE', 'Редактировать вершины зон', <Pencil size={17} aria-hidden="true" />)}
-        {toolButton('RELATE_ZONES', 'Связать две зоны', <GitFork size={17} aria-hidden="true" />)}
         <button type="button" aria-label="Слои карты" title="Слои карты" aria-pressed={layersOpen} onClick={() => setLayersOpen((open) => !open)}><Layers3 size={17} aria-hidden="true" /></button>
+        <WarehouseActivationControl currentWarehouseId={workspace.warehouse.id} warehouses={workspace.warehouses} selected={selected} onActivate={onWarehouseActivate} />
       </div>
-      {layersOpen ? (
-        <div className="map-overlay layer-menu" aria-label="Видимость слоёв">
-          <h3>Слои карты</h3>
-          {(Object.keys(layerLabels) as Array<keyof LayerVisibility>).map((layer) => layer === 'truckRestrictions' ? (
-            <TruckRestrictionLayerMenuItem
-              key={layer}
-              checked={layers.truckRestrictions}
-              state={truckRestrictionState}
-              onChange={() => toggleLayer('truckRestrictions')}
-            />
-          ) : (
-            <CheckboxField key={layer} label={layerLabels[layer]} checked={layers[layer]} onChange={() => toggleLayer(layer)} />
-          ))}
-        </div>
-      ) : null}
-      {layers.routes && routeLegend.length ? (
-        <div className="map-overlay route-legend" aria-label="Все участки построенного плана">
-          <strong>Полные маршруты</strong>
-          <small>Каждая строка — весь цикл, включая возврат на склад.</small>
-          {routeLegend.map((route) => <button type="button" key={route.id} onClick={() => onSelect({ kind: 'cycle', id: route.id })}>
-            <i style={{ background: route.color }} />
-            <span>{route.label}<small>{route.detail}</small></span>
-          </button>)}
-        </div>
-      ) : null}
-      {layers.warehouse && travelTimeContourState.status === 'loaded' ? (
-        <div
-          className="map-overlay route-legend"
-          aria-label="Изохроны складов и точек маршрута"
-          style={{ top: 62, left: 12, right: 'auto', width: 176, pointerEvents: 'none' }}
-        >
-          <strong>Время от складов и маршрутов</strong>
-          <small>Складов: {travelTimeContourState.depotCount} · точек маршрута: {travelTimeContourState.routeFrontCount}</small>
-          <small>Склады + последние точки доставки водителей. Оценка Valhalla; точный маршрут проверяет планировщик.</small>
-          <div style={{ display: 'grid', gap: 5 }}>
-            {TRAVEL_TIME_CONTOUR_STYLES.map((style) => (
-              <span key={style.minutes} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11 }}>
-                <i style={{ width: 14, height: 14, borderRadius: '50%', background: style.color, opacity: 0.9 }} />
-                {style.label}
-              </span>
-            ))}
-          </div>
+      {(layersOpen || (layers.routes && routeLegend.length > 0)) ? (
+        <div className="map-overlay map-overlay-stack">
+          {layers.routes && routeLegend.length ? (
+            <div className="route-legend" aria-label="Все участки построенного плана">
+              <strong>Полные маршруты</strong>
+              <small>Каждая строка — весь цикл, включая возврат на склад.</small>
+              {routeLegend.map((route) => <button type="button" key={route.id} onClick={() => onSelect({ kind: 'cycle', id: route.id })}>
+                <i style={{ background: route.color }} />
+                <span>{route.label}<small>{route.detail}</small></span>
+              </button>)}
+            </div>
+          ) : null}
+          {layersOpen ? (
+            <div className="layer-menu" aria-label="Видимость слоёв">
+              <h3>Слои карты</h3>
+              {(Object.keys(layerLabels) as Array<keyof LayerVisibility>).map((layer) => layer === 'truckRestrictions' ? (
+                <TruckRestrictionLayerMenuItem
+                  key={layer}
+                  checked={layers.truckRestrictions}
+                  state={truckRestrictionState}
+                  onChange={() => toggleLayer('truckRestrictions')}
+                />
+              ) : (
+                <CheckboxField key={layer} label={layerLabels[layer]} checked={layers[layer]} onChange={() => toggleLayer(layer)} />
+              ))}
+              {(layers.warehouseIsochrones || layers.taskIsochrones) ? (
+                <div className="contour-layer-status" role="status" aria-live="polite">
+                  {travelTimeContourState.status === 'loading' ? <small>Загружаем изохроны…</small> : null}
+                  {travelTimeContourState.status === 'unavailable' ? <small>Изохроны недоступны: {travelTimeContourState.error}</small> : null}
+                  {layers.taskIsochrones && !selectedTaskContourOrigin ? <small>Для изохрона задания нажмите на задание или поставьте точку проверки.</small> : null}
+                  {travelTimeContourState.status === 'loaded' ? <small>Складов: {travelTimeContourState.warehouseCount} · заданий: {travelTimeContourState.taskCount}</small> : null}
+                  {travelTimeContourState.status === 'loaded' ? <span>{TRAVEL_TIME_CONTOUR_STYLES.map((style) => <i key={style.minutes} title={style.label} style={{ background: style.color }} />)}</span> : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
       {selectedRequest && mapReady && mapRef.current ? (
@@ -1023,29 +1071,15 @@ export function MapCanvas({
           map={mapRef.current}
           request={selectedRequest}
           zone={workspace.zones.find((zone) => zone.id === selectedRequest.zone_id) ?? null}
+          plan={plan}
           planningDate={planningDate}
           busy={busy}
           onSchedule={onScheduleRequestDate}
           onUnschedule={onUnscheduleRequest}
+          onMoveTask={onMoveTask}
           onClose={() => onSelect(null)}
         />
       ) : null}
-      <div
-        className={`map-overlay map-status ${offlineMode || travelTimeContourState.status === 'unavailable' ? 'map-status--error' : ''}`}
-        role="status"
-        aria-live="polite"
-      >
-        <i />{mapTool === 'CUT_ZONE'
-          ? !cutoutZone
-            ? 'Вырез зоны · выберите исходную зону'
-            : cutoutZone.locked
-              ? `Вырез зоны · ${cutoutZone.code} заблокирована`
-              : `Вырез зоны · обведите внутреннюю область в ${cutoutZone.code}`
-          : mapTool === 'RELATE_ZONES'
-          ? relationSourceZoneId ? 'Связи зон · выберите вторую зону' : 'Связи зон · выберите первую зону'
-          : offlineMode ? 'Grid mode · без внешней карты' : 'Map mode · MapLibre'}
-        {travelTimeContourStatus ? ` · ${travelTimeContourStatus}` : ''}
-      </div>
       {!mapReady ? <div className="map-overlay progress-card"><span className="spinner">Карта запускается…</span></div> : null}
       {optimizationRun && ['PENDING', 'RUNNING'].includes(optimizationRun.status) ? (
         <div className="progress-card" role="status" data-testid="optimization-progress">

@@ -40,16 +40,6 @@ class RequestStatus(StrEnum):
     UNASSIGNED = "UNASSIGNED"
 
 
-class RelationType(StrEnum):
-    """Operational meaning of a directed transition between two zones."""
-
-    ADJACENT = "ADJACENT"
-    PREFERRED = "PREFERRED"
-    ALLOWED = "ALLOWED"
-    DISCOURAGED = "DISCOURAGED"
-    BLOCKED = "BLOCKED"
-
-
 class StopType(StrEnum):
     """Observable operation performed at a route stop."""
 
@@ -68,7 +58,6 @@ class UnassignedReasonCode(StrEnum):
     NO_SHIFT_CAPACITY = "NO_SHIFT_CAPACITY"
     TIME_WINDOW_CONFLICT = "TIME_WINDOW_CONFLICT"
     SHIFT_LIMIT_EXCEEDED = "SHIFT_LIMIT_EXCEEDED"
-    ZONE_RELATION_BLOCKED = "ZONE_RELATION_BLOCKED"
     DETOUR_TOO_LARGE = "DETOUR_TOO_LARGE"
     OUTSIDE_ZONES = "OUTSIDE_ZONES"
     REQUEST_NOT_READY = "REQUEST_NOT_READY"
@@ -95,7 +84,6 @@ class ValidationErrorCode(StrEnum):
 
     CAPACITY_EXCEEDED = "CAPACITY_EXCEEDED"
     NEGATIVE_LOAD = "NEGATIVE_LOAD"
-    PICKUP_BEFORE_DELIVERY = "PICKUP_BEFORE_DELIVERY"
     TIME_WINDOW_VIOLATION = "TIME_WINDOW_VIOLATION"
     DRIVER_OVERLAP = "DRIVER_OVERLAP"
     VEHICLE_OVERLAP = "VEHICLE_OVERLAP"
@@ -111,7 +99,6 @@ class ValidationWarningCode(StrEnum):
     """Non-fatal route quality or schedule risk surfaced to an operator."""
 
     HIGH_DETOUR = "HIGH_DETOUR"
-    CROSS_ROUTE_GROUP = "CROSS_ROUTE_GROUP"
     LOW_TIME_BUFFER = "LOW_TIME_BUFFER"
     SOFT_WINDOW_RISK = "SOFT_WINDOW_RISK"
     OVERTIME_WARNING = "OVERTIME_WARNING"
@@ -171,8 +158,8 @@ class RequestDateOption:
             if self.window_start >= self.window_end:
                 raise ValueError("window_start must be before window_end")
         if self.travel_zone_hours is not None:
-            if not 1 <= self.travel_zone_hours <= 4:
-                raise ValueError("travel_zone_hours must be between 1 and 4")
+            if self.travel_zone_hours < 1:
+                raise ValueError("travel_zone_hours must be positive")
             if self.window_start is None or not self.is_hard:
                 raise ValueError("travel_zone_hours requires a complete hard time window")
 
@@ -208,6 +195,7 @@ class LogisticsRequest:
     cargo_dimensions: CargoDimensions | None = None
     trailer_access_allowed: bool = True
     task_quantities: tuple[int, ...] | None = None
+    mandatory: bool = False
 
     def __post_init__(self) -> None:
         require_aware(self.created_at, "created_at")
@@ -255,6 +243,7 @@ class PlanningTask:
     is_last_available_date: bool
     cargo_dimensions: CargoDimensions | None = None
     trailer_access_allowed: bool = True
+    mandatory: bool = False
 
     def __post_init__(self) -> None:
         require_aware(self.created_at, "created_at")
@@ -269,39 +258,7 @@ class PlanningTask:
     def is_hard(self) -> bool:
         """Whether the selected date/window is mandatory."""
 
-        return self.selected_option.is_hard
-
-
-@dataclass(frozen=True, slots=True)
-class ZoneSnapshot:
-    """Planner-facing immutable zone identity and route-group metadata."""
-
-    id: str
-    code: str
-    route_group: str
-    version: int = 1
-    priority: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class ZoneRelation:
-    """Directed compatibility and detour policy between two zones."""
-
-    from_zone_id: str
-    to_zone_id: str
-    relation_type: RelationType = RelationType.ALLOWED
-    delivery_pair_allowed: bool = True
-    pickup_allowed: bool = True
-    max_detour_minutes: float | None = None
-    max_detour_ratio: float | None = None
-    penalty: float = 0.0
-    is_bidirectional: bool = False
-
-    def __post_init__(self) -> None:
-        if self.max_detour_minutes is not None and self.max_detour_minutes < 0:
-            raise ValueError("max_detour_minutes cannot be negative")
-        if self.max_detour_ratio is not None and self.max_detour_ratio < 0:
-            raise ValueError("max_detour_ratio cannot be negative")
+        return self.mandatory or self.selected_option.is_hard
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,9 +304,14 @@ class DriverShift:
     vehicle_id: str
     start_at: datetime
     end_at: datetime
-    preferred_route_group: str | None = None
     break_minutes: int = 0
     active: bool = True
+    resource_origin_warehouse_id: str | None = None
+    support_link_id: str | None = None
+    support_priority: int = 0
+    positioning_travel_minutes: int = 0
+    positioning_distance_meters: int = 0
+    return_required: bool = False
 
     def __post_init__(self) -> None:
         require_aware(self.start_at, "start_at")
@@ -358,6 +320,12 @@ class DriverShift:
             raise ValueError("shift start must be before shift end")
         if self.break_minutes < 0:
             raise ValueError("break_minutes cannot be negative")
+        if self.support_priority < 0:
+            raise ValueError("support_priority cannot be negative")
+        if self.positioning_travel_minutes < 0 or self.positioning_distance_meters < 0:
+            raise ValueError("positioning facts cannot be negative")
+        if self.support_link_id is not None and self.resource_origin_warehouse_id is None:
+            raise ValueError("support_link_id requires resource_origin_warehouse_id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -401,7 +369,6 @@ class RouteStop:
     request_id: str | None = None
     address_label: str = ""
     zone_id: str | None = None
-    route_group: str | None = None
     window_start: datetime | None = None
     window_end: datetime | None = None
     window_is_hard: bool = False
@@ -535,8 +502,6 @@ class PlanningSettings:
     max_local_search_iterations: int = 50
     empty_travel_weight: float = 1.5
     detour_weight: float = 1.0
-    cross_group_penalty: float = 20.0
-    driver_preference_bonus: float = 15.0
     paired_delivery_bonus: float = 20.0
     paired_pickup_bonus: float = 15.0
     unassigned_hard_task_penalty: float = 1_000_000.0
@@ -597,8 +562,6 @@ class PlanningSettings:
         weights = (
             self.empty_travel_weight,
             self.detour_weight,
-            self.cross_group_penalty,
-            self.driver_preference_bonus,
             self.paired_delivery_bonus,
             self.paired_pickup_bonus,
             self.unassigned_hard_task_penalty,
@@ -616,15 +579,14 @@ class PlanningSettings:
 class PlanningInput:
     """Complete immutable snapshot needed to generate or reoptimize a plan."""
 
-    scenario_id: str
+    warehouse_id: str
     planning_date: date
     warehouse: Warehouse
     requests: tuple[LogisticsRequest, ...]
-    zones: tuple[ZoneSnapshot, ...]
-    zone_relations: tuple[ZoneRelation, ...]
     shifts: tuple[DriverShift, ...]
     vehicles: tuple[Vehicle, ...]
     locked_cycles: tuple[RouteCycle, ...] = ()
+    accepting_requests: bool = False
 
 
 @dataclass(frozen=True, slots=True)

@@ -8,21 +8,19 @@ export function buildZoneUpdatePayload(
 ): Partial<Omit<ZoneInput, 'locked'>> | null {
   const geometryChanged = JSON.stringify(zone.geometry) !== JSON.stringify(input.geometry);
   const metadataChanged = zone.name !== input.name
-    || zone.code !== input.code
-    || zone.route_group !== input.route_group
+    || zone.kind !== input.kind
+    || zone.color !== input.color
     || zone.delivery_price !== input.delivery_price
-    || zone.pickup_price !== input.pickup_price
-    || zone.priority !== input.priority;
+    || zone.pickup_price !== input.pickup_price;
 
   if (!geometryChanged && !metadataChanged) return null;
 
   const metadata = {
     name: input.name,
-    code: input.code,
-    route_group: input.route_group,
+    kind: input.kind,
+    color: input.color,
     delivery_price: input.delivery_price,
     pickup_price: input.pickup_price,
-    priority: input.priority,
   };
   return geometryChanged ? { ...metadata, geometry: input.geometry } : metadata;
 }

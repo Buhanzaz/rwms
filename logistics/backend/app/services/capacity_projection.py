@@ -1,9 +1,10 @@
-"""Deterministic simulator-capacity projection published to RWMS logistics-service."""
+"""Deterministic warehouse-capacity projection published to RWMS logistics-service."""
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from hashlib import sha256
 from uuid import UUID, uuid5
@@ -13,18 +14,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.errors import ApiError, not_found
+from app.geo.classification import geometry_to_geojson
 from app.integrations.rwms import RwmsPlanningClient
-from app.models import LogisticsRequest, Scenario, Warehouse
-from app.models.domain import RequestStatus, RequestType
+from app.models import (
+    DriverShift,
+    LogisticsRequest,
+    PlanningDayClosure,
+    Warehouse,
+    Zone,
+)
+from app.models.domain import RequestStatus, ZoneKind
 from app.schemas.domain import (
+    GeoJsonGeometry,
+    PlanningSettings,
     RwmsCapacitySnapshotCommand,
     RwmsCapacitySnapshotResult,
     RwmsPlanningCapacityJob,
+    RwmsPlanningCapacityShift,
+    RwmsPlanningPriceZone,
+    RwmsPlanningRestrictionZone,
 )
 from app.services.workload_generator import GENERATOR_SOURCE_SYSTEM
 
 _COORDINATE_QUANTUM = Decimal("0.000001")
 _CAPACITY_IDEMPOTENCY_NAMESPACE = UUID("3bbef2d9-2f94-45a4-831a-61402ce25b27")
+_CAPACITY_SHIFT_NAMESPACE = UUID("48645899-fd60-47ad-95ec-b5cb21b810fe")
 _EXCLUDED_STATUSES = (
     RequestStatus.DRAFT,
     RequestStatus.COMPLETED,
@@ -46,18 +60,42 @@ def _coordinate(value: float) -> Decimal:
     return Decimal(str(value)).quantize(_COORDINATE_QUANTUM, rounding=ROUND_HALF_UP)
 
 
+def _capacity_shift_end(
+    delivery_date: date,
+    shift_end: time,
+    settings: PlanningSettings,
+) -> time:
+    """Extend published capacity by configured soft overtime within its local day."""
+
+    if not settings.allow_soft_overtime or settings.soft_overtime_limit_minutes == 0:
+        return shift_end
+    extended = datetime.combine(delivery_date, shift_end) + timedelta(
+        minutes=settings.soft_overtime_limit_minutes
+    )
+    latest = datetime.combine(delivery_date, time.max)
+    return min(extended, latest).time()
+
+
 def _revision(
-    scenario_id: UUID,
     warehouse_id: UUID,
     capacity_generation: int,
     jobs: list[RwmsPlanningCapacityJob],
+    shifts: list[RwmsPlanningCapacityShift],
+    price_zones: list[RwmsPlanningPriceZone],
+    restriction_zones: list[RwmsPlanningRestrictionZone],
+    isochrone_prices: tuple[int, int, int, int],
 ) -> str:
     """Hash one durable workload generation and its sorted capacity facts."""
 
     facts = {
-        "sourceScenarioId": str(scenario_id),
         "warehouseId": str(warehouse_id),
         "capacityGeneration": capacity_generation,
+        "isochronePrices": {
+            "60": isochrone_prices[0],
+            "120": isochrone_prices[1],
+            "180": isochrone_prices[2],
+            "240": isochrone_prices[3],
+        },
         "jobs": [
             {
                 "sourceJobId": str(job.source_job_id),
@@ -68,8 +106,42 @@ def _revision(
                 "windowStart": job.window_start.isoformat(),
                 "windowEnd": job.window_end.isoformat(),
                 "serviceMinutes": job.service_minutes,
+                "taskType": job.task_type,
+                "trailerAccessAllowed": job.trailer_access_allowed,
+                "priority": job.priority,
+                "mandatory": job.mandatory,
             }
             for job in jobs
+        ],
+        "priceZones": [
+            {
+                "sourceZoneId": str(zone.source_zone_id),
+                "sourceZoneVersion": zone.source_zone_version,
+                "deliveryPriceRubles": zone.delivery_price_rubles,
+                "pickupPriceRubles": zone.pickup_price_rubles,
+                "geometry": zone.geometry.model_dump(mode="json"),
+            }
+            for zone in price_zones
+        ],
+        "restrictionZones": [
+            {
+                "sourceZoneId": str(zone.source_zone_id),
+                "sourceZoneVersion": zone.source_zone_version,
+                "kind": zone.kind,
+                "geometry": zone.geometry.model_dump(mode="json"),
+            }
+            for zone in restriction_zones
+        ],
+        "shifts": [
+            {
+                "sourceShiftId": str(shift.source_shift_id),
+                "deliveryDate": shift.delivery_date.isoformat(),
+                "shiftStart": shift.shift_start.isoformat(),
+                "shiftEnd": shift.shift_end.isoformat(),
+                "breakMinutes": shift.break_minutes,
+                "cabinCapacity": shift.cabin_capacity,
+            }
+            for shift in shifts
         ],
     }
     serialized = json.dumps(
@@ -83,47 +155,24 @@ def _revision(
 
 async def build_capacity_projection(
     session: AsyncSession,
-    scenario_id: UUID,
+    warehouse_id: UUID,
 ) -> CapacityProjection:
-    """Read one complete generated-delivery snapshot for a uniquely linked warehouse."""
+    """Read generated route capacity and tariff polygons for one linked warehouse."""
 
-    scenario = await session.scalar(
-        select(Scenario).where(Scenario.id == scenario_id).with_for_update()
+    warehouse = await session.scalar(
+        select(Warehouse).where(Warehouse.id == warehouse_id).with_for_update()
     )
-    if scenario is None:
-        raise not_found("scenario", scenario_id)
-    warehouses = list(
-        await session.scalars(
-            select(Warehouse)
-            .where(
-                Warehouse.scenario_id == scenario_id,
-                Warehouse.external_warehouse_id.is_not(None),
-            )
-            .order_by(Warehouse.id)
-        )
-    )
-    if not warehouses:
-        raise ApiError(
-            422,
-            "RWMS_CAPACITY_WAREHOUSE_NOT_LINKED",
-            "Capacity publication requires one warehouse linked to an RWMS warehouse",
-        )
-    if len(warehouses) != 1:
-        raise ApiError(
-            422,
-            "RWMS_CAPACITY_WAREHOUSE_AMBIGUOUS",
-            "Capacity publication requires exactly one linked RWMS warehouse",
-        )
-    warehouse_id = warehouses[0].external_warehouse_id
-    assert warehouse_id is not None
+    if warehouse is None:
+        raise not_found("warehouse", warehouse_id)
+    external_warehouse_id = warehouse.external_warehouse_id
+    settings = PlanningSettings.model_validate(warehouse.settings)
 
     requests = list(
         await session.scalars(
             select(LogisticsRequest)
             .where(
-                LogisticsRequest.scenario_id == scenario_id,
+                LogisticsRequest.warehouse_id == warehouse_id,
                 LogisticsRequest.source_system == GENERATOR_SOURCE_SYSTEM,
-                LogisticsRequest.type == RequestType.DELIVERY,
                 LogisticsRequest.scheduled_date.is_not(None),
                 LogisticsRequest.status.not_in(_EXCLUDED_STATUSES),
             )
@@ -135,7 +184,7 @@ async def build_capacity_projection(
         raise ApiError(
             422,
             "RWMS_CAPACITY_TOO_MANY_JOBS",
-            "A capacity snapshot cannot contain more than 1000 generated deliveries",
+            "A capacity snapshot cannot contain more than 1000 generated tasks",
         )
 
     jobs: list[RwmsPlanningCapacityJob] = []
@@ -179,27 +228,154 @@ async def build_capacity_projection(
                 window_start=selected.window_start,
                 window_end=selected.window_end,
                 service_minutes=request.service_minutes,
+                task_type=request.type,
+                trailer_access_allowed=request.trailer_access_allowed is not False,
+                priority=max(0, request.priority),
+                mandatory=request.mandatory,
             )
         )
     jobs.sort(
         key=lambda job: (
             job.delivery_date,
             job.window_start,
+            job.task_type,
             str(job.source_job_id),
         )
     )
+    closed_dates = set(
+        await session.scalars(
+            select(PlanningDayClosure.date).where(
+                PlanningDayClosure.warehouse_id == warehouse_id,
+            )
+        )
+    )
+    active_shifts = list(
+        await session.scalars(
+            select(DriverShift)
+            .where(
+                DriverShift.warehouse_id == warehouse_id,
+                DriverShift.active.is_(True),
+            )
+            .options(
+                selectinload(DriverShift.driver),
+                selectinload(DriverShift.vehicle),
+            )
+            .order_by(DriverShift.date_from, DriverShift.start_time, DriverShift.id)
+        )
+    )
+    shifts: list[RwmsPlanningCapacityShift] = []
+    for shift in active_shifts:
+        if not shift.driver.active or not shift.vehicle.active:
+            continue
+        if shift.break_minutes > 720:
+            raise ApiError(
+                422,
+                "RWMS_CAPACITY_SHIFT_BREAK_INVALID",
+                "Published shift break time cannot exceed 720 minutes",
+            )
+        current_date = shift.date_from
+        while current_date <= shift.date_to:
+            if current_date not in closed_dates:
+                shifts.append(
+                    RwmsPlanningCapacityShift(
+                        source_shift_id=uuid5(
+                            _CAPACITY_SHIFT_NAMESPACE,
+                            f"{shift.id}:{current_date.isoformat()}",
+                        ),
+                        delivery_date=current_date,
+                        shift_start=shift.start_time,
+                        shift_end=_capacity_shift_end(
+                            current_date,
+                            shift.end_time,
+                            settings,
+                        ),
+                        break_minutes=shift.break_minutes,
+                        cabin_capacity=shift.vehicle.capacity,
+                    )
+                )
+            current_date += timedelta(days=1)
+    if len(shifts) > 2_000:
+        raise ApiError(
+            422,
+            "RWMS_CAPACITY_TOO_MANY_SHIFTS",
+            "A capacity snapshot cannot contain more than 2000 active shifts",
+        )
+    shifts.sort(
+        key=lambda shift: (
+            shift.delivery_date,
+            shift.shift_start,
+            str(shift.source_shift_id),
+        )
+    )
+    zones = list(
+        await session.scalars(
+            select(Zone)
+            .where(Zone.warehouse_id == warehouse_id)
+            .order_by(Zone.name, Zone.id)
+        )
+    )
+    price_zones = [
+        RwmsPlanningPriceZone(
+            source_zone_id=zone.id,
+            source_zone_version=zone.version,
+            delivery_price_rubles=zone.delivery_price,
+            pickup_price_rubles=zone.pickup_price,
+            geometry=GeoJsonGeometry.model_validate(geometry_to_geojson(zone.geometry)),
+        )
+        for zone in zones
+        if zone.kind == ZoneKind.SPECIAL_PRICE
+    ]
+    restriction_zones = [
+        RwmsPlanningRestrictionZone(
+            source_zone_id=zone.id,
+            source_zone_version=zone.version,
+            kind=zone.kind,
+            geometry=GeoJsonGeometry.model_validate(geometry_to_geojson(zone.geometry)),
+        )
+        for zone in zones
+        if zone.kind in (ZoneKind.FORBIDDEN, ZoneKind.NO_TRAILER)
+    ]
+    price_zones.sort(key=lambda zone: str(zone.source_zone_id))
+    restriction_zones.sort(key=lambda zone: str(zone.source_zone_id))
+    if len(price_zones) > 500:
+        raise ApiError(
+            422,
+            "RWMS_CAPACITY_TOO_MANY_PRICE_ZONES",
+            "A capacity snapshot cannot contain more than 500 price zones",
+        )
+    if len(restriction_zones) > 500:
+        raise ApiError(
+            422,
+            "RWMS_CAPACITY_TOO_MANY_RESTRICTION_ZONES",
+            "A capacity snapshot cannot contain more than 500 restriction zones",
+        )
+    isochrone_prices = (
+        warehouse.isochrone_price_60_minutes,
+        warehouse.isochrone_price_120_minutes,
+        warehouse.isochrone_price_180_minutes,
+        warehouse.isochrone_price_240_minutes,
+    )
     source_revision = _revision(
-        scenario_id,
-        warehouse_id,
-        scenario.capacity_generation,
+        external_warehouse_id,
+        warehouse.capacity_generation,
         jobs,
+        shifts,
+        price_zones,
+        restriction_zones,
+        isochrone_prices,
     )
     return CapacityProjection(
         command=RwmsCapacitySnapshotCommand(
-            warehouse_id=warehouse_id,
-            source_generation=scenario.capacity_generation,
+            source_generation=warehouse.capacity_generation,
             source_revision=source_revision,
             jobs=jobs,
+            shifts=shifts,
+            price_zones=price_zones,
+            isochrone_price_60_minutes=isochrone_prices[0],
+            isochrone_price_120_minutes=isochrone_prices[1],
+            isochrone_price_180_minutes=isochrone_prices[2],
+            isochrone_price_240_minutes=isochrone_prices[3],
+            restriction_zones=restriction_zones,
         ),
         idempotency_key=uuid5(
             _CAPACITY_IDEMPOTENCY_NAMESPACE,
@@ -208,27 +384,32 @@ async def build_capacity_projection(
     )
 
 
-async def publish_scenario_capacity(
+async def publish_warehouse_capacity(
     session: AsyncSession,
-    scenario_id: UUID,
+    warehouse_id: UUID,
     client: RwmsPlanningClient,
 ) -> RwmsCapacitySnapshotResult:
     """Release the read transaction before replacing the remote projection."""
 
     client.ensure_capacity_publish_enabled()
-    projection = await build_capacity_projection(session, scenario_id)
+    projection = await build_capacity_projection(session, warehouse_id)
+    warehouse = await session.get(Warehouse, warehouse_id)
+    if warehouse is None:
+        raise not_found("warehouse", warehouse_id)
     await session.commit()
     result = await client.replace_capacity_snapshot(
-        scenario_id,
+        warehouse.external_warehouse_id,
         projection.command,
         idempotency_key=projection.idempotency_key,
     )
     if (
-        result.warehouse_id != projection.command.warehouse_id
-        or result.source_scenario_id != scenario_id
+        result.warehouse_id != warehouse.external_warehouse_id
         or result.source_generation != projection.command.source_generation
         or result.source_revision != projection.command.source_revision
         or result.job_count != len(projection.command.jobs)
+        or result.shift_count != len(projection.command.shifts)
+        or result.price_zone_count != len(projection.command.price_zones)
+        or result.restriction_zone_count != len(projection.command.restriction_zones)
     ):
         raise ApiError(
             502,

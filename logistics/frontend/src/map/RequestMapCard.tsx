@@ -1,17 +1,21 @@
-import { CalendarCheck2, CalendarX2, Clock3, MapPin, PackageOpen, X } from 'lucide-react';
+import { CalendarCheck2, CalendarX2, Clock3, MapPin, PackageOpen, Route, UserRound, X } from 'lucide-react';
 import maplibregl, { type Map as MapLibreMap } from 'maplibre-gl';
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { LogisticsRequest, UUID, Zone } from '../domain/types';
-import { formatDate } from '../utils/format';
+import type { LogisticsRequest, PlanningTask, RouteCycle, RoutePlan, UUID, Zone } from '../domain/types';
+import type { PlanMove } from '../features/planning/PlanPanel';
+import { formatDate, formatTime } from '../utils/format';
+import { DatePicker } from '../components/DatePicker';
 
 interface RequestMapCardProps {
   request: LogisticsRequest;
   zone: Zone | null;
+  plan?: RoutePlan | null;
   planningDate: string;
   busy: boolean;
   onSchedule: (requestId: UUID, date: string, addIfMissing: boolean) => void;
   onUnschedule: (requestId: UUID) => void;
+  onMoveTask?: (move: PlanMove) => void;
   onClose: () => void;
 }
 
@@ -21,7 +25,7 @@ interface RequestMapPopupProps extends RequestMapCardProps {
 
 const requestStatusLabels: Record<LogisticsRequest['status'], string> = {
   DRAFT: 'Черновик',
-  READY: 'Готова к планированию',
+  READY: 'Готово',
   PLANNED: 'В плане',
   IN_PROGRESS: 'В работе',
   COMPLETED: 'Выполнена',
@@ -36,17 +40,26 @@ function initialDate(request: LogisticsRequest, planningDate: string): string {
 }
 
 function formatWindow(start: string | null, end: string | null): string {
-  return start && end ? `${start.slice(0, 5)}–${end.slice(0, 5)}` : 'весь день';
+  return start && end ? `${start.slice(0, 5)}–${end.slice(0, 5)}` : 'В течение дня';
+}
+
+interface TaskAssignment {
+  task: PlanningTask;
+  sourceCycleId: UUID | null;
+  cycle: RouteCycle | null;
+  driverName: string | null;
 }
 
 /** Request inspector with an explicit logistics date command. */
 export function RequestMapCard({
   request,
   zone,
+  plan = null,
   planningDate,
   busy,
   onSchedule,
   onUnschedule,
+  onMoveTask,
   onClose,
 }: RequestMapCardProps) {
   const [selectedDate, setSelectedDate] = useState(() => initialDate(request, planningDate));
@@ -59,18 +72,55 @@ export function RequestMapCard({
   const selectedOption = dateOptions.find((option) => option.date === selectedDate) ?? null;
   const alreadyScheduled = request.scheduled_date === selectedDate;
   const zoneState = request.zone_status === 'OUTSIDE_ZONES'
-    ? 'Вне логистических зон'
+    ? 'Обычный тариф по изохроне'
     : request.zone_status === 'STALE'
-      ? `Зона ${zone?.code ?? '—'} требует пересчёта`
-      : `Зона ${zone?.code ?? '—'} · версия ${request.zone_version ?? '—'}`;
+      ? `Особая зона «${zone?.name ?? 'не определена'}» требует пересчёта`
+      : `Особая зона «${zone?.name ?? 'не определена'}» · версия ${request.zone_version ?? '—'}`;
   const zonePrice = zone ? request.type === 'DELIVERY' ? zone.delivery_price : zone.pickup_price : null;
   const priceLabel = request.type === 'DELIVERY' ? 'Доставка' : 'Вывоз';
+  const routeOptions = useMemo(
+    () => plan?.driver_routes.flatMap((route) => route.cycles.map((cycle) => ({ route, cycle }))) ?? [],
+    [plan],
+  );
+  const assignments = useMemo<TaskAssignment[]>(() => {
+    const knownTasks = request.tasks?.length
+      ? request.tasks
+      : plan?.unassigned.filter((item) => item.task.request_id === request.id).map((item) => item.task) ?? [];
+    return knownTasks.map((task) => {
+      for (const route of plan?.driver_routes ?? []) {
+        for (const cycle of route.cycles) {
+          if (cycle.stops.some((stop) => stop.task_id === task.id)) {
+            return { task, sourceCycleId: cycle.id, cycle, driverName: route.driver_name };
+          }
+        }
+      }
+      return { task, sourceCycleId: null, cycle: null, driverName: null };
+    });
+  }, [plan, request.id, request.tasks]);
+  const planReadOnly = !plan || plan.status === 'CONFIRMED';
+
+  const moveAssignment = (assignment: TaskAssignment, targetCycleId: UUID) => {
+    if (!onMoveTask || !targetCycleId || targetCycleId === assignment.sourceCycleId) return;
+    const target = routeOptions.find((option) => option.cycle.id === targetCycleId);
+    if (!target) return;
+    const targetTaskStops = target.cycle.stops.filter((stop) => stop.task_id);
+    const targetSequence = assignment.task.type === 'DELIVERY'
+      ? targetTaskStops.filter((stop) => stop.stop_type === 'DELIVERY').length + 1
+      : targetTaskStops.length + 1;
+    onMoveTask({
+      taskId: assignment.task.id,
+      sourceCycleId: assignment.sourceCycleId,
+      targetCycleId,
+      targetSequence,
+      kind: 'MOVE_TASK',
+    });
+  };
 
   return (
-    <section className="request-map-menu" aria-label="Заявка на карте" aria-busy={busy} data-testid="request-map-menu">
+    <section className="request-map-menu" aria-label={request.type === 'DELIVERY' ? 'Доставка на карте' : 'Вывоз на карте'} aria-busy={busy} data-testid="request-map-menu">
       <div className="request-map-menu__head">
-        <strong>{request.type === 'DELIVERY' ? 'Д · доставка' : 'В · возврат'}</strong>
-        <button type="button" aria-label="Закрыть карточку заявки" onClick={onClose}><X size={16} aria-hidden="true" /></button>
+        <strong className={`request-kind request-kind--${request.type.toLowerCase()}`}>{request.type === 'DELIVERY' ? 'Доставка' : 'Вывоз'}</strong>
+        <button type="button" aria-label="Закрыть карточку доставки или вывоза" onClick={onClose}><X size={16} aria-hidden="true" /></button>
       </div>
 
       <h3>{request.name}</h3>
@@ -79,9 +129,34 @@ export function RequestMapCard({
         <div><dt><MapPin size={12} aria-hidden="true" />Адрес</dt><dd>{request.address_label}</dd></div>
         <div><dt><PackageOpen size={12} aria-hidden="true" />Объём</dt><dd>{request.quantity} бытов. · обслуживание {request.service_minutes} мин</dd></div>
         <div><dt><Clock3 size={12} aria-hidden="true" />Классификация</dt><dd>{zoneState}</dd></div>
-        <div><dt>Тариф</dt><dd>{zonePrice === null ? '—' : `${priceLabel} · ${zonePrice} ₽`}</dd></div>
+        <div><dt>Тариф</dt><dd>{zonePrice === null ? 'рассчитывается по изохроне' : `${priceLabel} · ${zonePrice} ₽`}</dd></div>
       </dl>
       {request.notes ? <p className="request-map-menu__notes">{request.notes}</p> : null}
+
+      {assignments.length ? (
+        <section className="request-map-menu__assignment" aria-label="Назначение водителя и рейса">
+          <div className="request-map-menu__assignment-title"><UserRound size={13} aria-hidden="true" /><strong>Водитель и рейс</strong></div>
+          {assignments.map((assignment) => (
+            <label key={assignment.task.id}>
+              <span>{assignments.length > 1 ? `Часть ${assignment.task.part_number} · ${assignment.task.quantity} бытов.` : assignment.driverName ?? 'Пока не распределено'}</span>
+              <select
+                aria-label={`Рейс для ${assignments.length > 1 ? `части ${assignment.task.part_number}` : request.name}`}
+                value={assignment.sourceCycleId ?? ''}
+                disabled={busy || planReadOnly || assignment.task.locked || assignment.cycle?.locked || !onMoveTask}
+                onChange={(event) => moveAssignment(assignment, event.target.value)}
+              >
+                {!assignment.sourceCycleId ? <option value="">Не распределено</option> : null}
+                {routeOptions.map(({ route, cycle }) => (
+                  <option key={cycle.id} value={cycle.id} disabled={cycle.locked}>
+                    {route.driver_name} · цикл {cycle.sequence} · {formatTime(cycle.planned_start)}–{formatTime(cycle.planned_finish)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
+          {planReadOnly ? <small><Route size={11} aria-hidden="true" />Назначение можно менять до утверждения плана</small> : null}
+        </section>
+      ) : null}
 
       <div className="request-map-menu__schedule-state">
         <CalendarCheck2 size={14} aria-hidden="true" />
@@ -107,17 +182,10 @@ export function RequestMapCard({
         </div>
       </div>
 
-      <label className="request-map-menu__date-input">
+      <div className="request-map-menu__date-input">
         <span>Дата для логистики</span>
-        <input
-          type="date"
-          name="scheduled-date"
-          autoComplete="off"
-          aria-label="Дата для логистики"
-          value={selectedDate}
-          onChange={(event) => setSelectedDate(event.target.value)}
-        />
-      </label>
+        <DatePicker label="Дата для логистики" value={selectedDate} onChange={setSelectedDate} disabled={busy} />
+      </div>
 
       {selectedDate && !selectedOption ? (
         <p className="request-map-menu__agreement-note">
@@ -158,10 +226,12 @@ export function RequestMapPopup({
   map,
   request,
   zone,
+  plan = null,
   planningDate,
   busy,
   onSchedule,
   onUnschedule,
+  onMoveTask,
   onClose,
 }: RequestMapPopupProps) {
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
@@ -194,10 +264,12 @@ export function RequestMapPopup({
     <RequestMapCard
       request={request}
       zone={zone}
+      plan={plan}
       planningDate={planningDate}
       busy={busy}
       onSchedule={onSchedule}
       onUnschedule={onUnschedule}
+      {...(onMoveTask ? { onMoveTask } : {})}
       onClose={onClose}
     />,
     portalRoot,

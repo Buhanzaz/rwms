@@ -105,7 +105,7 @@ class RouteGeometry:
 
 @dataclass(frozen=True, slots=True)
 class RoutingSettings:
-    """Deterministic offline-routing parameters owned by a scenario snapshot."""
+    """Deterministic offline-routing parameters owned by a warehouse snapshot."""
 
     city_speed_kmh: float = 35.0
     region_speed_kmh: float = 60.0

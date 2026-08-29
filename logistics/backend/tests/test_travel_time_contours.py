@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Mapping
+from datetime import datetime
 from typing import cast
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -15,6 +17,7 @@ from app.api import routing as routing_api
 from app.config import Settings, get_settings
 from app.main import create_app
 from app.routing.models import GeoPoint
+from app.routing.truck_profile import EffectiveTruckProfile, TruckConfigurationType
 from app.routing.valhalla import (
     RoutingProviderUnavailableError,
     ValhallaRoutingProvider,
@@ -64,6 +67,26 @@ def _provider(transport: httpx.AsyncBaseTransport) -> ValhallaRoutingProvider:
     )
 
 
+def _truck_profile() -> EffectiveTruckProfile:
+    """Build one already-validated truck profile for time-aware contour requests."""
+
+    return EffectiveTruckProfile(
+        vehicle_id="truck-1",
+        trailer_id="trailer-1",
+        trailer_attached=True,
+        is_hgv=True,
+        height_meters=4.05,
+        width_meters=2.55,
+        length_meters=18.5,
+        actual_weight_tons=24.8,
+        max_axle_load_tons=8.4,
+        axle_count=4,
+        cargo_count=2,
+        cargo_placements=(),
+        configuration_type=TruckConfigurationType.TWO_CARGO_SPLIT,
+    )
+
+
 def test_isochrone_request_is_truck_only_and_response_is_canonical() -> None:
     """The provider sends fixed truck contours and returns validated outer-first areas."""
 
@@ -101,6 +124,68 @@ def test_isochrone_request_is_truck_only_and_response_is_canonical() -> None:
     assert all(
         cast(Mapping[str, object], feature["geometry"])["type"] == "Polygon" for feature in features
     )
+
+
+def test_dynamic_isochrones_include_departure_and_exact_truck_profile() -> None:
+    """Slot-planning contours retain time, trailer, load, and truck-only costing."""
+
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(cast(dict[str, object], json.loads(request.content)))
+        contours = (15, 30, 45, 60)
+        return httpx.Response(
+            200,
+            json={
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {"contour": minutes},
+                        "geometry": _polygon(minutes / 10_000),
+                    }
+                    for minutes in contours
+                ],
+            },
+        )
+
+    provider = _provider(httpx.MockTransport(handler))
+
+    async def execute() -> list[dict[str, object]]:
+        """Request the dynamic slot-planning contour set and close the provider."""
+
+        try:
+            return await provider.get_truck_travel_time_contours(
+                GeoPoint(37.6, 55.7),
+                departure_at=datetime(
+                    2026,
+                    8,
+                    29,
+                    10,
+                    15,
+                    tzinfo=ZoneInfo("Europe/Moscow"),
+                ),
+                profile=_truck_profile(),
+                contour_minutes=(15, 30, 45, 60),
+            )
+        finally:
+            await provider.aclose()
+
+    features = asyncio.run(execute())
+
+    assert captured["costing"] == "truck"
+    assert captured["date_time"] == {"type": 1, "value": "2026-08-29T10:15"}
+    costing_options = cast(Mapping[str, object], captured["costing_options"])
+    truck = cast(Mapping[str, object], costing_options["truck"])
+    assert truck["length"] == 18.5
+    assert truck["weight"] == 24.8
+    assert "auto" not in json.dumps(captured)
+    assert [feature["properties"]["contour_minutes"] for feature in features] == [
+        60,
+        45,
+        30,
+        15,
+    ]
 
 
 @pytest.mark.parametrize(

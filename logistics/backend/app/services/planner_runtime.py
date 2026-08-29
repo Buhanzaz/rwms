@@ -1,4 +1,6 @@
-"""Production adapter between persisted scenarios and the deterministic planner core."""
+"""Production adapter between warehouse workspaces and the deterministic planner core."""
+
+# ruff: noqa: RUF001 -- Russian operator-facing explanations are intentional.
 
 from __future__ import annotations
 
@@ -21,6 +23,7 @@ from sqlalchemy.orm import selectinload
 from app.db import utc_now
 from app.errors import ApiError, not_found
 from app.geo import geometry_to_geojson
+from app.integrations.rwms import RwmsPlanningClient
 from app.models import (
     DriverShift as DbDriverShift,
 )
@@ -30,10 +33,10 @@ from app.models import (
 from app.models import (
     OptimizationRun,
     OptimizationTraceEvent,
+    PlanningDayClosure,
     RouteExplanation,
     RoutePlan,
     RouteSegment,
-    Scenario,
 )
 from app.models import (
     PlanningTask as DbPlanningTask,
@@ -60,7 +63,6 @@ from app.planner import (
     PlanningResult,
     PlanningSettings,
     PlanningTask,
-    RelationType,
     RequestDateOption,
     RequestStatus,
     RouteCycle,
@@ -68,16 +70,15 @@ from app.planner import (
     StopType,
     TaskType,
     Vehicle,
-    Warehouse,
-    ZoneRelation,
-    ZoneSnapshot,
     calculate_driver_workload_cost,
     calculate_plan_metrics,
     calculate_resource_activation_cost,
     validate_route_plan,
 )
+from app.planner import (
+    Warehouse as PlannerWarehouse,
+)
 from app.planner.engine import CandidateRouteRejected, NullProgressPublisher
-from app.planner.heuristic import _build_relation_index
 from app.planner.models import PlannedLeg, ValidationIssue, ValidationWarningCode
 from app.routing import (
     GeoPoint,
@@ -100,8 +101,21 @@ from app.routing.truck_profile import (
 )
 from app.schemas.domain import CyclePatch, GeneratePlanRequest, ManualChangeRequest
 from app.services import plans as plan_service
+from app.services.support_resource_candidates import (
+    RoutedSupportResource,
+    load_support_resource_facts,
+    route_support_resource_facts,
+)
 from app.services.truck_cycle_router import ExactTruckCycleRouter
 from app.simulation import DelayOverride, DriverUnavailableOverride, propagate_delays
+from app.slot_planning.configuration import (
+    effective_vehicle_cabin_capacity,
+    vehicle_equipment_snapshot,
+    vehicle_has_available_trailer,
+    warehouse_slot_configuration,
+)
+from app.slot_planning.models import PlanningReason
+from app.slot_planning.routing_adapter import CachedTruckTravelTimeProvider
 
 if TYPE_CHECKING:
     from app.routing.truck_profile import EffectiveTruckProfile
@@ -111,15 +125,17 @@ if TYPE_CHECKING:
 class _RuntimeSnapshot:
     """Fully loaded immutable planning boundary plus persistence ID mappings."""
 
-    scenario: Scenario
-    warehouse_entity: DbWarehouse
+    warehouse: DbWarehouse
     input_data: PlanningInput
     settings: PlanningSettings
     routing_settings: RoutingSettings
     task_uuid_by_core_id: Mapping[str, UUID]
     core_task_by_uuid: Mapping[UUID, PlanningTask]
     request_task_uuids: Mapping[str, tuple[UUID, ...]]
-    scenario_fingerprint: str
+    warehouse_fingerprint: str
+    support_resources: Mapping[str, RoutedSupportResource]
+    support_reason_codes: tuple[str, ...]
+    support_source_revision: str | None
 
 
 def request_is_available_on_date(
@@ -142,14 +158,14 @@ class _CachedRoutingProvider:
         delegate: RoutingProvider,
         cache: OrderedDict[tuple[object, ...], TravelMatrix],
         route_cache: OrderedDict[tuple[object, ...], RouteGeometry],
-        scenario_fingerprint: str,
+        warehouse_fingerprint: str,
         max_entries: int,
         provider_cache_key: tuple[object, ...],
     ) -> None:
         self._delegate = delegate
         self._cache = cache
         self._route_cache = route_cache
-        self._scenario_fingerprint = scenario_fingerprint
+        self._warehouse_fingerprint = warehouse_fingerprint
         self._max_entries = max_entries
         self._provider_cache_key = provider_cache_key
 
@@ -169,7 +185,7 @@ class _CachedRoutingProvider:
         )
         point_key = tuple((point.lon, point.lat, point.is_city) for point in points)
         key: tuple[object, ...] = (
-            self._scenario_fingerprint,
+            self._warehouse_fingerprint,
             point_key,
             self._provider_cache_key,
             profile.cache_key_data() if profile is not None else None,
@@ -202,7 +218,7 @@ class _CachedRoutingProvider:
         departure_bucket = departure_at.isoformat() if departure_at is not None else None
         point_key = tuple((point.lon, point.lat, point.is_city) for point in points)
         key: tuple[object, ...] = (
-            self._scenario_fingerprint,
+            self._warehouse_fingerprint,
             point_key,
             self._provider_cache_key,
             profile.cache_key_data() if profile is not None else None,
@@ -232,7 +248,7 @@ class _CachedRoutingProvider:
 
 
 class RuntimePlannerFacade:
-    """Execute planning and validated edits against the simulator-owned database."""
+    """Execute planning and validated edits against the warehouse-owned database."""
 
     def __init__(
         self,
@@ -245,6 +261,7 @@ class RuntimePlannerFacade:
         valhalla_timeout_seconds: float = 30.0,
         osm_data_version: str = "unknown",
         matrix_cache_entries: int = 32,
+        rwms_client: RwmsPlanningClient | None = None,
     ) -> None:
         if matrix_cache_entries < 1:
             raise ValueError("matrix_cache_entries must be positive")
@@ -256,22 +273,22 @@ class RuntimePlannerFacade:
         self._valhalla_timeout_seconds = valhalla_timeout_seconds
         self._osm_data_version = osm_data_version
         self._matrix_cache_entries = matrix_cache_entries
+        self._rwms_client = rwms_client
         self._matrix_cache: OrderedDict[tuple[object, ...], TravelMatrix] = OrderedDict()
         self._route_cache: OrderedDict[tuple[object, ...], RouteGeometry] = OrderedDict()
 
     async def generate_plan(
         self,
         session: AsyncSession,
-        scenario_id: UUID,
+        warehouse_id: UUID,
         command: GeneratePlanRequest,
     ) -> OptimizationRun:
         """Generate and persist one independent best-known plan and optimizer run."""
 
         snapshot = await self._load_snapshot(
             session,
-            scenario_id,
+            warehouse_id,
             command.date,
-            command.warehouse_id,
             command.settings,
             command.seed,
         )
@@ -288,9 +305,8 @@ class RuntimePlannerFacade:
         plan = await plan_service.assert_plan_version(session, plan_id, expected_version)
         snapshot = await self._load_snapshot(
             session,
-            plan.scenario_id,
-            plan.date,
             plan.warehouse_id,
+            plan.date,
             None,
             None,
         )
@@ -311,6 +327,119 @@ class RuntimePlannerFacade:
         await session.flush()
         return plan
 
+    async def refresh_plan_after_request_changes(
+        self,
+        session: AsyncSession,
+        plan_id: UUID,
+        expected_version: int,
+    ) -> RoutePlan:
+        """Refresh a fenced draft in place while preserving task and cycle identities."""
+
+        plan = await plan_service.assert_plan_version(session, plan_id, expected_version)
+        marker = plan.metrics.get(plan_service.PENDING_REQUEST_REFRESH_METRIC)
+        if not isinstance(marker, dict):
+            return plan
+        if plan.status == PlanStatus.CONFIRMED:
+            raise ApiError(
+                409,
+                "PLAN_ALREADY_CONFIRMED",
+                "A confirmed plan cannot be refreshed",
+            )
+        snapshot = await self._load_snapshot(
+            session,
+            plan.warehouse_id,
+            plan.date,
+            None,
+            None,
+        )
+        refreshed_by_id: dict[UUID, RouteCycle] = {}
+        refreshed_by_shift: dict[UUID, list[RouteCycle]] = {}
+        cursor_by_shift: dict[UUID, datetime] = {}
+        turnaround = timedelta(
+            minutes=(
+                snapshot.input_data.warehouse.turnaround_minutes
+                + snapshot.settings.default_route_buffer_minutes
+            )
+        )
+        for cycle in sorted(
+            plan.cycles,
+            key=lambda item: (str(item.driver_shift_id), item.sequence, str(item.id)),
+        ):
+            shift = next(
+                (
+                    item
+                    for item in snapshot.input_data.shifts
+                    if item.id == str(cycle.driver_shift_id)
+                ),
+                None,
+            )
+            if shift is None:
+                raise ApiError(
+                    422,
+                    "PLAN_SHIFT_MISSING",
+                    f"Plan cycle {cycle.id} references a missing driver shift",
+                )
+            start_at = cursor_by_shift.get(cycle.driver_shift_id, shift.start_at)
+            core_cycle = await self._reschedule_cycle(
+                snapshot,
+                cycle,
+                self._cycle_tasks(cycle, snapshot),
+                start_at=start_at,
+                existing_shift_cycles=tuple(
+                    refreshed_by_shift.get(cycle.driver_shift_id, ())
+                ),
+                mark_manually_changed=False,
+            )
+            refreshed_by_id[cycle.id] = core_cycle
+            refreshed_by_shift.setdefault(cycle.driver_shift_id, []).append(core_cycle)
+            cursor_by_shift[cycle.driver_shift_id] = core_cycle.planned_finish + turnaround
+
+        candidate_cycles = tuple(refreshed_by_id[cycle.id] for cycle in plan.cycles)
+        score = sum(cycle.score for cycle in candidate_cycles)
+        score += calculate_resource_activation_cost(candidate_cycles, snapshot.settings)
+        score += calculate_driver_workload_cost(
+            candidate_cycles,
+            snapshot.input_data.shifts,
+            snapshot.settings,
+        )
+        validation = validate_route_plan(
+            candidate_cycles,
+            warehouse=snapshot.input_data.warehouse,
+            shifts=snapshot.input_data.shifts,
+            vehicles=snapshot.input_data.vehicles,
+            settings=snapshot.settings,
+            total_tasks=self._plan_task_count(plan, candidate_cycles),
+            unassigned_tasks=len(plan.unassigned_tasks),
+            score=score,
+        )
+        if validation.errors:
+            raise ApiError(
+                422,
+                "PLAN_REFRESH_INVALID",
+                "The preserved operator order is no longer feasible",
+                extra={
+                    "errors": [self._issue_payload(issue) for issue in validation.errors]
+                },
+            )
+
+        for cycle in plan.cycles:
+            await self._replace_cycle(
+                session,
+                cycle,
+                refreshed_by_id[cycle.id],
+                snapshot,
+            )
+        plan.score = score
+        self._store_validation(plan, (), validation.warnings, validation.metrics)
+        refreshed_metrics = dict(plan.metrics)
+        refreshed_metrics.pop(plan_service.PENDING_REQUEST_REFRESH_METRIC, None)
+        plan.metrics = refreshed_metrics
+        plan.status = PlanStatus.DRAFT
+        plan.version += 1
+        await session.flush()
+        self._expire_plan_graph(session, plan)
+        return plan
+
     async def reoptimize_plan(
         self,
         session: AsyncSession,
@@ -326,9 +455,8 @@ class RuntimePlannerFacade:
         )
         snapshot = await self._load_snapshot(
             session,
-            source.scenario_id,
-            source.date,
             source.warehouse_id,
+            source.date,
             self._payload_mapping(command.payload.get("settings")),
             self._optional_int(command.payload.get("seed")),
         )
@@ -404,6 +532,71 @@ class RuntimePlannerFacade:
             f"Manual change {command.change_type} is not supported by this MVP editor",
         )
 
+    async def reset_manual_changes(
+        self,
+        session: AsyncSession,
+        plan_id: UUID,
+        expected_version: int,
+    ) -> RoutePlan:
+        """Archive a mutable edited plan and return a freshly generated replacement."""
+
+        source = await plan_service.get_plan(session, plan_id, for_update=True)
+        reset_marker = source.metrics.get("manual_reset")
+        if isinstance(reset_marker, dict) and reset_marker.get("expected_version") == (
+            expected_version
+        ):
+            replacement_id = self._optional_uuid(reset_marker.get("replacement_plan_id"))
+            if replacement_id is not None:
+                return await plan_service.get_plan(session, replacement_id)
+        if source.version != expected_version:
+            raise ApiError(
+                409,
+                "PLAN_VERSION_CONFLICT",
+                "The route plan changed after it was loaded",
+                extra={
+                    "expected_version": expected_version,
+                    "actual_version": source.version,
+                },
+            )
+        if source.status == PlanStatus.CONFIRMED:
+            raise ApiError(
+                409,
+                "PLAN_ALREADY_CONFIRMED",
+                "A confirmed plan cannot be reset",
+            )
+        if not source.manually_changed:
+            raise ApiError(
+                409,
+                "PLAN_HAS_NO_MANUAL_CHANGES",
+                "Only a manually changed plan can be reset",
+            )
+
+        snapshot = await self._load_snapshot(
+            session,
+            source.warehouse_id,
+            source.date,
+            None,
+            None,
+        )
+        run = await self._execute_generation(session, snapshot, locked_cycles=())
+        if run.plan_id is None:
+            raise ApiError(
+                422,
+                "PLAN_RESET_FAILED",
+                run.error_message or "The automatic replacement could not be generated",
+            )
+        source.status = PlanStatus.ARCHIVED
+        source.version += 1
+        source.metrics = {
+            **source.metrics,
+            "manual_reset": {
+                "expected_version": expected_version,
+                "replacement_plan_id": str(run.plan_id),
+            },
+        }
+        await session.flush()
+        return await plan_service.get_plan(session, run.plan_id)
+
     async def apply_simulation_delay(
         self,
         session: AsyncSession,
@@ -415,9 +608,8 @@ class RuntimePlannerFacade:
         plan = await plan_service.assert_plan_version(session, plan_id, command.expected_version)
         snapshot = await self._load_snapshot(
             session,
-            plan.scenario_id,
-            plan.date,
             plan.warehouse_id,
+            plan.date,
             None,
             None,
         )
@@ -502,71 +694,48 @@ class RuntimePlannerFacade:
     async def _load_snapshot(
         self,
         session: AsyncSession,
-        scenario_id: UUID,
+        warehouse_id: UUID,
         planning_date: date,
-        warehouse_id: UUID | None,
         command_settings: Mapping[str, Any] | None,
         command_seed: int | None,
     ) -> _RuntimeSnapshot:
-        """Load one complete scenario graph and translate it into planner value objects."""
+        """Load one complete warehouse graph and translate it into planner value objects."""
 
         statement = (
-            select(Scenario)
-            .where(Scenario.id == scenario_id)
+            select(DbWarehouse)
+            .where(DbWarehouse.id == warehouse_id)
             .options(
-                selectinload(Scenario.warehouses),
-                selectinload(Scenario.zones),
-                selectinload(Scenario.zone_relations),
-                selectinload(Scenario.vehicles),
-                selectinload(Scenario.vehicles).selectinload(DbVehicle.default_trailer),
-                selectinload(Scenario.vehicles).selectinload(DbVehicle.load_profiles),
-                selectinload(Scenario.shifts).selectinload(DbDriverShift.driver),
-                selectinload(Scenario.shifts).selectinload(DbDriverShift.vehicle),
-                selectinload(Scenario.requests).selectinload(DbLogisticsRequest.date_options),
-                selectinload(Scenario.requests).selectinload(DbLogisticsRequest.tasks),
+                selectinload(DbWarehouse.vehicles).selectinload(DbVehicle.default_trailer),
+                selectinload(DbWarehouse.vehicles).selectinload(DbVehicle.load_profiles),
+                selectinload(DbWarehouse.shifts).selectinload(DbDriverShift.driver),
+                selectinload(DbWarehouse.shifts).selectinload(DbDriverShift.vehicle),
+                selectinload(DbWarehouse.requests).selectinload(DbLogisticsRequest.date_options),
+                selectinload(DbWarehouse.requests).selectinload(DbLogisticsRequest.tasks),
             )
         )
-        scenario = await session.scalar(statement)
-        if scenario is None:
-            raise not_found("scenario", scenario_id)
-        warehouses = sorted(scenario.warehouses, key=lambda item: str(item.id))
-        if warehouse_id is None:
-            warehouse_entity = warehouses[0] if warehouses else None
-        else:
-            warehouse_entity = next(
-                (item for item in warehouses if item.id == warehouse_id),
-                None,
+        workspace = await session.scalar(statement)
+        if workspace is None:
+            raise not_found("warehouse", warehouse_id)
+        closure = await session.scalar(
+            select(PlanningDayClosure.id).where(
+                PlanningDayClosure.warehouse_id == warehouse_id,
+                PlanningDayClosure.date == planning_date,
             )
-        if warehouse_entity is None:
-            raise ApiError(
-                422,
-                "NO_WAREHOUSE",
-                "Planning requires a warehouse in the selected scenario",
-            )
-        zone_info = ZoneInfo(scenario.timezone)
+        )
+        accepting_requests = closure is None
+        zone_info = ZoneInfo(workspace.timezone)
         settings = self._planning_settings(
-            scenario.settings,
+            workspace.settings,
             command_settings,
-            command_seed if command_seed is not None else scenario.seed,
+            command_seed if command_seed is not None else workspace.seed,
         )
         routing_settings = self._routing_settings(
-            scenario.settings,
+            workspace.settings,
             command_settings,
             settings.seed,
         )
-        zone_entities = {zone.id: zone for zone in scenario.zones}
-        zones = tuple(
-            ZoneSnapshot(
-                id=str(zone.id),
-                code=zone.code,
-                route_group=zone.route_group,
-                version=zone.version,
-                priority=zone.priority,
-            )
-            for zone in sorted(scenario.zones, key=lambda item: str(item.id))
-        )
         request_entities = sorted(
-            scenario.requests,
+            workspace.requests,
             key=lambda item: (item.created_at, item.id),
         )
         eligible_request_entities = [
@@ -583,26 +752,12 @@ class RuntimePlannerFacade:
             planning_date,
         )
         requests = tuple(
-            self._core_request(request, zone_entities, zone_info)
+            self._core_request(request, zone_info)
             for request in eligible_request_entities
         )
         vehicles = tuple(
-            Vehicle(
-                id=str(vehicle.id),
-                name=vehicle.name,
-                capacity=vehicle.capacity,
-                active=vehicle.active,
-                routing_spec=self._vehicle_routing_spec(vehicle),
-                default_trailer=self._trailer_spec(vehicle.default_trailer),
-                axle_load_profiles=tuple(
-                    OperationalAxleLoadProfile(
-                        configuration_type=TruckConfigurationType(profile.configuration_type),
-                        max_actual_axle_load_kg=profile.max_actual_axle_load_kg,
-                    )
-                    for profile in vehicle.load_profiles
-                ),
-            )
-            for vehicle in sorted(scenario.vehicles, key=lambda item: str(item.id))
+            self._core_vehicle(vehicle)
+            for vehicle in sorted(workspace.vehicles, key=lambda item: str(item.id))
         )
         shifts = tuple(
             DriverShift(
@@ -610,50 +765,34 @@ class RuntimePlannerFacade:
                 driver_id=str(shift.driver_id),
                 driver_name=shift.driver.name,
                 vehicle_id=str(shift.vehicle_id),
-                start_at=shift.start_at.astimezone(zone_info),
-                end_at=shift.end_at.astimezone(zone_info),
-                preferred_route_group=(
-                    shift.preferred_route_group or shift.driver.preferred_route_group
-                ),
+                start_at=datetime.combine(planning_date, shift.start_time, tzinfo=zone_info),
+                end_at=datetime.combine(planning_date, shift.end_time, tzinfo=zone_info),
                 break_minutes=shift.break_minutes,
                 active=(shift.active and shift.driver.active and shift.vehicle.active),
             )
-            for shift in sorted(scenario.shifts, key=lambda item: (item.start_at, item.id))
-        )
-        relations = tuple(
-            ZoneRelation(
-                from_zone_id=str(relation.from_zone_id),
-                to_zone_id=str(relation.to_zone_id),
-                relation_type=RelationType(relation.relation_type),
-                delivery_pair_allowed=relation.delivery_pair_allowed,
-                pickup_allowed=relation.pickup_allowed,
-                max_detour_minutes=float(relation.max_detour_minutes),
-                max_detour_ratio=relation.max_detour_ratio,
-                penalty=relation.penalty,
-                is_bidirectional=relation.is_bidirectional,
+            for shift in sorted(
+                workspace.shifts,
+                key=lambda item: (item.date_from, item.start_time, item.id),
             )
-            for relation in sorted(
-                scenario.zone_relations,
-                key=lambda item: (str(item.from_zone_id), str(item.to_zone_id)),
-            )
+            if shift.date_from <= planning_date <= shift.date_to
         )
-        warehouse = Warehouse(
-            id=str(warehouse_entity.id),
-            name=warehouse_entity.name,
+        depot = PlannerWarehouse(
+            id=str(workspace.id),
+            name=workspace.name,
             point=GeoPoint(
-                lon=warehouse_entity.longitude,
-                lat=warehouse_entity.latitude,
+                lon=workspace.longitude,
+                lat=workspace.latitude,
                 is_city=True,
             ),
-            loading_minutes=warehouse_entity.loading_minutes,
-            unloading_minutes=warehouse_entity.unloading_minutes,
-            turnaround_minutes=warehouse_entity.turnaround_minutes,
+            loading_minutes=workspace.loading_minutes,
+            unloading_minutes=workspace.unloading_minutes,
+            turnaround_minutes=workspace.turnaround_minutes,
         )
         task_uuid_by_core_id: dict[str, UUID] = {}
         core_task_by_uuid: dict[UUID, PlanningTask] = {}
         request_task_uuids: dict[str, tuple[UUID, ...]] = {}
         core_request_by_id = {request.id: request for request in requests}
-        for request_entity in scenario.requests:
+        for request_entity in workspace.requests:
             request_id = str(request_entity.id)
             core_request = core_request_by_id.get(request_id)
             if core_request is None:
@@ -671,49 +810,183 @@ class RuntimePlannerFacade:
             request_task_uuids[request_id] = tuple(ids)
         fingerprint = repr(
             (
-                scenario.id,
-                sorted((zone.id, zone.version) for zone in scenario.zones),
+                workspace.id,
                 sorted(
                     (request.id, request.latitude, request.longitude)
-                    for request in scenario.requests
+                    for request in workspace.requests
                 ),
                 asdict(routing_settings),
+                accepting_requests,
             )
         )
-        return _RuntimeSnapshot(
-            scenario=scenario,
-            warehouse_entity=warehouse_entity,
+        snapshot = _RuntimeSnapshot(
+            warehouse=workspace,
             input_data=PlanningInput(
-                scenario_id=str(scenario.id),
+                warehouse_id=str(workspace.id),
                 planning_date=planning_date,
-                warehouse=warehouse,
+                warehouse=depot,
                 requests=requests,
-                zones=zones,
-                zone_relations=relations,
                 shifts=shifts,
                 vehicles=vehicles,
+                accepting_requests=accepting_requests,
             ),
             settings=settings,
             routing_settings=routing_settings,
             task_uuid_by_core_id=task_uuid_by_core_id,
             core_task_by_uuid=core_task_by_uuid,
             request_task_uuids=request_task_uuids,
-            scenario_fingerprint=fingerprint,
+            warehouse_fingerprint=fingerprint,
+            support_resources={},
+            support_reason_codes=(),
+            support_source_revision=None,
+        )
+        return await self._with_support_resources(session, snapshot)
+
+    async def _with_support_resources(
+        self,
+        session: AsyncSession,
+        snapshot: _RuntimeSnapshot,
+    ) -> _RuntimeSnapshot:
+        """Add routed one-day support shifts without changing workforce ownership."""
+
+        if not snapshot.warehouse.representative or self._rwms_client is None:
+            return snapshot
+        configuration = warehouse_slot_configuration(snapshot.warehouse)
+        zone = ZoneInfo(snapshot.warehouse.timezone)
+        planning_instants = tuple(
+            datetime.combine(snapshot.input_data.planning_date, value, tzinfo=zone)
+            for value in dict.fromkeys(
+                (
+                    configuration.driver_day_start,
+                    *(start for start, _ in configuration.customer_slots),
+                )
+            )
+        )
+        facts = await load_support_resource_facts(
+            session,
+            self._rwms_client,
+            snapshot.warehouse,
+            snapshot.input_data.planning_date,
+            planning_instants,
+            vehicle_equipment_snapshot,
+        )
+        if not facts.candidates:
+            return replace(
+                snapshot,
+                support_reason_codes=(
+                    (
+                        "CONTRACTOR_REQUIRED"
+                        if facts.contractor_fallback_allowed
+                        else "NO_SUPPORT_RESOURCE"
+                    ),
+                ),
+                support_source_revision=facts.source_revision,
+                warehouse_fingerprint=repr(
+                    (snapshot.warehouse_fingerprint, facts.source_revision)
+                ),
+            )
+        provider = self._provider(snapshot)
+        support_router = CachedTruckTravelTimeProvider(
+            provider,
+            facts.equipment,
+            routing_version=(
+                "cross-warehouse-day-plan",
+                self._routing_provider,
+                self._osm_data_version,
+                facts.source_revision,
+            ),
+        )
+        try:
+            resolution = await route_support_resource_facts(
+                facts,
+                configuration,
+                support_router,
+                support_router,
+            )
+        finally:
+            await provider.aclose()
+
+        support_resources = {
+            str(candidate.fact.shift.id): candidate
+            for candidate in resolution.candidates
+        }
+        vehicles_by_id = {
+            vehicle.id: vehicle for vehicle in snapshot.input_data.vehicles
+        }
+        shifts_by_id = {
+            shift.id: shift for shift in snapshot.input_data.shifts
+        }
+        for candidate in resolution.candidates:
+            fact = candidate.fact
+            vehicle = self._core_vehicle(fact.shift.vehicle)
+            vehicles_by_id.setdefault(vehicle.id, vehicle)
+            # The synthetic interval begins immediately before the shared warehouse-load
+            # operation. Inbound travel, unloading and turnaround are already consumed by
+            # the routed resolver; the original support shift remains the persisted FK.
+            service_start = candidate.available_at_served - timedelta(
+                minutes=configuration.load_one_minutes
+            ) + timedelta(
+                microseconds=min(max(fact.link.priority - 1, 0), 999_999)
+            )
+            shifts_by_id.setdefault(
+                str(fact.shift.id),
+                DriverShift(
+                    id=str(fact.shift.id),
+                    driver_id=str(fact.shift.driver_id),
+                    driver_name=fact.identity.display_name,
+                    vehicle_id=str(fact.shift.vehicle_id),
+                    start_at=service_start,
+                    end_at=candidate.latest_served_finish,
+                    break_minutes=fact.shift.break_minutes,
+                    active=True,
+                    resource_origin_warehouse_id=str(
+                        fact.support_warehouse.external_warehouse_id
+                    ),
+                    support_link_id=str(fact.link.support_link_id),
+                    support_priority=fact.link.priority,
+                    positioning_travel_minutes=(
+                        candidate.inbound_travel_minutes
+                        + candidate.return_travel_minutes
+                    ),
+                    positioning_distance_meters=(
+                        candidate.positioning_distance_meters
+                    ),
+                    return_required=True,
+                ),
+            )
+        reason_codes = tuple(reason.value for reason in resolution.reasons)
+        return replace(
+            snapshot,
+            input_data=replace(
+                snapshot.input_data,
+                shifts=tuple(
+                    sorted(
+                        shifts_by_id.values(),
+                        key=lambda item: (item.start_at, item.driver_id, item.id),
+                    )
+                ),
+                vehicles=tuple(
+                    sorted(vehicles_by_id.values(), key=lambda item: item.id)
+                ),
+            ),
+            support_resources=support_resources,
+            support_reason_codes=reason_codes,
+            support_source_revision=facts.source_revision,
+            warehouse_fingerprint=repr(
+                (snapshot.warehouse_fingerprint, facts.source_revision)
+            ),
         )
 
     @staticmethod
     def _core_request(
         request: DbLogisticsRequest,
-        zones: Mapping[UUID, Any],
         zone_info: ZoneInfo,
     ) -> LogisticsRequest:
         """Translate one persisted request without trusting any client zone input."""
 
-        zone = zones.get(request.zone_id) if request.zone_id is not None else None
         point = GeoPoint(
             lon=request.longitude,
             lat=request.latitude,
-            is_city=bool(zone and zone.route_group.upper() == "CITY"),
         )
         options = tuple(
             RequestDateOption(
@@ -761,6 +1034,7 @@ class RuntimePlannerFacade:
             task_quantities=tuple(
                 task.quantity for task in sorted(request.tasks, key=lambda item: item.part_number)
             ),
+            mandatory=request.mandatory,
         )
 
     @staticmethod
@@ -807,7 +1081,10 @@ class RuntimePlannerFacade:
 
         if not request.source_system:
             return None
-        if request.source_system != "SIMULATOR_GENERATOR" or request.external_id is not None:
+        if (
+            request.source_system != "WAREHOUSE_WORKLOAD_GENERATOR"
+            or request.external_id is not None
+        ):
             return (
                 f"{request.source_system}:{request.external_id}"
                 if request.external_id is not None
@@ -900,6 +1177,27 @@ class RuntimePlannerFacade:
                 weight_kg=task.cargo_weight_kg,
             ),
             trailer_access_allowed=request.trailer_access_allowed,
+            mandatory=task.mandatory,
+        )
+
+    @staticmethod
+    def _core_vehicle(vehicle: DbVehicle) -> Vehicle:
+        """Translate one active-or-inactive catalog vehicle without changing ownership."""
+
+        return Vehicle(
+            id=str(vehicle.id),
+            name=vehicle.name,
+            capacity=vehicle.capacity,
+            active=vehicle.active,
+            routing_spec=RuntimePlannerFacade._vehicle_routing_spec(vehicle),
+            default_trailer=RuntimePlannerFacade._trailer_spec(vehicle.default_trailer),
+            axle_load_profiles=tuple(
+                OperationalAxleLoadProfile(
+                    configuration_type=TruckConfigurationType(profile.configuration_type),
+                    max_actual_axle_load_kg=profile.max_actual_axle_load_kg,
+                )
+                for profile in vehicle.load_profiles
+            ),
         )
 
     @staticmethod
@@ -961,16 +1259,16 @@ class RuntimePlannerFacade:
 
     @staticmethod
     def _planning_settings(
-        scenario_settings: Mapping[str, Any],
+        warehouse_settings: Mapping[str, Any],
         command_settings: Mapping[str, Any] | None,
         seed: int,
     ) -> PlanningSettings:
-        """Select only planner-owned fields from scenario and command snapshots."""
+        """Select only planner-owned fields from warehouse and command snapshots."""
 
         allowed = {field.name for field in fields(PlanningSettings)}
         values = {
             key: value
-            for key, value in {**scenario_settings, **(command_settings or {})}.items()
+            for key, value in {**warehouse_settings, **(command_settings or {})}.items()
             if key in allowed
         }
         values["seed"] = seed
@@ -981,13 +1279,13 @@ class RuntimePlannerFacade:
 
     @staticmethod
     def _routing_settings(
-        scenario_settings: Mapping[str, Any],
+        warehouse_settings: Mapping[str, Any],
         command_settings: Mapping[str, Any] | None,
         seed: int,
     ) -> RoutingSettings:
         """Build the offline routing snapshot independently from planner weights."""
 
-        source = {**scenario_settings, **(command_settings or {})}
+        source = {**warehouse_settings, **(command_settings or {})}
         allowed = {field.name for field in fields(RoutingSettings)}
         values = {key: value for key, value in source.items() if key in allowed}
         values["seed"] = seed
@@ -1006,7 +1304,7 @@ class RuntimePlannerFacade:
         """Execute one synchronous bounded run and preserve its independently queryable status."""
 
         run = OptimizationRun(
-            scenario_id=snapshot.scenario.id,
+            warehouse_id=snapshot.warehouse.id,
             status=OptimizationStatus.RUNNING,
             started_at=utc_now(),
             seed=snapshot.settings.seed,
@@ -1111,7 +1409,7 @@ class RuntimePlannerFacade:
             delegate,
             self._matrix_cache,
             self._route_cache,
-            snapshot.scenario_fingerprint,
+            snapshot.warehouse_fingerprint,
             self._matrix_cache_entries,
             provider_cache_key,
         )
@@ -1126,7 +1424,7 @@ class RuntimePlannerFacade:
             delegate,
             self._matrix_cache,
             self._route_cache,
-            snapshot.scenario_fingerprint,
+            snapshot.warehouse_fingerprint,
             self._matrix_cache_entries,
             (
                 "truck-candidate-prefilter",
@@ -1273,14 +1571,33 @@ class RuntimePlannerFacade:
             codes = ", ".join(sorted({issue.code.value for issue in validation.errors}))
             raise RuntimeError(f"planner persistence rejected invalid plan: {codes}")
         plan = RoutePlan(
-            scenario_id=snapshot.scenario.id,
-            warehouse_id=snapshot.warehouse_entity.id,
+            warehouse_id=snapshot.warehouse.id,
             date=snapshot.input_data.planning_date,
             name=f"Автоплан · seed {result.seed}",
             version=1,
             status=PlanStatus.GENERATED,
             score=result.score,
-            metrics=asdict(metrics),
+            metrics={
+                **asdict(metrics),
+                "accepting_requests": snapshot.input_data.accepting_requests,
+                "support_candidate_count": len(snapshot.support_resources),
+                "support_reason_codes": list(snapshot.support_reason_codes),
+                "support_source_revision": snapshot.support_source_revision,
+                "support_positioning_distance_meters": sum(
+                    resource.positioning_distance_meters
+                    for shift_id, resource in snapshot.support_resources.items()
+                    if any(
+                        cycle.driver_shift_id == shift_id for cycle in result.cycles
+                    )
+                ),
+                "support_positioning_travel_minutes": sum(
+                    resource.inbound_travel_minutes + resource.return_travel_minutes
+                    for shift_id, resource in snapshot.support_resources.items()
+                    if any(
+                        cycle.driver_shift_id == shift_id for cycle in result.cycles
+                    )
+                ),
+            },
             validation_errors=[],
             validation_warnings=[self._issue_payload(issue) for issue in validation.warnings],
             manually_changed=False,
@@ -1302,25 +1619,47 @@ class RuntimePlannerFacade:
                 score=core_cycle.score,
                 locked=core_cycle.locked,
                 manually_changed=core_cycle.manually_changed,
-                metrics=self._cycle_metrics(core_cycle),
+                metrics=self._cycle_metrics(core_cycle, snapshot),
             )
             session.add(cycle)
             await session.flush()
             await self._populate_cycle(session, cycle, core_cycle, snapshot)
         for task_uuid, item in sorted(unassigned_by_task.items(), key=lambda pair: str(pair[0])):
+            support_reasons = [
+                code
+                for code in snapshot.support_reason_codes
+                if code not in {reason.value for reason in item.reason_codes}
+            ]
+            contractor_required = "CONTRACTOR_REQUIRED" in support_reasons
             session.add(
                 DbUnassignedTask(
                     route_plan_id=plan.id,
                     task_id=task_uuid,
-                    reason_codes=[reason.value for reason in item.reason_codes],
-                    descriptions_ru=list(item.explanation_ru),
+                    reason_codes=[
+                        *(reason.value for reason in item.reason_codes),
+                        *support_reasons,
+                    ],
+                    descriptions_ru=[
+                        *item.explanation_ru,
+                        *(
+                            ["Не найден подходящий штатный ресурс."]
+                            if contractor_required
+                            else []
+                        ),
+                    ],
                     nearest_option=(
                         {"possible_at": item.nearest_possible_at.isoformat()}
                         if item.nearest_possible_at is not None
                         else None
                     ),
                     recommendation_ru=(
-                        " ".join(item.recommendation_ru) if item.recommendation_ru else None
+                        "Добавить наёмного водителя на этот день и пересчитать план."
+                        if contractor_required
+                        else (
+                            " ".join(item.recommendation_ru)
+                            if item.recommendation_ru
+                            else None
+                        )
                     ),
                 )
             )
@@ -1333,8 +1672,10 @@ class RuntimePlannerFacade:
         cycle: DbRouteCycle,
         core_cycle: RouteCycle,
         snapshot: _RuntimeSnapshot,
+        *,
+        locked_task_ids: frozenset[UUID] = frozenset(),
     ) -> None:
-        """Persist stops, route geometry, and saved explanations for one cycle."""
+        """Persist stops, route geometry, explanations, and retained task locks."""
 
         stop_ids: dict[int, UUID] = {}
         warning_payloads = [
@@ -1342,14 +1683,15 @@ class RuntimePlannerFacade:
             for warning in core_cycle.warnings
         ]
         for core_stop in core_cycle.stops:
+            task_uuid = (
+                snapshot.task_uuid_by_core_id.get(core_stop.task_id)
+                if core_stop.task_id is not None
+                else None
+            )
             stop = DbRouteStop(
                 route_cycle_id=cycle.id,
                 sequence=core_stop.sequence,
-                task_id=(
-                    snapshot.task_uuid_by_core_id.get(core_stop.task_id)
-                    if core_stop.task_id is not None
-                    else None
-                ),
+                task_id=task_uuid,
                 stop_type=core_stop.stop_type.value,
                 planned_arrival=core_stop.planned_arrival,
                 planned_departure=core_stop.planned_departure,
@@ -1360,7 +1702,7 @@ class RuntimePlannerFacade:
                 latitude=core_stop.point.lat,
                 longitude=core_stop.point.lon,
                 warnings=warning_payloads if core_stop.sequence == 0 else [],
-                locked=False,
+                locked=task_uuid in locked_task_ids,
             )
             session.add(stop)
             await session.flush()
@@ -1399,18 +1741,112 @@ class RuntimePlannerFacade:
                     facts=[],
                 )
             )
+        support = snapshot.support_resources.get(core_cycle.driver_shift_id)
+        if support is not None:
+            session.add(
+                RouteExplanation(
+                    route_cycle_id=cycle.id,
+                    explanation_type="CROSS_WAREHOUSE_SERVICE",
+                    summary_ru=(
+                        f"Ресурс привлечён со склада "
+                        f"«{support.fact.support_warehouse.name}» на один рейс; "
+                        "базовый и оперативный склад водителя не меняется."
+                    ),
+                    facts=[
+                        *({"code": reason.value} for reason in support.reason_codes),
+                        {
+                            "supportWarehouseLinkId": str(
+                                support.fact.link.support_link_id
+                            ),
+                            "supportWarehouseId": str(
+                                support.fact.support_warehouse.external_warehouse_id
+                            ),
+                            "servedWarehouseId": str(
+                                snapshot.warehouse.external_warehouse_id
+                            ),
+                            "driverWorkerId": str(support.fact.identity.worker_id),
+                            "vehicleId": str(support.fact.shift.vehicle_id),
+                            "availableAtServed": support.available_at_served.isoformat(),
+                            "latestServedFinish": support.latest_served_finish.isoformat(),
+                            "inboundTravelMinutes": support.inbound_travel_minutes,
+                            "returnTravelMinutes": support.return_travel_minutes,
+                            "inboundDistanceMeters": support.inbound_distance_meters,
+                            "returnDistanceMeters": support.return_distance_meters,
+                            "positioningDistanceMeters": (
+                                support.positioning_distance_meters
+                            ),
+                            "returnsToSupportWarehouse": True,
+                            "changesOperationalWarehouse": False,
+                        },
+                    ],
+                )
+            )
         await session.flush()
 
     @staticmethod
-    def _cycle_metrics(cycle: RouteCycle) -> dict[str, Any]:
+    def _cycle_metrics(
+        cycle: RouteCycle,
+        snapshot: _RuntimeSnapshot,
+    ) -> dict[str, Any]:
         """Store planner-only cycle facts not represented by dedicated columns."""
 
-        return {
+        metrics: dict[str, Any] = {
             "waiting_seconds": cycle.waiting_seconds,
             "detour_ratio": cycle.detour_ratio,
             "driver_id": cycle.driver_id,
             "vehicle_id": cycle.vehicle_id,
         }
+        support = snapshot.support_resources.get(cycle.driver_shift_id)
+        if support is None:
+            metrics["execution_mode"] = "LOCAL"
+            return metrics
+        vehicle = support.fact.shift.vehicle
+        trailer_available = vehicle_has_available_trailer(vehicle)
+        raw_capacity = min(2, vehicle.capacity)
+        transfer_capacity = effective_vehicle_cabin_capacity(vehicle)
+        capacity_reasons: list[PlanningReason] = []
+        if transfer_capacity == 1:
+            capacity_reasons.append(
+                PlanningReason.TRAILER_REQUIRED
+                if raw_capacity > 1 and not trailer_available
+                else PlanningReason.VEHICLE_CAPACITY_ONE_CABIN
+            )
+        metrics.update(
+            {
+                "execution_mode": "CROSS_WAREHOUSE_SERVICE",
+                "service_warehouse_id": str(snapshot.warehouse.external_warehouse_id),
+                "resource_origin_warehouse_id": str(
+                    support.fact.support_warehouse.external_warehouse_id
+                ),
+                "support_warehouse_link_id": str(support.fact.link.support_link_id),
+                "driver_worker_id": str(support.fact.identity.worker_id),
+                "driver_name": support.fact.identity.display_name,
+                "vehicle_name": support.fact.shift.vehicle.name,
+                "vehicle_registration_number": (
+                    support.fact.shift.vehicle.registration_number
+                ),
+                "available_at_served": support.available_at_served.isoformat(),
+                "latest_served_finish": support.latest_served_finish.isoformat(),
+                "inbound_travel_minutes": support.inbound_travel_minutes,
+                "return_travel_minutes": support.return_travel_minutes,
+                "inbound_distance_meters": support.inbound_distance_meters,
+                "return_distance_meters": support.return_distance_meters,
+                "positioning_distance_meters": support.positioning_distance_meters,
+                "positioning_outbound_geometry": support.inbound_geometry,
+                "positioning_return_geometry": support.return_geometry,
+                "available_transfer_cabin_capacity": transfer_capacity,
+                "trailer_available": trailer_available,
+                "outbound_positioning_empty": True,
+                "empty_positioning_reason_required": True,
+                "returns_to_origin": True,
+                "changes_operational_warehouse": False,
+                "reason_codes": [
+                    *(reason.value for reason in support.reason_codes),
+                    *(reason.value for reason in capacity_reasons),
+                ],
+            }
+        )
+        return metrics
 
     def _core_cycle(
         self,
@@ -1430,7 +1866,6 @@ class RuntimePlannerFacade:
                 f"Plan cycle {cycle.id} references a missing driver shift",
             )
         stop_by_id = {stop.id: stop for stop in cycle.stops}
-        zone_by_id = {zone.id: zone for zone in snapshot.input_data.zones}
         stops: list[RouteStop] = []
         warning_codes: set[ValidationWarningCode] = set()
         for db_stop in sorted(cycle.stops, key=lambda item: item.sequence):
@@ -1439,7 +1874,6 @@ class RuntimePlannerFacade:
                 if db_stop.task_id is not None
                 else None
             )
-            zone = zone_by_id.get(core_task.zone_id or "") if core_task is not None else None
             for warning in db_stop.warnings:
                 raw_code = warning.get("code")
                 if isinstance(raw_code, str):
@@ -1466,7 +1900,6 @@ class RuntimePlannerFacade:
                         else snapshot.input_data.warehouse.name
                     ),
                     zone_id=core_task.zone_id if core_task is not None else None,
-                    route_group=zone.route_group if zone is not None else None,
                     window_start=(
                         core_task.selected_option.window_start if core_task is not None else None
                     ),
@@ -1538,9 +1971,8 @@ class RuntimePlannerFacade:
         plan = await plan_service.assert_plan_version(session, plan_id, command.expected_version)
         snapshot = await self._load_snapshot(
             session,
-            plan.scenario_id,
-            plan.date,
             plan.warehouse_id,
+            plan.date,
             None,
             None,
         )
@@ -1578,9 +2010,17 @@ class RuntimePlannerFacade:
         ):
             raise ApiError(409, "TASK_LOCKED", "The selected task is locked")
 
-        affected_ids = {target_cycle.id}
+        manually_changed_ids = {target_cycle.id}
         if source_cycle is not None:
-            affected_ids.add(source_cycle.id)
+            manually_changed_ids.add(source_cycle.id)
+        affected_shift_ids = {target_cycle.driver_shift_id}
+        if source_cycle is not None:
+            affected_shift_ids.add(source_cycle.driver_shift_id)
+        affected_ids = {
+            cycle.id
+            for cycle in plan.cycles
+            if cycle.driver_shift_id in affected_shift_ids
+        }
         original_orders = {
             str(cycle.id): [str(stop.task_id) for stop in cycle.stops if stop.task_id]
             for cycle in plan.cycles
@@ -1600,21 +2040,31 @@ class RuntimePlannerFacade:
             raise ApiError(422, "TARGET_SEQUENCE_INVALID", "target_sequence must be an integer")
         insertion_index = max(0, min(len(target_tasks), raw_sequence - 1))
         target_tasks.insert(insertion_index, core_task)
+        target_tasks = self._tasks_in_route_phase_order(target_tasks)
         source_tasks = (
-            [task for task in self._cycle_tasks(source_cycle, snapshot) if task.id != core_task.id]
+            self._tasks_in_route_phase_order(
+                [
+                    task
+                    for task in self._cycle_tasks(source_cycle, snapshot)
+                    if task.id != core_task.id
+                ]
+            )
             if source_cycle is not None and source_cycle is not target_cycle
             else None
         )
 
-        target_core = await self._reschedule_cycle(snapshot, target_cycle, target_tasks)
-        source_core = (
-            await self._reschedule_cycle(snapshot, source_cycle, source_tasks)
-            if source_cycle is not None and source_tasks
-            else None
-        )
-        replacements: dict[UUID, RouteCycle | None] = {target_cycle.id: target_core}
+        task_overrides: dict[UUID, list[PlanningTask] | None] = {
+            target_cycle.id: target_tasks,
+        }
         if source_cycle is not None and source_cycle is not target_cycle:
-            replacements[source_cycle.id] = source_core
+            task_overrides[source_cycle.id] = source_tasks
+        replacements = await self._reschedule_affected_shifts(
+            snapshot,
+            plan.cycles,
+            affected_shift_ids=frozenset(affected_shift_ids),
+            task_overrides=task_overrides,
+            manually_changed_ids=frozenset(manually_changed_ids),
+        )
         candidate_list: list[RouteCycle] = []
         for cycle in plan.cycles:
             if cycle.id in replacements:
@@ -1651,12 +2101,14 @@ class RuntimePlannerFacade:
                 extra={"errors": [self._issue_payload(issue) for issue in validation.errors]},
             )
 
-        await self._replace_cycle(session, target_cycle, target_core, snapshot)
-        if source_cycle is not None and source_cycle is not target_cycle:
-            if source_core is None:
-                await session.delete(source_cycle)
+        for cycle in tuple(plan.cycles):
+            if cycle.id not in replacements:
+                continue
+            replacement = replacements[cycle.id]
+            if replacement is None:
+                await session.delete(cycle)
             else:
-                await self._replace_cycle(session, source_cycle, source_core, snapshot)
+                await self._replace_cycle(session, cycle, replacement, snapshot)
         for item in tuple(plan.unassigned_tasks):
             if item.task_id == task_id:
                 await session.delete(item)
@@ -1686,29 +2138,102 @@ class RuntimePlannerFacade:
         self._expire_plan_graph(session, plan)
         return plan
 
+    async def _reschedule_affected_shifts(
+        self,
+        snapshot: _RuntimeSnapshot,
+        cycles: Iterable[DbRouteCycle],
+        *,
+        affected_shift_ids: frozenset[UUID],
+        task_overrides: Mapping[UUID, list[PlanningTask] | None],
+        manually_changed_ids: frozenset[UUID],
+    ) -> dict[UUID, RouteCycle | None]:
+        """Rebuild every affected shift sequentially without changing cycle identity.
+
+        Existing idle gaps remain valid lower bounds, while a longer preceding
+        cycle pushes every following cycle forward by the configured depot
+        turnaround. Empty source cycles are removed from the sequence.
+        """
+
+        shift_by_id = {
+            UUID(shift.id): shift
+            for shift in snapshot.input_data.shifts
+            if UUID(shift.id) in affected_shift_ids
+        }
+        rebuilt_by_shift: dict[UUID, list[RouteCycle]] = {}
+        cursor_by_shift: dict[UUID, datetime] = {}
+        replacements: dict[UUID, RouteCycle | None] = {}
+        turnaround = timedelta(
+            minutes=(
+                snapshot.input_data.warehouse.turnaround_minutes
+                + snapshot.settings.default_route_buffer_minutes
+            )
+        )
+        for cycle in sorted(
+            (item for item in cycles if item.driver_shift_id in affected_shift_ids),
+            key=lambda item: (str(item.driver_shift_id), item.sequence, str(item.id)),
+        ):
+            shift = shift_by_id.get(cycle.driver_shift_id)
+            if shift is None:
+                raise ApiError(
+                    422,
+                    "PLAN_SHIFT_MISSING",
+                    f"Plan cycle {cycle.id} references a missing driver shift",
+                )
+            tasks = (
+                task_overrides[cycle.id]
+                if cycle.id in task_overrides
+                else self._cycle_tasks(cycle, snapshot)
+            )
+            if not tasks:
+                replacements[cycle.id] = None
+                continue
+            earliest_start = cursor_by_shift.get(cycle.driver_shift_id, shift.start_at)
+            core_cycle = await self._reschedule_cycle(
+                snapshot,
+                cycle,
+                tasks,
+                start_at=max(cycle.planned_start, earliest_start),
+                existing_shift_cycles=tuple(
+                    rebuilt_by_shift.get(cycle.driver_shift_id, ())
+                ),
+                mark_manually_changed=cycle.id in manually_changed_ids,
+            )
+            replacements[cycle.id] = core_cycle
+            rebuilt_by_shift.setdefault(cycle.driver_shift_id, []).append(core_cycle)
+            cursor_by_shift[cycle.driver_shift_id] = core_cycle.planned_finish + turnaround
+        return replacements
+
+    @staticmethod
+    def _tasks_in_route_phase_order(tasks: list[PlanningTask]) -> list[PlanningTask]:
+        """Clamp an operator insertion to delivery then pickup route phases.
+
+        The stable partition preserves the requested relative order among
+        deliveries and among pickups while preventing a sequence coordinate
+        outside the selected task's phase from producing an invalid route.
+        """
+
+        return [
+            *(task for task in tasks if task.task_type is TaskType.DELIVERY),
+            *(task for task in tasks if task.task_type is TaskType.PICKUP),
+        ]
+
     async def _reschedule_cycle(
         self,
         snapshot: _RuntimeSnapshot,
         cycle: DbRouteCycle,
         tasks: list[PlanningTask],
+        *,
+        start_at: datetime | None = None,
+        existing_shift_cycles: tuple[RouteCycle, ...] | None = None,
+        mark_manually_changed: bool = True,
     ) -> RouteCycle:
-        """Rebuild one operator-edited cycle through the same production scheduler.
+        """Rebuild one cycle in persisted task order through the production scheduler.
 
         The generated plan uses one matrix snapshot at the earliest active shift start.
         Reusing that departure instant here keeps a no-op manual edit deterministic;
         the cycle's actual start still drives time-window and shift validation.
         """
 
-        pickup_seen = False
-        for task in tasks:
-            if task.task_type is TaskType.PICKUP:
-                pickup_seen = True
-            elif pickup_seen:
-                raise ApiError(
-                    422,
-                    "PICKUP_BEFORE_DELIVERY",
-                    "All deliveries must remain before every pickup",
-                )
         deliveries = tuple(task for task in tasks if task.task_type is TaskType.DELIVERY)
         pickups = tuple(task for task in tasks if task.task_type is TaskType.PICKUP)
         if not deliveries and not pickups:
@@ -1727,7 +2252,7 @@ class RuntimePlannerFacade:
                 and item.start_at.date() == snapshot.input_data.planning_date
                 and item.vehicle_id in active_vehicle_ids
             ),
-            default=cycle.planned_start.astimezone(ZoneInfo(snapshot.scenario.timezone)),
+            default=cycle.planned_start.astimezone(ZoneInfo(snapshot.warehouse.timezone)),
         )
         matrix = await provider.get_matrix(points, departure_at)
         matrix_index = {task.id: index + 1 for index, task in enumerate(all_tasks)}
@@ -1748,7 +2273,7 @@ class RuntimePlannerFacade:
         engine = HeuristicPlanner(provider)
         candidate = engine._schedule_candidate(
             shift=shift,
-            start_at=cycle.planned_start,
+            start_at=start_at or cycle.planned_start,
             sequence=cycle.sequence,
             deliveries=deliveries,
             pickups=pickups,
@@ -1756,28 +2281,31 @@ class RuntimePlannerFacade:
             vehicle=vehicle,
             matrix=matrix,
             matrix_index=matrix_index,
-            zones={zone.id: zone for zone in snapshot.input_data.zones},
-            relations=_build_relation_index(snapshot.input_data.zone_relations),
             settings=snapshot.settings,
             cycle_count=max(0, cycle.sequence - 1),
-            existing_shift_cycles=tuple(
-                self._core_cycle(item, snapshot)
-                for item in cycle.route_plan.cycles
-                if item.id != cycle.id and item.driver_shift_id == cycle.driver_shift_id
+            existing_shift_cycles=(
+                existing_shift_cycles
+                if existing_shift_cycles is not None
+                else tuple(
+                    self._core_cycle(item, snapshot)
+                    for item in cycle.route_plan.cycles
+                    if item.id != cycle.id and item.driver_shift_id == cycle.driver_shift_id
+                )
             ),
+            ordered_tasks=tuple(tasks),
         )
         if candidate is None:
             raise ApiError(
                 422,
                 "MANUAL_CHANGE_INVALID",
-                "The edited cycle violates capacity, zone, detour, window, or shift limits",
+                "The edited cycle violates capacity, detour, window, or shift limits",
                 extra={
                     "errors": [
                         {
                             "code": "NO_FEASIBLE_CYCLE",
                             "message_ru": (
                                 "Изменённый рейс не помещается во вместимость, окно, "
-                                "связи зон, лимит крюка или смену."
+                                "лимит крюка или смену."
                             ),
                             "cycle_id": str(cycle.id),
                         }
@@ -1788,7 +2316,9 @@ class RuntimePlannerFacade:
             candidate.cycle,
             id=str(cycle.id),
             locked=cycle.locked,
-            manually_changed=True,
+            manually_changed=(
+                True if mark_manually_changed else cycle.manually_changed
+            ),
         )
         if self._routing_provider == "valhalla":
             exact_provider = self._provider(snapshot)
@@ -1854,7 +2384,11 @@ class RuntimePlannerFacade:
         core_cycle: RouteCycle,
         snapshot: _RuntimeSnapshot,
     ) -> None:
-        """Replace one cycle schedule in place while preserving its stable database UUID."""
+        """Replace one cycle schedule while retaining its UUID and task locks."""
+
+        locked_task_ids = frozenset(
+            stop.task_id for stop in cycle.stops if stop.task_id is not None and stop.locked
+        )
 
         await session.execute(
             delete(RouteSegment)
@@ -1882,9 +2416,15 @@ class RuntimePlannerFacade:
         cycle.empty_distance_meters = core_cycle.empty_distance_meters
         cycle.detour_seconds = core_cycle.detour_seconds
         cycle.score = core_cycle.score
-        cycle.manually_changed = True
-        cycle.metrics = self._cycle_metrics(core_cycle)
-        await self._populate_cycle(session, cycle, core_cycle, snapshot)
+        cycle.manually_changed = core_cycle.manually_changed
+        cycle.metrics = self._cycle_metrics(core_cycle, snapshot)
+        await self._populate_cycle(
+            session,
+            cycle,
+            core_cycle,
+            snapshot,
+            locked_task_ids=locked_task_ids,
+        )
         session.expire(cycle, ["stops", "segments", "explanations"])
 
     async def _lock_task(
@@ -1930,7 +2470,7 @@ class RuntimePlannerFacade:
         shift_id: UUID,
         effective_at: datetime,
     ) -> None:
-        """Persist an explicit unavailable-driver scenario as an audited plan warning."""
+        """Persist an explicit unavailable-driver warehouse as an audited plan warning."""
 
         affected = sorted(
             {
@@ -1973,7 +2513,11 @@ class RuntimePlannerFacade:
             RuntimePlannerFacade._issue_payload(issue) for issue in warnings
         ]
         if metrics is not None:
-            plan.metrics = asdict(metrics)
+            calculated = asdict(metrics)
+            metadata = {
+                key: value for key, value in plan.metrics.items() if key not in calculated
+            }
+            plan.metrics = {**calculated, **metadata}
 
     @staticmethod
     def _issue_payload(issue: ValidationIssue) -> dict[str, Any]:
@@ -2022,7 +2566,6 @@ class RuntimePlannerFacade:
 
         return {
             "HIGH_DETOUR": "Крюк за вывозом превышает рекомендуемый лимит.",
-            "CROSS_ROUTE_GROUP": "Рейс проходит через несколько маршрутных групп.",
             "LOW_TIME_BUFFER": "До конца смены остаётся небольшой резерв.",
             "SOFT_WINDOW_RISK": "Рейс рискует выйти за мягкое временное окно.",
             "OVERTIME_WARNING": "Рейс использует разрешённую мягкую переработку.",

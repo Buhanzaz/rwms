@@ -5,7 +5,8 @@ export function requestPlanningMissingFields(request: LogisticsRequest, planning
   const option = request.date_options.find((candidate) => candidate.date === planningDate);
   const missing: string[] = [];
   if (!option) missing.push('дата не согласована');
-  else if (!option.window_start || !option.window_end) missing.push('не задано окно времени');
+  else if (option.is_hard && (!option.window_start || !option.window_end)) missing.push('не задано окно времени');
+  else if (Boolean(option.window_start) !== Boolean(option.window_end)) missing.push('окно времени заполнено не полностью');
   if (typeof request.trailer_access_allowed !== 'boolean') missing.push('не согласован проезд с прицепом');
   return missing;
 }
