@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.client.ui
 
+import dev.buhanzaz.rwms.client.data.CustomerApiException
 import dev.buhanzaz.rwms.client.data.CustomerBooking
 import dev.buhanzaz.rwms.client.data.DeliverySlot
 import dev.buhanzaz.rwms.client.data.EquipmentSelection
@@ -51,6 +52,25 @@ data class SelectionDraft(
     val equipment: Map<EquipmentKey, Long>,
 )
 
+/** Pure complete-replacement rules for bulk and per-cabin rental durations. */
+object CustomerRentalTermPolicy {
+    /** Applies a bounded duration to targets while preserving every other selected cabin's term. */
+    fun apply(
+        selectedCabins: Set<String>,
+        existingTerms: Map<String, Long>,
+        requestedTargets: Set<String>,
+        months: Long,
+    ): Map<String, Long> {
+        require(selectedCabins.isNotEmpty())
+        require(months in 1..120)
+        require(requestedTargets.all { it in selectedCabins })
+        val targets = requestedTargets.ifEmpty { selectedCabins }
+        return selectedCabins.associateWith { cabinId ->
+            if (cabinId in targets) months else existingTerms[cabinId] ?: 1L
+        }
+    }
+}
+
 /** Pure slot selection rules; only server-returned slots can ever become selected. */
 object DeliverySlotPolicy {
     /** Returns a chosen server slot ID or rejects an unknown/stale identifier. */
@@ -73,6 +93,29 @@ object DeliverySlotPolicy {
                 ),
             )
         }
+
+    /**
+     * Returns the one server tariff shared by all offers for the selected point.
+     *
+     * Missing or contradictory values stay unknown so the UI never invents a zero-price delivery.
+     */
+    fun deliveryPriceRubles(slots: List<DeliverySlot>): Int? {
+        val values = slots.map(DeliverySlot::deliveryPriceRubles).distinct()
+        return values.singleOrNull()?.takeIf { it >= 0 }
+    }
+
+    /** Describes the one server-owned tariff source without treating it as route feasibility. */
+    fun deliveryTariffSource(slots: List<DeliverySlot>): String? {
+        val sources = slots.map { slot ->
+            when {
+                slot.priceZoneId != null && slot.priceIsochroneMinutes == null -> "Особая зона доставки"
+                slot.priceZoneId == null && slot.priceIsochroneMinutes != null ->
+                    "Изохрона ${slot.priceIsochroneMinutes / 60} ч"
+                else -> null
+            }
+        }.distinct()
+        return sources.singleOrNull()
+    }
 }
 
 /** One display-only date grouping whose slots remain exact logistics responses. */
@@ -104,6 +147,13 @@ internal class LatestDeliveryGeocodeGate {
 
     /** Returns whether a callback still belongs to the most recent request. */
     fun isCurrent(token: Long): Boolean = token == generation
+}
+
+/** Prevents date navigation until a newer server slot search completed successfully. */
+internal object SlotSearchNavigationPolicy {
+    /** Allows navigation only for a completed generation newer than the tapped request baseline. */
+    fun canNavigate(baseline: Long?, current: Long, busy: Boolean): Boolean =
+        baseline != null && !busy && current > baseline
 }
 
 /** Chooses the current delivery point or, before one exists, the selected warehouse depot. */
@@ -174,8 +224,28 @@ internal object CustomerBookingPolicy {
     /** Checkout pending/completed states fence further cart commands for the active inquiry. */
     fun locksCart(booking: CustomerBooking?): Boolean = booking?.status in setOf("PENDING", "COMPLETED")
 
+    /** A booking from an earlier inquiry never locks a newly opened cart. */
+    fun locksCart(booking: CustomerBooking?, activeInquiryId: String?): Boolean =
+        activeInquiryId != null && booking?.inquiryId == activeInquiryId && locksCart(booking)
+
     private fun CustomerBooking.sameBookingAs(other: CustomerBooking): Boolean =
         (bookingId != null && bookingId == other.bookingId) || inquiryId == other.inquiryId
 
     private fun CustomerBooking.stableIdentity(): String = bookingId ?: inquiryId
+}
+
+/** Decides when a terminal customer inquiry must be replaced without discarding its booking. */
+internal object CustomerInquiryRecoveryPolicy {
+    /** The customer session exposes `BOOKED` once that cart can no longer serve catalogue calls. */
+    fun requiresFreshInquiry(sessionState: String): Boolean = sessionState == "BOOKED"
+
+    /** Handles an older or temporarily inconsistent session whose underlying inquiry is archived. */
+    fun isArchivedInquiry(failure: CustomerApiException): Boolean =
+        failure.status == 409 && failure.code == "INQUIRY_ARCHIVED"
+
+    /** A submitted booking makes only its source inquiry immutable; another cart stays editable. */
+    fun requiresFreshInquiry(booking: CustomerBooking?, activeInquiryId: String?): Boolean =
+        activeInquiryId != null &&
+            booking?.inquiryId == activeInquiryId &&
+            CustomerBookingPolicy.locksCart(booking)
 }

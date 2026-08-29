@@ -9,6 +9,15 @@
         android:name="android.hardware.camera"
         android:required="false" />
 
+    <queries>
+        <package android:name="ru.yandex.yandexmaps" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
+
     <application
         android:name=".DriverApplication"
         android:allowBackup="false"

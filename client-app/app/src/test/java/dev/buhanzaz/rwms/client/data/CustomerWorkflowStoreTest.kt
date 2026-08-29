@@ -57,6 +57,25 @@ class CustomerWorkflowStoreTest {
         assertThat(retryAfterLostResponse).isEqualTo(firstAttempt)
     }
 
+    @Test
+    fun `terminal inquiry restart preserves warehouse preference and rotates create identity`() = runTest {
+        val warehouseId = UUID.randomUUID().toString()
+        val firstInquiryId = UUID.randomUUID().toString()
+        val pending = store.begin(warehouseId, rememberWarehouse = true)
+        val bound = store.bind(
+            pending,
+            InquirySession(firstInquiryId, warehouseId, 4, "BOOKED"),
+        )
+
+        val replacement = store.restart(bound)
+
+        assertThat(replacement.warehouseId).isEqualTo(warehouseId)
+        assertThat(replacement.rememberWarehouse).isTrue()
+        assertThat(replacement.inquiryId).isNull()
+        assertThat(replacement.createIdempotencyKey).isNotEqualTo(pending.createIdempotencyKey)
+        assertThat(store.read()).isEqualTo(replacement)
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun `inquiry from another warehouse cannot replace the pending intent`() = runTest {
         val pending = store.begin(UUID.randomUUID().toString())

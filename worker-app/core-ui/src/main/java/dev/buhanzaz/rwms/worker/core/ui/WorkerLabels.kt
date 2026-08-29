@@ -32,6 +32,20 @@ fun workerTaskStageOrdinal(routeStepIndex: Int, routeStepCount: Int, separator: 
     return "$current$separator$total"
 }
 
+/**
+ * Recognizes only logistics-owned canonical text emitted for a warehouse-to-warehouse transfer.
+ * This helper deliberately does not classify every logistics document as a transfer because the
+ * current worker feed does not expose a dedicated document-type field.
+ */
+fun isInterwarehouseTransferTask(vararg values: String?): Boolean = values.asSequence()
+    .mapNotNull { value -> value?.trim()?.lowercase()?.takeIf(String::isNotEmpty) }
+    .any { value ->
+        value == "переместить бытовку между складами" ||
+            value == "переместить мебель между складами" ||
+            value.startsWith("перемещение бытовки между складами") ||
+            value.startsWith("межскладской груз:")
+    }
+
 private val UUID_PATTERN = Regex(
     pattern = """(?i)(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-f])""",
 )

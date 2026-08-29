@@ -3,8 +3,10 @@ package dev.buhanzaz.rwms.worker.feature.taskdetail
 import dev.buhanzaz.rwms.worker.core.database.WorkerAssignmentEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerTaskEntity
 import dev.buhanzaz.rwms.worker.core.network.WorkerMediaReferenceDto
+import dev.buhanzaz.rwms.worker.core.network.WorkerTaskDetailDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerTaskTimerSnapshotDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerWorkDto
+import dev.buhanzaz.rwms.worker.core.ui.isInterwarehouseTransferTask
 import java.math.BigDecimal
 import java.time.Duration
 import java.time.Instant
@@ -145,6 +147,103 @@ internal data class TaskSourceMediaPresentation(
     val general: List<WorkerMediaReferenceDto>,
     val byWorkId: Map<String, List<WorkerMediaReferenceDto>>,
 )
+
+/** Exact sibling task step rendered as part of a transfer trip without inventing stop semantics. */
+internal data class TransferRouteStepPresentation(
+    val ordinal: Int,
+    val label: String,
+    val status: String,
+)
+
+/**
+ * Worker-facing transfer projection derived only from the current public task-detail contract.
+ * A missing route is explicit because warehouse identities are not yet part of that contract.
+ */
+internal data class TransferTaskPresentation(
+    val route: String?,
+    val cargoLines: List<String>,
+    val materialLines: List<String>,
+    val comments: List<String>,
+    val routeSteps: List<TransferRouteStepPresentation>,
+    val instructions: List<String>,
+)
+
+/**
+ * Builds a transfer card only for a logistics-document task carrying canonical transfer text.
+ * The function never parses UUIDs into warehouse or cabin labels and never synthesizes cargo.
+ */
+internal fun transferTaskPresentation(detail: WorkerTaskDetailDto): TransferTaskPresentation? {
+    if (detail.source?.type != "LOGISTICS_DRIVER_TASK" ||
+        !isInterwarehouseTransferTask(detail.title, detail.description, detail.taskText)
+    ) {
+        return null
+    }
+    val transferText = listOfNotNull(detail.taskText, detail.description)
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .distinct()
+    val cabinNumbers = transferText.firstNotNullOfOrNull { text ->
+        text.substringAfterMarker("Бытовки:")
+            ?.split(',')
+            ?.map(String::trim)
+            ?.filter(String::isNotEmpty)
+            ?.takeIf(List<String>::isNotEmpty)
+    }.orEmpty()
+    val furnitureSummary = transferText.firstNotNullOfOrNull { text ->
+        text.substringAfterMarker("Межскладской груз:")
+    }
+    val cargoLines = when {
+        cabinNumbers.isNotEmpty() -> cabinNumbers
+        !furnitureSummary.isNullOrBlank() -> listOf(furnitureSummary)
+        else -> transferText.take(1)
+    }
+    val route = transferText.firstNotNullOfOrNull(::routeLabelOrNull)
+    val materialLines = detail.materials.map { material ->
+        "${material.name} — ${quantityLabel(material.quantity, material.unit)}"
+    }
+    val comments = detail.comments.map { comment ->
+        listOfNotNull(
+            comment.authorDisplayName?.trim()?.takeIf(String::isNotEmpty),
+            comment.text.trim().takeIf(String::isNotEmpty),
+        ).joinToString(": ")
+    }.filter(String::isNotEmpty)
+    val routeSteps = detail.relatedSteps
+        .sortedBy { it.routeIndex }
+        .mapIndexed { index, step ->
+            TransferRouteStepPresentation(
+                ordinal = index + 1,
+                label = step.taskText?.trim()?.takeIf(String::isNotEmpty) ?: step.queueName,
+                status = step.status,
+            )
+        }
+    return TransferTaskPresentation(
+        route = route,
+        cargoLines = cargoLines,
+        materialLines = materialLines,
+        comments = comments,
+        routeSteps = routeSteps,
+        instructions = listOf(
+            "Сверьте груз с карточкой перед выездом",
+            "Подтвердите погрузку фотографиями во время задания",
+            "Следуйте по маршруту, назначенному логистом",
+            "Выгрузите только подтверждённый груз",
+            "Добавьте фото выгрузки и завершите задание",
+        ),
+    )
+}
+
+private fun String.substringAfterMarker(marker: String): String? {
+    val markerIndex = indexOf(marker, ignoreCase = true)
+    if (markerIndex < 0) return null
+    return substring(markerIndex + marker.length).trim().takeIf(String::isNotEmpty)
+}
+
+private fun routeLabelOrNull(value: String): String? {
+    val line = value.lineSequence().firstOrNull { candidate -> '→' in candidate } ?: return null
+    val parts = line.split('→', limit = 2).map(String::trim)
+    if (parts.size != 2 || parts.any(String::isEmpty)) return null
+    return "${parts[0]} → ${parts[1]}"
+}
 
 /** Compact timer state rendered in the task app bar after the worker takes the task. */
 internal data class TaskHeaderTimerPresentation(

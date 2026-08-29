@@ -38,4 +38,28 @@ class CustomerCartPolicyTest {
             available = 2L,
         )
     }
+
+    @Test
+    fun `bulk duration changes only checked cabins and preserves complete replacement`() {
+        val terms = CustomerRentalTermPolicy.apply(
+            selectedCabins = setOf("cabin-a", "cabin-b"),
+            existingTerms = mapOf("cabin-a" to 2L, "cabin-b" to 5L),
+            requestedTargets = setOf("cabin-a"),
+            months = 8L,
+        )
+
+        assertThat(terms).containsExactly("cabin-a", 8L, "cabin-b", 5L)
+    }
+
+    @Test
+    fun `empty bulk selection applies duration to the whole cart`() {
+        val terms = CustomerRentalTermPolicy.apply(
+            selectedCabins = setOf("cabin-a", "cabin-b"),
+            existingTerms = emptyMap(),
+            requestedTargets = emptySet(),
+            months = 3L,
+        )
+
+        assertThat(terms.values).containsExactly(3L, 3L)
+    }
 }

@@ -21,6 +21,54 @@ data class CustomerProfile(
     val phone: String,
     val email: String? = null,
     val additionalInfo: String? = null,
+    val avatar: CustomerProfileAvatar? = null,
+)
+
+/** Exact current avatar generation exposed through authenticated media-service paths. */
+@Serializable
+data class CustomerProfileAvatar(
+    val mediaId: String,
+    val generation: Long,
+    val warehouseId: String,
+    val thumbnailUrl: String,
+    val url: String,
+)
+
+/** Replaces mutable profile fields under logistics-service's optimistic version fence. */
+@Serializable
+data class UpdateCustomerProfileRequest(
+    val expectedVersion: Long,
+    val firstName: String? = null,
+    val lastName: String? = null,
+    val companyName: String? = null,
+    val phone: String,
+    val email: String? = null,
+    val additionalInfo: String? = null,
+)
+
+/** Establishes the immutable warehouse scope used to authorize this profile's avatar media. */
+@Serializable
+data class PrepareCustomerProfileAvatarUploadRequest(
+    val expectedVersion: Long,
+    val warehouseId: String,
+)
+
+/** Subject-bound media owner scope returned by logistics before an avatar upload. */
+@Serializable
+data class CustomerProfileAvatarUploadScope(
+    val profileVersion: Long,
+    val ownerType: String,
+    val ownerId: String,
+    val warehouseId: String,
+    val context: String,
+)
+
+/** Binds one exact READY media generation to the current customer profile. */
+@Serializable
+data class SetCustomerProfileAvatarRequest(
+    val expectedVersion: Long,
+    val mediaId: String,
+    val generation: Long,
 )
 
 /** Public warehouse choice available for a new customer inquiry. */
@@ -159,6 +207,27 @@ data class EquipmentSelectionResponse(
     val selections: List<EquipmentSelection> = emptyList(),
 )
 
+/** One selected cabin's server-owned rental duration. */
+@Serializable
+data class CustomerCabinRentalTerm(
+    val cabinUnitId: String,
+    val rentalMonths: Long,
+)
+
+/** Replaces every selected cabin's duration under the current cart version fence. */
+@Serializable
+data class ReplaceCustomerRentalTermsRequest(
+    val expectedVersion: Long,
+    val terms: List<CustomerCabinRentalTerm>,
+)
+
+/** Authoritative per-cabin rental terms and the resulting cart version. */
+@Serializable
+data class CustomerRentalTerms(
+    val version: Long,
+    val terms: List<CustomerCabinRentalTerm> = emptyList(),
+)
+
 /** Authoritative cart summary and mutation version. */
 @Serializable
 data class CustomerCart(
@@ -168,37 +237,74 @@ data class CustomerCart(
     val state: String,
     val cabins: List<CustomerCabin> = emptyList(),
     val equipment: List<EquipmentSelection> = emptyList(),
+    val rentalTerms: List<CustomerCabinRentalTerm> = emptyList(),
     val deliverySlotId: String? = null,
 )
 
-/** Address and selected map point used to calculate real delivery capacity. */
+/** Address, map point, and declared per-arrival site capacity used for exact route simulation. */
 @Serializable
 data class DeliverySlotSearchRequest(
     val inquiryId: String,
     val address: String,
     val latitude: Double,
     val longitude: Double,
+    val siteCabinCapacity: Int,
+    val privateSiteAccessConfirmed: Boolean,
+    val failedTripChargeAcknowledged: Boolean,
 )
 
-/** One server-approved delivery window; clients never manufacture availability. */
+/** Frozen truck-and-trailer dimensions used by the routing service for one offer. */
+@Serializable
+data class CustomerRouteProfile(
+    val combinationHeightMeters: Double,
+    val combinationWidthMeters: Double,
+    val combinationLengthMeters: Double,
+    val combinationWeightTons: Double,
+    val axleLoadTons: Double,
+    val axleCount: Int,
+)
+
+/** Whether logistics fixes the arrival interval or lets the route planner choose within the day. */
+@Serializable
+enum class DeliverySlotKind {
+    FIXED_WINDOW,
+    DURING_DAY,
+}
+
+/** One route-proven delivery choice with server-owned price-zone and site-capacity facts. */
 @Serializable
 data class DeliverySlot(
     val slotId: String,
     val version: Long,
     val date: String,
+    val kind: DeliverySlotKind,
     val start: String,
     val end: String,
     val travelZoneHours: Int,
     val capacityRemaining: Int,
+    val deliveryPriceRubles: Int? = null,
+    val priceZoneId: String? = null,
+    val priceIsochroneMinutes: Int?,
+    val siteCabinCapacity: Int,
+    val roadRouteConfirmed: Boolean,
+    val privateSiteAccessConfirmed: Boolean,
+    val failedTripChargeAcknowledged: Boolean,
+    val routeProfile: CustomerRouteProfile,
     val expiresAt: String,
     val state: String,
 )
 
-/** Requests an expiring server hold for one slot. */
+/**
+ * Requests an expiring server hold after the customer confirms site capacity, private-site access,
+ * and failed-trip responsibility on the slot step.
+ */
 @Serializable
 data class HoldDeliverySlotRequest(
     val inquiryId: String,
     val expectedVersion: Long,
+    val siteCabinCapacity: Int,
+    val privateSiteAccessConfirmed: Boolean,
+    val failedTripChargeAcknowledged: Boolean,
 )
 
 /** Confirms which slot/version is held for checkout. */
@@ -214,7 +320,80 @@ data class CheckoutRequest(
     val expectedVersion: Long,
     val slotId: String,
     val slotVersion: Long,
+)
+
+/** Exact shipment-line media scope authorized for one delivered cabin. */
+@Serializable
+data class CustomerShipmentMediaOwner(
+    val ownerType: String,
+    val documentId: String,
+    val lineId: String,
+    val warehouseId: String,
+    val context: String,
+)
+
+/** One normalized signature point retained by logistics rather than as an image. */
+@Serializable
+data class CustomerSignaturePoint(
+    val x: Float,
+    val y: Float,
+    val elapsedMillis: Long,
+)
+
+/** One continuous stroke of the customer's acceptance signature. */
+@Serializable
+data class CustomerSignatureStroke(val points: List<CustomerSignaturePoint>)
+
+/** Commits one arrived cabin's bounded vector signature. */
+@Serializable
+data class AcceptCustomerCabinRequest(val strokes: List<CustomerSignatureStroke>)
+
+/** Durable acceptance returned for one arrived cabin. */
+@Serializable
+data class CustomerCabinAcceptance(
+    val acceptanceId: String,
+    val version: Long,
+    val acceptedAt: String,
+    val signaturePointCount: Int,
+)
+
+/** Opaque READY media generation attached to a customer problem report. */
+@Serializable
+data class CustomerProblemMediaReference(
+    val mediaId: String,
+    val generation: Long,
+)
+
+/** Immutable customer problem command for an arrived cabin. */
+@Serializable
+data class ReportCustomerCabinProblemRequest(
+    val category: String,
+    val description: String,
+    val mediaReferences: List<CustomerProblemMediaReference>,
+)
+
+/** Durable before- or after-acceptance problem report. */
+@Serializable
+data class CustomerCabinProblem(
+    val problemId: String,
+    val category: String,
+    val phase: String,
+    val description: String,
+    val mediaReferences: List<CustomerProblemMediaReference> = emptyList(),
+    val reportedAt: String,
+)
+
+/** One cabin in a durable booking, including its arrival and reception state. */
+@Serializable
+data class CustomerBookingCabin(
+    val cabinUnitId: String,
+    val accountingNo: String,
     val rentalMonths: Long,
+    val deliveryState: String,
+    val arrivalEligible: Boolean,
+    val mediaOwner: CustomerShipmentMediaOwner? = null,
+    val acceptance: CustomerCabinAcceptance? = null,
+    val problems: List<CustomerCabinProblem> = emptyList(),
 )
 
 /** Booking identity and durable downstream order state. */
@@ -226,6 +405,69 @@ data class CustomerBooking(
     val errorCode: String? = null,
     val inquiryId: String,
     val slotId: String? = null,
+    val warehouseId: String,
+    val deliveryAddress: String? = null,
+    val deliveryDate: String? = null,
+    val windowStart: String? = null,
+    val windowEnd: String? = null,
+    val cabins: List<CustomerBookingCabin> = emptyList(),
+)
+
+/** Same-origin source upload session issued by media-service. */
+@Serializable
+data class MediaUploadSession(
+    val uploadSessionId: String,
+    val mediaId: String,
+    val expiresAt: String,
+    val contentUploadUrl: String? = null,
+)
+
+/** Creates one source upload bound to an exact structured or owner-ID media scope. */
+@Serializable
+data class CreateCustomerMediaUploadRequest(
+    val ownerType: String,
+    val ownerId: String? = null,
+    val documentId: String? = null,
+    val lineId: String? = null,
+    val warehouseId: String,
+    val context: String,
+    val folderId: String,
+    val fileName: String,
+    val contentType: String,
+    val contentLength: Long,
+    val checksumSha256: String,
+    val sortOrder: Int,
+)
+
+/** Immutable object metadata returned after a source PUT. */
+@Serializable
+data class UploadedMediaObject(
+    val objectVersionId: String,
+    val etag: String,
+    val checksumSha256: String,
+)
+
+/** Finalizes the exact object metadata returned by the content PUT. */
+@Serializable
+data class FinalizeCustomerMediaUploadRequest(
+    val objectVersionId: String,
+    val etag: String,
+    val checksumSha256: String,
+)
+
+/** Current media processing state used to wait for a READY report reference. */
+@Serializable
+data class CustomerMediaAsset(
+    val id: String,
+    val status: String,
+    val generation: Long,
+)
+
+/** Bounded media page for one exact shipment-line owner. */
+@Serializable
+data class CustomerMediaPage(
+    val items: List<CustomerMediaAsset> = emptyList(),
+    val next: String? = null,
 )
 
 /** Username/password registration request whose confirmation is rechecked by the server. */
@@ -269,4 +511,5 @@ data class ProblemDetails(
     val status: Int? = null,
     val detail: String? = null,
     val instance: String? = null,
+    val code: String? = null,
 )

@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.client.ui
 
 import com.google.common.truth.Truth.assertThat
+import dev.buhanzaz.rwms.client.data.CustomerApiException
 import dev.buhanzaz.rwms.client.data.CustomerBooking
 import org.junit.Test
 
@@ -36,10 +37,37 @@ class CustomerWorkflowPolicyTest {
         assertThat(CustomerBookingPolicy.locksCart(null)).isFalse()
     }
 
+    @Test
+    fun `booking locks only its source inquiry and opens a fresh cart when revisiting catalogue`() {
+        val pending = booking("PENDING")
+
+        assertThat(CustomerBookingPolicy.locksCart(pending, "inquiry-a")).isTrue()
+        assertThat(CustomerBookingPolicy.locksCart(pending, "inquiry-b")).isFalse()
+        assertThat(CustomerInquiryRecoveryPolicy.requiresFreshInquiry(pending, "inquiry-a")).isTrue()
+        assertThat(CustomerInquiryRecoveryPolicy.requiresFreshInquiry(pending, "inquiry-b")).isFalse()
+    }
+
+    @Test
+    fun `booked session and archived problem require a fresh inquiry`() {
+        assertThat(CustomerInquiryRecoveryPolicy.requiresFreshInquiry("BOOKED")).isTrue()
+        assertThat(CustomerInquiryRecoveryPolicy.requiresFreshInquiry("ACTIVE")).isFalse()
+        assertThat(
+            CustomerInquiryRecoveryPolicy.isArchivedInquiry(
+                CustomerApiException(409, "Диалог уже завершён", "INQUIRY_ARCHIVED"),
+            ),
+        ).isTrue()
+        assertThat(
+            CustomerInquiryRecoveryPolicy.isArchivedInquiry(
+                CustomerApiException(409, "Корзина занята", "CUSTOMER_CART_BUSY"),
+            ),
+        ).isFalse()
+    }
+
     private fun booking(status: String): CustomerBooking = CustomerBooking(
         bookingId = "booking-a",
         orderId = null,
         status = status,
         inquiryId = "inquiry-a",
+        warehouseId = "warehouse-a",
     )
 }

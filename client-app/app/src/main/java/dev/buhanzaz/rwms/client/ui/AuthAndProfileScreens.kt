@@ -1,5 +1,10 @@
 package dev.buhanzaz.rwms.client.ui
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,7 +19,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Checkbox
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apartment
 import androidx.compose.material.icons.filled.Lock
@@ -29,20 +37,26 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
+import dev.buhanzaz.rwms.client.BuildConfig
 import dev.buhanzaz.rwms.client.auth.RegistrationValidator
 import dev.buhanzaz.rwms.client.data.CustomerEntityType
 import dev.buhanzaz.rwms.client.data.CustomerProfile
@@ -165,13 +179,15 @@ fun RegistrationScreen(
     }
 }
 
-/** Collects the customer identity required for rental and delivery documents. */
+/** Creates a customer identity or edits its mutable rental and delivery document fields. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileFormScreen(
     existing: CustomerProfile?,
     busy: Boolean,
     onSave: (CustomerProfile) -> Unit,
+    selectedWarehouse: CustomerWarehouse? = null,
+    onAvatarSelected: (Uri) -> Unit = {},
     onBack: (() -> Unit)? = null,
 ) {
     var type by remember(existing) { mutableStateOf(existing?.entityType ?: CustomerEntityType.INDIVIDUAL) }
@@ -181,6 +197,25 @@ fun ProfileFormScreen(
     var phone by remember(existing) { mutableStateOf(existing?.phone.orEmpty()) }
     var email by remember(existing) { mutableStateOf(existing?.email.orEmpty()) }
     var info by remember(existing) { mutableStateOf(existing?.additionalInfo.orEmpty()) }
+    val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri?.let(onAvatarSelected)
+    }
+    val draft = CustomerProfile(
+        id = existing?.id,
+        version = existing?.version,
+        entityType = type,
+        firstName = firstName.trim().takeIf { type == CustomerEntityType.INDIVIDUAL },
+        lastName = lastName.trim().takeIf { type == CustomerEntityType.INDIVIDUAL },
+        companyName = company.trim().takeIf { type == CustomerEntityType.LEGAL },
+        phone = phone.trim(),
+        email = email.trim().takeIf(String::isNotBlank),
+        additionalInfo = info.trim().takeIf(String::isNotBlank),
+        avatar = existing?.avatar,
+    )
+    val valid = draft.phone.isNotBlank() && when (type) {
+        CustomerEntityType.INDIVIDUAL -> !draft.firstName.isNullOrBlank() && !draft.lastName.isNullOrBlank()
+        CustomerEntityType.LEGAL -> !draft.companyName.isNullOrBlank()
+    }
     Scaffold(
         topBar = { TopAppBar(title = { Text(if (existing == null) "Данные клиента" else "Профиль") }) },
     ) { padding ->
@@ -188,6 +223,20 @@ fun ProfileFormScreen(
             modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 20.dp).testTag("profile-screen"),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            if (existing != null) {
+                item {
+                    ProfileAvatar(
+                        profile = existing,
+                        busy = busy,
+                        warehouseSelected = selectedWarehouse != null,
+                        onPick = {
+                            avatarPicker.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                            )
+                        },
+                    )
+                }
+            }
             item {
                 Text("Кто арендует бытовки?", style = MaterialTheme.typography.titleMedium)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -208,37 +257,72 @@ fun ProfileFormScreen(
                 }
             }
             if (type == CustomerEntityType.INDIVIDUAL) {
-                item { CustomerTextField(firstName, { firstName = it }, "Имя", enabled = existing == null) }
-                item { CustomerTextField(lastName, { lastName = it }, "Фамилия", enabled = existing == null) }
+                item {
+                    CustomerTextField(
+                        firstName,
+                        { firstName = it },
+                        "Имя",
+                        enabled = !busy,
+                        testTag = "profile-first-name",
+                    )
+                }
+                item {
+                    CustomerTextField(
+                        lastName,
+                        { lastName = it },
+                        "Фамилия",
+                        enabled = !busy,
+                        testTag = "profile-last-name",
+                    )
+                }
             } else {
-                item { CustomerTextField(company, { company = it }, "Компания", enabled = existing == null) }
+                item {
+                    CustomerTextField(
+                        company,
+                        { company = it },
+                        "Компания",
+                        enabled = !busy,
+                        testTag = "profile-company",
+                    )
+                }
             }
-            item { CustomerTextField(phone, { phone = it }, "Телефон", KeyboardType.Phone, enabled = existing == null) }
-            item { CustomerTextField(email, { email = it }, "Электронная почта", KeyboardType.Email, enabled = existing == null) }
-            item { CustomerTextField(info, { info = it }, "Дополнительная информация", singleLine = false, enabled = existing == null) }
+            item {
+                CustomerTextField(
+                    phone,
+                    { phone = it },
+                    "Телефон",
+                    KeyboardType.Phone,
+                    enabled = !busy,
+                    testTag = "profile-phone",
+                )
+            }
+            item {
+                CustomerTextField(
+                    email,
+                    { email = it },
+                    "Электронная почта",
+                    KeyboardType.Email,
+                    enabled = !busy,
+                    testTag = "profile-email",
+                )
+            }
+            item {
+                CustomerTextField(
+                    info,
+                    { info = it },
+                    "Дополнительная информация",
+                    singleLine = false,
+                    enabled = !busy,
+                    testTag = "profile-additional-info",
+                )
+            }
             item {
                 Spacer(Modifier.height(4.dp))
-                if (existing == null) {
-                    Button(
-                        onClick = {
-                            onSave(
-                                CustomerProfile(
-                                    entityType = type,
-                                    firstName = firstName.trim().takeIf { type == CustomerEntityType.INDIVIDUAL },
-                                    lastName = lastName.trim().takeIf { type == CustomerEntityType.INDIVIDUAL },
-                                    companyName = company.trim().takeIf { type == CustomerEntityType.LEGAL },
-                                    phone = phone.trim(),
-                                    email = email.trim().takeIf(String::isNotBlank),
-                                    additionalInfo = info.trim().takeIf(String::isNotBlank),
-                                ),
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !busy,
-                    ) { Text("Продолжить") }
-                } else {
-                    Text("Редактирование профиля пока не поддерживается серверным контрактом.")
-                }
+                Button(
+                    onClick = { onSave(draft) },
+                    modifier = Modifier.fillMaxWidth().testTag("profile-save"),
+                    enabled = !busy && valid && (existing == null || draft != existing),
+                ) { Text(if (existing == null) "Продолжить" else "Сохранить") }
                 onBack?.let { back ->
                     OutlinedButton(onClick = back, modifier = Modifier.fillMaxWidth(), enabled = !busy) {
                         Text("Назад")
@@ -250,15 +334,69 @@ fun ProfileFormScreen(
     }
 }
 
-/** Lists server-approved delivery warehouses without persisting a browser-owned choice. */
+/** Circular authenticated avatar preview and system photo-picker action for an existing profile. */
+@Composable
+private fun ProfileAvatar(
+    profile: CustomerProfile,
+    busy: Boolean,
+    warehouseSelected: Boolean,
+    onPick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Surface(
+            modifier = Modifier.size(112.dp).testTag("profile-avatar-preview"),
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primaryContainer,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(
+                    profile.avatarInitials(),
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+                profile.avatar?.thumbnailUrl?.takeIf(String::isNotBlank)?.let { path ->
+                    AsyncImage(
+                        model = customerProfileMediaUrl(path),
+                        contentDescription = "Фото профиля",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+        }
+        OutlinedButton(
+            onClick = onPick,
+            enabled = !busy && warehouseSelected,
+            modifier = Modifier.testTag("profile-avatar-picker"),
+        ) {
+            Text(if (profile.avatar == null) "Загрузить аватар" else "Изменить аватар")
+        }
+        if (!warehouseSelected) {
+            Text(
+                "Чтобы загрузить аватар, сначала выберите склад.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** Lists server-approved warehouses and forwards an explicit app-local remember preference. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WarehouseScreen(
     warehouses: List<CustomerWarehouse>,
     busy: Boolean,
-    onSelect: (CustomerWarehouse) -> Unit,
+    onSelect: (CustomerWarehouse, Boolean) -> Unit,
     onLogout: () -> Unit,
 ) {
+    var rememberWarehouse by rememberSaveable { mutableStateOf(false) }
     Scaffold(
         topBar = { TopAppBar(title = { Text("Выберите склад") }) },
     ) { padding ->
@@ -267,9 +405,31 @@ fun WarehouseScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item { Text("Показываем склады, которые принимают клиентские бронирования.") }
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .toggleable(
+                            value = rememberWarehouse,
+                            enabled = !busy,
+                            role = Role.Checkbox,
+                            onValueChange = { rememberWarehouse = it },
+                        )
+                        .padding(vertical = 4.dp)
+                        .testTag("remember-warehouse"),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = rememberWarehouse,
+                        onCheckedChange = null,
+                        enabled = !busy,
+                    )
+                    Text("Запомнить выбранный склад")
+                }
+            }
             items(warehouses, key = CustomerWarehouse::id) { warehouse ->
                 OutlinedButton(
-                    onClick = { onSelect(warehouse) },
+                    onClick = { onSelect(warehouse, rememberWarehouse) },
                     modifier = Modifier.fillMaxWidth(),
                     enabled = !busy,
                 ) {
@@ -297,15 +457,34 @@ private fun CustomerTextField(
     keyboardType: KeyboardType = KeyboardType.Text,
     singleLine: Boolean = true,
     enabled: Boolean = true,
+    testTag: String? = null,
 ) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().then(
+            if (testTag == null) Modifier else Modifier.testTag(testTag),
+        ),
         label = { Text(label) },
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
         singleLine = singleLine,
         minLines = if (singleLine) 1 else 3,
         enabled = enabled,
     )
+}
+
+private fun CustomerProfile.avatarInitials(): String {
+    val parts = if (entityType == CustomerEntityType.LEGAL) {
+        companyName.orEmpty().split(Regex("\\s+"))
+    } else {
+        listOf(firstName.orEmpty(), lastName.orEmpty())
+    }
+    return parts.filter(String::isNotBlank).take(2).mapNotNull(String::firstOrNull).joinToString("")
+        .uppercase().ifBlank { "?" }
+}
+
+private fun customerProfileMediaUrl(path: String): String = when {
+    path.startsWith("/api/media/v1/") -> "${BuildConfig.PUBLIC_BASE_URL}$path"
+    path.startsWith("${BuildConfig.PUBLIC_BASE_URL}/api/media/v1/") -> path
+    else -> ""
 }

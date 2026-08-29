@@ -20,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -94,7 +95,7 @@ fun TaskDetailScreen(
     )
     val plannedDurationMinutes = detail?.plannedDurationMinutes ?: task?.plannedDurationMinutes
     val timerSnapshot = detail?.timerSnapshot ?: task?.serverTimerSnapshotOrNull()
-    var elapsedSinceSnapshotSeconds by remember(timerSnapshot) { mutableStateOf(0L) }
+    var elapsedSinceSnapshotSeconds by remember(timerSnapshot) { mutableLongStateOf(0L) }
     LaunchedEffect(timerSnapshot) {
         while (timerSnapshot?.timerState == "WORKING") {
             delay(1_000)

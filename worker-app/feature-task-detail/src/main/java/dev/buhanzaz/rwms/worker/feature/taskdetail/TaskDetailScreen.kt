@@ -49,6 +49,7 @@ import androidx.compose.ui.window.Dialog
 import dev.buhanzaz.rwms.worker.core.database.TaskEvidenceEntity
 import dev.buhanzaz.rwms.worker.core.network.WorkerMediaReferenceDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerWorkDto
+import dev.buhanzaz.rwms.worker.core.ui.TaskStatusChip
 import dev.buhanzaz.rwms.worker.core.ui.WorkerKpiColorRange
 import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
 import dev.buhanzaz.rwms.worker.core.ui.cabinNumberForDisplay
@@ -135,6 +136,7 @@ fun TaskDetailScreen(
         works = detail?.works.orEmpty(),
         sourceMedia = detail?.sourceMedia.orEmpty(),
     )
+    val transfer = detail?.let(::transferTaskPresentation)
     val generalSourceMedia = sourceMediaPresentation.general
     val stageOrdinal = taskDetailStageOrdinal(
         detailRouteStepIndex = detail?.routeStepIndex,
@@ -178,7 +180,7 @@ fun TaskDetailScreen(
         }
     }
     WorkerScreenScaffold(
-        title = cabinNumber ?: "Задание",
+        title = if (transfer == null) cabinNumber ?: "Задание" else "Межскладской рейс",
         onBack = onBack,
         onMenu = onMenu,
         profileMonogram = profileMonogram,
@@ -222,6 +224,9 @@ fun TaskDetailScreen(
                     showRepairComplexity = showRepairComplexity,
                 )
             }
+            transfer?.let { presentation ->
+                item { TransferTaskCard(presentation) }
+            }
             if (readyServerEvidence.isNotEmpty()) {
                 item {
                     TaskMediaPager(
@@ -261,10 +266,12 @@ fun TaskDetailScreen(
                 }
             }
 
-            item { TaskSectionTitle("Работы:") }
-            if (detail?.works.isNullOrEmpty()) {
+            if (transfer == null || !detail?.works.isNullOrEmpty()) {
+                item { TaskSectionTitle("Работы:") }
+            }
+            if (transfer == null && detail?.works.isNullOrEmpty()) {
                 item { EmptyTaskSection("Состав работ не указан") }
-            } else {
+            } else if (!detail?.works.isNullOrEmpty()) {
                 items(requireNotNull(detail).works, key = { it.id }) { work ->
                     val workMedia = sourceMediaPresentation.byWorkId[work.id].orEmpty()
                     WorkRow(
@@ -282,10 +289,12 @@ fun TaskDetailScreen(
                 }
             }
 
-            item { TaskSectionTitle("Материалы:") }
-            if (detail?.materials.isNullOrEmpty()) {
+            if (transfer == null) {
+                item { TaskSectionTitle("Материалы:") }
+            }
+            if (transfer == null && detail?.materials.isNullOrEmpty()) {
                 item { EmptyTaskSection("Материалы не указаны") }
-            } else {
+            } else if (transfer == null) {
                 items(requireNotNull(detail).materials, key = { it.id }) { material ->
                     Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
                         Row(
@@ -352,15 +361,24 @@ fun TaskDetailScreen(
                     modifier = Modifier.padding(24.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text("Завершить задание", style = MaterialTheme.typography.headlineSmall)
-                    Text("Добавьте фотографии результата. После сохранения задание закроется автоматически.")
+                    Text(
+                        if (transfer == null) "Завершить задание" else "Подтвердить выгрузку",
+                        style = MaterialTheme.typography.headlineSmall,
+                    )
+                    Text(
+                        if (transfer == null) {
+                            "Добавьте фотографии результата. После сохранения задание закроется автоматически."
+                        } else {
+                            "Добавьте фотографии выгруженного груза. После сохранения межскладской рейс закроется через обычную синхронизацию."
+                        },
+                    )
                     OutlinedButton(
                         onClick = {
                             showCompletionDialog = false
                             onCamera(requireNotNull(detail).routeIndex, true)
                         },
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Сделать фото") }
+                    ) { Text(if (transfer == null) "Сделать фото" else "Сделать фото выгрузки") }
                     OutlinedButton(
                         onClick = {
                             showCompletionDialog = false
@@ -374,6 +392,112 @@ fun TaskDetailScreen(
                     ) { Text("Отмена") }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Renders only server-projected transfer facts and keeps the existing task action pipeline below
+ * the card authoritative for take, pause, evidence and completion transitions.
+ */
+@Composable
+internal fun TransferTaskCard(presentation: TransferTaskPresentation) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+            .testTag("transfer-task-card"),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Surface(
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.testTag("transfer-task-badge"),
+            ) {
+                Text(
+                    "Межскладское перемещение",
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+            }
+            TransferCardSection(
+                title = "Маршрут",
+                lines = listOf(
+                    presentation.route
+                        ?: "Точки отправления и назначения не переданы в карточку задания",
+                ),
+                testTag = "transfer-route",
+            )
+            TransferCardSection(
+                title = "Груз",
+                lines = presentation.cargoLines.ifEmpty {
+                    listOf("Состав груза не передан в карточку задания")
+                },
+                testTag = "transfer-cargo",
+            )
+            if (presentation.materialLines.isNotEmpty()) {
+                TransferCardSection(
+                    title = "Мебель и материалы",
+                    lines = presentation.materialLines,
+                    testTag = "transfer-materials",
+                )
+            }
+            TransferCardSection(
+                title = "Порядок выполнения",
+                lines = presentation.instructions.mapIndexed { index, instruction ->
+                    "${index + 1}. $instruction"
+                },
+                testTag = "transfer-instructions",
+            )
+            if (presentation.routeSteps.isNotEmpty()) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().testTag("transfer-related-steps"),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        "Связанные этапы ходки",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    presentation.routeSteps.forEach { step ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("${step.ordinal}.", fontWeight = FontWeight.Bold)
+                            Text(step.label, modifier = Modifier.weight(1f))
+                            TaskStatusChip(step.status)
+                        }
+                    }
+                }
+            }
+            if (presentation.comments.isNotEmpty()) {
+                TransferCardSection(
+                    title = "Комментарии логиста",
+                    lines = presentation.comments,
+                    testTag = "transfer-comments",
+                )
+            }
+        }
+    }
+}
+
+/** Displays one exact transfer subsection with consistent spacing and no hidden overflow. */
+@Composable
+private fun TransferCardSection(title: String, lines: List<String>, testTag: String) {
+    Column(
+        modifier = Modifier.fillMaxWidth().testTag(testTag),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        lines.forEach { line ->
+            Text(line, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }

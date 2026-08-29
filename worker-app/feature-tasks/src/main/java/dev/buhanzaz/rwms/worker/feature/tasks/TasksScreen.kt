@@ -28,6 +28,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -55,6 +56,7 @@ import dev.buhanzaz.rwms.worker.core.ui.TaskStatusChip
 import dev.buhanzaz.rwms.worker.core.ui.WorkerKpiColorRange
 import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
 import dev.buhanzaz.rwms.worker.core.ui.cabinNumberForDisplay
+import dev.buhanzaz.rwms.worker.core.ui.isInterwarehouseTransferTask
 import dev.buhanzaz.rwms.worker.core.ui.workerRepairComplexityLabel
 import dev.buhanzaz.rwms.worker.core.ui.workerKpiTimeColor
 import dev.buhanzaz.rwms.worker.core.ui.workerTaskStageOrdinal
@@ -405,6 +407,7 @@ private fun TaskRow(
 ) {
     var expanded by rememberSaveable(presentationKey) { mutableStateOf(false) }
     val isShadow = task.entryType != REAL_ENTRY_TYPE
+    val isTransfer = isInterwarehouseTransferTask(task.title, task.taskText)
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
             .testTag("task-card-$presentationKey")
@@ -454,6 +457,20 @@ private fun TaskRow(
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            if (isTransfer) {
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.testTag("task-transfer-${task.entryId}"),
+                ) {
+                    Text(
+                        "Межскладское перемещение",
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                }
             }
             if (task.status == "WAITING") {
                 Text(

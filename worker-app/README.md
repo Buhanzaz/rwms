@@ -117,6 +117,25 @@ The entry/resume action stays in a safe-area-aware static footer rather than
 scrolling with task content. Its button spans the available width, and the
 ordinary TAKE label is `Взять задание`.
 
+A canonical `LOGISTICS_DRIVER_TASK` transfer is marked
+`Межскладское перемещение` on the board and opens as `Межскладской рейс`.
+Logistics freezes the source-to-destination route, exact cabin numbers and
+characteristics, actual/required furniture comparison, loose furniture and the
+dispatcher comment into task-board's existing `taskText`, `works`, `materials`
+and `comments` snapshots. The ordered works cover source arrival, loading and
+verification, travel, destination unload and unload confirmation; WorkerApp
+renders those server-owned facts without a second transfer transport or local
+inventory state. All TAKE/JOIN/evidence/COMPLETE effects continue through the
+ordinary encrypted offline outbox, and the completion dialog labels the same
+evidence-gated COMPLETE command as unload confirmation. The generic contract
+does not add a separate mutable command for every displayed checkpoint, so the
+app never claims an intermediate operation has completed merely because its
+instruction is visible. Canonical transfer recognition and the detail
+projection are implemented by
+[`WorkerLabels.kt`](core-ui/src/main/java/dev/buhanzaz/rwms/worker/core/ui/WorkerLabels.kt)
+and
+[`TaskDetailPresentation.kt`](feature-task-detail/src/main/java/dev/buhanzaz/rwms/worker/feature/taskdetail/TaskDetailPresentation.kt).
+
 Both board and detail stage labels use the required zero-based
 `routeStepIndex` plus one over `routeStepCount`, the authoritative ordinal and
 count of worker execution packages. They never derive presentation from the raw

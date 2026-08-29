@@ -2,7 +2,12 @@ package dev.buhanzaz.rwms.client.data
 
 import com.google.common.truth.Truth.assertThat
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Test
+import retrofit2.HttpException
+import retrofit2.Response
 
 /** Locks CustomerApp decoding to the actual logistics CustomerController response shapes. */
 class CustomerBackendContractDecodingTest {
@@ -33,6 +38,17 @@ class CustomerBackendContractDecodingTest {
     }
 
     @Test
+    fun `problem code survives transport decoding for lifecycle recovery`() {
+        val body = """{"status":409,"code":"INQUIRY_ARCHIVED","detail":"Диалог уже завершён"}"""
+            .toResponseBody("application/problem+json".toMediaType())
+        val failure = HttpException(Response.error<Unit>(409, body)).toCustomerApiException(json)
+
+        assertThat(failure.status).isEqualTo(409)
+        assertThat(failure.code).isEqualTo("INQUIRY_ARCHIVED")
+        assertThat(failure.message).isEqualTo("Диалог уже завершён")
+    }
+
+    @Test
     fun `cabin page uses content and preserves photo generation`() {
         val page = json.decodeFromString<CabinPage>(
             """{
@@ -53,13 +69,42 @@ class CustomerBackendContractDecodingTest {
     fun `held slot and cart versions decode independently`() {
         val held = json.decodeFromString<HeldDeliverySlot>(
             """{"cartVersion":9,"slot":{"slotId":"00000000-0000-0000-0000-000000000010",
-              "version":3,"date":"2026-09-01","start":"09:00:00","end":"12:00:00",
-              "travelZoneHours":2,"capacityRemaining":1,"expiresAt":"2026-08-26T18:00:00Z","state":"HELD"}}""",
+              "version":3,"date":"2026-09-01","kind":"DURING_DAY","start":"09:00:00","end":"18:00:00",
+              "travelZoneHours":2,"capacityRemaining":1,"roadRouteConfirmed":true,
+              "deliveryPriceRubles":12500,"priceZoneId":"00000000-0000-0000-0000-000000000020",
+              "priceIsochroneMinutes":null,"siteCabinCapacity":2,
+              "privateSiteAccessConfirmed":true,"failedTripChargeAcknowledged":true,
+              "routeProfile":{"combinationHeightMeters":4.0,"combinationWidthMeters":2.5,
+              "combinationLengthMeters":14.0,"combinationWeightTons":20.0,"axleLoadTons":8.0,"axleCount":5},
+              "expiresAt":"2026-08-26T18:00:00Z","state":"HELD"}}""",
         )
 
         assertThat(held.cartVersion).isEqualTo(9)
         assertThat(held.slot.version).isEqualTo(3)
+        assertThat(held.slot.kind).isEqualTo(DeliverySlotKind.DURING_DAY)
         assertThat(held.slot.travelZoneHours).isEqualTo(2)
+        assertThat(held.slot.deliveryPriceRubles).isEqualTo(12500)
+        assertThat(held.slot.priceZoneId).isEqualTo("00000000-0000-0000-0000-000000000020")
+        assertThat(held.slot.priceIsochroneMinutes).isNull()
+        assertThat(held.slot.siteCabinCapacity).isEqualTo(2)
+    }
+
+    @Test
+    fun `ordinary delivery price preserves its canonical isochrone source`() {
+        val slot = json.decodeFromString<DeliverySlot>(
+            """{"slotId":"00000000-0000-0000-0000-000000000010","version":3,
+              "date":"2026-09-01","kind":"FIXED_WINDOW","start":"12:00:00","end":"15:00:00",
+              "travelZoneHours":2,"capacityRemaining":1,"deliveryPriceRubles":15000,
+              "priceZoneId":null,"priceIsochroneMinutes":120,"siteCabinCapacity":1,
+              "roadRouteConfirmed":true,"privateSiteAccessConfirmed":false,
+              "failedTripChargeAcknowledged":false,
+              "routeProfile":{"combinationHeightMeters":4.0,"combinationWidthMeters":2.5,
+              "combinationLengthMeters":9.0,"combinationWeightTons":12.0,"axleLoadTons":8.0,
+              "axleCount":3},"expiresAt":"2026-08-26T18:00:00Z","state":"OFFERED"}""",
+        )
+
+        assertThat(slot.priceZoneId).isNull()
+        assertThat(slot.priceIsochroneMinutes).isEqualTo(120)
     }
 
     @Test
@@ -69,7 +114,9 @@ class CustomerBackendContractDecodingTest {
               "accountingNo":"BK-2","type":null}]}""",
         )
         val booking = json.decodeFromString<CustomerBooking>(
-            """{"bookingId":null,"orderId":null,"status":"PENDING","inquiryId":"inquiry-a","slotId":null}""",
+            """{"bookingId":null,"orderId":null,"status":"PENDING","errorCode":null,
+              "inquiryId":"inquiry-a","slotId":null,"warehouseId":"warehouse-a",
+              "deliveryAddress":null,"deliveryDate":null,"windowStart":null,"windowEnd":null,"cabins":[]}""",
         )
 
         assertThat(selection.expiresAt).isNull()
@@ -88,5 +135,52 @@ class CustomerBackendContractDecodingTest {
         )
 
         assertThat(filters.activeCount).isEqualTo(4)
+    }
+
+    @Test
+    fun `booking cabin decodes arrival acceptance problems and shipment media owner`() {
+        val booking = json.decodeFromString<CustomerBooking>(
+            """{"bookingId":"booking-a","orderId":"order-a","status":"COMPLETED","errorCode":null,
+              "inquiryId":"inquiry-a","slotId":"slot-a","warehouseId":"warehouse-a",
+              "deliveryAddress":"Невский, 1","deliveryDate":"2026-09-01","windowStart":"09:00:00",
+              "windowEnd":"12:00:00","cabins":[{"cabinUnitId":"cabin-a","accountingNo":"БК-1",
+              "rentalMonths":3,"deliveryState":"ARRIVED","arrivalEligible":true,
+              "mediaOwner":{"ownerType":"LOGISTICS_SHIPMENT","documentId":"document-a","lineId":"line-a",
+              "warehouseId":"warehouse-a","context":"SHIPMENT"},"acceptance":null,"problems":[]}]}""",
+        )
+
+        assertThat(booking.cabins.single().arrivalEligible).isTrue()
+        assertThat(booking.cabins.single().mediaOwner?.lineId).isEqualTo("line-a")
+    }
+
+    @Test
+    fun `slot search forwards current false attestations and hold requires explicit true attestations`() {
+        val search = json.encodeToString(
+            DeliverySlotSearchRequest(
+                inquiryId = "inquiry-a",
+                address = "Невский, 1",
+                latitude = 59.9,
+                longitude = 30.3,
+                siteCabinCapacity = 2,
+                privateSiteAccessConfirmed = false,
+                failedTripChargeAcknowledged = false,
+            ),
+        )
+        val hold = json.encodeToString(
+            HoldDeliverySlotRequest(
+                inquiryId = "inquiry-a",
+                expectedVersion = 9,
+                siteCabinCapacity = 2,
+                privateSiteAccessConfirmed = true,
+                failedTripChargeAcknowledged = true,
+            ),
+        )
+
+        assertThat(search).contains("\"privateSiteAccessConfirmed\":false")
+        assertThat(search).contains("\"failedTripChargeAcknowledged\":false")
+        assertThat(search).contains("\"siteCabinCapacity\":2")
+        assertThat(hold).contains("\"privateSiteAccessConfirmed\":true")
+        assertThat(hold).contains("\"failedTripChargeAcknowledged\":true")
+        assertThat(hold).contains("\"siteCabinCapacity\":2")
     }
 }

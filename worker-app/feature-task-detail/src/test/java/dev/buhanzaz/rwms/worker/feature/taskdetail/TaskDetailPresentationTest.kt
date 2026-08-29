@@ -2,8 +2,13 @@ package dev.buhanzaz.rwms.worker.feature.taskdetail
 
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.worker.core.database.WorkerAssignmentEntity
+import dev.buhanzaz.rwms.worker.core.network.TaskSourceReferenceDto
+import dev.buhanzaz.rwms.worker.core.network.WorkerMaterialDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerTaskTimerSnapshotDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerMediaReferenceDto
+import dev.buhanzaz.rwms.worker.core.network.WorkerRelatedStepDto
+import dev.buhanzaz.rwms.worker.core.network.WorkerTaskDetailDto
+import dev.buhanzaz.rwms.worker.core.network.WorkerVisibleCommentDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerWorkDto
 import dev.buhanzaz.rwms.worker.core.ui.cabinNumberForDisplay
 import java.time.Instant
@@ -11,6 +16,89 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class TaskDetailPresentationTest {
+    @Test
+    fun `cabin transfer exposes exact cargo route materials comments and sibling steps`() {
+        val presentation = requireNotNull(
+            transferTaskPresentation(
+                transferDetail(
+                    title = "Отгрузить бытовки",
+                    description = "Перемещение бытовки между складами. Бытовки: БТ-172, БТ-311",
+                    taskText = "Санкт-Петербург → Великий Новгород\nБытовки: БТ-172, БТ-311",
+                    materials = listOf(
+                        WorkerMaterialDto("bed", "Кровать", 8.0, "шт"),
+                        WorkerMaterialDto("table", "Стол", 2.0, "шт"),
+                    ),
+                    comments = listOf(
+                        WorkerVisibleCommentDto(
+                            id = "comment",
+                            text = "Проверить крепление",
+                            authorDisplayName = "Логист",
+                            createdAt = "2026-08-29T08:00:00Z",
+                        ),
+                    ),
+                    relatedSteps = listOf(
+                        WorkerRelatedStepDto(
+                            entryId = "next",
+                            routeIndex = 8,
+                            queueName = "Разгрузка",
+                            taskText = "Разгрузить бытовки",
+                            status = "WAITING",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertThat(presentation.route).isEqualTo("Санкт-Петербург → Великий Новгород")
+        assertThat(presentation.cargoLines).containsExactly("БТ-172", "БТ-311").inOrder()
+        assertThat(presentation.materialLines)
+            .containsExactly("Кровать — 8 шт", "Стол — 2 шт")
+            .inOrder()
+        assertThat(presentation.comments).containsExactly("Логист: Проверить крепление")
+        assertThat(presentation.routeSteps.single().label).isEqualTo("Разгрузить бытовки")
+        assertThat(presentation.instructions).hasSize(5)
+    }
+
+    @Test
+    fun `furniture only transfer shows frozen backend cargo summary`() {
+        val presentation = requireNotNull(
+            transferTaskPresentation(
+                transferDetail(
+                    title = "Переместить мебель между складами",
+                    description = "Межскладской груз: Мебель: 3 поз., 14 ед.",
+                    taskText = "Межскладской груз: Мебель: 3 поз., 14 ед.",
+                ),
+            ),
+        )
+
+        assertThat(presentation.cargoLines).containsExactly("Мебель: 3 поз., 14 ед.")
+        assertThat(presentation.route).isNull()
+    }
+
+    @Test
+    fun `ordinary shipment is not relabelled as an interwarehouse transfer`() {
+        assertThat(
+            transferTaskPresentation(
+                transferDetail(
+                    title = "Отгрузить бытовки",
+                    description = "Клиент: ООО Ромашка. Бытовки: БТ-172",
+                    taskText = "Клиент: ООО Ромашка. Бытовки: БТ-172",
+                ),
+            ),
+        ).isNull()
+    }
+
+    @Test
+    fun `noncanonical logistics document source is not treated as a worker transfer`() {
+        val detail = transferDetail(
+            title = "Переместить бытовку между складами",
+            description = "Склад отправления → Склад назначения. Бытовки: БТ-172",
+            taskText = "Склад отправления → Склад назначения. Бытовки: БТ-172",
+        ).copy(source = TaskSourceReferenceDto("LOGISTICS_DOCUMENT", "document"))
+
+        assertThat(transferTaskPresentation(detail)).isNull()
+    }
+
     @Test
     fun `detail stage uses package ordinal and prefers authoritative detail over cached feed`() {
         assertThat(
@@ -414,6 +502,47 @@ class TaskDetailPresentationTest {
         thumbnailPath = null,
         capturedAt = null,
         recordedAt = "2026-08-04T10:00:00Z",
+    )
+
+    private fun transferDetail(
+        title: String,
+        description: String,
+        taskText: String,
+        materials: List<WorkerMaterialDto> = emptyList(),
+        comments: List<WorkerVisibleCommentDto> = emptyList(),
+        relatedSteps: List<WorkerRelatedStepDto> = emptyList(),
+    ) = WorkerTaskDetailDto(
+        entryId = "entry",
+        version = 3,
+        taskId = "task",
+        source = TaskSourceReferenceDto("LOGISTICS_DRIVER_TASK", "driver-task"),
+        routeIndex = 7,
+        routeStepIndex = 0,
+        routeStepCount = 1,
+        title = title,
+        description = description,
+        taskObject = null,
+        taskText = taskText,
+        scheduledDate = "2026-08-29",
+        deadlineAt = null,
+        priority = 3,
+        queuePosition = 0,
+        status = "WAITING",
+        availabilityMode = "MANDATORY",
+        plannedDurationMinutes = null,
+        activeStartedAt = null,
+        activeWorkSeconds = 0,
+        audienceSelectors = emptyList(),
+        assignments = emptyList(),
+        materials = materials,
+        works = emptyList(),
+        comments = comments,
+        sourceMedia = emptyList(),
+        evidence = emptyList(),
+        relatedSteps = relatedSteps,
+        resultPhotoMinCount = 1,
+        completionAllowed = false,
+        timerSnapshot = null,
     )
 
     @Test

@@ -1,7 +1,17 @@
 package dev.buhanzaz.rwms.client.ui
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PointF
+import android.location.LocationManager
+import android.os.CancellationSignal
+import android.os.Handler
+import android.os.Looper
 import android.view.MotionEvent
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -10,12 +20,11 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.NearMe
 import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -24,7 +33,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -32,15 +40,19 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.core.content.ContextCompat
 import com.yandex.mapkit.Animation
 import com.yandex.mapkit.GeoObject
 import com.yandex.mapkit.MapKitFactory
+import com.yandex.mapkit.geometry.BoundingBox
 import com.yandex.mapkit.geometry.Geometry
 import com.yandex.mapkit.geometry.Point
 import com.yandex.mapkit.map.CameraPosition
+import com.yandex.mapkit.map.IconStyle
 import com.yandex.mapkit.map.InputListener
 import com.yandex.mapkit.map.Map
 import com.yandex.mapkit.map.MapType
+import com.yandex.mapkit.map.PlacemarkMapObject
 import com.yandex.mapkit.mapview.MapView
 import com.yandex.mapkit.search.Response
 import com.yandex.mapkit.search.SearchFactory
@@ -49,10 +61,15 @@ import com.yandex.mapkit.search.SearchManagerType
 import com.yandex.mapkit.search.SearchOptions
 import com.yandex.mapkit.search.SearchType
 import com.yandex.mapkit.search.Session
+import com.yandex.mapkit.search.SuggestItem
+import com.yandex.mapkit.search.SuggestOptions
+import com.yandex.mapkit.search.SuggestResponse
+import com.yandex.mapkit.search.SuggestSession
+import com.yandex.mapkit.search.SuggestType
 import com.yandex.runtime.Error
 import com.yandex.runtime.image.ImageProvider
-import dev.buhanzaz.rwms.client.R
 import java.lang.ref.WeakReference
+import java.util.concurrent.Executor
 import kotlin.math.roundToInt
 
 /** Address and coordinate pair resolved by the maintained Yandex geocoder. */
@@ -60,6 +77,14 @@ internal data class GeocodedDeliveryLocation(
     val address: String,
     val latitude: Double,
     val longitude: Double,
+)
+
+/** One Yandex geo-suggestion that can be rendered and resolved into an exact map point. */
+internal data class DeliveryAddressSuggestion(
+    val displayText: String,
+    val searchText: String,
+    val latitude: Double?,
+    val longitude: Double?,
 )
 
 /** Owns one retained Yandex search session for forward and reverse delivery geocoding. */
@@ -162,7 +187,188 @@ internal class YandexDeliveryGeocoder(
     }
 }
 
-/** Full-screen Yandex MapKit picker with map style, zoom, and selected-point recenter controls. */
+/** Owns the retained Yandex suggest session used while the customer types an address. */
+internal class YandexDeliverySuggestSession(
+    searchManager: SearchManager = SearchFactory.getInstance()
+        .createSearchManager(SearchManagerType.COMBINED),
+) {
+    private val gate = LatestDeliveryGeocodeGate()
+    private val suggestSession = searchManager.createSuggestSession()
+    private var suggestListener: SuggestSession.SuggestListener? = null
+
+    /** Requests current geo suggestions around the selected warehouse. */
+    fun suggest(
+        query: String,
+        depotLatitude: Double,
+        depotLongitude: Double,
+        onSuccess: (List<DeliveryAddressSuggestion>) -> Unit,
+        onFailure: (String) -> Unit,
+    ) {
+        val normalizedQuery = query.trim()
+        if (normalizedQuery.length < MIN_SUGGEST_QUERY_LENGTH) {
+            cancel()
+            onSuccess(emptyList())
+            return
+        }
+        cancel()
+        val token = gate.begin()
+        val listener = object : SuggestSession.SuggestListener {
+            override fun onResponse(response: SuggestResponse) {
+                if (!gate.isCurrent(token)) return
+                gate.invalidate()
+                suggestListener = null
+                onSuccess(response.deliveryAddressSuggestions())
+            }
+
+            override fun onError(error: Error) {
+                if (!gate.isCurrent(token)) return
+                gate.invalidate()
+                suggestListener = null
+                onFailure("Не удалось получить подсказки Яндекс Карт")
+            }
+        }
+        suggestListener = listener
+        suggestSession.suggest(
+            normalizedQuery,
+            deliverySuggestionBounds(depotLatitude, depotLongitude),
+            deliverySuggestOptions(depotLatitude, depotLongitude),
+            listener,
+        )
+    }
+
+    /** Cancels the native request and rejects callbacks from any superseded query. */
+    fun cancel() {
+        gate.invalidate()
+        suggestSession.reset()
+        suggestListener = null
+    }
+}
+
+/**
+ * Requests one foreground Android position from every enabled provider and accepts the first
+ * valid result. The request is explicitly cancellable and never starts background tracking.
+ */
+internal class AndroidCurrentLocationProvider(
+    context: Context,
+    private val locationManager: LocationManager =
+        context.getSystemService(Context.LOCATION_SERVICE) as LocationManager,
+    private val executor: Executor = ContextCompat.getMainExecutor(context),
+    private val handler: Handler = Handler(Looper.getMainLooper()),
+) {
+    private val gate = LatestDeliveryGeocodeGate()
+    private val cancellationSignals = mutableListOf<CancellationSignal>()
+    private var timeoutAction: Runnable? = null
+
+    /** Delivers the first valid enabled-provider result or one explicit actionable failure. */
+    @Suppress("MissingPermission")
+    fun request(
+        onSuccess: (Double, Double) -> Unit,
+        onFailure: (String) -> Unit,
+    ) {
+        cancel()
+        val token = gate.begin()
+        val providers = runCatching {
+            preferredCurrentLocationProviders(locationManager.getProviders(true))
+        }.getOrElse {
+            finishFailure(token, onFailure, "Сервис определения местоположения сейчас недоступен")
+            return
+        }
+        if (providers.isEmpty()) {
+            finishFailure(
+                token,
+                onFailure,
+                "Не удалось определить местоположение. Проверьте, включена ли геолокация",
+            )
+            return
+        }
+        var pendingProviders = providers.size
+        val providerFailed: () -> Unit = {
+            if (gate.isCurrent(token)) {
+                pendingProviders--
+                if (pendingProviders == 0) {
+                    finishFailure(
+                        token,
+                        onFailure,
+                        "Не удалось получить текущую точку. Попробуйте ещё раз на открытом месте",
+                    )
+                }
+            }
+        }
+        providers.forEach { provider ->
+            val signal = CancellationSignal()
+            cancellationSignals += signal
+            runCatching {
+                locationManager.getCurrentLocation(provider, signal, executor) { location ->
+                    if (!gate.isCurrent(token)) return@getCurrentLocation
+                    if (location == null ||
+                        location.latitude !in -90.0..90.0 ||
+                        location.longitude !in -180.0..180.0
+                    ) {
+                        providerFailed()
+                    } else {
+                        finishSuccess(token, onSuccess, location.latitude, location.longitude)
+                    }
+                }
+            }.onFailure { providerFailed() }
+        }
+        if (gate.isCurrent(token)) {
+            Runnable {
+                finishFailure(
+                    token,
+                    onFailure,
+                    "Определение местоположения заняло слишком много времени. Попробуйте ещё раз",
+                )
+            }.also { action ->
+                timeoutAction = action
+                handler.postDelayed(action, CURRENT_LOCATION_TIMEOUT_MILLIS)
+            }
+        }
+    }
+
+    /** Cancels every platform provider request and rejects all of their late callbacks. */
+    fun cancel() {
+        gate.invalidate()
+        clearAttempt()
+    }
+
+    private fun finishSuccess(
+        token: Long,
+        callback: (Double, Double) -> Unit,
+        latitude: Double,
+        longitude: Double,
+    ) {
+        if (!gate.isCurrent(token)) return
+        gate.invalidate()
+        clearAttempt()
+        callback(latitude, longitude)
+    }
+
+    private fun finishFailure(token: Long, callback: (String) -> Unit, message: String) {
+        if (!gate.isCurrent(token)) return
+        gate.invalidate()
+        clearAttempt()
+        callback(message)
+    }
+
+    private fun clearAttempt() {
+        timeoutAction?.let(handler::removeCallbacks)
+        timeoutAction = null
+        cancellationSignals.forEach(CancellationSignal::cancel)
+        cancellationSignals.clear()
+    }
+}
+
+/** Orders only Android providers that are currently enabled for a foreground one-shot request. */
+internal fun preferredCurrentLocationProviders(enabledProviders: Collection<String>): List<String> {
+    val enabled = enabledProviders.toSet()
+    return listOf(
+        LocationManager.GPS_PROVIDER,
+        LocationManager.NETWORK_PROVIDER,
+        LocationManager.PASSIVE_PROVIDER,
+    ).filter(enabled::contains)
+}
+
+/** Full-screen Yandex raster-map picker with zoom and an explicit current-location control. */
 @Composable
 internal fun DeliveryMapPointPicker(
     latitude: Double?,
@@ -170,12 +376,15 @@ internal fun DeliveryMapPointPicker(
     depotLatitude: Double,
     depotLongitude: Double,
     onPoint: (Double, Double, Float) -> Unit,
+    onCurrentLocation: () -> Unit,
     modifier: Modifier = Modifier,
     bottomControlsClearance: Dp = 0.dp,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val darkTheme = isSystemInDarkTheme()
     val latestOnPoint by rememberUpdatedState(onPoint)
+    val latestOnCurrentLocation by rememberUpdatedState(onCurrentLocation)
     val initialTarget = deliveryMapInitialTarget(latitude, longitude, depotLatitude, depotLongitude)
     val mapHandle = remember(context, depotLatitude, depotLongitude) {
         YandexDeliveryMapHandle(
@@ -183,6 +392,7 @@ internal fun DeliveryMapPointPicker(
             initialLatitude = initialTarget.first,
             initialLongitude = initialTarget.second,
             initialZoom = if (latitude == null || longitude == null) DEPOT_ZOOM else DELIVERY_ZOOM,
+            initialNightMode = darkTheme,
             onPoint = { point, zoom -> latestOnPoint(point.latitude, point.longitude, zoom) },
         )
     }
@@ -203,7 +413,11 @@ internal fun DeliveryMapPointPicker(
                     }
                 }
             },
-            update = { mapHandle.renderPoint(latitude, longitude) },
+            update = {
+                mapHandle.render(
+                    deliveryMapRenderState(latitude, longitude, darkTheme),
+                )
+            },
             modifier = Modifier.fillMaxSize(),
         )
         Box(
@@ -212,29 +426,34 @@ internal fun DeliveryMapPointPicker(
                 .safeDrawingPadding()
                 .padding(12.dp),
         ) {
-            Surface(
-                modifier = Modifier.align(Alignment.TopEnd),
-                shape = MAP_CONTROL_SHAPE,
-                color = Color.White.copy(alpha = 0.94f),
-                shadowElevation = 5.dp,
-            ) {
-                IconButton(onClick = mapHandle::changeMapType, modifier = Modifier.size(54.dp)) {
-                    Icon(Icons.Default.Layers, contentDescription = "Сменить вид карты", tint = Color(0xFF303236))
-                }
-            }
-            Surface(
+            Column(
                 modifier = Modifier.align(Alignment.CenterEnd),
-                shape = MAP_CONTROL_SHAPE,
-                color = Color.White.copy(alpha = 0.94f),
-                shadowElevation = 5.dp,
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
             ) {
-                Column {
+                Surface(
+                    shape = MAP_CONTROL_SHAPE,
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                    shadowElevation = 5.dp,
+                ) {
                     IconButton(onClick = { mapHandle.changeZoom(1f) }, modifier = Modifier.size(54.dp)) {
-                        Icon(Icons.Default.Add, contentDescription = "Приблизить карту", tint = Color(0xFF303236))
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = "Приблизить карту",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                        )
                     }
-                    HorizontalDivider()
+                }
+                Surface(
+                    shape = MAP_CONTROL_SHAPE,
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                    shadowElevation = 5.dp,
+                ) {
                     IconButton(onClick = { mapHandle.changeZoom(-1f) }, modifier = Modifier.size(54.dp)) {
-                        Icon(Icons.Default.Remove, contentDescription = "Отдалить карту", tint = Color(0xFF303236))
+                        Icon(
+                            Icons.Default.Remove,
+                            contentDescription = "Отдалить карту",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                        )
                     }
                 }
             }
@@ -243,24 +462,44 @@ internal fun DeliveryMapPointPicker(
                     .align(Alignment.BottomEnd)
                     .padding(bottom = bottomControlsClearance),
                 shape = MAP_CONTROL_SHAPE,
-                color = Color.White.copy(alpha = 0.94f),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
                 shadowElevation = 5.dp,
             ) {
                 IconButton(
-                    onClick = {
-                        mapHandle.recenter(
-                            latitude = latitude ?: depotLatitude,
-                            longitude = longitude ?: depotLongitude,
-                            zoom = if (latitude == null || longitude == null) DEPOT_ZOOM else DELIVERY_ZOOM,
-                        )
-                    },
+                    onClick = { latestOnCurrentLocation() },
                     modifier = Modifier.size(54.dp),
                 ) {
-                    Icon(Icons.Default.NearMe, contentDescription = "Вернуться к выбранной точке", tint = Color(0xFF303236))
+                    Icon(
+                        Icons.Default.NearMe,
+                        contentDescription = "Определить моё местоположение",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                    )
                 }
             }
         }
     }
+}
+
+/** Immutable native-map presentation used to keep marker and night mode in one render update. */
+internal data class DeliveryMapRenderState(
+    val selectedPoint: Pair<Double, Double>?,
+    val nightModeEnabled: Boolean,
+)
+
+/** Validates a complete optional coordinate pair and produces the native-map presentation. */
+internal fun deliveryMapRenderState(
+    latitude: Double?,
+    longitude: Double?,
+    nightModeEnabled: Boolean,
+): DeliveryMapRenderState {
+    require((latitude == null) == (longitude == null)) { "Map point must contain both coordinates" }
+    val point = if (latitude == null || longitude == null) {
+        null
+    } else {
+        require(latitude in -90.0..90.0 && longitude in -180.0..180.0)
+        latitude to longitude
+    }
+    return DeliveryMapRenderState(point, nightModeEnabled)
 }
 
 /** Retains the native map view, weak-listener targets, marker, and camera state for one composition. */
@@ -269,29 +508,38 @@ private class YandexDeliveryMapHandle(
     initialLatitude: Double,
     initialLongitude: Double,
     initialZoom: Float,
+    initialNightMode: Boolean,
     private val onPoint: (Point, Float) -> Unit,
 ) {
     val mapView: MapView = MapView(context).apply {
         contentDescription = "Карта выбора точки доставки"
     }
     private val map: Map = mapView.mapWindow.map
-    private val markerImage = ImageProvider.fromResource(context, R.drawable.ic_delivery_pin)
+    private val markerImage = deliveryMarkerImage(context)
+    private val markerStyle = IconStyle()
+        .setAnchor(PointF(0.5f, 1f))
+        .setScale(1f)
+        .setZIndex(10f)
     private val lifecycleObserver = YandexMapLifecycleObserver(mapView)
     private var renderedPoint: Pair<Double, Double>? = null
+    private var marker: PlacemarkMapObject? = null
     private val inputListener = object : InputListener {
         override fun onMapTap(map: Map, point: Point) {
+            renderNativePoint(point, recenter = false)
             onPoint(point, map.cameraPosition.zoom)
         }
 
         override fun onMapLongTap(map: Map, point: Point) {
+            renderNativePoint(point, recenter = false)
             onPoint(point, map.cameraPosition.zoom)
         }
     }
 
     init {
         map.addInputListener(WeakReference(inputListener))
-        map.mapType = MapType.VECTOR_MAP
+        map.mapType = MapType.MAP
         map.set2DMode(true)
+        map.isNightModeEnabled = initialNightMode
         map.move(CameraPosition(Point(initialLatitude, initialLongitude), initialZoom, 0f, 0f))
     }
 
@@ -306,21 +554,36 @@ private class YandexDeliveryMapHandle(
         lifecycleObserver.stopIfStarted()
     }
 
-    /** Replaces the visible marker and recenters only when the confirmed/candidate point changes. */
-    fun renderPoint(latitude: Double?, longitude: Double?) {
-        val point = if (latitude != null && longitude != null) latitude to longitude else null
+    /** Applies dark-map state and keeps one persistent marker for the confirmed/candidate point. */
+    fun render(state: DeliveryMapRenderState) {
+        map.isNightModeEnabled = state.nightModeEnabled
+        val point = state.selectedPoint
         if (point == renderedPoint) return
-        renderedPoint = point
-        map.mapObjects.clear()
-        if (point == null) return
-        val mapPoint = Point(point.first, point.second)
-        map.mapObjects.addPlacemark().apply {
-            geometry = mapPoint
-            setIcon(markerImage)
+        if (point == null) {
+            renderedPoint = null
+            marker?.let(map.mapObjects::remove)
+            marker = null
+            return
         }
+        renderNativePoint(Point(point.first, point.second), recenter = true)
+    }
+
+    private fun renderNativePoint(mapPoint: Point, recenter: Boolean) {
+        renderedPoint = mapPoint.latitude to mapPoint.longitude
+        val currentMarker = marker
+        if (currentMarker == null) {
+            marker = map.mapObjects.addPlacemark().apply {
+                geometry = mapPoint
+                setIcon(markerImage, markerStyle)
+            }
+        } else {
+            currentMarker.geometry = mapPoint
+            currentMarker.setIcon(markerImage, markerStyle)
+        }
+        if (!recenter) return
         map.move(
             CameraPosition(mapPoint, DELIVERY_ZOOM, map.cameraPosition.azimuth, 0f),
-            SMOOTH_ANIMATION,
+            smoothMapAnimation(),
             null,
         )
     }
@@ -335,28 +598,11 @@ private class YandexDeliveryMapHandle(
                 current.azimuth,
                 current.tilt,
             ),
-            SMOOTH_ANIMATION,
+            smoothMapAnimation(),
             null,
         )
     }
 
-    /** Toggles the Yandex base layers permitted for third-party MapKit applications. */
-    fun changeMapType() {
-        map.mapType = when (map.mapType) {
-            MapType.VECTOR_MAP -> MapType.MAP
-            else -> MapType.VECTOR_MAP
-        }
-    }
-
-    /** Returns the camera to the selected delivery point or the warehouse depot. */
-    fun recenter(latitude: Double, longitude: Double, zoom: Float) {
-        val current = map.cameraPosition
-        map.move(
-            CameraPosition(Point(latitude, longitude), zoom, current.azimuth, 0f),
-            SMOOTH_ANIMATION,
-            null,
-        )
-    }
 }
 
 /** Balances MapKit singleton and MapView start/stop calls for the map destination lifecycle. */
@@ -388,6 +634,71 @@ private fun deliverySearchOptions(): SearchOptions = SearchOptions().apply {
     resultPageSize = 5
 }
 
+private fun deliverySuggestOptions(depotLatitude: Double, depotLongitude: Double): SuggestOptions =
+    SuggestOptions().apply {
+        suggestTypes = SuggestType.GEO.value
+        userPosition = Point(depotLatitude, depotLongitude)
+        suggestWords = false
+        strictBounds = false
+    }
+
+/** Pure latitude/longitude limits for the Yandex address-suggestion request. */
+internal data class DeliverySuggestionBoundsCoordinates(
+    val southLatitude: Double,
+    val westLongitude: Double,
+    val northLatitude: Double,
+    val eastLongitude: Double,
+)
+
+/** Returns broad regional coordinate limits centered on the selected warehouse. */
+internal fun deliverySuggestionBoundsCoordinates(
+    depotLatitude: Double,
+    depotLongitude: Double,
+): DeliverySuggestionBoundsCoordinates = DeliverySuggestionBoundsCoordinates(
+    southLatitude = (depotLatitude - SUGGEST_LATITUDE_RADIUS).coerceIn(-90.0, 90.0),
+    westLongitude = (depotLongitude - SUGGEST_LONGITUDE_RADIUS).coerceIn(-180.0, 180.0),
+    northLatitude = (depotLatitude + SUGGEST_LATITUDE_RADIUS).coerceIn(-90.0, 90.0),
+    eastLongitude = (depotLongitude + SUGGEST_LONGITUDE_RADIUS).coerceIn(-180.0, 180.0),
+)
+
+/** Converts pure regional limits to the Yandex MapKit search boundary. */
+internal fun deliverySuggestionBounds(depotLatitude: Double, depotLongitude: Double): BoundingBox {
+    val bounds = deliverySuggestionBoundsCoordinates(depotLatitude, depotLongitude)
+    return BoundingBox(
+        Point(bounds.southLatitude, bounds.westLongitude),
+        Point(bounds.northLatitude, bounds.eastLongitude),
+    )
+}
+
+private fun SuggestResponse.deliveryAddressSuggestions(): List<DeliveryAddressSuggestion> = items.asSequence()
+    .mapNotNull(SuggestItem::toDeliveryAddressSuggestion)
+    .distinctBy { suggestion ->
+        listOf(
+            suggestion.searchText.lowercase(),
+            suggestion.latitude?.toString().orEmpty(),
+            suggestion.longitude?.toString().orEmpty(),
+        ).joinToString("|")
+    }
+    .take(MAX_ADDRESS_SUGGESTIONS)
+    .toList()
+
+private fun SuggestItem.toDeliveryAddressSuggestion(): DeliveryAddressSuggestion? {
+    val display = displayText?.trim().orEmpty().ifEmpty {
+        listOf(title?.text?.trim().orEmpty(), subtitle?.text?.trim().orEmpty())
+            .filter(String::isNotEmpty)
+            .distinct()
+            .joinToString(", ")
+    }
+    val query = searchText?.trim().orEmpty().ifEmpty { display }
+    if (display.isEmpty() || query.isEmpty()) return null
+    return DeliveryAddressSuggestion(
+        displayText = display,
+        searchText = query,
+        latitude = center?.latitude,
+        longitude = center?.longitude,
+    )
+}
+
 private fun Response.firstDeliveryLocation(
     fallbackAddress: String?,
     forcedPoint: Point?,
@@ -406,9 +717,46 @@ private fun GeoObject.toDeliveryLocation(
     return GeocodedDeliveryLocation(address, point.latitude, point.longitude)
 }
 
+/** Builds a bitmap-backed pin because native MapKit cannot reliably rasterize Android vectors. */
+private fun deliveryMarkerImage(context: Context): ImageProvider {
+    val density = context.resources.displayMetrics.density
+    val width = (44f * density).roundToInt().coerceAtLeast(44)
+    val height = (54f * density).roundToInt().coerceAtLeast(54)
+    val centerX = width / 2f
+    val headRadius = width * 0.39f
+    val headCenterY = headRadius + 2f * density
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    val pinPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFE4473A.toInt() }
+    val tail = Path().apply {
+        moveTo(centerX - headRadius * 0.68f, headCenterY + headRadius * 0.58f)
+        lineTo(centerX, height - density)
+        lineTo(centerX + headRadius * 0.68f, headCenterY + headRadius * 0.58f)
+        close()
+    }
+    canvas.drawPath(tail, pinPaint)
+    canvas.drawCircle(centerX, headCenterY, headRadius, pinPaint)
+    canvas.drawCircle(
+        centerX,
+        headCenterY,
+        headRadius * 0.38f,
+        Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.WHITE },
+    )
+    return ImageProvider.fromBitmap(
+        bitmap,
+        true,
+        "rwms-customer-delivery-pin-${context.resources.displayMetrics.densityDpi}",
+    )
+}
+
 private const val DEPOT_ZOOM = 10f
 private const val DELIVERY_ZOOM = 15f
 private const val MIN_ZOOM = 2f
 private const val MAX_ZOOM = 21f
-private val SMOOTH_ANIMATION = Animation(Animation.Type.SMOOTH, 0.25f)
+private const val MIN_SUGGEST_QUERY_LENGTH = 2
+private const val MAX_ADDRESS_SUGGESTIONS = 5
+private const val CURRENT_LOCATION_TIMEOUT_MILLIS = 15_000L
+private const val SUGGEST_LATITUDE_RADIUS = 2.5
+private const val SUGGEST_LONGITUDE_RADIUS = 4.0
+private fun smoothMapAnimation(): Animation = Animation(Animation.Type.SMOOTH, 0.25f)
 private val MAP_CONTROL_SHAPE = androidx.compose.foundation.shape.RoundedCornerShape(18.dp)

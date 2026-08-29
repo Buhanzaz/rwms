@@ -17,11 +17,13 @@ path and verified package/version/signing/checksum facts.
 
 Use Node.js 20 or newer:
 
-    npm run check
+    RWMS_CUSTOMER_APK=/absolute/path/to/rwms-customer.apk npm run check
 
-The static page supports phones and desktops and requires no runtime package
-installation. Publish the page and reviewed APK only after an authorized
-release process has verified the APK itself.
+For a published manifest the check hashes that exact APK and compares it with
+`release.json`; the manifest also fences the signer certificate, base source
+revision and application diff. The static page supports phones and desktops
+and requires no runtime package installation. Publish the page and reviewed
+APK only after an authorized release process has verified the APK itself.
 
 ## Runtime path
 

@@ -28,4 +28,26 @@ class WorkerLabelsTest {
         assertThat(workerTaskStageOrdinal(routeStepIndex = 2, routeStepCount = 1, separator = " из "))
             .isEqualTo("3 из 3")
     }
+
+    @Test
+    fun `only canonical transfer labels identify an interwarehouse task`() {
+        assertThat(
+            isInterwarehouseTransferTask(
+                "Отгрузить бытовки",
+                "Перемещение бытовки между складами. Бытовки: БТ-172, БТ-311",
+            ),
+        ).isTrue()
+        assertThat(
+            isInterwarehouseTransferTask(
+                "Переместить мебель между складами",
+                "Межскладской груз: Мебель: 3 поз., 14 ед.",
+            ),
+        ).isTrue()
+        assertThat(
+            isInterwarehouseTransferTask(
+                "Отгрузить бытовки",
+                "Клиент: ООО Ромашка. Бытовки: БТ-172",
+            ),
+        ).isFalse()
+    }
 }

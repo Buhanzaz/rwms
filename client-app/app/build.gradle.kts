@@ -53,10 +53,13 @@ android {
         applicationId = "dev.buhanzaz.rwms.client"
         minSdk = 30
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.1.4"
+        versionCode = 13
+        versionName = "0.1.12"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "MAPKIT_API_KEY", "\"$mapkitApiKey\"")
+        ndk {
+            abiFilters += setOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     buildFeatures {
@@ -69,6 +72,9 @@ android {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
             buildConfigField("String", "PUBLIC_BASE_URL", "\"$publicBaseUrl\"")
+            ndk {
+                abiFilters += setOf("x86_64")
+            }
         }
         release {
             isMinifyEnabled = false
@@ -122,6 +128,10 @@ dependencies {
     implementation(libs.coil.network.okhttp)
     implementation(libs.yandex.mapkit)
     implementation(libs.coroutines.android)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.androidx.camera.video)
     ksp(libs.hilt.compiler)
     coreLibraryDesugaring(libs.desugar)
 

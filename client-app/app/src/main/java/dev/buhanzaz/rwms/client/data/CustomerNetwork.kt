@@ -74,6 +74,7 @@ object CustomerNetworkModule {
 class CustomerApiException(
     val status: Int?,
     override val message: String,
+    val code: String? = null,
 ) : RuntimeException(message)
 
 /** Converts Retrofit/transport exceptions into localized, non-fabricated UI failures. */
@@ -81,7 +82,7 @@ fun Throwable.toCustomerApiException(json: Json): CustomerApiException = when (t
     is CustomerApiException -> this
     is HttpException -> {
         val raw = response()?.errorBody()?.string().orEmpty().take(16_384)
-        val detail = runCatching { json.decodeFromString<ProblemDetails>(raw).detail }.getOrNull()
+        val problem = runCatching { json.decodeFromString<ProblemDetails>(raw) }.getOrNull()
         val fallback = when (code()) {
             401 -> "Сессия завершена. Войдите снова"
             403 -> "Недостаточно прав для действия"
@@ -92,7 +93,11 @@ fun Throwable.toCustomerApiException(json: Json): CustomerApiException = when (t
             in 500..599 -> "Сервис временно недоступен"
             else -> "Не удалось выполнить запрос"
         }
-        CustomerApiException(code(), detail?.takeIf(String::isNotBlank) ?: fallback)
+        CustomerApiException(
+            status = code(),
+            message = problem?.detail?.takeIf(String::isNotBlank) ?: fallback,
+            code = problem?.code?.takeIf(String::isNotBlank),
+        )
     }
     is IOException -> CustomerApiException(null, "Нет соединения с RWMS")
     else -> CustomerApiException(null, "Не удалось выполнить запрос")

@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.client.ui
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -14,7 +15,9 @@ import dev.buhanzaz.rwms.client.data.CustomerBooking
 import dev.buhanzaz.rwms.client.data.CustomerCabin
 import dev.buhanzaz.rwms.client.data.CustomerCart
 import dev.buhanzaz.rwms.client.data.CustomerEntityType
+import dev.buhanzaz.rwms.client.data.CustomerEvidenceFile
 import dev.buhanzaz.rwms.client.data.CustomerProfile
+import dev.buhanzaz.rwms.client.data.CustomerSignatureStroke
 import dev.buhanzaz.rwms.client.data.CustomerRepository
 import dev.buhanzaz.rwms.client.data.CustomerWarehouse
 import dev.buhanzaz.rwms.client.data.CustomerWorkflowReference
@@ -25,11 +28,13 @@ import dev.buhanzaz.rwms.client.data.HeldDeliverySlot
 import dev.buhanzaz.rwms.client.data.InquirySession
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.round
 
 /** Complete UI state for the signed-in customer funnel; no field is authoritative outside the server. */
@@ -40,6 +45,7 @@ data class CustomerWorkflowState(
     val profile: CustomerProfile? = null,
     val warehouses: List<CustomerWarehouse> = emptyList(),
     val selectedWarehouse: CustomerWarehouse? = null,
+    val rememberWarehouseChoice: Boolean = false,
     val inquiryId: String? = null,
     val selectionVersion: Long = 0,
     val facets: CabinFacets = CabinFacets(),
@@ -50,19 +56,71 @@ data class CustomerWorkflowState(
     val selectedCabinIds: Set<String> = emptySet(),
     val equipment: List<AvailableEquipment> = emptyList(),
     val equipmentDraft: Map<EquipmentKey, Long> = emptyMap(),
+    val rentalTerms: Map<String, Long> = emptyMap(),
+    val selectedRentalTermCabinIds: Set<String> = emptySet(),
     val cart: CustomerCart? = null,
     val address: String = "",
     val latitude: Double? = null,
     val longitude: Double? = null,
     val deliveryLocationConfirmed: Boolean = false,
+    val siteCabinCapacity: Int = 1,
+    val privateSiteAccessConfirmed: Boolean = false,
+    val failedTripChargeAcknowledged: Boolean = false,
     val slots: List<DeliverySlot> = emptyList(),
     val slotSearchCompleted: Boolean = false,
+    val slotSearchGeneration: Long = 0,
     val selectedSlotId: String? = null,
     val heldSlot: HeldDeliverySlot? = null,
-    val rentalMonths: Long = 1,
     val booking: CustomerBooking? = null,
     val bookings: List<CustomerBooking> = emptyList(),
 )
+
+/**
+ * Replaces customer access attestations while preserving offers and slot selection; an actual
+ * answer change clears only a hold created with the previous answers.
+ */
+internal fun CustomerWorkflowState.withDeliveryAttestations(
+    privateSiteAccessConfirmed: Boolean = this.privateSiteAccessConfirmed,
+    failedTripChargeAcknowledged: Boolean = this.failedTripChargeAcknowledged,
+): CustomerWorkflowState {
+    if (this.privateSiteAccessConfirmed == privateSiteAccessConfirmed &&
+        this.failedTripChargeAcknowledged == failedTripChargeAcknowledged
+    ) {
+        return this
+    }
+    return copy(
+        privateSiteAccessConfirmed = privateSiteAccessConfirmed,
+        failedTripChargeAcknowledged = failedTripChargeAcknowledged,
+        heldSlot = null,
+    )
+}
+
+/**
+ * Replaces the address receiving capacity that constrains truck/trailer routing.
+ *
+ * A changed answer invalidates every offer and attestation calculated for the previous vehicle
+ * configuration. A one-cabin cart is always served by the solo-truck capacity of one.
+ */
+internal fun CustomerWorkflowState.withSiteCabinCapacity(requestedCapacity: Int): CustomerWorkflowState {
+    val normalized = normalizedSiteCabinCapacity(selectedCabinIds.size, requestedCapacity)
+    if (siteCabinCapacity == normalized) return this
+    return copy(
+        siteCabinCapacity = normalized,
+        privateSiteAccessConfirmed = false,
+        failedTripChargeAcknowledged = false,
+        slots = emptyList(),
+        slotSearchCompleted = false,
+        selectedSlotId = null,
+        heldSlot = null,
+    )
+}
+
+/** Returns the only supported receiving capacity for one cabin or validates the 1/2 choice. */
+internal fun normalizedSiteCabinCapacity(selectedCabinCount: Int, requestedCapacity: Int): Int {
+    require(selectedCabinCount >= 0)
+    require(requestedCapacity in 1..2)
+    return if (selectedCabinCount <= 1) 1 else requestedCapacity
+}
 
 /** App-level conditional state consumed by Navigation 3. */
 sealed interface CustomerAppState {
@@ -140,45 +198,58 @@ class CustomerAppViewModel @Inject constructor(
     /** Saves a validated individual or legal profile. */
     fun saveProfile(profile: CustomerProfile) = launchMutation {
         validateProfile(profile)?.let { throw CustomerApiException(422, it) }
-        val saved = repository.createProfile(profile)
-        val warehouses = repository.warehouses()
+        val saved = if (profile.id == null) {
+            repository.createProfile(profile)
+        } else {
+            repository.updateProfile(profile)
+        }
+        val warehouses = if (profile.id == null) repository.warehouses() else mutableWorkflow.value.warehouses
         mutableWorkflow.value = mutableWorkflow.value.copy(profile = saved, warehouses = warehouses)
     }
 
-    /** Creates an inquiry for the selected warehouse and loads free cabins/facets. */
-    fun selectWarehouse(warehouse: CustomerWarehouse) = launchMutation {
-        val reference = workflowStore.begin(warehouse.id)
+    /** Uploads and binds an avatar only after a warehouse has fixed its authorization scope. */
+    fun uploadProfileAvatar(uri: Uri) = launchMutation {
+        val current = mutableWorkflow.value
+        val profile = current.profile
+            ?: throw CustomerApiException(409, "Сначала сохраните профиль")
+        val warehouse = current.selectedWarehouse
+            ?: throw CustomerApiException(409, "Сначала выберите склад")
+        val updated = withContext(Dispatchers.IO) {
+            repository.uploadProfileAvatar(profile, warehouse.id, uri)
+        }
+        mutableWorkflow.value = mutableWorkflow.value.copy(profile = updated)
+    }
+
+    /** Selects a warehouse, optionally resumes its remembered inquiry, and loads free cabins. */
+    fun selectWarehouse(
+        warehouse: CustomerWarehouse,
+        rememberWarehouse: Boolean,
+    ) = launchMutation {
+        val existing = workflowStore.read()
+        if (existing?.warehouseId == warehouse.id && existing.inquiryId != null) {
+            val updated = workflowStore.updateRemember(existing, rememberWarehouse)
+            resumeWorkflow(updated, mutableWorkflow.value.warehouses)
+            return@launchMutation
+        }
+        val reference = workflowStore.begin(warehouse.id, rememberWarehouse)
         val session = repository.createInquiry(warehouse.id, reference.createIdempotencyKey)
-        workflowStore.bind(reference, session)
-        mutableWorkflow.value = mutableWorkflow.value.copy(
-            selectedWarehouse = warehouse,
-            inquiryId = session.inquiryId,
-            selectionVersion = session.selectionVersion,
-            facets = CabinFacets(),
-            cabins = emptyList(),
-            cabinPage = 0,
-            cabinTotalPages = 0,
-            filters = CabinFilters(),
-            selectedCabinIds = emptySet(),
-            equipmentDraft = emptyMap(),
-            cart = null,
-            address = "",
-            latitude = null,
-            longitude = null,
-            deliveryLocationConfirmed = false,
-            slots = emptyList(),
-            slotSearchCompleted = false,
-            selectedSlotId = null,
-            heldSlot = null,
-        )
-        val facets = repository.facets(session.inquiryId)
-        val page = repository.cabins(session.inquiryId, CabinFilters(), 0)
-        mutableWorkflow.value = mutableWorkflow.value.copy(
-            facets = facets,
-            cabins = page.content,
-            cabinPage = page.page,
-            cabinTotalPages = page.totalPages,
-        )
+        val bound = workflowStore.bind(reference, session)
+        activateWorkflow(bound, session, mutableWorkflow.value.warehouses)
+    }
+
+    /** Opens a fresh mutable cart when the current inquiry has already produced a booking. */
+    fun ensureActiveInquiry() {
+        val current = mutableWorkflow.value
+        if (!CustomerInquiryRecoveryPolicy.requiresFreshInquiry(current.booking, current.inquiryId)) return
+        launchMutation {
+            val latest = mutableWorkflow.value
+            if (!CustomerInquiryRecoveryPolicy.requiresFreshInquiry(latest.booking, latest.inquiryId)) {
+                return@launchMutation
+            }
+            val warehouse = latest.selectedWarehouse
+                ?: throw CustomerApiException(409, "Сначала выберите склад")
+            restartWorkflow(workflowStore.read(), warehouse, latest.warehouses)
+        }
     }
 
     /** Replaces cabin filters and reloads page zero from the authoritative free inventory. */
@@ -221,12 +292,20 @@ class CustomerAppViewModel @Inject constructor(
         val selection = repository.updateCabins(inquiryId, current.selectionVersion, draft.selectedCabins)
         val available = repository.equipment(inquiryId).filter { it.availableQuantity > 0 }
         val cart = repository.cart(inquiryId)
+        val selectedIds = selection.cabins.mapTo(mutableSetOf()) { it.unitId }
         mutableWorkflow.value = current.copy(
             selectionVersion = cart.version,
-            selectedCabinIds = selection.cabins.mapTo(mutableSetOf()) { it.unitId },
+            selectedCabinIds = selectedIds,
             equipmentDraft = draft.equipment,
+            rentalTerms = cart.rentalTerms.associate { it.cabinUnitId to it.rentalMonths },
+            selectedRentalTermCabinIds = current.selectedRentalTermCabinIds.intersect(
+                selection.cabins.mapTo(mutableSetOf()) { it.unitId },
+            ),
             equipment = available,
             cart = cart,
+            siteCabinCapacity = normalizedSiteCabinCapacity(selectedIds.size, current.siteCabinCapacity),
+            privateSiteAccessConfirmed = false,
+            failedTripChargeAcknowledged = false,
             slots = emptyList(),
             slotSearchCompleted = false,
             selectedSlotId = null,
@@ -265,12 +344,80 @@ class CustomerAppViewModel @Inject constructor(
         )
     }
 
+    /** Selects which cart cabins receive the next bulk rental-duration change. */
+    fun toggleRentalTermCabin(cabinUnitId: String) {
+        if (mutationGate.isActive()) return
+        val current = mutableWorkflow.value
+        require(cabinUnitId in current.selectedCabinIds)
+        val next = if (cabinUnitId in current.selectedRentalTermCabinIds) {
+            current.selectedRentalTermCabinIds - cabinUnitId
+        } else {
+            current.selectedRentalTermCabinIds + cabinUnitId
+        }
+        mutableWorkflow.value = current.copy(selectedRentalTermCabinIds = next)
+    }
+
+    /** Applies one duration to checked cabins, or to the complete cart when none are checked. */
+    fun setRentalMonths(months: Long) = launchMutation {
+        require(months in 1..120)
+        val current = mutableWorkflow.value
+        requireMutableCart(current)
+        val next = CustomerRentalTermPolicy.apply(
+            current.selectedCabinIds,
+            current.rentalTerms,
+            current.selectedRentalTermCabinIds,
+            months,
+        )
+        val response = repository.updateRentalTerms(
+            requireNotNull(current.inquiryId),
+            current.selectionVersion,
+            next,
+        )
+        mutableWorkflow.value = current.copy(
+            selectionVersion = response.version,
+            rentalTerms = response.terms.associate { it.cabinUnitId to it.rentalMonths },
+            slots = emptyList(),
+            slotSearchCompleted = false,
+            selectedSlotId = null,
+            heldSlot = null,
+        )
+    }
+
+    /** Applies a duration override to exactly one selected cabin. */
+    fun setCabinRentalMonths(cabinUnitId: String, months: Long) = launchMutation {
+        require(months in 1..120)
+        val current = mutableWorkflow.value
+        require(cabinUnitId in current.selectedCabinIds)
+        val next = CustomerRentalTermPolicy.apply(
+            current.selectedCabinIds,
+            current.rentalTerms,
+            setOf(cabinUnitId),
+            months,
+        )
+        val response = repository.updateRentalTerms(
+            requireNotNull(current.inquiryId),
+            current.selectionVersion,
+            next,
+        )
+        mutableWorkflow.value = current.copy(
+            selectionVersion = response.version,
+            rentalTerms = response.terms.associate { it.cabinUnitId to it.rentalMonths },
+            slots = emptyList(),
+            slotSearchCompleted = false,
+            selectedSlotId = null,
+            heldSlot = null,
+        )
+    }
+
     /** Stores an address draft and invalidates any earlier address-to-point confirmation. */
     fun setAddress(address: String) {
         if (mutationGate.isActive()) return
         mutableWorkflow.value = mutableWorkflow.value.copy(
             address = address,
             deliveryLocationConfirmed = false,
+            siteCabinCapacity = 1,
+            privateSiteAccessConfirmed = false,
+            failedTripChargeAcknowledged = false,
             slots = emptyList(),
             slotSearchCompleted = false,
             selectedSlotId = null,
@@ -286,6 +433,9 @@ class CustomerAppViewModel @Inject constructor(
             latitude = latitude.roundedCoordinate(),
             longitude = longitude.roundedCoordinate(),
             deliveryLocationConfirmed = false,
+            siteCabinCapacity = 1,
+            privateSiteAccessConfirmed = false,
+            failedTripChargeAcknowledged = false,
             slots = emptyList(),
             slotSearchCompleted = false,
             selectedSlotId = null,
@@ -293,7 +443,7 @@ class CustomerAppViewModel @Inject constructor(
         )
     }
 
-    /** Atomically confirms the address and coordinates returned by Yandex or entered manually. */
+    /** Atomically confirms the address and coordinates returned by Yandex geocoding. */
     fun confirmDeliveryLocation(address: String, latitude: Double, longitude: Double) {
         if (mutationGate.isActive()) return
         require(address.isNotBlank()) { "Delivery address must not be blank" }
@@ -310,19 +460,36 @@ class CustomerAppViewModel @Inject constructor(
         )
     }
 
-    /** Invalidates an earlier confirmation while the customer edits manual coordinate drafts. */
-    fun invalidateDeliveryLocation() {
+    /**
+     * Stores the private-site confirmation without discarding calculated offers or the selected slot.
+     * A changed attestation invalidates only an already held slot because the hold binds both answers.
+     */
+    fun setPrivateSiteAccessConfirmed(confirmed: Boolean) {
         if (mutationGate.isActive()) return
-        mutableWorkflow.value = mutableWorkflow.value.copy(
-            deliveryLocationConfirmed = false,
-            slots = emptyList(),
-            slotSearchCompleted = false,
-            selectedSlotId = null,
-            heldSlot = null,
-        )
+        val current = mutableWorkflow.value
+        mutableWorkflow.value = current.withDeliveryAttestations(privateSiteAccessConfirmed = confirmed)
     }
 
-    /** Searches only server-calculated slots for the entered address and map point. */
+    /**
+     * Stores failed-trip acknowledgement without changing offers or their selection.
+     * A changed acknowledgement clears only an existing hold that used the previous answer.
+     */
+    fun setFailedTripChargeAcknowledged(acknowledged: Boolean) {
+        if (mutationGate.isActive()) return
+        val current = mutableWorkflow.value
+        mutableWorkflow.value = current.withDeliveryAttestations(failedTripChargeAcknowledged = acknowledged)
+    }
+
+    /** Selects whether the address can receive one solo-truck cabin or two with a trailer. */
+    fun setSiteCabinCapacity(capacity: Int) {
+        if (mutationGate.isActive()) return
+        mutableWorkflow.value = mutableWorkflow.value.withSiteCabinCapacity(capacity)
+    }
+
+    /**
+     * Searches server-calculated slots for the confirmed address and point, forwarding the
+     * current attestations as context without requiring them on the map step.
+     */
     fun searchSlots() = launchMutation {
         val current = mutableWorkflow.value
         requireMutableCart(current)
@@ -337,11 +504,23 @@ class CustomerAppViewModel @Inject constructor(
         }
         val inquiryId = requireNotNull(current.inquiryId)
         val slots = repository.searchSlots(
-            DeliverySlotSearchRequest(inquiryId, current.address.trim(), latitude, longitude),
+            DeliverySlotSearchRequest(
+                inquiryId,
+                current.address.trim(),
+                latitude,
+                longitude,
+                siteCabinCapacity = current.siteCabinCapacity,
+                privateSiteAccessConfirmed = current.privateSiteAccessConfirmed,
+                failedTripChargeAcknowledged = current.failedTripChargeAcknowledged,
+            ),
         )
+        if (slots.any { slot -> slot.siteCabinCapacity != current.siteCabinCapacity }) {
+            throw CustomerApiException(503, "Сервис вернул слот для другой вместимости объекта")
+        }
         mutableWorkflow.value = current.copy(
             slots = slots,
             slotSearchCompleted = true,
+            slotSearchGeneration = current.slotSearchGeneration + 1,
             selectedSlotId = null,
             heldSlot = null,
             booking = null,
@@ -356,30 +535,32 @@ class CustomerAppViewModel @Inject constructor(
         mutableWorkflow.value = current.copy(selectedSlotId = selected, heldSlot = null)
     }
 
-    /** Rechecks capacity and places an expiring server hold on the selected slot. */
+    /** Rechecks capacity and holds the selected slot only with both customer attestations. */
     fun holdSelectedSlot() = launchMutation {
         val current = mutableWorkflow.value
         requireMutableCart(current)
+        if (!current.privateSiteAccessConfirmed || !current.failedTripChargeAcknowledged) {
+            throw CustomerApiException(422, "Подтвердите проезд на участок и ответственность за ложные сведения")
+        }
         val slotId = requireNotNull(current.selectedSlotId)
         val slot = current.slots.single { it.slotId == slotId }
+        if (slot.siteCabinCapacity != current.siteCabinCapacity) {
+            throw CustomerApiException(409, "Вместимость объекта изменилась. Пересчитайте слоты")
+        }
         val held = repository.holdSlot(
             slotId,
             slot.version,
             requireNotNull(current.inquiryId),
             current.selectionVersion,
+            current.siteCabinCapacity,
+            current.privateSiteAccessConfirmed,
+            current.failedTripChargeAcknowledged,
         )
         mutableWorkflow.value = current.copy(
             selectionVersion = held.cartVersion,
             heldSlot = held,
             booking = null,
         )
-    }
-
-    /** Changes the requested rental term within the server-supported positive range. */
-    fun setRentalMonths(months: Long) {
-        if (mutationGate.isActive()) return
-        require(months in 1..120)
-        mutableWorkflow.value = mutableWorkflow.value.copy(rentalMonths = months)
     }
 
     /** Checks out only with the exact held slot/version and current optimistic selection version. */
@@ -394,7 +575,6 @@ class CustomerAppViewModel @Inject constructor(
                 current.selectionVersion,
                 held.slot.slotId,
                 held.slot.version,
-                current.rentalMonths,
             ),
         )
         val bookings = repository.bookings()
@@ -418,6 +598,33 @@ class CustomerAppViewModel @Inject constructor(
         mutableWorkflow.value = current.copy(booking = latest, bookings = bookings)
     }
 
+    /** Accepts one arrived cabin and reloads its authoritative reception state. */
+    fun acceptCabin(bookingId: String, cabinId: String, strokes: List<CustomerSignatureStroke>) = launchMutation {
+        repository.acceptCabin(bookingId, cabinId, strokes)
+        val bookings = repository.bookings()
+        mutableWorkflow.value = mutableWorkflow.value.copy(bookings = bookings)
+    }
+
+    /** Uploads evidence to the exact shipment line and submits an arrived-cabin problem. */
+    fun reportCabinProblem(
+        bookingId: String,
+        cabinId: String,
+        category: String,
+        description: String,
+        evidence: List<CustomerEvidenceFile>,
+    ) = launchMutation {
+        if (description.isBlank()) throw CustomerApiException(422, "Опишите проблему")
+        val booking = mutableWorkflow.value.bookings.firstOrNull { it.bookingId == bookingId }
+            ?: throw CustomerApiException(404, "Заказ не найден")
+        val cabin = booking.cabins.firstOrNull { it.cabinUnitId == cabinId }
+            ?: throw CustomerApiException(404, "Бытовка не найдена")
+        if (!cabin.arrivalEligible) throw CustomerApiException(409, "Бытовка ещё не прибыла")
+        val owner = cabin.mediaOwner ?: throw CustomerApiException(409, "Медиа-владелец ещё не подготовлен")
+        repository.reportProblem(bookingId, cabinId, owner, category, description, evidence)
+        val bookings = repository.bookings()
+        mutableWorkflow.value = mutableWorkflow.value.copy(bookings = bookings)
+    }
+
     /** Clears a displayed failure without changing domain state. */
     fun dismissError() {
         mutableWorkflow.value = mutableWorkflow.value.copy(error = null)
@@ -435,7 +642,7 @@ class CustomerAppViewModel @Inject constructor(
             workflowStore.clear()
             return@launchMutation
         }
-        workflowStore.read()?.let { reference ->
+        workflowStore.read()?.takeIf(CustomerWorkflowReference::rememberWarehouse)?.let { reference ->
             resumeWorkflow(reference, warehouses)
         }
     }
@@ -449,9 +656,13 @@ class CustomerAppViewModel @Inject constructor(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: CustomerApiException) {
-                if (failure.status == 401) authRepository.invalidate(failure.message)
-                if (failure.status == 409) reloadAfterConflict()
-                mutableWorkflow.value = mutableWorkflow.value.copy(error = failure.message)
+                if (CustomerInquiryRecoveryPolicy.isArchivedInquiry(failure)) {
+                    mutableWorkflow.value = mutableWorkflow.value.copy(error = recoverArchivedWorkflow())
+                } else {
+                    if (failure.status == 401) authRepository.invalidate(failure.message)
+                    if (failure.status == 409) reloadAfterConflict()
+                    mutableWorkflow.value = mutableWorkflow.value.copy(error = failure.message)
+                }
             } catch (_: Throwable) {
                 mutableWorkflow.value = mutableWorkflow.value.copy(error = "Не удалось выполнить действие")
             } finally {
@@ -464,13 +675,19 @@ class CustomerAppViewModel @Inject constructor(
     private suspend fun reloadAfterConflict() {
         val inquiryId = mutableWorkflow.value.inquiryId ?: return
         runCatching { repository.cart(inquiryId) }.getOrNull()?.let { cart ->
+            val selectedIds = cart.cabins.mapTo(mutableSetOf()) { it.unitId }
             mutableWorkflow.value = mutableWorkflow.value.copy(
                 cart = cart,
                 selectionVersion = cart.version,
-                selectedCabinIds = cart.cabins.mapTo(mutableSetOf()) { it.unitId },
+                selectedCabinIds = selectedIds,
+                siteCabinCapacity = normalizedSiteCabinCapacity(
+                    selectedIds.size,
+                    mutableWorkflow.value.siteCabinCapacity,
+                ),
                 equipmentDraft = cart.equipment.associate { selection ->
                     EquipmentKey(selection.cabinUnitId, selection.inventoryItemId) to selection.quantity
                 },
+                rentalTerms = cart.rentalTerms.associate { it.cabinUnitId to it.rentalMonths },
                 slots = emptyList(),
                 slotSearchCompleted = false,
                 selectedSlotId = null,
@@ -488,18 +705,38 @@ class CustomerAppViewModel @Inject constructor(
             workflowStore.clear()
             throw CustomerApiException(409, "Ранее выбранный склад больше недоступен")
         }
-        val session = try {
-            reference.inquiryId?.let { repository.inquiry(it) }
-                ?: repository.createInquiry(reference.warehouseId, reference.createIdempotencyKey).also { created ->
-                    workflowStore.bind(reference, created)
+        val (activeReference, session) = try {
+            reference.inquiryId?.let { inquiryId -> reference to repository.inquiry(inquiryId) }
+                ?: repository.createInquiry(reference.warehouseId, reference.createIdempotencyKey).let { created ->
+                    workflowStore.bind(reference, created) to created
                 }
         } catch (failure: CustomerApiException) {
             if (failure.status == 404) workflowStore.clear()
             throw failure
         }
+        validateRecoveredInquiry(activeReference, session)
+        if (CustomerInquiryRecoveryPolicy.requiresFreshInquiry(session.state)) {
+            restartWorkflow(activeReference, warehouse, warehouses)
+            return
+        }
+        activateWorkflow(activeReference, session, warehouses)
+    }
+
+    /**
+     * Replaces every cart-scoped UI field from one validated server session while retaining the
+     * independent booking history returned by logistics.
+     */
+    private suspend fun activateWorkflow(
+        reference: CustomerWorkflowReference,
+        session: InquirySession,
+        warehouses: List<CustomerWarehouse>,
+    ) {
         validateRecoveredInquiry(reference, session)
+        val warehouse = warehouses.firstOrNull { it.id == session.warehouseId }
+            ?: throw CustomerApiException(409, "Ранее выбранный склад больше недоступен")
         mutableWorkflow.value = mutableWorkflow.value.copy(
             selectedWarehouse = warehouse,
+            rememberWarehouseChoice = reference.rememberWarehouse,
             inquiryId = session.inquiryId,
             selectionVersion = session.selectionVersion,
             facets = CabinFacets(),
@@ -507,6 +744,24 @@ class CustomerAppViewModel @Inject constructor(
             cabinPage = 0,
             cabinTotalPages = 0,
             filters = CabinFilters(),
+            selectedCabinIds = emptySet(),
+            equipment = emptyList(),
+            equipmentDraft = emptyMap(),
+            rentalTerms = emptyMap(),
+            selectedRentalTermCabinIds = emptySet(),
+            cart = null,
+            address = "",
+            latitude = null,
+            longitude = null,
+            deliveryLocationConfirmed = false,
+            siteCabinCapacity = 1,
+            privateSiteAccessConfirmed = false,
+            failedTripChargeAcknowledged = false,
+            slots = emptyList(),
+            slotSearchCompleted = false,
+            selectedSlotId = null,
+            heldSlot = null,
+            booking = null,
         )
         val cart = repository.cart(session.inquiryId)
         val facets = repository.facets(session.inquiryId)
@@ -514,21 +769,64 @@ class CustomerAppViewModel @Inject constructor(
         val equipment = repository.equipment(session.inquiryId).filter { it.availableQuantity > 0 }
         val bookings = repository.bookings()
         val booking = bookings.firstOrNull { it.inquiryId == session.inquiryId }
+        val selectedIds = cart.cabins.mapTo(mutableSetOf()) { it.unitId }
         mutableWorkflow.value = mutableWorkflow.value.copy(
             selectionVersion = cart.version,
             facets = facets,
             cabins = page.content,
             cabinPage = page.page,
             cabinTotalPages = page.totalPages,
-            selectedCabinIds = cart.cabins.mapTo(mutableSetOf()) { it.unitId },
+            selectedCabinIds = selectedIds,
+            siteCabinCapacity = normalizedSiteCabinCapacity(
+                selectedIds.size,
+                mutableWorkflow.value.siteCabinCapacity,
+            ),
             equipment = equipment,
             equipmentDraft = cart.equipment.associate { selection ->
                 EquipmentKey(selection.cabinUnitId, selection.inventoryItemId) to selection.quantity
             },
+            rentalTerms = cart.rentalTerms.associate { it.cabinUnitId to it.rentalMonths },
             cart = cart,
             booking = booking,
             bookings = bookings,
         )
+    }
+
+    /**
+     * Persists the replacement create intent before calling logistics, so an uncertain response
+     * can be retried without creating duplicate carts.
+     */
+    private suspend fun restartWorkflow(
+        reference: CustomerWorkflowReference?,
+        warehouse: CustomerWarehouse,
+        warehouses: List<CustomerWarehouse>,
+    ) {
+        val remembered = reference?.takeIf { it.warehouseId == warehouse.id }
+        val pending = if (remembered?.inquiryId != null) {
+            workflowStore.restart(remembered)
+        } else {
+            workflowStore.begin(warehouse.id, mutableWorkflow.value.rememberWarehouseChoice)
+        }
+        val session = repository.createInquiry(warehouse.id, pending.createIdempotencyKey)
+        val bound = workflowStore.bind(pending, session)
+        activateWorkflow(bound, session, warehouses)
+    }
+
+    /** Reconciles an explicit archived-inquiry conflict by opening a separate mutable cart. */
+    private suspend fun recoverArchivedWorkflow(): String? {
+        val current = mutableWorkflow.value
+        val warehouse = current.selectedWarehouse ?: return "Выберите склад заново"
+        return try {
+            restartWorkflow(workflowStore.read(), warehouse, current.warehouses)
+            null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: CustomerApiException) {
+            if (failure.status == 401) authRepository.invalidate(failure.message)
+            failure.message
+        } catch (_: Throwable) {
+            "Не удалось открыть новую корзину"
+        }
     }
 
     private suspend fun validateRecoveredInquiry(
@@ -545,7 +843,7 @@ class CustomerAppViewModel @Inject constructor(
     }
 
     private fun requireMutableCart(current: CustomerWorkflowState) {
-        if (CustomerBookingPolicy.locksCart(current.booking)) {
+        if (CustomerBookingPolicy.locksCart(current.booking, current.inquiryId)) {
             throw CustomerApiException(409, "Оформление уже выполняется; обновите статус заказа")
         }
     }

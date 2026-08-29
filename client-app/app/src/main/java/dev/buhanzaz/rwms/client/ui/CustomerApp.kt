@@ -100,21 +100,29 @@ fun CustomerApp(viewModel: CustomerAppViewModel = hiltViewModel()) {
             onRegister = viewModel::register,
             onLogout = viewModel::logout,
             onSaveProfile = viewModel::saveProfile,
+            onAvatarSelected = viewModel::uploadProfileAvatar,
             onWarehouse = viewModel::selectWarehouse,
+            onEnsureActiveInquiry = viewModel::ensureActiveInquiry,
             onFilters = viewModel::applyFilters,
             onLoadMoreCabins = viewModel::loadMoreCabins,
             onToggleCabin = viewModel::toggleCabin,
+            onToggleRentalCabin = viewModel::toggleRentalTermCabin,
+            onBulkRentalMonths = viewModel::setRentalMonths,
+            onCabinRentalMonths = viewModel::setCabinRentalMonths,
             onEquipment = viewModel::setEquipment,
             onAddress = viewModel::setAddress,
             onPoint = viewModel::setMapPoint,
             onConfirmedLocation = viewModel::confirmDeliveryLocation,
-            onLocationDraftChanged = viewModel::invalidateDeliveryLocation,
+            onSiteCabinCapacity = viewModel::setSiteCabinCapacity,
+            onPrivateSiteAccess = viewModel::setPrivateSiteAccessConfirmed,
+            onFailedTripAcknowledgement = viewModel::setFailedTripChargeAcknowledged,
             onSearchSlots = viewModel::searchSlots,
             onSelectSlot = viewModel::selectSlot,
             onHoldSlot = viewModel::holdSelectedSlot,
-            onRentalMonths = viewModel::setRentalMonths,
             onCheckout = viewModel::checkout,
             onRefreshBookings = viewModel::refreshBookings,
+            onAcceptCabin = viewModel::acceptCabin,
+            onReportProblem = viewModel::reportCabinProblem,
             onDismissError = viewModel::dismissError,
         )
     }
@@ -129,21 +137,29 @@ fun CustomerAppContent(
     onRegister: (String, String, String) -> Unit = { _, _, _ -> },
     onLogout: () -> Unit = {},
     onSaveProfile: (dev.buhanzaz.rwms.client.data.CustomerProfile) -> Unit = {},
-    onWarehouse: (dev.buhanzaz.rwms.client.data.CustomerWarehouse) -> Unit = {},
+    onAvatarSelected: (android.net.Uri) -> Unit = {},
+    onWarehouse: (dev.buhanzaz.rwms.client.data.CustomerWarehouse, Boolean) -> Unit = { _, _ -> },
+    onEnsureActiveInquiry: () -> Unit = {},
     onFilters: (dev.buhanzaz.rwms.client.data.CabinFilters) -> Unit = {},
     onLoadMoreCabins: () -> Unit = {},
     onToggleCabin: (String) -> Unit = {},
+    onToggleRentalCabin: (String) -> Unit = {},
+    onBulkRentalMonths: (Long) -> Unit = {},
+    onCabinRentalMonths: (String, Long) -> Unit = { _, _ -> },
     onEquipment: (String, dev.buhanzaz.rwms.client.data.AvailableEquipment, Long) -> Unit = { _, _, _ -> },
     onAddress: (String) -> Unit = {},
     onPoint: (Double, Double) -> Unit = { _, _ -> },
     onConfirmedLocation: (String, Double, Double) -> Unit = { _, _, _ -> },
-    onLocationDraftChanged: () -> Unit = {},
+    onSiteCabinCapacity: (Int) -> Unit = {},
+    onPrivateSiteAccess: (Boolean) -> Unit = {},
+    onFailedTripAcknowledgement: (Boolean) -> Unit = {},
     onSearchSlots: () -> Unit = {},
     onSelectSlot: (String) -> Unit = {},
     onHoldSlot: () -> Unit = {},
-    onRentalMonths: (Long) -> Unit = {},
     onCheckout: () -> Unit = {},
     onRefreshBookings: () -> Unit = {},
+    onAcceptCabin: (String, String, List<dev.buhanzaz.rwms.client.data.CustomerSignatureStroke>) -> Unit = { _, _, _ -> },
+    onReportProblem: (String, String, String, String, List<dev.buhanzaz.rwms.client.data.CustomerEvidenceFile>) -> Unit = { _, _, _, _, _ -> },
     onDismissError: () -> Unit = {},
 ) {
     when (state) {
@@ -164,20 +180,31 @@ fun CustomerAppContent(
                     state = workflow,
                     onLogout = onLogout,
                     onSaveProfile = onSaveProfile,
+                    onAvatarSelected = onAvatarSelected,
+                    onWarehouse = { warehouse ->
+                        onWarehouse(warehouse, workflow.rememberWarehouseChoice)
+                    },
+                    onEnsureActiveInquiry = onEnsureActiveInquiry,
                     onFilters = onFilters,
                     onLoadMoreCabins = onLoadMoreCabins,
                     onToggleCabin = onToggleCabin,
+                    onToggleRentalCabin = onToggleRentalCabin,
+                    onBulkRentalMonths = onBulkRentalMonths,
+                    onCabinRentalMonths = onCabinRentalMonths,
                     onEquipment = onEquipment,
                     onAddress = onAddress,
                     onPoint = onPoint,
                     onConfirmedLocation = onConfirmedLocation,
-                    onLocationDraftChanged = onLocationDraftChanged,
+                    onSiteCabinCapacity = onSiteCabinCapacity,
+                    onPrivateSiteAccess = onPrivateSiteAccess,
+                    onFailedTripAcknowledgement = onFailedTripAcknowledgement,
                     onSearchSlots = onSearchSlots,
                     onSelectSlot = onSelectSlot,
                     onHoldSlot = onHoldSlot,
-                    onRentalMonths = onRentalMonths,
                     onCheckout = onCheckout,
                     onRefreshBookings = onRefreshBookings,
+                    onAcceptCabin = onAcceptCabin,
+                    onReportProblem = onReportProblem,
                     onDismissError = onDismissError,
                 )
             }
@@ -226,20 +253,29 @@ private fun SignedInNavigation(
     state: CustomerWorkflowState,
     onLogout: () -> Unit,
     onSaveProfile: (dev.buhanzaz.rwms.client.data.CustomerProfile) -> Unit,
+    onAvatarSelected: (android.net.Uri) -> Unit,
+    onWarehouse: (dev.buhanzaz.rwms.client.data.CustomerWarehouse) -> Unit,
+    onEnsureActiveInquiry: () -> Unit,
     onFilters: (dev.buhanzaz.rwms.client.data.CabinFilters) -> Unit,
     onLoadMoreCabins: () -> Unit,
     onToggleCabin: (String) -> Unit,
+    onToggleRentalCabin: (String) -> Unit,
+    onBulkRentalMonths: (Long) -> Unit,
+    onCabinRentalMonths: (String, Long) -> Unit,
     onEquipment: (String, dev.buhanzaz.rwms.client.data.AvailableEquipment, Long) -> Unit,
     onAddress: (String) -> Unit,
     onPoint: (Double, Double) -> Unit,
     onConfirmedLocation: (String, Double, Double) -> Unit,
-    onLocationDraftChanged: () -> Unit,
+    onSiteCabinCapacity: (Int) -> Unit,
+    onPrivateSiteAccess: (Boolean) -> Unit,
+    onFailedTripAcknowledgement: (Boolean) -> Unit,
     onSearchSlots: () -> Unit,
     onSelectSlot: (String) -> Unit,
     onHoldSlot: () -> Unit,
-    onRentalMonths: (Long) -> Unit,
     onCheckout: () -> Unit,
     onRefreshBookings: () -> Unit,
+    onAcceptCabin: (String, String, List<dev.buhanzaz.rwms.client.data.CustomerSignatureStroke>) -> Unit,
+    onReportProblem: (String, String, String, String, List<dev.buhanzaz.rwms.client.data.CustomerEvidenceFile>) -> Unit,
     onDismissError: () -> Unit,
 ) {
     val backStack = rememberNavBackStack(CatalogRoute)
@@ -264,6 +300,9 @@ private fun SignedInNavigation(
         if (CustomerBookingPolicy.locksCart(state.booking)) {
             topLevel(BookingsRoute)
         }
+    }
+    LaunchedEffect(current, state.booking?.status, state.inquiryId) {
+        if (current is CatalogRoute || current is CartRoute) onEnsureActiveInquiry()
     }
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -322,11 +361,13 @@ private fun SignedInNavigation(
                                 onMenu = { coroutineScope.launch { drawerState.open() } },
                                 onProfile = { topLevel(ProfileRoute) },
                                 onCart = { topLevel(CartRoute) },
+                                onWarehouse = onWarehouse,
                                 onFilters = onFilters,
                                 onLoadMore = onLoadMoreCabins,
                                 onToggleCabin = onToggleCabin,
                                 onEquipment = onEquipment,
                                 onPhoto = { unitId, page -> backStack.add(GalleryRoute(unitId, page)) },
+                                avatarUrl = state.profile?.avatar?.thumbnailUrl,
                             )
                         }
                         entry<CartRoute> {
@@ -340,6 +381,9 @@ private fun SignedInNavigation(
                                     }
                                 },
                                 onToggleCabin = onToggleCabin,
+                                onToggleRentalCabin = onToggleRentalCabin,
+                                onBulkRentalMonths = onBulkRentalMonths,
+                                onCabinRentalMonths = onCabinRentalMonths,
                             )
                         }
                         entry<DeliveryMapRoute> {
@@ -349,9 +393,11 @@ private fun SignedInNavigation(
                                 onAddress = onAddress,
                                 onPoint = onPoint,
                                 onConfirmedLocation = onConfirmedLocation,
-                                onLocationDraftChanged = onLocationDraftChanged,
-                                onContinue = {
-                                    onSearchSlots()
+                                onSiteCabinCapacity = onSiteCabinCapacity,
+                                onPrivateSiteAccess = onPrivateSiteAccess,
+                                onFailedTripAcknowledgement = onFailedTripAcknowledgement,
+                                onSearchSlots = onSearchSlots,
+                                onSlotsReady = {
                                     if (backStack.lastOrNull() !is DeliveryDatesRoute) {
                                         backStack.add(DeliveryDatesRoute)
                                     }
@@ -386,7 +432,6 @@ private fun SignedInNavigation(
                             DeliveryConfirmationScreen(
                                 state = state,
                                 onBack = { backStack.removeLastOrNull() },
-                                onRentalMonths = onRentalMonths,
                                 onCheckout = onCheckout,
                             )
                         }
@@ -398,6 +443,8 @@ private fun SignedInNavigation(
                                 onMenu = { coroutineScope.launch { drawerState.open() } },
                                 onProfile = { topLevel(ProfileRoute) },
                                 onRefresh = onRefreshBookings,
+                                onAccept = onAcceptCabin,
+                                onReport = onReportProblem,
                             )
                         }
                         entry<ProfileRoute> {
@@ -405,6 +452,8 @@ private fun SignedInNavigation(
                                 existing = state.profile,
                                 busy = state.busy,
                                 onSave = onSaveProfile,
+                                selectedWarehouse = state.selectedWarehouse,
+                                onAvatarSelected = onAvatarSelected,
                                 onBack = { topLevel(CatalogRoute) },
                             )
                         }

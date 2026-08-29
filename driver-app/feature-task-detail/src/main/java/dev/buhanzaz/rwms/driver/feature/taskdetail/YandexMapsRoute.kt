@@ -21,7 +21,7 @@ internal fun yandexMapsRouteUrl(trip: DriverTripDetailsDto): String? {
     val destination = coordinateDestination(trip.latitude, trip.longitude)
         ?: trip.address?.trim()?.takeIf(String::isNotBlank)
         ?: return null
-    val encodedDestination = URLEncoder.encode(destination, StandardCharsets.UTF_8)
+    val encodedDestination = URLEncoder.encode(destination, StandardCharsets.UTF_8.name())
     return "https://yandex.ru/maps/?rtext=~$encodedDestination&rtt=auto"
 }
 

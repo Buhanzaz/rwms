@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 const manifest = JSON.parse(await readFile(new URL("../release.json", import.meta.url), "utf8"));
@@ -6,8 +7,12 @@ const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
 if (manifest.packageName !== "dev.buhanzaz.rwms.client") throw new Error("Unexpected packageName");
 if (manifest.minimumAndroidVersion !== "Android 11") throw new Error("Minimum Android mismatch");
 if (!Number.isInteger(manifest.versionCode) || manifest.versionCode < 1) throw new Error("Invalid versionCode");
-if (!/^\/downloads\/rwms-customer-[0-9.]+\.apk$/.test(manifest.artifactPath)) {
+if (manifest.artifactPath !== `/downloads/rwms-customer-${manifest.versionName}.apk`) {
   throw new Error("artifactPath must be immutable and versioned");
+}
+if (!/^[a-f0-9]{40}$/.test(manifest.sourceRevision ?? "")) throw new Error("Invalid source revision");
+if (!/^[a-f0-9]{64}$/.test(manifest.applicationDiffSha256 ?? "")) {
+  throw new Error("Invalid application diff SHA-256");
 }
 
 if (manifest.status === "pending") {
@@ -19,7 +24,20 @@ if (manifest.status === "pending") {
     throw new Error("Published URL must match the immutable artifact path");
   }
   if (!/^[a-f0-9]{64}$/.test(manifest.sha256 ?? "")) throw new Error("Invalid SHA-256");
+  if (!/^[a-f0-9]{64}$/.test(manifest.signerCertificateSha256 ?? "")) {
+    throw new Error("Invalid signer certificate SHA-256");
+  }
+  if (typeof manifest.signerCertificateDn !== "string" || manifest.signerCertificateDn.trim() === "") {
+    throw new Error("Missing signer certificate DN");
+  }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(manifest.publishedAt ?? "")) throw new Error("Invalid publication date");
+
+  const apkPath = process.env.RWMS_CUSTOMER_APK;
+  if (!apkPath) throw new Error("RWMS_CUSTOMER_APK must point to the reviewed published APK");
+  const apk = await readFile(apkPath);
+  if (createHash("sha256").update(apk).digest("hex") !== manifest.sha256) {
+    throw new Error("RWMS_CUSTOMER_APK checksum does not match release.json");
+  }
 } else {
   throw new Error("Unknown release status");
 }

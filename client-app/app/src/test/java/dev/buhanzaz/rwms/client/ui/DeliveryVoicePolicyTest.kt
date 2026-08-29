@@ -16,4 +16,12 @@ class DeliveryVoicePolicyTest {
         assertThat(DeliveryVoicePolicy.recognizedAddress(null)).isNull()
         assertThat(DeliveryVoicePolicy.recognizedAddress(listOf(" "))).isNull()
     }
+
+    @Test
+    fun `voice provider policy accepts yandex and rejects google fallback`() {
+        assertThat(isYandexSpeechRecognizerPackage("ru.yandex.searchplugin")).isTrue()
+        assertThat(isYandexSpeechRecognizerPackage("com.google.android.googlequicksearchbox")).isFalse()
+        assertThat(isYandexSpeechRecognizerPackage("com.android.speech.service")).isFalse()
+        assertThat(isYandexSpeechRecognizerPackage("example.yandex.fake")).isFalse()
+    }
 }

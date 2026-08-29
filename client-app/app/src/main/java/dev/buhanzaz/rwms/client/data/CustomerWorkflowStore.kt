@@ -25,6 +25,7 @@ internal data class CustomerWorkflowReference(
     val warehouseId: String,
     val createIdempotencyKey: String,
     val inquiryId: String? = null,
+    val rememberWarehouse: Boolean = false,
 ) {
     init {
         UUID.fromString(warehouseId)
@@ -61,16 +62,20 @@ class CustomerWorkflowStore @Inject constructor(
      * lost: a retry in the same Android process must carry the same idempotency key as recovery
      * after process recreation.
      */
-    internal suspend fun begin(warehouseId: String): CustomerWorkflowReference {
+    internal suspend fun begin(
+        warehouseId: String,
+        rememberWarehouse: Boolean = false,
+    ): CustomerWorkflowReference {
         UUID.fromString(warehouseId)
         read()?.takeIf { reference ->
             reference.warehouseId == warehouseId && reference.inquiryId == null
         }?.let { pending ->
-            return pending
+            return updateRemember(pending, rememberWarehouse)
         }
         val reference = CustomerWorkflowReference(
             warehouseId = warehouseId,
             createIdempotencyKey = UUID.randomUUID().toString(),
+            rememberWarehouse = rememberWarehouse,
         )
         write(reference)
         return reference
@@ -87,6 +92,34 @@ class CustomerWorkflowStore @Inject constructor(
         val bound = reference.copy(inquiryId = inquiry.inquiryId)
         write(bound)
         return bound
+    }
+
+    /** Updates only the local warehouse preference without changing the server inquiry identity. */
+    internal suspend fun updateRemember(
+        reference: CustomerWorkflowReference,
+        rememberWarehouse: Boolean,
+    ): CustomerWorkflowReference {
+        val updated = reference.copy(rememberWarehouse = rememberWarehouse)
+        if (updated != reference) write(updated)
+        return updated
+    }
+
+    /**
+     * Replaces a terminal bound inquiry with one durable, unbound create intent.
+     *
+     * The replacement is written before the remote create so a lost response is retried with the
+     * same key instead of opening two carts. Server bookings referenced by the old inquiry are not
+     * changed or deleted.
+     */
+    internal suspend fun restart(reference: CustomerWorkflowReference): CustomerWorkflowReference {
+        require(reference.inquiryId != null) { "Only a bound inquiry can be restarted" }
+        val replacement = CustomerWorkflowReference(
+            warehouseId = reference.warehouseId,
+            createIdempotencyKey = UUID.randomUUID().toString(),
+            rememberWarehouse = reference.rememberWarehouse,
+        )
+        write(replacement)
+        return replacement
     }
 
     /** Removes the local pointer on sign-out or when authoritative recovery proves it stale. */

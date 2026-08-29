@@ -23,6 +23,10 @@ private val CustomerDarkColors = darkColorScheme(
     onPrimary = Color(0xFF003546),
     primaryContainer = Color(0xFF004D66),
     secondary = Color(0xFFB2CBD6),
+    onSurface = Color.White,
+    onSurfaceVariant = Color.White,
+    outline = Color.White,
+    outlineVariant = Color.White,
 )
 
 /** Applies the RWMS customer color system while respecting the device appearance. */

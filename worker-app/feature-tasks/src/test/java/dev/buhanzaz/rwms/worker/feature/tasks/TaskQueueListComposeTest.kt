@@ -337,6 +337,35 @@ class TaskQueueListComposeTest {
     }
 
     @Test
+    fun transferTaskHasExplicitBadgeWithoutExposingTechnicalTaskText() {
+        val taskText = "Перемещение бытовки между складами. Бытовки: БТ-172, БТ-311"
+        val section = TaskQueueSection(
+            queueId = "logistics",
+            name = "Логистика",
+            queuePurpose = "LOGISTICS_DRIVER",
+            sortOrder = 10,
+            tasks = listOf(
+                task("transfer").copy(
+                    title = "Отгрузить бытовки",
+                    unitNumber = "2 бытовки",
+                    taskText = taskText,
+                ),
+            ),
+        )
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.size(width = 360.dp, height = 500.dp)) {
+                    TaskQueueList(sections = listOf(section), onTask = {})
+                }
+            }
+        }
+
+        compose.onNodeWithText("Межскладское перемещение").assertIsDisplayed()
+        compose.onNodeWithTag("task-transfer-transfer").assertIsDisplayed()
+        compose.onAllNodesWithText(taskText).assertCountEquals(0)
+    }
+
+    @Test
     fun oneCabinTaskUsesOnlyCabinNumberAsCardTitle() {
         val section = TaskQueueSection(
             queueId = "logistics",

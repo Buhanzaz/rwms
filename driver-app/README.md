@@ -26,7 +26,19 @@ The main menu has exactly three destinations:
   rich trip detail offers **Open in Yandex Maps**:
   it hands the driver-selected destination to the installed Maps app, or to its
   HTTPS web fallback. Confirmed coordinates take priority over the address;
-  RWMS does not call a Yandex routing API or transmit device location.
+  RWMS does not call a Yandex routing API or transmit device location. The APK
+  declares only the Yandex Maps package and HTTPS VIEW capability needed for
+  Android package visibility, so the browser fallback remains available on
+  Android 11+ without broad installed-application access.
+  An assigned or eligible shared interwarehouse transfer uses that same detail
+  and offline cache. Logistics supplies the source-to-destination route, exact
+  cabin numbers and characteristics, actual/required furniture comparison,
+  loose furniture, dispatcher comment and ordered load/travel/unload
+  instructions through task-board's existing `taskText`, `works`, `materials`
+  and `comments` fields. DriverApp renders those server-owned snapshots and
+  does not create a parallel transfer API or local inventory state. Displayed
+  checkpoints are instructions; the existing evidence-gated `COMPLETE`
+  remains the one server command that confirms completion.
 - **Uploads** (`Загрузки`) shows durable pending actions and photo uploads and
   allows a failed operation to be retried.
 
@@ -102,6 +114,10 @@ file is ignored by Git and must describe the Firebase Android application for
 ## Build and focused checks
 
 Use JDK 17 and Android SDK 36:
+
+`core-database` enables the same core-library desugaring as the other modules
+that parse server instants, preserving the API 23 minimum while using
+`java.time` for offline lease and evidence recovery fences.
 
 ```bash
 cd driver-app

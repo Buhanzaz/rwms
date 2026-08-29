@@ -16,6 +16,7 @@ serialization = "1.11.0"
 coil = "3.3.0"
 yandex-mapkit = "4.42.0-full"
 coroutines = "1.10.2"
+camerax = "1.5.2"
 desugar = "2.0.3"
 junit = "4.13.2"
 truth = "1.4.5"
@@ -54,6 +55,10 @@ coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version
 yandex-mapkit = { module = "com.yandex.android:maps.mobile", version.ref = "yandex-mapkit" }
 coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "camerax" }
+androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "camerax" }
+androidx-camera-view = { module = "androidx.camera:camera-view", version.ref = "camerax" }
+androidx-camera-video = { module = "androidx.camera:camera-video", version.ref = "camerax" }
 desugar = { module = "com.android.tools:desugar_jdk_libs", version.ref = "desugar" }
 junit = { module = "junit:junit", version.ref = "junit" }
 truth = { module = "com.google.truth:truth", version.ref = "truth" }

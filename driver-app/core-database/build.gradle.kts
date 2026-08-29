@@ -12,6 +12,7 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        isCoreLibraryDesugaringEnabled = true
     }
 }
 
@@ -26,6 +27,7 @@ dependencies {
     implementation(libs.hilt.android)
     implementation(libs.coroutines.android)
     implementation(libs.serialization.json)
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
     ksp(libs.room.compiler)
     ksp(libs.hilt.compiler)
     testImplementation(libs.junit)

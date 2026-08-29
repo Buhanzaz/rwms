@@ -283,6 +283,8 @@ class BlockedMediaFeedReconciliationRobolectricTest {
 
         override suspend fun logisticsDriverTask(taskId: String): Response<DriverTaskTripDetailsResponseDto> = unused()
 
+        override suspend fun claimFutureLogisticsTask(taskId: String): Response<DriverTaskTripDetailsResponseDto> = unused()
+
         override suspend fun applyAction(
             entryId: String,
             idempotencyKey: String,
