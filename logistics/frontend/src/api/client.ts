@@ -201,25 +201,6 @@ export interface PlanningDayStatus {
   plan_id: UUID | null;
 }
 
-/** RWMS identity, local timings, and optional isochrone tariffs for a warehouse binding. */
-export interface WarehouseConnectionInput {
-  external_warehouse_id: UUID;
-  loading_minutes?: number;
-  unloading_minutes?: number;
-  turnaround_minutes?: number;
-  working_day_start?: string;
-  working_day_end?: string;
-  isochrone_price_60_minutes?: number;
-  isochrone_price_120_minutes?: number;
-  isochrone_price_180_minutes?: number;
-  isochrone_price_240_minutes?: number;
-}
-
-/** Warehouse binding command; an exceptional zone may be created atomically when supplied. */
-export interface WarehouseInput extends WarehouseConnectionInput {
-  initial_zone?: ZoneInput;
-}
-
 export interface WarehouseUpdateInput {
   loading_minutes?: number;
   unloading_minutes?: number;
@@ -667,10 +648,6 @@ export const api = {
 
   listWarehouses: async () => (await request<RawWarehouse[]>('/warehouses')).map((warehouse) => normalizeWarehouse(warehouse)),
   listAvailableWarehouses: () => request<AvailableWarehouse[]>('/warehouses/available'),
-  createWarehouse: async (input: WarehouseInput) => normalizeWarehouse(await request<RawWarehouse>('/warehouses', {
-    method: 'POST',
-    body: jsonBody(input),
-  })),
   updateWarehouse: async (id: UUID, input: WarehouseUpdateInput) => normalizeWarehouse(await request<RawWarehouse>(`/warehouses/${id}`, {
     method: 'PATCH',
     body: jsonBody(input),

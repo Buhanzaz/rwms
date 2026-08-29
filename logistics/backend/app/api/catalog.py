@@ -126,23 +126,33 @@ async def _publish_generated_request_capacity(
 async def list_warehouses(
     session: SessionDep,
     client: CapacityRwmsClientDep,
+    geocoder: GeocodingClientDep,
 ) -> list[Warehouse]:
     """Reconcile and list routing-ready canonical RWMS warehouse workspaces."""
 
-    return await refresh_warehouse_directory(session, client)
+    return await refresh_warehouse_directory(
+        session,
+        client,
+        lambda identity: geocoder.forward(_warehouse_geocoding_query(identity)),
+    )
 
 
 @router.get("/warehouses/available", response_model=list[AvailableWarehouseRead])
 async def list_available_warehouses(
     session: SessionDep,
     client: CapacityRwmsClientDep,
+    geocoder: GeocodingClientDep,
 ) -> list[AvailableWarehouseRead]:
     """List authoritative RWMS warehouse candidates and their local binding state."""
 
     identities = await client.list_warehouses()
-    await service.reconcile_warehouse_directory(session, identities)
+    await service.reconcile_warehouse_directory(
+        session,
+        identities,
+        lambda identity: geocoder.forward(_warehouse_geocoding_query(identity)),
+    )
     local_by_external = {
-        warehouse.external_warehouse_id: warehouse.id
+        warehouse.external_warehouse_id: warehouse
         for warehouse in await session.scalars(select(Warehouse))
     }
     return [
@@ -152,17 +162,39 @@ async def list_available_warehouses(
             name=identity.name,
             city=identity.city,
             address=identity.address,
-            latitude=identity.latitude,
-            longitude=identity.longitude,
+            latitude=(
+                local_by_external[identity.warehouse_id].latitude
+                if identity.warehouse_id in local_by_external
+                and local_by_external[identity.warehouse_id].routing_ready
+                else identity.latitude
+            ),
+            longitude=(
+                local_by_external[identity.warehouse_id].longitude
+                if identity.warehouse_id in local_by_external
+                and local_by_external[identity.warehouse_id].routing_ready
+                else identity.longitude
+            ),
             timezone=identity.timezone,
             representative=identity.representative,
-            routing_ready=identity.routing_ready,
+            routing_ready=(
+                local_by_external[identity.warehouse_id].routing_ready
+                if identity.warehouse_id in local_by_external
+                else identity.routing_ready
+            ),
             routing_unavailable_reason=(
                 None
-                if identity.routing_ready
+                if (
+                    local_by_external[identity.warehouse_id].routing_ready
+                    if identity.warehouse_id in local_by_external
+                    else identity.routing_ready
+                )
                 else "Не заданы координаты для использования склада в логистике"  # noqa: RUF001
             ),
-            local_warehouse_id=local_by_external.get(identity.warehouse_id),
+            local_warehouse_id=(
+                local_by_external[identity.warehouse_id].id
+                if identity.warehouse_id in local_by_external
+                else None
+            ),
         )
         for identity in identities
     ]

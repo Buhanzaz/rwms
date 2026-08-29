@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import type { DriverInput, LogisticsRequestInput, ShiftInput, WarehouseConnectionInput, ZoneInput } from '../src/api/client';
+import type { DriverInput, LogisticsRequestInput, ShiftInput, WarehouseUpdateInput, ZoneInput } from '../src/api/client';
 import {
   CatalogDialog,
   RequestDialog,
@@ -17,35 +17,26 @@ const polygon = {
 };
 
 describe('warehouse editor', () => {
-  it('connects a canonical RWMS warehouse without editable identity fields', async () => {
+  it('edits planning settings without exposing canonical RWMS identity fields', async () => {
     const user = userEvent.setup();
-    const submit = vi.fn<(input: WarehouseConnectionInput) => Promise<void>>(() => Promise.resolve());
+    const submit = vi.fn<(input: WarehouseUpdateInput) => Promise<void>>(() => Promise.resolve());
     render(<WarehouseDialog
-      availableWarehouses={[{
-        warehouse_id: '11111111-1111-4111-8111-111111111111',
-        warehouse_version: 1,
-        name: 'Склад СПб',
-        city: 'Санкт-Петербург',
-        address: 'СПб, Шоссе Революции, 1',
-        latitude: 59.961,
-        longitude: 30.49,
-        timezone: 'Europe/Moscow',
-        representative: false,
-        routing_ready: true,
-      }]}
+      warehouse={warehouseFixture()}
       busy={false}
       onClose={() => undefined}
-      onSubmit={(input) => submit(input as WarehouseConnectionInput)}
+      onSubmit={submit}
     />);
 
-    expect(screen.getByText(/Особые зоны можно добавить после создания склада/)).toBeVisible();
+    expect(screen.getByText('Склад СПб')).toBeVisible();
     expect(screen.queryByLabelText('Название')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Адрес')).not.toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText('Склад RWMS'), '11111111-1111-4111-8111-111111111111');
-    await user.click(screen.getByRole('button', { name: 'Добавить склад' }));
+    await user.clear(screen.getByLabelText('Загрузка, мин'));
+    await user.type(screen.getByLabelText('Загрузка, мин'), '45');
+    await user.click(screen.getByRole('button', { name: 'Сохранить' }));
 
     await waitFor(() => expect(submit).toHaveBeenCalledOnce());
-    expect(submit.mock.calls[0]?.[0]).toMatchObject({ external_warehouse_id: '11111111-1111-4111-8111-111111111111' });
+    expect(submit.mock.calls[0]?.[0]).toMatchObject({ loading_minutes: 45 });
+    expect(submit.mock.calls[0]?.[0]).not.toHaveProperty('external_warehouse_id');
   });
 });
 

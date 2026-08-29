@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App, WarehousePicker } from '../src/app/App';
@@ -33,41 +33,19 @@ describe('application states', () => {
     expect(screen.getByRole('button', { name: 'Повторить' })).toBeEnabled();
   });
 
-  it('opens RWMS warehouse connection from an empty backend', async () => {
+  it('shows automatic RWMS projection status without a manual connection action', async () => {
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const url = requestUrl(input);
       const body = url.endsWith('/warehouses/available')
-        ? [{ warehouse_id: '11111111-1111-4111-8111-111111111111', name: 'Склад СПб', address: 'СПб, Шоссе Революции, 1', timezone: 'Europe/Moscow' }]
+        ? [{ warehouse_id: '11111111-1111-4111-8111-111111111111', warehouse_version: 1, name: 'Склад СПб', city: 'Санкт-Петербург', address: null, latitude: null, longitude: null, timezone: 'Europe/Moscow', representative: false, routing_ready: false }]
         : [];
       return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     }));
-    const user = userEvent.setup();
     renderApp();
-    expect(await screen.findByText('Склады не созданы')).toBeVisible();
-    await user.click((await screen.findAllByRole('button', { name: /Добавить склад/ }))[0]!);
-    expect(screen.getByRole('dialog', { name: 'Выбрать склад RWMS' })).toBeVisible();
-    const warehouseSelect = screen.getByLabelText('Склад RWMS');
-    expect(warehouseSelect).toHaveTextContent('Склад СПб');
-    await user.selectOptions(warehouseSelect, '11111111-1111-4111-8111-111111111111');
-    expect(warehouseSelect).toHaveDisplayValue(/Склад СПб/);
-  });
-
-  it('does not require a polygon before adding the first RWMS warehouse', async () => {
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => Promise.resolve(new Response(
-      requestUrl(input).endsWith('/warehouses/available')
-        ? JSON.stringify([{ warehouse_id: '11111111-1111-4111-8111-111111111111', name: 'Склад СПб', address: 'СПб, Шоссе Революции, 1', timezone: 'Europe/Moscow' }])
-        : '[]',
-      { status: 200, headers: { 'Content-Type': 'application/json' } },
-    ))));
-    const user = userEvent.setup();
-    renderApp();
-
-    expect(await screen.findByText('Склады не созданы')).toBeVisible();
-    expect(screen.queryByTestId('bootstrap-zone-map')).not.toBeInTheDocument();
-    await user.click(screen.getAllByRole('button', { name: 'Добавить склад' })[0]!);
-    await user.selectOptions(screen.getByLabelText('Склад RWMS'), '11111111-1111-4111-8111-111111111111');
-    expect(within(screen.getByRole('dialog', { name: 'Выбрать склад RWMS' })).getByRole('button', { name: 'Добавить склад' })).toBeEnabled();
-    expect(screen.getByText(/Особые зоны можно добавить после создания склада/)).toBeVisible();
+    expect(await screen.findByText('Склады RWMS синхронизируются')).toBeVisible();
+    expect(screen.getByLabelText('Склады RWMS')).toHaveTextContent('Склад СПбНет координат в RWMS');
+    expect(screen.queryByRole('button', { name: 'Добавить склад' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Выбрать склад RWMS' })).not.toBeInTheDocument();
   });
 
   it('uses compact actionable warehouse controls without the old product label', async () => {
@@ -75,7 +53,19 @@ describe('application states', () => {
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const url = requestUrl(input);
       let body: unknown = null;
-      if (url.endsWith('/warehouses/available')) body = [];
+      if (url.endsWith('/warehouses/available')) body = [{
+        warehouse_id: warehouse.external_warehouse_id,
+        warehouse_version: warehouse.external_warehouse_version,
+        name: warehouse.name,
+        city: warehouse.city,
+        address: warehouse.address,
+        latitude: warehouse.latitude,
+        longitude: warehouse.longitude,
+        timezone: warehouse.timezone,
+        representative: warehouse.representative,
+        routing_ready: true,
+        local_warehouse_id: warehouse.id,
+      }];
       else if (url.endsWith('/warehouses')) body = [warehouse];
       else if (url.includes(`/warehouses/${warehouse.id}/workspace`)) body = {
         warehouse,
@@ -104,15 +94,13 @@ describe('application states', () => {
     renderApp();
 
     const picker = await screen.findByRole('combobox', { name: 'Текущий склад' });
-    const addWarehouse = screen.getByRole('button', { name: 'Добавить склад' });
     const warehouseHome = screen.getByRole('button', { name: 'Открыть склад' });
     expect(screen.queryByText('RWMS · Логистика')).not.toBeInTheDocument();
-    expect(addWarehouse.nextElementSibling).toContainElement(picker);
+    expect(warehouseHome.nextElementSibling).toContainElement(picker);
+    expect(screen.queryByRole('button', { name: 'Добавить склад' })).not.toBeInTheDocument();
 
     await user.click(warehouseHome);
     expect(useUiStore.getState()).toMatchObject({ mode: 'EDITOR', section: 'WAREHOUSE', selected: { kind: 'warehouse', id: warehouse.id } });
-    await user.click(addWarehouse);
-    expect(screen.getByRole('dialog', { name: 'Выбрать склад RWMS' })).toBeVisible();
   });
 });
 
@@ -178,10 +166,38 @@ describe('warehouse picker', () => {
     const user = userEvent.setup();
     const warehouses = [
       warehouseFixture(),
-      warehouseFixture({ id: 'warehouse-2', name: 'Склад Великий Новгород', city: 'Великий Новгород' }),
+      warehouseFixture({ id: 'warehouse-2', external_warehouse_id: '22222222-2222-4222-8222-222222222222', name: 'Склад Великий Новгород', city: 'Великий Новгород' }),
+    ];
+    const availableWarehouses = [
+      ...warehouses.map((warehouse) => ({
+        warehouse_id: warehouse.external_warehouse_id,
+        warehouse_version: warehouse.external_warehouse_version,
+        name: warehouse.name,
+        city: warehouse.city ?? '',
+        address: warehouse.address,
+        latitude: warehouse.latitude,
+        longitude: warehouse.longitude,
+        timezone: warehouse.timezone,
+        representative: warehouse.representative,
+        routing_ready: true,
+        local_warehouse_id: warehouse.id,
+      })),
+      {
+        warehouse_id: '33333333-3333-4333-8333-333333333333',
+        warehouse_version: 1,
+        name: 'Склад без координат',
+        city: 'Москва',
+        address: null,
+        latitude: null,
+        longitude: null,
+        timezone: 'Europe/Moscow',
+        representative: false,
+        routing_ready: false,
+        local_warehouse_id: null,
+      },
     ];
     const onChange = vi.fn();
-    render(<WarehousePicker warehouses={warehouses} value="warehouse-1" onChange={onChange} />);
+    render(<WarehousePicker warehouses={warehouses} availableWarehouses={availableWarehouses} value="warehouse-1" onChange={onChange} />);
 
     const picker = screen.getByRole('combobox', { name: 'Текущий склад' });
     expect(picker).toHaveAttribute('aria-expanded', 'false');
@@ -189,6 +205,7 @@ describe('warehouse picker', () => {
     await user.click(picker);
 
     expect(screen.getByRole('listbox', { name: 'Склады' })).toBeVisible();
+    expect(screen.getByRole('option', { name: /Склад без координат.*Нет координат в RWMS/ })).toBeDisabled();
     const novgorod = screen.getByRole('option', { name: /Склад Великий Новгород/ });
     expect(novgorod).toHaveAttribute('aria-selected', 'false');
     await user.click(novgorod);

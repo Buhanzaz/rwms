@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import date, timedelta
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -35,9 +36,11 @@ from app.schemas.domain import (
     RwmsSyncFailure,
     RwmsSyncRequest,
     RwmsSyncResult,
+    RwmsWarehouseIdentity,
     RwmsWarehouseRefreshResult,
     RwmsWarehouseSyncResult,
 )
+from app.schemas.geocoding import ResolvedAddress
 from app.services import catalog
 from app.services.auto_planning import generate_missing_draft_plans
 from app.services.plans import PlannerFacade
@@ -46,10 +49,15 @@ from app.services.plans import PlannerFacade
 async def refresh_warehouse_directory(
     session: AsyncSession,
     client: RwmsPlanningClient,
+    resolve_address: Callable[[RwmsWarehouseIdentity], Awaitable[ResolvedAddress]] | None = None,
 ) -> list[Warehouse]:
-    """Fetch and reconcile the owner-held warehouse directory without geocoding."""
+    """Fetch and reconcile the owner directory, resolving address-only warehouses when possible."""
 
-    return await catalog.reconcile_warehouse_directory(session, await client.list_warehouses())
+    return await catalog.reconcile_warehouse_directory(
+        session,
+        await client.list_warehouses(),
+        resolve_address,
+    )
 
 
 async def sync_warehouse_requests(

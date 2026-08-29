@@ -1277,10 +1277,11 @@ and
 1. The backend reads the exact canonical warehouse directory and automatically
    reconciles every active RWMS warehouse with a complete coordinate pair into
    its map projection under the same UUID. The owner-held coordinates win over
-   address. An address-only warehouse remains explicitly non-routable until the
-   top-bar binding command resolves its canonical address with the existing
-   server geocoder; that derived point survives automatic reads only while the
-   canonical address is unchanged, and no browser-supplied point is accepted. A changed warehouse
+   address. An address-only warehouse is resolved automatically during the same
+   directory read with the existing server geocoder; that derived point
+   survives later reads only while the canonical address and city are unchanged,
+   and no browser-supplied point is accepted. A failed resolution leaves that
+   identity explicitly unavailable without hiding routable siblings. A changed warehouse
    version or coordinate pair updates the marker and invalidates mutable plans
    and visual isochrone data that used the prior point. There is no separate
    “connect warehouse” action and no required initial delivery polygon.
@@ -1345,6 +1346,12 @@ and
    recentres it when requested, and later manual pan/zoom is not reset by refreshes. New canonical
    warehouses appear from directory reconciliation without a second create form, a covering first
    zone, temporary identity or browser-owned geometry.
+   “Создать перемещение” and a support-route “Добавить бытовки” action open the
+   same local draft dialog. With the shared renewable panel `USER` session it
+   submits the existing public `POST /api/logistics/v1/transfers` command and
+   stays on the map; if login is required, the shared callback returns through a
+   full page load to `/logistics-simulator/**`. FastAPI owns no duplicate
+   transfer command or state.
    The standalone slot checker obtains navigator-style suggestions, suggestion
    resolution and reverse-geocoded map addresses through three same-origin
    FastAPI reads backed by separate server-only Yandex Geosuggest/Geocoder keys.

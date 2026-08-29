@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import date, time
 from uuid import UUID
 
@@ -263,11 +263,19 @@ async def require_zone(
 async def _insert_canonical_warehouse(
     session: AsyncSession,
     identity: RwmsWarehouseIdentity,
+    resolved: ResolvedAddress | None = None,
 ) -> Warehouse:
-    """Insert one routing-ready canonical identity, tolerating a concurrent first discovery."""
+    """Insert one routable canonical identity, tolerating a concurrent first discovery."""
 
-    assert identity.latitude is not None
-    assert identity.longitude is not None
+    if identity.routing_ready:
+        assert identity.latitude is not None
+        assert identity.longitude is not None
+        latitude = identity.latitude
+        longitude = identity.longitude
+    else:
+        assert resolved is not None
+        latitude = resolved.latitude
+        longitude = resolved.longitude
     entity = Warehouse(
         external_warehouse_id=identity.warehouse_id,
         external_warehouse_version=identity.warehouse_version,
@@ -275,8 +283,8 @@ async def _insert_canonical_warehouse(
         city=identity.city,
         address=identity.address,
         timezone=identity.timezone,
-        latitude=identity.latitude,
-        longitude=identity.longitude,
+        latitude=latitude,
+        longitude=longitude,
         representative=identity.representative,
         routing_ready=True,
         settings=PlanningSettings().model_dump(mode="json"),
@@ -300,8 +308,9 @@ async def _insert_canonical_warehouse(
 async def reconcile_warehouse_directory(
     session: AsyncSession,
     identities: Sequence[RwmsWarehouseIdentity],
+    resolve_address: Callable[[RwmsWarehouseIdentity], Awaitable[ResolvedAddress]] | None = None,
 ) -> list[Warehouse]:
-    """Reconcile RWMS identities while retaining a valid address-derived local point."""
+    """Reconcile RWMS identities and isolate address-resolution failures per warehouse."""
 
     if len({identity.warehouse_id for identity in identities}) != len(identities):
         raise ApiError(
@@ -311,6 +320,34 @@ async def reconcile_warehouse_directory(
         )
     materialized: list[Warehouse] = []
     for identity in identities:
+        owner_coordinates_available = (
+            identity.routing_ready
+            and identity.latitude is not None
+            and identity.longitude is not None
+        )
+        current = await session.scalar(
+            select(Warehouse).where(Warehouse.external_warehouse_id == identity.warehouse_id)
+        )
+        current_address_point_still_valid = (
+            not owner_coordinates_available
+            and current is not None
+            and current.routing_ready
+            and identity.address is not None
+            and current.address == identity.address
+            and current.city == identity.city
+        )
+        resolved = None
+        if (
+            not owner_coordinates_available
+            and not current_address_point_still_valid
+            and identity.address is not None
+            and resolve_address is not None
+        ):
+            try:
+                resolved = await resolve_address(identity)
+            except ApiError:
+                resolved = None
+
         entity = await session.scalar(
             select(Warehouse)
             .where(Warehouse.external_warehouse_id == identity.warehouse_id)
@@ -318,14 +355,10 @@ async def reconcile_warehouse_directory(
         )
         if entity is None:
             if not identity.routing_ready:
-                continue
-            entity = await _insert_canonical_warehouse(session, identity)
+                if resolved is None:
+                    continue
+            entity = await _insert_canonical_warehouse(session, identity, resolved)
 
-        owner_coordinates_available = (
-            identity.routing_ready
-            and identity.latitude is not None
-            and identity.longitude is not None
-        )
         address_derived_point_still_valid = (
             not owner_coordinates_available
             and entity.routing_ready
@@ -334,7 +367,9 @@ async def reconcile_warehouse_directory(
             and entity.city == identity.city
         )
         effective_routing_ready = (
-            owner_coordinates_available or address_derived_point_still_valid
+            owner_coordinates_available
+            or address_derived_point_still_valid
+            or resolved is not None
         )
         route_facts_changed = (
             entity.external_warehouse_version != identity.warehouse_version
@@ -344,6 +379,13 @@ async def reconcile_warehouse_directory(
                 and (
                     entity.latitude != identity.latitude
                     or entity.longitude != identity.longitude
+                )
+            )
+            or (
+                resolved is not None
+                and (
+                    entity.latitude != resolved.latitude
+                    or entity.longitude != resolved.longitude
                 )
             )
         )
@@ -359,6 +401,9 @@ async def reconcile_warehouse_directory(
             assert identity.longitude is not None
             entity.latitude = identity.latitude
             entity.longitude = identity.longitude
+        elif resolved is not None:
+            entity.latitude = resolved.latitude
+            entity.longitude = resolved.longitude
         if route_facts_changed:
             await _invalidate_mutable_route_plans_for_warehouse(session, entity.id)
         if effective_routing_ready:

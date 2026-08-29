@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { navigateAfterLogin } from "@/features/auth/auth-callback-navigation"
 import { useAuth } from "@/features/auth/use-auth"
 
 export function AuthCallbackPage() {
@@ -19,7 +20,7 @@ export function AuthCallbackPage() {
     started.current = true
 
     void completeLogin()
-      .then((returnTo) => navigate(returnTo, { replace: true }))
+      .then((returnTo) => navigateAfterLogin(returnTo, navigate))
       .catch((callbackError: unknown) => {
         setError(
           callbackError instanceof Error

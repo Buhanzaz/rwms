@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CheckCircle2,
   ChevronDown,
-  CirclePlus,
   LockKeyhole,
   PlayCircle,
   RefreshCw,
@@ -16,7 +15,6 @@ import {
   getWarehouseWorkspace,
   optimizationStreamUrl,
   type RequestPlanningDetailsInput,
-  type WarehouseConnectionInput,
   type ZoneInput,
 } from '../api/client';
 import type {
@@ -32,6 +30,7 @@ import type {
   ValidationResult,
   Vehicle,
   Warehouse,
+  AvailableWarehouse,
   Zone,
 } from '../domain/types';
 import { Button, EmptyState, ErrorPanel, NotificationCenter, Spinner, ThemeSwitch, Toasts } from '../components/ui';
@@ -61,10 +60,12 @@ import { actionErrorFeedback } from './action-error';
 import { TrailerDialog } from '../features/trailers/TrailerDialog';
 import { SlotAvailabilityPanel } from '../features/slot-availability/SlotAvailabilityPanel';
 import type { SlotPlanningMapPresentation } from '../features/slot-availability/types';
+import { TransferDraftDialog } from '../features/transfers/TransferDraftDialog';
 
 type DialogState =
   | { kind: 'workload-generator' }
-  | { kind: 'warehouse'; value?: Warehouse }
+  | { kind: 'warehouse'; value: Warehouse }
+  | { kind: 'transfer'; sourceWarehouseId?: UUID; destinationWarehouseId?: UUID }
   | { kind: 'zone'; value?: Zone; geometry: Polygon | MultiPolygon }
   | { kind: 'zone-cutout'; sourceZone: Zone; geometry: Polygon; initialValues: Partial<Omit<ZoneInput, 'geometry'>> }
   | { kind: 'driver'; value?: Driver }
@@ -131,8 +132,9 @@ function parseTraceEvent(value: string, runId: UUID): OptimizationTraceEvent | n
 }
 
 /** Accessible warehouse selector styled as a first-class logistics header control. */
-export function WarehousePicker({ warehouses, value, onChange }: {
+export function WarehousePicker({ warehouses, availableWarehouses = [], value, onChange }: {
   warehouses: Warehouse[];
+  availableWarehouses?: AvailableWarehouse[];
   value: UUID;
   onChange: (warehouseId: UUID) => void;
 }) {
@@ -142,6 +144,40 @@ export function WarehousePicker({ warehouses, value, onChange }: {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const current = warehouses.find((warehouse) => warehouse.id === value) ?? warehouses[0];
+  const localByExternalId = useMemo(
+    () => new Map(warehouses.map((warehouse) => [warehouse.external_warehouse_id, warehouse])),
+    [warehouses],
+  );
+  const options = useMemo(() => {
+    const canonical = availableWarehouses.map((warehouse) => ({
+      warehouse,
+      local: localByExternalId.get(warehouse.warehouse_id)
+        ?? warehouses.find((candidate) => candidate.id === warehouse.local_warehouse_id),
+    }));
+    const represented = new Set(canonical.map(({ warehouse }) => warehouse.warehouse_id));
+    return [
+      ...canonical,
+      ...warehouses
+        .filter((warehouse) => !represented.has(warehouse.external_warehouse_id))
+        .map((local) => ({
+          local,
+          warehouse: {
+            warehouse_id: local.external_warehouse_id,
+            warehouse_version: local.external_warehouse_version,
+            name: local.name,
+            city: local.city ?? '',
+            address: local.address,
+            latitude: local.latitude,
+            longitude: local.longitude,
+            timezone: local.timezone,
+            representative: local.representative,
+            routing_ready: local.routing_ready,
+            routing_unavailable_reason: null,
+            local_warehouse_id: local.id,
+          } satisfies AvailableWarehouse,
+        })),
+    ];
+  }, [availableWarehouses, localByExternalId, warehouses]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -154,9 +190,9 @@ export function WarehousePicker({ warehouses, value, onChange }: {
 
   useEffect(() => {
     if (!open) return;
-    const selectedIndex = Math.max(0, warehouses.findIndex((warehouse) => warehouse.id === current?.id));
+    const selectedIndex = Math.max(0, options.findIndex(({ local }) => local?.id === current?.id));
     queueMicrotask(() => optionRefs.current[selectedIndex]?.focus());
-  }, [current?.id, open, warehouses]);
+  }, [current?.id, open, options]);
 
   if (!current) return null;
 
@@ -211,20 +247,30 @@ export function WarehousePicker({ warehouses, value, onChange }: {
       </button>
       {open ? (
         <div id={listboxId} className="warehouse-picker__popover" role="listbox" aria-label="Склады" onKeyDown={moveOptionFocus}>
-          {warehouses.map((warehouse, index) => (
+          {options.map(({ warehouse, local }, index) => {
+            const missingCoordinates = warehouse.latitude === null || warehouse.longitude === null;
+            const selectable = Boolean(local && warehouse.routing_ready && !missingCoordinates);
+            const status = missingCoordinates
+              ? 'Нет координат в RWMS'
+              : !warehouse.routing_ready
+                ? warehouse.routing_unavailable_reason ?? 'Недоступен для маршрутизации'
+                : warehouse.city || warehouse.address || 'Готов к маршрутизации';
+            return (
             <button
               ref={(node) => { optionRefs.current[index] = node; }}
               type="button"
               role="option"
-              aria-selected={warehouse.id === current.id}
+              aria-selected={local?.id === current.id}
+              aria-disabled={!selectable}
+              disabled={!selectable}
               className="warehouse-picker__option"
-              key={warehouse.id}
-              onClick={() => choose(warehouse.id)}
+              key={`${warehouse.warehouse_id}:${local?.id ?? 'unprojected'}`}
+              onClick={() => local && choose(local.id)}
             >
-              <span><strong>{warehouse.name}</strong><small>{warehouse.city ?? warehouse.address}</small></span>
-              {warehouse.id === current.id ? <CheckCircle2 size={14} aria-hidden="true" /> : null}
+              <span><strong>{warehouse.name}</strong><small>{status}</small></span>
+              {local?.id === current.id ? <CheckCircle2 size={14} aria-hidden="true" /> : null}
             </button>
-          ))}
+          );})}
         </div>
       ) : null}
     </div>
@@ -317,8 +363,8 @@ export function App() {
     }
   }, []);
 
-  const warehousesQuery = useQuery({ queryKey: ['warehouses'], queryFn: api.listWarehouses });
-  const availableWarehousesQuery = useQuery({ queryKey: ['available-warehouses'], queryFn: api.listAvailableWarehouses });
+  const warehousesQuery = useQuery({ queryKey: ['warehouses'], queryFn: api.listWarehouses, refetchInterval: 15_000 });
+  const availableWarehousesQuery = useQuery({ queryKey: ['available-warehouses'], queryFn: api.listAvailableWarehouses, refetchInterval: 15_000 });
   useEffect(() => {
     if (!warehouseId && warehousesQuery.data?.[0]) setWarehouseId(warehousesQuery.data[0].id);
     if (warehouseId && warehousesQuery.data && !warehousesQuery.data.some((warehouse) => warehouse.id === warehouseId)) {
@@ -601,8 +647,7 @@ export function App() {
 
   const openCreate = (kind: EntityKind) => {
     if (!workspace) return;
-    if (kind === 'warehouse') setDialog({ kind: 'warehouse' });
-    else if (kind === 'driver') setDialog({ kind: 'driver' });
+    if (kind === 'driver') setDialog({ kind: 'driver' });
     else if (kind === 'vehicle') setDialog({ kind: 'vehicle' });
     else if (kind === 'trailer') setDialog({ kind: 'trailer' });
     else if (kind === 'shift') setDialog({ kind: 'shift' });
@@ -896,23 +941,22 @@ export function App() {
     return (
       <div className="app-shell app-shell--bootstrap">
         <header className="topbar">
-          <div className="topbar__brand"><Button className="brand-mark" onClick={() => setDialog({ kind: 'warehouse' })} aria-label="Выбрать склад" title="Выбрать склад">L</Button></div>
+          <div className="topbar__brand"><Button className="brand-mark" aria-label="Логистика" title="Логистика">L</Button></div>
           <div />
           <div className="topbar__actions">
-            <Button variant="primary" onClick={() => setDialog({ kind: 'warehouse' })}><CirclePlus size={15} /><span>Добавить склад</span></Button>
             <ThemeSwitch />
             <NotificationCenter />
           </div>
         </header>
         <div className="bootstrap-workspace" style={{ placeItems: 'center' }}>
-          <EmptyState title="Склады не созданы" description="Добавьте обычный или представительский склад RWMS. Изохроны работают без обязательной полигональной зоны." />
+          <EmptyState title="Склады RWMS синхронизируются" description="Склады с координатами появятся на карте автоматически. Ручное подключение больше не требуется." />
+          <div className="warehouse-sync-list" aria-label="Склады RWMS">
+            {(availableWarehousesQuery.data ?? []).map((candidate) => {
+              const missingCoordinates = candidate.latitude === null || candidate.longitude === null;
+              return <div className="detail-item" key={candidate.warehouse_id}><strong>{candidate.name}</strong><span>{missingCoordinates ? 'Нет координат в RWMS' : candidate.routing_ready ? 'Ожидает автоматической синхронизации' : candidate.routing_unavailable_reason ?? 'Недоступен для маршрутизации'}</span></div>;
+            })}
+          </div>
         </div>
-        {dialog?.kind === 'warehouse' ? <WarehouseDialog availableWarehouses={availableWarehousesQuery.data ?? []} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => {
-          const created = await api.createWarehouse(input as WarehouseConnectionInput);
-          await refresh();
-          setWarehouseId(created.id);
-          setDialog(null);
-        }, 'Склад добавлен'); }} /> : null}
         <Toasts />
       </div>
     );
@@ -928,8 +972,7 @@ export function App() {
       <header className="topbar">
         <div className="topbar__brand">
           <Button className="brand-mark" onClick={() => { setMode('EDITOR'); setSection('WAREHOUSE'); setMapTool('SELECT'); setSelected({ kind: 'warehouse', id: warehouseId }); }} aria-label="Открыть склад" title="Открыть склад">L</Button>
-          <Button className="topbar-icon-button" onClick={() => setDialog({ kind: 'warehouse' })} aria-label="Добавить склад" title="Добавить склад"><CirclePlus size={16} aria-hidden="true" /></Button>
-          <WarehousePicker warehouses={warehousesQuery.data} value={warehouseId} onChange={setWarehouseId} />
+          <WarehousePicker warehouses={warehousesQuery.data} availableWarehouses={availableWarehousesQuery.data ?? []} value={warehouseId} onChange={setWarehouseId} />
         </div>
         <div className="topbar__date">
           {routesNeedRefresh && plan && plan.status !== 'CONFIRMED' ? <Button variant="primary" disabled={busy} onClick={() => void refreshRoutes()}><RefreshCw size={15} aria-hidden="true" /><span>Обновить маршруты</span></Button> : null}
@@ -991,6 +1034,11 @@ export function App() {
           onSetMapTool={(tool) => { setMapTool(tool); toast({ tone: 'info', title: 'Инструмент карты включён' }); }}
           onSelect={(kind, id) => setSelected({ kind, id })} onMoveTask={(move) => void moveTask(move)} onToggleCycleLock={(cycle) => void toggleCycleLock(cycle)}
           onSaveSettings={async (input) => { await execute(async () => { await api.updateWarehouse(workspace.warehouse.id, input); await refresh(); flagCurrentRoutesForRefresh(); }, 'Настройки сохранены'); }}
+          onCreateTransfer={(sourceWarehouseId, destinationWarehouseId) => setDialog({
+            kind: 'transfer',
+            ...(sourceWarehouseId ? { sourceWarehouseId } : {}),
+            ...(destinationWarehouseId ? { destinationWarehouseId } : {}),
+          })}
           onConfirmPlan={() => void confirmPlan()}
           onResetManualChanges={() => void resetManualChanges()}
           onSimulationOverride={(overrideKind, driverShiftId) => setDialog({ kind: 'simulation', overrideKind, driverShiftId })}
@@ -1030,16 +1078,13 @@ export function App() {
           onConfirm={async (reason) => confirmPlan(reason)}
         />
       ) : null}
-      {dialog?.kind === 'warehouse' ? <WarehouseDialog warehouse={dialog.value} availableWarehouses={availableWarehousesQuery.data ?? []} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => {
-        if (dialog.value) await api.updateWarehouse(dialog.value.id, input);
-        else {
-          const created = await api.createWarehouse(input as WarehouseConnectionInput);
-          setWarehouseId(created.id);
-        }
+      {dialog?.kind === 'transfer' ? <TransferDraftDialog warehouses={availableWarehousesQuery.data ?? []} sourceWarehouseId={dialog.sourceWarehouseId} destinationWarehouseId={dialog.destinationWarehouseId ?? workspace.warehouse.external_warehouse_id} scheduledDate={planningDate} onClose={() => setDialog(null)} onCreated={(draft) => { setDialog(null); toast({ tone: 'success', title: 'Черновик перемещения создан', detail: `Документ ${draft.id}` }); }} /> : null}
+      {dialog?.kind === 'warehouse' ? <WarehouseDialog warehouse={dialog.value} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => {
+        await api.updateWarehouse(dialog.value.id, input);
         await refresh();
         flagCurrentRoutesForRefresh();
         setDialog(null); setMapTool('SELECT');
-      }, dialog.value ? 'Настройки склада сохранены' : 'Склад добавлен'); }} /> : null}
+      }, 'Настройки склада сохранены'); }} /> : null}
       {dialog?.kind === 'zone' ? <ZoneDialog zone={dialog.value} geometry={dialog.geometry} busy={busy} onClose={() => { setDialog(null); setMapTool('SELECT'); }} onSubmit={async (input) => { await execute(async () => {
         if (dialog.value) {
           await saveZoneUpdate(dialog.value, input, {

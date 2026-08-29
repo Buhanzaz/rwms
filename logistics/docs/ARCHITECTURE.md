@@ -5,6 +5,8 @@
 ```mermaid
 flowchart LR
     Browser[Operator browser] -->|same-origin /api| FastAPI[FastAPI]
+    Browser -. renewable USER session; transfer draft .-> Gateway[Public RWMS gateway]
+    Gateway --> Logistics[logistics-service]
     FastAPI --> Catalog[Warehouse catalog services]
     FastAPI --> Planner[Deterministic planner]
     FastAPI --> Slots[Dynamic slot planner]
@@ -22,6 +24,12 @@ manual audit and closing state. The browser owns only presentation and
 short-lived view controls. It cannot author canonical warehouse identity,
 classification, route feasibility, slot feasibility or RWMS effects.
 
+Planner operations use the standalone same-origin FastAPI. Creating an
+interwarehouse transfer is deliberately not duplicated there: the local modal
+reuses the panel's renewable `USER` OIDC session and sends the canonical draft
+command through the public gateway to `logistics-service`. The shared panel
+callback performs a full-page return to `/logistics-simulator/**` after login.
+
 FastAPI is standalone and uses only its own database. It integrates with RWMS
 through authenticated transport contracts and never reads another service's
 tables. Alembic is the only schema mutation mechanism. These boundaries are
@@ -32,37 +40,38 @@ implemented in [`backend/app/api`](../backend/app/api),
 
 ## Aggregate and ownership model
 
-`Warehouse` is the local planning root. It has a required, globally unique
-RWMS external warehouse UUID, canonical name/address/timezone, geocoded point,
+`Warehouse` is the local planning projection root. It has a required, globally
+unique RWMS external warehouse UUID, canonical name/address/timezone, routing point,
 planning date/seed/settings, capacity generation and depot timing. Drivers,
 vehicles, trailers, shift periods, requests, optimization runs and plans carry
 one local `warehouse_id`.
 
-Warehouse creation is a server orchestration:
+Warehouse discovery is an automatic server orchestration:
 
-1. Resolve the selected UUID in the authenticated RWMS warehouse directory.
-2. Require a canonical address and timezone.
-3. Resolve the address using the backend Geocoder credential.
-4. Validate the required first zone and ensure that it covers the point.
-5. Persist the warehouse and first zone in one transaction.
+1. Read the authenticated canonical RWMS warehouse directory.
+2. Materialize every active identity with an owner-held coordinate pair under
+   the same external UUID.
+3. For an address-only identity, resolve its canonical address with the existing
+   backend Geocoder and retain the derived point while address and city remain
+   unchanged.
+4. Keep an unresolved identity visible as unavailable without hiding routable
+   siblings; never infer a point from the city or browser input.
+5. Yield to later owner-held coordinates and invalidate mutable route plans when
+   the owner version, routing readiness or effective point changes.
 
 Identity refresh follows the same validation and never accepts browser-provided
-name, address or coordinates. Existing migrated warehouses retain their proven
-coordinates until this explicit reconciliation. The former depot label is only
-an address placeholder because the old schema had no canonical address;
-rollout must call identity refresh before trusting or displaying it as the
-RWMS address. See
+name, address or coordinates. There is no second create/connect/refresh action
+and no required first delivery polygon. See
 [`catalog.py`](../backend/app/api/catalog.py) and
 [`catalog.py`](../backend/app/services/catalog.py).
 
 Every zone has one non-null warehouse owner and contains UUID, name, validated
 hex color, geometry/version, delivery/pickup prices and lock state. The first
-zone is created atomically with its warehouse; later commands are nested under
-that warehouse and reject cross-owner IDs. `ST_Covers` selects same-warehouse
+zone is optional; commands are nested under that warehouse and reject cross-owner
+IDs. `ST_Covers` selects same-warehouse
 candidates ordered by smallest area and then UUID, so overlaps are deterministic
-without operator ordering metadata. A geometry mutation cannot leave the depot
-outside every owned zone. Zone snapshots on existing requests may become stale
-after geometry edits; they remain pricing history and never block route
+without operator ordering metadata. Zone snapshots on existing requests may
+become stale after geometry edits; they remain pricing history and never block route
 generation. See
 [`classification.py`](../backend/app/geo/classification.py).
 

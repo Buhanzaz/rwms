@@ -96,6 +96,8 @@ button { color: inherit; }
 .warehouse-picker__option { width: 100%; min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 8px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text); cursor: pointer; text-align: left; }
 .warehouse-picker__option:hover, .warehouse-picker__option:focus-visible { border-color: var(--line); background: var(--hover); }
 .warehouse-picker__option[aria-selected="true"] { border-color: var(--line-strong); background: var(--panel-raised); }
+.warehouse-picker__option:disabled { cursor: not-allowed; opacity: .62; }
+.warehouse-picker__option:disabled:hover { border-color: transparent; background: transparent; }
 .warehouse-picker__option > svg { flex: 0 0 auto; color: var(--accent); }
 .topbar__date, .topbar__actions { display: flex; align-items: center; gap: 7px; }
 .topbar .button, .topbar .date-picker__trigger, .topbar .segmented { height: var(--control-height); min-height: var(--control-height); }
@@ -120,6 +122,7 @@ button { color: inherit; }
 
 .workspace { min-height: 0; display: grid; grid-template-columns: 258px minmax(320px, 1fr) var(--inspector-width, 420px); }
 .bootstrap-workspace { position: relative; min-height: 0; overflow: hidden; }
+.warehouse-sync-list { width: min(560px, calc(100vw - 36px)); max-height: min(420px, 55vh); display: grid; gap: 8px; overflow: auto; margin-top: 16px; }
 .bootstrap-zone-map { width: 100%; height: 100%; }
 .bootstrap-onboarding { position: absolute; z-index: 35; top: 18px; right: 18px; width: min(390px, calc(100vw - 36px)); padding: 18px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--glass); box-shadow: 0 20px 60px var(--shadow); }
 .bootstrap-onboarding > svg { color: var(--accent); }
@@ -284,7 +287,7 @@ button { color: inherit; }
 .planning-request-card__parts { margin-right: auto; color: var(--muted); font-size: 10px; }
 .toolbar-row { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 12px; }
 .warehouse-actions { display: grid; gap: 8px; margin-bottom: 12px; }
-.warehouse-actions__row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.warehouse-actions__row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .warehouse-actions__row .button { width: 100%; height: 48px; min-width: 0; padding: 6px 7px; white-space: normal; line-height: 1.15; text-align: center; }
 .detail-grid, .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .detail-item, .metric { padding: 9px; background: var(--panel-soft); border: 1px solid var(--line); border-radius: 8px; }
@@ -302,6 +305,8 @@ button { color: inherit; }
 .button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--line-strong); border-radius: var(--control-radius); cursor: pointer; white-space: nowrap; transition: background-color .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease, opacity .15s ease; }
 .button svg { flex: 0 0 auto; }
 .button:disabled { opacity: .45; cursor: not-allowed; }
+.button-link { display: inline; padding: 0; border: 0; background: transparent; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.button-link:hover { color: var(--accent-strong); }
 .button--md { height: var(--control-height); min-height: var(--control-height); padding: 0 11px; font-size: 12px; }
 .button--sm { height: var(--control-height-sm); min-height: var(--control-height-sm); padding: 0 8px; font-size: 11px; }
 .button--primary { border-color: var(--accent); background: var(--accent-strong); color: var(--accent-foreground); font-weight: 800; }
@@ -319,6 +324,7 @@ textarea.input { resize: vertical; min-height: 74px; }
 .field__hint { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .form-grid .span-2 { grid-column: 1 / -1; }
+.form-grid textarea.input { min-height: 84px; padding-block: 9px; resize: vertical; }
 .checkbox-field { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; cursor: pointer; }
 .checkbox-field input { accent-color: var(--accent-strong); }
 .switch { position: relative; width: 38px; height: 22px; flex: 0 0 auto; padding: 2px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--panel-raised); cursor: pointer; transition: background-color .18s ease, border-color .18s ease; }

@@ -137,7 +137,7 @@ export interface PlanMove {
   kind: 'MOVE_TASK' | 'REORDER_TASK';
 }
 
-export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, readOnly = false, onSelectCycle, onSelectDriverRoute, onMove, onToggleLock }: {
+export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, readOnly = false, onSelectCycle, onSelectDriverRoute, onMove, onToggleLock, onCreateTransfer = () => undefined }: {
   plan: RoutePlan | null;
   timeZone: string;
   showUnassignedOnly?: boolean;
@@ -146,6 +146,7 @@ export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, readOnly
   onSelectDriverRoute: (driverShiftId: UUID) => void;
   onMove: (move: PlanMove) => void;
   onToggleLock: (cycle: RouteCycle) => void;
+  onCreateTransfer?: (sourceWarehouseId: UUID, destinationWarehouseId: UUID) => void;
 }) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -233,11 +234,16 @@ export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, readOnly
                             ? ' · автомобиль вмещает только одну бытовку'
                             : ''}
                       {' · '}
-                      <a
-                        href={`/logistics/transfers?sourceWarehouseId=${encodeURIComponent(route.cross_warehouse_service.resource_origin_warehouse_id)}&destinationWarehouseId=${encodeURIComponent(route.cross_warehouse_service.service_warehouse_id)}`}
+                      <button
+                        type="button"
+                        className="button-link"
+                        onClick={() => onCreateTransfer(
+                          route.cross_warehouse_service!.resource_origin_warehouse_id,
+                          route.cross_warehouse_service!.service_warehouse_id,
+                        )}
                       >
                         Добавить бытовки
-                      </a>
+                      </button>
                     </span>
                   ) : null}
                 </div>

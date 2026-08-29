@@ -70,8 +70,11 @@ the same renderer-neutral evaluator to Master Setup and ordinary CAD. See the
 `logistics/` is a separate React/FastAPI/PostGIS warehouse-planning deployable
 with one common map and warehouse-scoped resources, requests, plans, isochrone
 tariffs and exceptional zones. It automatically reconciles active canonical
-RWMS warehouses that have owner-held coordinates under the same UUID; there is
-no second create/connect lifecycle or required first polygon. Selecting a
+RWMS warehouses under the same UUID: owner-held coordinates win, while an
+address-only identity is automatically resolved by the existing server
+geocoder and retained until its address or city changes. One failed resolution
+leaves that identity unavailable without hiding routable siblings. There is no
+second create/connect lifecycle or required first polygon. Selecting a
 warehouse scopes zones, drivers, vehicles, shifts, requests and plans without
 moving the viewport. An explicit “go to warehouse” control recentres the map;
 markers for other routable warehouses remain available for comparison.
@@ -186,9 +189,12 @@ Evidence:
 ## Client Boundaries
 
 - `panel/`, `app/`, `client-app/`, `worker-app/` and `driver-app/` use the public gateway.
-- The standalone logistics planner is not an interactive gateway client. Its
-  backend alone uses the private OAuth-protected planning operations; its
-  browser calls only the planner's same-origin API.
+- The standalone logistics planner uses its same-origin FastAPI for planning.
+  Its in-map transfer-draft dialog is one explicit interactive-gateway client:
+  it reuses the renewable `rwms-panel` `USER` session and calls the canonical
+  public logistics transfer create operation. The panel OIDC callback performs
+  a full-page return to `/logistics-simulator/**`; no transfer aggregate or
+  command is duplicated in FastAPI.
 - Browser requests are same-origin `/auth/**` and `/api/**` only.
 - Clients do not call `/api/internal/**` or direct service database/storage
   endpoints.

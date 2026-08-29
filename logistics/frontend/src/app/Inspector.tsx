@@ -54,6 +54,7 @@ interface InspectorProps {
   onMoveTask: (move: PlanMove) => void;
   onToggleCycleLock: (cycle: RouteCycle) => void;
   onSaveSettings: (input: WarehouseUpdateInput) => Promise<void>;
+  onCreateTransfer: (sourceWarehouseId?: UUID, destinationWarehouseId?: UUID) => void;
   onConfirmPlan: () => void;
   onResetManualChanges: () => void;
   onSimulationOverride: (kind: 'delay' | 'unavailable', driverShiftId: UUID) => void;
@@ -115,13 +116,10 @@ function WarehouseSection({ props }: { props: InspectorProps }) {
     <div className="divider" />
     <div className="warehouse-actions" aria-label="Действия со складом">
       <div className="warehouse-actions__row">
-        <a
-          className="button button--primary button--md"
-          href={`/logistics/transfers?destinationWarehouseId=${encodeURIComponent(warehouse.external_warehouse_id)}`}
-        >
+        <Button variant="primary" onClick={() => props.onCreateTransfer()}>
           <ArrowRightLeft size={14} aria-hidden="true" />
           Создать перемещение
-        </a>
+        </Button>
         <Button variant="primary" onClick={() => props.onEdit('warehouse', warehouse)}><Edit3 size={14} aria-hidden="true" />Настроить склад</Button>
         <Button onClick={props.onGenerateWorkload} disabled={props.busy}><CalendarPlus size={14} aria-hidden="true" />Создать нагрузку</Button>
         <Button variant="danger" onClick={props.onDeleteGeneratedWorkload} disabled={props.busy}><Trash2 size={14} aria-hidden="true" />Удалить нагрузку</Button>
@@ -246,15 +244,15 @@ export function Inspector(props: InspectorProps) {
     case 'REQUESTS': content = <DeliveriesSection props={props} />; break;
     case 'PLAN_DAY': content = <>
       <div className="entity-card__row"><span><h2 className="section-title">План на {formatDate(props.planningDate)}</h2><p className="section-subtitle">Здесь только итоговый план и его показатели. Время, прицеп и обязательность редактируются в разделе «Доставки».</p></span><span className="toolbar-row">{props.plan?.manually_changed && props.plan.status !== 'CONFIRMED' ? <Button size="sm" onClick={props.onResetManualChanges} disabled={props.busy}>Отменить изменения</Button> : null}{props.plan && props.plan.status !== 'CONFIRMED' ? <Button size="sm" variant="primary" onClick={props.onConfirmPlan} disabled={props.busy}>Утвердить</Button> : null}</span></div>
-      {props.plan ? <><Metrics metrics={props.plan.metrics} /><div className="divider" /><PlanPanel plan={props.plan} timeZone={props.workspace.warehouse.timezone} readOnly={props.plan.status === 'CONFIRMED'} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} /></> : <EmptyState title="План дня не составлен" description="Заполните условия доставок и вывозов — план пересчитается автоматически." />}
+      {props.plan ? <><Metrics metrics={props.plan.metrics} /><div className="divider" /><PlanPanel plan={props.plan} timeZone={props.workspace.warehouse.timezone} readOnly={props.plan.status === 'CONFIRMED'} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} onCreateTransfer={props.onCreateTransfer} /></> : <EmptyState title="План дня не составлен" description="Заполните условия доставок и вывозов — план пересчитается автоматически." />}
     </>; break;
     case 'ROUTES': content = <>
       <div className="entity-card__row"><span><h2 className="section-title">Маршруты</h2><p className="section-subtitle">Нажмите водителя, чтобы выделить все его рейсы на карте; цикл — чтобы выделить один рейс.</p></span></div>
       {props.plan ? <><Metrics metrics={props.plan.metrics} /><div className="divider" /></> : null}
       {mode === 'SIMULATION' && props.simulation ? <><SimulationDrivers props={props} /><div className="divider" /></> : null}
-      {props.plan?.driver_routes.some((route) => route.cycles.length) ? <PlanPanel plan={props.plan} timeZone={props.workspace.warehouse.timezone} readOnly={props.plan.status === 'CONFIRMED'} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} /> : <EmptyState title="Маршруты не построены" description="После расчёта допустимые рейсы появятся здесь." />}
+      {props.plan?.driver_routes.some((route) => route.cycles.length) ? <PlanPanel plan={props.plan} timeZone={props.workspace.warehouse.timezone} readOnly={props.plan.status === 'CONFIRMED'} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} onCreateTransfer={props.onCreateTransfer} /> : <EmptyState title="Маршруты не построены" description="После расчёта допустимые рейсы появятся здесь." />}
     </>; break;
-    case 'UNASSIGNED': content = props.plan?.unassigned.length ? <PlanPanel plan={props.plan} timeZone={props.workspace.warehouse.timezone} showUnassignedOnly readOnly={props.plan.status === 'CONFIRMED'} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} /> : <EmptyState title="Нераспределённых заданий нет" description={props.plan ? 'Все задачи выбранного дня распределены.' : 'После расчёта плана здесь появятся задачи без назначенного маршрута.'} />; break;
+    case 'UNASSIGNED': content = props.plan?.unassigned.length ? <PlanPanel plan={props.plan} timeZone={props.workspace.warehouse.timezone} showUnassignedOnly readOnly={props.plan.status === 'CONFIRMED'} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} onCreateTransfer={props.onCreateTransfer} /> : <EmptyState title="Нераспределённых заданий нет" description={props.plan ? 'Все задачи выбранного дня распределены.' : 'После расчёта плана здесь появятся задачи без назначенного маршрута.'} />; break;
     case 'SETTINGS': content = <SettingsEditor warehouse={props.workspace.warehouse} busy={props.busy} onSave={props.onSaveSettings} />; break;
   }
   return <aside className="inspector" aria-label="Инспектор">

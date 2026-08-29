@@ -524,15 +524,23 @@ reuse them outside the isolated local simulator.
 RWMS integration is server-owned and automatic. To enable it, provision the
 dedicated `logistics-planner` OAuth client in `auth-service`, configure the
 `RWMS_*` variables above and expose the canonical warehouse directory. Every
-active entry with coordinates is reconciled automatically under its RWMS UUID;
-address is display metadata and a missing coordinate pair is an explicit
-`COORDINATES_REQUIRED` routing state. Drivers, representative support links and
-contractor availability are resolved through their private RWMS directories;
-the panel does not ask the operator to connect or refresh a warehouse manually.
-An address-only canonical entry can be selected through the single top-bar add
-action: the server resolves that RWMS-owned address with the existing geocoder,
-keeps the derived point while the address is unchanged, and yields immediately
-to owner-held coordinates when RWMS later supplies them.
+active entry with coordinates is reconciled automatically under its RWMS UUID.
+An address-only canonical entry is resolved automatically during the same
+directory read with the existing server geocoder; the derived point is retained
+while its address and city are unchanged and yields immediately to later
+owner-held coordinates. A failed address resolution leaves that entry visibly
+unavailable without hiding routable siblings. Drivers, representative support
+links and contractor availability are resolved through their private RWMS
+directories; the panel does not ask the operator to connect or refresh a
+warehouse manually.
+
+Planning reads and commands remain on the simulator's same-origin FastAPI. The
+in-map **Create transfer** action is the narrow exception: it opens a local
+dialog and submits one authoritative draft to the existing public
+`POST /api/logistics/v1/transfers` gateway operation using the renewable panel
+`USER` OIDC session. It does not navigate to the panel transfer page or create a
+second transfer aggregate. If the shared session is absent, the panel OIDC
+callback returns the operator to the standalone logistics URL after sign-in.
 
 For a representative warehouse the same planner evaluates local resources,
 active operational assignments, every calendar-eligible support warehouse and

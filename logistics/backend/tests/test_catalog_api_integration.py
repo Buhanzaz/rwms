@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.dependencies import get_capacity_rwms_client
 from app.api.geocoding import get_yandex_geocoding_client
 from app.db import get_session
+from app.errors import ApiError
 from app.main import create_app
 from app.models import RoutePlan
 from app.schemas.domain import RwmsWarehouseIdentity
@@ -226,13 +227,18 @@ async def test_http_warehouse_binding_geocodes_canonical_address_without_coordin
     app = _application(db_session, directory, geocoder)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/warehouses",
-            json={"external_warehouse_id": str(external_id)},
-        )
+        available = await client.get("/api/warehouses/available")
+        response = await client.get("/api/warehouses")
 
-    assert response.status_code == 201, response.text
-    body = response.json()
+    assert available.status_code == 200, available.text
+    available_body = available.json()[0]
+    assert available_body["routing_ready"] is True
+    assert available_body["routing_unavailable_reason"] is None
+    assert available_body["latitude"] == 58.5544
+    assert available_body["longitude"] == 31.2698
+    assert available_body["local_warehouse_id"] is not None
+    assert response.status_code == 200, response.text
+    body = response.json()[0]
     assert body["external_warehouse_id"] == str(external_id)
     assert body["latitude"] == 58.5544
     assert body["longitude"] == 31.2698
@@ -250,6 +256,66 @@ async def test_http_warehouse_binding_geocodes_canonical_address_without_coordin
     assert listed.json()[0]["longitude"] == 31.2698
     assert listed.json()[0]["routing_ready"] is True
     geocoder.forward.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_warehouse_geocoding_failure_does_not_hide_routing_ready_siblings(
+    db_session: AsyncSession,
+) -> None:
+    """One unavailable address stays explicit while coordinate-ready siblings materialize."""
+
+    unavailable_id = uuid4()
+    ready_id = uuid4()
+    directory = AsyncMock()
+    directory.list_warehouses.return_value = [
+        RwmsWarehouseIdentity(
+            warehouseId=unavailable_id,
+            warehouseVersion=1,
+            name="Address unavailable",
+            city="Первый город",
+            address="Неизвестная улица, 1",
+            latitude=None,
+            longitude=None,
+            timeZone="Europe/Moscow",
+            representative=False,
+            routingReady=False,
+        ),
+        RwmsWarehouseIdentity(
+            warehouseId=ready_id,
+            warehouseVersion=1,
+            name="Coordinate ready",
+            city="Второй город",
+            address=None,
+            latitude=55.75,
+            longitude=37.62,
+            timeZone="Europe/Moscow",
+            representative=False,
+            routingReady=True,
+        ),
+    ]
+    geocoder = AsyncMock()
+    geocoder.forward.side_effect = ApiError(
+        503,
+        "GEOCODING_PROVIDER_UNAVAILABLE",
+        "Provider unavailable",
+    )
+    app = _application(db_session, directory, geocoder)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        available = await client.get("/api/warehouses/available")
+        listed = await client.get("/api/warehouses")
+
+    assert available.status_code == 200, available.text
+    available_by_id = {item["warehouse_id"]: item for item in available.json()}
+    unavailable = available_by_id[str(unavailable_id)]
+    assert unavailable["routing_ready"] is False
+    assert unavailable["routing_unavailable_reason"] == (
+        "Не заданы координаты для использования склада в логистике"  # noqa: RUF001
+    )
+    assert unavailable["local_warehouse_id"] is None
+    assert listed.status_code == 200, listed.text
+    assert [item["external_warehouse_id"] for item in listed.json()] == [str(ready_id)]
+    geocoder.forward.assert_awaited()
 
 
 @pytest.mark.asyncio

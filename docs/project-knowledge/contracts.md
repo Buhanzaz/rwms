@@ -294,11 +294,18 @@ publishing includes only the selected warehouse's zones. Warehouse update also o
 non-negative isochrone tariff values for the inclusive 60/120/180/240-minute bands.
 
 The same standalone OpenAPI exposes server-keyed Yandex
-suggestion/resolve/reverse operations for operator input and address-only
-canonical warehouse binding. This does not permit address-only customer-order
+suggestion/resolve/reverse operations for operator input and automatic
+address-only canonical warehouse projection. This does not permit address-only customer-order
 feed geocoding. A slot response identifies its tariff with
 `price_zone_id`/`price_zone_name`; the canonical CustomerApp response uses
 nullable UUID `priceZoneId`, never a business code.
+
+The standalone transfer dialog does not add a FastAPI transport contract. It
+uses the existing public gateway operation
+`POST /api/logistics/v1/transfers` from the canonical logistics OpenAPI with a
+renewable human `USER` token, warehouse authorization and `Idempotency-Key`.
+Planning integration continues to use only its separate private
+`logistics.planning` client-credentials boundary.
 
 Evidence:
 [`planning API models`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/planning/api/PlanningIntegrationApiModels.java),

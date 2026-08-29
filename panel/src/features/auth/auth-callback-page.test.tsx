@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom"
 import { render, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
+import { navigateAfterLogin } from "@/features/auth/auth-callback-navigation"
 import { AuthCallbackPage } from "@/features/auth/auth-callback-page"
 import { AuthContext, type AuthContextValue } from "@/features/auth/auth-context"
 
@@ -36,5 +37,29 @@ describe("AuthCallbackPage", () => {
     })
 
     await waitFor(() => expect(completeLogin).toHaveBeenCalledTimes(1))
+  })
+
+  it("performs a full-page return to the standalone logistics workspace", () => {
+    const navigate = vi.fn()
+    const assign = vi.fn()
+
+    navigateAfterLogin("/logistics-simulator/?warehouse=spb", navigate, assign)
+
+    expect(assign).toHaveBeenCalledWith(
+      "/logistics-simulator/?warehouse=spb"
+    )
+    expect(navigate).not.toHaveBeenCalled()
+  })
+
+  it("keeps ordinary panel destinations inside the panel router", () => {
+    const navigate = vi.fn()
+    const assign = vi.fn()
+
+    navigateAfterLogin("/logistics/transfers", navigate, assign)
+
+    expect(navigate).toHaveBeenCalledWith("/logistics/transfers", {
+      replace: true,
+    })
+    expect(assign).not.toHaveBeenCalled()
   })
 })

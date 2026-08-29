@@ -6,7 +6,6 @@ import type {
   Driver,
   DriverShift,
   LogisticsRequest,
-  AvailableWarehouse,
   Trailer,
   Vehicle,
   VehicleLoadConfigurationType,
@@ -20,7 +19,6 @@ import type {
   ShiftInput,
   VehicleInput,
   VehicleLoadProfileInput,
-  WarehouseConnectionInput,
   WarehouseUpdateInput,
   ZoneInput,
 } from '../api/client';
@@ -34,7 +32,6 @@ const optionalUuidSchema = z.string().trim().refine(
 
 
 const warehouseSchema = z.object({
-  external_warehouse_id: z.string().uuid('Выберите склад RWMS'),
   loading_minutes: z.number().int().min(0),
   unloading_minutes: z.number().int().min(0),
   turnaround_minutes: z.number().int().min(0),
@@ -52,32 +49,30 @@ const warehouseSchema = z.object({
 
 type WarehouseValues = z.infer<typeof warehouseSchema>;
 
-export function WarehouseDialog({ warehouse, availableWarehouses, busy, onClose, onSubmit }: {
-  warehouse?: Warehouse | undefined;
-  availableWarehouses: AvailableWarehouse[];
+export function WarehouseDialog({ warehouse, busy, onClose, onSubmit }: {
+  warehouse: Warehouse;
   busy: boolean;
   onClose: () => void;
-  onSubmit: (input: WarehouseConnectionInput | WarehouseUpdateInput) => Promise<void>;
+  onSubmit: (input: WarehouseUpdateInput) => Promise<void>;
 }) {
   const { register, handleSubmit, formState: { errors } } = useForm<WarehouseValues>({
     resolver: zodResolver(warehouseSchema),
     defaultValues: {
-      external_warehouse_id: warehouse?.external_warehouse_id ?? '',
-      loading_minutes: warehouse?.loading_minutes ?? 30,
-      unloading_minutes: warehouse?.unloading_minutes ?? 20,
-      turnaround_minutes: warehouse?.turnaround_minutes ?? 20,
-      working_day_start: warehouse?.working_day_start ?? '08:00',
-      working_day_end: warehouse?.working_day_end ?? '20:00',
-      isochrone_price_60_minutes: warehouse?.isochrone_price_60_minutes ?? 10_000,
-      isochrone_price_120_minutes: warehouse?.isochrone_price_120_minutes ?? 15_000,
-      isochrone_price_180_minutes: warehouse?.isochrone_price_180_minutes ?? 20_000,
-      isochrone_price_240_minutes: warehouse?.isochrone_price_240_minutes ?? 25_000,
-      default_planning_date: warehouse?.default_planning_date ?? undefined,
+      loading_minutes: warehouse.loading_minutes,
+      unloading_minutes: warehouse.unloading_minutes,
+      turnaround_minutes: warehouse.turnaround_minutes,
+      working_day_start: warehouse.working_day_start,
+      working_day_end: warehouse.working_day_end,
+      isochrone_price_60_minutes: warehouse.isochrone_price_60_minutes,
+      isochrone_price_120_minutes: warehouse.isochrone_price_120_minutes,
+      isochrone_price_180_minutes: warehouse.isochrone_price_180_minutes,
+      isochrone_price_240_minutes: warehouse.isochrone_price_240_minutes,
+      default_planning_date: warehouse.default_planning_date ?? undefined,
     },
   });
   return (
-    <Modal title={warehouse ? 'Настроить склад' : 'Выбрать склад RWMS'} description={warehouse ? `${warehouse.address} · ${warehouse.timezone}` : 'Название, адрес и координаты загружаются из RWMS. Особые зоны можно добавить после создания склада.'} onClose={onClose}>
-      <form className="form-grid" onSubmit={handleSubmit((values) => onSubmit(warehouse ? {
+    <Modal title="Настроить склад" description={`${warehouse.address} · ${warehouse.timezone}`} onClose={onClose}>
+      <form className="form-grid" onSubmit={handleSubmit((values) => onSubmit({
         loading_minutes: values.loading_minutes,
         unloading_minutes: values.unloading_minutes,
         turnaround_minutes: values.turnaround_minutes,
@@ -88,24 +83,8 @@ export function WarehouseDialog({ warehouse, availableWarehouses, busy, onClose,
         isochrone_price_180_minutes: values.isochrone_price_180_minutes,
         isochrone_price_240_minutes: values.isochrone_price_240_minutes,
         ...(values.default_planning_date ? { default_planning_date: values.default_planning_date } : {}),
-      } : {
-        external_warehouse_id: values.external_warehouse_id,
-        loading_minutes: values.loading_minutes,
-        unloading_minutes: values.unloading_minutes,
-        turnaround_minutes: values.turnaround_minutes,
-        working_day_start: values.working_day_start,
-        working_day_end: values.working_day_end,
-        isochrone_price_60_minutes: values.isochrone_price_60_minutes,
-        isochrone_price_120_minutes: values.isochrone_price_120_minutes,
-        isochrone_price_180_minutes: values.isochrone_price_180_minutes,
-        isochrone_price_240_minutes: values.isochrone_price_240_minutes,
       }))}>
-        {!warehouse ? <SelectField className="span-2" label="Склад RWMS" {...register('external_warehouse_id')} error={errors.external_warehouse_id?.message}>
-          <option value="">Выберите склад</option>
-          {availableWarehouses.map((candidate) => <option key={candidate.warehouse_id} value={candidate.warehouse_id} disabled={Boolean(candidate.local_warehouse_id) || !candidate.address?.trim()}>
-            {candidate.name}{candidate.city ? ` · ${candidate.city}` : ''}{candidate.address ? ` · ${candidate.address}` : ' · адрес не заполнен'}{candidate.local_warehouse_id ? ' · уже подключён' : ''}
-          </option>)}
-        </SelectField> : <div className="span-2 detail-item"><small>Связь с RWMS</small><strong>{warehouse.name}</strong><span>{warehouse.address}</span></div>}
+        <div className="span-2 detail-item"><small>Связь с RWMS</small><strong>{warehouse.name}</strong><span>{warehouse.address}</span></div>
         <Field label="Загрузка, мин" type="number" {...register('loading_minutes', { valueAsNumber: true })} />
         <Field label="Выгрузка, мин" type="number" {...register('unloading_minutes', { valueAsNumber: true })} />
         <Field label="Оборот на складе, мин" type="number" {...register('turnaround_minutes', { valueAsNumber: true })} />
@@ -116,8 +95,8 @@ export function WarehouseDialog({ warehouse, availableWarehouses, busy, onClose,
         <Field label="До 2 часов, ₽" type="number" min="0" {...register('isochrone_price_120_minutes', { valueAsNumber: true })} />
         <Field label="До 3 часов, ₽" type="number" min="0" {...register('isochrone_price_180_minutes', { valueAsNumber: true })} />
         <Field label="До 4 часов, ₽" type="number" min="0" {...register('isochrone_price_240_minutes', { valueAsNumber: true })} />
-        {warehouse ? <Field className="span-2" label="Дата планирования по умолчанию" type="date" {...register('default_planning_date')} /> : null}
-        <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}><Button type="button" onClick={onClose}>Отмена</Button><Button type="submit" variant="primary" disabled={busy || (!warehouse && availableWarehouses.every((candidate) => Boolean(candidate.local_warehouse_id) || !candidate.address?.trim()))}>{busy ? 'Сохраняем…' : warehouse ? 'Сохранить' : 'Добавить склад'}</Button></div>
+        <Field className="span-2" label="Дата планирования по умолчанию" type="date" {...register('default_planning_date')} />
+        <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}><Button type="button" onClick={onClose}>Отмена</Button><Button type="submit" variant="primary" disabled={busy}>{busy ? 'Сохраняем…' : 'Сохранить'}</Button></div>
       </form>
     </Modal>
   );

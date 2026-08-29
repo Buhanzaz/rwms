@@ -61,6 +61,7 @@ function inspectorProps(plan: RoutePlan, simulation: SimulationDerivedState): Co
     onMoveTask: () => undefined,
     onToggleCycleLock: () => undefined,
     onSaveSettings: () => Promise.resolve(),
+    onCreateTransfer: () => undefined,
     onConfirmPlan: () => undefined,
     onResetManualChanges: () => undefined,
     onSimulationOverride: () => undefined,
@@ -89,16 +90,17 @@ describe('application shell', () => {
     const plan = planFixture();
     const simulation: SimulationDerivedState = { timestamp: '2026-08-25T05:45:00Z', vehicles: [], events: [], completed_stop_ids: [], active_stop_ids: [], affected_task_ids: [], warnings: [] };
     const props = inspectorProps(plan, simulation);
+    props.onCreateTransfer = vi.fn();
     render(<Inspector {...props} />);
 
     const actions = screen.getByLabelText('Действия со складом');
     const rows = Array.from(actions.querySelectorAll(':scope > .warehouse-actions__row'));
     expect(rows).toHaveLength(1);
-    expect(within(rows[0] as HTMLElement).getAllByRole('button')).toHaveLength(3);
-    expect(within(actions).getByRole('link', { name: 'Создать перемещение' })).toHaveAttribute(
-      'href',
-      `/logistics/transfers?destinationWarehouseId=${encodeURIComponent(props.workspace.warehouse.external_warehouse_id)}`,
-    );
+    expect(within(rows[0] as HTMLElement).getAllByRole('button')).toHaveLength(4);
+    expect(within(actions).getByRole('button', { name: 'Создать перемещение' })).toBeVisible();
+    expect(within(actions).queryByRole('link', { name: 'Создать перемещение' })).not.toBeInTheDocument();
+    fireEvent.click(within(actions).getByRole('button', { name: 'Создать перемещение' }));
+    expect(props.onCreateTransfer).toHaveBeenCalledOnce();
     expect(within(actions).getByRole('button', { name: 'Настроить склад' })).toBeVisible();
     expect(within(actions).getByRole('button', { name: 'Создать нагрузку' })).toBeVisible();
     expect(within(actions).getByRole('button', { name: 'Удалить нагрузку' })).toBeVisible();
@@ -196,7 +198,8 @@ describe('built plan UI', () => {
     route.cross_warehouse_service = context;
     cycle.cross_warehouse_service = context;
 
-    const view = render(<PlanPanel plan={plan} timeZone="Europe/Moscow" onSelectCycle={() => undefined} onSelectDriverRoute={() => undefined} onMove={() => undefined} onToggleLock={() => undefined} />);
+    const onCreateTransfer = vi.fn();
+    const view = render(<PlanPanel plan={plan} timeZone="Europe/Moscow" onSelectCycle={() => undefined} onSelectDriverRoute={() => undefined} onMove={() => undefined} onToggleLock={() => undefined} onCreateTransfer={onCreateTransfer} />);
 
     const support = screen.getByTestId('cross-warehouse-service-shift');
     expect(within(support).getByText('Привлечённый ресурс')).toBeVisible();
@@ -206,10 +209,10 @@ describe('built plan UI', () => {
     expect(within(support).getByText(/базирование не меняется/)).toBeVisible();
     expect(within(support).getByText(/Попутное перемещение/)).toBeVisible();
     expect(within(support).getByText(/доступно 2 бытовк.*с прицепом/)).toBeVisible();
-    expect(within(support).getByRole('link', { name: 'Добавить бытовки' })).toHaveAttribute(
-      'href',
-      '/logistics/transfers?sourceWarehouseId=support-warehouse&destinationWarehouseId=served-warehouse',
-    );
+    const addCabins = within(support).getByRole('button', { name: 'Добавить бытовки' });
+    fireEvent.click(addCabins);
+    expect(onCreateTransfer).toHaveBeenCalledWith('support-warehouse', 'served-warehouse');
+    expect(within(support).queryByRole('link', { name: 'Добавить бытовки' })).not.toBeInTheDocument();
     expect(screen.getByText('Петров Алексей')).toBeVisible();
     expect(screen.getByText(/МАЗ поддержки · А456ВС/)).toBeVisible();
 
@@ -221,7 +224,7 @@ describe('built plan UI', () => {
     };
     route.cross_warehouse_service = oneCabinContext;
     cycle.cross_warehouse_service = oneCabinContext;
-    view.rerender(<PlanPanel plan={plan} timeZone="Europe/Moscow" onSelectCycle={() => undefined} onSelectDriverRoute={() => undefined} onMove={() => undefined} onToggleLock={() => undefined} />);
+    view.rerender(<PlanPanel plan={plan} timeZone="Europe/Moscow" onSelectCycle={() => undefined} onSelectDriverRoute={() => undefined} onMove={() => undefined} onToggleLock={() => undefined} onCreateTransfer={onCreateTransfer} />);
     expect(
       within(screen.getByTestId('cross-warehouse-service-shift')).getByText(
         /доступно 1 бытовк.*автомобиль вмещает только одну бытовку/,

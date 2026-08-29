@@ -15,6 +15,10 @@ Russian version: [README.ru.md](README.ru.md).
 - Interactive sign-in uses the gateway's OIDC flow. The panel accepts the
   human `USER` principal; the gateway and owning service still enforce every
   role and warehouse-access check. Hiding a UI control is not authorization.
+- The same OIDC transaction may be started by the standalone logistics
+  workspace. Its callback performs a full-page return to
+  `/logistics-simulator/**`; ordinary panel return paths continue through the
+  panel router. Both clients use the same renewable `rwms-panel` user session.
 - `CUSTOMER` is a recognized human role only so user administration, order
   actors and dossier history can render truthful labels. It remains ineligible
   for ManagerApp and receives no panel order or warehouse command affordance;

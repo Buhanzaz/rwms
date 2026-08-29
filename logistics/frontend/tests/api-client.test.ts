@@ -98,25 +98,15 @@ describe('warehouse workspace transport', () => {
     ]);
   });
 
-  it('lists RWMS warehouses and connects one by its canonical identity', async () => {
+  it('lists canonical RWMS warehouses for automatic projection', async () => {
     const warehouse = warehouseFixture();
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(jsonResponse([{ warehouse_id: warehouse.external_warehouse_id, name: warehouse.name, address: warehouse.address, timezone: warehouse.timezone }]))
-      .mockResolvedValueOnce(jsonResponse(warehouse));
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse([{ warehouse_id: warehouse.external_warehouse_id, name: warehouse.name, address: warehouse.address, timezone: warehouse.timezone }]));
     vi.stubGlobal('fetch', fetchMock);
 
     const available = await api.listAvailableWarehouses();
-    const created = await api.createWarehouse({
-      external_warehouse_id: warehouse.external_warehouse_id,
-    });
 
     expect(available[0]?.address).toBe(warehouse.address);
-    expect(created.id).toBe(warehouse.id);
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/warehouses/available');
-    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/warehouses');
-    expect(bodyAt(fetchMock, 1)).toEqual({
-      external_warehouse_id: warehouse.external_warehouse_id,
-    });
   });
 });
 
@@ -381,9 +371,7 @@ describe('transport errors', () => {
       code: 'RWMS_WAREHOUSE_NOT_FOUND',
     }, 422)));
 
-    const error = await api.createWarehouse({
-      external_warehouse_id: '11111111-1111-4111-8111-111111111111',
-    })
+    const error = await api.updateWarehouse('warehouse-1', { loading_minutes: 30 })
       .catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(ApiError);
