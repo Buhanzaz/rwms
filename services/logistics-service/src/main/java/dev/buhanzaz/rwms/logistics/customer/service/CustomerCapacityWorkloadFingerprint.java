@@ -1,6 +1,10 @@
 package dev.buhanzaz.rwms.logistics.customer.service;
 
-import dev.buhanzaz.rwms.logistics.customer.capacity.domain.ScenarioCapacityJob;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityJob;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityPriceZone;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityRestrictionZone;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityShift;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacitySnapshot;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlot;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotState;
 import java.nio.charset.StandardCharsets;
@@ -33,9 +37,32 @@ final class CustomerCapacityWorkloadFingerprint {
   /** Returns a stable SHA-256 over exact slots, simulator jobs and whole-day driver reservations. */
   static String sha256(
       List<CustomerDeliverySlot> slots,
-      List<ScenarioCapacityJob> generatedJobs,
+      List<WarehouseCapacityJob> generatedJobs,
+      List<WarehouseCapacityShift> shifts,
+      WarehouseCapacitySnapshot snapshot,
+      List<WarehouseCapacityPriceZone> priceZones,
+      List<WarehouseCapacityRestrictionZone> restrictionZones,
       long wholeDayDriverReservations) {
     StringBuilder value = new StringBuilder("drivers\u001f").append(wholeDayDriverReservations);
+    if (snapshot == null) {
+      value.append("\nsnapshot\u001fabsent");
+    } else {
+      value
+          .append("\nsnapshot\u001f")
+          .append(snapshot.getVersion())
+          .append('\u001f')
+          .append(snapshot.getSourceGeneration())
+          .append('\u001f')
+          .append(snapshot.getSourceRevision())
+          .append('\u001f')
+          .append(snapshot.getIsochronePrice60Minutes())
+          .append('\u001f')
+          .append(snapshot.getIsochronePrice120Minutes())
+          .append('\u001f')
+          .append(snapshot.getIsochronePrice180Minutes())
+          .append('\u001f')
+          .append(snapshot.getIsochronePrice240Minutes());
+    }
     slots.stream()
         .sorted(Comparator.comparing(CustomerDeliverySlot::getId))
         .forEach(
@@ -60,13 +87,23 @@ final class CustomerCapacityWorkloadFingerprint {
                     .append('\u001f')
                     .append(slot.getCabinCount())
                     .append('\u001f')
+                    .append(slot.getOneWayTravelSeconds())
+                    .append('\u001f')
+                    .append(slot.getSiteCabinCapacity())
+                    .append('\u001f')
+                    .append(slot.getDeliveryPriceRubles())
+                    .append('\u001f')
+                    .append(slot.getPriceZoneId())
+                    .append('\u001f')
+                    .append(slot.getPriceIsochroneMinutes())
+                    .append('\u001f')
                     .append(slot.getExpiresAt()));
     generatedJobs.stream()
-        .sorted(Comparator.comparing(ScenarioCapacityJob::getSourceJobId))
+        .sorted(Comparator.comparing(WarehouseCapacityJob::getSourceJobId))
         .forEach(
             job ->
                 value
-                    .append("\nscenario\u001f")
+                    .append("\nwarehouse-capacity\u001f")
                     .append(job.getSourceJobId())
                     .append('\u001f')
                     .append(job.getDeliveryDate())
@@ -81,7 +118,60 @@ final class CustomerCapacityWorkloadFingerprint {
                     .append('\u001f')
                     .append(job.getCabinCount())
                     .append('\u001f')
-                    .append(job.getServiceMinutes()));
+                    .append(job.getServiceMinutes())
+                    .append('\u001f')
+                    .append(job.getTaskType())
+                    .append('\u001f')
+                    .append(job.isTrailerAccessAllowed())
+                    .append('\u001f')
+                    .append(job.getPriority())
+                    .append('\u001f')
+                    .append(job.isMandatory()));
+    shifts.stream()
+        .sorted(Comparator.comparing(WarehouseCapacityShift::getSourceShiftId))
+        .forEach(
+            shift ->
+                value
+                    .append("\nshift\u001f")
+                    .append(shift.getSourceShiftId())
+                    .append('\u001f')
+                    .append(shift.getDeliveryDate())
+                    .append('\u001f')
+                    .append(shift.getShiftStart())
+                    .append('\u001f')
+                    .append(shift.getShiftEnd())
+                    .append('\u001f')
+                    .append(shift.getBreakMinutes())
+                    .append('\u001f')
+                    .append(shift.getCabinCapacity()));
+    priceZones.stream()
+        .sorted(Comparator.comparing(WarehouseCapacityPriceZone::getSourceZoneId))
+        .forEach(
+            zone ->
+                value
+                    .append("\nprice-zone\u001f")
+                    .append(zone.getSourceZoneId())
+                    .append('\u001f')
+                    .append(zone.getSourceZoneVersion())
+                    .append('\u001f')
+                    .append(zone.getDeliveryPriceRubles())
+                    .append('\u001f')
+                    .append(zone.getPickupPriceRubles())
+                    .append('\u001f')
+                    .append(zone.getGeometryJson()));
+    restrictionZones.stream()
+        .sorted(Comparator.comparing(WarehouseCapacityRestrictionZone::getSourceZoneId))
+        .forEach(
+            zone ->
+                value
+                    .append("\nrestriction-zone\u001f")
+                    .append(zone.getSourceZoneId())
+                    .append('\u001f')
+                    .append(zone.getSourceZoneVersion())
+                    .append('\u001f')
+                    .append(zone.getKind())
+                    .append('\u001f')
+                    .append(zone.getGeometryJson()));
     try {
       return HexFormat.of()
           .formatHex(
@@ -90,6 +180,23 @@ final class CustomerCapacityWorkloadFingerprint {
     } catch (NoSuchAlgorithmException exception) {
       throw new IllegalStateException("SHA-256 is unavailable", exception);
     }
+  }
+
+  /** Preserves tests and callers that predate tariff and restriction workload facts. */
+  static String sha256(
+      List<CustomerDeliverySlot> slots,
+      List<WarehouseCapacityJob> generatedJobs,
+      List<WarehouseCapacityShift> shifts,
+      List<WarehouseCapacityPriceZone> priceZones,
+      long wholeDayDriverReservations) {
+    return sha256(
+        slots,
+        generatedJobs,
+        shifts,
+        null,
+        priceZones,
+        List.of(),
+        wholeDayDriverReservations);
   }
 
   private static String decimal(java.math.BigDecimal value) {

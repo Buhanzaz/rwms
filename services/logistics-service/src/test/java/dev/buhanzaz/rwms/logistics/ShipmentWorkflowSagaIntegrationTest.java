@@ -72,6 +72,8 @@ class ShipmentWorkflowSagaIntegrationTest {
   private static final UUID CORRELATION = UUID.fromString("00000000-0000-0000-0000-000000000803");
   private static final UUID ASSET = UUID.fromString("00000000-0000-0000-0000-000000000804");
   private static final UUID EQUIPMENT = UUID.fromString("00000000-0000-0000-0000-000000000805");
+  private static final UUID INVENTORY_SOURCE =
+      UUID.fromString("00000000-0000-0000-0000-000000000806");
 
   @Container @ServiceConnection
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
@@ -409,6 +411,158 @@ class ShipmentWorkflowSagaIntegrationTest {
   }
 
   @Test
+  void directRegionalShipmentKeepsServiceWarehouseAndReplaysFrozenInventorySource() {
+    OrderClient client =
+        clients.saveAndFlush(
+            OrderClient.create(
+                ClientType.LEGAL_ENTITY,
+                "Региональный клиент",
+                "региональный клиент",
+                "+79990000003",
+                "+79990000003",
+                null,
+                null,
+                "Контакт",
+                SUBJECT,
+                "Логист",
+                null,
+                null,
+                List.of(),
+                SUBJECT,
+                UUID.randomUUID(),
+                "3".repeat(64)));
+    RentalOrder order =
+        RentalOrder.create(
+            "ORD-999998",
+            client,
+            SUBJECT,
+            "Логист",
+            SUBJECT,
+            "Логист",
+            "RENTAL_MANAGER",
+            "+79990000003",
+            null,
+            UUID.randomUUID(),
+            "4".repeat(64));
+    order.replaceClientDeliveryDetails(
+        "Региональный адрес",
+        new BigDecimal("58.521000"),
+        new BigDecimal("31.275000"),
+        List.of());
+    LocalDate shipmentDate = LocalDate.now();
+    order.replaceClientDesiredDeliveryWindows(
+        List.of(DesiredDeliveryWindow.create(shipmentDate, shipmentDate)));
+    order.selectWarehouse(WAREHOUSE);
+    order.saveForFulfillment();
+    order = orders.saveAndFlush(order);
+    rentalTerms.saveAndFlush(RentalOrderUnitTerm.create(order, ASSET, 1));
+    LogisticsDependencyGateway.OrderUnitReservation sourceReservation =
+        reservation(order.getId(), INVENTORY_SOURCE);
+    CreateOrderRentalShipmentRequest request =
+        new CreateOrderRentalShipmentRequest(
+            order.getVersion(),
+            "Водитель источника",
+            null,
+            shipmentDate,
+            List.of(ASSET),
+            false,
+            INVENTORY_SOURCE);
+    UUID commandKey = UUID.randomUUID();
+    String checksum = "d".repeat(64);
+
+    var created =
+        documents.createRentalOrderShipment(
+            SUBJECT,
+            commandKey,
+            CORRELATION,
+            order,
+            List.of(sourceReservation),
+            request,
+            checksum);
+    var replay =
+        documents.createRentalOrderShipment(
+            SUBJECT,
+            commandKey,
+            CORRELATION,
+            order,
+            List.of(sourceReservation),
+            request,
+            checksum);
+
+    assertThat(created.replayed()).isFalse();
+    assertThat(replay.replayed()).isTrue();
+    assertThat(replay.response().id()).isEqualTo(created.response().id());
+    assertThat(created.response().warehouseId()).isEqualTo(WAREHOUSE);
+    assertThat(created.response().lines().getFirst().inventorySourceWarehouseId())
+        .isEqualTo(INVENTORY_SOURCE);
+    assertThat(
+            jdbc.queryForObject(
+                "select inventory_source_warehouse_id from logistics_document_line where id=?",
+                UUID.class,
+                created.response().lines().getFirst().id()))
+        .isEqualTo(INVENTORY_SOURCE);
+    UUID lineId = created.response().lines().getFirst().id();
+    UUID leaseId = UUID.randomUUID();
+    when(dependencies.readRentalItemSnapshot(ASSET))
+        .thenReturn(snapshotAt(INVENTORY_SOURCE, 7, "BOOKED"));
+    when(dependencies.acquireOperationLease(
+            any(),
+            eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_SHIPMENT),
+            eq(ASSET),
+            eq(7L),
+            eq(created.response().id()),
+            eq(lineId),
+            eq(order.getId())))
+        .thenReturn(activeLease(leaseId));
+
+    documents.planShipment(
+        SUBJECT,
+        UUID.randomUUID(),
+        CORRELATION,
+        created.response().id(),
+        created.response().version(),
+        new ShipmentPlanRequest("Водитель источника", shipmentDate));
+    LogisticsExternalAttemptTestClaims.drainShipment(claims, processor);
+
+    var awaiting = documents.get(created.response().id(), LogisticsDocumentType.SHIPMENT);
+    assertThat(awaiting.state())
+        .isEqualTo(LogisticsDocumentState.AWAITING_CONFIRMATION);
+    when(dependencies.applyFencedEffect(
+            any(),
+            eq(LogisticsDependencyGateway.AssetEffect.SHIPMENT_CONFIRM),
+            eq(ASSET),
+            eq(7L),
+            eq(leaseId),
+            eq(11L),
+            eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_SHIPMENT),
+            eq(created.response().id()),
+            eq(lineId),
+            eq(null)))
+        .thenReturn(snapshotAt(INVENTORY_SOURCE, 8, "RENTED"));
+    when(dependencies.releaseOperationLease(
+            any(),
+            eq(leaseId),
+            eq(3L),
+            eq(11L),
+            eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_SHIPMENT),
+            eq(created.response().id()),
+            eq(lineId)))
+        .thenReturn(releasedLease(leaseId));
+
+    documents.confirmShipmentPreparation(
+        SUBJECT,
+        UUID.randomUUID(),
+        CORRELATION,
+        created.response().id(),
+        awaiting.version());
+    LogisticsExternalAttemptTestClaims.drainShipment(claims, processor);
+
+    assertThat(documents.get(created.response().id(), LogisticsDocumentType.SHIPMENT).state())
+        .isEqualTo(LogisticsDocumentState.SHIPPED);
+    verify(driverTaskPlanner, times(2)).plan(any(), any());
+  }
+
+  @Test
   void savedOrderShipmentCreatesOneIdempotentFurnitureTaskFromTheAssetDelta() {
     OrderClient client =
         clients.saveAndFlush(
@@ -594,13 +748,18 @@ class ShipmentWorkflowSagaIntegrationTest {
   }
 
   private static LogisticsDependencyGateway.OrderUnitReservation reservation(UUID orderId) {
+    return reservation(orderId, WAREHOUSE);
+  }
+
+  private static LogisticsDependencyGateway.OrderUnitReservation reservation(
+      UUID orderId, UUID inventorySourceWarehouseId) {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
     return new LogisticsDependencyGateway.OrderUnitReservation(
         UUID.randomUUID(),
         0,
         orderId,
         ASSET,
-        WAREHOUSE,
+        inventorySourceWarehouseId,
         "ACTIVE",
         SUBJECT,
         "RENTAL_MANAGER",
@@ -608,16 +767,32 @@ class ShipmentWorkflowSagaIntegrationTest {
         null,
         false,
         new LogisticsDependencyGateway.OrderRentalItem(
-            ASSET, 7, WAREHOUSE, "CAB-801", "FREE", "RENT", null, null, null, null, null, List.of(),
+            ASSET,
+            7,
+            inventorySourceWarehouseId,
+            "CAB-801",
+            "FREE",
+            "RENT",
+            null,
+            null,
+            null,
+            null,
+            null,
+            List.of(),
             List.of(), now, now));
   }
 
   private static LogisticsDependencyGateway.RentalItemSnapshot snapshot(
       long version, String status) {
+    return snapshotAt(WAREHOUSE, version, status);
+  }
+
+  private static LogisticsDependencyGateway.RentalItemSnapshot snapshotAt(
+      UUID warehouseId, long version, String status) {
     return new LogisticsDependencyGateway.RentalItemSnapshot(
         ASSET,
         version,
-        WAREHOUSE,
+        warehouseId,
         status,
         List.of(new LogisticsDependencyGateway.EquipmentContent(EQUIPMENT, 2)));
   }

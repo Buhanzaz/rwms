@@ -24,7 +24,9 @@ public class CustomerRouteCapacityPlanner {
   private static final Comparator<DriverState> DRIVER_ORDER =
       Comparator.comparingLong(DriverState::availableAt)
           .thenComparingInt(DriverState::matrixIndex)
-          .thenComparingInt(DriverState::cabinsOnTruck);
+          .thenComparingInt(DriverState::cabinsOnTruck)
+          .thenComparingInt(DriverState::cabinCapacity)
+          .thenComparingLong(DriverState::deadline);
 
   /** One existing or candidate delivery demand at a matrix point and hard arrival window. */
   public record DeliveryJob(
@@ -33,43 +35,51 @@ public class CustomerRouteCapacityPlanner {
       LocalTime windowStart,
       LocalTime windowEnd,
       int serviceMinutes,
-      boolean candidate) {}
+      boolean candidate,
+      boolean trailerAccessAllowed) {}
+
+  /** One anonymous active shift with its exact local availability and transport capability. */
+  public record CapacityShift(
+      LocalTime shiftStart,
+      LocalTime shiftEnd,
+      int breakMinutes,
+      int cabinCapacity) {}
 
   /** Feasibility result and additional candidate-point cabins supported by the same day. */
   public record CapacityDecision(boolean feasible, int capacityRemaining) {}
 
-  /** Evaluates the complete day without external whole-driver reservations. */
-  public CapacityDecision evaluate(
-      CustomerTravelTimeMatrix matrix,
-      List<DeliveryJob> jobs,
-      CustomerDeliveryProperties.Validated configuration) {
-    return evaluate(matrix, jobs, configuration, 0);
-  }
-
   /**
-   * Evaluates the complete day after reserving whole drivers for active transport work whose exact
-   * service window is not known to RWMS. Capacity probing uses at most seven memoized searches for
-   * the supported 128-cabin safety ceiling and therefore remains bounded for API traffic.
+   * Evaluates the complete day against the published simulator shifts after reserving whole shifts
+   * for active transport work whose exact service window is not known to RWMS. An empty shift set
+   * fails closed. Capacity probing uses at most seven memoized searches for the supported
+   * 128-cabin safety ceiling and therefore remains bounded for API traffic.
    */
   public CapacityDecision evaluate(
       CustomerTravelTimeMatrix matrix,
       List<DeliveryJob> jobs,
       CustomerDeliveryProperties.Validated configuration,
+      List<CapacityShift> shifts,
       int reservedDrivers) {
-    validateInputs(matrix, jobs, configuration, reservedDrivers);
+    validateInputs(matrix, jobs, configuration, shifts, reservedDrivers);
     DeliveryJob candidate = jobs.stream().filter(DeliveryJob::candidate).findFirst().orElseThrow();
-    long oneWaySeconds = matrix.travelSeconds(DEPOT_INDEX, candidate.matrixIndex());
-    if (oneWaySeconds < 0 || travelZoneHours(oneWaySeconds) > configuration.maxTravelZoneHours()) {
+    long oneWaySeconds =
+        adjustedTravelSeconds(
+            matrix.travelSeconds(DEPOT_INDEX, candidate.matrixIndex()), configuration);
+    if (oneWaySeconds < 0) {
       return new CapacityDecision(false, 0);
     }
-    int availableDrivers = configuration.driverCount() - reservedDrivers;
-    if (availableDrivers == 0 || !isFeasible(matrix, jobs, configuration, availableDrivers)) {
+    int conservativeTripCapacity =
+        jobs.stream().allMatch(DeliveryJob::trailerAccessAllowed) ? 2 : 1;
+    List<CapacityShift> availableShifts =
+        availableShifts(shifts, reservedDrivers, conservativeTripCapacity, configuration);
+    if (availableShifts.isEmpty()
+        || !isFeasible(matrix, jobs, configuration, availableShifts)) {
       return new CapacityDecision(false, 0);
     }
 
     int originalCandidateCabins = candidate.cabinCount();
     int upperCandidateCabins =
-        Math.min(MAX_ROUTABLE_CABINS, maximumFleetCabins(configuration, availableDrivers));
+        Math.min(MAX_ROUTABLE_CABINS, maximumFleetCabins(configuration, availableShifts));
     int low = originalCandidateCabins;
     int high = Math.max(low, upperCandidateCabins);
     while (low < high) {
@@ -78,7 +88,7 @@ public class CustomerRouteCapacityPlanner {
           matrix,
           withCandidateCabins(jobs, probe),
           configuration,
-          availableDrivers)) {
+          availableShifts)) {
         low = probe;
       } else {
         high = probe - 1;
@@ -91,6 +101,7 @@ public class CustomerRouteCapacityPlanner {
       CustomerTravelTimeMatrix matrix,
       List<DeliveryJob> jobs,
       CustomerDeliveryProperties.Validated configuration,
+      List<CapacityShift> shifts,
       int reservedDrivers) {
     if (matrix == null || configuration == null || jobs == null || jobs.isEmpty()) {
       throw new IllegalArgumentException("Delivery matrix, configuration and jobs are required");
@@ -98,8 +109,21 @@ public class CustomerRouteCapacityPlanner {
     if (jobs.stream().filter(DeliveryJob::candidate).count() != 1) {
       throw new IllegalArgumentException("Exactly one candidate delivery job is required");
     }
-    if (reservedDrivers < 0 || reservedDrivers > configuration.driverCount()) {
+    if (shifts == null || reservedDrivers < 0 || reservedDrivers > shifts.size()) {
       throw new IllegalArgumentException("Reserved driver count is invalid");
+    }
+    for (CapacityShift shift : shifts) {
+      if (shift == null
+          || shift.shiftStart() == null
+          || shift.shiftEnd() == null
+          || !shift.shiftStart().isBefore(shift.shiftEnd())
+          || shift.breakMinutes() < 0
+          || shift.breakMinutes()
+              >= java.time.Duration.between(shift.shiftStart(), shift.shiftEnd()).toMinutes()
+          || shift.cabinCapacity() < 1
+          || shift.cabinCapacity() > 2) {
+        throw new IllegalArgumentException("Capacity shift is invalid");
+      }
     }
     for (DeliveryJob job : jobs) {
       if (job.matrixIndex() <= DEPOT_INDEX
@@ -114,20 +138,21 @@ public class CustomerRouteCapacityPlanner {
     }
   }
 
-  private static int travelZoneHours(long oneWaySeconds) {
-    return (int) Math.max(1L, (oneWaySeconds + 3_599L) / 3_600L);
-  }
-
   private static int maximumFleetCabins(
-      CustomerDeliveryProperties.Validated configuration, int availableDrivers) {
-    long operationalSeconds =
-        deadline(configuration) - configuration.workdayStart().toSecondOfDay();
+      CustomerDeliveryProperties.Validated configuration, List<CapacityShift> shifts) {
     long serviceSeconds = configuration.serviceMinutes() * 60L;
-    long maximumVisitsPerDriver = operationalSeconds / serviceSeconds + 1L;
-    long maximum =
-        Math.min(MAX_ROUTABLE_CABINS, maximumVisitsPerDriver)
-            * Math.min(MAX_ROUTABLE_CABINS, availableDrivers)
-            * Math.min(MAX_ROUTABLE_CABINS, configuration.truckCabinCapacity());
+    long maximum = 0;
+    for (CapacityShift shift : shifts) {
+      long operationalSeconds =
+          effectiveDeadline(shift, configuration)
+              - Math.max(
+                  shift.shiftStart().toSecondOfDay(),
+                  configuration.driverWorkStart().toSecondOfDay());
+      long maximumVisits = operationalSeconds / serviceSeconds + 1L;
+      maximum +=
+          Math.min(MAX_ROUTABLE_CABINS, maximumVisits)
+              * Math.min(MAX_ROUTABLE_CABINS, shift.cabinCapacity());
+    }
     return (int) Math.min(MAX_ROUTABLE_CABINS, maximum);
   }
 
@@ -143,7 +168,8 @@ public class CustomerRouteCapacityPlanner {
                         job.windowStart(),
                         job.windowEnd(),
                         job.serviceMinutes(),
-                        true)
+                        true,
+                        job.trailerAccessAllowed())
                     : job)
         .toList();
   }
@@ -152,34 +178,50 @@ public class CustomerRouteCapacityPlanner {
       CustomerTravelTimeMatrix matrix,
       List<DeliveryJob> jobs,
       CustomerDeliveryProperties.Validated configuration,
-      int availableDrivers) {
+      List<CapacityShift> shifts) {
     long totalCabins = jobs.stream().mapToLong(DeliveryJob::cabinCount).sum();
     if (totalCabins > MAX_ROUTABLE_CABINS) return false;
     long minimumServiceSeconds =
         jobs.stream().mapToLong(job -> job.serviceMinutes() * 60L).min().orElseThrow();
     long maximumVisits =
-        (long) availableDrivers
-            * (deadline(configuration) - configuration.workdayStart().toSecondOfDay())
-            / minimumServiceSeconds
-            + availableDrivers;
+        shifts.stream()
+            .mapToLong(
+                shift ->
+                    (effectiveDeadline(shift, configuration)
+                                - Math.max(
+                                    shift.shiftStart().toSecondOfDay(),
+                                    configuration.driverWorkStart().toSecondOfDay()))
+                            / minimumServiceSeconds
+                        + 1L)
+            .sum();
     long minimumVisits =
         jobs.stream()
             .mapToLong(
                 job ->
-                    (job.cabinCount() + configuration.truckCabinCapacity() - 1L)
-                        / configuration.truckCabinCapacity())
+                    (job.cabinCount()
+                            + shifts.stream().mapToInt(CapacityShift::cabinCapacity).max().orElse(1)
+                            - 1L)
+                        / shifts.stream().mapToInt(CapacityShift::cabinCapacity).max().orElse(1))
             .sum();
     if (minimumVisits > maximumVisits) return false;
 
     int[] remaining = jobs.stream().mapToInt(DeliveryJob::cabinCount).toArray();
-    List<DriverState> drivers = new ArrayList<>(availableDrivers);
-    for (int index = 0; index < availableDrivers; index++) {
+    List<DriverState> drivers = new ArrayList<>(shifts.size());
+    for (CapacityShift shift : shifts) {
+      long loadedAt =
+          Math.max(
+                  shift.shiftStart().toSecondOfDay(),
+                  configuration.driverWorkStart().toSecondOfDay())
+              + configuration.warehouseLoadMinutes(shift.cabinCapacity()) * 60L;
       drivers.add(
           new DriverState(
-              configuration.workdayStart().toSecondOfDay(),
+              loadedAt,
               DEPOT_INDEX,
-              configuration.truckCabinCapacity()));
+              shift.cabinCapacity(),
+              shift.cabinCapacity(),
+              effectiveDeadline(shift, configuration)));
     }
+    drivers.sort(DRIVER_ORDER);
     SearchBudget budget = new SearchBudget(MAX_SEARCH_STATES);
     Set<SearchKey> failed = new HashSet<>();
     return search(
@@ -201,7 +243,7 @@ public class CustomerRouteCapacityPlanner {
       Set<SearchKey> failed,
       SearchBudget budget) {
     if (Arrays.stream(remaining).allMatch(count -> count == 0)) {
-      return canReturnAllDrivers(matrix, drivers, deadline(configuration));
+      return canReturnAllDrivers(matrix, drivers, configuration);
     }
     if (!budget.tryVisit()) return false;
     SearchKey key = new SearchKey(toList(remaining), drivers);
@@ -277,21 +319,28 @@ public class CustomerRouteCapacityPlanner {
     int departurePoint = driver.matrixIndex();
     int cabinsOnTruck = driver.cabinsOnTruck();
     if (reloadAtDepot) {
-      long depotLeg = matrix.travelSeconds(departurePoint, DEPOT_INDEX);
+      long depotLeg =
+          adjustedTravelSeconds(
+              matrix.travelSeconds(departurePoint, DEPOT_INDEX), configuration);
       if (depotLeg < 0) return false;
-      departure += depotLeg + configuration.depotReloadMinutes() * 60L;
+      departure +=
+          depotLeg + configuration.warehouseLoadMinutes(driver.cabinCapacity()) * 60L;
       departurePoint = DEPOT_INDEX;
-      cabinsOnTruck = configuration.truckCabinCapacity();
+      cabinsOnTruck = driver.cabinCapacity();
     }
     if (cabinsOnTruck < 1) return false;
-    long customerLeg = matrix.travelSeconds(departurePoint, job.matrixIndex());
+    long customerLeg =
+        adjustedTravelSeconds(
+            matrix.travelSeconds(departurePoint, job.matrixIndex()), configuration);
     if (customerLeg < 0) return false;
     long serviceStart =
         Math.max(departure + customerLeg, job.windowStart().toSecondOfDay());
     if (serviceStart > job.windowEnd().toSecondOfDay()) return false;
     long serviceEnd = serviceStart + job.serviceMinutes() * 60L;
-    long returnLeg = matrix.travelSeconds(job.matrixIndex(), DEPOT_INDEX);
-    if (returnLeg < 0 || serviceEnd + returnLeg > deadline(configuration)) return false;
+    long returnLeg =
+        adjustedTravelSeconds(
+            matrix.travelSeconds(job.matrixIndex(), DEPOT_INDEX), configuration);
+    if (returnLeg < 0 || serviceEnd + returnLeg > driver.deadline()) return false;
 
     int maximumQuantity = Math.min(cabinsOnTruck, remaining[jobIndex]);
     for (int quantity = maximumQuantity; quantity >= 1; quantity--) {
@@ -300,7 +349,12 @@ public class CustomerRouteCapacityPlanner {
       List<DriverState> nextDrivers = new ArrayList<>(drivers);
       nextDrivers.set(
           driverIndex,
-          new DriverState(serviceEnd, job.matrixIndex(), cabinsOnTruck - quantity));
+          new DriverState(
+              serviceEnd,
+              job.matrixIndex(),
+              cabinsOnTruck - quantity,
+              driver.cabinCapacity(),
+              driver.deadline()));
       nextDrivers.sort(DRIVER_ORDER);
       if (search(
           matrix,
@@ -317,17 +371,61 @@ public class CustomerRouteCapacityPlanner {
   }
 
   private static boolean canReturnAllDrivers(
-      CustomerTravelTimeMatrix matrix, List<DriverState> drivers, long deadline) {
+      CustomerTravelTimeMatrix matrix,
+      List<DriverState> drivers,
+      CustomerDeliveryProperties.Validated configuration) {
     for (DriverState driver : drivers) {
       if (driver.matrixIndex() == DEPOT_INDEX) continue;
-      long returnLeg = matrix.travelSeconds(driver.matrixIndex(), DEPOT_INDEX);
-      if (returnLeg < 0 || driver.availableAt() + returnLeg > deadline) return false;
+      long returnLeg =
+          adjustedTravelSeconds(
+              matrix.travelSeconds(driver.matrixIndex(), DEPOT_INDEX), configuration);
+      if (returnLeg < 0 || driver.availableAt() + returnLeg > driver.deadline()) return false;
     }
     return true;
   }
 
-  private static long deadline(CustomerDeliveryProperties.Validated configuration) {
-    return configuration.workdayEnd().toSecondOfDay() + configuration.maxOvertime().toSeconds();
+  private static long effectiveDeadline(
+      CapacityShift shift, CustomerDeliveryProperties.Validated configuration) {
+    return Math.min(
+            shift.shiftEnd().toSecondOfDay(), configuration.driverShiftEnd().toSecondOfDay())
+        - shift.breakMinutes() * 60L;
+  }
+
+  private static List<CapacityShift> availableShifts(
+      List<CapacityShift> shifts,
+      int reservedDrivers,
+      int conservativeTripCapacity,
+      CustomerDeliveryProperties.Validated configuration) {
+    List<CapacityShift> constrained =
+        shifts.stream()
+            .map(
+                shift ->
+                    new CapacityShift(
+                        shift.shiftStart(),
+                        shift.shiftEnd(),
+                        shift.breakMinutes(),
+                        Math.min(shift.cabinCapacity(), conservativeTripCapacity)))
+            .toList();
+    Comparator<CapacityShift> strongestFirst =
+        Comparator.comparingLong(
+                (CapacityShift shift) ->
+                    (effectiveDeadline(shift, configuration)
+                            - Math.max(
+                                shift.shiftStart().toSecondOfDay(),
+                                configuration.driverWorkStart().toSecondOfDay()))
+                        * shift.cabinCapacity())
+            .reversed()
+            .thenComparing(CapacityShift::shiftStart)
+            .thenComparing(CapacityShift::shiftEnd);
+    return constrained.stream().sorted(strongestFirst).skip(reservedDrivers).toList();
+  }
+
+  private static long adjustedTravelSeconds(
+      long rawSeconds, CustomerDeliveryProperties.Validated configuration) {
+    if (rawSeconds < 0) return -1;
+    if (rawSeconds == 0) return 0;
+    return (long) Math.ceil(rawSeconds * configuration.travelTimeMultiplier())
+        + configuration.fixedTravelBufferMinutes() * 60L;
   }
 
   private static List<Integer> toList(int[] values) {
@@ -335,7 +433,12 @@ public class CustomerRouteCapacityPlanner {
   }
 
   /** Canonical per-driver scheduling state; driver identity is intentionally irrelevant. */
-  private record DriverState(long availableAt, int matrixIndex, int cabinsOnTruck) {}
+  private record DriverState(
+      long availableAt,
+      int matrixIndex,
+      int cabinsOnTruck,
+      int cabinCapacity,
+      long deadline) {}
 
   /** Memoization key for all remaining demands and symmetrically sorted driver states. */
   private record SearchKey(List<Integer> remaining, List<DriverState> drivers) {}

@@ -45,6 +45,46 @@ func TestValidatorAcceptsValidRS256UserToken(t *testing.T) {
 	}
 }
 
+func TestValidatorAcceptsOnlyExactCustomerRentalIdentity(t *testing.T) {
+	fixture := newJWTFixture(t)
+	claims := fixture.validClaims(uuid.New())
+	claims["global_role"] = "CUSTOMER"
+	claims["client_id"] = "rwms-customer-android"
+	claims["scope"] = "customer.rental"
+
+	principal, err := fixture.validator.Validate(context.Background(), "Bearer "+fixture.sign(t, testKeyID, claims, jwt.SigningMethodRS256))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if !principal.IsCustomerRental() || !principal.IsCustomerIdentity() {
+		t.Fatalf("customer principal = %#v", principal)
+	}
+
+	for _, mutate := range []func(Principal) Principal{
+		func(value Principal) Principal { value.Role = "MANAGER"; return value },
+		func(value Principal) Principal { value.ClientID = "manager-android"; return value },
+		func(value Principal) Principal {
+			value.Scopes = map[string]struct{}{"customer.rental": {}, "rwms.read": {}}
+			return value
+		},
+	} {
+		changed := mutate(principal)
+		if changed.IsCustomerRental() || !changed.IsCustomerIdentity() {
+			t.Fatalf("non-exact customer identity accepted = %#v", changed)
+		}
+	}
+}
+
+func TestValidatorRejectsMalformedUserClientID(t *testing.T) {
+	fixture := newJWTFixture(t)
+	claims := fixture.validClaims(uuid.New())
+	claims["client_id"] = 42
+	_, err := fixture.validator.Validate(context.Background(), "Bearer "+fixture.sign(t, testKeyID, claims, jwt.SigningMethodRS256))
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("Validate() error = %v, want forbidden", err)
+	}
+}
+
 func TestValidatorAcceptsNarrowWorkerTaskToken(t *testing.T) {
 	for _, taskScope := range []string{"worker.tasks", "driver.tasks"} {
 		t.Run(taskScope, func(t *testing.T) {

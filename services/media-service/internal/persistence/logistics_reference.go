@@ -28,10 +28,11 @@ type ReadyMediaReference struct {
 // ValidateLogisticsReferencesCommand asks for read-only validation of a small
 // set of ready media references within one proven logistics scope.
 type ValidateLogisticsReferencesCommand struct {
-	OwnerType   string
-	OwnerID     string
-	WarehouseID uuid.UUID
-	References  []ReadyMediaReference
+	OwnerType           string
+	OwnerID             string
+	AuthorizedSubjectID *uuid.UUID
+	WarehouseID         uuid.UUID
+	References          []ReadyMediaReference
 }
 
 // IsLogisticsOwnerType reports whether ownerType is one of the supported
@@ -57,8 +58,20 @@ func (repository *Repository) ValidateLogisticsReferences(
 	ctx context.Context,
 	command ValidateLogisticsReferencesCommand,
 ) error {
-	if !IsLogisticsOwnerType(command.OwnerType) || strings.TrimSpace(command.OwnerID) == "" ||
+	structured := IsLogisticsOwnerType(command.OwnerType)
+	profile := command.OwnerType == OwnerTypeLogisticsCustomerProfile
+	if (!structured && !profile) || strings.TrimSpace(command.OwnerID) == "" ||
 		command.WarehouseID == uuid.Nil || len(command.References) < 1 || len(command.References) > 20 {
+		return ErrConflict
+	}
+	if profile {
+		ownerID, err := uuid.Parse(command.OwnerID)
+		if err != nil || ownerID == uuid.Nil || ownerID.String() != command.OwnerID ||
+			command.AuthorizedSubjectID == nil || *command.AuthorizedSubjectID == uuid.Nil ||
+			len(command.References) != 1 {
+			return ErrConflict
+		}
+	} else if command.AuthorizedSubjectID != nil {
 		return ErrConflict
 	}
 	mediaIDs := make([]uuid.UUID, 0, len(command.References))
@@ -100,12 +113,14 @@ func (repository *Repository) ValidateLogisticsReferences(
 		 and checkpoint.aggregate_type=binding.proof_aggregate_type
 		 and checkpoint.aggregate_id=binding.proof_aggregate_id
 		 and checkpoint.aggregate_version>=binding.proof_aggregate_version
-		where not exists (select 1 from media_quarantined_aggregate quarantine
+		where ($6::uuid is null or binding.authorized_subject_id=$6)
+		  and not exists (select 1 from media_quarantined_aggregate quarantine
 			where quarantine.consumer_name=binding.proof_consumer_name
 			  and quarantine.aggregate_type=binding.proof_aggregate_type
 			  and quarantine.aggregate_id=binding.proof_aggregate_id
 			  and quarantine.reconciled_at is null)`,
 		mediaIDs, generations, command.OwnerType, command.OwnerID, command.WarehouseID,
+		nullableUUIDPointer(command.AuthorizedSubjectID),
 	).Scan(&matched)
 	if err != nil {
 		return err

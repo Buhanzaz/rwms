@@ -86,9 +86,46 @@ class LogisticsDocumentTest {
   }
 
   @Test
-  void historicalRentalDocumentsKeepThePastDateButNeverCreateDriverData() {
+  void unstartedOrderLineReplacementChangesOnlyItsPhysicalSourceAndCabinFence() {
+    UUID orderId = UUID.randomUUID();
+    UUID oldUnitId = UUID.randomUUID();
+    UUID replacementUnitId = UUID.randomUUID();
+    UUID supportWarehouseId = UUID.randomUUID();
+    LogisticsDocument document =
+        LogisticsDocument.createRentalOrderShipment(
+            WAREHOUSE,
+            UUID.randomUUID(),
+            orderId,
+            "ООО Регион",
+            SUBJECT,
+            CORRELATION);
+    LogisticsDocumentLine line =
+        LogisticsDocumentLine.create(
+            document, 1, oldUnitId, 3, "ООО Регион", orderId, WAREHOUSE);
+
+    line.replaceRentalItem(oldUnitId, replacementUnitId, 7, supportWarehouseId);
+
+    assertThat(document.getWarehouseId()).isEqualTo(WAREHOUSE);
+    assertThat(line.getAssetId()).isEqualTo(replacementUnitId);
+    assertThat(line.getAssetVersion()).isEqualTo(7);
+    assertThat(line.getInventorySourceWarehouseId()).isEqualTo(supportWarehouseId);
+  }
+
+  @Test
+  void historicalRentalDocumentsKeepThePastDateAndOptionalShipmentDriverEvidence() {
     LocalDate occurredOn = LocalDate.parse("2026-08-01");
+    UUID driverWorkerId = UUID.randomUUID();
     LogisticsDocument shipment =
+        LogisticsDocument.createHistoricalRentalShipment(
+            WAREHOUSE,
+            UUID.randomUUID(),
+            "ООО История",
+            "  Иванов Иван  ",
+            driverWorkerId,
+            occurredOn,
+            SUBJECT,
+            CORRELATION);
+    LogisticsDocument unknownDriverShipment =
         LogisticsDocument.createHistoricalRentalShipment(
             WAREHOUSE, UUID.randomUUID(), "ООО История", occurredOn, SUBJECT, CORRELATION);
     LogisticsDocument rentalReturn =
@@ -96,18 +133,82 @@ class LogisticsDocumentTest {
             WAREHOUSE, UUID.randomUUID(), "ООО История", occurredOn, SUBJECT, CORRELATION);
 
     shipment.beginShipmentPreparation();
+    unknownDriverShipment.beginShipmentPreparation();
     rentalReturn.beginReturnRegistration();
 
     assertThat(shipment.isHistoricalRentalImport()).isTrue();
     assertThat(shipment.getScheduledDate()).isEqualTo(occurredOn);
-    assertThat(shipment.getDriverSnapshot()).isNull();
-    assertThat(shipment.getDriverWorkerId()).isNull();
+    assertThat(shipment.getDriverSnapshot()).isEqualTo("Иванов Иван");
+    assertThat(shipment.getDriverWorkerId()).isEqualTo(driverWorkerId);
     assertThat(shipment.getState()).isEqualTo(LogisticsDocumentState.PREPARING);
+    assertThat(unknownDriverShipment.getDriverSnapshot()).isNull();
+    assertThat(unknownDriverShipment.getDriverWorkerId()).isNull();
     assertThat(rentalReturn.isHistoricalRentalImport()).isTrue();
     assertThat(rentalReturn.getScheduledDate()).isEqualTo(occurredOn);
     assertThat(rentalReturn.getDriverSnapshot()).isNull();
     assertThat(rentalReturn.getDriverWorkerId()).isNull();
     assertThat(rentalReturn.getState()).isEqualTo(LogisticsDocumentState.REGISTERING);
+  }
+
+  @Test
+  void failedHistoricalShipmentCanBeCancelledWithoutChangingACompletedShipment() {
+    LogisticsDocument failed =
+        LogisticsDocument.createHistoricalRentalShipment(
+            WAREHOUSE,
+            UUID.randomUUID(),
+            "ООО История",
+            LocalDate.parse("2026-08-01"),
+            SUBJECT,
+            CORRELATION);
+    failed.beginShipmentPreparation();
+    failed.shipmentConflict();
+
+    failed.beginFailedHistoricalShipmentCancellation();
+    failed.cancelShipment();
+
+    assertThat(failed.getState()).isEqualTo(LogisticsDocumentState.CANCELLED);
+    assertThatThrownBy(failed::beginFailedHistoricalShipmentCancellation)
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("failed historical shipment");
+  }
+
+  @Test
+  void knownHistoricalShipmentCapabilitiesCanBeReleasedAfterAConflict() {
+    LogisticsDocument document =
+        LogisticsDocument.createHistoricalRentalShipment(
+            WAREHOUSE,
+            UUID.randomUUID(),
+            "ООО История",
+            LocalDate.parse("2026-08-01"),
+            SUBJECT,
+            CORRELATION);
+    LogisticsDocumentLine line =
+        LogisticsDocumentLine.create(document, 1, UUID.randomUUID(), 7, "ООО История");
+    OffsetDateTime acquiredAt = OffsetDateTime.parse("2026-08-01T10:00:00Z");
+    LogisticsGuard guard =
+        LogisticsGuard.active(
+            document, line, UUID.randomUUID(), 2, 3, line.getAssetVersion(), acquiredAt);
+    LogisticsEquipmentHoldReference hold =
+        LogisticsEquipmentHoldReference.active(
+            document,
+            line,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            WAREHOUSE,
+            1,
+            4,
+            5,
+            acquiredAt);
+    guard.conflict();
+    hold.requireReconciliation();
+
+    guard.prepareReleaseAfterFailedHistoricalShipment();
+    hold.prepareReleaseAfterFailedHistoricalShipment();
+    guard.release();
+    hold.release(6, acquiredAt.plusMinutes(1));
+
+    assertThat(guard.getGuardState()).isEqualTo(LogisticsGuardState.RELEASED);
+    assertThat(hold.getHoldState()).isEqualTo(LogisticsEquipmentHoldState.RELEASED);
   }
 
   @Test

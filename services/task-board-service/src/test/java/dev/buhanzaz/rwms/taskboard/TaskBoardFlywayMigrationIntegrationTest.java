@@ -71,7 +71,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
   void cumulativeVersionFourEventSourcingAndTaskSyncMigrateCleanDatabaseAndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(33);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(35);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -115,6 +115,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             "worker_feed_revision",
             "worker_device_registration",
             "worker_media_event_inbox",
+            "worker_operational_assignment",
             "worker_task_evidence",
             "warehouse_metadata",
             "warehouse_event_inbox",
@@ -141,7 +142,8 @@ class TaskBoardFlywayMigrationIntegrationTest {
                 Map.entry("queue_definition_class_binding", 8),
                 Map.entry("work_queue", 15),
                 Map.entry("work_queue_class_binding", 8),
-                Map.entry("worker", 17),
+                Map.entry("worker", 21),
+                Map.entry("worker_operational_assignment", 16),
                 Map.entry("worker_class", 8),
                 Map.entry("worker_class_assignment", 6),
                 Map.entry("worker_deletion_intent", 7),
@@ -388,6 +390,22 @@ class TaskBoardFlywayMigrationIntegrationTest {
         .containsEntry("description", "worker feed revision and action receipts")
         .containsEntry(
             "script", "V36__worker_feed_revision_and_action_receipts.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='37'"))
+        .containsEntry("version", "37")
+        .containsEntry("description", "driver operational assignments")
+        .containsEntry("script", "V37__driver_operational_assignments.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='38'"))
+        .containsEntry("version", "38")
+        .containsEntry("description", "trip only driver commitments")
+        .containsEntry("script", "V38__trip_only_driver_commitments.sql")
         .containsEntry("success", true);
     assertThat(
             jdbc.queryForObject(
@@ -2124,7 +2142,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(32);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(34);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
 
@@ -2299,7 +2317,9 @@ class TaskBoardFlywayMigrationIntegrationTest {
                         : "worker_group_member".equals(table)
                             ? "to_jsonb(row_value) - 'role_in_group'"
                             : "worker".equals(table)
-                                ? "to_jsonb(row_value) - 'current_group_id'"
+                                ? "to_jsonb(row_value) - array['current_group_id',"
+                                    + "'employment_type','phone','contract_available_from',"
+                                    + "'contract_available_until']"
                                 : "worker_group".equals(table)
                                     ? "to_jsonb(row_value) - array['operational_status',"
                                         + "'unavailable_since','unavailability_reason']"

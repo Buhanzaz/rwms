@@ -7,6 +7,7 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsExternalAttempt;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsExternalAttemptResult;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsReconciliation;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsReconciliationState;
+import dev.buhanzaz.rwms.logistics.customer.repository.CustomerRentalSessionRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsExternalAttemptRepository;
@@ -32,12 +33,14 @@ class MediaOwnerProofWorkflowStore {
   static final List<String> OPERATIONS =
       List.of(
           LogisticsDocumentService.RETURN_MEDIA_OWNER_PROOF_REGISTER,
+          LogisticsDocumentService.SHIPMENT_MEDIA_OWNER_PROOF_REGISTER,
           LogisticsDocumentService.TRANSFER_MEDIA_OWNER_PROOF_REGISTER,
           LogisticsDocumentService.TRANSFER_MEDIA_OWNER_PROOF_DEACTIVATE);
 
   private final LogisticsExternalAttemptRepository attemptRepository;
   private final LogisticsExternalAttemptClaimService claims;
   private final LogisticsReconciliationRepository reconciliationRepository;
+  private final CustomerRentalSessionRepository customerSessions;
 
   /**
    * Builds an owner-proof request only for the exact leased operation. Transfer deactivation stays
@@ -115,7 +118,7 @@ class MediaOwnerProofWorkflowStore {
     return attempt;
   }
 
-  private static Work work(LogisticsExternalAttempt attempt) {
+  private Work work(LogisticsExternalAttempt attempt) {
     LogisticsDocument document = attempt.getDocument();
     LogisticsDocumentLine line = requiredLine(attempt);
     return switch (attempt.getOperationType()) {
@@ -129,6 +132,32 @@ class MediaOwnerProofWorkflowStore {
             document.getWarehouseId(),
             0,
             0,
+            null,
+            true);
+      }
+      case LogisticsDocumentService.SHIPMENT_MEDIA_OWNER_PROOF_REGISTER -> {
+        requireType(document, LogisticsDocumentType.SHIPMENT);
+        if (document.getRentalOrderId() == null) {
+          throw new IllegalStateException("Customer shipment media proof has no rental order");
+        }
+        UUID authorizedSubjectId =
+            customerSessions
+                .findFirstByOrderIdOrderByCreatedAtAscIdAsc(document.getRentalOrderId())
+                .filter(session -> document.getWarehouseId().equals(session.getWarehouseId()))
+                .map(session -> session.getCustomerSubjectId())
+                .orElseThrow(
+                    () ->
+                        new IllegalStateException(
+                            "Customer shipment media proof has no customer session"));
+        yield new Work(
+            attempt.getOperationId(),
+            LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_SHIPMENT,
+            document.getId(),
+            line.getId(),
+            document.getWarehouseId(),
+            0,
+            0,
+            authorizedSubjectId,
             true);
       }
       case LogisticsDocumentService.TRANSFER_MEDIA_OWNER_PROOF_REGISTER -> {
@@ -141,6 +170,7 @@ class MediaOwnerProofWorkflowStore {
             destination(document),
             0,
             0,
+            null,
             true);
       }
       case LogisticsDocumentService.TRANSFER_MEDIA_OWNER_PROOF_DEACTIVATE -> {
@@ -153,6 +183,7 @@ class MediaOwnerProofWorkflowStore {
             destination(document),
             1,
             1,
+            null,
             false);
       }
       default -> throw new IllegalArgumentException("External attempt type is invalid");
@@ -169,6 +200,8 @@ class MediaOwnerProofWorkflowStore {
         || expected.ownerRevision() != actual.ownerRevision()
         || expected.aggregateVersion() != actual.aggregateVersion()
         || !expected.operationId().equals(actual.proofEventId())
+        || !java.util.Objects.equals(
+            expected.authorizedSubjectId(), actual.authorizedSubjectId())
         || expected.active() != actual.active()) {
       throw new LogisticsDependencyException(
           LogisticsDependencyException.FailureKind.CONFIGURATION,
@@ -208,6 +241,7 @@ class MediaOwnerProofWorkflowStore {
             Long.toString(proof.ownerRevision()),
             Long.toString(proof.aggregateVersion()),
             proof.proofEventId().toString(),
+            proof.authorizedSubjectId() == null ? "" : proof.authorizedSubjectId().toString(),
             Boolean.toString(proof.active())));
   }
 
@@ -219,6 +253,7 @@ class MediaOwnerProofWorkflowStore {
     return OffsetDateTime.now(ZoneOffset.UTC);
   }
 
+  /** One leased owner-proof command with its optional customer-subject restriction. */
   record Work(
       UUID operationId,
       LogisticsDependencyGateway.LogisticsOwnerType ownerType,
@@ -227,5 +262,6 @@ class MediaOwnerProofWorkflowStore {
       UUID warehouseId,
       long ownerRevision,
       long aggregateVersion,
+      UUID authorizedSubjectId,
       boolean active) {}
 }

@@ -222,12 +222,36 @@ final class LogisticsAssetOrderPresentationDependencyClient {
       String actorRole,
       List<OrderUnitEquipmentRequirements> units,
       List<OrderUnitReplacement> replacements) {
+    return replaceOrderUnits(
+        idempotencyKey,
+        orderId,
+        warehouseId,
+        warehouseId,
+        presentationId,
+        actorSubjectId,
+        actorRole,
+        units,
+        replacements);
+  }
+
+  /** Sends service and physical replacement warehouse identities without conflating them. */
+  OrderUnitsReplacementReceipt replaceOrderUnits(
+      UUID idempotencyKey,
+      UUID orderId,
+      UUID warehouseId,
+      UUID inventorySourceWarehouseId,
+      UUID presentationId,
+      UUID actorSubjectId,
+      String actorRole,
+      List<OrderUnitEquipmentRequirements> units,
+      List<OrderUnitReplacement> replacements) {
     OrderUnitsReplacementReceiptResponse response =
         transport.post(
             assetBase + "/orders/" + orderId + "/units/replace",
             idempotencyKey,
             new ReplaceOrderUnitsRequest(
                 warehouseId,
+                inventorySourceWarehouseId,
                 presentationId,
                 actorSubjectId,
                 actorRole,
@@ -739,6 +763,20 @@ final class LogisticsAssetOrderPresentationDependencyClient {
         || response.equipment().name() == null
         || response.equipment().name().isBlank()
         || response.totals().availableQuantity() < 0
+        || response.totals().availableStock() < 0
+        || response.totals().balances() == null
+        || response.totals().balances().stream()
+            .anyMatch(
+                balance ->
+                    balance == null
+                        || balance.id() == null
+                        || balance.version() < 0
+                        || !response.equipment().id().equals(balance.equipmentId())
+                        || balance.warehouseId() == null
+                        || balance.locationKind() == null
+                        || balance.quantity() < 0
+                        || balance.activeHeldQuantity() < 0
+                        || balance.availableStock() < 0)
         || response.equipment().maximumPerCabin() != null
             && response.equipment().maximumPerCabin() < 1) {
       throw malformed("Asset-service returned invalid equipment availability");
@@ -748,7 +786,23 @@ final class LogisticsAssetOrderPresentationDependencyClient {
         response.equipment().name(),
         response.equipment().active(),
         response.totals().availableQuantity(),
-        response.equipment().maximumPerCabin());
+        response.equipment().maximumPerCabin(),
+        response.totals().availableStock(),
+        response.totals().balances().stream()
+            .map(
+                balance ->
+                    new EquipmentBalanceAvailability(
+                        balance.id(),
+                        balance.version(),
+                        balance.equipmentId(),
+                        balance.warehouseId(),
+                        balance.rentalItemId(),
+                        balance.locationKind(),
+                        balance.quantity(),
+                        balance.activeHeldQuantity(),
+                        balance.allocatable(),
+                        balance.availableStock()))
+            .toList());
   }
 
   private static List<OrderEquipmentReservation> orderEquipmentReservations(
@@ -756,20 +810,22 @@ final class LogisticsAssetOrderPresentationDependencyClient {
     if (response == null) {
       throw malformed("Asset-service returned an empty order equipment reservation list");
     }
-    java.util.HashSet<UUID> ids = new java.util.HashSet<>();
+    java.util.HashSet<String> ids = new java.util.HashSet<>();
     List<OrderEquipmentReservation> values = new java.util.ArrayList<>(response.size());
     for (OrderEquipmentReservationResponse value : response) {
       if (value == null
+          || value.warehouseId() == null
           || value.equipmentId() == null
           || value.equipmentName() == null
           || value.equipmentName().isBlank()
           || value.quantity() < 1
           || value.availableQuantity() < 0
-          || !ids.add(value.equipmentId())) {
+          || !ids.add(value.warehouseId() + ":" + value.equipmentId())) {
         throw malformed("Asset-service returned an invalid order equipment reservation");
       }
       values.add(
           new OrderEquipmentReservation(
+              value.warehouseId(),
               value.equipmentId(),
               value.equipmentName(),
               value.quantity(),
@@ -1048,8 +1104,8 @@ final class LogisticsAssetOrderPresentationDependencyClient {
       UUID rentalItemId, List<OrderEquipmentRequirementRequest> requirements) {}
 
   /**
-   * Replacement command declaring the complete desired equipment reservation set for an order in
-   * one warehouse.
+   * Replacement command declaring the complete desired equipment reservation set for an order;
+   * asset-service resolves each active cabin's physical source and partitions the aggregate there.
    */
   private record ReplaceOrderEquipmentReservationsRequest(
       UUID warehouseId,
@@ -1057,8 +1113,9 @@ final class LogisticsAssetOrderPresentationDependencyClient {
       String actorRole,
       List<OrderUnitEquipmentRequirementsRequest> units) {}
 
-  /** Asset-service resolution of an equipment requirement against current available quantity. */
+  /** Source-partitioned asset resolution of an equipment requirement and live availability. */
   private record OrderEquipmentReservationResponse(
+      UUID warehouseId,
       UUID equipmentId,
       String equipmentName,
       long quantity,
@@ -1100,6 +1157,7 @@ final class LogisticsAssetOrderPresentationDependencyClient {
   /** Atomic asset replacement command carrying all pairs and post-swap composition. */
   private record ReplaceOrderUnitsRequest(
       UUID warehouseId,
+      UUID inventorySourceWarehouseId,
       UUID presentationId,
       UUID actorSubjectId,
       String actorRole,
@@ -1139,7 +1197,23 @@ final class LogisticsAssetOrderPresentationDependencyClient {
   private record EquipmentResponse(UUID id, String name, boolean active, Integer maximumPerCabin) {}
 
   /** Minimal warehouse totals shape needed for live presentation availability. */
-  private record EquipmentTotalsResponse(long availableQuantity) {}
+  private record EquipmentTotalsResponse(
+      long availableQuantity,
+      long availableStock,
+      List<EquipmentBalanceResponse> balances) {}
+
+  /** Exact source balance included by the existing asset equipment-availability response. */
+  private record EquipmentBalanceResponse(
+      UUID id,
+      long version,
+      UUID equipmentId,
+      UUID warehouseId,
+      UUID rentalItemId,
+      String locationKind,
+      long quantity,
+      long activeHeldQuantity,
+      boolean allocatable,
+      long availableStock) {}
 
   /** Asset-owned warehouse equipment availability row. */
   private record EquipmentWarehouseResponse(

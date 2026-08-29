@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.logistics.repository;
 
 import dev.buhanzaz.rwms.logistics.domain.LogisticsReconciliation;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsReconciliationState;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -13,4 +14,8 @@ public interface LogisticsReconciliationRepository
     extends JpaRepository<LogisticsReconciliation, UUID> {
   Optional<LogisticsReconciliation> findByDocument_IdAndLine_IdAndState(
       UUID documentId, UUID lineId, LogisticsReconciliationState state);
+
+  /** Returns every open ambiguity of one document in stable audit order. */
+  List<LogisticsReconciliation> findAllByDocument_IdAndStateOrderByOpenedAtAscIdAsc(
+      UUID documentId, LogisticsReconciliationState state);
 }

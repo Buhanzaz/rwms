@@ -1,7 +1,7 @@
 asyncapi: 3.1.0
 info:
   title: RWMS Logistics Domain Events
-  version: 1.0.0
+  version: 1.1.0
   description: >-
     Sanitized committed logistics facts published through the logistics-service
     transactional outbox. Delivery is at-least-once, aggregateId is the Kafka
@@ -32,6 +32,8 @@ channels:
     address: rwms.logistics.transfer.v1
     messages:
       transferCreatedV1: { $ref: '#/components/messages/TransferCreatedV1' }
+      transferPlanUpdatedV1: { $ref: '#/components/messages/TransferPlanUpdatedV1' }
+      transferConfirmedV1: { $ref: '#/components/messages/TransferConfirmedV1' }
       transferDepartedV1: { $ref: '#/components/messages/TransferDepartedV1' }
       transferLineArrivedV1: { $ref: '#/components/messages/TransferLineArrivedV1' }
       transferConflictedV1: { $ref: '#/components/messages/TransferConflictedV1' }
@@ -145,6 +147,12 @@ components:
       payload: { $ref: './logistics/logistics-events-v1.schema.json' }
     TransferCreatedV1:
       name: logistics.transfer.created.v1
+      payload: { $ref: './logistics/logistics-events-v1.schema.json' }
+    TransferPlanUpdatedV1:
+      name: logistics.transfer.plan-updated.v1
+      payload: { $ref: './logistics/logistics-events-v1.schema.json' }
+    TransferConfirmedV1:
+      name: logistics.transfer.confirmed.v1
       payload: { $ref: './logistics/logistics-events-v1.schema.json' }
     TransferDepartedV1:
       name: logistics.transfer.departed.v1

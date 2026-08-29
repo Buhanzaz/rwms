@@ -146,7 +146,9 @@ class ShipmentFurnitureTaskServiceTest {
     LogisticsDocumentLine first = mock(LogisticsDocumentLine.class);
     LogisticsDocumentLine second = mock(LogisticsDocumentLine.class);
     when(first.getAssetId()).thenReturn(UNIT_1);
+    when(first.getInventorySourceWarehouseId()).thenReturn(WAREHOUSE_ID);
     when(second.getAssetId()).thenReturn(UNIT_2);
+    when(second.getInventorySourceWarehouseId()).thenReturn(WAREHOUSE_ID);
     when(documentLines.findAllByDocument_IdOrderByLineNumber(SHIPMENT_ID))
         .thenReturn(List.of(first, second));
     when(taskLinks.findAllByDocument_IdOrderByUnitNumberAsc(SHIPMENT_ID)).thenReturn(List.of());
@@ -292,6 +294,7 @@ class ShipmentFurnitureTaskServiceTest {
         .thenReturn(List.of());
     LogisticsDocumentLine line = mock(LogisticsDocumentLine.class);
     when(line.getAssetId()).thenReturn(UNIT_1);
+    when(line.getInventorySourceWarehouseId()).thenReturn(WAREHOUSE_ID);
     when(documentLines.findAllByDocument_IdOrderByLineNumber(SHIPMENT_ID))
         .thenReturn(List.of(line));
     when(taskLinks

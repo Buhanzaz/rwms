@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -43,11 +44,14 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.security.access.AccessDeniedException;
 
 /** Verifies replacement ordering, pre-start fencing, and old furniture-task cancellation. */
 class RentalOrderUnitReplacementServiceTest {
   private static final UUID ORDER_ID = UUID.fromString("10000000-0000-0000-0000-000000000001");
   private static final UUID WAREHOUSE_ID = UUID.fromString("10000000-0000-0000-0000-000000000002");
+  private static final UUID SUPPORT_WAREHOUSE_ID =
+      UUID.fromString("10000000-0000-0000-0000-000000000004");
   private static final UUID ACTOR_ID = UUID.fromString("10000000-0000-0000-0000-000000000003");
   private static final UUID OLD_1 = UUID.fromString("10000000-0000-0000-0000-000000000011");
   private static final UUID OLD_2 = UUID.fromString("10000000-0000-0000-0000-000000000012");
@@ -58,6 +62,8 @@ class RentalOrderUnitReplacementServiceTest {
   private final RentalOrderReadService reads = mock(RentalOrderReadService.class);
   private final RentalOrderReservationService reservations =
       mock(RentalOrderReservationService.class);
+  private final RentalOrderInventorySourcePolicy inventorySources =
+      mock(RentalOrderInventorySourcePolicy.class);
   private final OrderAuthorizer access = mock(OrderAuthorizer.class);
   private final LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
   private final ShipmentFurnitureTaskService furnitureTasks =
@@ -73,6 +79,7 @@ class RentalOrderUnitReplacementServiceTest {
       new RentalOrderUnitReplacementService(
           reads,
           reservations,
+          inventorySources,
           access,
           dependencies,
           furnitureTasks,
@@ -97,6 +104,12 @@ class RentalOrderUnitReplacementServiceTest {
   void replacementTripIsPreStartByDefault() {
     when(documentService.isRentalOrderUnitReplacementPreStart(eq(ORDER_ID), any()))
         .thenReturn(true);
+    when(inventorySources.requireWritableReplacementSource(
+            any(), eq(WAREHOUSE_ID), nullable(UUID.class)))
+        .thenAnswer(invocation -> {
+          UUID requested = invocation.getArgument(2);
+          return requested == null ? WAREHOUSE_ID : requested;
+        });
   }
 
   @Test
@@ -324,6 +337,133 @@ class RentalOrderUnitReplacementServiceTest {
     assertThat(replacements.getValue())
         .singleElement()
         .satisfies(replacement -> assertThat(replacement.movement()).isEqualTo(bundle));
+  }
+
+  @Test
+  void authorizedCrossSourceReplacementFreezesAndReplaysThePhysicalSource() {
+    UUID key = UUID.randomUUID();
+    OrderDetailResponse order = order(OLD_1);
+    List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> composition =
+        List.of(new LogisticsDependencyGateway.OrderUnitEquipmentRequirements(NEW_1, List.of()));
+    ReplacementCheckpoint checkpoint =
+        new ReplacementCheckpoint(
+            UUID.randomUUID(),
+            ORDER_ID,
+            WAREHOUSE_ID,
+            SUPPORT_WAREHOUSE_ID,
+            null,
+            OLD_1,
+            NEW_1,
+            "межскладская замена",
+            ACTOR_ID,
+            "WAREHOUSE_MANAGER",
+            key,
+            key,
+            0,
+            "a".repeat(64),
+            null,
+            null,
+            null,
+            null,
+            null);
+    LogisticsDependencyGateway.OrderUnitsReplacementReceipt receipt =
+        new LogisticsDependencyGateway.OrderUnitsReplacementReceipt(
+            List.of(
+                new LogisticsDependencyGateway.OrderUnitReplacementReceipt(
+                    null, null, List.of(), true)),
+            false);
+    when(reads.get(actor, ORDER_ID)).thenReturn(order);
+    when(documents.findAllByDocumentTypeAndRentalOrderIdOrderByCreatedAtAscIdAsc(
+            any(), eq(ORDER_ID)))
+        .thenReturn(List.of());
+    when(reservations.replacementComposition(eq(ORDER_ID), any())).thenReturn(composition);
+    when(dependencies.planOrderFurnitureMovements(
+            eq(ORDER_ID),
+            eq(SUPPORT_WAREHOUSE_ID),
+            eq(NEW_1),
+            eq(OLD_1),
+            anyList(),
+            eq(composition)))
+        .thenReturn(
+            new LogisticsDependencyGateway.OrderFurnitureMovementPlan(
+                ORDER_ID, NEW_1, "VN-101", List.of()));
+    when(furnitureTasks.replacementBatch(ORDER_ID, key)).thenReturn(List.of(checkpoint));
+    when(dependencies.replaceOrderUnits(
+            eq(key),
+            eq(ORDER_ID),
+            eq(WAREHOUSE_ID),
+            eq(SUPPORT_WAREHOUSE_ID),
+            eq(null),
+            eq(ACTOR_ID),
+            eq("WAREHOUSE_MANAGER"),
+            eq(composition),
+            anyList()))
+        .thenReturn(receipt);
+    when(reservations.finalizeReplacements(ORDER_ID, key, receipt))
+        .thenReturn(new RentalOrderCommandOutcome(order, false));
+
+    OrderDetailResponse result =
+        service.replaceDirect(
+            actor,
+            ORDER_ID,
+            5,
+            OLD_1,
+            NEW_1,
+            "межскладская замена",
+            SUPPORT_WAREHOUSE_ID,
+            key);
+
+    assertThat(result).isSameAs(order);
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<ReplacementPreparation>> preparations =
+        ArgumentCaptor.forClass(List.class);
+    verify(furnitureTasks).checkpointReplacements(preparations.capture());
+    assertThat(preparations.getValue())
+        .singleElement()
+        .satisfies(
+            value ->
+                assertThat(value.command().inventorySourceWarehouseId())
+                    .isEqualTo(SUPPORT_WAREHOUSE_ID));
+    verify(dependencies)
+        .replaceOrderUnits(
+            eq(key),
+            eq(ORDER_ID),
+            eq(WAREHOUSE_ID),
+            eq(SUPPORT_WAREHOUSE_ID),
+            eq(null),
+            eq(ACTOR_ID),
+            eq("WAREHOUSE_MANAGER"),
+            eq(composition),
+            anyList());
+  }
+
+  @Test
+  void deniedCrossSourceFailsBeforePlanningOrAssetMutation() {
+    OrderDetailResponse order = order(OLD_1);
+    when(reads.get(actor, ORDER_ID)).thenReturn(order);
+    when(inventorySources.requireWritableReplacementSource(
+            actor, WAREHOUSE_ID, SUPPORT_WAREHOUSE_ID))
+        .thenThrow(new AccessDeniedException("Insufficient warehouse access"));
+
+    assertThatThrownBy(
+            () ->
+                service.replaceDirect(
+                    actor,
+                    ORDER_ID,
+                    5,
+                    OLD_1,
+                    NEW_1,
+                    "межскладская замена",
+                    SUPPORT_WAREHOUSE_ID,
+                    UUID.randomUUID()))
+        .isInstanceOf(AccessDeniedException.class);
+
+    verify(dependencies, never())
+        .planOrderFurnitureMovements(any(), any(), any(), any(), anyList(), anyList());
+    verify(dependencies, never())
+        .replaceOrderUnits(
+            any(), any(), any(), any(), any(), any(), any(), anyList(), anyList());
+    verify(furnitureTasks, never()).checkpointReplacements(any());
   }
 
   @Test

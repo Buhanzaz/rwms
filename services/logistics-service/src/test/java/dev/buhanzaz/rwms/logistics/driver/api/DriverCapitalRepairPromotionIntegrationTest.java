@@ -154,6 +154,7 @@ class DriverCapitalRepairPromotionIntegrationTest {
             eq(QUEUE_DEFINITION),
             any(),
             anyInt(),
+            any(),
             any()))
         .thenAnswer(
             invocation -> {

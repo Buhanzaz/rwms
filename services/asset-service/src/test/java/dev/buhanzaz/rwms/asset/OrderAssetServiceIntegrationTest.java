@@ -28,6 +28,7 @@ import dev.buhanzaz.rwms.asset.api.AdministrativeAssetCorrectionApiModels.Admini
 import dev.buhanzaz.rwms.asset.api.AdministrativeAssetCorrectionApiModels.CreateCabinAdministrativeCorrectionRequest;
 import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderActorRequest;
 import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderEquipmentRequirement;
+import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderEquipmentReservationView;
 import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderFurnitureMovementPlan;
 import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderFurnitureMovementPlanLine;
 import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderFurnitureMovementPlanRequest;
@@ -1552,6 +1553,251 @@ class OrderAssetServiceIntegrationTest {
                 firstAlternative.id(),
                 secondAlternative.id()))
         .containsOnly("RELEASED");
+  }
+
+  @Test
+  void crossSourceReplacementMovesReservationAndFurnitureCapacityToThePhysicalSource() {
+    UUID actorSubjectId = UUID.randomUUID();
+    UUID serviceWarehouseId = UUID.randomUUID();
+    UUID inventorySourceWarehouseId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    UUID equipmentId = createFurniture(actorSubjectId, "Cross-source bed");
+    RentalItemResponse old = freeRental(actorSubjectId, serviceWarehouseId);
+    RentalItemResponse replacement = freeRental(actorSubjectId, inventorySourceWarehouseId);
+    seedStockBalance(equipmentId, serviceWarehouseId, 1);
+    seedStockBalance(equipmentId, inventorySourceWarehouseId, 1);
+    orders.reserve(
+        UUID.randomUUID(),
+        orderId,
+        reserveRequest(serviceWarehouseId, old.id(), actorSubjectId));
+    List<OrderEquipmentRequirement> requirements =
+        List.of(new OrderEquipmentRequirement(equipmentId, 1L));
+    orders.replaceEquipmentReservations(
+        UUID.randomUUID(),
+        orderId,
+        equipmentReservationRequest(
+            actorSubjectId, serviceWarehouseId, old.id(), requirements));
+    List<OrderUnitEquipmentRequirements> postSwap =
+        List.of(new OrderUnitEquipmentRequirements(replacement.id(), requirements));
+    OrderFurnitureMovementPlan plan =
+        orders.furnitureMovementPlan(
+            orderId,
+            new OrderFurnitureMovementPlanRequest(
+                inventorySourceWarehouseId,
+                replacement.id(),
+                old.id(),
+                requirements,
+                postSwap));
+    assertThat(plan.lines())
+        .singleElement()
+        .satisfies(
+            line -> {
+              assertThat(line.sourceWarehouseId()).isEqualTo(inventorySourceWarehouseId);
+              assertThat(line.sourceRentalItemId()).isNull();
+              assertThat(line.targetWarehouseId()).isEqualTo(inventorySourceWarehouseId);
+              assertThat(line.targetRentalItemId()).isEqualTo(replacement.id());
+            });
+    UUID key = UUID.randomUUID();
+    ReplaceOrderUnitsRequest request =
+        new ReplaceOrderUnitsRequest(
+            serviceWarehouseId,
+            inventorySourceWarehouseId,
+            null,
+            actorSubjectId,
+            "WAREHOUSE_MANAGER",
+            postSwap,
+            List.of(
+                new OrderUnitReplacement(
+                    old.id(), replacement.id(), movementBundle(plan))));
+
+    var receipt = orders.replaceUnits(key, orderId, request);
+    var replay = orders.replaceUnits(key, orderId, request);
+
+    assertThat(receipt.response().replacements())
+        .singleElement()
+        .satisfies(
+            pair -> {
+              assertThat(pair.releasedReservation().warehouseId())
+                  .isEqualTo(serviceWarehouseId);
+              assertThat(pair.replacementReservation().warehouseId())
+                  .isEqualTo(inventorySourceWarehouseId);
+              assertThat(pair.movementReservations()).singleElement();
+            });
+    assertThat(replay.replayed()).isTrue();
+    assertThat(orders.units(orderId))
+        .singleElement()
+        .satisfies(
+            unit -> {
+              assertThat(unit.rentalItemId()).isEqualTo(replacement.id());
+              assertThat(unit.warehouseId()).isEqualTo(inventorySourceWarehouseId);
+            });
+    assertThat(
+            jdbc.queryForList(
+                "select warehouse_id from order_equipment_reservation where order_id=? and state='ACTIVE'",
+                UUID.class,
+                orderId))
+        .containsExactly(inventorySourceWarehouseId);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from order_unit_reservation where order_id=? and state='ACTIVE'",
+                Integer.class,
+                orderId))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void crossSourceReplacementUsesFurnitureAlreadyAttachedToTheReplacementCabin() {
+    UUID actorSubjectId = UUID.randomUUID();
+    UUID serviceWarehouseId = UUID.randomUUID();
+    UUID inventorySourceWarehouseId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    UUID equipmentId = createFurniture(actorSubjectId, "Cross-source furnished cabin bed");
+    RentalItemResponse old = freeRental(actorSubjectId, serviceWarehouseId);
+    RentalItemResponse replacement = freeRental(actorSubjectId, inventorySourceWarehouseId);
+    seedCabinBalance(equipmentId, serviceWarehouseId, old.id(), 1);
+    seedCabinBalance(equipmentId, inventorySourceWarehouseId, replacement.id(), 1);
+    orders.reserve(
+        UUID.randomUUID(),
+        orderId,
+        reserveRequest(serviceWarehouseId, old.id(), actorSubjectId));
+    List<OrderEquipmentRequirement> requirements =
+        List.of(new OrderEquipmentRequirement(equipmentId, 1L));
+    orders.replaceEquipmentReservations(
+        UUID.randomUUID(),
+        orderId,
+        equipmentReservationRequest(
+            actorSubjectId, serviceWarehouseId, old.id(), requirements));
+    List<OrderUnitEquipmentRequirements> postSwap =
+        List.of(new OrderUnitEquipmentRequirements(replacement.id(), requirements));
+    OrderFurnitureMovementPlan plan =
+        orders.furnitureMovementPlan(
+            orderId,
+            new OrderFurnitureMovementPlanRequest(
+                inventorySourceWarehouseId,
+                replacement.id(),
+                old.id(),
+                requirements,
+                postSwap));
+    assertThat(plan.lines()).isEmpty();
+
+    var receipt =
+        orders.replaceUnits(
+            UUID.randomUUID(),
+            orderId,
+            new ReplaceOrderUnitsRequest(
+                serviceWarehouseId,
+                inventorySourceWarehouseId,
+                null,
+                actorSubjectId,
+                "WAREHOUSE_MANAGER",
+                postSwap,
+                List.of(new OrderUnitReplacement(old.id(), replacement.id(), null))));
+
+    assertThat(receipt.response().replacements())
+        .singleElement()
+        .satisfies(
+            pair -> {
+              assertThat(pair.contentReady()).isTrue();
+              assertThat(pair.movementReservations()).isEmpty();
+              assertThat(pair.replacementReservation().warehouseId())
+                  .isEqualTo(inventorySourceWarehouseId);
+            });
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from order_equipment_reservation
+                where order_id=? and warehouse_id=? and equipment_id=? and state='ACTIVE'
+                """,
+                Integer.class,
+                orderId,
+                inventorySourceWarehouseId,
+                equipmentId))
+        .isOne();
+  }
+
+  @Test
+  void crossSourceReplacementRejectsAReplacementCabinOutsideTheDeclaredSource() {
+    UUID actorSubjectId = UUID.randomUUID();
+    UUID serviceWarehouseId = UUID.randomUUID();
+    UUID actualSourceWarehouseId = UUID.randomUUID();
+    UUID declaredSourceWarehouseId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    RentalItemResponse old = freeRental(actorSubjectId, serviceWarehouseId);
+    RentalItemResponse replacement = freeRental(actorSubjectId, actualSourceWarehouseId);
+    orders.reserve(
+        UUID.randomUUID(),
+        orderId,
+        reserveRequest(serviceWarehouseId, old.id(), actorSubjectId));
+
+    assertConflict(
+        "UNIT_WAREHOUSE_MISMATCH",
+        () ->
+            orders.replaceUnits(
+                UUID.randomUUID(),
+                orderId,
+                new ReplaceOrderUnitsRequest(
+                    serviceWarehouseId,
+                    declaredSourceWarehouseId,
+                    null,
+                    actorSubjectId,
+                    "WAREHOUSE_MANAGER",
+                    List.of(
+                        new OrderUnitEquipmentRequirements(replacement.id(), List.of())),
+                    List.of(new OrderUnitReplacement(old.id(), replacement.id(), null)))));
+
+    assertThat(orders.units(orderId))
+        .singleElement()
+        .satisfies(
+            unit -> {
+              assertThat(unit.rentalItemId()).isEqualTo(old.id());
+              assertThat(unit.warehouseId()).isEqualTo(serviceWarehouseId);
+            });
+    assertThat(assets.rentalItem(replacement.id()).status()).isEqualTo(RentalItemStatus.FREE);
+  }
+
+  @Test
+  void equipmentReservationsRemainPartitionedForMixedSourceOrderCabins() {
+    UUID actorSubjectId = UUID.randomUUID();
+    UUID firstWarehouseId = UUID.randomUUID();
+    UUID secondWarehouseId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    UUID equipmentId = createFurniture(actorSubjectId, "Mixed-source table");
+    RentalItemResponse first = freeRental(actorSubjectId, firstWarehouseId);
+    RentalItemResponse second = freeRental(actorSubjectId, secondWarehouseId);
+    seedStockBalance(equipmentId, firstWarehouseId, 1);
+    seedStockBalance(equipmentId, secondWarehouseId, 1);
+    orders.reserve(
+        UUID.randomUUID(), orderId, reserveRequest(firstWarehouseId, first.id(), actorSubjectId));
+    orders.reserve(
+        UUID.randomUUID(), orderId, reserveRequest(secondWarehouseId, second.id(), actorSubjectId));
+    List<OrderEquipmentRequirement> one =
+        List.of(new OrderEquipmentRequirement(equipmentId, 1L));
+
+    var result =
+        orders.replaceEquipmentReservations(
+            UUID.randomUUID(),
+            orderId,
+            new ReplaceOrderEquipmentReservationsRequest(
+                firstWarehouseId,
+                actorSubjectId,
+                "WAREHOUSE_MANAGER",
+                List.of(
+                    new OrderUnitEquipmentRequirements(first.id(), one),
+                    new OrderUnitEquipmentRequirements(second.id(), one))));
+
+    assertThat(result.response())
+        .extracting(OrderEquipmentReservationView::warehouseId)
+        .containsExactlyInAnyOrder(firstWarehouseId, secondWarehouseId);
+    assertThat(result.response())
+        .extracting(OrderEquipmentReservationView::quantity)
+        .containsOnly(1L);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from order_equipment_reservation where order_id=? and equipment_id=? and state='ACTIVE'",
+                Integer.class,
+                orderId,
+                equipmentId))
+        .isEqualTo(2);
   }
 
   @Test

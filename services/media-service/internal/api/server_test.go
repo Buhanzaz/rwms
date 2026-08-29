@@ -176,6 +176,169 @@ func TestCreateUploadReturnsOnlySameOriginContentPath(t *testing.T) {
 	}
 }
 
+func TestCustomerRentalCreatesOnlyItsSubjectBoundShipmentUpload(t *testing.T) {
+	documentID, lineID, warehouseID, subjectID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	sessionID, mediaID := uuid.New(), uuid.New()
+	repository := &repositoryStub{createAsset: persistence.AssetRecord{
+		ID: mediaID, OwnerType: persistence.OwnerTypeLogisticsShipment,
+		OwnerID: persistence.LogisticsOwnerID(documentID, lineID), WarehouseID: warehouseID,
+		Version: 1, UploadSessionID: sessionID, UploadExpiresAt: time.Now().Add(time.Minute),
+	}}
+	principal := auth.Principal{
+		SubjectID: subjectID, Role: "CUSTOMER", ClientID: "rwms-customer-android",
+		Scopes: map[string]struct{}{"customer.rental": {}},
+	}
+	server := newTestServer(t, repository, validatorStub{principal: principal}, &storeStub{})
+	body := fmt.Sprintf(`{"ownerType":"LOGISTICS_SHIPMENT","documentId":"%s","lineId":"%s","warehouseId":"%s","context":"SHIPMENT","fileName":"delivery.jpg","contentType":"image/jpeg","contentLength":128,"checksumSha256":"%s","sortOrder":0}`,
+		documentID, lineID, warehouseID, strings.Repeat("a", 64))
+	request := httptest.NewRequest(http.MethodPost, "/api/media/v1/upload-sessions", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer test")
+	request.Header.Set("Idempotency-Key", uuid.NewString())
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || repository.createCalls != 1 ||
+		repository.createCommand.AuthorizedSubjectID == nil ||
+		*repository.createCommand.AuthorizedSubjectID != subjectID {
+		t.Fatalf("customer create response = %d %s; command=%#v", response.Code,
+			response.Body.String(), repository.createCommand)
+	}
+
+	foreignBody := strings.Replace(body, `"LOGISTICS_SHIPMENT"`, `"LOGISTICS_RETURN"`, 1)
+	foreignBody = strings.Replace(foreignBody, `"SHIPMENT"`, `"RETURN_INSPECTION"`, 1)
+	foreignRequest := httptest.NewRequest(http.MethodPost, "/api/media/v1/upload-sessions", strings.NewReader(foreignBody))
+	foreignRequest.Header.Set("Authorization", "Bearer test")
+	foreignRequest.Header.Set("Idempotency-Key", uuid.NewString())
+	foreignResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(foreignResponse, foreignRequest)
+	if foreignResponse.Code != http.StatusForbidden || repository.createCalls != 1 {
+		t.Fatalf("customer non-shipment response = %d %s; calls=%d", foreignResponse.Code,
+			foreignResponse.Body.String(), repository.createCalls)
+	}
+}
+
+func TestCustomerRentalCreatesProfileAvatarButManagerCannotUseProfileOwner(t *testing.T) {
+	profileID, warehouseID, subjectID := uuid.New(), uuid.New(), uuid.New()
+	sessionID, mediaID := uuid.New(), uuid.New()
+	repository := &repositoryStub{createAsset: persistence.AssetRecord{
+		ID: mediaID, OwnerType: persistence.OwnerTypeLogisticsCustomerProfile,
+		OwnerID: profileID.String(), WarehouseID: warehouseID, Version: 1,
+		UploadSessionID: sessionID, UploadExpiresAt: time.Now().Add(time.Minute),
+	}}
+	customer := auth.Principal{
+		SubjectID: subjectID, Role: "CUSTOMER", ClientID: "rwms-customer-android",
+		Scopes: map[string]struct{}{"customer.rental": {}},
+	}
+	body := fmt.Sprintf(`{"ownerType":"LOGISTICS_CUSTOMER_PROFILE","ownerId":"%s","warehouseId":"%s","context":"PROFILE_AVATAR","fileName":"avatar.jpg","contentType":"image/jpeg","contentLength":128,"checksumSha256":"%s","sortOrder":0}`,
+		profileID, warehouseID, strings.Repeat("a", 64))
+	server := newTestServer(t, repository, validatorStub{principal: customer}, &storeStub{})
+	request := httptest.NewRequest(http.MethodPost, "/api/media/v1/upload-sessions", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer customer")
+	request.Header.Set("Idempotency-Key", uuid.NewString())
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || repository.createCalls != 1 ||
+		repository.createCommand.OwnerType != persistence.OwnerTypeLogisticsCustomerProfile ||
+		repository.createCommand.OwnerID != profileID.String() ||
+		repository.createCommand.AuthorizedSubjectID == nil ||
+		*repository.createCommand.AuthorizedSubjectID != subjectID {
+		t.Fatalf("profile avatar create = %d %s; command=%#v", response.Code,
+			response.Body.String(), repository.createCommand)
+	}
+
+	wrongContext := strings.Replace(body, `"PROFILE_AVATAR"`, `"SHIPMENT"`, 1)
+	wrongRequest := httptest.NewRequest(http.MethodPost, "/api/media/v1/upload-sessions", strings.NewReader(wrongContext))
+	wrongRequest.Header.Set("Authorization", "Bearer customer")
+	wrongRequest.Header.Set("Idempotency-Key", uuid.NewString())
+	wrongResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(wrongResponse, wrongRequest)
+	if wrongResponse.Code != http.StatusBadRequest || repository.createCalls != 1 {
+		t.Fatalf("wrong profile context = %d %s; calls=%d", wrongResponse.Code,
+			wrongResponse.Body.String(), repository.createCalls)
+	}
+
+	managerRepository := &repositoryStub{createAsset: repository.createAsset}
+	manager := auth.Principal{
+		SubjectID: uuid.New(), Scopes: map[string]struct{}{"rwms.write": {}},
+		Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.Edit}},
+	}
+	managerServer := newTestServer(t, managerRepository, validatorStub{principal: manager}, &storeStub{})
+	managerRequest := httptest.NewRequest(http.MethodPost, "/api/media/v1/upload-sessions", strings.NewReader(body))
+	managerRequest.Header.Set("Authorization", "Bearer manager")
+	managerRequest.Header.Set("Idempotency-Key", uuid.NewString())
+	managerResponse := httptest.NewRecorder()
+	managerServer.Handler().ServeHTTP(managerResponse, managerRequest)
+	if managerResponse.Code != http.StatusForbidden || managerRepository.createCalls != 0 {
+		t.Fatalf("manager profile create = %d %s; calls=%d", managerResponse.Code,
+			managerResponse.Body.String(), managerRepository.createCalls)
+	}
+}
+
+func TestCustomerRentalFinalizeCarriesItsAuthorizedSubject(t *testing.T) {
+	documentID, lineID, warehouseID, subjectID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	sessionID, mediaID := uuid.New(), uuid.New()
+	completedAt := time.Now().UTC()
+	asset := persistence.AssetRecord{
+		ID: mediaID, OwnerType: persistence.OwnerTypeLogisticsShipment,
+		OwnerID: persistence.LogisticsOwnerID(documentID, lineID), WarehouseID: warehouseID,
+		UploadSessionID: sessionID, UploadCompletedAt: &completedAt, UploadMode: persistence.UploadModeSource,
+		ContentType: "image/jpeg", ExpectedLength: 128, ExpectedChecksum: strings.Repeat("a", 64),
+		Status: media.StatusProcessing, Version: 2,
+	}
+	repository := &repositoryStub{sessionAsset: asset, finalizeAsset: asset, finalizeReplay: true}
+	principal := auth.Principal{
+		SubjectID: subjectID, Role: "CUSTOMER", ClientID: "rwms-customer-android",
+		Scopes: map[string]struct{}{"customer.rental": {}},
+	}
+	server := newTestServer(t, repository, validatorStub{principal: principal}, &storeStub{})
+	body := fmt.Sprintf(`{"objectVersionId":"version-1","etag":"etag-1","checksumSha256":"%s"}`,
+		strings.Repeat("a", 64))
+	request := httptest.NewRequest(http.MethodPost,
+		"/api/media/v1/upload-sessions/"+sessionID.String()+"/complete", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer test")
+	request.Header.Set("Idempotency-Key", uuid.NewString())
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || repository.finalizeCalls != 1 ||
+		len(repository.finalizeCommands) != 1 || repository.finalizeCommands[0].AuthorizedSubjectID == nil ||
+		*repository.finalizeCommands[0].AuthorizedSubjectID != subjectID {
+		t.Fatalf("customer finalize response = %d %s; commands=%#v", response.Code,
+			response.Body.String(), repository.finalizeCommands)
+	}
+}
+
+func TestCustomerProfileFinalizeCarriesItsAuthorizedSubject(t *testing.T) {
+	profileID, warehouseID, subjectID := uuid.New(), uuid.New(), uuid.New()
+	sessionID, mediaID := uuid.New(), uuid.New()
+	completedAt := time.Now().UTC()
+	asset := persistence.AssetRecord{
+		ID: mediaID, OwnerType: persistence.OwnerTypeLogisticsCustomerProfile,
+		OwnerID: profileID.String(), WarehouseID: warehouseID,
+		UploadSessionID: sessionID, UploadCompletedAt: &completedAt, UploadMode: persistence.UploadModeSource,
+		ContentType: "image/jpeg", ExpectedLength: 128, ExpectedChecksum: strings.Repeat("a", 64),
+		Status: media.StatusProcessing, Version: 2,
+	}
+	repository := &repositoryStub{sessionAsset: asset, finalizeAsset: asset, finalizeReplay: true}
+	principal := auth.Principal{
+		SubjectID: subjectID, Role: "CUSTOMER", ClientID: "rwms-customer-android",
+		Scopes: map[string]struct{}{"customer.rental": {}},
+	}
+	server := newTestServer(t, repository, validatorStub{principal: principal}, &storeStub{})
+	body := fmt.Sprintf(`{"objectVersionId":"version-1","etag":"etag-1","checksumSha256":"%s"}`,
+		strings.Repeat("a", 64))
+	request := httptest.NewRequest(http.MethodPost,
+		"/api/media/v1/upload-sessions/"+sessionID.String()+"/complete", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer customer")
+	request.Header.Set("Idempotency-Key", uuid.NewString())
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || repository.finalizeCalls != 1 ||
+		repository.finalizeCommands[0].AuthorizedSubjectID == nil ||
+		*repository.finalizeCommands[0].AuthorizedSubjectID != subjectID {
+		t.Fatalf("profile finalize = %d %s; commands=%#v", response.Code,
+			response.Body.String(), repository.finalizeCommands)
+	}
+}
+
 func TestCreateImageVariantUploadReturnsThreeSameOriginPartPaths(t *testing.T) {
 	warehouseID, ownerID, subjectID := uuid.New(), uuid.New(), uuid.New()
 	sessionID, mediaID := uuid.New(), uuid.New()
@@ -1107,6 +1270,152 @@ func TestOwnerMediaListReturnsOnlyRelativeAuthorizedContentPaths(t *testing.T) {
 	}
 }
 
+func TestCustomerRentalListsOnlyShipmentOwnerMedia(t *testing.T) {
+	documentID, lineID, warehouseID, subjectID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	ownerID := persistence.LogisticsOwnerID(documentID, lineID)
+	repository := &repositoryStub{ownerRecords: []persistence.AssetWithVariants{{Asset: persistence.AssetRecord{
+		ID: uuid.New(), FolderID: uuid.New(), OwnerType: persistence.OwnerTypeLogisticsShipment,
+		OwnerID: ownerID, WarehouseID: warehouseID, FileName: "delivery.jpg",
+		ContentType: "image/jpeg", Kind: media.KindImage, Status: media.StatusUploading,
+		Version: 1, CreatedAt: time.Now(),
+	}}}}
+	principal := auth.Principal{
+		SubjectID: subjectID, Role: "CUSTOMER", ClientID: "rwms-customer-android",
+		Scopes: map[string]struct{}{"customer.rental": {}},
+	}
+	server := newTestServer(t, repository, validatorStub{principal: principal}, &storeStub{})
+	path := fmt.Sprintf("/api/media/v1/assets?ownerType=LOGISTICS_SHIPMENT&documentId=%s&lineId=%s&warehouseId=%s&context=SHIPMENT",
+		documentID, lineID, warehouseID)
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request.Header.Set("Authorization", "Bearer test")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"items":[{`) {
+		t.Fatalf("customer shipment list response = %d %s", response.Code, response.Body.String())
+	}
+
+	foreignPath := strings.Replace(path, "LOGISTICS_SHIPMENT", "LOGISTICS_RETURN", 1)
+	foreignPath = strings.Replace(foreignPath, "SHIPMENT", "RETURN_INSPECTION", 1)
+	foreignRequest := httptest.NewRequest(http.MethodGet, foreignPath, nil)
+	foreignRequest.Header.Set("Authorization", "Bearer test")
+	foreignResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(foreignResponse, foreignRequest)
+	if foreignResponse.Code != http.StatusForbidden {
+		t.Fatalf("customer non-shipment list response = %d %s", foreignResponse.Code, foreignResponse.Body.String())
+	}
+
+	overScoped := principal
+	overScoped.Scopes = map[string]struct{}{"customer.rental": {}, "rwms.read": {}}
+	overScopedServer := newTestServer(t, repository, validatorStub{principal: overScoped}, &storeStub{})
+	overScopedRequest := httptest.NewRequest(http.MethodGet, path, nil)
+	overScopedRequest.Header.Set("Authorization", "Bearer test")
+	overScopedResponse := httptest.NewRecorder()
+	overScopedServer.Handler().ServeHTTP(overScopedResponse, overScopedRequest)
+	if overScopedResponse.Code != http.StatusForbidden {
+		t.Fatalf("over-scoped customer response = %d %s", overScopedResponse.Code,
+			overScopedResponse.Body.String())
+	}
+}
+
+func TestCustomerProfileMediaListReadDeleteAreCustomerOnly(t *testing.T) {
+	profileID, warehouseID, subjectID, mediaID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	body := []byte("profile-avatar")
+	asset := persistence.AssetRecord{
+		ID: mediaID, FolderID: mediaID, OwnerType: persistence.OwnerTypeLogisticsCustomerProfile,
+		OwnerID: profileID.String(), WarehouseID: warehouseID, FileName: "avatar.webp",
+		ContentType: "image/webp", Kind: media.KindImage, Status: media.StatusReady,
+		Version: 3, Generation: 2, CreatedAt: time.Now(),
+	}
+	small := persistence.VariantRecord{
+		Variant: media.VariantSmall, ObjectKey: "private/profile-small",
+		ObjectVersionID: "profile-small-v2", ContentType: "image/webp", SizeBytes: int64(len(body)),
+	}
+	original := persistence.VariantRecord{
+		Variant: media.VariantOriginal, ObjectKey: "private/profile-original",
+		ObjectVersionID: "profile-original-v2", ContentType: "image/webp", SizeBytes: int64(len(body)),
+	}
+	repository := &repositoryStub{
+		ownerRecords:  []persistence.AssetWithVariants{{Asset: asset, Variants: []persistence.VariantRecord{small}}},
+		originalAsset: asset, originalVariant: &original,
+		deleteAsset: func() persistence.AssetRecord {
+			deleted := asset
+			deleted.Status, deleted.Version = media.StatusDeleted, 4
+			return deleted
+		}(),
+	}
+	customer := auth.Principal{
+		SubjectID: subjectID, Role: "CUSTOMER", ClientID: "rwms-customer-android",
+		Scopes: map[string]struct{}{"customer.rental": {}},
+	}
+	store := &storeStub{objectBody: body, statMetadata: media.ObjectMetadata{
+		VersionID: original.ObjectVersionID, SizeBytes: int64(len(body)), ContentType: original.ContentType,
+	}}
+	server := newTestServer(t, repository, validatorStub{principal: customer}, store)
+	query := fmt.Sprintf("ownerType=LOGISTICS_CUSTOMER_PROFILE&ownerId=%s&warehouseId=%s&context=PROFILE_AVATAR",
+		profileID, warehouseID)
+
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/media/v1/assets?"+query, nil)
+	listRequest.Header.Set("Authorization", "Bearer customer")
+	listResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(listResponse, listRequest)
+	if listResponse.Code != http.StatusOK ||
+		!strings.Contains(listResponse.Body.String(), "context=PROFILE_AVATAR") ||
+		!strings.Contains(listResponse.Body.String(), "ownerId="+profileID.String()) {
+		t.Fatalf("profile list = %d %s", listResponse.Code, listResponse.Body.String())
+	}
+
+	readRequest := httptest.NewRequest(http.MethodGet,
+		"/api/media/v1/assets/"+mediaID.String()+"/original?"+query, nil)
+	readRequest.Header.Set("Authorization", "Bearer customer")
+	readResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(readResponse, readRequest)
+	if readResponse.Code != http.StatusOK || !bytes.Equal(readResponse.Body.Bytes(), body) {
+		t.Fatalf("profile original = %d %q", readResponse.Code, readResponse.Body.Bytes())
+	}
+
+	deleteRequest := httptest.NewRequest(http.MethodPost,
+		"/api/media/v1/assets/"+mediaID.String()+"/deletion?"+query,
+		strings.NewReader(`{"expectedVersion":3}`))
+	deleteRequest.Header.Set("Authorization", "Bearer customer")
+	deleteRequest.Header.Set("Idempotency-Key", uuid.NewString())
+	deleteResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(deleteResponse, deleteRequest)
+	if deleteResponse.Code != http.StatusOK || repository.deleteCalls != 1 ||
+		repository.deleteCommand.AuthorizedSubjectID == nil ||
+		*repository.deleteCommand.AuthorizedSubjectID != subjectID {
+		t.Fatalf("profile delete = %d %s; command=%#v", deleteResponse.Code,
+			deleteResponse.Body.String(), repository.deleteCommand)
+	}
+
+	manager := auth.Principal{
+		SubjectID: uuid.New(), Scopes: map[string]struct{}{"rwms.read": {}},
+		Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.View}},
+	}
+	managerServer := newTestServer(t, &repositoryStub{}, validatorStub{principal: manager}, &storeStub{})
+	managerRequest := httptest.NewRequest(http.MethodGet, "/api/media/v1/assets?"+query, nil)
+	managerRequest.Header.Set("Authorization", "Bearer manager")
+	managerResponse := httptest.NewRecorder()
+	managerServer.Handler().ServeHTTP(managerResponse, managerRequest)
+	if managerResponse.Code != http.StatusForbidden {
+		t.Fatalf("manager profile read = %d %s", managerResponse.Code, managerResponse.Body.String())
+	}
+
+	worker := auth.WorkerPrincipal{
+		SubjectID: uuid.New(), WorkerID: uuid.New(), WarehouseID: warehouseID,
+		Scopes: map[string]struct{}{"worker.tasks": {}},
+	}
+	workerServer := newTestServer(t, &repositoryStub{}, validatorStub{
+		err: auth.ErrForbidden, workerPrincipal: worker,
+	}, &storeStub{})
+	workerRequest := httptest.NewRequest(http.MethodGet, "/api/media/v1/assets?"+query, nil)
+	workerRequest.Header.Set("Authorization", "Bearer worker")
+	workerResponse := httptest.NewRecorder()
+	workerServer.Handler().ServeHTTP(workerResponse, workerRequest)
+	if workerResponse.Code != http.StatusForbidden {
+		t.Fatalf("worker profile read = %d %s", workerResponse.Code, workerResponse.Body.String())
+	}
+}
+
 func TestSafeVariantContentPathKeepsTheCanonicalOwnerContext(t *testing.T) {
 	warehouseID, ownerID := uuid.New(), uuid.New()
 	for _, testCase := range []struct {
@@ -1492,6 +1801,76 @@ func TestServiceOwnerProofEnforcesExactClientAndStructuredLogisticsIdentity(t *t
 	}
 }
 
+func TestShipmentOwnerProofRequiresAndReturnsAuthorizedSubject(t *testing.T) {
+	documentID, lineID, warehouseID, proofEventID, subjectID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	repository := &repositoryStub{ownerProofRecord: persistence.ServiceOwnerProofRecord{
+		SourceService: persistence.LogisticsOwnerProofService,
+		OwnerType:     persistence.OwnerTypeLogisticsShipment, DocumentID: documentID, LineID: lineID,
+		WarehouseID: warehouseID, AuthorizedSubjectID: &subjectID,
+		OwnerRevision: 2, AggregateVersion: 3, ProofEventID: proofEventID, Active: true,
+	}}
+	server := newTestServer(t, repository, logisticsValidatorStub(), &storeStub{})
+	body := fmt.Sprintf(`{"ownerType":"LOGISTICS_SHIPMENT","documentId":"%s","lineId":"%s","warehouseId":"%s","authorizedSubjectId":"%s","ownerRevision":2,"aggregateVersion":3,"proofEventId":"%s","active":true}`,
+		documentID, lineID, warehouseID, subjectID, proofEventID)
+	request := httptest.NewRequest(http.MethodPost, "/api/internal/media/v1/owner-proofs", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer test")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || repository.ownerProofCommand.AuthorizedSubjectID == nil ||
+		*repository.ownerProofCommand.AuthorizedSubjectID != subjectID ||
+		!strings.Contains(response.Body.String(), `"authorizedSubjectId":"`+subjectID.String()+`"`) {
+		t.Fatalf("shipment owner proof response = %d %s; command=%#v", response.Code,
+			response.Body.String(), repository.ownerProofCommand)
+	}
+
+	missing := strings.Replace(body, `,"authorizedSubjectId":"`+subjectID.String()+`"`, "", 1)
+	missingRequest := httptest.NewRequest(http.MethodPost, "/api/internal/media/v1/owner-proofs", strings.NewReader(missing))
+	missingRequest.Header.Set("Authorization", "Bearer test")
+	missingResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(missingResponse, missingRequest)
+	if missingResponse.Code != http.StatusBadRequest || repository.ownerProofCalls != 1 {
+		t.Fatalf("missing shipment subject response = %d %s; calls=%d", missingResponse.Code,
+			missingResponse.Body.String(), repository.ownerProofCalls)
+	}
+}
+
+func TestCustomerProfileOwnerProofRequiresNonStructuredIdentityAndSubject(t *testing.T) {
+	profileID, warehouseID, proofEventID, subjectID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	repository := &repositoryStub{ownerProofRecord: persistence.ServiceOwnerProofRecord{
+		SourceService: persistence.LogisticsOwnerProofService,
+		OwnerType:     persistence.OwnerTypeLogisticsCustomerProfile, OwnerID: profileID,
+		WarehouseID: warehouseID, AuthorizedSubjectID: &subjectID,
+		OwnerRevision: 0, AggregateVersion: 1, ProofEventID: proofEventID, Active: true,
+	}}
+	server := newTestServer(t, repository, logisticsValidatorStub(), &storeStub{})
+	body := fmt.Sprintf(`{"ownerType":"LOGISTICS_CUSTOMER_PROFILE","ownerId":"%s","warehouseId":"%s","authorizedSubjectId":"%s","ownerRevision":0,"aggregateVersion":1,"proofEventId":"%s","active":true}`,
+		profileID, warehouseID, subjectID, proofEventID)
+	request := httptest.NewRequest(http.MethodPost, "/api/internal/media/v1/owner-proofs", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer logistics")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || repository.ownerProofCalls != 1 ||
+		repository.ownerProofCommand.OwnerID != profileID || repository.ownerProofCommand.DocumentID != uuid.Nil ||
+		repository.ownerProofCommand.AuthorizedSubjectID == nil ||
+		*repository.ownerProofCommand.AuthorizedSubjectID != subjectID ||
+		!strings.Contains(response.Body.String(), `"ownerId":"`+profileID.String()+`"`) ||
+		!strings.Contains(response.Body.String(), `"authorizedSubjectId":"`+subjectID.String()+`"`) {
+		t.Fatalf("profile owner proof = %d %s; command=%#v", response.Code,
+			response.Body.String(), repository.ownerProofCommand)
+	}
+
+	structured := strings.Replace(body, `"ownerId":"`+profileID.String()+`"`,
+		`"documentId":"`+profileID.String()+`","lineId":"`+uuid.NewString()+`"`, 1)
+	structuredRequest := httptest.NewRequest(http.MethodPost, "/api/internal/media/v1/owner-proofs", strings.NewReader(structured))
+	structuredRequest.Header.Set("Authorization", "Bearer logistics")
+	structuredResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(structuredResponse, structuredRequest)
+	if structuredResponse.Code != http.StatusBadRequest || repository.ownerProofCalls != 1 {
+		t.Fatalf("structured profile proof = %d %s; calls=%d", structuredResponse.Code,
+			structuredResponse.Body.String(), repository.ownerProofCalls)
+	}
+}
+
 func TestMaintenanceOwnerProofUsesUUIDOwnerAndNeverAcceptsLogisticsShape(t *testing.T) {
 	ownerID, warehouseID, proofEventID := uuid.New(), uuid.New(), uuid.New()
 	repository := &repositoryStub{ownerProofRecord: persistence.ServiceOwnerProofRecord{
@@ -1794,6 +2173,51 @@ func TestLogisticsReferenceValidationFailsClosed(t *testing.T) {
 				t.Fatalf("validation calls = %d, want %d", calls, testCase.wantCallCount)
 			}
 		})
+	}
+}
+
+func TestCustomerProfileReferenceValidationCarriesExactOwnerSubjectAndContext(t *testing.T) {
+	profileID, subjectID, warehouseID, mediaID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	repository := &repositoryStub{}
+	server := newTestServer(t, repository, logisticsValidatorStub(), &storeStub{})
+	body := fmt.Sprintf(`{"ownerType":"LOGISTICS_CUSTOMER_PROFILE","ownerId":"%s","authorizedSubjectId":"%s","warehouseId":"%s","context":"PROFILE_AVATAR","references":[{"mediaId":"%s","generation":3}]}`,
+		profileID, subjectID, warehouseID, mediaID)
+	request := httptest.NewRequest(http.MethodPost, "/api/internal/media/v1/logistics/references/validate", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer logistics")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	_, command := repository.validationSnapshot()
+	if response.Code != http.StatusOK || command.OwnerType != persistence.OwnerTypeLogisticsCustomerProfile ||
+		command.OwnerID != profileID.String() || command.WarehouseID != warehouseID ||
+		command.AuthorizedSubjectID == nil || *command.AuthorizedSubjectID != subjectID ||
+		len(command.References) != 1 || command.References[0].MediaID != mediaID ||
+		!strings.Contains(response.Body.String(), `"context":"PROFILE_AVATAR"`) {
+		t.Fatalf("profile validation = %d %s; command=%#v", response.Code,
+			response.Body.String(), command)
+	}
+
+	for name, invalidBody := range map[string]string{
+		"wrong context": strings.Replace(body, `"PROFILE_AVATAR"`, `"SHIPMENT"`, 1),
+		"structured identity": strings.Replace(body, `"ownerId":"`+profileID.String()+`"`,
+			`"documentId":"`+profileID.String()+`","lineId":"`+uuid.NewString()+`"`, 1),
+		"multiple references": strings.Replace(body, `]}`,
+			`,{"mediaId":"`+uuid.NewString()+`","generation":1}]}`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalidRequest := httptest.NewRequest(http.MethodPost,
+				"/api/internal/media/v1/logistics/references/validate", strings.NewReader(invalidBody))
+			invalidRequest.Header.Set("Authorization", "Bearer logistics")
+			invalidResponse := httptest.NewRecorder()
+			server.Handler().ServeHTTP(invalidResponse, invalidRequest)
+			if invalidResponse.Code != http.StatusBadRequest {
+				t.Fatalf("invalid profile validation = %d %s", invalidResponse.Code,
+					invalidResponse.Body.String())
+			}
+		})
+	}
+	calls, _ := repository.validationSnapshot()
+	if calls != 1 {
+		t.Fatalf("profile validation calls = %d, want 1", calls)
 	}
 }
 
@@ -2290,11 +2714,24 @@ func (stub *repositoryStub) UploadSessionForPrincipal(context.Context, uuid.UUID
 	return stub.sessionAsset, stub.sessionErr
 }
 
+func (stub *repositoryStub) UploadSessionForCustomer(context.Context, uuid.UUID, uuid.UUID) (persistence.AssetRecord, error) {
+	return stub.sessionAsset, stub.sessionErr
+}
+
 func (stub *repositoryStub) UploadImageVariantForPrincipal(
 	context.Context,
 	uuid.UUID,
 	uuid.UUID,
 	string,
+	media.Variant,
+) (persistence.AssetRecord, persistence.UploadImageVariantPart, error) {
+	return stub.variantAsset, stub.variantPart, stub.variantErr
+}
+
+func (stub *repositoryStub) UploadImageVariantForCustomer(
+	context.Context,
+	uuid.UUID,
+	uuid.UUID,
 	media.Variant,
 ) (persistence.AssetRecord, persistence.UploadImageVariantPart, error) {
 	return stub.variantAsset, stub.variantPart, stub.variantErr
@@ -2337,6 +2774,18 @@ func (stub *repositoryStub) ReadOwnerAssets(_ context.Context, _, _ string, _ uu
 	}
 	if stub.ownerRecords == nil {
 		return errors.New("unexpected ReadOwnerAssets")
+	}
+	return consume(stub.ownerRecords)
+}
+
+func (stub *repositoryStub) ReadOwnerAssetsForCustomer(_ context.Context, _, _ string, _, _ uuid.UUID, _ int,
+	_ *uuid.UUID, consume func([]persistence.AssetWithVariants) error,
+) error {
+	if stub.ownerReadErr != nil {
+		return stub.ownerReadErr
+	}
+	if stub.ownerRecords == nil {
+		return errors.New("unexpected ReadOwnerAssetsForCustomer")
 	}
 	return consume(stub.ownerRecords)
 }
@@ -2422,6 +2871,13 @@ func (stub *repositoryStub) ReadOriginal(_ context.Context, mediaID uuid.UUID, o
 	return consume(stub.originalAsset, stub.originalVariant)
 }
 
+func (stub *repositoryStub) ReadOriginalForCustomer(_ context.Context, mediaID uuid.UUID, ownerType, ownerID string,
+	warehouseID, _ uuid.UUID, generation *int,
+	consume func(persistence.AssetRecord, *persistence.VariantRecord) error,
+) error {
+	return stub.ReadOriginal(context.Background(), mediaID, ownerType, ownerID, warehouseID, generation, consume)
+}
+
 func (stub *repositoryStub) ReadCurrentVariant(_ context.Context, mediaID uuid.UUID, ownerType, ownerID string,
 	warehouseID uuid.UUID, generation int, variant media.Variant, consume func(persistence.AssetRecord, *persistence.VariantRecord) error,
 ) error {
@@ -2435,6 +2891,14 @@ func (stub *repositoryStub) ReadCurrentVariant(_ context.Context, mediaID uuid.U
 		return errors.New("unexpected ReadCurrentVariant")
 	}
 	return consume(stub.currentAsset, stub.currentVariant)
+}
+
+func (stub *repositoryStub) ReadCurrentVariantForCustomer(_ context.Context, mediaID uuid.UUID, ownerType, ownerID string,
+	warehouseID, _ uuid.UUID, generation int, variant media.Variant,
+	consume func(persistence.AssetRecord, *persistence.VariantRecord) error,
+) error {
+	return stub.ReadCurrentVariant(context.Background(), mediaID, ownerType, ownerID, warehouseID,
+		generation, variant, consume)
 }
 
 func (stub *repositoryStub) ReadTaskBoardEntryOriginalForWorker(_ context.Context, entryID, warehouseID, workerID, _ uuid.UUID, generation *int,

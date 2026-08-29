@@ -53,6 +53,7 @@ type WarehouseGrant struct {
 // media routes.
 type Principal struct {
 	SubjectID uuid.UUID
+	ClientID  string
 	Scopes    map[string]struct{}
 	Role      string
 	Grants    []WarehouseGrant
@@ -138,7 +139,37 @@ func (validator *Validator) Validate(ctx context.Context, authorization string) 
 		return Principal{}, ErrForbidden
 	}
 	role, _ := claims["global_role"].(string)
-	return Principal{SubjectID: subject, Scopes: scopes, Role: role, Grants: grants}, nil
+	clientID := ""
+	if rawClientID, present := claims["client_id"]; present {
+		parsedClientID, valid := rawClientID.(string)
+		parsedClientID = strings.TrimSpace(parsedClientID)
+		if !valid || parsedClientID == "" || len(parsedClientID) > 128 {
+			return Principal{}, ErrForbidden
+		}
+		clientID = parsedClientID
+	}
+	return Principal{SubjectID: subject, ClientID: clientID, Scopes: scopes, Role: role, Grants: grants}, nil
+}
+
+// IsCustomerRental reports whether a USER token is the exact CustomerApp
+// principal admitted to subject-bound logistics shipment and profile media.
+func (principal Principal) IsCustomerRental() bool {
+	if principal.Role != "CUSTOMER" || principal.ClientID != "rwms-customer-android" || len(principal.Scopes) != 1 {
+		return false
+	}
+	_, present := principal.Scopes["customer.rental"]
+	return present
+}
+
+// IsCustomerIdentity reports whether any customer-only claim is present. It
+// lets callers reject malformed or over-scoped customer tokens instead of
+// accidentally treating them as ordinary manager tokens.
+func (principal Principal) IsCustomerIdentity() bool {
+	if principal.Role == "CUSTOMER" || principal.ClientID == "rwms-customer-android" {
+		return true
+	}
+	_, present := principal.Scopes["customer.rental"]
+	return present
 }
 
 // ValidateWorker verifies a bearer token and returns the deliberately limited

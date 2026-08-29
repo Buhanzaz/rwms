@@ -1,22 +1,37 @@
 package dev.buhanzaz.rwms.logistics.customer.service;
 
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerDeliverySlotResponse;
+import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerRouteProfile;
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.DeliverySlotSearchRequest;
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.HeldCustomerDeliverySlotResponse;
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.HoldCustomerDeliverySlotRequest;
 
-import dev.buhanzaz.rwms.logistics.customer.capacity.domain.ScenarioCapacityJob;
-import dev.buhanzaz.rwms.logistics.customer.capacity.repository.ScenarioCapacityJobRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityJob;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityPriceZone;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityRestrictionZone;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityShift;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacitySnapshot;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityTaskType;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityJobRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityPriceZoneRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityRestrictionZoneRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityShiftRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacitySnapshotRepository;
 import dev.buhanzaz.rwms.logistics.customer.config.CustomerDeliveryProperties;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlot;
+import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotKind;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotState;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerRentalSession;
 import dev.buhanzaz.rwms.logistics.customer.routing.CustomerRouteCapacityPlanner;
 import dev.buhanzaz.rwms.logistics.customer.routing.CustomerRouteCapacityPlanner.CapacityDecision;
+import dev.buhanzaz.rwms.logistics.customer.routing.CustomerRouteCapacityPlanner.CapacityShift;
 import dev.buhanzaz.rwms.logistics.customer.routing.CustomerRouteCapacityPlanner.DeliveryJob;
 import dev.buhanzaz.rwms.logistics.customer.routing.CustomerTravelTimeMatrix;
 import dev.buhanzaz.rwms.logistics.customer.routing.CustomerTravelTimeMatrix.GeoPoint;
+import dev.buhanzaz.rwms.logistics.customer.routing.CustomerVehicleRouteProfile;
 import dev.buhanzaz.rwms.logistics.customer.routing.ValhallaCustomerTravelTimeClient;
+import dev.buhanzaz.rwms.logistics.customer.service.CustomerDeliveryPriceClassifier.PriceQuote;
+import dev.buhanzaz.rwms.logistics.customer.service.CustomerDeliveryPriceClassifier.DeliveryPolicy;
 import dev.buhanzaz.rwms.logistics.customer.security.CustomerIdentity;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
@@ -30,31 +45,33 @@ import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 /**
- * Calculates, offers and holds fixed CustomerApp arrival windows against the complete local-day
- * held/confirmed delivery workload and the private Valhalla truck matrix. Date-only pickup tasks
- * do not consume a whole driver: the route planner may attach them after priority deliveries.
+ * Calculates, offers and holds fixed or full-day CustomerApp arrival choices against the complete
+ * local-day held/confirmed delivery workload and the private Valhalla truck matrix. Date-only
+ * pickup tasks do not consume a whole driver: the route planner may attach them after priority
+ * deliveries.
  */
 @Service
 @RequiredArgsConstructor
 public class CustomerDeliverySlotService {
   private static final int MAX_MATRIX_POINTS = 32;
-  private static final List<Window> WINDOWS =
-      List.of(
-          new Window(LocalTime.of(9, 0), LocalTime.of(12, 0)),
-          new Window(LocalTime.of(12, 0), LocalTime.of(15, 0)),
-          new Window(LocalTime.of(15, 0), LocalTime.of(18, 0)));
   private final CustomerRentalService rentals;
   private final CustomerWarehouseService warehouses;
   private final CustomerRentalSessionStore sessions;
   private final CustomerDeliverySlotStore slotStore;
   private final CustomerDeliverySlotHoldStore holdStore;
-  private final ScenarioCapacityJobRepository scenarioCapacityJobs;
+  private final WarehouseCapacityJobRepository warehouseCapacityJobs;
+  private final WarehouseCapacityShiftRepository warehouseCapacityShifts;
+  private final WarehouseCapacityPriceZoneRepository warehouseCapacityPriceZones;
+  private final WarehouseCapacityRestrictionZoneRepository warehouseCapacityRestrictionZones;
+  private final WarehouseCapacitySnapshotRepository warehouseCapacitySnapshots;
+  private final CustomerDeliveryPriceClassifier prices;
   private final ValhallaCustomerTravelTimeClient travelTimes;
   private final CustomerRouteCapacityPlanner capacity;
   private final DriverLogisticsTaskRepository driverTasks;
@@ -73,6 +90,7 @@ public class CustomerDeliverySlotService {
           "CUSTOMER_CABINS_REQUIRED",
           "Добавьте хотя бы одну бытовку перед выбором доставки");
     }
+    int siteCabinCapacity = cabinCount == 1 ? 1 : request.siteCabinCapacity();
     OffsetDateTime now = now();
     ZoneId zone = ZoneId.of(warehouses.required(session.getWarehouseId()).timeZone());
     LocalDate first = now.toInstant().atZone(zone).toLocalDate().plusDays(configuration.earliestDeliveryDays());
@@ -86,14 +104,23 @@ public class CustomerDeliverySlotService {
               date,
               request.latitude(),
               request.longitude(),
+              siteCabinCapacity,
               configuration,
               now);
-      if (context.matrix() == null) continue;
-      for (Window window : WINDOWS) {
+      if (context.points().isEmpty()) continue;
+      for (Window window : windows(configuration)) {
         OfferDecision decision =
-            evaluate(context, window, cabinCount, configuration);
+            evaluate(
+                context,
+                date,
+                window,
+                cabinCount,
+                siteCabinCapacity,
+                configuration);
         if (!decision.capacity().feasible()) continue;
         long oneWay = decision.matrix().travelSeconds(0, decision.candidateIndex());
+        PriceDecision price = price(context, oneWay);
+        if (price == null) continue;
         int zoneHours = (int) Math.max(1, (oneWay + 3_599L) / 3_600L);
         offers.add(
             CustomerDeliverySlot.offer(
@@ -101,6 +128,7 @@ public class CustomerDeliverySlotService {
                 request.inquiryId(),
                 session.getWarehouseId(),
                 date,
+                window.kind(),
                 window.start(),
                 window.end(),
                 request.address(),
@@ -110,6 +138,18 @@ public class CustomerDeliverySlotService {
                 oneWay,
                 zoneHours,
                 decision.capacity().capacityRemaining(),
+                siteCabinCapacity,
+                price.deliveryPriceRubles(),
+                price.priceZoneId(),
+                price.priceIsochroneMinutes(),
+                request.privateSiteAccessConfirmed(),
+                request.failedTripChargeAcknowledged(),
+                decision.profile().heightMeters(),
+                decision.profile().widthMeters(),
+                decision.profile().lengthMeters(),
+                decision.profile().weightTons(),
+                decision.profile().axleLoadTons(),
+                decision.profile().axleCount(),
                 now.plus(configuration.offerLifetime())));
       }
     }
@@ -143,6 +183,24 @@ public class CustomerDeliverySlotService {
     }
     int selectedCabinCount = rentals.selectedCabinIds(identity, request.inquiryId()).size();
     if (selectedCabinCount != offered.getCabinCount()) throw cartVersionConflict();
+    if (request.siteCabinCapacity() != offered.getSiteCabinCapacity()) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "CUSTOMER_DELIVERY_SITE_CAPACITY_CHANGED",
+          "Вместимость приёмки изменилась; рассчитайте доступное время заново");
+    }
+    boolean privateSiteAccessConfirmed =
+        offered.isPrivateSiteAccessConfirmed()
+            || Boolean.TRUE.equals(request.privateSiteAccessConfirmed());
+    boolean failedTripChargeAcknowledged =
+        offered.isFailedTripChargeAcknowledged()
+            || Boolean.TRUE.equals(request.failedTripChargeAcknowledged());
+    if (!privateSiteAccessConfirmed || !failedTripChargeAcknowledged) {
+      throw new OrderProblemException(
+          HttpStatus.UNPROCESSABLE_ENTITY,
+          "CUSTOMER_ROUTE_ATTESTATIONS_REQUIRED",
+          "Подтвердите доступ автопоезда и ответственность за ложные сведения");
+    }
     CustomerDeliveryProperties.Validated configuration =
         warehouses.validated(session.getWarehouseId());
     RouteContext context =
@@ -151,19 +209,35 @@ public class CustomerDeliverySlotService {
             offered.getDeliveryDate(),
             offered.getLatitude(),
             offered.getLongitude(),
+            offered.getSiteCabinCapacity(),
             configuration,
             now);
     OfferDecision decision =
         evaluate(
             context,
-            new Window(offered.getWindowStart(), offered.getWindowEnd()),
+            offered.getDeliveryDate(),
+            new Window(offered.getKind(), offered.getWindowStart(), offered.getWindowEnd()),
             offered.getCabinCount(),
+            offered.getSiteCabinCapacity(),
             configuration);
     if (!decision.capacity().feasible()) {
       throw new OrderProblemException(
           HttpStatus.CONFLICT,
           "CUSTOMER_DELIVERY_SLOT_TAKEN",
           "Этот слот только что заняли; выберите другое время");
+    }
+    long oneWay = decision.matrix().travelSeconds(0, decision.candidateIndex());
+    PriceDecision recalculatedPrice = price(context, oneWay);
+    if (recalculatedPrice == null
+        || !Objects.equals(
+            offered.getDeliveryPriceRubles(), recalculatedPrice.deliveryPriceRubles())
+        || !Objects.equals(offered.getPriceZoneId(), recalculatedPrice.priceZoneId())
+        || !Objects.equals(
+            offered.getPriceIsochroneMinutes(), recalculatedPrice.priceIsochroneMinutes())) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "CUSTOMER_DELIVERY_SLOT_TAKEN",
+          "Тариф или правила доставки изменились; выберите доступное время заново");
     }
     CustomerDeliverySlotHoldStore.HeldSlot held =
         holdStore.hold(
@@ -177,6 +251,8 @@ public class CustomerDeliverySlotService {
                 offered.getDeliveryDate(),
                 context.workloadSha256(),
                 decision.capacity().capacityRemaining(),
+                privateSiteAccessConfirmed,
+                failedTripChargeAcknowledged,
                 configuration.holdLifetime()));
     return new HeldCustomerDeliverySlotResponse(
         held.session().getVersion(), response(held.slot()));
@@ -225,6 +301,7 @@ public class CustomerDeliverySlotService {
       LocalDate date,
       BigDecimal latitude,
       BigDecimal longitude,
+      int siteCabinCapacity,
       CustomerDeliveryProperties.Validated configuration,
       OffsetDateTime now) {
     List<CustomerDeliverySlot> existing =
@@ -232,13 +309,43 @@ public class CustomerDeliverySlotService {
             slotStore.workload(session.getWarehouseId(), date, now),
             session.getCustomerSubjectId(),
             session.getInquiryId());
-    List<ScenarioCapacityJob> generated =
-        scenarioCapacityJobs.findCapacityWorkload(session.getWarehouseId(), date);
+    List<WarehouseCapacityJob> generated =
+        warehouseCapacityJobs.findCapacityWorkload(session.getWarehouseId(), date).stream()
+            .filter(job -> job.getTaskType() == WarehouseCapacityTaskType.DELIVERY)
+            .toList();
+    List<WarehouseCapacityShift> shifts =
+        warehouseCapacityShifts.findCapacityShifts(session.getWarehouseId(), date);
+    List<WarehouseCapacityPriceZone> priceZones =
+        warehouseCapacityPriceZones.findTariffZones(session.getWarehouseId());
+    List<WarehouseCapacityRestrictionZone> restrictionZones =
+        warehouseCapacityRestrictionZones.findRestrictionZones(session.getWarehouseId());
+    WarehouseCapacitySnapshot snapshot =
+        warehouseCapacitySnapshots.findByWarehouseId(session.getWarehouseId()).orElse(null);
+    DeliveryPolicy policy =
+        prices.classifyPolicy(priceZones, restrictionZones, latitude, longitude);
     long wholeDayReservations =
         driverTasks.countWholeDayDeliveryReservations(session.getWarehouseId(), date);
     String workloadSha256 =
         CustomerCapacityWorkloadFingerprint.sha256(
-            existing, generated, wholeDayReservations);
+            existing,
+            generated,
+            shifts,
+            snapshot,
+            priceZones,
+            restrictionZones,
+            wholeDayReservations);
+    if (policy.forbidden()) {
+      return new RouteContext(
+          List.of(),
+          0,
+          List.of(),
+          workloadSha256,
+          wholeDayReservations,
+          List.of(),
+          1,
+          snapshot,
+          policy);
+    }
     List<GeoPoint> points = new ArrayList<>(existing.size() + generated.size() + 2);
     points.add(
         new GeoPoint(
@@ -250,11 +357,29 @@ public class CustomerDeliverySlotService {
         job -> points.add(new GeoPoint(job.getLatitude().doubleValue(), job.getLongitude().doubleValue())));
     int candidateIndex = points.size();
     points.add(new GeoPoint(latitude.doubleValue(), longitude.doubleValue()));
+    int maximumShiftCapacity =
+        shifts.stream().mapToInt(WarehouseCapacityShift::getCabinCapacity).max().orElse(1);
+    int conservativeTripCapacity = Math.min(siteCabinCapacity, maximumShiftCapacity);
+    if (!policy.trailerAccessAllowed()) conservativeTripCapacity = 1;
+    for (CustomerDeliverySlot slot : existing) {
+      conservativeTripCapacity =
+          Math.min(conservativeTripCapacity, slot.getSiteCabinCapacity());
+    }
+    for (WarehouseCapacityJob job : generated) {
+      if (!job.isTrailerAccessAllowed()) conservativeTripCapacity = 1;
+    }
     if (points.size() > MAX_MATRIX_POINTS) {
       return new RouteContext(
-          null, candidateIndex, List.of(), workloadSha256, wholeDayReservations);
+          List.of(),
+          candidateIndex,
+          List.of(),
+          workloadSha256,
+          wholeDayReservations,
+          List.of(),
+          conservativeTripCapacity,
+          snapshot,
+          policy);
     }
-    CustomerTravelTimeMatrix matrix = travelTimes.matrix(points, date, configuration);
     List<DeliveryJob> baseJobs = new ArrayList<>();
     for (int index = 0; index < existing.size(); index++) {
       CustomerDeliverySlot slot = existing.get(index);
@@ -265,10 +390,11 @@ public class CustomerDeliverySlotService {
               slot.getWindowStart(),
               slot.getWindowEnd(),
               configuration.serviceMinutes(),
-              false));
+              false,
+              slot.getSiteCabinCapacity() >= 2));
     }
     for (int index = 0; index < generated.size(); index++) {
-      ScenarioCapacityJob job = generated.get(index);
+      WarehouseCapacityJob job = generated.get(index);
       baseJobs.add(
           new DeliveryJob(
               existing.size() + index + 1,
@@ -276,25 +402,45 @@ public class CustomerDeliverySlotService {
               job.getWindowStart(),
               job.getWindowEnd(),
               job.getServiceMinutes(),
-              false));
+              false,
+              job.isTrailerAccessAllowed()));
     }
     return new RouteContext(
-        matrix,
+        List.copyOf(points),
         candidateIndex,
         List.copyOf(baseJobs),
         workloadSha256,
-        wholeDayReservations);
+        wholeDayReservations,
+        shifts.stream()
+            .map(
+                shift ->
+                    new CapacityShift(
+                        shift.getShiftStart(),
+                        shift.getShiftEnd(),
+                        shift.getBreakMinutes(),
+                        shift.getCabinCapacity()))
+            .toList(),
+        conservativeTripCapacity,
+        snapshot,
+        policy);
   }
 
   private OfferDecision evaluate(
       RouteContext context,
+      LocalDate date,
       Window window,
       int cabinCount,
+      int siteCabinCapacity,
       CustomerDeliveryProperties.Validated configuration) {
-    if (context.matrix() == null) {
+    CustomerVehicleRouteProfile profile =
+        CustomerVehicleRouteProfile.forTripCapacity(
+            configuration, context.conservativeTripCapacity());
+    if (context.points().isEmpty()) {
       return new OfferDecision(
-          null, context.candidateIndex(), new CapacityDecision(false, 0));
+          null, context.candidateIndex(), new CapacityDecision(false, 0), profile);
     }
+    CustomerTravelTimeMatrix matrix =
+        travelTimes.matrix(context.points(), date, window.start(), configuration, profile);
     List<DeliveryJob> jobs = new ArrayList<>(context.baseJobs());
     jobs.add(
         new DeliveryJob(
@@ -303,13 +449,16 @@ public class CustomerDeliverySlotService {
             window.start(),
             window.end(),
             configuration.serviceMinutes(),
-            true));
+            true,
+            context.policy().trailerAccessAllowed() && siteCabinCapacity >= 2));
     int reservedDrivers =
-        (int) Math.min(configuration.driverCount(), context.wholeDayDriverReservations());
+        (int) Math.min(context.shifts().size(), context.wholeDayDriverReservations());
     return new OfferDecision(
-        context.matrix(),
+        matrix,
         context.candidateIndex(),
-        capacity.evaluate(context.matrix(), jobs, configuration, reservedDrivers));
+        capacity.evaluate(
+            matrix, jobs, configuration, context.shifts(), reservedDrivers),
+        profile);
   }
 
   private static CustomerDeliverySlotResponse response(CustomerDeliverySlot slot) {
@@ -317,16 +466,81 @@ public class CustomerDeliverySlotService {
         slot.getId(),
         slot.getVersion(),
         slot.getDeliveryDate(),
+        slot.getKind(),
         slot.getWindowStart(),
         slot.getWindowEnd(),
         slot.getTravelZoneHours(),
         slot.getCapacityRemaining(),
+        slot.getSiteCabinCapacity(),
+        slot.getDeliveryPriceRubles(),
+        slot.getPriceZoneId(),
+        slot.getPriceIsochroneMinutes(),
+        slot.isRoadRouteConfirmed(),
+        slot.isPrivateSiteAccessConfirmed(),
+        slot.isFailedTripChargeAcknowledged(),
+        new CustomerRouteProfile(
+            slot.getRouteHeightMeters(),
+            slot.getRouteWidthMeters(),
+            slot.getRouteLengthMeters(),
+            slot.getRouteWeightTons(),
+            slot.getRouteAxleLoadTons(),
+            slot.getRouteAxleCount()),
         slot.getExpiresAt(),
         slot.getState().name());
   }
 
   private OffsetDateTime now() {
-    return OffsetDateTime.now(clock).withOffsetSameInstant(ZoneOffset.UTC).truncatedTo(ChronoUnit.MICROS);
+    return OffsetDateTime.now(clock)
+        .withOffsetSameInstant(ZoneOffset.UTC)
+        .truncatedTo(ChronoUnit.MICROS);
+  }
+
+  private static List<Window> windows(CustomerDeliveryProperties.Validated configuration) {
+    List<Window> windows = new ArrayList<>();
+    LocalTime start = configuration.customerDeliveryStart();
+    while (start.isBefore(configuration.customerDeliveryEnd())) {
+      LocalTime end = start.plusMinutes(configuration.deliverySlotMinutes());
+      windows.add(new Window(CustomerDeliverySlotKind.FIXED_WINDOW, start, end));
+      start = end;
+    }
+    windows.add(
+        new Window(
+            CustomerDeliverySlotKind.DURING_DAY,
+            configuration.customerDeliveryStart(),
+            configuration.customerDeliveryEnd()));
+    return List.copyOf(windows);
+  }
+
+  private static PriceDecision price(RouteContext context, long oneWayTravelSeconds) {
+    PriceQuote special = context.policy().specialPrice();
+    if (special.deliveryPriceRubles() != null) {
+      return new PriceDecision(special.deliveryPriceRubles(), special.priceZoneId(), null);
+    }
+    Integer tier = isochroneTier(oneWayTravelSeconds);
+    if (tier == null) return null;
+    long deliveryPrice =
+        context.snapshot() == null
+            ? defaultIsochronePrice(tier)
+            : context.snapshot().deliveryPriceForIsochroneMinutes(tier);
+    return new PriceDecision(deliveryPrice, null, tier);
+  }
+
+  private static Integer isochroneTier(long oneWayTravelSeconds) {
+    if (oneWayTravelSeconds <= 3_600) return 60;
+    if (oneWayTravelSeconds <= 7_200) return 120;
+    if (oneWayTravelSeconds <= 10_800) return 180;
+    if (oneWayTravelSeconds <= 14_400) return 240;
+    return null;
+  }
+
+  private static long defaultIsochronePrice(int tier) {
+    return switch (tier) {
+      case 60 -> WarehouseCapacitySnapshot.DEFAULT_ISOCHRONE_PRICE_60_MINUTES;
+      case 120 -> WarehouseCapacitySnapshot.DEFAULT_ISOCHRONE_PRICE_120_MINUTES;
+      case 180 -> WarehouseCapacitySnapshot.DEFAULT_ISOCHRONE_PRICE_180_MINUTES;
+      case 240 -> WarehouseCapacitySnapshot.DEFAULT_ISOCHRONE_PRICE_240_MINUTES;
+      default -> throw new IllegalArgumentException("Unsupported isochrone price tier");
+    };
   }
 
   private static OrderProblemException slotNotFound() {
@@ -341,18 +555,29 @@ public class CustomerDeliverySlotService {
         "Корзина уже изменилась; обновите данные и повторите действие");
   }
 
-  /** One immutable fixed working-day window. */
-  private record Window(LocalTime start, LocalTime end) {}
+  /** One immutable fixed or complete-day arrival choice evaluated by the same route planner. */
+  private record Window(CustomerDeliverySlotKind kind, LocalTime start, LocalTime end) {}
 
   /** Matrix and capacity result for one potential offer. */
   private record OfferDecision(
-      CustomerTravelTimeMatrix matrix, int candidateIndex, CapacityDecision capacity) {}
-
-  /** Route matrix and exact local workload facts shared by all three windows of one day. */
-  private record RouteContext(
       CustomerTravelTimeMatrix matrix,
+      int candidateIndex,
+      CapacityDecision capacity,
+      CustomerVehicleRouteProfile profile) {}
+
+  /** Exactly one special-zone or ordinary-isocrone price explanation for an offered slot. */
+  private record PriceDecision(
+      long deliveryPriceRubles, UUID priceZoneId, Integer priceIsochroneMinutes) {}
+
+  /** Exact local workload facts shared by all configured windows of one day. */
+  private record RouteContext(
+      List<GeoPoint> points,
       int candidateIndex,
       List<DeliveryJob> baseJobs,
       String workloadSha256,
-      long wholeDayDriverReservations) {}
+      long wholeDayDriverReservations,
+      List<CapacityShift> shifts,
+      int conservativeTripCapacity,
+      WarehouseCapacitySnapshot snapshot,
+      DeliveryPolicy policy) {}
 }

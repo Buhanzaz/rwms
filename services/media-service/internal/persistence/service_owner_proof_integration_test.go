@@ -266,6 +266,267 @@ func TestServiceOwnerProofAndSoftDeleteIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("shipment subject binds customer access while manager access remains", func(t *testing.T) {
+		documentID, lineID, warehouseID := uuid.New(), uuid.New(), uuid.New()
+		customerID, otherCustomerID := uuid.New(), uuid.New()
+		proof := ServiceOwnerProofCommand{
+			SourceService: LogisticsOwnerProofService,
+			OwnerType:     OwnerTypeLogisticsShipment, DocumentID: documentID, LineID: lineID,
+			WarehouseID: warehouseID, AuthorizedSubjectID: &customerID,
+			OwnerRevision: 0, AggregateVersion: 0, ProofEventID: uuid.New(), Active: true,
+		}
+		record, replayed, err := repository.UpsertServiceOwnerProof(ctx, proof)
+		if err != nil || replayed || record.AuthorizedSubjectID == nil || *record.AuthorizedSubjectID != customerID {
+			t.Fatalf("shipment subject proof = %#v replayed:%v error:%v", record, replayed, err)
+		}
+		var checkpointSubject, receiptSubject, bindingSubject uuid.UUID
+		if err := database.Pool.QueryRow(ctx, `select checkpoint.authorized_subject_id,
+			receipt.authorized_subject_id,binding.authorized_subject_id
+			from media_service_owner_proof_checkpoint checkpoint
+			join media_service_owner_proof_receipt receipt on receipt.proof_event_id=$1
+			join media_owner_binding binding on binding.owner_type=checkpoint.owner_type
+			 and binding.owner_id=checkpoint.owner_id
+			where checkpoint.owner_type='LOGISTICS_SHIPMENT' and checkpoint.owner_id=$2`,
+			proof.ProofEventID, LogisticsOwnerID(documentID, lineID)).Scan(
+			&checkpointSubject, &receiptSubject, &bindingSubject); err != nil ||
+			checkpointSubject != customerID || receiptSubject != customerID || bindingSubject != customerID {
+			t.Fatalf("stored shipment subjects checkpoint=%s receipt=%s binding=%s error=%v",
+				checkpointSubject, receiptSubject, bindingSubject, err)
+		}
+
+		customerCreate := createCommand(documentID, warehouseID, media.KindImage, 0)
+		customerCreate.OwnerType = OwnerTypeLogisticsShipment
+		customerCreate.OwnerID = LogisticsOwnerID(documentID, lineID)
+		customerCreate.PrincipalType = PrincipalTypeUser
+		customerCreate.SubjectID = customerID
+		customerCreate.AuthorizedSubjectID = &customerID
+		asset, replayed, err := repository.CreateUpload(ctx, customerCreate)
+		if err != nil || replayed {
+			t.Fatalf("customer shipment create = replayed:%v error:%v", replayed, err)
+		}
+		wrongCreate := customerCreate
+		wrongCreate.MediaID, wrongCreate.FolderID, wrongCreate.UploadSessionID = uuid.New(), uuid.New(), uuid.New()
+		wrongCreate.IdempotencyKey, wrongCreate.SubjectID = uuid.New(), otherCustomerID
+		wrongCreate.AuthorizedSubjectID = &otherCustomerID
+		if _, _, err := repository.CreateUpload(ctx, wrongCreate); !errors.Is(err, ErrOwnerProofMissing) {
+			t.Fatalf("wrong customer shipment create error = %v, want ErrOwnerProofMissing", err)
+		}
+		if _, err := repository.UploadSessionForCustomer(ctx, asset.UploadSessionID, customerID); err != nil {
+			t.Fatalf("customer shipment session: %v", err)
+		}
+		if _, err := repository.UploadSessionForCustomer(ctx, asset.UploadSessionID, otherCustomerID); !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrOwnerProofMissing) {
+			t.Fatalf("wrong customer shipment session error = %v", err)
+		}
+
+		managerCreate := createCommand(documentID, warehouseID, media.KindImage, 1)
+		managerCreate.OwnerType = OwnerTypeLogisticsShipment
+		managerCreate.OwnerID = LogisticsOwnerID(documentID, lineID)
+		if _, replayed, err := repository.CreateUpload(ctx, managerCreate); err != nil || replayed {
+			t.Fatalf("manager shipment create = replayed:%v error:%v", replayed, err)
+		}
+
+		reassigned := proof
+		reassigned.ProofEventID = uuid.New()
+		reassigned.OwnerRevision = 1
+		reassigned.AggregateVersion = 1
+		reassigned.AuthorizedSubjectID = &otherCustomerID
+		if _, replayed, err := repository.UpsertServiceOwnerProof(ctx, reassigned); err != nil || replayed {
+			t.Fatalf("reassign shipment subject = replayed:%v error:%v", replayed, err)
+		}
+		if _, err := repository.UploadSessionForCustomer(ctx, asset.UploadSessionID, customerID); !errors.Is(err, ErrOwnerProofMissing) {
+			t.Fatalf("revoked customer shipment session error = %v, want ErrOwnerProofMissing", err)
+		}
+		if _, _, err := repository.CreateUpload(ctx, customerCreate); !errors.Is(err, ErrOwnerProofMissing) {
+			t.Fatalf("revoked customer shipment create replay error = %v, want ErrOwnerProofMissing", err)
+		}
+		if _, err := repository.UploadSessionForPrincipal(ctx, asset.UploadSessionID, customerID, PrincipalTypeUser); err != nil {
+			t.Fatalf("manager-compatible session after subject reassignment: %v", err)
+		}
+	})
+
+	t.Run("customer profile avatar is exact-subject only across write read validate and delete", func(t *testing.T) {
+		profileID, warehouseID := uuid.New(), uuid.New()
+		customerID, otherCustomerID := uuid.New(), uuid.New()
+		proof := ServiceOwnerProofCommand{
+			SourceService: LogisticsOwnerProofService,
+			OwnerType:     OwnerTypeLogisticsCustomerProfile, OwnerID: profileID,
+			WarehouseID: warehouseID, AuthorizedSubjectID: &customerID,
+			OwnerRevision: 0, AggregateVersion: 0, ProofEventID: uuid.New(), Active: true,
+		}
+		record, replayed, err := repository.UpsertServiceOwnerProof(ctx, proof)
+		if err != nil || replayed || record.OwnerID != profileID ||
+			record.AuthorizedSubjectID == nil || *record.AuthorizedSubjectID != customerID {
+			t.Fatalf("profile subject proof = %#v replayed:%v error:%v", record, replayed, err)
+		}
+		missingSubject := proof
+		missingSubject.OwnerID, missingSubject.ProofEventID = uuid.New(), uuid.New()
+		missingSubject.AuthorizedSubjectID = nil
+		if _, _, err := repository.UpsertServiceOwnerProof(ctx, missingSubject); !errors.Is(err, ErrConflict) {
+			t.Fatalf("profile proof without subject error = %v, want ErrConflict", err)
+		}
+
+		customerCreate := createCommand(profileID, warehouseID, media.KindImage, 0)
+		customerCreate.OwnerType = OwnerTypeLogisticsCustomerProfile
+		customerCreate.SubjectID = customerID
+		customerCreate.AuthorizedSubjectID = &customerID
+		asset, replayed, err := repository.CreateUpload(ctx, customerCreate)
+		if err != nil || replayed {
+			t.Fatalf("customer profile create = replayed:%v error:%v", replayed, err)
+		}
+		foreignCreate := customerCreate
+		foreignCreate.MediaID, foreignCreate.FolderID, foreignCreate.UploadSessionID = uuid.New(), uuid.New(), uuid.New()
+		foreignCreate.IdempotencyKey, foreignCreate.SubjectID = uuid.New(), otherCustomerID
+		foreignCreate.AuthorizedSubjectID = &otherCustomerID
+		if _, _, err := repository.CreateUpload(ctx, foreignCreate); !errors.Is(err, ErrOwnerProofMissing) {
+			t.Fatalf("foreign profile create error = %v, want ErrOwnerProofMissing", err)
+		}
+		managerCreate := customerCreate
+		managerCreate.MediaID, managerCreate.FolderID, managerCreate.UploadSessionID = uuid.New(), uuid.New(), uuid.New()
+		managerCreate.IdempotencyKey, managerCreate.SubjectID = uuid.New(), uuid.New()
+		managerCreate.AuthorizedSubjectID = nil
+		if _, _, err := repository.CreateUpload(ctx, managerCreate); !errors.Is(err, ErrOwnerProofMissing) {
+			t.Fatalf("manager profile create error = %v, want ErrOwnerProofMissing", err)
+		}
+
+		if _, err := database.Pool.Exec(ctx, `update media_asset set processing_status='READY',
+			current_generation=1,next_generation=2,version=3,source_version_id='profile-source-version',
+			source_etag='profile-source-etag',source_checksum_sha256=$2,finalized_content_type='image/jpeg',
+			finalized_size_bytes=128,size_bytes=128 where media_id=$1`, asset.ID,
+			customerCreate.ChecksumSHA256); err != nil {
+			t.Fatalf("prepare profile avatar: %v", err)
+		}
+		if _, err := database.Pool.Exec(ctx, `insert into media_variant (
+			media_id,generation,variant,object_key,object_version_id,content_type,
+			size_bytes,width,height,checksum_sha256)
+		values ($1,1,'ORIGINAL',$2,'profile-original-version','image/jpeg',128,null,null,$4),
+		       ($1,1,'SMALL',$3,'profile-small-version','image/webp',64,360,360,$4)`,
+			asset.ID, "profile/"+asset.ID.String()+"/original.jpg",
+			"profile/"+asset.ID.String()+"/small.webp", customerCreate.ChecksumSHA256); err != nil {
+			t.Fatalf("insert profile avatar variants: %v", err)
+		}
+
+		reference := ValidateLogisticsReferencesCommand{
+			OwnerType: OwnerTypeLogisticsCustomerProfile, OwnerID: profileID.String(),
+			AuthorizedSubjectID: &customerID, WarehouseID: warehouseID,
+			References: []ReadyMediaReference{{MediaID: asset.ID, Generation: 1}},
+		}
+		if err := repository.ValidateLogisticsReferences(ctx, reference); err != nil {
+			t.Fatalf("validate profile avatar: %v", err)
+		}
+		foreignReference := reference
+		foreignReference.AuthorizedSubjectID = &otherCustomerID
+		if err := repository.ValidateLogisticsReferences(ctx, foreignReference); !errors.Is(err, ErrReferenceNotReady) {
+			t.Fatalf("foreign profile validation error = %v, want ErrReferenceNotReady", err)
+		}
+		wrongWarehouse := reference
+		wrongWarehouse.WarehouseID = uuid.New()
+		if err := repository.ValidateLogisticsReferences(ctx, wrongWarehouse); !errors.Is(err, ErrReferenceNotReady) {
+			t.Fatalf("wrong profile warehouse validation error = %v, want ErrReferenceNotReady", err)
+		}
+		staleGeneration := reference
+		staleGeneration.References = []ReadyMediaReference{{MediaID: asset.ID, Generation: 2}}
+		if err := repository.ValidateLogisticsReferences(ctx, staleGeneration); !errors.Is(err, ErrReferenceNotReady) {
+			t.Fatalf("stale profile generation error = %v, want ErrReferenceNotReady", err)
+		}
+		if _, err := database.Pool.Exec(ctx, `update media_asset set processing_status='FAILED'
+			where media_id=$1`, asset.ID); err != nil {
+			t.Fatalf("mark profile avatar non-ready: %v", err)
+		}
+		if err := repository.ValidateLogisticsReferences(ctx, reference); !errors.Is(err, ErrReferenceNotReady) {
+			t.Fatalf("non-ready profile generation error = %v, want ErrReferenceNotReady", err)
+		}
+		if _, err := database.Pool.Exec(ctx, `update media_asset set processing_status='READY'
+			where media_id=$1`, asset.ID); err != nil {
+			t.Fatalf("restore ready profile avatar: %v", err)
+		}
+
+		if err := repository.ReadOwnerAssetsForCustomer(ctx, OwnerTypeLogisticsCustomerProfile,
+			profileID.String(), warehouseID, customerID, 10, nil,
+			func(records []AssetWithVariants) error {
+				if len(records) != 1 || records[0].Asset.ID != asset.ID {
+					t.Fatalf("profile asset list = %#v", records)
+				}
+				return nil
+			}); err != nil {
+			t.Fatalf("read profile list: %v", err)
+		}
+		if err := repository.ReadOwnerAssetsForCustomer(ctx, OwnerTypeLogisticsCustomerProfile,
+			profileID.String(), warehouseID, otherCustomerID, 10, nil,
+			func([]AssetWithVariants) error { return nil }); !errors.Is(err, ErrOwnerProofMissing) {
+			t.Fatalf("foreign profile list error = %v, want ErrOwnerProofMissing", err)
+		}
+		if err := repository.ReadOwnerAssets(ctx, OwnerTypeLogisticsCustomerProfile,
+			profileID.String(), warehouseID, 10, nil,
+			func([]AssetWithVariants) error { return nil }); !errors.Is(err, ErrOwnerProofMissing) {
+			t.Fatalf("manager profile list error = %v, want ErrOwnerProofMissing", err)
+		}
+		if err := repository.ReadOriginalForCustomer(ctx, asset.ID,
+			OwnerTypeLogisticsCustomerProfile, profileID.String(), warehouseID, customerID, nil,
+			func(found AssetRecord, original *VariantRecord) error {
+				if found.ID != asset.ID || original == nil || original.Variant != media.VariantOriginal {
+					t.Fatalf("profile original = %#v %#v", found, original)
+				}
+				return nil
+			}); err != nil {
+			t.Fatalf("read profile original: %v", err)
+		}
+		if err := repository.ReadOriginalForCustomer(ctx, asset.ID,
+			OwnerTypeLogisticsCustomerProfile, profileID.String(), warehouseID, otherCustomerID, nil,
+			func(AssetRecord, *VariantRecord) error { return nil }); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("foreign profile original error = %v, want ErrNotFound", err)
+		}
+		if err := repository.ReadOriginal(ctx, asset.ID, OwnerTypeLogisticsCustomerProfile,
+			profileID.String(), warehouseID, nil,
+			func(AssetRecord, *VariantRecord) error { return nil }); !errors.Is(err, ErrOwnerProofMissing) {
+			t.Fatalf("manager profile original error = %v, want ErrOwnerProofMissing", err)
+		}
+		if err := repository.ReadCurrentVariantForCustomer(ctx, asset.ID,
+			OwnerTypeLogisticsCustomerProfile, profileID.String(), warehouseID, customerID, 1,
+			media.VariantSmall, func(found AssetRecord, variant *VariantRecord) error {
+				if found.ID != asset.ID || variant == nil || variant.Variant != media.VariantSmall {
+					t.Fatalf("profile small = %#v %#v", found, variant)
+				}
+				return nil
+			}); err != nil {
+			t.Fatalf("read profile small: %v", err)
+		}
+		if err := repository.ReadCurrentVariantForCustomer(ctx, asset.ID,
+			OwnerTypeLogisticsCustomerProfile, profileID.String(), warehouseID, otherCustomerID, 1,
+			media.VariantSmall,
+			func(AssetRecord, *VariantRecord) error { return nil }); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("foreign profile small error = %v, want ErrNotFound", err)
+		}
+		if err := repository.ReadCurrentVariant(ctx, asset.ID, OwnerTypeLogisticsCustomerProfile,
+			profileID.String(), warehouseID, 1, media.VariantSmall,
+			func(AssetRecord, *VariantRecord) error { return nil }); !errors.Is(err, ErrOwnerProofMissing) {
+			t.Fatalf("manager profile small error = %v, want ErrOwnerProofMissing", err)
+		}
+
+		managerDelete := DeleteCommand{
+			MediaID: asset.ID, OwnerType: OwnerTypeLogisticsCustomerProfile, OwnerID: profileID.String(),
+			WarehouseID: warehouseID, SubjectID: uuid.New(), IdempotencyKey: uuid.New(),
+			RequestSHA256: hex64('b'), ExpectedVersion: 3, CorrelationID: uuid.New(),
+		}
+		if _, _, err := repository.Delete(ctx, managerDelete); !errors.Is(err, ErrOwnerProofMissing) {
+			t.Fatalf("manager profile delete error = %v, want ErrOwnerProofMissing", err)
+		}
+		foreignDelete := managerDelete
+		foreignDelete.SubjectID, foreignDelete.IdempotencyKey = otherCustomerID, uuid.New()
+		foreignDelete.AuthorizedSubjectID = &otherCustomerID
+		foreignDelete.RequestSHA256 = hex64('d')
+		if _, _, err := repository.Delete(ctx, foreignDelete); !errors.Is(err, ErrOwnerProofMissing) {
+			t.Fatalf("foreign profile delete error = %v, want ErrOwnerProofMissing", err)
+		}
+		customerDelete := managerDelete
+		customerDelete.SubjectID, customerDelete.IdempotencyKey = customerID, uuid.New()
+		customerDelete.AuthorizedSubjectID = &customerID
+		customerDelete.RequestSHA256 = hex64('c')
+		deleted, replayed, err := repository.Delete(ctx, customerDelete)
+		if err != nil || replayed || deleted.Status != media.StatusDeleted || deleted.Version != 4 {
+			t.Fatalf("customer profile delete = %#v replayed:%v error:%v", deleted, replayed, err)
+		}
+	})
+
 	t.Run("logistics transfer uses only destination warehouse and structured identity", func(t *testing.T) {
 		documentID, lineID := uuid.New(), uuid.New()
 		destinationWarehouseID, sourceWarehouseID := uuid.New(), uuid.New()

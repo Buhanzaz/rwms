@@ -4,8 +4,14 @@ import static dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway
 import static dev.buhanzaz.rwms.logistics.integration.LogisticsOAuthHttpTransport.FailurePolicy.DEFAULT;
 import static dev.buhanzaz.rwms.logistics.integration.LogisticsOAuthHttpTransport.malformed;
 
+import java.math.BigDecimal;
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.web.util.UriComponentsBuilder;
@@ -52,13 +58,7 @@ final class LogisticsWarehouseDependencyClient {
             "Dependency returned an empty response",
             DEFAULT);
     if (response == null) throw malformed("Warehouse-service returned an empty identity");
-    return new WarehouseIdentity(
-        response.id(),
-        response.version(),
-        response.active(),
-        response.name(),
-        response.city(),
-        response.timeZone());
+    return identity(response);
   }
 
   WarehouseOperationAdmission warehouseAdmission(
@@ -192,21 +192,128 @@ final class LogisticsWarehouseDependencyClient {
             "Warehouse-service returned an empty identity list",
             DEFAULT);
     return response.stream()
-        .map(
-            value ->
-                new WarehouseIdentity(
-                    value.id(),
-                    value.version(),
-                    value.active(),
-                    value.name(),
-                    value.city(),
-                    value.timeZone()))
+        .map(value -> value == null ? null : identity(value))
         .toList();
+  }
+
+  List<WarehouseSupportLink> listWarehouseSupportLinks(
+      UUID servedWarehouseId, OffsetDateTime at) {
+    if (servedWarehouseId == null || at == null) {
+      throw new IllegalArgumentException("Warehouse support-link lookup requires an instant");
+    }
+    String uri =
+        UriComponentsBuilder.fromUriString(
+                warehouseBase + "/" + servedWarehouseId + "/support-links")
+            .queryParam("at", at)
+            .build()
+            .encode()
+            .toUriString();
+    List<WarehouseSupportLinkResponse> response =
+        transport.getList(
+            uri,
+            new ParameterizedTypeReference<>() {},
+            WAREHOUSE_CLIENT,
+            WAREHOUSE_SCOPE,
+            "Warehouse-service returned an empty support-link list",
+            DEFAULT);
+    Set<UUID> linkIds = new HashSet<>();
+    Set<UUID> supportWarehouseIds = new HashSet<>();
+    return response.stream()
+        .map(
+            value -> {
+              if (invalidSupportLink(value, servedWarehouseId)
+                  || !linkIds.add(value.id())
+                  || !supportWarehouseIds.add(value.supportWarehouse().id())) {
+                throw malformed("Warehouse-service returned invalid support-link truth");
+              }
+              return new WarehouseSupportLink(
+                  value.id(),
+                  value.version(),
+                  identity(value.supportWarehouse()),
+                  identity(value.servedWarehouse()),
+                  value.priority(),
+                  value.allowDrivers(),
+                  value.allowVehicles(),
+                  value.allowInventory(),
+                  value.allowDirectFulfillment(),
+                  value.allowInterwarehouseTransfer(),
+                  value.allowContractorFallback(),
+                  Set.copyOf(value.allowedWeekdays()),
+                  Set.copyOf(value.allowedDates()),
+                  Set.copyOf(value.excludedDates()),
+                  value.serviceStart(),
+                  value.serviceEnd());
+            })
+        .toList();
+  }
+
+  private static WarehouseIdentity identity(WarehouseIdentityResponse response) {
+    return new WarehouseIdentity(
+        response.id(),
+        response.version(),
+        response.active(),
+        response.name(),
+        response.city(),
+        response.address(),
+        response.latitude(),
+        response.longitude(),
+        response.timeZone(),
+        response.representative());
+  }
+
+  private static boolean invalidSupportLink(
+      WarehouseSupportLinkResponse value, UUID servedWarehouseId) {
+    return value == null
+        || value.id() == null
+        || value.version() < 0
+        || value.priority() < 1
+        || value.supportWarehouse() == null
+        || value.servedWarehouse() == null
+        || value.supportWarehouse().id() == null
+        || value.servedWarehouse().id() == null
+        || value.supportWarehouse().id().equals(value.servedWarehouse().id())
+        || !servedWarehouseId.equals(value.servedWarehouse().id())
+        || !value.supportWarehouse().active()
+        || !value.servedWarehouse().active()
+        || !value.servedWarehouse().representative()
+        || value.allowedWeekdays() == null
+        || value.allowedDates() == null
+        || value.excludedDates() == null
+        || ((value.serviceStart() == null) != (value.serviceEnd() == null))
+        || (value.serviceStart() != null && !value.serviceStart().isBefore(value.serviceEnd()));
   }
 
   /** Versioned warehouse identity and timezone snapshot returned by warehouse-service. */
   private record WarehouseIdentityResponse(
-      UUID id, long version, boolean active, String name, String city, String timeZone) {}
+      UUID id,
+      long version,
+      boolean active,
+      String name,
+      String city,
+      String address,
+      BigDecimal latitude,
+      BigDecimal longitude,
+      String timeZone,
+      boolean representative) {}
+
+  /** Exact calendar-filtered support edge returned by warehouse-service. */
+  private record WarehouseSupportLinkResponse(
+      UUID id,
+      long version,
+      WarehouseIdentityResponse supportWarehouse,
+      WarehouseIdentityResponse servedWarehouse,
+      int priority,
+      boolean allowDrivers,
+      boolean allowVehicles,
+      boolean allowInventory,
+      boolean allowDirectFulfillment,
+      boolean allowInterwarehouseTransfer,
+      boolean allowContractorFallback,
+      Set<DayOfWeek> allowedWeekdays,
+      Set<LocalDate> allowedDates,
+      Set<LocalDate> excludedDates,
+      LocalTime serviceStart,
+      LocalTime serviceEnd) {}
 
   /** Optimistically fenced confirmation of a warehouse lifecycle-readiness work item. */
   private record WarehouseLifecycleReadinessRequest(long expectedVersion) {}

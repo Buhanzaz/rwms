@@ -24,6 +24,8 @@ import dev.buhanzaz.rwms.warehouse.eventing.WarehouseEventPayload.TimeZoneDecisi
 import dev.buhanzaz.rwms.warehouse.eventing.WarehouseOutboxWriter;
 import dev.buhanzaz.rwms.warehouse.mapper.WarehouseResponseMapper;
 import dev.buhanzaz.rwms.warehouse.repository.WarehouseRepository;
+import dev.buhanzaz.rwms.warehouse.repository.WarehouseSupportLinkRepository;
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.Comparator;
@@ -54,6 +56,7 @@ public class WarehouseService {
           .thenComparing(Warehouse::getName)
           .thenComparing(Warehouse::getId);
   private final WarehouseRepository warehouses;
+  private final WarehouseSupportLinkRepository supportLinks;
   private final WarehouseResponseMapper responses;
   private final WarehouseOutboxWriter outbox;
   private final WarehouseIdempotencyStore idempotency;
@@ -67,6 +70,7 @@ public class WarehouseService {
    * Creates the transactional application boundary.
    *
    * @param warehouses repository for the warehouse aggregate
+   * @param supportLinks repository used to protect representative-link ownership
    * @param responses mapper for transport projections
    * @param outbox transactional publisher for warehouse facts
    * @param idempotency caller-scoped create idempotency store
@@ -78,6 +82,7 @@ public class WarehouseService {
    */
   public WarehouseService(
       WarehouseRepository warehouses,
+      WarehouseSupportLinkRepository supportLinks,
       WarehouseResponseMapper responses,
       WarehouseOutboxWriter outbox,
       WarehouseIdempotencyStore idempotency,
@@ -87,6 +92,7 @@ public class WarehouseService {
       WarehouseLifecycleAuditStore lifecycleAudit,
       ObjectMapper objectMapper) {
     this.warehouses = warehouses;
+    this.supportLinks = supportLinks;
     this.responses = responses;
     this.outbox = outbox;
     this.idempotency = idempotency;
@@ -193,9 +199,20 @@ public class WarehouseService {
       throw new WarehouseConflictException(
           "An operated warehouse timezone must be scheduled with an effective timestamp");
     }
+    if (!request.representative() && supportLinks.existsByServedWarehouseId(id)) {
+      throw new WarehouseConflictException(
+          "Remove warehouse support links before clearing the representative characteristic");
+    }
 
     Warehouse.Mutation mutation =
-        warehouse.replace(request.name(), request.city(), request.address(), request.sortOrder());
+        warehouse.replace(
+            request.name(),
+            request.city(),
+            request.address(),
+            request.latitude(),
+            request.longitude(),
+            request.sortOrder(),
+            request.representative());
     if (timeZoneChanged) warehouse.correctTimeZone(requestedTimeZone);
     if (mutation == Warehouse.Mutation.NONE && !timeZoneChanged) return response(warehouse, now);
 
@@ -513,7 +530,14 @@ public class WarehouseService {
 
   private Warehouse newWarehouse(CreateWarehouseRequest request) {
     return Warehouse.create(
-        request.name(), request.city(), request.address(), zone(request.timeZone()), request.sortOrder());
+        request.name(),
+        request.city(),
+        request.address(),
+        request.latitude(),
+        request.longitude(),
+        zone(request.timeZone()),
+        request.sortOrder(),
+        request.representative());
   }
 
   private WarehouseResponse response(Warehouse warehouse, OffsetDateTime now) {
@@ -558,6 +582,10 @@ public class WarehouseService {
     return Warehouse.requireCanonicalTimeZone(value);
   }
 
+  /**
+   * Hashes every normalized create field so an idempotency key cannot replay across a change of
+   * the representative characteristic.
+   */
   private String fingerprint(Warehouse warehouse) {
     try {
       return WarehouseChecksum.sha256(
@@ -566,8 +594,11 @@ public class WarehouseService {
                   warehouse.getName(),
                   warehouse.getCity(),
                   warehouse.getAddress(),
+                  warehouse.getLatitude(),
+                  warehouse.getLongitude(),
                   warehouse.getTimeZone(),
-                  warehouse.getSortOrder())));
+                  warehouse.getSortOrder(),
+                  warehouse.isRepresentative())));
     } catch (JacksonException exception) {
       throw new IllegalArgumentException(
           "Warehouse create command cannot be fingerprinted", exception);
@@ -582,6 +613,14 @@ public class WarehouseService {
    */
   public record CreateResult(WarehouseResponse response, boolean replayed) {}
 
+  /** Normalized semantic create command used only as the caller-scoped idempotency fingerprint. */
   private record CreateFingerprint(
-      String name, String city, String address, String timeZone, Integer sortOrder) {}
+      String name,
+      String city,
+      String address,
+      BigDecimal latitude,
+      BigDecimal longitude,
+      String timeZone,
+      Integer sortOrder,
+      boolean representative) {}
 }

@@ -43,6 +43,10 @@ public enum LogisticsEventType {
       "logistics.shipment.reconciliation-required.v1",
       "RECONCILIATION_REQUIRED"),
   TRANSFER_CREATED(LogisticsAggregateType.TRANSFER, "logistics.transfer.created.v1", "DRAFT"),
+  TRANSFER_PLAN_UPDATED(
+      LogisticsAggregateType.TRANSFER, "logistics.transfer.plan-updated.v1", "DRAFT"),
+  TRANSFER_CONFIRMED(
+      LogisticsAggregateType.TRANSFER, "logistics.transfer.confirmed.v1", "DRAFT"),
   TRANSFER_DEPARTURE_STARTED(
       LogisticsAggregateType.TRANSFER, "logistics.transfer.departure-started.v1", "DEPARTING"),
   TRANSFER_DEPARTED(

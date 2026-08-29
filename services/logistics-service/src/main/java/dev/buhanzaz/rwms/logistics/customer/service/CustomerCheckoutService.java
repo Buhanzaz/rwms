@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.logistics.customer.service;
 
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerBookingResponse;
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerCabinEquipmentSelection;
+import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerCabinRentalTerm;
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerCheckoutRequest;
 
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CabinFurnitureRequirement;
@@ -50,7 +51,9 @@ public class CustomerCheckoutService {
   private final CustomerRentalSessionStore sessions;
   private final CustomerCheckoutStore checkoutStore;
   private final CustomerEquipmentCodec equipmentCodec;
+  private final CustomerRentalTermCodec rentalTermCodec;
   private final CustomerDeliverySlotService slots;
+  private final CustomerBookingService customerBookings;
   private final CustomerAuthorizer access;
   private final ClientPresentationService presentations;
   private final PresentationBookingService bookings;
@@ -62,10 +65,11 @@ public class CustomerCheckoutService {
       UUID inquiryId,
       UUID idempotencyKey,
       CustomerCheckoutRequest request) {
-    String requestHash = checkoutHash(inquiryId, request);
     CustomerRentalSession current = rentals.requiredSession(identity, inquiryId);
     List<UUID> cabinIds = List.of();
     List<CustomerCabinEquipmentSelection> furniture = List.of();
+    List<CustomerCabinRentalTerm> rentalTerms =
+        rentalTermCodec.decode(current.getRentalTermsJson());
     if (current.getState() != CustomerSessionState.BOOKED && current.getBookingId() == null) {
       cabinIds = rentals.selectedCabinIds(identity, inquiryId);
       if (cabinIds.isEmpty()) {
@@ -73,12 +77,24 @@ public class CustomerCheckoutService {
       }
       furniture = equipmentCodec.decode(current.getEquipmentSelectionJson());
       Set<UUID> selected = Set.copyOf(cabinIds);
+      rentalTerms =
+          rentalTermCodec.completeWithDefaults(current.getRentalTermsJson(), selected);
       if (furniture.stream().anyMatch(item -> !selected.contains(item.cabinUnitId()))) {
         throw conflict(
             "CUSTOMER_EQUIPMENT_SELECTION_INVALID",
             "Мебель выбрана для бытовки, которой больше нет в корзине");
       }
+      Set<UUID> termCabins =
+          rentalTerms.stream()
+              .map(CustomerCabinRentalTerm::cabinUnitId)
+              .collect(java.util.stream.Collectors.toSet());
+      if (termCabins.size() != rentalTerms.size() || !termCabins.equals(selected)) {
+        throw conflict(
+            "CUSTOMER_RENTAL_TERMS_REQUIRED",
+            "Укажите срок аренды для каждой бытовки в корзине");
+      }
     }
+    String requestHash = checkoutHash(inquiryId, request, rentalTerms);
     var preparation =
         checkoutStore.prepare(
             identity.subjectId(),
@@ -90,7 +106,9 @@ public class CustomerCheckoutService {
             request.slotVersion());
     CustomerRentalSession session = preparation.session();
     UUID commandKey = preparation.commandKey();
-    if (preparation.completedReplay()) return response(session, "COMPLETED", null);
+    if (preparation.completedReplay()) {
+      return customerBookings.response(identity, session, "COMPLETED", null);
+    }
     if (preparation.pendingReplay() && session.getBookingId() != null) {
       return reconcile(identity, session);
     }
@@ -113,11 +131,11 @@ public class CustomerCheckoutService {
             token,
             commandKey,
             new ConfirmClientPresentationRequest(
-                selections(cabinIds, furniture),
+                selections(cabinIds, furniture, rentalTerms),
                 List.of(
                     new DesiredDeliveryWindowInput(
                         slot.getDeliveryDate(), slot.getDeliveryDate())),
-                request.rentalMonths(),
+                null,
                 slot.getDeliveryAddress(),
                 slot.getLatitude(),
                 slot.getLongitude(),
@@ -144,7 +162,7 @@ public class CustomerCheckoutService {
           == dev.buhanzaz.rwms.logistics.customer.domain.CustomerSessionState.CHECKOUT_PENDING) {
         result.add(reconcile(identity, session));
       } else {
-        result.add(response(session, "COMPLETED", null));
+        result.add(customerBookings.response(identity, session, "COMPLETED", null));
       }
     }
     return List.copyOf(result);
@@ -200,7 +218,7 @@ public class CustomerCheckoutService {
               session.getInquiryId(),
               status.bookingId(),
               status.orderId());
-      return response(completed, status.state(), status.errorCode());
+      return customerBookings.response(identity, completed, status.state(), status.errorCode());
     }
     if ("REJECTED".equals(status.state())) {
       CustomerRentalSession rejected =
@@ -209,14 +227,22 @@ public class CustomerCheckoutService {
               session.getInquiryId(),
               session.getDeliverySlotId(),
               status.bookingId());
-      return response(rejected, status.state(), status.errorCode());
+      return customerBookings.response(identity, rejected, status.state(), status.errorCode());
     }
-    return response(session, status.state(), status.errorCode());
+    return customerBookings.response(identity, session, status.state(), status.errorCode());
   }
 
   private static List<PresentationCabinSelectionInput> selections(
-      List<UUID> cabinIds, List<CustomerCabinEquipmentSelection> furniture) {
+      List<UUID> cabinIds,
+      List<CustomerCabinEquipmentSelection> furniture,
+      List<CustomerCabinRentalTerm> rentalTerms) {
     Map<UUID, List<PresentationEquipmentSelectionInput>> byCabin = new LinkedHashMap<>();
+    Map<UUID, Long> monthsByCabin =
+        rentalTerms.stream()
+            .collect(
+                java.util.stream.Collectors.toMap(
+                    CustomerCabinRentalTerm::cabinUnitId,
+                    CustomerCabinRentalTerm::rentalMonths));
     cabinIds.forEach(cabinId -> byCabin.put(cabinId, new ArrayList<>()));
     furniture.forEach(
         item ->
@@ -226,7 +252,12 @@ public class CustomerCheckoutService {
                     new PresentationEquipmentSelectionInput(
                         item.inventoryItemId(), item.quantity())));
     return byCabin.entrySet().stream()
-        .map(entry -> new PresentationCabinSelectionInput(entry.getKey(), List.copyOf(entry.getValue())))
+        .map(
+            entry ->
+                new PresentationCabinSelectionInput(
+                    entry.getKey(),
+                    List.copyOf(entry.getValue()),
+                    monthsByCabin.get(entry.getKey())))
         .toList();
   }
 
@@ -254,17 +285,6 @@ public class CustomerCheckoutService {
                 List.copyOf(requirements)));
   }
 
-  private static CustomerBookingResponse response(
-      CustomerRentalSession session, String status, String errorCode) {
-    return new CustomerBookingResponse(
-        session.getBookingId(),
-        session.getOrderId(),
-        status,
-        errorCode,
-        session.getInquiryId(),
-        session.getDeliverySlotId());
-  }
-
   private static String token(String publicPath) {
     if (publicPath == null || publicPath.isBlank() || !publicPath.contains("/")) {
       throw new IllegalStateException("Customer presentation path is invalid");
@@ -272,15 +292,25 @@ public class CustomerCheckoutService {
     return publicPath.substring(publicPath.lastIndexOf('/') + 1);
   }
 
-  private static String checkoutHash(UUID inquiryId, CustomerCheckoutRequest request) {
+  private static String checkoutHash(
+      UUID inquiryId,
+      CustomerCheckoutRequest request,
+      List<CustomerCabinRentalTerm> rentalTerms) {
+    String terms =
+        rentalTerms.stream()
+            .sorted(java.util.Comparator.comparing(CustomerCabinRentalTerm::cabinUnitId))
+            .map(term -> term.cabinUnitId() + ":" + term.rentalMonths())
+            .collect(java.util.stream.Collectors.joining("\n"));
     String value =
         inquiryId
+            + "\n"
+            + request.expectedVersion()
             + "\n"
             + request.slotId()
             + "\n"
             + request.slotVersion()
             + "\n"
-            + request.rentalMonths();
+            + terms;
     try {
       return HexFormat.of().formatHex(
           MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));

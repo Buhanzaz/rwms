@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Warehouse Service API
-  version: 1.0.0
+  version: 1.1.0
   description: >-
     Canonical warehouse identity API. Public directory reads require a USER JWT
     with warehouse.read and intentionally expose the same warehouse registry to
@@ -101,6 +101,50 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Warehouse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/warehouse/v1/warehouses/{servedWarehouseId}/support-links:
+    parameters:
+      - name: servedWarehouseId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: listWarehouseSupportLinks
+      description: >-
+        Returns the complete directed support-link collection, including inactive links.
+        Requires a USER with warehouse.read, a warehouse-management role and at least VIEW
+        access to the served warehouse. SYSTEM_ADMIN and WMS_ADMIN have global access.
+      responses:
+        '200':
+          description: Current collection and the served warehouse version fence.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WarehouseSupportLinks' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      operationId: replaceWarehouseSupportLinks
+      description: >-
+        Atomic full replacement under the served warehouse expectedVersion. Requires USER,
+        rwms.write, a warehouse-management role and MANAGE access to both the served warehouse
+        and every supplied support warehouse. An identical retry is a semantic no-op. The served
+        warehouse must be active and representative; every support warehouse must be active.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReplaceWarehouseSupportLinksRequest' }
+      responses:
+        '200':
+          description: Replaced collection with the next warehouse version fence.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WarehouseSupportLinks' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -280,12 +324,12 @@ paths:
       description: >-
         Requires principal_type SERVICE, sub and client_id both exactly
         logistics-service, and exactly one scope: warehouse.logistics. This
-        narrow private route is not gateway-routable and exposes no topology or
-        location data. The legacy active field is false for DRAINING and INACTIVE;
+        narrow private route is not gateway-routable and exposes only the owner-held
+        human-readable address, never topology. The legacy active field is false for DRAINING and INACTIVE;
         directional admission must use the dedicated private boundary.
       responses:
         '200':
-          description: Exact warehouse identity, version, active flag and canonical IANA timezone.
+          description: Exact warehouse identity, owner-held address, version, active flag and canonical IANA timezone.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/LogisticsWarehouseIdentity' }
@@ -300,7 +344,7 @@ paths:
         logistics-service, and exactly one scope: warehouse.logistics. This
         private route returns ACTIVE identities only, ordered by configured
         warehouse order, name and UUID, so logistics can build bounded availability
-        facets without a cross-database query.
+        facets and an address-bound planner directory without a cross-database query.
       responses:
         '200':
           description: Active warehouse identities available to logistics.
@@ -311,6 +355,37 @@ paths:
                 items: { $ref: '#/components/schemas/LogisticsWarehouseIdentity' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/internal/warehouse/v1/warehouses/logistics/{servedWarehouseId}/support-links:
+    parameters:
+      - name: servedWarehouseId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: listEligibleWarehouseSupportLinksForLogisticsService
+      description: >-
+        Requires principal_type SERVICE, matching logistics-service sub/client_id and exactly
+        warehouse.logistics. Returns only active links whose calendar permits the supplied instant,
+        evaluated in the served warehouse timezone. Inactive endpoints are excluded. Each edge
+        contains both owner-held warehouse coordinate pairs so logistics never creates a second map
+        identity or uses straight-line distance as a final route decision.
+      parameters:
+        - name: at
+          in: query
+          required: true
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Calendar-eligible active support links ordered by priority and stable identity.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/LogisticsWarehouseSupportLink' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/internal/warehouse/v1/warehouses/{id}/time-zone:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -470,13 +545,15 @@ components:
     Warehouse:
       type: object
       additionalProperties: false
-      required: [id, version, name, city, address, timeZone, active, lifecycleState, sortOrder]
+      required: [id, version, name, city, address, latitude, longitude, timeZone, active, lifecycleState, sortOrder, representative]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, minimum: 0 }
         name: { type: string, minLength: 1, maxLength: 255, description: Unique after trim, internal-whitespace collapse and Unicode-aware lowercase normalization. }
         city: { type: string, minLength: 1, maxLength: 255 }
         address: { type: [string, 'null'], maxLength: 1000 }
+        latitude: { type: [number, 'null'], minimum: -90, maximum: 90, multipleOf: 0.000001 }
+        longitude: { type: [number, 'null'], minimum: -180, maximum: 180, multipleOf: 0.000001 }
         timeZone:
           type: string
           minLength: 1
@@ -489,6 +566,9 @@ components:
             and cannot decide whether outbound draining work is admitted.
         lifecycleState: { $ref: '#/components/schemas/WarehouseLifecycleState' }
         sortOrder: { type: [integer, 'null'], minimum: 0 }
+        representative:
+          type: boolean
+          description: Additive characteristic that does not alter lifecycle or operation admission.
     CreateWarehouseRequest:
       type: object
       additionalProperties: false
@@ -497,8 +577,24 @@ components:
         name: { type: string, minLength: 1, maxLength: 255, description: Unique after trim, internal-whitespace collapse and Unicode-aware lowercase normalization. }
         city: { type: string, minLength: 1, maxLength: 255 }
         address: { type: [string, 'null'], maxLength: 1000 }
+        latitude:
+          type: [number, 'null']
+          minimum: -90
+          maximum: 90
+          multipleOf: 0.000001
+          description: Optional WGS84 latitude; latitude and longitude must be supplied together.
+        longitude:
+          type: [number, 'null']
+          minimum: -180
+          maximum: 180
+          multipleOf: 0.000001
+          description: Optional WGS84 longitude; latitude and longitude must be supplied together.
         timeZone: { type: string, minLength: 1, maxLength: 64, description: Canonical IANA timezone identifier. }
         sortOrder: { type: [integer, 'null'], minimum: 0 }
+        representative:
+          type: boolean
+          default: false
+          description: Additive characteristic that does not alter lifecycle or operation admission.
     ReplaceWarehouseRequest:
       type: object
       additionalProperties: false
@@ -508,12 +604,28 @@ components:
         name: { type: string, minLength: 1, maxLength: 255, description: Unique after trim, internal-whitespace collapse and Unicode-aware lowercase normalization. }
         city: { type: string, minLength: 1, maxLength: 255 }
         address: { type: [string, 'null'], maxLength: 1000 }
+        latitude:
+          type: [number, 'null']
+          minimum: -90
+          maximum: 90
+          multipleOf: 0.000001
+          description: Full-replacement WGS84 latitude; requires longitude.
+        longitude:
+          type: [number, 'null']
+          minimum: -180
+          maximum: 180
+          multipleOf: 0.000001
+          description: Full-replacement WGS84 longitude; requires latitude.
         timeZone:
           type: string
           minLength: 1
           maxLength: 64
           description: Immediate correction only before the first durable operation mark.
         sortOrder: { type: [integer, 'null'], minimum: 0 }
+        representative:
+          type: boolean
+          default: false
+          description: Full-replacement value; omitted legacy requests select false.
     WarehouseLifecycleState:
       type: string
       enum: [ACTIVE, DRAINING, INACTIVE]
@@ -663,18 +775,163 @@ components:
     LogisticsWarehouseIdentity:
       type: object
       additionalProperties: false
-      required: [id, version, active, name, city, timeZone]
+      required: [id, version, active, name, city, address, latitude, longitude, timeZone, representative]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, minimum: 0 }
         active: { type: boolean }
         name: { type: string, minLength: 1, maxLength: 255 }
         city: { type: string, minLength: 1, maxLength: 255 }
+        address:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 1000
+        latitude:
+          type: [number, 'null']
+          minimum: -90
+          maximum: 90
+          multipleOf: 0.000001
+          description: Owner-held WGS84 latitude used by logistics as the map source of truth.
+        longitude:
+          type: [number, 'null']
+          minimum: -180
+          maximum: 180
+          multipleOf: 0.000001
+          description: Owner-held WGS84 longitude used by logistics as the map source of truth.
         timeZone:
           type: string
           minLength: 1
           maxLength: 64
           description: Canonical IANA timezone identifier.
+        representative:
+          type: boolean
+          description: Additive characteristic that does not alter lifecycle or operation admission.
+    WarehouseSupportLinkInput:
+      type: object
+      additionalProperties: false
+      required:
+        [supportWarehouseId, active, priority, allowDrivers, allowVehicles, allowInventory,
+         allowDirectFulfillment, allowInterwarehouseTransfer, allowContractorFallback]
+      properties:
+        supportWarehouseId: { type: string, format: uuid }
+        active: { type: boolean }
+        priority: { type: integer, minimum: 1 }
+        allowDrivers: { type: boolean }
+        allowVehicles: { type: boolean }
+        allowInventory: { type: boolean }
+        allowDirectFulfillment: { type: boolean }
+        allowInterwarehouseTransfer: { type: boolean }
+        allowContractorFallback: { type: boolean }
+        allowedWeekdays:
+          type: array
+          uniqueItems: true
+          default: []
+          description: Empty means every recurring weekday; explicit allowed dates can add exceptions.
+          items: { $ref: '#/components/schemas/Weekday' }
+        allowedDates:
+          type: array
+          uniqueItems: true
+          default: []
+          items: { type: string, format: date }
+        excludedDates:
+          type: array
+          uniqueItems: true
+          default: []
+          description: Exclusions override weekday and explicit-date allowances.
+          items: { type: string, format: date }
+        serviceStart: { type: [string, 'null'], format: time }
+        serviceEnd: { type: [string, 'null'], format: time }
+    ReplaceWarehouseSupportLinksRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, links]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        links:
+          type: array
+          items: { $ref: '#/components/schemas/WarehouseSupportLinkInput' }
+    WarehouseSupportLink:
+      type: object
+      additionalProperties: false
+      required:
+        [id, version, supportWarehouseId, servedWarehouseId, active, priority, allowDrivers,
+         allowVehicles, allowInventory, allowDirectFulfillment, allowInterwarehouseTransfer,
+         allowContractorFallback, allowedWeekdays, allowedDates, excludedDates, serviceStart,
+         serviceEnd]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, minimum: 0 }
+        supportWarehouseId: { type: string, format: uuid }
+        servedWarehouseId: { type: string, format: uuid }
+        active: { type: boolean }
+        priority: { type: integer, minimum: 1 }
+        allowDrivers: { type: boolean }
+        allowVehicles: { type: boolean }
+        allowInventory: { type: boolean }
+        allowDirectFulfillment: { type: boolean }
+        allowInterwarehouseTransfer: { type: boolean }
+        allowContractorFallback: { type: boolean }
+        allowedWeekdays:
+          type: array
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/Weekday' }
+        allowedDates:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: date }
+        excludedDates:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: date }
+        serviceStart: { type: [string, 'null'], format: time }
+        serviceEnd: { type: [string, 'null'], format: time }
+    WarehouseSupportLinks:
+      type: object
+      additionalProperties: false
+      required: [servedWarehouseId, warehouseVersion, links]
+      properties:
+        servedWarehouseId: { type: string, format: uuid }
+        warehouseVersion: { type: integer, minimum: 0 }
+        links:
+          type: array
+          items: { $ref: '#/components/schemas/WarehouseSupportLink' }
+    LogisticsWarehouseSupportLink:
+      type: object
+      additionalProperties: false
+      required:
+        [id, version, supportWarehouse, servedWarehouse, priority, allowDrivers, allowVehicles,
+         allowInventory, allowDirectFulfillment, allowInterwarehouseTransfer,
+         allowContractorFallback, allowedWeekdays, allowedDates, excludedDates, serviceStart,
+         serviceEnd]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, minimum: 0 }
+        supportWarehouse: { $ref: '#/components/schemas/LogisticsWarehouseIdentity' }
+        servedWarehouse: { $ref: '#/components/schemas/LogisticsWarehouseIdentity' }
+        priority: { type: integer, minimum: 1 }
+        allowDrivers: { type: boolean }
+        allowVehicles: { type: boolean }
+        allowInventory: { type: boolean }
+        allowDirectFulfillment: { type: boolean }
+        allowInterwarehouseTransfer: { type: boolean }
+        allowContractorFallback: { type: boolean }
+        allowedWeekdays:
+          type: array
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/Weekday' }
+        allowedDates:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: date }
+        excludedDates:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: date }
+        serviceStart: { type: [string, 'null'], format: time }
+        serviceEnd: { type: [string, 'null'], format: time }
+    Weekday:
+      type: string
+      enum: [MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY, SATURDAY, SUNDAY]
     ApiProblem:
       type: object
       additionalProperties: true

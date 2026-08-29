@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.warehouse.api;
 
+import java.math.BigDecimal;
 import java.util.UUID;
 
 /**
@@ -10,7 +11,11 @@ import java.util.UUID;
  * @param active compatibility projection; directional admission requires the dedicated endpoint
  * @param name display name
  * @param city human-readable city
+ * @param address optional human-readable warehouse address
+ * @param latitude optional WGS84 latitude used as the logistics map source of truth
+ * @param longitude optional WGS84 longitude used as the logistics map source of truth
  * @param timeZone current canonical IANA timezone
+ * @param representative whether the warehouse has the representative characteristic
  */
 public record LogisticsWarehouseIdentityResponse(
     UUID id,
@@ -18,4 +23,8 @@ public record LogisticsWarehouseIdentityResponse(
     boolean active,
     String name,
     String city,
-    String timeZone) {}
+    String address,
+    BigDecimal latitude,
+    BigDecimal longitude,
+    String timeZone,
+    boolean representative) {}

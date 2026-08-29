@@ -53,6 +53,9 @@ public class CustomerRentalSession {
   @Column(name = "equipment_selection_json", nullable = false, columnDefinition = "text")
   private String equipmentSelectionJson;
 
+  @Column(name = "rental_terms_json", nullable = false, columnDefinition = "text")
+  private String rentalTermsJson;
+
   @Column(name = "pending_command_key")
   private UUID pendingCommandKey;
 
@@ -98,6 +101,7 @@ public class CustomerRentalSession {
     session.warehouseId = Objects.requireNonNull(warehouseId, "warehouseId");
     session.state = CustomerSessionState.ACTIVE;
     session.equipmentSelectionJson = "[]";
+    session.rentalTermsJson = "[]";
     session.createdAt = now();
     session.updatedAt = session.createdAt;
     return session;
@@ -115,13 +119,17 @@ public class CustomerRentalSession {
 
   /** Completes the exact pending cabin-selection command. */
   public void completeSelection(
-      UUID commandKey, String commandSha256, String normalizedEquipmentSelectionJson) {
+      UUID commandKey,
+      String commandSha256,
+      String normalizedEquipmentSelectionJson,
+      String normalizedRentalTermsJson) {
     requirePending(CustomerSessionState.SELECTION_PENDING, commandKey, commandSha256);
     state = CustomerSessionState.ACTIVE;
     lastSelectionKey = commandKey;
     lastSelectionSha256 = commandSha256;
     equipmentSelectionJson =
         Objects.requireNonNull(normalizedEquipmentSelectionJson, "normalizedEquipmentSelectionJson");
+    rentalTermsJson = Objects.requireNonNull(normalizedRentalTermsJson, "normalizedRentalTermsJson");
     deliverySlotId = null;
     clearPending();
     touch();
@@ -140,6 +148,15 @@ public class CustomerRentalSession {
     requireExpectedVersion(expectedVersion);
     requireActive();
     equipmentSelectionJson = Objects.requireNonNull(normalizedJson, "normalizedJson");
+    deliverySlotId = null;
+    touch();
+  }
+
+  /** Replaces the complete per-cabin rental terms under the session version fence. */
+  public void replaceRentalTerms(long expectedVersion, String normalizedJson) {
+    requireExpectedVersion(expectedVersion);
+    requireActive();
+    rentalTermsJson = Objects.requireNonNull(normalizedJson, "normalizedJson");
     deliverySlotId = null;
     touch();
   }

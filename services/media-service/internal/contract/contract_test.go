@@ -338,13 +338,13 @@ func TestPublicMediaContractExposesAllCanonicalOwnerScopes(t *testing.T) {
 	if got := stringSliceAt(t, ownerType, "enum"); !equalStrings(got, []string{
 		"INVENTORY_FINDING", "CABIN", "MAINTENANCE_ESTIMATE", "MAINTENANCE_REPAIR",
 		"MAINTENANCE_ACCEPTANCE", "MAINTENANCE_CATALOG_NODE", "LOGISTICS_RETURN",
-		"LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER", "TASK_BOARD_ENTRY",
+		"LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER", "LOGISTICS_CUSTOMER_PROFILE", "TASK_BOARD_ENTRY",
 	}) {
 		t.Fatalf("media owner types = %#v", got)
 	}
 	if got := stringSliceAt(t, ownerContext, "enum"); !equalStrings(got, []string{
 		"INSPECTION", "WAREHOUSE", "ESTIMATE", "REPAIR", "ACCEPTANCE", "CATALOG",
-		"RETURN_INSPECTION", "SHIPMENT", "TRANSFER", "WORK_RESULT",
+		"RETURN_INSPECTION", "SHIPMENT", "TRANSFER", "PROFILE_AVATAR", "WORK_RESULT",
 	}) {
 		t.Fatalf("media owner contexts = %#v", got)
 	}
@@ -365,7 +365,7 @@ func TestPublicMediaContractExposesAllCanonicalOwnerScopes(t *testing.T) {
 		t.Fatal("media asset folderId must be required")
 	}
 	pairs, ok := upload["oneOf"].([]any)
-	if !ok || len(pairs) != 10 {
+	if !ok || len(pairs) != 11 {
 		t.Fatalf("upload owner scope pairs = %#v", upload["oneOf"])
 	}
 	wire, err := json.Marshal(pairs)
@@ -382,6 +382,7 @@ func TestPublicMediaContractExposesAllCanonicalOwnerScopes(t *testing.T) {
 		`"ownerType":{"const":"LOGISTICS_RETURN"}`, `"context":{"const":"RETURN_INSPECTION"}`,
 		`"ownerType":{"const":"LOGISTICS_SHIPMENT"}`, `"context":{"const":"SHIPMENT"}`,
 		`"ownerType":{"const":"LOGISTICS_TRANSFER"}`, `"context":{"const":"TRANSFER"}`,
+		`"ownerType":{"const":"LOGISTICS_CUSTOMER_PROFILE"}`, `"context":{"const":"PROFILE_AVATAR"}`,
 		`"ownerType":{"const":"TASK_BOARD_ENTRY"}`, `"context":{"const":"WORK_RESULT"}`,
 	} {
 		if !strings.Contains(string(wire), required) {
@@ -414,15 +415,33 @@ func TestLogisticsReferenceValidationContractIsPrivateAndOpaque(t *testing.T) {
 	request := objectAt(t, schemas, "LogisticsMediaReferenceValidationRequest")
 	response := objectAt(t, schemas, "LogisticsMediaReferenceValidation")
 	for name, schema := range map[string]map[string]any{"request": request, "response": response} {
+		if variants, ok := schema["oneOf"].([]any); !ok || len(variants) != 2 {
+			t.Fatalf("%s owner union = %#v", name, schema["oneOf"])
+		}
+	}
+	for name, schemaName := range map[string]string{
+		"structured request":  "StructuredLogisticsMediaReferenceValidationRequest",
+		"structured response": "StructuredLogisticsMediaReferenceValidation",
+		"profile request":     "CustomerProfileMediaReferenceValidationRequest",
+		"profile response":    "CustomerProfileMediaReferenceValidation",
+	} {
+		schema := objectAt(t, schemas, schemaName)
 		if schema["additionalProperties"] != false {
 			t.Errorf("%s schema allows undeclared properties", name)
 		}
 		properties := objectAt(t, schema, "properties")
-		for _, forbidden := range []string{"ownerId", "url", "objectKey", "sourceObjectKey", "fileName", "contentType", "status"} {
+		for _, forbidden := range []string{"url", "objectKey", "sourceObjectKey", "fileName", "contentType", "status"} {
 			if _, present := properties[forbidden]; present {
 				t.Errorf("%s schema exposes forbidden %q", name, forbidden)
 			}
 		}
+	}
+	profileRequest := objectAt(t, schemas, "CustomerProfileMediaReferenceValidationRequest")
+	profileProperties := objectAt(t, profileRequest, "properties")
+	if objectAt(t, profileProperties, "ownerType")["const"] != "LOGISTICS_CUSTOMER_PROFILE" ||
+		objectAt(t, profileProperties, "context")["const"] != "PROFILE_AVATAR" ||
+		objectAt(t, profileProperties, "references")["maxItems"] != 1 {
+		t.Fatalf("profile validation contract = %#v", profileRequest)
 	}
 	reference := objectAt(t, schemas, "OpaqueReadyMediaReference")
 	properties := objectAt(t, reference, "properties")
@@ -540,8 +559,12 @@ func TestServiceOwnerProofAndDeletionContractsAreClosedAndOpaque(t *testing.T) {
 				t.Errorf("%s exposes forbidden %q", name, forbidden)
 			}
 		}
-		if pairs, ok := schema["oneOf"].([]any); !ok || len(pairs) != 2 {
+		if pairs, ok := schema["oneOf"].([]any); !ok || len(pairs) != 4 {
 			t.Fatalf("%s identity union = %#v", name, schema["oneOf"])
+		}
+		authorizedSubject := objectAt(t, properties, "authorizedSubjectId")
+		if stringAt(t, authorizedSubject, "format") != "uuid" {
+			t.Fatalf("%s authorizedSubjectId = %#v", name, authorizedSubject)
 		}
 	}
 	requestProperties := objectAt(t, objectAt(t, schemas, "ServiceOwnerProofRequest"), "properties")
@@ -564,7 +587,7 @@ func TestLegacyUnionSchemaCarriesTheExpandedOwnerEnum(t *testing.T) {
 	if got := stringSliceAt(t, ownerType, "enum"); !equalStrings(got, []string{
 		"INVENTORY_FINDING", "CABIN", "MAINTENANCE_ESTIMATE", "MAINTENANCE_REPAIR",
 		"MAINTENANCE_ACCEPTANCE", "MAINTENANCE_CATALOG_NODE", "LOGISTICS_RETURN",
-		"LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER", "TASK_BOARD_ENTRY",
+		"LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER", "LOGISTICS_CUSTOMER_PROFILE", "TASK_BOARD_ENTRY",
 	}) {
 		t.Fatalf("legacy union media owner types = %#v", got)
 	}

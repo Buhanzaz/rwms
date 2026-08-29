@@ -4,18 +4,18 @@ Use this file only for unresolved contradictions or product decisions that
 block a safe implementation. This is not a backlog and does not authorize
 work.
 
-## Retiring Simulator Requests Missing From A Full RWMS Feed
+## Retiring Planner Requests Missing From A Full RWMS Feed
 
 - Status: `Open`
 - Affected owner and consumers: logistics-service as rental-demand owner;
-  standalone `logistics/` simulator as a read projection and planner; saved
+  standalone `logistics/` warehouse planner as a read projection; saved
   route plans and later apply commands.
-- Requested behavior: a synchronized simulator scenario must stop planning an
+- Requested behavior: a synchronized warehouse workspace must stop planning an
   order after it is assigned, cancelled or otherwise disappears from the
   logistics-owned still-unplanned demand feed.
 - Conflicting contract or invariant: the canonical planning response is named
   a complete warehouse/date demand snapshot, but it contains only the current
-  still-unplanned remainder and no tombstone or removal reason. The simulator
+  still-unplanned remainder and no tombstone or removal reason. The planner
   currently upserts returned order IDs and leaves an absent local request
   `READY`. Deleting it would break saved-plan references and erase history;
   retaining it as active leaves planner state stale. A later apply fails at
@@ -23,45 +23,14 @@ work.
   projection.
 - Evidence:
   [`planning feed contract`](../../contracts/openapi/logistics-service.yaml),
-  [`simulator synchronization`](../../logistics/backend/app/integrations/rwms_sync.py),
+  [`planner synchronization`](../../logistics/backend/app/integrations/rwms_sync.py),
   and
-  [`simulator request aggregate`](../../logistics/backend/app/models/domain.py).
+  [`planner request aggregate`](../../logistics/backend/app/models/domain.py).
 - Smallest decision needed: define whether omission from a successful complete
   refresh is an authoritative inactive transition, and specify how existing
   unassigned tasks, saved plan members and history are retained or invalidated.
   If omission is not sufficient evidence, extend the canonical feed with a
   lifecycle/tombstone fact and update both producer and consumer together.
-- Resolution and date: none.
-
-## Clearing Published Simulator Capacity On Local Lifecycle Changes
-
-- Status: `Open`
-- Affected owner and consumers: standalone `logistics/` simulator as capacity
-  publisher; logistics-service as the active warehouse projection owner;
-  CustomerApp slot searches.
-- Requested behavior: the active anonymous generated-delivery snapshot must
-  stop constraining a warehouse after its linked scenario is deleted, reset or
-  relinked.
-- Conflicting contract or invariant: logistics owns a full-replacement
-  projection keyed by warehouse and keeps it active until another accepted
-  replacement. The simulator republishes after generated-workload changes, but
-  scenario deletion, demo reset and an `external_warehouse_id` relink currently
-  have no durable clear receipt. If publication is disabled or temporarily
-  unavailable after the local mutation, the last successful capacity can
-  remain active indefinitely. Silently deleting local evidence or making a
-  best-effort browser call would violate recovery and ownership rules.
-- Evidence:
-  [`capacity replacement contract`](../../contracts/openapi/logistics-service.yaml),
-  [`simulator capacity projection`](../../logistics/backend/app/services/capacity_projection.py),
-  [`scenario lifecycle API`](../../logistics/backend/app/api/scenarios.py),
-  [`scenario lifecycle owner`](../../logistics/backend/app/services/scenarios.py),
-  and
-  [`warehouse link editor`](../../logistics/frontend/src/components/EntityDialogs.tsx).
-- Smallest decision needed: either fail closed and refuse delete/reset/relink
-  until an empty replacement is acknowledged, or persist a server-side local
-  clear intent/receipt and permit the lifecycle mutation only with an explicit
-  retry/recovery state. A projection TTL would instead be a separate canonical
-  logistics contract change.
 - Resolution and date: none.
 
 ## Guaranteed Alice/SpeechKit Voice Search In CustomerApp
@@ -90,6 +59,31 @@ work.
   never enter CustomerApp or its download artifact.
 - Resolution and date: none. On 2026-08-27 the device-recognizer fallback was
   implemented without adding an APK secret or audio storage.
+
+## Failed-Trip Charge Amount And Billing Owner
+
+- Status: `Open`
+- Affected owner and consumers: logistics-service customer delivery slots and
+  booking audit, CustomerApp legal copy, and a future billing/accounting owner.
+- Requested behavior: warn that a false private-site truck-and-trailer access
+  confirmation may lead to a failed-trip charge.
+- Conflicting contract or invariant: the current command safely persists the
+  customer's acknowledgement together with the frozen truck route profile,
+  but RWMS has no authoritative tariff, currency, tax rule, adjudication
+  transition, invoice owner or cancellation/refund policy for such a charge.
+  Creating money or automatically billing from this boolean would invent a
+  business invariant outside logistics ownership.
+- Evidence:
+  [`customer slot contract`](../../contracts/openapi/logistics-service.yaml),
+  [`slot aggregate`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/domain/CustomerDeliverySlot.java),
+  and
+  [`V61 audit fields`](../../services/logistics-service/src/main/resources/db/migration/V61__customer_terms_capacity_shifts_and_reception.sql).
+- Smallest decision needed: name the billing owner and approved legal text,
+  tariff/currency/tax calculation, operator evidence and dispute/refund
+  transitions. Then add the canonical money contract and all affected
+  producer/consumer flows together.
+- Resolution and date: none. On 2026-08-27 only explicit acknowledgement was
+  implemented; no amount is displayed or charged.
 
 ## Non-Expiring Cabin Presentation Versus Current Media Generation
 
@@ -559,23 +553,26 @@ work.
 ## Address-Only Order Geocoding For Planning
 
 - Status: `Open`
-- Affected owner and consumers: logistics-service, standalone logistics
-  simulator and logistics operators.
+- Affected owner and consumers: logistics-service, standalone warehouse
+  planner and logistics operators.
 - Requested behavior: allow an RWMS order with an address but no coordinates to
   enter route planning, while coordinates remain authoritative when both are
   present.
-- Conflicting contract or invariant: no approved private geocoder, data-sharing
-  policy, result-confidence threshold or operator correction owner exists. The
-  current simulator therefore returns `COORDINATES_REQUIRED` and never sends a
-  customer address to an undeclared public service or fabricates coordinates.
+- Conflicting contract or invariant: no approved feed-side geocoder,
+  address-data sharing policy, result-confidence threshold or operator
+  correction owner exists. The separately configured Yandex boundary serves an
+  address deliberately entered/selected by an operator in the slot checker; it
+  is not authority to transmit imported RWMS customer addresses. Synchronization
+  therefore returns `COORDINATES_REQUIRED` and never fabricates coordinates.
 - Evidence:
   [`sync orchestration`](../../logistics/backend/app/integrations/rwms_sync.py),
+  [`operator geocoding boundary`](../../logistics/backend/app/api/geocoding.py),
   [`planning contract`](../../contracts/openapi/logistics-service.yaml).
 - Smallest decision needed: select and approve the geocoding provider/runtime
   boundary, address-data policy, confidence/error behavior and explicit manual
   correction workflow.
 - Resolution and date: none. Coordinate-bearing orders synchronize now;
-  address-only orders fail per order without partially corrupting the scenario.
+  address-only orders fail per order without partially corrupting the warehouse projection.
 
 ## Capacity-Backed Client Dates
 
@@ -591,7 +588,7 @@ work.
 - Evidence:
   [`ClientDeliveryDatePolicy.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/ClientDeliveryDatePolicy.java),
   [`public presentation`](../../panel/src/features/assistant/pages/public-client-presentation-page.tsx),
-  [`simulator planner`](../../logistics/backend/app/planner/heuristic.py).
+  [`warehouse planner`](../../logistics/backend/app/planner/heuristic.py).
 - Smallest decision needed: choose the capacity owner, freshness/version fence,
   reservation lifetime and fallback shown when the planner is unavailable.
 - Resolution and date: none. The UI labels current values as requested dates,
@@ -606,7 +603,7 @@ work.
   claiming an extra trip.
 - Conflicting contract or invariant: current RWMS shipment/task contracts are
   intentionally date-only, while planned arrival/route segment timestamps live
-  only in a versioned simulator plan. Applying a plan currently assigns date,
+  only in a versioned warehouse plan. Applying a plan currently assigns date,
   driver and cabin IDs but does not establish which service owns ETA updates,
   delay propagation or stale-plan display.
 - Evidence:

@@ -20,6 +20,11 @@ public interface CustomerRentalSessionRepository
   Optional<CustomerRentalSession> findByInquiryIdAndCustomerSubjectId(
       UUID inquiryId, UUID customerSubjectId);
 
+  Optional<CustomerRentalSession> findByBookingIdAndCustomerSubjectId(
+      UUID bookingId, UUID customerSubjectId);
+
+  Optional<CustomerRentalSession> findFirstByOrderIdOrderByCreatedAtAscIdAsc(UUID orderId);
+
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select session from CustomerRentalSession session where session.inquiryId = :inquiryId")
   Optional<CustomerRentalSession> findByInquiryIdForUpdate(@Param("inquiryId") UUID inquiryId);

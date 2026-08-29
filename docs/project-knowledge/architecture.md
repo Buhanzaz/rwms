@@ -23,8 +23,8 @@ flowchart LR
     Customer[Customer Android app] --> Gateway
     Worker[Worker Android app] --> Gateway
     Driver[Driver Android app] --> Gateway
-    Simulator[Standalone logistics simulator] -. OAuth2 planning boundary .-> Auth
-    Simulator -. private versioned planning API .-> Domain
+    Planner[Warehouse logistics planner] -. OAuth2 planning boundary .-> Auth
+    Planner -. private versioned planning API .-> Domain
     Gateway --> Auth[Auth service]
     Gateway --> Domain[Public domain APIs]
     Domain --> ServiceDB[(Service-owned PostgreSQL)]
@@ -67,42 +67,59 @@ the same renderer-neutral evaluator to Master Setup and ordinary CAD. See the
 [`Cabin CAD flow`](cabin-cad.md) and
 [`application shell`](../../cabin-cad/src/app/App.tsx).
 
-`logistics/` is a separate React/FastAPI/PostGIS planning and simulation
-deployable with its own schema, zones and route plans. A private Valhalla truck
-graph is built from a source-manifested Central plus Northwestern Federal
-District OpenStreetMap PBF set; a one-shot Osmium importer atomically derives a
-deduplicated same-version PostGIS truck-restriction overlay before the backend
-starts. That overlay is diagnostic only: per-leg Valhalla truck
-costing remains the route-safety authority. The simulator never reads an RWMS
-service database. Its optional integration is disabled by
-default; when enabled, the backend authenticates as the dedicated
-`logistics-planner` client with sole scope `logistics.planning`, imports a
-warehouse/date-bounded minimal order feed from `logistics-service`, and applies
-only an explicitly reviewed exact plan version. Unassigned parts remain hidden
-unless the operator explicitly selects a future `RWMS`-sourced delivery for the qualified
-warehouse-driver pool. A bounded status read returns only planner-created
-assignment/task ownership, allowing the simulator to show who claimed a shared
-part without task-board or database access. Loading a linked workspace first
-refreshes the current 31-day RWMS horizon, so changing simulator scenarios does
-not erase a real request; confirmed CustomerApp demand retains its hard exact
-time window and persisted one-to-four-hour travel ring. A second opt-in publishes
-one anonymous active generated-delivery snapshot per warehouse into
-logistics-service; immutable command receipts prevent delayed retries from
-restoring an older accepted revision. A simulator-wide monotonic
-`sourceGeneration` also rejects a never-accepted stale request and distinguishes
-an intentional `A -> B -> A` regeneration from that delayed retry. Replacing capacity changes slot feasibility but
-never deletes a real booking. Generated pickups remain simulator backhaul and generated/manual
-tasks are never exported as RWMS assignments. The numeric ring ranks
-multi-point candidates against the depot matrix. Visual contours originate at
-depots and each driver's latest delivery point, remain display-only, and exact
-directed truck legs remain authoritative. RWMS remains the owner of orders,
-shipments, driver identities and assignment validation. See the
-[`simulator architecture`](../../logistics/docs/ARCHITECTURE.md),
+`logistics/` is a separate React/FastAPI/PostGIS warehouse-planning deployable
+with one common map and warehouse-scoped resources, requests, plans, isochrone
+tariffs and exceptional zones. It automatically reconciles active canonical
+RWMS warehouses that have owner-held coordinates under the same UUID; there is
+no second create/connect lifecycle or required first polygon. Selecting a
+warehouse scopes zones, drivers, vehicles, shifts, requests and plans without
+moving the viewport. An explicit “go to warehouse” control recentres the map;
+markers for other routable warehouses remain available for comparison.
+
+A private Valhalla truck graph is built from a source-manifested Central plus
+Northwestern Federal District OpenStreetMap PBF set. A one-shot Osmium importer
+derives a same-version diagnostic PostGIS restriction overlay; exact per-leg
+Valhalla costing remains the route-safety authority. Visual depot/request
+isochrones are optional display layers and never replace exact directed route
+matrices.
+
+The planner never reads an RWMS database. When enabled, it authenticates as the
+dedicated `logistics-planner` client with sole scope `logistics.planning`, reads
+canonical warehouses and warehouse-qualified drivers, refreshes the selected
+warehouse's 31-day demand horizon before returning its workspace, and
+automatically applies assigned RWMS deliveries when request acceptance closes.
+An authoritative request revision invalidates and rebuilds only affected
+dates. RWMS remains the owner of warehouses, orders, shipments, worker identity
+and assignment validation.
+
+A separate opt-in publishes one active anonymous workload, period-shift and
+warehouse-scoped tariff-zone snapshot per warehouse. The URL path owns
+warehouse
+identity; the body contains no duplicate warehouse or workspace identity.
+Tariff polygons are identified by UUID, classify price only and never decide
+route feasibility. Immutable receipts and a monotonic per-warehouse generation
+make exact retries idempotent and reject delayed older state. Replacement can
+change slot feasibility but never deletes a real booking. See the
+[`planner architecture`](../../logistics/docs/ARCHITECTURE.md),
 [`planning controller`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/planning/api/PlanningIntegrationController.java),
-[`capacity owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/capacity/service/ScenarioCapacitySnapshotService.java),
+[`planning directory`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/planning/service/PlanningResourceDirectoryService.java),
+[`capacity owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/capacity/service/WarehouseCapacitySnapshotService.java),
 [`V60`](../../services/logistics-service/src/main/resources/db/migration/V60__customer_scenario_capacity_projection.sql),
+[`V61`](../../services/logistics-service/src/main/resources/db/migration/V61__customer_terms_capacity_shifts_and_reception.sql),
+[`V64`](../../services/logistics-service/src/main/resources/db/migration/V64__dynamic_delivery_slots_and_tariff_zones.sql),
+[`V65`](../../services/logistics-service/src/main/resources/db/migration/V65__warehouse_capacity_identity_and_tariff_zones.sql),
 [`RWMS adapter`](../../logistics/backend/app/integrations/rwms.py), and
-[`route-front contours`](../../logistics/frontend/src/map/TravelTimeContours.ts).
+[`dynamic-slot design`](../isochrone-slot-planning.md).
+
+The standalone operator slot checker has a separate server-side Yandex address
+boundary for autocomplete, suggestion resolution and reverse geocoding. Its
+Geosuggest and Geocoder credentials never enter the browser. This does not
+authorize the RWMS feed synchronizer to disclose address-only customer orders;
+those rows continue to fail with `COORDINATES_REQUIRED` until the distinct open
+product decision is resolved. Evidence:
+[`geocoding boundary`](../../logistics/backend/app/api/geocoding.py),
+[`runtime settings`](../../logistics/backend/app/config.py), and
+[`address-only decision`](open-questions.md#address-only-order-geocoding-for-planning).
 
 ### Android release surfaces
 
@@ -169,9 +186,9 @@ Evidence:
 ## Client Boundaries
 
 - `panel/`, `app/`, `client-app/`, `worker-app/` and `driver-app/` use the public gateway.
-- The standalone logistics simulator is not an interactive gateway client. Its
+- The standalone logistics planner is not an interactive gateway client. Its
   backend alone uses the private OAuth-protected planning operations; its
-  browser calls only the simulator's same-origin API.
+  browser calls only the planner's same-origin API.
 - Browser requests are same-origin `/auth/**` and `/api/**` only.
 - Clients do not call `/api/internal/**` or direct service database/storage
   endpoints.
@@ -202,26 +219,38 @@ and
 CustomerApp is an independent Android 11+ package and OAuth client. It uses
 anonymous CSRF-protected registration through the delegated `/auth/**` route,
 PKCE S256 login as `rwms-customer-android`, and only the public
-`/api/logistics/customer/v1/**` rental boundary. Its encrypted session is local
-client state; profiles, availability, holds, furniture balances, delivery slots
-and bookings remain authoritative in auth-, asset- and logistics-service. It
-also retains one non-authoritative warehouse/inquiry/create-key pointer: an
-uncertain inquiry create reuses that key in-process or after recreation and
-then reloads the authoritative cart rather than storing a cart projection. It
+`/api/logistics/customer/v1/**` rental boundary plus subject-bound public media operations. Its
+encrypted session is local client state; profiles/avatar references, availability, holds, furniture balances, per-cabin
+rental terms, delivery slots, bookings, arrivals, acceptances and problems
+remain authoritative in auth-, asset-, logistics- and media-service. It
+also retains one non-authoritative remember-warehouse/inquiry/create-key pointer: an
+uncertain inquiry create reuses that key in-process and auto-resumes after recreation only when the
+preference is enabled, then reloads the authoritative cart rather than storing a cart projection. It
 has no cabin-dossier or internal-service route. Its focused delivery UI is a
-four-destination Navigation 3 flow: a full-screen Yandex vector map, grouped
+four-destination Navigation 3 flow: a full-screen Yandex map, grouped
 server dates, exact server slots, and held-slot rental confirmation. The map
-toggles only the third-party-permitted vector/raster base layers and enables
-zoom and recenter controls but no satellite/hybrid, route, traffic or weather
-layer. Yandex MapKit Full is a client-only rendering/geocoding dependency: its
-API key comes from a protected build file outside the repository, while an
-address edit, map tap, speech result or manual coordinate edit invalidates the
-previous address-to-point confirmation before another server slot search. The
+uses the permitted raster `MapType.MAP`, enables zoom and current-location controls, and exposes no
+satellite/hybrid, route, traffic, weather or layer toggle. Yandex MapKit Full is a client-only
+rendering, suggestion, one-shot location and geocoding dependency: its API key comes from a
+protected build file outside the repository, while an address edit, suggestion, map tap, speech
+result or current-location result invalidates the previous address-to-point confirmation before
+another server slot search. Android location permission is requested only by the explicit map
+arrow; there is no background location. The
 optional Russian voice path delegates capture to the installed Android speech
 recognition activity, requests no microphone permission and retains no audio;
-a guaranteed Alice/SpeechKit path still requires a separately approved secure
-backend credential boundary. Logistics still derives profile and cabin count
-from its own session/cart and owns every capacity decision.
+a missing recognizer produces an installation modal. A guaranteed Alice/SpeechKit path still
+requires a separately approved secure backend credential boundary. Logistics still derives profile and cabin count
+from its own session/cart and owns every capacity decision. Slot search also
+requires explicit private-site trailer access and possible failed-trip charge attestations collected
+in a modal before the current client sends the request; Valhalla's public-road route profile is
+frozen with the offer. Existing profiles update only mutable contact/display fields. Avatar upload
+uses Android Photo Picker, a logistics-created `LOGISTICS_CUSTOMER_PROFILE/PROFILE_AVATAR` owner
+scope and one media-service-validated `READY` generation; no storage permission or media bytes enter
+logistics.
+My Orders admits reception only after the exact grouped shipment member is
+completed. Full-screen vector signatures are sent to logistics; CameraX
+photo/video and gallery imports remain app-private drafts until the exact
+subject-bound shipment media upload reaches READY.
 
 Manager, worker and driver Retrofit declarations are executable inventories
 rather than implicit conventions. The manager inventory contains 62 methods:
@@ -243,6 +272,7 @@ Evidence:
 [`CustomerApp auth`](../../client-app/app/src/main/java/dev/buhanzaz/rwms/client/auth/CustomerAuth.kt),
 [`CustomerApp recovery pointer`](../../client-app/app/src/main/java/dev/buhanzaz/rwms/client/data/CustomerWorkflowStore.kt),
 [`CustomerApp delivery destinations`](../../client-app/app/src/main/java/dev/buhanzaz/rwms/client/ui/DeliveryFlowScreens.kt),
+[`CustomerApp reception`](../../client-app/app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerReceptionScreens.kt),
 [`CustomerApp map adapter`](../../client-app/app/src/main/java/dev/buhanzaz/rwms/client/ui/YandexDeliveryMap.kt),
 [`CustomerApp build boundary`](../../client-app/app/build.gradle.kts),
 [`manager contract boundary`](../../app/src/test/java/dev/buhanzaz/rwms/manager/network/RwmsApiContractBoundaryTest.kt),

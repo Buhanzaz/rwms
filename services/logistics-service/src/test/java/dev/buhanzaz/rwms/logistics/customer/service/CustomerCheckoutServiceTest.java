@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.logistics.customer.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -9,6 +10,9 @@ import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CabinFurnitureRequirement;
 import dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerCabinEquipmentSelection;
+import dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerBookingResponse;
+import dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerCabinRentalTerm;
+import dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerCheckoutRequest;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlot;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerRentalSession;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerSessionState;
@@ -20,6 +24,7 @@ import dev.buhanzaz.rwms.logistics.inquiry.service.PresentationBookingService;
 import dev.buhanzaz.rwms.logistics.service.CabinFurnitureTaskService;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -44,12 +49,14 @@ class CustomerCheckoutServiceTest {
       UUID.fromString("00000000-0000-0000-0000-000000000408");
 
   @Test
-  void retriesFurnitureCreationWithOneStableTaskKeyBeforeCompletingSession() {
+  void checkoutUsesDisplayedOneMonthDefaultForAnExistingIncompleteCart() {
     CustomerRentalService rentals = mock(CustomerRentalService.class);
     CustomerRentalSessionStore sessions = mock(CustomerRentalSessionStore.class);
     CustomerCheckoutStore checkoutStore = mock(CustomerCheckoutStore.class);
     CustomerEquipmentCodec equipmentCodec = mock(CustomerEquipmentCodec.class);
+    CustomerRentalTermCodec rentalTermCodec = mock(CustomerRentalTermCodec.class);
     CustomerDeliverySlotService slots = mock(CustomerDeliverySlotService.class);
+    CustomerBookingService customerBookings = mock(CustomerBookingService.class);
     CustomerAuthorizer access = mock(CustomerAuthorizer.class);
     ClientPresentationService presentations = mock(ClientPresentationService.class);
     PresentationBookingService bookings = mock(PresentationBookingService.class);
@@ -60,7 +67,66 @@ class CustomerCheckoutServiceTest {
             sessions,
             checkoutStore,
             equipmentCodec,
+            rentalTermCodec,
             slots,
+            customerBookings,
+            access,
+            presentations,
+            bookings,
+            furnitureTasks);
+    CustomerIdentity identity = new CustomerIdentity(SUBJECT, "customer");
+    CustomerRentalSession current = mock(CustomerRentalSession.class);
+    CustomerBookingResponse expected = mock(CustomerBookingResponse.class);
+    CustomerCheckoutRequest request = new CustomerCheckoutRequest(9L, SLOT, 3L);
+    UUID commandKey = UUID.fromString("00000000-0000-0000-0000-000000000409");
+    List<CustomerCabinRentalTerm> defaulted =
+        List.of(new CustomerCabinRentalTerm(CABIN, 1L));
+    when(current.getState()).thenReturn(CustomerSessionState.ACTIVE);
+    when(current.getRentalTermsJson()).thenReturn("[]");
+    when(current.getEquipmentSelectionJson()).thenReturn("[]");
+    when(rentals.requiredSession(identity, INQUIRY)).thenReturn(current);
+    when(rentals.selectedCabinIds(identity, INQUIRY)).thenReturn(List.of(CABIN));
+    when(rentalTermCodec.decode("[]")).thenReturn(List.of());
+    when(rentalTermCodec.completeWithDefaults("[]", Set.of(CABIN))).thenReturn(defaulted);
+    when(equipmentCodec.decode("[]")).thenReturn(List.of());
+    when(checkoutStore.prepare(
+            eq(SUBJECT),
+            eq(INQUIRY),
+            eq(9L),
+            eq(commandKey),
+            anyString(),
+            eq(SLOT),
+            eq(3L)))
+        .thenReturn(
+            new CustomerCheckoutStore.Preparation(current, null, true, false, commandKey));
+    when(customerBookings.response(identity, current, "COMPLETED", null)).thenReturn(expected);
+
+    assertThat(service.checkout(identity, INQUIRY, commandKey, request)).isSameAs(expected);
+    verify(rentalTermCodec).completeWithDefaults("[]", Set.of(CABIN));
+  }
+
+  @Test
+  void retriesFurnitureCreationWithOneStableTaskKeyBeforeCompletingSession() {
+    CustomerRentalService rentals = mock(CustomerRentalService.class);
+    CustomerRentalSessionStore sessions = mock(CustomerRentalSessionStore.class);
+    CustomerCheckoutStore checkoutStore = mock(CustomerCheckoutStore.class);
+    CustomerEquipmentCodec equipmentCodec = mock(CustomerEquipmentCodec.class);
+    CustomerRentalTermCodec rentalTermCodec = mock(CustomerRentalTermCodec.class);
+    CustomerDeliverySlotService slots = mock(CustomerDeliverySlotService.class);
+    CustomerBookingService customerBookings = mock(CustomerBookingService.class);
+    CustomerAuthorizer access = mock(CustomerAuthorizer.class);
+    ClientPresentationService presentations = mock(ClientPresentationService.class);
+    PresentationBookingService bookings = mock(PresentationBookingService.class);
+    CabinFurnitureTaskService furnitureTasks = mock(CabinFurnitureTaskService.class);
+    CustomerCheckoutService service =
+        new CustomerCheckoutService(
+            rentals,
+            sessions,
+            checkoutStore,
+            equipmentCodec,
+            rentalTermCodec,
+            slots,
+            customerBookings,
             access,
             presentations,
             bookings,
@@ -78,6 +144,8 @@ class CustomerCheckoutServiceTest {
     when(equipmentCodec.decode("equipment-json"))
         .thenReturn(List.of(new CustomerCabinEquipmentSelection(CABIN, EQUIPMENT, 2L)));
     when(sessions.completeBooking(SUBJECT, INQUIRY, BOOKING, ORDER)).thenReturn(completed);
+    when(customerBookings.response(identity, completed, "COMPLETED", null))
+        .thenReturn(mock(CustomerBookingResponse.class));
 
     assertThat(service.bookings(identity)).hasSize(1);
     assertThat(service.bookings(identity)).hasSize(1);

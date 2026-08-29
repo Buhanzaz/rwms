@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsLineState;
 import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
+import dev.buhanzaz.rwms.logistics.customer.repository.CustomerRentalSessionRepository;
 import dev.buhanzaz.rwms.logistics.driver.settings.service.ShipmentTaskSettingsService;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventStore;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventType;
@@ -19,6 +20,9 @@ import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderUnitTermRepositor
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.repository.ShipmentFurnitureMovementTaskRepository;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsTargetService;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import java.util.ArrayList;
@@ -53,6 +57,8 @@ class LogisticsRentalOrderShipmentCoordinator {
   private final LogisticsDocumentReadProjection readProjection;
   private final DocumentDriverTaskPlanner driverTaskPlanner;
   private final ShipmentTaskSettingsService shipmentTaskSettings;
+  private final CustomerRentalSessionRepository customerSessions;
+  private final LogisticsDocumentAttemptWriter attemptWriter;
 
   LogisticsDocumentCommandResult replayRentalOrderShipment(
       UUID subjectId, UUID idempotencyKey, String checksum) {
@@ -89,7 +95,7 @@ class LogisticsRentalOrderShipmentCoordinator {
             idempotencyKey,
             List.of(
                 new AdmissionRequirement(
-                    order.getWarehouseId(), WarehouseOperationDirection.OUTGOING))));
+                    inventorySource(order, request), WarehouseOperationDirection.OUTGOING))));
   }
 
   LogisticsDocumentCommandResult createRentalOrderShipment(
@@ -115,16 +121,17 @@ class LogisticsRentalOrderShipmentCoordinator {
         || order.getClient() == null) {
       throw new LogisticsConflictException("Сохранённый заказ требуется для создания отгрузки");
     }
+    UUID inventorySourceWarehouseId = inventorySource(order, request);
     warehouseAdmission.requireAdmission(
         admission,
         List.of(
             new AdmissionRequirement(
-                order.getWarehouseId(), WarehouseOperationDirection.OUTGOING)));
-    if (request.scheduledDate().isBefore(admission.localDate(order.getWarehouseId()))) {
+                inventorySourceWarehouseId, WarehouseOperationDirection.OUTGOING)));
+    if (request.scheduledDate().isBefore(admission.localDate(inventorySourceWarehouseId))) {
       throw new LogisticsConflictException("Дата отгрузки не может быть в прошлом");
     }
     if (request.warehouseDriverPool()
-        && !request.scheduledDate().isAfter(admission.localDate(order.getWarehouseId()))) {
+        && !request.scheduledDate().isAfter(admission.localDate(inventorySourceWarehouseId))) {
       throw new LogisticsConflictException(
           "Общую доставку для свободного водителя можно опубликовать только на будущую дату");
     }
@@ -137,7 +144,7 @@ class LogisticsRentalOrderShipmentCoordinator {
         validRentalOrderReservations(order, reservations);
     List<UUID> selectedUnitIds = sortedSelectedUnitIds(request.unitIds());
     shipmentTaskSettings.requireWithinLimit(
-        order.getWarehouseId(), selectedUnitIds.size(), subjectId);
+        inventorySourceWarehouseId, selectedUnitIds.size(), subjectId);
     Map<UUID, LogisticsDependencyGateway.OrderUnitReservation> reservationsByUnit =
         validReservations.stream()
             .collect(
@@ -148,6 +155,15 @@ class LogisticsRentalOrderShipmentCoordinator {
                     LinkedHashMap::new));
     if (!reservationsByUnit.keySet().containsAll(selectedUnitIds)) {
       throw new LogisticsConflictException("Отгрузка содержит бытовку не из выбранного заказа");
+    }
+    if (selectedUnitIds.stream()
+        .map(reservationsByUnit::get)
+        .anyMatch(
+            reservation ->
+                reservation == null
+                    || !inventorySourceWarehouseId.equals(reservation.warehouseId()))) {
+      throw new LogisticsConflictException(
+          "Одна отгрузка не может содержать бытовки из разных складов-источников");
     }
     List<UUID> assigned =
         lineRepository.findAssignedRentalShipmentAssetIds(order.getId(), selectedUnitIds);
@@ -181,10 +197,38 @@ class LogisticsRentalOrderShipmentCoordinator {
         request.driverWorkerId(),
         request.scheduledDate(),
         request.warehouseDriverPool());
-    document = documentRepository.saveAndFlush(document);
+    documentRepository.saveAndFlush(document);
     List<LogisticsDocumentLine> lines =
         lineRepository.saveAllAndFlush(
-            rentalOrderShipmentLines(document, order, reservationsByUnit, selectedUnitIds));
+            rentalOrderShipmentLines(
+                document,
+                order,
+                reservationsByUnit,
+                selectedUnitIds,
+                inventorySourceWarehouseId));
+    customerSessions
+        .findFirstByOrderIdOrderByCreatedAtAscIdAsc(order.getId())
+        .ifPresent(
+            session -> {
+              OffsetDateTime createdAt = OffsetDateTime.now(ZoneOffset.UTC);
+              for (LogisticsDocumentLine line : lines) {
+                attemptWriter.createLineAttempt(
+                    document,
+                    line,
+                    LogisticsTargetService.MEDIA,
+                    LogisticsDocumentEffectOperations.SHIPMENT_MEDIA_OWNER_PROOF_REGISTER,
+                    attemptWriter.ownerProofDigest(
+                        LogisticsDocumentEffectOperations.SHIPMENT_MEDIA_OWNER_PROOF_REGISTER,
+                        document,
+                        line,
+                        document.getWarehouseId(),
+                        0,
+                        0,
+                        true,
+                        session.getCustomerSubjectId()),
+                    createdAt);
+              }
+            });
     shipmentFurnitureTasks.attachReplacementMovementsToShipment(document, selectedUnitIds);
     driverTaskPlanner.plan(document, lines);
     for (RentalOrderUnitTerm term : terms) {
@@ -192,7 +236,7 @@ class LogisticsRentalOrderShipmentCoordinator {
     }
     rentalTerms.saveAllAndFlush(terms);
     eventStore.initialize(document, lines.size(), correlationId, subjectId);
-    warehouseAdmission.enqueue(document, document.getWarehouseId(), admission);
+    warehouseAdmission.enqueue(document, inventorySourceWarehouseId, admission);
     idempotency.remember(
         subjectId, idempotencyKey, CREATE_RENTAL_ORDER_SHIPMENT, checksum, document);
     return result(document, false);
@@ -319,7 +363,8 @@ class LogisticsRentalOrderShipmentCoordinator {
           || reservation.unitId() == null
           || !reservation.unitId().equals(reservation.unit().id())
           || !order.getId().equals(reservation.orderId())
-          || !order.getWarehouseId().equals(reservation.warehouseId())
+          || reservation.warehouseId() == null
+          || !reservation.warehouseId().equals(reservation.unit().warehouseId())
           || !"ACTIVE".equals(reservation.state())
           || !unitIds.add(reservation.unitId())) {
         throw new LogisticsConflictException("Order unit reservation is invalid");
@@ -332,7 +377,8 @@ class LogisticsRentalOrderShipmentCoordinator {
       LogisticsDocument document,
       RentalOrder order,
       Map<UUID, LogisticsDependencyGateway.OrderUnitReservation> reservationsByUnit,
-      List<UUID> selectedUnitIds) {
+      List<UUID> selectedUnitIds,
+      UUID inventorySourceWarehouseId) {
     List<LogisticsDocumentLine> lines = new ArrayList<>(selectedUnitIds.size());
     for (int index = 0; index < selectedUnitIds.size(); index++) {
       LogisticsDependencyGateway.OrderUnitReservation reservation =
@@ -347,7 +393,8 @@ class LogisticsRentalOrderShipmentCoordinator {
               reservation.unitId(),
               reservation.unit().version(),
               order.getClient().getDisplayName(),
-              order.getId());
+              order.getId(),
+              inventorySourceWarehouseId);
       line.captureSourceAllocations(emptyAllocationSnapshot());
       lines.add(line);
     }
@@ -358,6 +405,16 @@ class LogisticsRentalOrderShipmentCoordinator {
     ObjectNode root = JsonNodeFactory.instance.objectNode();
     root.putArray("allocations");
     return root;
+  }
+
+  private static UUID inventorySource(
+      RentalOrder order, CreateOrderRentalShipmentRequest request) {
+    if (order == null || order.getWarehouseId() == null || request == null) {
+      throw new IllegalArgumentException("Shipment source is invalid");
+    }
+    return request.inventorySourceWarehouseId() == null
+        ? order.getWarehouseId()
+        : request.inventorySourceWarehouseId();
   }
 
   private static void requireRequest(Object request) {

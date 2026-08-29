@@ -140,13 +140,32 @@ public class OrderUnitReservation {
       UUID actorSubjectId,
       String actorRole) {
     Objects.requireNonNull(previous, "previous");
+    return replace(
+        previous,
+        replacementRentalItemId,
+        previous.warehouseId,
+        actorSubjectId,
+        actorRole);
+  }
+
+  /**
+   * Creates the active side of one atomic replacement at the replacement cabin's physical source.
+   * The previous reservation remains immutable evidence and may belong to a different warehouse.
+   */
+  public static OrderUnitReservation replace(
+      OrderUnitReservation previous,
+      UUID replacementRentalItemId,
+      UUID replacementWarehouseId,
+      UUID actorSubjectId,
+      String actorRole) {
+    Objects.requireNonNull(previous, "previous");
     if (!previous.isActive()) {
       throw new IllegalArgumentException("Only an active order reservation can be replaced");
     }
     return createInternal(
         previous.orderId,
         Objects.requireNonNull(replacementRentalItemId, "replacementRentalItemId"),
-        previous.warehouseId,
+        Objects.requireNonNull(replacementWarehouseId, "replacementWarehouseId"),
         previous.clientId,
         previous.tenantSnapshot,
         previous.draftReservationExpiresAt,

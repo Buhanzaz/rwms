@@ -78,6 +78,7 @@ class RentalOrderReadService {
   private final RentalOrderResponseMapper mapper;
   private final LogisticsDependencyGateway dependencies;
   private final RentalOrderEditabilityService editability;
+  private final RentalOrderInventorySourcePolicy inventorySources;
 
   OrderPageResponse list(
       OrderActor actor,
@@ -201,7 +202,7 @@ class RentalOrderReadService {
     Page<RentalOrder> result = orders.findAll(specification, PageRequest.of(page, size, pageSort));
     List<OrderSummaryResponse> content =
         result.getContent().stream()
-            .map(order -> mapper.toSummaryResponse(order, readUnits(order).size()))
+            .map(order -> mapper.toSummaryResponse(order, readUnitsForView(actor, order).size()))
             .toList();
     return new OrderPageResponse(
         content,
@@ -214,7 +215,7 @@ class RentalOrderReadService {
   OrderDetailResponse get(OrderActor actor, UUID orderId) {
     RentalOrder order = order(orderId);
     access.requireVisible(actor, order);
-    return detail(order, actor, readUnits(order));
+    return detail(order, actor, readUnitsForView(actor, order));
   }
 
   /**
@@ -283,10 +284,21 @@ class RentalOrderReadService {
 
   OrderUnitPageResponse availableUnits(
       OrderActor actor, UUID orderId, int page, int size, String search) {
+    return availableUnits(actor, orderId, null, page, size, search);
+  }
+
+  OrderUnitPageResponse availableUnits(
+      OrderActor actor,
+      UUID orderId,
+      UUID inventorySourceWarehouseId,
+      int page,
+      int size,
+      String search) {
     requirePage(page, size);
     RentalOrder order = order(orderId);
     access.requireVisible(actor, order);
-    UUID warehouseId = order.getWarehouseId();
+    UUID warehouseId =
+        inventorySources.requireReadableSource(actor, order, inventorySourceWarehouseId);
     if (warehouseId == null) {
       throw RentalOrderProblems.conflict(
           "ORDER_WAREHOUSE_REQUIRED", "Сначала выберите склад заказа");
@@ -335,7 +347,7 @@ class RentalOrderReadService {
 
   OrderDetailResponse visibleDetail(OrderActor actor, RentalOrder order) {
     access.requireVisible(actor, order);
-    return detail(order, actor, readUnits(order));
+    return detail(order, actor, readUnitsForView(actor, order));
   }
 
   OrderDetailResponse detail(
@@ -415,7 +427,8 @@ class RentalOrderReadService {
   }
 
   private static OrderMovementCabinResponse movementCabin(LogisticsDocumentLine line) {
-    return new OrderMovementCabinResponse(line.getAssetId(), line.getState().name());
+    return new OrderMovementCabinResponse(
+        line.getAssetId(), line.getInventorySourceWarehouseId(), line.getState().name());
   }
 
   /**
@@ -441,6 +454,29 @@ class RentalOrderReadService {
    * reservation before callers use it in a local command or response.
    */
   List<LogisticsDependencyGateway.OrderUnitReservation> readUnits(RentalOrder order) {
+    return readUnits(order, false);
+  }
+
+  /** Reads shipment candidates while preserving their owner-authoritative physical warehouses. */
+  List<LogisticsDependencyGateway.OrderUnitReservation> readUnitsForShipment(RentalOrder order) {
+    return readUnits(order, true);
+  }
+
+  /** Reads independently sourced cabins only when the actor can also see every physical source. */
+  private List<LogisticsDependencyGateway.OrderUnitReservation> readUnitsForView(
+      OrderActor actor, RentalOrder order) {
+    List<LogisticsDependencyGateway.OrderUnitReservation> units = readUnitsForShipment(order);
+    if (!actor.globalAdministrator()
+        && units.stream()
+            .anyMatch(unit -> !actor.readableWarehouses().contains(unit.warehouseId()))) {
+      throw new org.springframework.security.access.AccessDeniedException(
+          "Insufficient warehouse access");
+    }
+    return units;
+  }
+
+  private List<LogisticsDependencyGateway.OrderUnitReservation> readUnits(
+      RentalOrder order, boolean allowIndependentInventorySource) {
     try {
       List<LogisticsDependencyGateway.OrderUnitReservation> result =
           dependencies.readOrderUnits(order.getId());
@@ -456,9 +492,11 @@ class RentalOrderReadService {
             || !"ACTIVE".equals(reservation.state())
             || reservation.unit() == null
             || !reservation.unitId().equals(reservation.unit().id())
-            || order.getWarehouseId() == null
-            || !order.getWarehouseId().equals(reservation.warehouseId())
-            || !order.getWarehouseId().equals(reservation.unit().warehouseId())) {
+            || reservation.warehouseId() == null
+            || !reservation.warehouseId().equals(reservation.unit().warehouseId())
+            || (!allowIndependentInventorySource
+                && (order.getWarehouseId() == null
+                    || !order.getWarehouseId().equals(reservation.warehouseId())))) {
           throw RentalOrderProblems.invalidDependencyResponse();
         }
       }

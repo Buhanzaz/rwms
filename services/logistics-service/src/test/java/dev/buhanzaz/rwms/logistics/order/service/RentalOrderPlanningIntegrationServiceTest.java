@@ -14,6 +14,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentView;
+import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlot;
+import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotKind;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerDeliverySlotStore;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
@@ -39,10 +41,12 @@ import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -136,6 +140,7 @@ class RentalOrderPlanningIntegrationServiceTest {
     assertThat(response.timeZone()).isEqualTo("Europe/Moscow");
     assertThat(response.requests()).singleElement().satisfies(request -> {
       assertThat(request.orderId()).isEqualTo(ORDER_ID);
+      assertThat(request.sourceRevision()).matches("^[0-9a-f]{64}$");
       assertThat(request.unitIds()).containsExactly(UNIT_TWO);
       assertThat(request.quantity()).isEqualTo(1);
       assertThat(request.latitude()).isEqualByComparingTo("55.751244");
@@ -145,6 +150,124 @@ class RentalOrderPlanningIntegrationServiceTest {
           .containsExactly(0, 1);
       assertThat(request.dateOptions()).allMatch(option -> !option.isHard());
     });
+
+    var replay = service.feed(WAREHOUSE_ID, first, second);
+    assertThat(replay.requests().getFirst().sourceRevision())
+        .isEqualTo(response.requests().getFirst().sourceRevision());
+  }
+
+  @Test
+  void feedRevisionChangesWhenAnIndependentCustomerSlotFactChanges() {
+    LocalDate date = LocalDate.now(MOSCOW).plusDays(2);
+    OrderClient client = mock(OrderClient.class);
+    CustomerDeliverySlot slot = mock(CustomerDeliverySlot.class);
+    when(client.getDisplayName()).thenReturn("ООО Ромашка");
+    when(order.getOrderNumber()).thenReturn("А-142");
+    when(order.getClient()).thenReturn(client);
+    when(order.getDeliveryAddress()).thenReturn("Москва, Тестовая улица, 1");
+    when(order.getLatitude()).thenReturn(new BigDecimal("55.751244"));
+    when(order.getLongitude()).thenReturn(new BigDecimal("37.618423"));
+    when(order.getCreatedAt()).thenReturn(OffsetDateTime.parse("2026-08-20T08:00:00Z"));
+    when(order.getDesiredDeliveryWindows())
+        .thenReturn(List.of(DesiredDeliveryWindow.create(date, date)));
+    when(orders.findAllPlanningCandidates(WAREHOUSE_ID, RentalOrderStatus.SAVED))
+        .thenReturn(List.of(order));
+    var unitReservation = reservation(UNIT_ONE);
+    when(reads.readUnits(order)).thenReturn(List.of(unitReservation));
+    when(slot.getDeliveryDate()).thenReturn(date);
+    when(slot.getKind()).thenReturn(CustomerDeliverySlotKind.FIXED_WINDOW);
+    when(slot.getWindowStart()).thenReturn(LocalTime.of(9, 0));
+    when(slot.getWindowEnd()).thenReturn(LocalTime.of(12, 0));
+    when(slot.getTravelZoneHours()).thenReturn(1);
+    when(slot.getSiteCabinCapacity()).thenReturn(1, 2);
+    when(customerDeliverySlots.confirmedForOrders(List.of(ORDER_ID)))
+        .thenReturn(Map.of(ORDER_ID, slot));
+
+    var withoutTrailer = service.feed(WAREHOUSE_ID, date, date).requests().getFirst();
+    var withTrailer = service.feed(WAREHOUSE_ID, date, date).requests().getFirst();
+
+    assertThat(withoutTrailer.orderVersion()).isEqualTo(withTrailer.orderVersion());
+    assertThat(withoutTrailer.trailerAccessAllowed()).isFalse();
+    assertThat(withTrailer.trailerAccessAllowed()).isTrue();
+    assertThat(withoutTrailer.sourceRevision()).isNotEqualTo(withTrailer.sourceRevision());
+  }
+
+  @Test
+  void freshFeedReadsANewCustomerBookingWithoutDependingOnAPlannerTaskIdentity() {
+    LocalDate date = LocalDate.now(MOSCOW).plusDays(2);
+    OrderClient client = mock(OrderClient.class);
+    CustomerDeliverySlot slot = mock(CustomerDeliverySlot.class);
+    when(client.getDisplayName()).thenReturn("Новый клиент CustomerApp");
+    when(order.getOrderNumber()).thenReturn("APP-1");
+    when(order.getClient()).thenReturn(client);
+    when(order.getDeliveryAddress()).thenReturn("Санкт-Петербург, Шереметевский сквер");
+    when(order.getLatitude()).thenReturn(new BigDecimal("59.932364"));
+    when(order.getLongitude()).thenReturn(new BigDecimal("30.348501"));
+    when(order.getCreatedAt()).thenReturn(OffsetDateTime.parse("2026-08-28T08:00:00Z"));
+    when(order.getDesiredDeliveryWindows())
+        .thenReturn(List.of(DesiredDeliveryWindow.create(date, date)));
+    when(orders.findAllPlanningCandidates(WAREHOUSE_ID, RentalOrderStatus.SAVED))
+        .thenReturn(List.of(), List.of(order));
+    var unitReservation = reservation(UNIT_ONE);
+    when(reads.readUnits(order)).thenReturn(List.of(unitReservation));
+    when(slot.getDeliveryDate()).thenReturn(date);
+    when(slot.getKind()).thenReturn(CustomerDeliverySlotKind.FIXED_WINDOW);
+    when(slot.getWindowStart()).thenReturn(LocalTime.of(12, 0));
+    when(slot.getWindowEnd()).thenReturn(LocalTime.of(15, 0));
+    when(slot.getTravelZoneHours()).thenReturn(1);
+    when(slot.getSiteCabinCapacity()).thenReturn(2);
+    when(customerDeliverySlots.confirmedForOrders(List.of(ORDER_ID)))
+        .thenReturn(Map.of(ORDER_ID, slot));
+
+    assertThat(service.feed(WAREHOUSE_ID, date, date).requests()).isEmpty();
+
+    var refreshed = service.feed(WAREHOUSE_ID, date, date);
+
+    assertThat(refreshed.requests()).singleElement().satisfies(request -> {
+      assertThat(request.orderId()).isEqualTo(ORDER_ID);
+      assertThat(request.unitIds()).containsExactly(UNIT_ONE);
+      assertThat(request.dateOptions()).singleElement().satisfies(option -> {
+        assertThat(option.isHard()).isTrue();
+        assertThat(option.windowStart()).isEqualTo(LocalTime.of(12, 0));
+        assertThat(option.windowEnd()).isEqualTo(LocalTime.of(15, 0));
+      });
+    });
+  }
+
+  @Test
+  void feedExportsDuringDayBookingAsASoftDateOnlyPlannerChoice() {
+    LocalDate date = LocalDate.now(MOSCOW).plusDays(2);
+    OrderClient client = mock(OrderClient.class);
+    CustomerDeliverySlot slot = mock(CustomerDeliverySlot.class);
+    when(client.getDisplayName()).thenReturn("Клиент с доставкой в течение дня");
+    when(order.getOrderNumber()).thenReturn("APP-DAY");
+    when(order.getClient()).thenReturn(client);
+    when(order.getDeliveryAddress()).thenReturn("Санкт-Петербург, Невский проспект, 1");
+    when(order.getLatitude()).thenReturn(new BigDecimal("59.934280"));
+    when(order.getLongitude()).thenReturn(new BigDecimal("30.335099"));
+    when(order.getCreatedAt()).thenReturn(OffsetDateTime.parse("2026-08-28T08:00:00Z"));
+    when(order.getDesiredDeliveryWindows())
+        .thenReturn(List.of(DesiredDeliveryWindow.create(date, date)));
+    when(orders.findAllPlanningCandidates(WAREHOUSE_ID, RentalOrderStatus.SAVED))
+        .thenReturn(List.of(order));
+    var unitReservation = reservation(UNIT_ONE);
+    when(reads.readUnits(order)).thenReturn(List.of(unitReservation));
+    when(slot.getDeliveryDate()).thenReturn(date);
+    when(slot.getKind()).thenReturn(CustomerDeliverySlotKind.DURING_DAY);
+    when(slot.getWindowStart()).thenReturn(LocalTime.of(9, 0));
+    when(slot.getWindowEnd()).thenReturn(LocalTime.of(18, 0));
+    when(slot.getTravelZoneHours()).thenReturn(2);
+    when(slot.getSiteCabinCapacity()).thenReturn(2);
+    when(customerDeliverySlots.confirmedForOrders(List.of(ORDER_ID)))
+        .thenReturn(Map.of(ORDER_ID, slot));
+
+    var option =
+        service.feed(WAREHOUSE_ID, date, date).requests().getFirst().dateOptions().getFirst();
+
+    assertThat(option.isHard()).isFalse();
+    assertThat(option.windowStart()).isNull();
+    assertThat(option.windowEnd()).isNull();
+    assertThat(option.travelZoneHours()).isEqualTo(2);
   }
 
   @Test

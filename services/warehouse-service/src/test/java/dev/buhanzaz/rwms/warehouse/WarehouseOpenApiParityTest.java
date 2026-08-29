@@ -41,6 +41,7 @@ class WarehouseOpenApiParityTest {
         .containsKeys(
             "/api/warehouse/v1/warehouses",
             "/api/warehouse/v1/warehouses/{id}",
+            "/api/warehouse/v1/warehouses/{servedWarehouseId}/support-links",
             "/api/warehouse/v1/warehouses/{id}/draining",
             "/api/warehouse/v1/warehouses/{id}/inactivation",
             "/api/warehouse/v1/warehouses/{id}/time-zone-changes",
@@ -49,6 +50,7 @@ class WarehouseOpenApiParityTest {
             "/api/internal/warehouse/v1/warehouses/asset/{id}/existence",
             "/api/internal/warehouse/v1/warehouses/inventory/{id}/metadata",
             "/api/internal/warehouse/v1/warehouses/logistics/{id}/identity",
+            "/api/internal/warehouse/v1/warehouses/logistics/{servedWarehouseId}/support-links",
             "/api/internal/warehouse/v1/warehouses/{id}/time-zone",
             "/api/internal/warehouse/v1/warehouses/{id}/operation-marks",
             "/api/internal/warehouse/v1/warehouses/{id}/admission",
@@ -69,14 +71,31 @@ class WarehouseOpenApiParityTest {
             "name",
             "city",
             "address",
+            "latitude",
+            "longitude",
             "timeZone",
             "active",
             "lifecycleState",
-            "sortOrder");
+            "sortOrder",
+            "representative");
+    assertThat(list(child(schemas, "CreateWarehouseRequest").get("required")))
+        .doesNotContain("representative", "latitude", "longitude");
+    assertThat(
+            child(
+                    child(child(schemas, "CreateWarehouseRequest"), "properties"),
+                    "representative")
+                .get("default"))
+        .isEqualTo(false);
     assertThat(list(child(schemas, "ReplaceWarehouseRequest").get("required")))
         .containsExactlyInAnyOrder("expectedVersion", "name", "city", "timeZone");
     assertThat(child(child(schemas, "ReplaceWarehouseRequest"), "properties"))
         .doesNotContainKey("active");
+    assertThat(
+            child(
+                    child(child(schemas, "ReplaceWarehouseRequest"), "properties"),
+                    "representative")
+                .get("default"))
+        .isEqualTo(false);
     assertThat(list(child(schemas, "InternalWarehouseExistence").get("required")))
         .containsExactlyInAnyOrder("id", "version", "active");
     assertThat(child(schemas, "InternalWarehouseExistence").get("additionalProperties"))
@@ -91,11 +110,45 @@ class WarehouseOpenApiParityTest {
         .isEqualTo(true);
     assertThat(list(child(schemas, "LogisticsWarehouseIdentity").get("required")))
         .containsExactlyInAnyOrder(
-            "id", "version", "active", "name", "city", "timeZone");
+            "id",
+            "version",
+            "active",
+            "name",
+            "city",
+            "address",
+            "latitude",
+            "longitude",
+            "timeZone",
+            "representative");
     assertThat(child(schemas, "LogisticsWarehouseIdentity").get("additionalProperties"))
         .isEqualTo(false);
     assertThat(child(child(schemas, "LogisticsWarehouseIdentity"), "properties"))
-        .containsKeys("id", "version", "active", "name", "city", "timeZone");
+        .containsKeys(
+            "id",
+            "version",
+            "active",
+            "name",
+            "city",
+            "address",
+            "latitude",
+            "longitude",
+            "timeZone",
+            "representative");
+    assertThat(list(child(schemas, "ReplaceWarehouseSupportLinksRequest").get("required")))
+        .containsExactlyInAnyOrder("expectedVersion", "links");
+    assertThat(list(child(schemas, "WarehouseSupportLinks").get("required")))
+        .containsExactlyInAnyOrder("servedWarehouseId", "warehouseVersion", "links");
+    assertThat(list(child(schemas, "WarehouseSupportLink").get("required")))
+        .contains(
+            "id",
+            "version",
+            "supportWarehouseId",
+            "servedWarehouseId",
+            "allowDrivers",
+            "allowDirectFulfillment");
+    assertThat(list(child(schemas, "Weekday").get("enum")))
+        .containsExactly(
+            "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY");
     assertThat(list(child(schemas, "ScheduleWarehouseTimeZoneRequest").get("required")))
         .containsExactlyInAnyOrder("expectedVersion", "timeZone", "effectiveFrom");
     assertThat(list(child(schemas, "WarehouseTimeZoneChange").get("required")))

@@ -25,12 +25,3 @@ ALTER TABLE public.logistics_idempotency_record
       'RECONCILE_DOCUMENT'
     )
   );
-
-ALTER TABLE public.logistics_idempotency_record
-  ADD CONSTRAINT ck_logistics_historical_idempotency_response CHECK (
-    operation_name NOT IN (
-      'CREATE_HISTORICAL_RENTAL_MOVEMENT',
-      'UPDATE_HISTORICAL_RENTAL_MOVEMENT'
-    )
-    OR response_json IS NOT NULL
-  );

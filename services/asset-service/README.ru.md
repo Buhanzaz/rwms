@@ -167,7 +167,9 @@ warehouse и была non-terminal, cabin scope совпадал точно, а 
 order-wide furniture reservations и live allocation holds, сохраняет их audit rows/events и затем
 перезаписывает текущие quantities проверенными абсолютными counts. Повтор release maintenance или
 logistics lease может прочитать тот же terminal lease `RELEASED` или `EXPIRED` того же owner с
-исходным fencing token; неверный owner или token остаётся fenced.
+исходным fencing token; неверный owner или token остаётся fenced. Logistics release сначала
+материализует естественный expiry под тем же rental-item/lease lock, поэтому истёкшая, но ещё не
+наблюдавшаяся row возвращается как `EXPIRED`, а не как ложный stale-lease conflict.
 
 ## Внутренняя структура приложения
 

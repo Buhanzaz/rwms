@@ -27,12 +27,14 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.proxy.HibernateProxy;
+import org.hibernate.type.SqlTypes;
 
 /**
  * Logistics-owned intent and effect checkpoint for one physical movement.
  *
  * <p>Document tasks may retain several immutable cabin members while task order, worker
- * assignments, and execution status stay authoritative in task-board.
+ * assignments, and execution status stay authoritative in task-board. A furniture-only transfer
+ * deliberately retains no cabin identity and still uses this same task and relay lifecycle.
  */
 @Entity
 @Table(
@@ -60,7 +62,11 @@ public class DriverLogisticsTask {
   @Column(name = "warehouse_id", nullable = false)
   private UUID warehouseId;
 
-  @Column(name = "cabin_id", nullable = false)
+  /**
+   * Primary cabin retained by every cabin movement. It is absent only for a document-owned
+   * furniture-only transfer created through {@link #createFurnitureCargoTransfer}.
+   */
+  @Column(name = "cabin_id")
   private UUID cabinId;
 
   @Column(name = "repair_id")
@@ -96,6 +102,14 @@ public class DriverLogisticsTask {
 
   @Column(name = "movement_comment", length = 2000)
   private String comment;
+
+  /**
+   * Sanitized immutable native-task presentation snapshot. Task-board remains authoritative for
+   * execution state, while this JSON makes initial registration and ambiguous retries deterministic.
+   */
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "worker_content_json", nullable = false, columnDefinition = "jsonb")
+  private String workerContentJson;
 
   /** Immutable client display snapshot retained when a grouped document has one. */
   @Column(name = "client_snapshot", length = 512)
@@ -219,8 +233,8 @@ public class DriverLogisticsTask {
   private OffsetDateTime inventoryCancelledAt;
 
   /**
-   * Cabin members are present only for the document-owned grouped trip form; legacy document-line
-   * tasks intentionally retain no member rows.
+   * Cabin members are present only for a document-owned cabin trip. Legacy document-line tasks and
+   * an explicit furniture-only transfer intentionally retain no member rows.
    */
   @OneToMany(mappedBy = "task", cascade = CascadeType.ALL, orphanRemoval = true)
   @OrderBy("position ASC")
@@ -287,8 +301,105 @@ public class DriverLogisticsTask {
       UUID createdBySubjectId,
       UUID idempotencyKey,
       String requestSha256) {
+    return createInternal(
+        warehouseId,
+        cabinId,
+        repairId,
+        sourceType,
+        sourceId,
+        kind,
+        planningMode,
+        scheduledDate,
+        priority,
+        comment,
+        unitNumber,
+        driverQueueDefinitionId,
+        driverAudienceMode,
+        plannedDriverWorkerId,
+        plannedDriverNameSnapshot,
+        createdBySubjectId,
+        idempotencyKey,
+        requestSha256,
+        false);
+  }
+
+  /**
+   * Creates the only driver-task form that deliberately has no primary cabin and no cabin members:
+   * one fixed-date interwarehouse transfer whose physical cargo consists solely of loose furniture.
+   * The caller supplies a stable catalog-derived cargo summary; no placeholder cabin identity is
+   * invented to pass generic workflow infrastructure.
+   */
+  public static DriverLogisticsTask createFurnitureCargoTransfer(
+      UUID warehouseId,
+      UUID documentId,
+      LocalDate scheduledDate,
+      int technicalPriority,
+      String taskText,
+      String cargoSummary,
+      UUID driverQueueDefinitionId,
+      DriverTaskAudienceMode driverAudienceMode,
+      UUID plannedDriverWorkerId,
+      String plannedDriverNameSnapshot,
+      UUID createdBySubjectId,
+      UUID idempotencyKey,
+      String requestSha256) {
+    DriverLogisticsTask task =
+        createInternal(
+            warehouseId,
+            null,
+            null,
+            DriverTaskSourceType.LOGISTICS_DOCUMENT,
+            documentId,
+            DriverTaskKind.TRANSFER,
+            DriverTaskPlanningMode.FIXED_DATE,
+            scheduledDate,
+            technicalPriority,
+            taskText,
+            cargoSummary,
+            driverQueueDefinitionId,
+            driverAudienceMode,
+            plannedDriverWorkerId,
+            plannedDriverNameSnapshot,
+            createdBySubjectId,
+            idempotencyKey,
+            requestSha256,
+            true);
+    task.tripNumber = 1;
+    return task;
+  }
+
+  /**
+   * Initializes the shared persisted workflow while keeping cabinless creation inaccessible to all
+   * public generic factories. The boolean is an internal factory fence, not domain state.
+   */
+  private static DriverLogisticsTask createInternal(
+      UUID warehouseId,
+      UUID cabinId,
+      UUID repairId,
+      DriverTaskSourceType sourceType,
+      UUID sourceId,
+      DriverTaskKind kind,
+      DriverTaskPlanningMode planningMode,
+      LocalDate scheduledDate,
+      int priority,
+      String comment,
+      String unitNumber,
+      UUID driverQueueDefinitionId,
+      DriverTaskAudienceMode driverAudienceMode,
+      UUID plannedDriverWorkerId,
+      String plannedDriverNameSnapshot,
+      UUID createdBySubjectId,
+      UUID idempotencyKey,
+      String requestSha256,
+      boolean allowFurnitureCargoWithoutCabin) {
+    boolean furnitureCargoWithoutCabin =
+        allowFurnitureCargoWithoutCabin
+            && cabinId == null
+            && repairId == null
+            && sourceType == DriverTaskSourceType.LOGISTICS_DOCUMENT
+            && kind == DriverTaskKind.TRANSFER;
     if (warehouseId == null
-        || cabinId == null
+        || (!furnitureCargoWithoutCabin && cabinId == null)
         || sourceType == null
         || sourceId == null
         || kind == null
@@ -299,6 +410,10 @@ public class DriverLogisticsTask {
         || createdBySubjectId == null
         || idempotencyKey == null) {
       throw new IllegalArgumentException("Driver task ownership and planning fields are required");
+    }
+    if (allowFurnitureCargoWithoutCabin && !furnitureCargoWithoutCabin) {
+      throw new IllegalArgumentException(
+          "Cabinless driver work is allowed only for a document furniture transfer");
     }
     if (priority < 1 || priority > 5) {
       throw new IllegalArgumentException("Driver task priority must be between 1 and 5");
@@ -328,6 +443,7 @@ public class DriverLogisticsTask {
         planningMode == DriverTaskPlanningMode.FIXED_DATE ? scheduledDate : null;
     task.priority = priority;
     task.comment = optionalComment(comment);
+    task.workerContentJson = "{}";
     if (sourceType == DriverTaskSourceType.MANUAL && task.comment == null) {
       throw new IllegalArgumentException("Manual movement comment is required");
     }
@@ -479,7 +595,9 @@ public class DriverLogisticsTask {
   /** Adds one immutable document-line/cabin snapshot before the grouped task crosses the relay. */
   public void addGroupedDocumentMember(
       UUID documentLineId, UUID memberCabinId, String memberUnitNumber, int position) {
-    if (!isGroupedDocument() || state != DriverTaskState.REGISTERING) {
+    if (!isGroupedDocument()
+        || isFurnitureCargoTransfer()
+        || state != DriverTaskState.REGISTERING) {
       throw new IllegalStateException("Document members can be added only to a new grouped task");
     }
     DriverLogisticsTaskMember member =
@@ -528,12 +646,24 @@ public class DriverLogisticsTask {
     addGroupedDocumentMember(documentLineId, memberCabinId, memberUnitNumber, position);
   }
 
-  /** Returns whether this is a document-owned trip with immutable cabin members. */
+  /**
+   * Returns whether this is one document-owned driver trip. Cabin members are immutable when
+   * present; the furniture-only transfer variant deliberately has none.
+   */
   public boolean isGroupedDocument() {
     return sourceType == DriverTaskSourceType.LOGISTICS_DOCUMENT
         && (kind == DriverTaskKind.SHIPMENT
             || kind == DriverTaskKind.RETURN
             || kind == DriverTaskKind.TRANSFER);
+  }
+
+  /** Returns whether this is the explicitly cabinless, furniture-only transfer task form. */
+  public boolean isFurnitureCargoTransfer() {
+    return sourceType == DriverTaskSourceType.LOGISTICS_DOCUMENT
+        && kind == DriverTaskKind.TRANSFER
+        && cabinId == null
+        && repairId == null
+        && members.isEmpty();
   }
 
   /** Returns whether this grouped document is specifically a shipment. */
@@ -603,6 +733,23 @@ public class DriverLogisticsTask {
     applyAudience(audienceMode, workerId, workerName);
     requestSha256 = requireHash(requestHash);
     scheduleImmediately();
+  }
+
+  /**
+   * Replaces the worker-visible snapshot only while the route is still locally considered
+   * unstarted. Registered work must first pass task-board's version-fenced pre-start update.
+   */
+  public void captureWorkerContent(String canonicalJson) {
+    if (state != DriverTaskState.REGISTERING
+        && state != DriverTaskState.SCHEDULED
+        && state != DriverTaskState.CURRENT) {
+      throw new IllegalStateException("Only unstarted driver work can change worker content");
+    }
+    if (canonicalJson == null || canonicalJson.isBlank()) {
+      throw new IllegalArgumentException("Worker content JSON is required");
+    }
+    workerContentJson = canonicalJson;
+    touch();
   }
 
   /** Applies the authoritative audience echoed by task-board without changing execution state. */
@@ -840,6 +987,11 @@ public class DriverLogisticsTask {
     resumeImmediatelyAfterConfirmation();
   }
 
+  /**
+   * Freezes task-board completion evidence before any service-owned completion effects run. A
+   * furniture-only transfer marks its otherwise inapplicable cabin-cover effect complete here,
+   * while every cabin task still requires the existing per-cabin cover command.
+   */
   public void captureEvidence(UUID evidenceId, UUID mediaId, long mediaGeneration, UUID entryId) {
     if (state != DriverTaskState.FINALIZING
         || evidenceId == null
@@ -860,6 +1012,11 @@ public class DriverLogisticsTask {
     completionMediaId = mediaId;
     completionMediaGeneration = mediaGeneration;
     completionEntryId = entryId;
+    if (isFurnitureCargoTransfer()) {
+      // Completion evidence belongs to the same task-board workflow, but there is no cabin cover
+      // effect to apply. Recording this checkpoint prevents a fabricated asset operation.
+      coverApplied = true;
+    }
     resumeImmediatelyAfterConfirmation();
   }
 
@@ -896,11 +1053,17 @@ public class DriverLogisticsTask {
     resumeImmediatelyAfterConfirmation();
   }
 
+  /**
+   * Completes only after every applicable effect is durable. Cabin trips require their cover
+   * checkpoints; a furniture-only transfer has no cabin member and therefore completes from its
+   * frozen task-board evidence and the already-satisfied repair-place checkpoint.
+   */
   public void complete() {
     if (state != DriverTaskState.FINALIZING
         || !coverApplied
         || !repairPlaceEffectApplied
         || (isGroupedDocument()
+            && !isFurnitureCargoTransfer()
             && (members.isEmpty()
                 || members.stream().anyMatch(member -> !member.isCoverApplied())))) {
       throw new IllegalStateException("Driver task completion effects are incomplete");

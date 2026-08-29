@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.logistics.customer.security.CustomerAuthorizer;
 import dev.buhanzaz.rwms.logistics.customer.security.CustomerIdentity;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerCabinCatalogService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerCheckoutService;
+import dev.buhanzaz.rwms.logistics.customer.service.CustomerBookingService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerDeliverySlotService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerProfileService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerRentalService;
@@ -48,6 +49,7 @@ public class CustomerController {
   private final CustomerCabinCatalogService catalog;
   private final CustomerDeliverySlotService deliverySlots;
   private final CustomerCheckoutService checkout;
+  private final CustomerBookingService customerBookings;
 
   /** Returns the logistics profile of the authenticated customer. */
   @GetMapping("/profile")
@@ -61,6 +63,30 @@ public class CustomerController {
       @AuthenticationPrincipal Jwt jwt,
       @Valid @RequestBody CustomerProfileRequest request) {
     return ResponseEntity.status(201).body(profiles.create(identity(jwt), request));
+  }
+
+  /** Updates mutable contact and display fields under the profile version fence. */
+  @PutMapping("/profile")
+  public CustomerProfileResponse updateProfile(
+      @AuthenticationPrincipal Jwt jwt,
+      @Valid @RequestBody UpdateCustomerProfileRequest request) {
+    return profiles.update(identity(jwt), request);
+  }
+
+  /** Establishes the exact subject-bound media scope used for profile-avatar upload. */
+  @PostMapping("/profile/avatar-upload")
+  public CustomerProfileAvatarUploadScope prepareProfileAvatarUpload(
+      @AuthenticationPrincipal Jwt jwt,
+      @Valid @RequestBody PrepareCustomerProfileAvatarUploadRequest request) {
+    return profiles.prepareAvatarUpload(identity(jwt), request);
+  }
+
+  /** Binds one READY avatar generation after private media ownership validation. */
+  @PutMapping("/profile/avatar")
+  public CustomerProfileResponse setProfileAvatar(
+      @AuthenticationPrincipal Jwt jwt,
+      @Valid @RequestBody SetCustomerProfileAvatarRequest request) {
+    return profiles.setAvatar(identity(jwt), request);
   }
 
   /** Lists active warehouses explicitly configured for customer delivery. */
@@ -155,6 +181,15 @@ public class CustomerController {
     return rentals.replaceEquipment(identity(jwt), inquiryId, request);
   }
 
+  /** Replaces the complete per-cabin initial rental durations under the cart fence. */
+  @PutMapping("/inquiries/{inquiryId}/rental-terms")
+  public CustomerRentalTermsResponse replaceRentalTerms(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID inquiryId,
+      @Valid @RequestBody ReplaceCustomerRentalTermsRequest request) {
+    return rentals.replaceRentalTerms(identity(jwt), inquiryId, request);
+  }
+
   /** Returns the complete current cart projection. */
   @GetMapping("/inquiries/{inquiryId}/cart")
   public CustomerCartResponse cart(
@@ -214,6 +249,31 @@ public class CustomerController {
   @GetMapping("/bookings")
   public List<CustomerBookingResponse> bookings(@AuthenticationPrincipal Jwt jwt) {
     return checkout.bookings(identity(jwt));
+  }
+
+  /** Accepts one arrived cabin with the customer's full-screen drawn signature. */
+  @PostMapping("/bookings/{bookingId}/cabins/{cabinId}/acceptance")
+  public CustomerCabinAcceptanceResponse acceptCabin(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID bookingId,
+      @PathVariable UUID cabinId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody AcceptCustomerCabinRequest request) {
+    return customerBookings.accept(identity(jwt), bookingId, cabinId, idempotencyKey, request);
+  }
+
+  /** Records one arrived-cabin problem with optional ready in-app media evidence. */
+  @PostMapping("/bookings/{bookingId}/cabins/{cabinId}/problems")
+  public ResponseEntity<CustomerCabinProblemResponse> reportCabinProblem(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID bookingId,
+      @PathVariable UUID cabinId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody ReportCustomerCabinProblemRequest request) {
+    return ResponseEntity.status(201)
+        .body(
+            customerBookings.reportProblem(
+                identity(jwt), bookingId, cabinId, idempotencyKey, request));
   }
 
   private CustomerIdentity identity(Jwt jwt) {

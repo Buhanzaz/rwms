@@ -62,9 +62,12 @@ class LogisticsFlywayMigrationIntegrationTest {
             "client_presentation",
             "client_presentation_item",
             "consumer_aggregate_checkpoint",
-            "customer_scenario_capacity_command_receipt",
-            "customer_scenario_capacity_job",
-            "customer_scenario_capacity_snapshot",
+            "customer_warehouse_capacity_command_receipt",
+            "customer_warehouse_capacity_job",
+            "customer_warehouse_capacity_price_zone",
+            "customer_warehouse_capacity_restriction_zone",
+            "customer_warehouse_capacity_shift",
+            "customer_warehouse_capacity_snapshot",
             "driver_logistics_task",
             "driver_logistics_task_member",
             "equipment_movement_task",
@@ -141,9 +144,43 @@ class LogisticsFlywayMigrationIntegrationTest {
                 Integer.class))
         .isEqualTo(4);
     assertThat(toRegclass("uk_logistics_document_inventory_source")).isNotNull();
-    assertThat(toRegclass("uk_customer_scenario_capacity_snapshot_warehouse")).isNotNull();
-    assertThat(toRegclass("idx_customer_scenario_capacity_command_revision")).isNotNull();
-    assertThat(toRegclass("idx_customer_scenario_capacity_job_date")).isNotNull();
+    assertThat(toRegclass("uk_customer_warehouse_capacity_snapshot_warehouse")).isNotNull();
+    assertThat(toRegclass("idx_customer_warehouse_capacity_command_revision")).isNotNull();
+    assertThat(toRegclass("idx_customer_warehouse_capacity_job_date")).isNotNull();
+    assertThat(toRegclass("idx_customer_warehouse_capacity_price_zone_snapshot")).isNotNull();
+    assertThat(toRegclass("idx_customer_warehouse_capacity_restriction_zone_snapshot"))
+        .isNotNull();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from information_schema.columns
+                where table_schema='public'
+                  and table_name='shipment_furniture_movement_task'
+                  and column_name='replacement_inventory_source_warehouse_id'
+                """,
+                Integer.class))
+        .isOne();
+    assertThat(toRegclass("idx_shipment_furniture_movement_task_replacement_source"))
+        .isNotNull();
+    assertThat(
+            constraintDefinition(
+                "shipment_furniture_movement_task",
+                "ck_shipment_furniture_movement_task_replacement"))
+        .contains("replacement_inventory_source_warehouse_id IS NOT NULL");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from information_schema.columns
+                where table_schema='public' and table_name='driver_logistics_task'
+                  and column_name='worker_content_json' and data_type='jsonb'
+                """,
+                Integer.class))
+        .isOne();
+    assertThat(
+            constraintDefinition(
+                "driver_logistics_task", "ck_driver_logistics_task_worker_content_json"))
+        .contains("jsonb_typeof(worker_content_json) = 'object'");
     assertThat(
             jdbc.queryForObject(
                 """
@@ -151,12 +188,25 @@ class LogisticsFlywayMigrationIntegrationTest {
                 from information_schema.columns
                 where table_schema='public'
                   and table_name in (
-                    'customer_scenario_capacity_snapshot',
-                    'customer_scenario_capacity_command_receipt')
+                    'customer_warehouse_capacity_snapshot',
+                    'customer_warehouse_capacity_command_receipt')
                   and column_name='source_generation'
                 """,
                 Integer.class))
         .isEqualTo(2);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from information_schema.columns
+                where table_schema='public'
+                  and table_name in (
+                    'customer_warehouse_capacity_snapshot',
+                    'customer_warehouse_capacity_command_receipt')
+                  and column_name='source_scenario_id'
+                """,
+                Integer.class))
+        .isZero();
     assertThat(
             constraintDefinition(
                 "inventory_outcome_receipt_asset",
@@ -2751,11 +2801,10 @@ class LogisticsFlywayMigrationIntegrationTest {
         .contains("CREATE_HISTORICAL_RENTAL_MOVEMENT");
     assertThat(
             jdbc.queryForObject(
-                "select is_nullable from information_schema.columns where table_schema='public'"
+                "select count(*) from information_schema.columns where table_schema='public'"
                     + " and table_name='logistics_idempotency_record' and column_name='response_json'",
-                String.class))
-        .isEqualTo("YES");
-    assertJpaValidationStarts();
+                Integer.class))
+        .isZero();
   }
 
   @Test
@@ -2774,12 +2823,12 @@ class LogisticsFlywayMigrationIntegrationTest {
         .contains(
             "CREATE_HISTORICAL_RENTAL_MOVEMENT",
             "UPDATE_HISTORICAL_RENTAL_MOVEMENT");
-    assertThat(logisticsConstraintDefinition("ck_logistics_historical_idempotency_response"))
-        .contains(
-            "CREATE_HISTORICAL_RENTAL_MOVEMENT",
-            "UPDATE_HISTORICAL_RENTAL_MOVEMENT",
-            "response_json IS NOT NULL");
-    assertJpaValidationStarts();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from pg_constraint"
+                    + " where conname='ck_logistics_historical_idempotency_response'",
+                Integer.class))
+        .isZero();
   }
 
   @Test
@@ -2810,14 +2859,36 @@ class LogisticsFlywayMigrationIntegrationTest {
   }
 
   @Test
-  void v56ToV60UpgradeAddsImmutableReceiptsAndIsolatedScenarioCapacityThenValidatesJpa() {
+  void v56ToV63UpgradePreservesPublishedHistoryAndAppliesProfileFollowupsThenValidatesJpa() {
     Flyway beforeV57 = configuration(MIGRATIONS).target("56").load();
     assertThat(beforeV57.migrate().migrationsExecuted).isEqualTo(56);
     assertThat(toRegclass("customer_profile")).isNull();
     assertThat(toRegclass("customer_scenario_capacity_snapshot")).isNull();
 
-    Flyway upgraded = configuration(MIGRATIONS).target("60").load();
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(4);
+    Flyway throughPublishedHistory = configuration(MIGRATIONS).target("60").load();
+    assertThat(throughPublishedHistory.migrate().migrationsExecuted).isEqualTo(4);
+    throughPublishedHistory.validate();
+
+    assertThat(
+            jdbc.queryForList(
+                "select checksum from flyway_schema_history"
+                    + " where version in ('57','58','60') order by version",
+                Integer.class))
+        .containsExactly(-821369856, -1548850854, 1424256002);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from information_schema.columns where table_schema='public'"
+                    + " and table_name='logistics_idempotency_record' and column_name='response_json'",
+                Integer.class))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select pg_get_indexdef(to_regclass('idx_customer_scenario_capacity_command_revision'))",
+                String.class))
+        .doesNotContain("source_generation");
+
+    Flyway upgraded = configuration(MIGRATIONS).target("63").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(3);
     upgraded.validate();
 
     assertThat(tableNames())
@@ -2838,6 +2909,599 @@ class LogisticsFlywayMigrationIntegrationTest {
             "source_revision");
     assertThat(logisticsConstraintDefinition("ck_logistics_historical_idempotency_response"))
         .contains("response_json IS NOT NULL");
+    assertThat(
+            jdbc.queryForObject(
+                "select convalidated from pg_constraint"
+                    + " where conname='ck_logistics_historical_idempotency_response'",
+                Boolean.class))
+        .isFalse();
+    assertThat(
+            jdbc.queryForList(
+                "select column_name from information_schema.columns"
+                    + " where table_schema='public' and table_name='customer_profile'"
+                    + " and column_name in"
+                    + " ('avatar_warehouse_id','avatar_media_id','avatar_generation')"
+                    + " order by column_name",
+                String.class))
+        .containsExactly("avatar_generation", "avatar_media_id", "avatar_warehouse_id");
+    assertThat(toRegclass("ix_customer_profile_avatar_media")).isNotNull();
+    assertThat(constraintDefinition("customer_profile", "ck_customer_profile_avatar_generation"))
+        .contains("avatar_media_id IS NULL", "avatar_generation IS NULL")
+        .contains("avatar_media_id IS NOT NULL", "avatar_generation >= 1");
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v64MakesZonesTariffOnlyAndBackfillsExistingCapacityRows() {
+    Flyway beforeV64 = configuration(MIGRATIONS).target("63").load();
+    assertThat(beforeV64.migrate().migrationsExecuted).isEqualTo(63);
+    UUID snapshotId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID legacySourceId = UUID.randomUUID();
+    UUID jobId = UUID.randomUUID();
+    UUID sourceJobId = UUID.randomUUID();
+    UUID commandId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into customer_scenario_capacity_snapshot(
+          id,version,warehouse_id,source_scenario_id,source_generation,source_revision,
+          created_at,updated_at)
+        values (?,0,?,?,1,?,clock_timestamp(),clock_timestamp())
+        """,
+        snapshotId,
+        warehouseId,
+        legacySourceId,
+        "a".repeat(64));
+    jdbc.update(
+        """
+        insert into customer_scenario_capacity_job(
+          id,snapshot_id,source_job_id,delivery_date,latitude,longitude,cabin_count,
+          window_start,window_end,service_minutes)
+        values (?,?,?,date '2026-08-29',59.9,30.3,1,time '09:00',time '12:00',60)
+        """,
+        jobId,
+        snapshotId,
+        sourceJobId);
+    jdbc.update(
+        """
+        insert into customer_scenario_capacity_command_receipt(
+          idempotency_key,warehouse_id,source_scenario_id,source_generation,source_revision,
+          request_sha256,snapshot_version,job_count,shift_count,response_updated_at,created_at)
+        values (?,?,?,1,?,?,0,1,0,clock_timestamp(),clock_timestamp())
+        """,
+        commandId,
+        warehouseId,
+        legacySourceId,
+        "a".repeat(64),
+        "b".repeat(64));
+
+    Flyway upgraded = configuration(MIGRATIONS).target("64").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForMap(
+                "select task_type,trailer_access_allowed,priority,mandatory"
+                    + " from customer_scenario_capacity_job where id=?",
+                jobId))
+        .containsEntry("task_type", "DELIVERY")
+        .containsEntry("trailer_access_allowed", true)
+        .containsEntry("priority", 0)
+        .containsEntry("mandatory", true);
+    assertThat(
+            jdbc.queryForObject(
+                "select price_zone_count from customer_scenario_capacity_command_receipt"
+                    + " where idempotency_key=?",
+                Integer.class,
+                commandId))
+        .isZero();
+    assertThat(toRegclass("customer_scenario_capacity_price_zone")).isNotNull();
+    assertThat(constraintDefinition("customer_delivery_slot", "ck_customer_delivery_slot_capacity"))
+        .contains("travel_zone_hours >= 1")
+        .doesNotContain("travel_zone_hours <= 4");
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v65PreservesCapacityRowsWhileMakingWarehouseTheOnlyOwnerIdentity() {
+    Flyway beforeV65 = configuration(MIGRATIONS).target("64").load();
+    assertThat(beforeV65.migrate().migrationsExecuted).isEqualTo(64);
+    UUID snapshotId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID legacySourceId = UUID.randomUUID();
+    UUID commandId = UUID.randomUUID();
+    UUID jobId = UUID.randomUUID();
+    UUID shiftId = UUID.randomUUID();
+    UUID zoneId = UUID.randomUUID();
+    UUID sourceZoneId = UUID.randomUUID();
+    UUID customerSubjectId = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID mappedSlotId = UUID.randomUUID();
+    UUID unmappedSlotId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into customer_scenario_capacity_snapshot(
+          id,version,warehouse_id,source_scenario_id,source_generation,source_revision,
+          created_at,updated_at)
+        values (?,3,?,?,7,?,clock_timestamp(),clock_timestamp())
+        """,
+        snapshotId,
+        warehouseId,
+        legacySourceId,
+        "a".repeat(64));
+    jdbc.update(
+        """
+        insert into customer_scenario_capacity_command_receipt(
+          idempotency_key,warehouse_id,source_scenario_id,source_generation,source_revision,
+          request_sha256,snapshot_version,job_count,shift_count,price_zone_count,
+          response_updated_at,created_at)
+        values (?,?,?,7,?,?,3,1,1,1,clock_timestamp(),clock_timestamp())
+        """,
+        commandId,
+        warehouseId,
+        legacySourceId,
+        "a".repeat(64),
+        "b".repeat(64));
+    jdbc.update(
+        """
+        insert into customer_scenario_capacity_job(
+          id,snapshot_id,source_job_id,delivery_date,latitude,longitude,cabin_count,
+          window_start,window_end,service_minutes)
+        values (?,?,?,date '2026-08-30',59.9,30.3,1,time '09:00',time '12:00',60)
+        """,
+        jobId,
+        snapshotId,
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into customer_scenario_capacity_shift(
+          id,snapshot_id,source_shift_id,delivery_date,shift_start,shift_end,
+          break_minutes,cabin_capacity)
+        values (?,?,?,date '2026-08-30',time '08:00',time '20:00',30,2)
+        """,
+        shiftId,
+        snapshotId,
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into customer_scenario_capacity_price_zone(
+          id,snapshot_id,source_zone_id,source_zone_version,code,priority,
+          delivery_price_rubles,pickup_price_rubles,geometry_json)
+        values (?,?,?,?,?,10,3000,2000,?::text)
+        """,
+        zoneId,
+        snapshotId,
+        sourceZoneId,
+        5,
+        "legacy-zone",
+        "{\"type\":\"MultiPolygon\",\"coordinates\":[[[[30,59],[31,59],[31,60],[30,60],[30,59]]]]}");
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,created_by_subject_id,
+          creation_idempotency_key,creation_request_sha256,phone,normalized_phone,
+          responsible_manager_id,created_at,updated_at)
+        values (?,0,'INDIVIDUAL','Capacity migration client',?,?,?, ?,
+          '+79990000000','+79990000000',?,
+          clock_timestamp(),clock_timestamp())
+        """,
+        clientId,
+        "capacity-migration-" + clientId,
+        customerSubjectId,
+        UUID.randomUUID(),
+        "c".repeat(64),
+        customerSubjectId);
+    jdbc.update(
+        """
+        insert into rental_inquiry(
+          id,version,conversation_id,client_id,manager_id,manager_display_name,manager_role,
+          warehouse_id,state,creation_idempotency_key,created_at,updated_at)
+        values (?,0,null,?,?,'Capacity migration customer','CUSTOMER',?,'ACTIVE',?,
+          clock_timestamp(),clock_timestamp())
+        """,
+        inquiryId,
+        clientId,
+        customerSubjectId,
+        warehouseId,
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into customer_delivery_slot(
+          id,version,customer_subject_id,inquiry_id,warehouse_id,delivery_date,
+          window_start,window_end,delivery_address,latitude,longitude,cabin_count,
+          one_way_travel_seconds,travel_zone_hours,capacity_remaining,state,expires_at,
+          delivery_price_rubles,price_zone_code,created_at,updated_at)
+        values (?,0,?,?,?,date '2026-08-30',time '09:00',time '12:00','Migration address',
+          59.9,30.3,1,1800,1,1,'RELEASED',clock_timestamp(),3000,?,
+          clock_timestamp(),clock_timestamp())
+        """,
+        mappedSlotId,
+        customerSubjectId,
+        inquiryId,
+        warehouseId,
+        "legacy-zone");
+    jdbc.update(
+        """
+        insert into customer_delivery_slot(
+          id,version,customer_subject_id,inquiry_id,warehouse_id,delivery_date,
+          window_start,window_end,delivery_address,latitude,longitude,cabin_count,
+          one_way_travel_seconds,travel_zone_hours,capacity_remaining,state,expires_at,
+          delivery_price_rubles,price_zone_code,created_at,updated_at)
+        values (?,0,?,?,?,date '2026-08-30',time '12:00',time '15:00','Migration address',
+          59.9,30.3,1,1800,1,1,'RELEASED',clock_timestamp(),4500,'removed-zone',
+          clock_timestamp(),clock_timestamp())
+        """,
+        unmappedSlotId,
+        customerSubjectId,
+        inquiryId,
+        warehouseId);
+
+    Flyway upgraded = configuration(MIGRATIONS).target("65").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(tableNames())
+        .contains(
+            "customer_warehouse_capacity_snapshot",
+            "customer_warehouse_capacity_command_receipt",
+            "customer_warehouse_capacity_job",
+            "customer_warehouse_capacity_shift",
+            "customer_warehouse_capacity_price_zone")
+        .doesNotContain(
+            "customer_scenario_capacity_snapshot",
+            "customer_scenario_capacity_command_receipt",
+            "customer_scenario_capacity_job",
+            "customer_scenario_capacity_shift",
+            "customer_scenario_capacity_price_zone");
+    assertThat(
+            jdbc.queryForMap(
+                "select warehouse_id,source_generation,source_revision"
+                    + " from customer_warehouse_capacity_snapshot where id=?",
+                snapshotId))
+        .containsEntry("warehouse_id", warehouseId)
+        .containsEntry("source_generation", 7L)
+        .containsEntry("source_revision", "a".repeat(64));
+    assertThat(
+            jdbc.queryForMap(
+                "select source_zone_id,source_zone_version,delivery_price_rubles,pickup_price_rubles"
+                    + " from customer_warehouse_capacity_price_zone where id=?",
+                zoneId))
+        .containsEntry("source_zone_id", sourceZoneId)
+        .containsEntry("source_zone_version", 5L)
+        .containsEntry("delivery_price_rubles", 3_000L)
+        .containsEntry("pickup_price_rubles", 2_000L);
+    assertThat(
+            jdbc.queryForObject(
+                "select price_zone_id from customer_delivery_slot where id=?",
+                UUID.class,
+                mappedSlotId))
+        .isEqualTo(sourceZoneId);
+    assertThat(
+            jdbc.queryForMap(
+                "select delivery_price_rubles,price_zone_id from customer_delivery_slot where id=?",
+                unmappedSlotId))
+        .containsEntry("delivery_price_rubles", 4_500L)
+        .containsEntry("price_zone_id", null);
+    assertThat(
+            jdbc.queryForList(
+                "select column_name from information_schema.columns"
+                    + " where table_schema='public'"
+                    + " and table_name='customer_warehouse_capacity_price_zone'"
+                    + " and column_name in ('code','priority','source_scenario_id')",
+                String.class))
+        .isEmpty();
+    assertThat(
+            jdbc.queryForList(
+                "select column_name from information_schema.columns"
+                    + " where table_schema='public' and table_name='customer_delivery_slot'"
+                    + " and column_name in ('price_zone_code')",
+                String.class))
+        .isEmpty();
+    assertThat(toRegclass("idx_customer_warehouse_capacity_command_revision")).isNotNull();
+    assertThat(toRegclass("idx_customer_warehouse_capacity_price_zone_snapshot")).isNotNull();
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v66BackfillsFixedSlotsAndConstrainsTheExplicitSlotKind() {
+    Flyway beforeV66 = configuration(MIGRATIONS).target("65").load();
+    assertThat(beforeV66.migrate().migrationsExecuted).isEqualTo(65);
+    UUID subjectId = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID slotId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,created_by_subject_id,
+          creation_idempotency_key,creation_request_sha256,phone,normalized_phone,
+          responsible_manager_id,created_at,updated_at)
+        values (?,0,'INDIVIDUAL','Slot kind migration client',?,?,?,?,
+          '+79990000000','+79990000000',?,clock_timestamp(),clock_timestamp())
+        """,
+        clientId,
+        "slot-kind-migration-" + clientId,
+        subjectId,
+        UUID.randomUUID(),
+        "d".repeat(64),
+        subjectId);
+    jdbc.update(
+        """
+        insert into rental_inquiry(
+          id,version,conversation_id,client_id,manager_id,manager_display_name,manager_role,
+          warehouse_id,state,creation_idempotency_key,created_at,updated_at)
+        values (?,0,null,?,?,'Slot kind migration customer','CUSTOMER',?,'ACTIVE',?,
+          clock_timestamp(),clock_timestamp())
+        """,
+        inquiryId,
+        clientId,
+        subjectId,
+        warehouseId,
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into customer_delivery_slot(
+          id,version,customer_subject_id,inquiry_id,warehouse_id,delivery_date,
+          window_start,window_end,delivery_address,latitude,longitude,cabin_count,
+          one_way_travel_seconds,travel_zone_hours,capacity_remaining,state,expires_at,
+          created_at,updated_at)
+        values (?,0,?,?,?,date '2026-08-30',time '09:00',time '12:00',
+          'Slot kind migration address',59.9,30.3,1,1800,1,1,'RELEASED',
+          clock_timestamp(),clock_timestamp(),clock_timestamp())
+        """,
+        slotId,
+        subjectId,
+        inquiryId,
+        warehouseId);
+
+    Flyway upgraded = configuration(MIGRATIONS).target("66").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select slot_kind from customer_delivery_slot where id=?", String.class, slotId))
+        .isEqualTo("FIXED_WINDOW");
+    assertThat(constraintDefinition("customer_delivery_slot", "ck_customer_delivery_slot_kind"))
+        .contains("FIXED_WINDOW", "DURING_DAY");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update customer_delivery_slot set slot_kind='UNKNOWN' where id=?", slotId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v69BackfillsIsochroneTariffsAndPersistsStrictRestrictionPolicies() {
+    Flyway beforeV69 = configuration(MIGRATIONS).target("68").load();
+    assertThat(beforeV69.migrate().migrationsExecuted).isPositive();
+    UUID subjectId = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID snapshotId = UUID.randomUUID();
+    UUID slotId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into customer_warehouse_capacity_snapshot(
+          id,version,warehouse_id,source_generation,source_revision,created_at,updated_at)
+        values (?,0,?,1,?,clock_timestamp(),clock_timestamp())
+        """,
+        snapshotId,
+        warehouseId,
+        "a".repeat(64));
+    jdbc.update(
+        """
+        insert into customer_warehouse_capacity_command_receipt(
+          idempotency_key,warehouse_id,source_generation,source_revision,request_sha256,
+          snapshot_version,job_count,shift_count,price_zone_count,response_updated_at,created_at)
+        values (?,?,1,?,?,0,0,0,0,clock_timestamp(),clock_timestamp())
+        """,
+        UUID.randomUUID(),
+        warehouseId,
+        "a".repeat(64),
+        "b".repeat(64));
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,created_by_subject_id,
+          creation_idempotency_key,creation_request_sha256,phone,normalized_phone,
+          responsible_manager_id,created_at,updated_at)
+        values (?,0,'INDIVIDUAL','Isochrone migration client',?,?,?, ?,
+          '+79990000001','+79990000001',?,clock_timestamp(),clock_timestamp())
+        """,
+        clientId,
+        "isochrone-migration-" + clientId,
+        subjectId,
+        UUID.randomUUID(),
+        "c".repeat(64),
+        subjectId);
+    jdbc.update(
+        """
+        insert into rental_inquiry(
+          id,version,conversation_id,client_id,manager_id,manager_display_name,manager_role,
+          warehouse_id,state,creation_idempotency_key,created_at,updated_at)
+        values (?,0,null,?,?,'Isochrone migration customer','CUSTOMER',?,'ACTIVE',?,
+          clock_timestamp(),clock_timestamp())
+        """,
+        inquiryId,
+        clientId,
+        subjectId,
+        warehouseId,
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into customer_delivery_slot(
+          id,version,customer_subject_id,inquiry_id,warehouse_id,delivery_date,slot_kind,
+          window_start,window_end,delivery_address,latitude,longitude,cabin_count,
+          one_way_travel_seconds,travel_zone_hours,capacity_remaining,state,expires_at,
+          created_at,updated_at)
+        values (?,0,?,?,?,date '2026-08-30','FIXED_WINDOW',time '09:00',time '12:00',
+          'Isochrone migration address',59.9,30.3,1,1800,1,1,'RELEASED',
+          clock_timestamp(),clock_timestamp(),clock_timestamp())
+        """,
+        slotId,
+        subjectId,
+        inquiryId,
+        warehouseId);
+
+    Flyway upgraded = configuration(MIGRATIONS).target("69").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select isochrone_price_60_minutes,isochrone_price_120_minutes,
+                       isochrone_price_180_minutes,isochrone_price_240_minutes
+                from customer_warehouse_capacity_snapshot where id=?
+                """,
+                snapshotId))
+        .containsEntry("isochrone_price_60_minutes", 10_000L)
+        .containsEntry("isochrone_price_120_minutes", 15_000L)
+        .containsEntry("isochrone_price_180_minutes", 20_000L)
+        .containsEntry("isochrone_price_240_minutes", 25_000L);
+    assertThat(
+            jdbc.queryForObject(
+                "select restriction_zone_count from customer_warehouse_capacity_command_receipt",
+                Integer.class))
+        .isZero();
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select delivery_price_rubles,price_zone_id,price_isochrone_minutes
+                from customer_delivery_slot where id=?
+                """,
+                slotId))
+        .containsEntry("delivery_price_rubles", 10_000L)
+        .containsEntry("price_isochrone_minutes", 60)
+        .containsEntry("price_zone_id", null);
+    assertThat(toRegclass("customer_warehouse_capacity_restriction_zone")).isNotNull();
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    insert into customer_warehouse_capacity_restriction_zone(
+                      id,snapshot_id,source_zone_id,source_zone_version,restriction_kind,geometry_json)
+                    values (?,?,?,1,'SPECIAL_PRICE','{"type":"MultiPolygon","coordinates":[]}')
+                    """,
+                    UUID.randomUUID(),
+                    snapshotId,
+                    UUID.randomUUID()))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v72BackfillsTheServiceWarehouseForExistingReplacementCheckpoints() {
+    Flyway beforeV72 = configuration(MIGRATIONS).target("71").load();
+    assertThat(beforeV72.migrate().migrationsExecuted).isPositive();
+    UUID subjectId = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    UUID serviceWarehouseId = UUID.randomUUID();
+    UUID checkpointId = UUID.randomUUID();
+    UUID oldRentalItemId = UUID.randomUUID();
+    UUID replacementRentalItemId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,created_by_subject_id,
+          creation_idempotency_key,creation_request_sha256,phone,normalized_phone,
+          responsible_manager_id,created_at,updated_at)
+        values (?,0,'INDIVIDUAL','V72 replacement client',?,?,?, ?,
+          '+79990000072','+79990000072',?,clock_timestamp(),clock_timestamp())
+        """,
+        clientId,
+        "v72-replacement-client-" + clientId,
+        subjectId,
+        UUID.randomUUID(),
+        "7".repeat(64),
+        subjectId);
+    jdbc.update(
+        """
+        insert into rental_order(
+          id,version,order_number,status,client_id,manager_id,manager_display_name,
+          created_by_subject_id,created_by_display_name,created_by_role,warehouse_id,
+          creation_idempotency_key,creation_request_sha256,created_at,updated_at)
+        values (?,0,'ORD-990072','DRAFT',?,?,'V72 manager',?,'V72 manager',
+          'WAREHOUSE_MANAGER',?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        orderId,
+        clientId,
+        subjectId,
+        subjectId,
+        serviceWarehouseId,
+        UUID.randomUUID(),
+        "8".repeat(64));
+    jdbc.update(
+        """
+        insert into shipment_furniture_movement_task(
+          id,version,document_id,rental_item_id,unit_number,equipment_movement_task_id,
+          line_count,created_at,order_id,old_rental_item_id,replacement_reason,
+          replacement_actor_subject_id,replacement_actor_role,replacement_idempotency_key,
+          replacement_batch_idempotency_key,replacement_pair_index,replacement_request_sha256)
+        values (?,0,null,?,'V72-UNIT',null,0,clock_timestamp(),?,?,?,?,'WAREHOUSE_MANAGER',
+          ?,?,0,?)
+        """,
+        checkpointId,
+        replacementRentalItemId,
+        orderId,
+        oldRentalItemId,
+        "Legacy same-warehouse replacement",
+        subjectId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "9".repeat(64));
+
+    Flyway versionSeventyTwo = configuration(MIGRATIONS).target("72").load();
+    assertThat(versionSeventyTwo.migrate().migrationsExecuted).isOne();
+    versionSeventyTwo.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select replacement_inventory_source_warehouse_id
+                from shipment_furniture_movement_task where id=?
+                """,
+                UUID.class,
+                checkpointId))
+        .isEqualTo(serviceWarehouseId);
+    assertThat(
+            constraintDefinition(
+                "shipment_furniture_movement_task",
+                "ck_shipment_furniture_movement_task_replacement"))
+        .contains("replacement_inventory_source_warehouse_id IS NOT NULL");
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v73BackfillsEmptyWorkerContentAndEnforcesAnObjectSnapshot() {
+    Flyway beforeV73 = configuration(MIGRATIONS).target("72").load();
+    assertThat(beforeV73.migrate().migrationsExecuted).isPositive();
+    UUID taskId = UUID.randomUUID();
+    insertV72GroupedShipmentTask(taskId, UUID.randomUUID());
+
+    Flyway versionSeventyThree = configuration(MIGRATIONS).target("73").load();
+    assertThat(versionSeventyThree.migrate().migrationsExecuted).isOne();
+    versionSeventyThree.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select worker_content_json::text from driver_logistics_task where id=?",
+                String.class,
+                taskId))
+        .isEqualTo("{}");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update driver_logistics_task set worker_content_json='[]'::jsonb where id=?",
+                    taskId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class)
+        .hasMessageContaining("ck_driver_logistics_task_worker_content_json");
     assertJpaValidationStarts();
   }
 
@@ -3203,6 +3867,34 @@ class LogisticsFlywayMigrationIntegrationTest {
         UUID.randomUUID(),
         UUID.randomUUID(),
         "a".repeat(64));
+  }
+
+  /** Inserts a current pre-V73 group while deliberately omitting the new worker-content column. */
+  private void insertV72GroupedShipmentTask(UUID taskId, UUID warehouseId) {
+    jdbc.update(
+        """
+        insert into driver_logistics_task(
+          id,version,warehouse_id,cabin_id,source_type,source_id,task_kind,planning_mode,
+          scheduled_date,fixed_date_lower_bound,priority,movement_comment,client_snapshot,
+          trip_number,unit_number,driver_queue_definition_id,driver_audience_mode,
+          planned_driver_worker_id,planned_driver_name_snapshot,external_task_id,state,
+          cover_applied,repair_place_effect_applied,created_by_subject_id,idempotency_key,
+          request_sha256,retry_count,next_attempt_at,created_at,updated_at)
+        values (?,0,?,?,'LOGISTICS_DOCUMENT',?,'SHIPMENT','FIXED_DATE',current_date,
+          current_date,3,'Клиент: V72. Бытовка: БТ-72','V72',1,'1 бытовка',?,
+          'ASSIGNED_DRIVER',?,'Водитель V72',?,'REGISTERING',false,true,?,?,?,0,
+          clock_timestamp(),clock_timestamp(),clock_timestamp())
+        """,
+        taskId,
+        warehouseId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "7".repeat(64));
   }
 
   private void insertV46OrderTripDocument(

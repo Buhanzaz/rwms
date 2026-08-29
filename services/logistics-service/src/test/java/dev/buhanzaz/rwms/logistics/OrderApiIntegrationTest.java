@@ -35,6 +35,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -372,6 +373,13 @@ class OrderApiIntegrationTest {
     long shippedVersion = json(shipped).get("version").longValue();
 
     mvc.perform(
+            post("/api/logistics/v1/shipments/{documentId}/cancel", documentId)
+                .param("expectedVersion", Long.toString(shippedVersion))
+                .header("Idempotency-Key", UUID.randomUUID())
+                .with(admin()))
+        .andExpect(status().isConflict());
+
+    mvc.perform(
             post("/api/logistics/v1/historical-rental-movements")
                 .header("Idempotency-Key", idempotencyKey)
                 .contentType(MediaType.APPLICATION_JSON)
@@ -399,6 +407,7 @@ class OrderApiIntegrationTest {
 
     UUID replacementClientId =
         createClient(MANAGER_1, "manager-one", "ООО Исправленный клиент");
+    UUID correctedDriverWorkerId = UUID.randomUUID();
     UUID updateKey = UUID.randomUUID();
     String updateBody =
         """
@@ -406,10 +415,12 @@ class OrderApiIntegrationTest {
           "expectedVersion": %d,
           "rentalItemId": "%s",
           "clientId": "%s",
+          "driverSnapshot": "Иванов Иван",
+          "driverWorkerId": "%s",
           "occurredOn": "2023-05-16"
         }
         """
-            .formatted(shippedVersion, UNIT_1, replacementClientId);
+            .formatted(shippedVersion, UNIT_1, replacementClientId, correctedDriverWorkerId);
     mvc.perform(
             put("/api/logistics/v1/historical-rental-movements/{documentId}", documentId)
                 .header("Idempotency-Key", updateKey)
@@ -421,6 +432,8 @@ class OrderApiIntegrationTest {
         .andExpect(jsonPath("$.state").value("SHIPPED"))
         .andExpect(jsonPath("$.clientId").value(replacementClientId.toString()))
         .andExpect(jsonPath("$.partySnapshot").value("ООО Исправленный клиент"))
+        .andExpect(jsonPath("$.driverSnapshot").value("Иванов Иван"))
+        .andExpect(jsonPath("$.driverWorkerId").value(correctedDriverWorkerId.toString()))
         .andExpect(jsonPath("$.scheduledDate").value("2023-05-16"));
     when(dependencies.warehouseTimeZoneAt(eq(WAREHOUSE_1), any(OffsetDateTime.class)))
         .thenThrow(
@@ -490,6 +503,214 @@ class OrderApiIntegrationTest {
         .isOne();
     assertThat(jdbc.queryForObject("select count(*) from driver_logistics_task", Long.class))
         .isZero();
+  }
+
+  @Test
+  void administratorCancelsFailedHistoricalShipmentAndResolvesItsAudit() throws Exception {
+    UUID clientId = createClient(MANAGER_1, "manager-one", "ООО Ошибочная отгрузка");
+    UUID driverWorkerId = UUID.randomUUID();
+    MvcResult created =
+        mvc.perform(
+                post("/api/logistics/v1/historical-rental-movements")
+                    .header("Idempotency-Key", UUID.randomUUID())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(
+                        """
+                        {
+                          "warehouseId": "%s",
+                          "rentalItemId": "%s",
+                          "expectedRentalItemVersion": 7,
+                          "clientId": "%s",
+                          "driverSnapshot": "Петров Пётр",
+                          "driverWorkerId": "%s",
+                          "kind": "SHIPMENT",
+                          "occurredOn": "2023-05-17"
+                        }
+                        """
+                            .formatted(WAREHOUSE_1, UNIT_1, clientId, driverWorkerId))
+                    .with(admin()))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.state").value("PREPARING"))
+            .andExpect(jsonPath("$.driverSnapshot").value("Петров Пётр"))
+            .andExpect(jsonPath("$.driverWorkerId").value(driverWorkerId.toString()))
+            .andReturn();
+    UUID documentId = UUID.fromString(json(created).get("id").stringValue());
+
+    when(dependencies.closeHistoricalShipment(
+            any(), eq(documentId), eq(WAREHOUSE_1), eq(UNIT_1)))
+        .thenThrow(
+            new LogisticsDependencyException(
+                LogisticsDependencyException.FailureKind.CONFIGURATION,
+                "maintenance dependency is unavailable"));
+    assertThat(
+            LogisticsExternalAttemptTestClaims.drainShipment(
+                externalAttemptClaims, shipmentProcessor))
+        .isOne();
+
+    MvcResult failed =
+        mvc.perform(get("/api/logistics/v1/shipments/{documentId}", documentId).with(admin()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.state").value("RECONCILIATION_REQUIRED"))
+            .andReturn();
+    long failedVersion = json(failed).get("version").longValue();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_reconciliation where document_id=? and state='OPEN'",
+                Long.class,
+                documentId))
+        .isOne();
+
+    mvc.perform(
+            post("/api/logistics/v1/shipments/{documentId}/cancel", documentId)
+                .param("expectedVersion", Long.toString(failedVersion))
+                .header("Idempotency-Key", UUID.randomUUID())
+                .with(admin()))
+        .andExpect(status().isAccepted())
+        .andExpect(jsonPath("$.state").value("CANCELLED"))
+        .andExpect(jsonPath("$.historicalRentalImport").value(true));
+
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_reconciliation where document_id=? and state='RESOLVED'",
+                Long.class,
+                documentId))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select resolution_reason from logistics_reconciliation where document_id=?",
+                String.class,
+                documentId))
+        .isEqualTo("HISTORICAL_SHIPMENT_CANCELLED_BY_OPERATOR");
+    assertThat(jdbc.queryForObject("select count(*) from driver_logistics_task", Long.class))
+        .isZero();
+  }
+
+  @Test
+  void administratorCancelsHistoricalShipmentAfterRecoveringLostLeaseResponse() throws Exception {
+    UUID clientId = createClient(MANAGER_1, "manager-one", "ООО Потерянный ответ аренды");
+    MvcResult created =
+        mvc.perform(
+                post("/api/logistics/v1/historical-rental-movements")
+                    .header("Idempotency-Key", UUID.randomUUID())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(
+                        """
+                        {
+                          "warehouseId": "%s",
+                          "rentalItemId": "%s",
+                          "expectedRentalItemVersion": 7,
+                          "clientId": "%s",
+                          "kind": "SHIPMENT",
+                          "occurredOn": "2023-05-17"
+                        }
+                        """
+                            .formatted(WAREHOUSE_1, UNIT_1, clientId))
+                    .with(admin()))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.state").value("PREPARING"))
+            .andReturn();
+    UUID documentId = UUID.fromString(json(created).get("id").stringValue());
+    UUID lineId = UUID.fromString(json(created).get("lines").get(0).get("id").stringValue());
+    UUID leaseId = UUID.randomUUID();
+
+    when(dependencies.closeHistoricalShipment(
+            any(), eq(documentId), eq(WAREHOUSE_1), eq(UNIT_1)))
+        .thenReturn(
+            new LogisticsDependencyGateway.HistoricalShipmentRepairClosure(
+                documentId,
+                WAREHOUSE_1,
+                UNIT_1,
+                7,
+                "FREE",
+                List.of(),
+                "NOT_REQUIRED"));
+    when(dependencies.acquireOperationLease(
+            any(),
+            eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_SHIPMENT),
+            eq(UNIT_1),
+            eq(7L),
+            eq(documentId),
+            eq(lineId)))
+        .thenThrow(
+            new LogisticsDependencyException(
+                LogisticsDependencyException.FailureKind.CONFIGURATION,
+                "lease response was lost"))
+        .thenReturn(
+            new LogisticsDependencyGateway.OperationLease(
+                leaseId,
+                0,
+                UNIT_1,
+                41,
+                "ACTIVE",
+                OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(1)));
+    when(dependencies.releaseOperationLease(
+            any(),
+            eq(leaseId),
+            eq(0L),
+            eq(41L),
+            eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_SHIPMENT),
+            eq(documentId),
+            eq(lineId)))
+        .thenReturn(
+            new LogisticsDependencyGateway.OperationLease(
+                leaseId,
+                1,
+                UNIT_1,
+                41,
+                "EXPIRED",
+                OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(1)));
+
+    assertThat(
+            LogisticsExternalAttemptTestClaims.drainShipment(
+                externalAttemptClaims, shipmentProcessor))
+        .isEqualTo(3);
+    MvcResult failed =
+        mvc.perform(get("/api/logistics/v1/shipments/{documentId}", documentId).with(admin()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.state").value("RECONCILIATION_REQUIRED"))
+            .andReturn();
+
+    mvc.perform(
+            post("/api/logistics/v1/shipments/{documentId}/cancel", documentId)
+                .param(
+                    "expectedVersion",
+                    Long.toString(json(failed).get("version").longValue()))
+                .header("Idempotency-Key", UUID.randomUUID())
+                .with(admin()))
+        .andExpect(status().isAccepted())
+        .andExpect(jsonPath("$.state").value("CANCELLING"));
+
+    assertThat(
+            LogisticsExternalAttemptTestClaims.drainShipment(
+                externalAttemptClaims, shipmentProcessor))
+        .isEqualTo(2);
+    mvc.perform(get("/api/logistics/v1/shipments/{documentId}", documentId).with(admin()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.state").value("CANCELLED"));
+
+    ArgumentCaptor<UUID> operationIds = ArgumentCaptor.forClass(UUID.class);
+    verify(dependencies, times(2))
+        .acquireOperationLease(
+            operationIds.capture(),
+            eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_SHIPMENT),
+            eq(UNIT_1),
+            eq(7L),
+            eq(documentId),
+            eq(lineId));
+    assertThat(operationIds.getAllValues()).hasSize(2);
+    assertThat(operationIds.getAllValues().get(1)).isEqualTo(operationIds.getAllValues().get(0));
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_guard where document_id=? and guard_state='RELEASED'",
+                Long.class,
+                documentId))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_reconciliation where document_id=? and state='RESOLVED'",
+                Long.class,
+                documentId))
+        .isOne();
   }
 
   @Test
@@ -1024,8 +1245,7 @@ class OrderApiIntegrationTest {
     mvc.perform(
             get("/api/logistics/v1/orders/{orderId}", orderId)
                 .with(managerWithoutWarehouse(MANAGER_1, "manager-one")))
-        .andExpect(status().isOk())
-        .andExpect(jsonPath("$.permissions.canExtendRentalTerms").value(false));
+        .andExpect(status().isForbidden());
   }
 
   @Test

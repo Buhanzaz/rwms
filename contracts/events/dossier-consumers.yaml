@@ -469,6 +469,8 @@ components:
         eventType:
           enum:
             - logistics.transfer.created.v1
+            - logistics.transfer.plan-updated.v1
+            - logistics.transfer.confirmed.v1
             - logistics.transfer.departure-started.v1
             - logistics.transfer.departed.v1
             - logistics.transfer.arrival-started.v1

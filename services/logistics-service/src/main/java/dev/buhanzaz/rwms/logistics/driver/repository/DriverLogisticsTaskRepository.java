@@ -31,6 +31,7 @@ public interface DriverLogisticsTaskRepository extends JpaRepository<DriverLogis
   Optional<DriverLogisticsTask> findByCreatedBySubjectIdAndIdempotencyKey(
       UUID createdBySubjectId, UUID idempotencyKey);
 
+  @EntityGraph(attributePaths = "members")
   @Query(
       """
       select task
@@ -46,6 +47,7 @@ public interface DriverLogisticsTaskRepository extends JpaRepository<DriverLogis
       @Param("kind") DriverTaskKind kind);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @EntityGraph(attributePaths = "members")
   @Query(
       """
       select task
@@ -74,6 +76,7 @@ public interface DriverLogisticsTaskRepository extends JpaRepository<DriverLogis
       @Param("sourceIds") Collection<UUID> sourceIds);
 
   /** Reads current and terminal projections for a bounded set of planner-created documents. */
+  @EntityGraph(attributePaths = "members")
   @Query(
       """
       select task

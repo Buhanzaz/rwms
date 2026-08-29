@@ -178,6 +178,36 @@ public class OrderClient {
     return creationRequestSha256.equals(requestSha256);
   }
 
+  /**
+   * Synchronizes the mutable CustomerApp profile projection without changing client ownership,
+   * type, creation receipt or historical order snapshots.
+   */
+  public void updateCustomerProfile(
+      String displayName,
+      String normalizedName,
+      String phone,
+      String normalizedPhone,
+      String email,
+      String normalizedEmail,
+      String contactPerson,
+      String comment) {
+    this.displayName = requireText(displayName, 512, "displayName");
+    this.normalizedName = requireText(normalizedName, 512, "normalizedName");
+    this.phone = requireText(phone, 32, "phone");
+    this.normalizedPhone = requireText(normalizedPhone, 32, "normalizedPhone");
+    this.email = optionalText(email, 320, "email");
+    this.normalizedEmail = optionalText(normalizedEmail, 320, "normalizedEmail");
+    if ((this.email == null) != (this.normalizedEmail == null)) {
+      throw new IllegalArgumentException("email projection is invalid");
+    }
+    this.contactPerson = optionalText(contactPerson, 255, "contactPerson");
+    if (clientType == ClientType.LEGAL_ENTITY && this.contactPerson == null) {
+      throw new IllegalArgumentException("contactPerson is required for this client type");
+    }
+    this.comment = optionalText(comment, 2_000, "comment");
+    this.updatedAt = now();
+  }
+
   private static String requireText(String value, int maximum, String field) {
     String normalized = value == null ? "" : value.trim();
     if (normalized.isEmpty() || normalized.length() > maximum) {

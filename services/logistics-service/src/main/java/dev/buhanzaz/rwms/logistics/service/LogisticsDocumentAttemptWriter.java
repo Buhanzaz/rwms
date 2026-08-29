@@ -70,6 +70,27 @@ class LogisticsDocumentAttemptWriter {
       long ownerRevision,
       long aggregateVersion,
       boolean active) {
+    return ownerProofDigest(
+        operation,
+        document,
+        line,
+        warehouseId,
+        ownerRevision,
+        aggregateVersion,
+        active,
+        null);
+  }
+
+  /** Includes a customer subject only for a subject-bound shipment media owner proof. */
+  String ownerProofDigest(
+      String operation,
+      LogisticsDocument document,
+      LogisticsDocumentLine line,
+      UUID warehouseId,
+      long ownerRevision,
+      long aggregateVersion,
+      boolean active,
+      UUID authorizedSubjectId) {
     return LogisticsCommandChecksum.sha256(
         operation,
         List.of(
@@ -79,6 +100,7 @@ class LogisticsDocumentAttemptWriter {
             warehouseId.toString(),
             Long.toString(ownerRevision),
             Long.toString(aggregateVersion),
-            Boolean.toString(active)));
+            Boolean.toString(active),
+            authorizedSubjectId == null ? "" : authorizedSubjectId.toString()));
   }
 }

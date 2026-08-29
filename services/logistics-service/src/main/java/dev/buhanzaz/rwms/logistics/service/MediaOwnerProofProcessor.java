@@ -44,6 +44,7 @@ public class MediaOwnerProofProcessor {
               work.ownerRevision(),
               work.aggregateVersion(),
               work.operationId(),
+              work.authorizedSubjectId(),
               work.active()));
     } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
       // The remote result belongs to an expired or superseded local lease.

@@ -154,6 +154,13 @@ audience под общим task/entry version fence; публичная обыч
 перестановку ожидающих карточек внутри одной очереди, но не logistics replanning и не cross-queue
 move.
 
+Private directory водителей для exact logistics-service разрешает ownership workforce при каждом
+чтении. Для одного склада она возвращает только `{workerId, displayName}` активных работников, чья
+активная primary qualification соответствует активным logistics-driver queue и definition этого
+склада, в порядке normalized display name, затем UUID. Secondary bindings, неактивные работники,
+queues, definitions и qualifications исключаются; login, group, contact, credential и остальные
+персональные поля через эту границу не проходят.
+
 ## Внутренняя структура приложения
 
 `TaskBoardService` — стабильный transactional facade над связными collaborators.
@@ -176,6 +183,7 @@ move.
 | `TaskBoardQueuePositionCoordinator` | Только advisory locks, stream fences и persisted queue/pin ordering |
 | `TaskBoardRoutePayloadCodec` | Единственный canonical route JSON и fingerprint codec |
 | `DriverTaskAudienceService` | Shape аудитории logistics-driver, qualification, visibility и execution authorization |
+| `LogisticsDriverDirectoryService` | Least-privilege directory активных primary logistics-drivers для exact caller logistics-service |
 | `MobileTaskSurfacePolicy` | Непересекающиеся DriverApp primary и WorkerApp secondary capabilities |
 | `WorkerTaskAccessService` | Общая worker/group/qualification аудитория очередей для native task reads и media proofs |
 | `WorkerFeedCountProjection` | Однозапросные route cardinality и READY-evidence counts для bounded native feed page |
@@ -238,6 +246,7 @@ Public gateway преобразует `/api/task-board/**` в downstream `/api/*
 | `/api/internal/task-board/v1/maintenance/**` | Exact maintenance-service identity | Routing и catalog preflight |
 | `/api/internal/task-board/v1/tasks/**` | Exact source service identity | Idempotent task synchronization и evidence reads |
 | `/api/internal/task-board/v1/logistics/**` | Exact logistics-service identity | Driver/equipment task integration |
+| `/api/internal/task-board/v1/logistics/warehouses/{warehouseId}/drivers` | Exact identity и scope logistics-service | Только identities активных primary-qualified водителей |
 | `/api/internal/queue-definitions/**` | Allow-listed service identity | Durable queue usage references |
 
 Private paths — service-to-service boundaries, а не client shortcuts. Их exact

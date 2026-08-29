@@ -76,6 +76,41 @@ class DossierEnvelopeValidatorTest {
   }
 
   @Test
+  void acceptsTransferPlanningFactsAsJournalOnlyEvidence() {
+    UUID transferId = UUID.fromString("40000000-0000-0000-0000-000000000016");
+    UUID destinationWarehouseId =
+        UUID.fromString("30000000-0000-0000-0000-000000000002");
+    String payload =
+        """
+        {"documentId":"%s","documentType":"TRANSFER","state":"DRAFT","warehouseId":"%s","destinationWarehouseId":"%s","lineCount":2,"resultCode":"NOT_RESERVED"}
+        """
+            .formatted(transferId, WAREHOUSE_ID, destinationWarehouseId);
+
+    for (String eventType :
+        new String[] {
+          "logistics.transfer.plan-updated.v1", "logistics.transfer.confirmed.v1"
+        }) {
+      String fact =
+          envelope(eventType, "logistics-service", "TRANSFER", transferId, payload)
+              .replace(
+                  "\"occurredAt\":null", "\"occurredAt\":\"2026-07-18T00:00:00Z\"");
+
+      DossierValidatedEvent event =
+          validator.validate(
+              "rwms.logistics.transfer.v1",
+              0,
+              2,
+              transferId.toString(),
+              fact.getBytes(StandardCharsets.UTF_8));
+
+      assertThat(event.activityCode()).isNull();
+      assertThat(event.subjectCapable()).isFalse();
+      assertThat(event.cabinId()).isNull();
+      assertThat(event.aggregateId()).isEqualTo(transferId);
+    }
+  }
+
+  @Test
   void acceptsRestoredInventoryMembershipAsJournalOnlyFindingEvidence() {
     UUID findingId = UUID.fromString("40000000-0000-0000-0000-000000000012");
     UUID inventoryId = UUID.fromString("40000000-0000-0000-0000-000000000013");
@@ -234,6 +269,36 @@ class DossierEnvelopeValidatorTest {
     assertThat(event.secondaryId()).isEqualTo(CABIN_ID);
     assertThat(event.activityCode()).isEqualTo("MEDIA_READY");
     assertThat(event.payload().required("folderId").stringValue()).isEqualTo(folderId.toString());
+  }
+
+  @Test
+  void acceptsCustomerProfileAvatarWithoutTreatingItAsCabinDossierActivity() {
+    UUID mediaId = UUID.fromString("40000000-0000-0000-0000-000000000013");
+    UUID profileId = UUID.fromString("40000000-0000-0000-0000-000000000014");
+    String fact =
+        envelope(
+                "media.media.ready.v1",
+                "media-service",
+                "MEDIA",
+                mediaId,
+                """
+                {"mediaId":"%s","ownerType":"LOGISTICS_CUSTOMER_PROFILE","ownerId":"%s","warehouseId":"%s","kind":"IMAGE","status":"READY","generation":1,"rotationDegrees":0}
+                """
+                    .formatted(mediaId, profileId, WAREHOUSE_ID))
+            .replace("\"aggregateVersion\":0", "\"aggregateVersion\":1");
+
+    DossierValidatedEvent event =
+        validator.validate(
+            "rwms.media.media.v1",
+            0,
+            13,
+            mediaId.toString(),
+            fact.getBytes(StandardCharsets.UTF_8));
+
+    assertThat(event.cabinId()).isNull();
+    assertThat(event.warehouseId()).isEqualTo(WAREHOUSE_ID);
+    assertThat(event.secondaryId()).isNull();
+    assertThat(event.subjectCapable()).isFalse();
   }
 
   @Test

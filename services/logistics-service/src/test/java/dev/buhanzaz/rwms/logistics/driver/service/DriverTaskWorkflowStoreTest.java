@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.customer.capacity.service.CustomerDeliveryCapacityFence;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.MaintenanceDriverTaskCompensationOutcome;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
@@ -36,6 +37,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
+import tools.jackson.databind.ObjectMapper;
 
 class DriverTaskWorkflowStoreTest {
   private final DriverLogisticsTaskRepository tasks = mock(DriverLogisticsTaskRepository.class);
@@ -48,7 +50,50 @@ class DriverTaskWorkflowStoreTest {
       mock(CustomerDeliveryCapacityFence.class);
   private final DriverTaskWorkflowStore store =
       new DriverTaskWorkflowStore(
-          tasks, documents, documentLines, rentalTerms, capacityFence);
+          tasks,
+          documents,
+          documentLines,
+          rentalTerms,
+          capacityFence,
+          new DriverTaskWorkerContentCodec(new ObjectMapper()));
+
+  @Test
+  void furnitureCargoTransferUsesTheExistingDriverRegistrationWorkItem() {
+    UUID taskId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID workerId = UUID.randomUUID();
+    UUID queueDefinitionId = UUID.randomUUID();
+    DriverLogisticsTask task =
+        DriverLogisticsTask.createFurnitureCargoTransfer(
+            warehouseId,
+            UUID.randomUUID(),
+            LocalDate.of(2026, 8, 30),
+            3,
+            "Межскладской груз: 12 предметов мебели",
+            "12 предметов мебели",
+            queueDefinitionId,
+            DriverTaskAudienceMode.ASSIGNED_DRIVER,
+            workerId,
+            "Петров Алексей",
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            "f".repeat(64));
+    ReflectionTestUtils.setField(task, "id", taskId);
+    when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
+
+    DriverTaskWorkflowStore.RegisterWork work =
+        (DriverTaskWorkflowStore.RegisterWork) store.nextWork(taskId).orElseThrow();
+
+    assertThat(work.taskId()).isEqualTo(taskId);
+    assertThat(work.warehouseId()).isEqualTo(warehouseId);
+    assertThat(work.queueDefinitionId()).isEqualTo(queueDefinitionId);
+    assertThat(work.title()).isEqualTo("Переместить мебель между складами");
+    assertThat(work.description()).isEqualTo("Межскладской груз: 12 предметов мебели");
+    assertThat(work.unitNumber()).isEqualTo("12 предметов мебели");
+    assertThat(work.driverAudience().mode()).isEqualTo(DriverTaskAudienceMode.ASSIGNED_DRIVER);
+    assertThat(work.driverAudience().workerId()).isEqualTo(workerId);
+    assertThat(work.workerContent().isEmpty()).isTrue();
+  }
 
   @Test
   void statusRecoveryMovesEveryGroupedDocumentTypeWithoutChangingMembers() {
@@ -88,6 +133,13 @@ class DriverTaskWorkflowStoreTest {
       task.registerBoardTask(boardTaskId, 0, entryId, "WAITING", "SCHEDULED", null);
       when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
       when(documents.findForUpdate(documentId)).thenReturn(Optional.of(document));
+      if (type == LogisticsDocumentType.SHIPMENT) {
+        when(documentLines.findAllByDocument_IdOrderByLineNumber(documentId))
+            .thenReturn(
+                java.util.List.of(
+                    LogisticsDocumentLine.create(
+                        document, 1, cabinId, 0, "Клиент", null, warehouseId)));
+      }
 
       store.confirmStatus(
           taskId,
@@ -119,9 +171,83 @@ class DriverTaskWorkflowStoreTest {
       assertThat(document.getScheduledDate()).isEqualTo(movedDate);
     }
     verify(documents, times(3)).saveAndFlush(any(LogisticsDocument.class));
-    verify(documentLines, never()).findAllByDocument_IdOrderByLineNumber(any());
+    verify(documentLines).findAllByDocument_IdOrderByLineNumber(any());
     verify(rentalTerms, never()).saveAllAndFlush(any());
     verify(capacityFence, times(3)).acquireDay(warehouseId, movedDate);
+  }
+
+  @Test
+  void groupedRegionalShipmentReschedulesAgainstItsPhysicalSourceWarehouse() {
+    LocalDate originalDate = LocalDate.now(ZoneOffset.UTC).plusDays(1);
+    LocalDate movedDate = originalDate.plusDays(1);
+    UUID serviceWarehouseId = UUID.randomUUID();
+    UUID inventorySourceWarehouseId = UUID.randomUUID();
+    UUID documentId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    LogisticsDocument document =
+        scheduledDocument(
+            LogisticsDocumentType.SHIPMENT, serviceWarehouseId, documentId, originalDate);
+    LogisticsDocumentLine line =
+        LogisticsDocumentLine.create(
+            document, 1, cabinId, 0, "Региональный клиент", null, inventorySourceWarehouseId);
+    DriverLogisticsTask task =
+        DriverLogisticsTask.createGroupedDocument(
+            inventorySourceWarehouseId,
+            cabinId,
+            documentId,
+            DriverTaskKind.SHIPMENT,
+            originalDate,
+            1,
+            3,
+            "Региональная ходка",
+            "Региональный клиент",
+            "1 бытовка",
+            UUID.randomUUID(),
+            DriverTaskAudienceMode.WAREHOUSE_DRIVERS,
+            null,
+            null,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            "d".repeat(64));
+    task.addGroupedDocumentMember(UUID.randomUUID(), cabinId, "БТ-1", 1);
+    UUID taskId = UUID.randomUUID();
+    UUID boardTaskId = UUID.randomUUID();
+    UUID entryId = UUID.randomUUID();
+    ReflectionTestUtils.setField(task, "id", taskId);
+    task.registerBoardTask(boardTaskId, 0, entryId, "WAITING", "SCHEDULED", null);
+    when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
+    when(documents.findForUpdate(documentId)).thenReturn(Optional.of(document));
+    when(documentLines.findAllByDocument_IdOrderByLineNumber(documentId))
+        .thenReturn(java.util.List.of(line));
+
+    store.confirmStatus(
+        taskId,
+        new LogisticsDependencyGateway.DriverBoardTask(
+            boardTaskId,
+            1,
+            inventorySourceWarehouseId,
+            task.getExternalTaskId(),
+            "Региональная ходка",
+            "1 бытовка",
+            "Региональный клиент",
+            new LogisticsDependencyGateway.DriverTaskAudience(
+                DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null),
+            "ACTIVE",
+            movedDate,
+            "SCHEDULED",
+            3,
+            false,
+            null,
+            entryId,
+            1,
+            "WAITING",
+            0));
+
+    assertThat(document.getWarehouseId()).isEqualTo(serviceWarehouseId);
+    assertThat(document.getScheduledDate()).isEqualTo(movedDate);
+    assertThat(task.getWarehouseId()).isEqualTo(inventorySourceWarehouseId);
+    assertThat(task.getScheduledDate()).isEqualTo(movedDate);
+    verify(capacityFence).acquireDay(inventorySourceWarehouseId, movedDate);
   }
 
   @Test

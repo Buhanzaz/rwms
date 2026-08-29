@@ -56,7 +56,7 @@ func TestKafkaRelayAckBeforeDatabaseMarkIsReconciledByProcessingConsumerIntegrat
 		kgo.SeedBrokers(brokers...),
 		kgo.ConsumerGroup("media-ack-race-"+uuid.NewString()),
 		kgo.ConsumeTopics(persistence.ProcessingTopic),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.DisableAutoCommit(),
 		kgo.BlockRebalanceOnPoll(),
 		kgo.FetchMaxBytes(2<<20),
@@ -184,6 +184,16 @@ func seedKafkaProcessingState(
 		mediaID, ownerID.String(), warehouseID, sourceKey, recordedAt, sourceVersionID, sourceChecksum)
 	if err != nil {
 		t.Fatalf("seed ACK-race media asset: %v", err)
+	}
+	_, err = pool.Exec(ctx, `insert into media_upload_session (
+		upload_session_id,media_id,principal_type,subject_id,idempotency_key,
+		expected_content_length,expected_content_type,expected_checksum_sha256,
+		upload_mode,expires_at,completed_at,created_at)
+	values ($1,$2,'USER',$3,$4,1024,'image/jpeg',$5,'SOURCE',$6,$7,$7)`,
+		uuid.New(), mediaID, uuid.New(), uuid.New(), sourceChecksum,
+		recordedAt.Add(time.Hour), recordedAt)
+	if err != nil {
+		t.Fatalf("seed ACK-race upload session: %v", err)
 	}
 	_, err = pool.Exec(ctx, `insert into media_processing_job (
 		processing_job_id,media_id,generation,processing_kind,requested_rotation_degrees,
@@ -852,7 +862,7 @@ func startKafkaObserver(t *testing.T, brokers, topics []string) *kafkaObserver {
 		kgo.SeedBrokers(brokers...),
 		kgo.ConsumerGroup("media-kafka-integration-"+uuid.NewString()),
 		kgo.ConsumeTopics(topics...),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.DisableAutoCommit(),
 		kgo.OnPartitionsAssigned(func(context.Context, *kgo.Client, map[string][]int32) {
 			assignedOnce.Do(func() { close(assigned) })

@@ -151,6 +151,13 @@ private source replan boundary may replace audience under the shared task/entry 
 public ordinary board exposes only same-queue waiting-card reorder, never logistics replanning or a
 cross-queue move.
 
+The exact logistics-service private driver directory resolves workforce ownership on every read.
+For one warehouse it returns only `{workerId, displayName}` for active workers whose active primary
+qualification matches that warehouse's active logistics-driver queue and definition, ordered by
+normalized display name and then UUID. Secondary bindings, inactive workers, queues, definitions or
+qualifications are excluded; login, group, contact, credential and other personal fields never
+cross this boundary.
+
 ## Internal application structure
 
 `TaskBoardService` is a stable transactional facade over cohesive collaborators. It keeps
@@ -173,6 +180,7 @@ components own the decisions:
 | `TaskBoardQueuePositionCoordinator` | Advisory locks, stream fences and persisted queue/pin ordering only |
 | `TaskBoardRoutePayloadCodec` | The single canonical route JSON and fingerprint codec |
 | `DriverTaskAudienceService` | Logistics-driver audience shape, qualification, visibility and execution authorization |
+| `LogisticsDriverDirectoryService` | Least-privilege active primary logistics-driver directory for the exact logistics-service caller |
 | `MobileTaskSurfacePolicy` | Non-overlapping DriverApp primary and WorkerApp secondary capabilities |
 | `WorkerTaskAccessService` | Shared worker/group/qualification queue audience for native task reads and media proofs |
 | `WorkerFeedCountProjection` | One-query route cardinality and READY-evidence counts for a bounded native feed page |
@@ -235,6 +243,7 @@ The public gateway maps `/api/task-board/**` to this service's downstream
 | `/api/internal/task-board/v1/maintenance/**` | Exact maintenance-service identity | Routing and catalog preflight |
 | `/api/internal/task-board/v1/tasks/**` | Exact source service identity | Idempotent task synchronization and evidence reads |
 | `/api/internal/task-board/v1/logistics/**` | Exact logistics-service identity | Driver/equipment task integration |
+| `/api/internal/task-board/v1/logistics/warehouses/{warehouseId}/drivers` | Exact logistics-service identity and scope | Active primary-qualified driver identities only |
 | `/api/internal/queue-definitions/**` | Allow-listed service identity | Durable queue usage references |
 
 Private paths are service-to-service boundaries and are never exposed as client

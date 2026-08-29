@@ -22,6 +22,8 @@ import org.springframework.web.util.UriComponentsBuilder;
 final class LogisticsMediaDependencyClient {
   private static final String MEDIA_CLIENT = "logistics-media";
   private static final String MEDIA_SCOPE = "media.logistics";
+  private static final String CUSTOMER_PROFILE_OWNER_TYPE = "LOGISTICS_CUSTOMER_PROFILE";
+  private static final String CUSTOMER_PROFILE_CONTEXT = "PROFILE_AVATAR";
 
   private final LogisticsOAuthHttpTransport transport;
   private final String mediaBase;
@@ -74,6 +76,50 @@ final class LogisticsMediaDependencyClient {
     return new MediaValidation(ownerType, documentId, lineId, warehouseId, validated);
   }
 
+  CustomerProfileMediaValidation validateCustomerProfileMediaReference(
+      UUID profileId,
+      UUID warehouseId,
+      UUID authorizedSubjectId,
+      MediaReference reference) {
+    if (profileId == null
+        || warehouseId == null
+        || authorizedSubjectId == null
+        || reference == null
+        || reference.mediaId() == null
+        || reference.generation() < 1) {
+      throw malformed("Customer profile avatar reference is invalid");
+    }
+    CustomerProfileMediaValidationResponse response =
+        transport.postWithoutIdempotency(
+            mediaBase + "/logistics/references/validate",
+            new CustomerProfileMediaValidationRequest(
+                CUSTOMER_PROFILE_OWNER_TYPE,
+                profileId,
+                warehouseId,
+                authorizedSubjectId,
+                CUSTOMER_PROFILE_CONTEXT,
+                List.of(new MediaReferenceRequest(reference.mediaId(), reference.generation()))),
+            CustomerProfileMediaValidationResponse.class,
+            MEDIA_CLIENT,
+            MEDIA_SCOPE,
+            "Dependency returned an empty response",
+            DEFAULT);
+    if (response == null
+        || !CUSTOMER_PROFILE_OWNER_TYPE.equals(response.ownerType())
+        || !profileId.equals(response.ownerId())
+        || !warehouseId.equals(response.warehouseId())
+        || !authorizedSubjectId.equals(response.authorizedSubjectId())
+        || !CUSTOMER_PROFILE_CONTEXT.equals(response.context())
+        || response.references() == null
+        || response.references().size() != 1
+        || !reference.mediaId().equals(response.references().getFirst().mediaId())
+        || reference.generation() != response.references().getFirst().generation()) {
+      throw malformed("Media-service returned a mismatched customer profile avatar");
+    }
+    return new CustomerProfileMediaValidation(
+        profileId, warehouseId, authorizedSubjectId, reference);
+  }
+
   MediaOwnerProof upsertMediaOwnerProof(
       LogisticsOwnerType ownerType,
       UUID documentId,
@@ -82,9 +128,9 @@ final class LogisticsMediaDependencyClient {
       long ownerRevision,
       long aggregateVersion,
       UUID proofEventId,
+      UUID authorizedSubjectId,
       boolean active) {
     if (ownerType == null
-        || ownerType == LogisticsOwnerType.LOGISTICS_SHIPMENT
         || documentId == null
         || lineId == null
         || warehouseId == null
@@ -92,6 +138,9 @@ final class LogisticsMediaDependencyClient {
         || aggregateVersion < 0
         || proofEventId == null) {
       throw malformed("Logistics media owner proof is invalid");
+    }
+    if ((ownerType == LogisticsOwnerType.LOGISTICS_SHIPMENT) != (authorizedSubjectId != null)) {
+      throw malformed("Shipment media owner proof subject is invalid");
     }
     MediaOwnerProofResponse response =
         transport.postWithoutIdempotency(
@@ -104,6 +153,7 @@ final class LogisticsMediaDependencyClient {
                 ownerRevision,
                 aggregateVersion,
                 proofEventId,
+                authorizedSubjectId,
                 active),
             MediaOwnerProofResponse.class,
             MEDIA_CLIENT,
@@ -120,6 +170,7 @@ final class LogisticsMediaDependencyClient {
         || ownerRevision != response.ownerRevision()
         || aggregateVersion != response.aggregateVersion()
         || !proofEventId.equals(response.proofEventId())
+        || !Objects.equals(authorizedSubjectId, response.authorizedSubjectId())
         || active != response.active()) {
       throw malformed("Media-service returned a mismatched logistics owner proof");
     }
@@ -131,7 +182,53 @@ final class LogisticsMediaDependencyClient {
         ownerRevision,
         aggregateVersion,
         proofEventId,
+        authorizedSubjectId,
         active);
+  }
+
+  CustomerProfileMediaOwnerProof upsertCustomerProfileMediaOwnerProof(
+      UUID profileId,
+      UUID warehouseId,
+      UUID authorizedSubjectId,
+      UUID proofEventId) {
+    if (profileId == null
+        || warehouseId == null
+        || authorizedSubjectId == null
+        || proofEventId == null) {
+      throw malformed("Customer profile media owner proof is invalid");
+    }
+    CustomerProfileMediaOwnerProofResponse response =
+        transport.postWithoutIdempotency(
+            mediaBase + "/owner-proofs",
+            new CustomerProfileMediaOwnerProofRequest(
+                CUSTOMER_PROFILE_OWNER_TYPE,
+                profileId,
+                warehouseId,
+                0,
+                0,
+                proofEventId,
+                authorizedSubjectId,
+                true),
+            CustomerProfileMediaOwnerProofResponse.class,
+            MEDIA_CLIENT,
+            MEDIA_SCOPE,
+            "Dependency returned an empty response",
+            DEFAULT);
+    if (response == null
+        || !CUSTOMER_PROFILE_OWNER_TYPE.equals(response.ownerType())
+        || !profileId.equals(response.ownerId())
+        || !warehouseId.equals(response.warehouseId())
+        || response.ownerRevision() == null
+        || response.ownerRevision() != 0
+        || response.aggregateVersion() == null
+        || response.aggregateVersion() != 0
+        || !proofEventId.equals(response.proofEventId())
+        || !authorizedSubjectId.equals(response.authorizedSubjectId())
+        || !Boolean.TRUE.equals(response.active())) {
+      throw malformed("Media-service returned a mismatched customer profile owner proof");
+    }
+    return new CustomerProfileMediaOwnerProof(
+        profileId, warehouseId, authorizedSubjectId, 0, 0, proofEventId, true);
   }
 
   CabinCoverChange setCabinCoverFromTaskEvidence(
@@ -273,6 +370,24 @@ final class LogisticsMediaDependencyClient {
       UUID warehouseId,
       List<MediaReferenceRequest> references) {}
 
+  /** Subject-bound non-structured avatar reference validation request. */
+  private record CustomerProfileMediaValidationRequest(
+      String ownerType,
+      UUID ownerId,
+      UUID warehouseId,
+      UUID authorizedSubjectId,
+      String context,
+      List<MediaReferenceRequest> references) {}
+
+  /** Exact profile avatar reference echoed by media-service after READY validation. */
+  private record CustomerProfileMediaValidationResponse(
+      String ownerType,
+      UUID ownerId,
+      UUID warehouseId,
+      UUID authorizedSubjectId,
+      String context,
+      List<MediaReferenceRequest> references) {}
+
   /**
    * Owner-proof upsert carrying monotonic owner and aggregate revisions plus the originating event
    * identity for idempotent recovery.
@@ -285,6 +400,7 @@ final class LogisticsMediaDependencyClient {
       long ownerRevision,
       long aggregateVersion,
       UUID proofEventId,
+      UUID authorizedSubjectId,
       boolean active) {}
 
   /**
@@ -299,6 +415,29 @@ final class LogisticsMediaDependencyClient {
       Long ownerRevision,
       Long aggregateVersion,
       UUID proofEventId,
+      UUID authorizedSubjectId,
+      Boolean active) {}
+
+  /** Initial active CustomerApp profile-avatar owner proof. */
+  private record CustomerProfileMediaOwnerProofRequest(
+      String ownerType,
+      UUID ownerId,
+      UUID warehouseId,
+      long ownerRevision,
+      long aggregateVersion,
+      UUID proofEventId,
+      UUID authorizedSubjectId,
+      boolean active) {}
+
+  /** Strict echo of the active CustomerApp profile-avatar owner proof. */
+  private record CustomerProfileMediaOwnerProofResponse(
+      String ownerType,
+      UUID ownerId,
+      UUID warehouseId,
+      Long ownerRevision,
+      Long aggregateVersion,
+      UUID proofEventId,
+      UUID authorizedSubjectId,
       Boolean active) {}
 
   /** Command selecting verified task evidence as the new cabin cover image. */

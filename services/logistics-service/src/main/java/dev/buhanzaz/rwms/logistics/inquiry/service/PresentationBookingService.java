@@ -179,7 +179,8 @@ public class PresentationBookingService {
               converted,
               requirements,
               normalDesiredDeliveryWindows(context),
-              normalRentalMonths(context),
+              normalRentalTerms(context),
+              context.rentalMonths(),
               normalDeliveryAddress(context),
               context.latitude(),
               context.longitude(),
@@ -414,16 +415,27 @@ public class PresentationBookingService {
         .toList();
   }
 
-  /** Reads the duration from the durable booking receipt before local order reconciliation. */
-  private static long normalRentalMonths(BookingContext context) {
-    Long rentalMonths = context.rentalMonths();
-    if (rentalMonths == null || rentalMonths < 1) {
+  /** Resolves every selected cabin's immutable initial duration from the durable receipt. */
+  private static Map<UUID, Long> normalRentalTerms(BookingContext context) {
+    Map<UUID, Long> result = new LinkedHashMap<>();
+    for (PresentationCabinSelectionInput selection : context.selections()) {
+      Long months =
+          selection.rentalMonths() == null ? context.rentalMonths() : selection.rentalMonths();
+      if (months == null || months < 1 || months > 120) {
+        throw new OrderProblemException(
+            org.springframework.http.HttpStatus.CONFLICT,
+            "CLIENT_PRESENTATION_RENTAL_MONTHS_REQUIRED",
+            "Не найден срок аренды выбранной бытовки");
+      }
+      result.put(selection.rentalItemId(), months);
+    }
+    if (result.size() != context.selections().size()) {
       throw new OrderProblemException(
           org.springframework.http.HttpStatus.CONFLICT,
-          "CLIENT_PRESENTATION_RENTAL_MONTHS_REQUIRED",
-          "Не найден срок аренды бытовок");
+          "CLIENT_PRESENTATION_RENTAL_MONTHS_INVALID",
+          "Сроки аренды бытовок содержат повторяющиеся позиции");
     }
-    return rentalMonths;
+    return Map.copyOf(result);
   }
 
   /**

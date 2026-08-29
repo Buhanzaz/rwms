@@ -41,7 +41,7 @@ CREATE TABLE public.customer_scenario_capacity_command_receipt (
 
 CREATE INDEX idx_customer_scenario_capacity_command_revision
     ON public.customer_scenario_capacity_command_receipt (
-        warehouse_id, source_scenario_id, source_generation, source_revision, created_at, idempotency_key
+        warehouse_id, source_scenario_id, source_revision, created_at, idempotency_key
     );
 
 CREATE TABLE public.customer_scenario_capacity_job (

@@ -20,7 +20,7 @@ class CustomerRentalSessionTest {
     UUID commandKey = UUID.randomUUID();
 
     session.beginSelection(0, commandKey, HASH);
-    session.completeSelection(commandKey, HASH, "[]");
+    session.completeSelection(commandKey, HASH, "[]", "[]");
 
     assertThat(session.getDeliverySlotId()).isNull();
   }
@@ -43,6 +43,7 @@ class CustomerRentalSessionTest {
             UUID.randomUUID(),
             UUID.randomUUID(),
             LocalDate.now(ZoneOffset.UTC).plusDays(2),
+            CustomerDeliverySlotKind.FIXED_WINDOW,
             LocalTime.of(9, 0),
             LocalTime.of(12, 0),
             "Москва",
@@ -52,9 +53,20 @@ class CustomerRentalSessionTest {
             1_800,
             1,
             1,
+            2,
+            null,
+            null,
+            true,
+            true,
+            4.0,
+            2.55,
+            12.0,
+            18.0,
+            10.0,
+            3,
             now.plusMinutes(10));
     UUID bookingId = UUID.randomUUID();
-    slot.hold(now.plusMinutes(20), 1);
+    slot.hold(now.plusMinutes(20), 1, false, false);
 
     slot.protectCheckout(bookingId, null);
 
@@ -70,7 +82,7 @@ class CustomerRentalSessionTest {
     UUID reservationKey = UUID.randomUUID();
     UUID bookingId = UUID.randomUUID();
     UUID orderId = UUID.randomUUID();
-    slot.hold(now.plusMinutes(20), 1);
+    slot.hold(now.plusMinutes(20), 1, false, false);
 
     slot.protectCheckout(reservationKey, null);
     slot.bindCheckoutBooking(reservationKey, bookingId, orderId);
@@ -89,6 +101,7 @@ class CustomerRentalSessionTest {
         UUID.randomUUID(),
         UUID.randomUUID(),
         LocalDate.now(ZoneOffset.UTC).plusDays(2),
+        CustomerDeliverySlotKind.FIXED_WINDOW,
         LocalTime.of(9, 0),
         LocalTime.of(12, 0),
         "Москва",
@@ -98,6 +111,17 @@ class CustomerRentalSessionTest {
         1_800,
         1,
         1,
+        2,
+        null,
+        null,
+        true,
+        true,
+        4.0,
+        2.55,
+        12.0,
+        18.0,
+        10.0,
+        3,
         now.plusMinutes(10));
   }
 

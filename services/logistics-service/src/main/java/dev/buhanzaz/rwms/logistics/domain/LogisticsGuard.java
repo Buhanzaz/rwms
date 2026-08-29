@@ -140,6 +140,24 @@ public class LogisticsGuard {
     guardState = LogisticsGuardState.RECONCILIATION_REQUIRED;
   }
 
+  /**
+   * Restores a fully known lease capability to releaseable state after the surrounding historical
+   * shipment failed. The cancellation coordinator must first prove from its durable attempt that
+   * lease acquisition completed and the shipment effect did not.
+   */
+  public void prepareReleaseAfterFailedHistoricalShipment() {
+    if (guardState == LogisticsGuardState.ACTIVE) return;
+    if ((guardState != LogisticsGuardState.CONFLICT
+            && guardState != LogisticsGuardState.RECONCILIATION_REQUIRED)
+        || leaseId == null
+        || leaseVersion == null
+        || fenceToken == null
+        || observedAssetVersion == null) {
+      throw new IllegalStateException("Failed historical shipment guard cannot be released safely");
+    }
+    guardState = LogisticsGuardState.ACTIVE;
+  }
+
   public void release() {
     if (guardState != LogisticsGuardState.ACTIVE) {
       throw new IllegalStateException("Only an active guard can be released");

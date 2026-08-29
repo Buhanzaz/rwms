@@ -65,6 +65,15 @@ public class CustomerProfile {
   @Column(name = "additional_info", length = 2_000)
   private String additionalInfo;
 
+  @Column(name = "avatar_warehouse_id")
+  private UUID avatarWarehouseId;
+
+  @Column(name = "avatar_media_id")
+  private UUID avatarMediaId;
+
+  @Column(name = "avatar_generation")
+  private Long avatarGeneration;
+
   @Column(name = "created_at", nullable = false)
   private OffsetDateTime createdAt;
 
@@ -116,6 +125,74 @@ public class CustomerProfile {
     if (entityType != CustomerEntityType.LEGAL) return null;
     if (firstName == null && lastName == null) return companyName;
     return ((firstName == null ? "" : firstName) + " " + (lastName == null ? "" : lastName)).trim();
+  }
+
+  /**
+   * Replaces mutable profile details under the customer-visible optimistic version fence.
+   * Authentication, rental-client identity and the individual/legal kind remain immutable.
+   */
+  public void updateDetails(
+      long expectedVersion,
+      String firstName,
+      String lastName,
+      String companyName,
+      String phone,
+      String email,
+      String additionalInfo) {
+    requireVersion(expectedVersion);
+    String normalizedFirstName = optional(firstName, 255, "firstName");
+    String normalizedLastName = optional(lastName, 255, "lastName");
+    String normalizedCompanyName = optional(companyName, 512, "companyName");
+    if (entityType == CustomerEntityType.INDIVIDUAL
+        && (normalizedFirstName == null || normalizedLastName == null)) {
+      throw new IllegalArgumentException("Individual first and last names are required");
+    }
+    if (entityType == CustomerEntityType.LEGAL && normalizedCompanyName == null) {
+      throw new IllegalArgumentException("Legal entity company name is required");
+    }
+    this.firstName = normalizedFirstName;
+    this.lastName = normalizedLastName;
+    this.companyName = normalizedCompanyName;
+    this.phone = required(phone, 32, "phone");
+    this.email = optional(email, 320, "email");
+    this.additionalInfo = optional(additionalInfo, 2_000, "additionalInfo");
+    this.updatedAt = now();
+  }
+
+  /**
+   * Fixes the first validated warehouse as this profile's media authorization scope.
+   * Replays for the same scope do not mutate the profile or advance its version.
+   */
+  public boolean prepareAvatarScope(long expectedVersion, UUID warehouseId) {
+    Objects.requireNonNull(warehouseId, "warehouseId");
+    if (avatarWarehouseId != null) {
+      if (!avatarWarehouseId.equals(warehouseId)) {
+        throw new IllegalStateException("Avatar media warehouse is already fixed");
+      }
+      return false;
+    }
+    requireVersion(expectedVersion);
+    avatarWarehouseId = warehouseId;
+    updatedAt = now();
+    return true;
+  }
+
+  /** Binds one media-service-validated READY avatar generation under the profile fence. */
+  public void bindAvatar(long expectedVersion, UUID mediaId, long generation) {
+    requireVersion(expectedVersion);
+    if (avatarWarehouseId == null) {
+      throw new IllegalStateException("Avatar media scope is not prepared");
+    }
+    avatarMediaId = Objects.requireNonNull(mediaId, "mediaId");
+    if (generation < 1) throw new IllegalArgumentException("Avatar generation is invalid");
+    avatarGeneration = generation;
+    updatedAt = now();
+  }
+
+  private void requireVersion(long expectedVersion) {
+    if (expectedVersion < 0 || version != expectedVersion) {
+      throw new IllegalStateException("Customer profile version conflict");
+    }
   }
 
   private static String required(String value, int maximum, String field) {

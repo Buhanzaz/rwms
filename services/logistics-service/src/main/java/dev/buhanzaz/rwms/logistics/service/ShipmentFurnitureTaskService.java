@@ -108,7 +108,10 @@ public class ShipmentFurnitureTaskService {
             || !existing.getReplacementIdempotencyKey().equals(expected.idempotencyKey())
             || !existing.matchesReplacementRequest(expected.requestSha256())
             || !existing.getOldRentalItemId().equals(expected.oldRentalItemId())
-            || !existing.getRentalItemId().equals(expected.replacementRentalItemId())) {
+            || !existing.getRentalItemId().equals(expected.replacementRentalItemId())
+            || !existing
+                .getReplacementInventorySourceWarehouseId()
+                .equals(expected.inventorySourceWarehouseId())) {
           throw new LogisticsConflictException(
               "Idempotency-Key уже использован для другой замены бытовки");
         }
@@ -130,6 +133,7 @@ public class ShipmentFurnitureTaskService {
           || !java.util.Objects.equals(first.presentationId(), command.presentationId())
           || !first.actorSubjectId().equals(command.actorSubjectId())
           || !first.actorRole().equals(command.actorRole())
+          || !first.inventorySourceWarehouseId().equals(command.inventorySourceWarehouseId())
           || !java.util.Objects.equals(first.reason(), command.reason())
           || !oldIds.add(command.oldRentalItemId())
           || !newIds.add(command.replacementRentalItemId())
@@ -155,13 +159,14 @@ public class ShipmentFurnitureTaskService {
                 taskKey,
                 List.of(
                     new AdmissionRequirement(
-                        command.warehouseId(), WarehouseOperationDirection.OUTGOING)));
+                        command.inventorySourceWarehouseId(),
+                        WarehouseOperationDirection.OUTGOING)));
         EquipmentMovementTaskService.CreateResult movement =
             movementTasks.create(
                 command.actorSubjectId(),
                 taskKey,
                 new CreateEquipmentMovementTaskRequest(
-                    command.warehouseId(),
+                    command.inventorySourceWarehouseId(),
                     plan.unitNumber(),
                     DEFAULT_PLANNED_DURATION_MINUTES,
                     OffsetDateTime.now(ZoneOffset.UTC).plusDays(30),
@@ -188,6 +193,7 @@ public class ShipmentFurnitureTaskService {
               command.pairIndex(),
               command.requestSha256(),
               command.presentationId(),
+              command.inventorySourceWarehouseId(),
               OffsetDateTime.now(ZoneOffset.UTC)));
     }
     if (!java.util.Collections.disjoint(oldIds, newIds)) {
@@ -222,6 +228,7 @@ public class ShipmentFurnitureTaskService {
         link.getId(),
         link.getOrder().getId(),
         link.getOrder().getWarehouseId(),
+        link.getReplacementInventorySourceWarehouseId(),
         link.getDocument() == null ? null : link.getDocument().getId(),
         link.getOldRentalItemId(),
         link.getRentalItemId(),
@@ -318,6 +325,19 @@ public class ShipmentFurnitureTaskService {
             .findWithClientById(orderId)
             .orElseThrow(
                 () -> new LogisticsConflictException("Заказ перемещения мебели не найден"));
+    UUID movementWarehouseId =
+        replacement
+            ? link.getReplacementInventorySourceWarehouseId()
+            : order.getWarehouseId();
+    if (!replacement) {
+      LogisticsDocumentLine shipmentLine =
+          documentLines.findAllByDocument_IdOrderByLineNumber(link.getDocument().getId()).stream()
+              .filter(line -> targetRentalItemId.equals(line.getAssetId()))
+              .findFirst()
+              .orElseThrow(
+                  () -> new LogisticsConflictException("Строка бытовки отгрузки не найдена"));
+      movementWarehouseId = shipmentLine.getInventorySourceWarehouseId();
+    }
     List<LogisticsDependencyGateway.OrderUnitReservation> active =
         dependencies.readOrderUnits(orderId);
     if (active == null
@@ -326,7 +346,9 @@ public class ShipmentFurnitureTaskService {
                 unit ->
                     unit == null
                         || !orderId.equals(unit.orderId())
-                        || !order.getWarehouseId().equals(unit.warehouseId()))) {
+                        || unit.unit() == null
+                        || unit.warehouseId() == null
+                        || !unit.warehouseId().equals(unit.unit().warehouseId()))) {
       throw new LogisticsConflictException("Склад вернул некорректный состав заказа");
     }
     Set<UUID> activeIds =
@@ -336,6 +358,16 @@ public class ShipmentFurnitureTaskService {
     if (!activeIds.contains(targetRentalItemId)
         || (!replacement && !activeIds.contains(sourceRentalItemId))) {
       return null;
+    }
+    UUID requiredMovementWarehouseId = movementWarehouseId;
+    if (active.stream()
+        .filter(
+            unit ->
+                targetRentalItemId.equals(unit.unitId())
+                    || (!replacement && sourceRentalItemId.equals(unit.unitId())))
+        .anyMatch(unit -> !requiredMovementWarehouseId.equals(unit.warehouseId()))) {
+      throw new LogisticsConflictException(
+          "Перемещение мебели не соответствует складу-источнику отгрузки");
     }
     Map<UUID, List<LogisticsDependencyGateway.OrderEquipmentRequirement>> byUnit =
         requirementsByUnit(
@@ -483,7 +515,13 @@ public class ShipmentFurnitureTaskService {
       UUID unitId = line.getAssetId();
       lineUnitIds.add(unitId);
       LogisticsDependencyGateway.OrderFurnitureMovementPlan plan =
-          planFor(shipment, order, unitId, byUnit, composition);
+          planFor(
+              shipment,
+              order,
+              line.getInventorySourceWarehouseId(),
+              unitId,
+              byUnit,
+              composition);
       ShipmentFurnitureMovementTask link = existingByUnit.get(unitId);
       if (link == null) {
         requiresTaskCreation |= !plan.lines().isEmpty();
@@ -581,7 +619,6 @@ public class ShipmentFurnitureTaskService {
     List<RentalOrderEquipmentRequirement> desiredRows =
         requirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(
             order.getId());
-    Map<UUID, Long> orderRequirements = aggregateRequirements(desiredRows);
     Map<UUID, List<LogisticsDependencyGateway.OrderEquipmentRequirement>> byUnit =
         requirementsByUnit(desiredRows);
     List<LogisticsDocumentLine> shipmentLines = linesRequired(shipment.getId());
@@ -612,7 +649,13 @@ public class ShipmentFurnitureTaskService {
         continue;
       }
       LogisticsDependencyGateway.OrderFurnitureMovementPlan plan =
-          planFor(shipment, order, unitId, byUnit, composition);
+          planFor(
+              shipment,
+              order,
+              line.getInventorySourceWarehouseId(),
+              unitId,
+              byUnit,
+              composition);
       if (plan.lines().isEmpty()) {
         result.add(new ShipmentFurnitureTaskView(unitId, plan.unitNumber(), null, 0));
         continue;
@@ -632,13 +675,14 @@ public class ShipmentFurnitureTaskService {
               taskKey,
               List.of(
                   new AdmissionRequirement(
-                      shipment.getWarehouseId(), WarehouseOperationDirection.OUTGOING)));
+                      line.getInventorySourceWarehouseId(),
+                      WarehouseOperationDirection.OUTGOING)));
       EquipmentMovementTaskService.CreateResult task =
           movementTasks.create(
               actorSubjectId,
               taskKey,
               new CreateEquipmentMovementTaskRequest(
-                  shipment.getWarehouseId(),
+                  line.getInventorySourceWarehouseId(),
                   plan.unitNumber(),
                   DEFAULT_PLANNED_DURATION_MINUTES,
                   OffsetDateTime.now(ZoneOffset.UTC).plusDays(30),
@@ -689,18 +733,19 @@ public class ShipmentFurnitureTaskService {
   private LogisticsDependencyGateway.OrderFurnitureMovementPlan planFor(
       LogisticsDocument shipment,
       RentalOrder order,
+      UUID inventorySourceWarehouseId,
       UUID unitId,
       Map<UUID, List<LogisticsDependencyGateway.OrderEquipmentRequirement>> byUnit,
       List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> composition) {
     LogisticsDependencyGateway.OrderFurnitureMovementPlan plan =
         dependencies.planOrderFurnitureMovements(
             order.getId(),
-            shipment.getWarehouseId(),
+            inventorySourceWarehouseId,
             unitId,
             null,
             byUnit.getOrDefault(unitId, List.of()),
             composition);
-    validatePlan(plan, order.getId(), unitId, shipment.getWarehouseId());
+    validatePlan(plan, order.getId(), unitId, inventorySourceWarehouseId);
     return plan;
   }
 
@@ -781,25 +826,29 @@ public class ShipmentFurnitureTaskService {
     if (active == null || active.isEmpty()) {
       throw new LogisticsConflictException("Склад не подтвердил состав заказа для мебели");
     }
-    Set<UUID> activeIds = new HashSet<>();
+    Map<UUID, LogisticsDependencyGateway.OrderUnitReservation> activeById =
+        new LinkedHashMap<>();
     for (LogisticsDependencyGateway.OrderUnitReservation reservation : active) {
       if (reservation == null
           || reservation.unit() == null
           || reservation.unitId() == null
           || !reservation.unitId().equals(reservation.unit().id())
           || !order.getId().equals(reservation.orderId())
-          || !order.getWarehouseId().equals(reservation.warehouseId())
+          || reservation.warehouseId() == null
+          || !reservation.warehouseId().equals(reservation.unit().warehouseId())
           || !"ACTIVE".equals(reservation.state())
-          || !activeIds.add(reservation.unitId())) {
+          || activeById.putIfAbsent(reservation.unitId(), reservation) != null) {
         throw new LogisticsConflictException("Склад вернул некорректный состав заказа для мебели");
       }
     }
-    if (shipmentLines.stream()
-        .map(LogisticsDocumentLine::getAssetId)
-        .anyMatch(unitId -> !activeIds.contains(unitId))) {
-      throw new LogisticsConflictException("Состав отгрузки больше не входит в активный заказ");
+    for (LogisticsDocumentLine line : shipmentLines) {
+      LogisticsDependencyGateway.OrderUnitReservation reservation = activeById.get(line.getAssetId());
+      if (reservation == null
+          || !line.getInventorySourceWarehouseId().equals(reservation.warehouseId())) {
+        throw new LogisticsConflictException("Состав отгрузки больше не входит в активный заказ");
+      }
     }
-    return activeIds.stream()
+    return activeById.keySet().stream()
         .sorted()
         .map(
             unitId ->
@@ -879,6 +928,7 @@ public class ShipmentFurnitureTaskService {
       UUID orderId,
       long expectedOrderVersion,
       UUID warehouseId,
+      UUID inventorySourceWarehouseId,
       UUID oldRentalItemId,
       UUID replacementRentalItemId,
       String reason,
@@ -888,7 +938,38 @@ public class ShipmentFurnitureTaskService {
       UUID batchIdempotencyKey,
       int pairIndex,
       String requestSha256,
-      UUID presentationId) {}
+      UUID presentationId) {
+    public ReplacementCheckpointCommand(
+        UUID orderId,
+        long expectedOrderVersion,
+        UUID warehouseId,
+        UUID oldRentalItemId,
+        UUID replacementRentalItemId,
+        String reason,
+        UUID actorSubjectId,
+        String actorRole,
+        UUID idempotencyKey,
+        UUID batchIdempotencyKey,
+        int pairIndex,
+        String requestSha256,
+        UUID presentationId) {
+      this(
+          orderId,
+          expectedOrderVersion,
+          warehouseId,
+          warehouseId,
+          oldRentalItemId,
+          replacementRentalItemId,
+          reason,
+          actorSubjectId,
+          actorRole,
+          idempotencyKey,
+          batchIdempotencyKey,
+          pairIndex,
+          requestSha256,
+          presentationId);
+    }
+  }
 
   /** One ordered pair and its already validated direct asset movement plan. */
   public record ReplacementPreparation(
@@ -900,6 +981,7 @@ public class ShipmentFurnitureTaskService {
       UUID id,
       UUID orderId,
       UUID warehouseId,
+      UUID inventorySourceWarehouseId,
       UUID documentId,
       UUID oldRentalItemId,
       UUID replacementRentalItemId,
@@ -915,6 +997,47 @@ public class ShipmentFurnitureTaskService {
       UUID replacementSourceReservationId,
       OffsetDateTime completedAt,
       OffsetDateTime rejectedAt) {
+    public ReplacementCheckpoint(
+        UUID id,
+        UUID orderId,
+        UUID warehouseId,
+        UUID documentId,
+        UUID oldRentalItemId,
+        UUID replacementRentalItemId,
+        String reason,
+        UUID actorSubjectId,
+        String actorRole,
+        UUID idempotencyKey,
+        UUID batchIdempotencyKey,
+        int pairIndex,
+        String requestSha256,
+        UUID presentationId,
+        UUID equipmentMovementTaskId,
+        UUID replacementSourceReservationId,
+        OffsetDateTime completedAt,
+        OffsetDateTime rejectedAt) {
+      this(
+          id,
+          orderId,
+          warehouseId,
+          warehouseId,
+          documentId,
+          oldRentalItemId,
+          replacementRentalItemId,
+          reason,
+          actorSubjectId,
+          actorRole,
+          idempotencyKey,
+          batchIdempotencyKey,
+          pairIndex,
+          requestSha256,
+          presentationId,
+          equipmentMovementTaskId,
+          replacementSourceReservationId,
+          completedAt,
+          rejectedAt);
+    }
+
     public boolean pending() {
       return completedAt == null && rejectedAt == null;
     }

@@ -77,7 +77,8 @@ public class DriverTaskProcessor {
                 value.queueDefinitionId(),
                 value.scheduledDate(),
                 value.priority(),
-                value.driverAudience()));
+                value.driverAudience(),
+                value.workerContent()));
         return;
       }
       if (work instanceof DriverTaskWorkflowStore.StatusWork value) {

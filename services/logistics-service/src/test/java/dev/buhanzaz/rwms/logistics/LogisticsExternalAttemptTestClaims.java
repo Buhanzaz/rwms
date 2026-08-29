@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.logistics.service.ReturnCompletionProcessor;
 import dev.buhanzaz.rwms.logistics.service.ReturnRegistrationProcessor;
 import dev.buhanzaz.rwms.logistics.service.ShipmentProcessor;
 import dev.buhanzaz.rwms.logistics.service.TransferProcessor;
+import dev.buhanzaz.rwms.logistics.service.TransferPlanProcessor;
 import java.util.List;
 import java.util.function.Consumer;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -48,6 +49,7 @@ final class LogisticsExternalAttemptTestClaims {
   private static final List<String> MEDIA_OWNER_PROOF_OPERATIONS =
       List.of(
           "RETURN_MEDIA_OWNER_PROOF_REGISTER",
+          "MEDIA_SHIPMENT_OWNER_PROOF_REGISTER",
           "TRANSFER_MEDIA_OWNER_PROOF_REGISTER",
           "TRANSFER_MEDIA_OWNER_PROOF_DEACTIVATE");
 
@@ -107,6 +109,26 @@ final class LogisticsExternalAttemptTestClaims {
     throw new AssertionError("Claim-driven transfer workflow did not reach a stable test state");
   }
 
+  /** Drives all durable reservation/resource effects of the transfer-plan workflow. */
+  static int drainTransferPlan(
+      LogisticsExternalAttemptClaimService claims,
+      TransferPlanProcessor processor,
+      JdbcTemplate jdbc) {
+    int processed = 0;
+    while (processed < MAX_TEST_STEPS) {
+      var claim =
+          claims.claimNextByOperationPrefix(
+              LogisticsExternalAttemptClaimService.Owner.TRANSFER, "XFER_PLAN_");
+      if (claim.isPresent()) {
+        processor.process(claim.get());
+        processed++;
+        continue;
+      }
+      if (advanceDeferredTransferPlanAttempt(jdbc) == 0) return processed;
+    }
+    throw new AssertionError("Transfer-plan workflow did not reach a stable test state");
+  }
+
   /** Processes every currently due media-owner proof claim through the one-claim processor API. */
   static int drainMediaOwnerProof(
       LogisticsExternalAttemptClaimService claims, MediaOwnerProofProcessor processor) {
@@ -157,5 +179,22 @@ final class LogisticsExternalAttemptTestClaims {
         """
             .formatted(placeholders);
     return jdbc.update(sql, TRANSFER_OPERATIONS.toArray());
+  }
+
+  private static int advanceDeferredTransferPlanAttempt(JdbcTemplate jdbc) {
+    if (jdbc == null) throw new IllegalArgumentException("jdbc is required");
+    return jdbc.update(
+        """
+        update logistics_external_attempt
+        set next_attempt_at = current_timestamp,
+            row_version = row_version + 1
+        where operation_type like 'XFER\\_PLAN\\_%' escape '\\'
+          and result in ('PENDING', 'RETRY')
+          and retry_count = 0
+          and lease_token is null
+          and lease_expires_at is null
+          and lease_fence > 0
+          and next_attempt_at > current_timestamp
+        """);
   }
 }

@@ -1951,6 +1951,7 @@ class InventoryReadProjectionIntegrationTest {
     UUID inventoryId = UUID.randomUUID();
     seedSession(inventoryId, warehouseId);
     InventoryFinding finding = stageFinalPlanFinding(inventoryId, warehouseId);
+    confirmEmptyCabinDisposition(inventoryId);
 
     AtomicReference<List<JsonNode>> candidates = new AtomicReference<>(List.of());
     doAnswer(
@@ -1980,7 +1981,10 @@ class InventoryReadProjectionIntegrationTest {
             inventoryId,
             UUID.randomUUID(),
             new PrepareFinalPlanRequest(
-                0, 0, FinalPlanScheduleMode.AUTO, FinalPlanScheduleMode.AUTO));
+                service.session(jwt(), inventoryId).sessionRevision(),
+                0,
+                FinalPlanScheduleMode.AUTO,
+                FinalPlanScheduleMode.AUTO));
     var preparedEntry = prepared.entries().getFirst();
 
     UUID historicalTargetId = UUID.randomUUID();
@@ -2053,7 +2057,10 @@ class InventoryReadProjectionIntegrationTest {
             inventoryId,
             UUID.randomUUID(),
             new PrepareFinalPlanRequest(
-                0, 0, FinalPlanScheduleMode.AUTO, FinalPlanScheduleMode.AUTO));
+                service.session(jwt(), inventoryId).sessionRevision(),
+                0,
+                FinalPlanScheduleMode.AUTO,
+                FinalPlanScheduleMode.AUTO));
 
     assertThatThrownBy(
             () ->
@@ -2086,11 +2093,13 @@ class InventoryReadProjectionIntegrationTest {
     seedSession(inventoryId, warehouseId);
     setBusinessDate(inventoryId, planningDate.minusDays(1));
     InventoryFinding finding = stageFinalPlanFinding(inventoryId, warehouseId, true);
+    confirmEmptyCabinDisposition(inventoryId);
 
     prepareFinalPlan(
         inventoryId,
         new FurnitureReviewState(
-            0, List.of(new RevisionExpectation(finding.getId(), finding.getRevision()))));
+            service.session(jwt(), inventoryId).sessionRevision(),
+            List.of(new RevisionExpectation(finding.getId(), finding.getRevision()))));
     var automatic = service.finalPlan(jwt(), inventoryId);
     var automaticEntry = automatic.entries().getFirst();
     assertThat(automaticEntry.movementScheduledDate()).isNotNull();

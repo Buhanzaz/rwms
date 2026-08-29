@@ -53,10 +53,14 @@ type repository interface {
 	AcquireUploadSessionContentLock(context.Context, uuid.UUID) (func() error, error)
 	AcquireUploadImageVariantContentLock(context.Context, uuid.UUID, media.Variant) (func() error, error)
 	UploadSessionForPrincipal(context.Context, uuid.UUID, uuid.UUID, string) (persistence.AssetRecord, error)
+	UploadSessionForCustomer(context.Context, uuid.UUID, uuid.UUID) (persistence.AssetRecord, error)
 	UploadImageVariantForPrincipal(context.Context, uuid.UUID, uuid.UUID, string, media.Variant) (persistence.AssetRecord, persistence.UploadImageVariantPart, error)
+	UploadImageVariantForCustomer(context.Context, uuid.UUID, uuid.UUID, media.Variant) (persistence.AssetRecord, persistence.UploadImageVariantPart, error)
 	CompleteUploadImageVariant(context.Context, persistence.CompleteUploadImageVariantCommand) (persistence.UploadImageVariantPart, bool, error)
 	FinalizeUpload(context.Context, persistence.FinalizeCommand) (persistence.AssetRecord, bool, error)
 	ReadOwnerAssets(context.Context, string, string, uuid.UUID, int, *uuid.UUID,
+		func([]persistence.AssetWithVariants) error) error
+	ReadOwnerAssetsForCustomer(context.Context, string, string, uuid.UUID, uuid.UUID, int, *uuid.UUID,
 		func([]persistence.AssetWithVariants) error) error
 	ReadTaskBoardEntryAssetsForWorker(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, int, *uuid.UUID,
 		func([]persistence.AssetWithVariants) error) error
@@ -66,7 +70,11 @@ type repository interface {
 		func([]persistence.CabinPresentationSnapshotRecord) error) error
 	ReadOriginal(context.Context, uuid.UUID, string, string, uuid.UUID, *int,
 		func(persistence.AssetRecord, *persistence.VariantRecord) error) error
+	ReadOriginalForCustomer(context.Context, uuid.UUID, string, string, uuid.UUID, uuid.UUID, *int,
+		func(persistence.AssetRecord, *persistence.VariantRecord) error) error
 	ReadCurrentVariant(context.Context, uuid.UUID, string, string, uuid.UUID, int, media.Variant,
+		func(persistence.AssetRecord, *persistence.VariantRecord) error) error
+	ReadCurrentVariantForCustomer(context.Context, uuid.UUID, string, string, uuid.UUID, uuid.UUID, int, media.Variant,
 		func(persistence.AssetRecord, *persistence.VariantRecord) error) error
 	ReadTaskBoardEntryOriginalForWorker(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, *int,
 		func(persistence.AssetRecord, *persistence.VariantRecord) error) error
@@ -100,6 +108,18 @@ type mediaRequestPrincipal struct {
 
 func (principal mediaRequestPrincipal) isWorker() bool {
 	return principal.worker != nil
+}
+
+func (principal mediaRequestPrincipal) isCustomerRental() bool {
+	return principal.user != nil && principal.user.IsCustomerRental()
+}
+
+func authorizedSubjectFor(principal mediaRequestPrincipal) *uuid.UUID {
+	if !principal.isCustomerRental() {
+		return nil
+	}
+	subjectID := principal.subjectID
+	return &subjectID
 }
 
 func (principal mediaRequestPrincipal) requireTaskBoardWorker(ownerType, ownerID string, warehouseID uuid.UUID) (uuid.UUID, error) {
@@ -306,15 +326,16 @@ func (server *Server) ready(response http.ResponseWriter, request *http.Request)
 }
 
 type serviceOwnerProofRequest struct {
-	OwnerType        string `json:"ownerType"`
-	OwnerID          string `json:"ownerId"`
-	DocumentID       string `json:"documentId"`
-	LineID           string `json:"lineId"`
-	WarehouseID      string `json:"warehouseId"`
-	OwnerRevision    *int64 `json:"ownerRevision"`
-	AggregateVersion *int64 `json:"aggregateVersion"`
-	ProofEventID     string `json:"proofEventId"`
-	Active           *bool  `json:"active"`
+	OwnerType           string `json:"ownerType"`
+	OwnerID             string `json:"ownerId"`
+	DocumentID          string `json:"documentId"`
+	LineID              string `json:"lineId"`
+	AuthorizedSubjectID string `json:"authorizedSubjectId"`
+	WarehouseID         string `json:"warehouseId"`
+	OwnerRevision       *int64 `json:"ownerRevision"`
+	AggregateVersion    *int64 `json:"aggregateVersion"`
+	ProofEventID        string `json:"proofEventId"`
+	Active              *bool  `json:"active"`
 }
 
 func (server *Server) upsertOwnerProof(response http.ResponseWriter, request *http.Request) {
@@ -363,6 +384,17 @@ func (server *Server) upsertOwnerProof(response http.ResponseWriter, request *ht
 		}
 		command.OwnerID = ownerID
 	}
+	if persistence.IsCustomerSubjectBoundOwnerType(body.OwnerType) {
+		subjectID, subjectErr := uuid.Parse(body.AuthorizedSubjectID)
+		if subjectErr != nil || subjectID == uuid.Nil || subjectID.String() != body.AuthorizedSubjectID {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_OWNER_PROOF", "Invalid owner proof")
+			return
+		}
+		command.AuthorizedSubjectID = &subjectID
+	} else if body.AuthorizedSubjectID != "" {
+		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_OWNER_PROOF", "Invalid owner proof")
+		return
+	}
 	record, replayed, err := server.repository.UpsertServiceOwnerProof(request.Context(), command)
 	if err != nil {
 		server.repositoryProblem(response, request, err)
@@ -379,6 +411,9 @@ func (server *Server) upsertOwnerProof(response http.ResponseWriter, request *ht
 	} else {
 		result["ownerId"] = record.OwnerID
 	}
+	if record.AuthorizedSubjectID != nil {
+		result["authorizedSubjectId"] = *record.AuthorizedSubjectID
+	}
 	status := http.StatusCreated
 	if replayed {
 		status = http.StatusOK
@@ -393,11 +428,14 @@ type logisticsMediaReferenceRequest struct {
 }
 
 type validateLogisticsReferencesRequest struct {
-	OwnerType   string                           `json:"ownerType"`
-	DocumentID  string                           `json:"documentId"`
-	LineID      string                           `json:"lineId"`
-	WarehouseID string                           `json:"warehouseId"`
-	References  []logisticsMediaReferenceRequest `json:"references"`
+	OwnerType           string                           `json:"ownerType"`
+	OwnerID             string                           `json:"ownerId"`
+	DocumentID          string                           `json:"documentId"`
+	LineID              string                           `json:"lineId"`
+	AuthorizedSubjectID string                           `json:"authorizedSubjectId"`
+	WarehouseID         string                           `json:"warehouseId"`
+	Context             string                           `json:"context"`
+	References          []logisticsMediaReferenceRequest `json:"references"`
 }
 
 type logisticsMediaReferenceResponse struct {
@@ -406,11 +444,14 @@ type logisticsMediaReferenceResponse struct {
 }
 
 type validateLogisticsReferencesResponse struct {
-	OwnerType   string                            `json:"ownerType"`
-	DocumentID  uuid.UUID                         `json:"documentId"`
-	LineID      uuid.UUID                         `json:"lineId"`
-	WarehouseID uuid.UUID                         `json:"warehouseId"`
-	References  []logisticsMediaReferenceResponse `json:"references"`
+	OwnerType           string                            `json:"ownerType"`
+	OwnerID             *uuid.UUID                        `json:"ownerId,omitempty"`
+	DocumentID          *uuid.UUID                        `json:"documentId,omitempty"`
+	LineID              *uuid.UUID                        `json:"lineId,omitempty"`
+	AuthorizedSubjectID *uuid.UUID                        `json:"authorizedSubjectId,omitempty"`
+	WarehouseID         uuid.UUID                         `json:"warehouseId"`
+	Context             string                            `json:"context,omitempty"`
+	References          []logisticsMediaReferenceResponse `json:"references"`
 }
 
 // inventoryCabinPhotoReferenceRequest is one exact generation decoded from
@@ -546,20 +587,45 @@ func (server *Server) validateLogisticsReferences(response http.ResponseWriter, 
 	if !server.decode(response, request, &body) {
 		return
 	}
-	documentID, documentErr := uuid.Parse(body.DocumentID)
-	lineID, lineErr := uuid.Parse(body.LineID)
 	warehouseID, warehouseErr := uuid.Parse(body.WarehouseID)
-	if documentErr != nil || lineErr != nil || warehouseErr != nil || !persistence.IsLogisticsOwnerType(body.OwnerType) ||
-		len(body.References) < 1 || len(body.References) > 20 {
+	if warehouseErr != nil || warehouseID == uuid.Nil {
 		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_LOGISTICS_REFERENCE", "Invalid logistics media reference request")
 		return
+	}
+	var ownerID string
+	var profileOwnerID, documentID, lineID *uuid.UUID
+	var authorizedSubjectID *uuid.UUID
+	if body.OwnerType == persistence.OwnerTypeLogisticsCustomerProfile {
+		parsedOwnerID, ownerErr := uuid.Parse(body.OwnerID)
+		parsedSubjectID, subjectErr := uuid.Parse(body.AuthorizedSubjectID)
+		if ownerErr != nil || subjectErr != nil || parsedOwnerID == uuid.Nil || parsedSubjectID == uuid.Nil ||
+			parsedOwnerID.String() != body.OwnerID || parsedSubjectID.String() != body.AuthorizedSubjectID ||
+			body.DocumentID != "" || body.LineID != "" || body.Context != persistence.ViewerContextProfileAvatar ||
+			len(body.References) != 1 {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_LOGISTICS_REFERENCE", "Invalid logistics media reference request")
+			return
+		}
+		ownerID = parsedOwnerID.String()
+		profileOwnerID = &parsedOwnerID
+		authorizedSubjectID = &parsedSubjectID
+	} else {
+		parsedDocumentID, documentErr := uuid.Parse(body.DocumentID)
+		parsedLineID, lineErr := uuid.Parse(body.LineID)
+		if documentErr != nil || lineErr != nil || parsedDocumentID == uuid.Nil || parsedLineID == uuid.Nil ||
+			!persistence.IsLogisticsOwnerType(body.OwnerType) || body.OwnerID != "" ||
+			body.AuthorizedSubjectID != "" || body.Context != "" || len(body.References) < 1 || len(body.References) > 20 {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_LOGISTICS_REFERENCE", "Invalid logistics media reference request")
+			return
+		}
+		documentID, lineID = &parsedDocumentID, &parsedLineID
+		ownerID = persistence.LogisticsOwnerID(parsedDocumentID, parsedLineID)
 	}
 	references := make([]persistence.ReadyMediaReference, 0, len(body.References))
 	responseReferences := make([]logisticsMediaReferenceResponse, 0, len(body.References))
 	seen := make(map[uuid.UUID]struct{}, len(body.References))
 	for _, reference := range body.References {
 		mediaID, err := uuid.Parse(reference.MediaID)
-		if err != nil || reference.Generation <= 0 {
+		if err != nil || mediaID == uuid.Nil || reference.Generation <= 0 {
 			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_LOGISTICS_REFERENCE", "Invalid logistics media reference request")
 			return
 		}
@@ -572,7 +638,7 @@ func (server *Server) validateLogisticsReferences(response http.ResponseWriter, 
 		responseReferences = append(responseReferences, logisticsMediaReferenceResponse{MediaID: mediaID, Generation: reference.Generation})
 	}
 	err := server.repository.ValidateLogisticsReferences(request.Context(), persistence.ValidateLogisticsReferencesCommand{
-		OwnerType: body.OwnerType, OwnerID: persistence.LogisticsOwnerID(documentID, lineID),
+		OwnerType: body.OwnerType, OwnerID: ownerID, AuthorizedSubjectID: authorizedSubjectID,
 		WarehouseID: warehouseID, References: references,
 	})
 	if errors.Is(err, persistence.ErrReferenceNotReady) {
@@ -585,8 +651,9 @@ func (server *Server) validateLogisticsReferences(response http.ResponseWriter, 
 	}
 	response.Header().Set("Cache-Control", "no-store")
 	writeJSON(response, http.StatusOK, validateLogisticsReferencesResponse{
-		OwnerType: body.OwnerType, DocumentID: documentID, LineID: lineID,
-		WarehouseID: warehouseID, References: responseReferences,
+		OwnerType: body.OwnerType, OwnerID: profileOwnerID, DocumentID: documentID,
+		LineID: lineID, AuthorizedSubjectID: authorizedSubjectID,
+		WarehouseID: warehouseID, Context: body.Context, References: responseReferences,
 	})
 }
 
@@ -885,13 +952,21 @@ func (server *Server) createUpload(response http.ResponseWriter, request *http.R
 		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_FILE_NAME", "Invalid file name")
 		return
 	}
-	if principal.isWorker() {
+	var authorizedSubjectID *uuid.UUID
+	if principal.isCustomerRental() {
+		if !persistence.IsCustomerSubjectBoundOwnerType(body.OwnerType) {
+			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+			return
+		}
+		authorizedSubjectID = authorizedSubjectFor(principal)
+	} else if principal.isWorker() {
 		if _, err := principal.requireTaskBoardWorker(body.OwnerType, ownerID, warehouseID); err != nil ||
 			body.Context != persistence.ViewerContextWorkResult {
 			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 			return
 		}
-	} else if principal.user == nil || principal.user.Require("rwms.write", warehouseID, auth.Edit) != nil {
+	} else if principal.user == nil || body.OwnerType == persistence.OwnerTypeLogisticsCustomerProfile ||
+		principal.user.Require("rwms.write", warehouseID, auth.Edit) != nil {
 		server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 		return
 	}
@@ -942,6 +1017,10 @@ func (server *Server) createUpload(response http.ResponseWriter, request *http.R
 		server.problem(response, request, http.StatusUnsupportedMediaType, "MEDIA_UNSUPPORTED_TYPE", "Unsupported media type")
 		return
 	}
+	if body.OwnerType == persistence.OwnerTypeLogisticsCustomerProfile && kind != media.KindImage {
+		server.problem(response, request, http.StatusUnsupportedMediaType, "MEDIA_UNSUPPORTED_TYPE", "Unsupported media type")
+		return
+	}
 	folderID := mediaID
 	if body.FolderID != "" {
 		folderID, err = uuid.Parse(body.FolderID)
@@ -979,7 +1058,8 @@ func (server *Server) createUpload(response http.ResponseWriter, request *http.R
 		MediaID: mediaID, FolderID: folderID, UploadSessionID: sessionID, SubjectID: principal.subjectID,
 		PrincipalType: principal.principalType, Actor: principal.actor, WorkerID: workerIDFor(principal),
 		IdempotencyKey: idempotencyKey, RequestSHA256: fingerprint, OwnerType: body.OwnerType,
-		OwnerID: ownerID, WarehouseID: warehouseID, ClientReferenceID: clientReferenceID, Kind: kind, FileName: fileName,
+		OwnerID: ownerID, WarehouseID: warehouseID, AuthorizedSubjectID: authorizedSubjectID,
+		ClientReferenceID: clientReferenceID, Kind: kind, FileName: fileName,
 		ContentType: contentType, ContentLength: contentLength, ChecksumSHA256: checksumSHA256,
 		UploadMode: uploadMode, ImageVariants: imageVariants,
 		SortOrder: body.SortOrder, SourceObjectKey: objectKey,
@@ -1054,12 +1134,17 @@ func (server *Server) uploadSessionContent(response http.ResponseWriter, request
 		}
 	}()
 
-	asset, err := server.repository.UploadSessionForPrincipal(request.Context(), sessionID, principal.subjectID, principal.principalType)
+	var asset persistence.AssetRecord
+	if principal.isCustomerRental() {
+		asset, err = server.repository.UploadSessionForCustomer(request.Context(), sessionID, principal.subjectID)
+	} else {
+		asset, err = server.repository.UploadSessionForPrincipal(request.Context(), sessionID, principal.subjectID, principal.principalType)
+	}
 	if err != nil {
 		server.repositoryProblem(response, request, err)
 		return
 	}
-	if !server.authorizeUploadAsset(response, request, principal, asset) {
+	if !principal.isCustomerRental() && !server.authorizeUploadAsset(response, request, principal, asset) {
 		return
 	}
 
@@ -1125,8 +1210,9 @@ func (server *Server) uploadSessionContent(response http.ResponseWriter, request
 	fingerprint := finalizeFingerprint(sessionID, finalizeRequest)
 	asset, replayed, err := server.repository.FinalizeUpload(request.Context(), persistence.FinalizeCommand{
 		SessionID: sessionID, SubjectID: principal.subjectID, PrincipalType: principal.principalType,
-		Actor: principal.actor, WorkerID: workerIDFor(principal), IdempotencyKey: idempotencyKey,
-		RequestSHA256: fingerprint, ObjectVersionID: finalizeRequest.ObjectVersionID,
+		Actor: principal.actor, WorkerID: workerIDFor(principal), AuthorizedSubjectID: authorizedSubjectFor(principal),
+		IdempotencyKey: idempotencyKey,
+		RequestSHA256:  fingerprint, ObjectVersionID: finalizeRequest.ObjectVersionID,
 		ETag: finalizeRequest.ETag, ChecksumSHA256: finalizeRequest.ChecksumSHA256,
 		ContentType: verified.ContentType, SizeBytes: verified.SizeBytes, CorrelationID: correlationID(request.Context()),
 	})
@@ -1168,13 +1254,21 @@ func (server *Server) uploadSessionImageVariantContent(response http.ResponseWri
 	if !ok {
 		return
 	}
-	asset, part, err := server.repository.UploadImageVariantForPrincipal(
-		request.Context(), sessionID, principal.subjectID, principal.principalType, variant)
+	var asset persistence.AssetRecord
+	var part persistence.UploadImageVariantPart
+	var err error
+	if principal.isCustomerRental() {
+		asset, part, err = server.repository.UploadImageVariantForCustomer(
+			request.Context(), sessionID, principal.subjectID, variant)
+	} else {
+		asset, part, err = server.repository.UploadImageVariantForPrincipal(
+			request.Context(), sessionID, principal.subjectID, principal.principalType, variant)
+	}
 	if err != nil {
 		server.repositoryProblem(response, request, err)
 		return
 	}
-	if !server.authorizeUploadAsset(response, request, principal, asset) {
+	if !principal.isCustomerRental() && !server.authorizeUploadAsset(response, request, principal, asset) {
 		return
 	}
 	release, err := server.repository.AcquireUploadImageVariantContentLock(request.Context(), asset.ID, variant)
@@ -1188,20 +1282,26 @@ func (server *Server) uploadSessionImageVariantContent(response http.ResponseWri
 				"correlationId", correlationID(request.Context()), "error", safeError(releaseErr))
 		}
 	}()
-	asset, part, err = server.repository.UploadImageVariantForPrincipal(
-		request.Context(), sessionID, principal.subjectID, principal.principalType, variant)
+	if principal.isCustomerRental() {
+		asset, part, err = server.repository.UploadImageVariantForCustomer(
+			request.Context(), sessionID, principal.subjectID, variant)
+	} else {
+		asset, part, err = server.repository.UploadImageVariantForPrincipal(
+			request.Context(), sessionID, principal.subjectID, principal.principalType, variant)
+	}
 	if err != nil {
 		server.repositoryProblem(response, request, err)
 		return
 	}
-	if !server.authorizeUploadAsset(response, request, principal, asset) {
+	if !principal.isCustomerRental() && !server.authorizeUploadAsset(response, request, principal, asset) {
 		return
 	}
 	if part.UploadedAt != nil {
 		_, replayed, completeErr := server.repository.CompleteUploadImageVariant(request.Context(),
 			persistence.CompleteUploadImageVariantCommand{
 				SessionID: sessionID, SubjectID: principal.subjectID, PrincipalType: principal.principalType,
-				MediaID: asset.ID, Variant: variant, IdempotencyKey: idempotencyKey,
+				AuthorizedSubjectID: authorizedSubjectFor(principal), MediaID: asset.ID,
+				Variant: variant, IdempotencyKey: idempotencyKey,
 				ObjectVersionID: part.ObjectVersionID, ETag: part.ETag,
 				ChecksumSHA256: part.ChecksumSHA256, SizeBytes: part.ContentLength,
 			})
@@ -1270,7 +1370,8 @@ func (server *Server) uploadSessionImageVariantContent(response http.ResponseWri
 	part, replayed, err := server.repository.CompleteUploadImageVariant(request.Context(),
 		persistence.CompleteUploadImageVariantCommand{
 			SessionID: sessionID, SubjectID: principal.subjectID, PrincipalType: principal.principalType,
-			MediaID: asset.ID, Variant: variant, IdempotencyKey: idempotencyKey,
+			AuthorizedSubjectID: authorizedSubjectFor(principal), MediaID: asset.ID,
+			Variant: variant, IdempotencyKey: idempotencyKey,
 			ObjectVersionID: metadata.VersionID, ETag: normalizeETag(metadata.ETag),
 			ChecksumSHA256: checksum, SizeBytes: part.ContentLength,
 		})
@@ -1289,6 +1390,9 @@ func (server *Server) uploadSessionImageVariantContent(response http.ResponseWri
 }
 
 func (server *Server) authorizeUploadAsset(response http.ResponseWriter, request *http.Request, principal mediaRequestPrincipal, asset persistence.AssetRecord) bool {
+	if principal.isCustomerRental() {
+		return false
+	}
 	if principal.isWorker() {
 		entryID, err := principal.requireTaskBoardWorker(asset.OwnerType, asset.OwnerID, asset.WarehouseID)
 		if err != nil {
@@ -1321,7 +1425,8 @@ func (server *Server) confirmContentReplay(
 	}
 	asset, replayed, err := server.repository.FinalizeUpload(request.Context(), persistence.FinalizeCommand{
 		SessionID: sessionID, SubjectID: principal.subjectID, PrincipalType: principal.principalType,
-		Actor: principal.actor, WorkerID: workerIDFor(principal), IdempotencyKey: idempotencyKey,
+		Actor: principal.actor, WorkerID: workerIDFor(principal), AuthorizedSubjectID: authorizedSubjectFor(principal),
+		IdempotencyKey:  idempotencyKey,
 		RequestSHA256:   finalizeFingerprint(sessionID, finalizeRequest),
 		ObjectVersionID: finalizeRequest.ObjectVersionID, ETag: finalizeRequest.ETag,
 		ChecksumSHA256: finalizeRequest.ChecksumSHA256, ContentType: asset.ContentType,
@@ -1447,12 +1552,17 @@ func (server *Server) finalizeUpload(response http.ResponseWriter, request *http
 			return
 		}
 	}
-	asset, err := server.repository.UploadSessionForPrincipal(request.Context(), sessionID, principal.subjectID, principal.principalType)
+	var asset persistence.AssetRecord
+	if principal.isCustomerRental() {
+		asset, err = server.repository.UploadSessionForCustomer(request.Context(), sessionID, principal.subjectID)
+	} else {
+		asset, err = server.repository.UploadSessionForPrincipal(request.Context(), sessionID, principal.subjectID, principal.principalType)
+	}
 	if err != nil {
 		server.repositoryProblem(response, request, err)
 		return
 	}
-	if !server.authorizeUploadAsset(response, request, principal, asset) {
+	if !principal.isCustomerRental() && !server.authorizeUploadAsset(response, request, principal, asset) {
 		return
 	}
 	uploadMode := asset.UploadMode
@@ -1467,8 +1577,9 @@ func (server *Server) finalizeUpload(response http.ResponseWriter, request *http
 	if asset.UploadCompletedAt != nil {
 		asset, replayed, err := server.repository.FinalizeUpload(request.Context(), persistence.FinalizeCommand{
 			SessionID: sessionID, SubjectID: principal.subjectID, PrincipalType: principal.principalType,
-			Actor: principal.actor, WorkerID: workerIDFor(principal), IdempotencyKey: idempotencyKey,
-			RequestSHA256: fingerprint, ObjectVersionID: body.ObjectVersionID,
+			Actor: principal.actor, WorkerID: workerIDFor(principal), AuthorizedSubjectID: authorizedSubjectFor(principal),
+			IdempotencyKey: idempotencyKey,
+			RequestSHA256:  fingerprint, ObjectVersionID: body.ObjectVersionID,
 			ETag: body.ETag, ChecksumSHA256: body.ChecksumSHA256, ImageVariants: imageVariants,
 			ContentType: asset.ContentType, SizeBytes: asset.ExpectedLength, CorrelationID: correlationID(request.Context()),
 		})
@@ -1502,8 +1613,9 @@ func (server *Server) finalizeUpload(response http.ResponseWriter, request *http
 	}
 	asset, replayed, err := server.repository.FinalizeUpload(request.Context(), persistence.FinalizeCommand{
 		SessionID: sessionID, SubjectID: principal.subjectID, PrincipalType: principal.principalType,
-		Actor: principal.actor, WorkerID: workerIDFor(principal), IdempotencyKey: idempotencyKey,
-		RequestSHA256: fingerprint, ObjectVersionID: body.ObjectVersionID,
+		Actor: principal.actor, WorkerID: workerIDFor(principal), AuthorizedSubjectID: authorizedSubjectFor(principal),
+		IdempotencyKey: idempotencyKey,
+		RequestSHA256:  fingerprint, ObjectVersionID: body.ObjectVersionID,
 		ETag: body.ETag, ChecksumSHA256: body.ChecksumSHA256,
 		ContentType: metadata.ContentType, SizeBytes: metadata.SizeBytes,
 		ImageVariants: imageVariants, CorrelationID: correlationID(request.Context()),
@@ -1586,14 +1698,20 @@ func (server *Server) listOwner(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	var workerEntryID uuid.UUID
-	if principal.isWorker() {
+	if principal.isCustomerRental() {
+		if !persistence.IsCustomerSubjectBoundOwnerType(ownerType) {
+			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+			return
+		}
+	} else if principal.isWorker() {
 		entryID, err := principal.requireTaskBoardWorker(ownerType, ownerID, warehouseID)
 		if err != nil {
 			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 			return
 		}
 		workerEntryID = entryID
-	} else if principal.user == nil || principal.user.Require("rwms.read", warehouseID, auth.View) != nil {
+	} else if principal.user == nil || ownerType == persistence.OwnerTypeLogisticsCustomerProfile ||
+		principal.user.Require("rwms.read", warehouseID, auth.View) != nil {
 		server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 		return
 	}
@@ -1626,7 +1744,10 @@ func (server *Server) listOwner(response http.ResponseWriter, request *http.Requ
 		}
 		return nil
 	}
-	if principal.isWorker() {
+	if principal.isCustomerRental() {
+		err = server.repository.ReadOwnerAssetsForCustomer(request.Context(), ownerType, ownerID,
+			warehouseID, principal.subjectID, limit, after, consume)
+	} else if principal.isWorker() {
 		err = server.repository.ReadTaskBoardEntryAssetsForWorker(request.Context(), workerEntryID,
 			warehouseID, principal.worker.WorkerID, limit, after, consume)
 	} else {
@@ -1752,7 +1873,14 @@ func (server *Server) getOriginal(response http.ResponseWriter, request *http.Re
 		selectedOriginal = &copyOfOriginal
 		return nil
 	}
-	if principal.isWorker() {
+	if principal.isCustomerRental() {
+		if !persistence.IsCustomerSubjectBoundOwnerType(ownerType) {
+			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+			return
+		}
+		err = server.repository.ReadOriginalForCustomer(request.Context(), mediaID, ownerType, ownerID,
+			warehouseID, principal.subjectID, generation, consume)
+	} else if principal.isWorker() {
 		entryID, workerErr := principal.requireTaskBoardWorker(ownerType, ownerID, warehouseID)
 		if workerErr != nil {
 			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
@@ -1761,7 +1889,8 @@ func (server *Server) getOriginal(response http.ResponseWriter, request *http.Re
 		err = server.repository.ReadTaskBoardEntryOriginalForWorker(request.Context(), entryID, warehouseID,
 			principal.worker.WorkerID, mediaID, generation, consume)
 	} else {
-		if principal.user == nil || principal.user.Require("rwms.read", warehouseID, auth.View) != nil {
+		if principal.user == nil || ownerType == persistence.OwnerTypeLogisticsCustomerProfile ||
+			principal.user.Require("rwms.read", warehouseID, auth.View) != nil {
 			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 			return
 		}
@@ -1819,7 +1948,14 @@ func (server *Server) getVariantContent(response http.ResponseWriter, request *h
 		selectedVariant = &copyOfVariant
 		return nil
 	}
-	if principal.isWorker() {
+	if principal.isCustomerRental() {
+		if !persistence.IsCustomerSubjectBoundOwnerType(ownerType) {
+			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+			return
+		}
+		err = server.repository.ReadCurrentVariantForCustomer(request.Context(), mediaID, ownerType, ownerID,
+			warehouseID, principal.subjectID, generation, variant, consume)
+	} else if principal.isWorker() {
 		entryID, workerErr := principal.requireTaskBoardWorker(ownerType, ownerID, warehouseID)
 		if workerErr != nil {
 			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
@@ -1828,7 +1964,8 @@ func (server *Server) getVariantContent(response http.ResponseWriter, request *h
 		err = server.repository.ReadTaskBoardEntryVariantForWorker(request.Context(), entryID, warehouseID,
 			principal.worker.WorkerID, mediaID, generation, variant, consume)
 	} else {
-		if principal.user == nil || principal.user.Require("rwms.read", warehouseID, auth.View) != nil {
+		if principal.user == nil || ownerType == persistence.OwnerTypeLogisticsCustomerProfile ||
+			principal.user.Require("rwms.read", warehouseID, auth.View) != nil {
 			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 			return
 		}
@@ -1853,7 +1990,7 @@ type deletionRequest struct {
 }
 
 func (server *Server) deleteAsset(response http.ResponseWriter, request *http.Request) {
-	principal, ok := server.principal(response, request)
+	principal, ok := server.mediaPrincipal(response, request)
 	if !ok {
 		return
 	}
@@ -1861,7 +1998,16 @@ func (server *Server) deleteAsset(response http.ResponseWriter, request *http.Re
 	if !ok {
 		return
 	}
-	if err := principal.Require("rwms.write", warehouseID, auth.Edit); err != nil {
+	var authorizedSubjectID *uuid.UUID
+	if principal.isCustomerRental() {
+		if !persistence.IsCustomerSubjectBoundOwnerType(ownerType) {
+			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+			return
+		}
+		authorizedSubjectID = authorizedSubjectFor(principal)
+	} else if principal.isWorker() || principal.user == nil ||
+		ownerType == persistence.OwnerTypeLogisticsCustomerProfile ||
+		principal.user.Require("rwms.write", warehouseID, auth.Edit) != nil {
 		server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 		return
 	}
@@ -1884,7 +2030,7 @@ func (server *Server) deleteAsset(response http.ResponseWriter, request *http.Re
 	}
 	asset, replayed, err := server.repository.Delete(request.Context(), persistence.DeleteCommand{
 		MediaID: mediaID, OwnerType: ownerType, OwnerID: ownerID, WarehouseID: warehouseID,
-		SubjectID: principal.SubjectID, IdempotencyKey: idempotencyKey,
+		SubjectID: principal.subjectID, AuthorizedSubjectID: authorizedSubjectID, IdempotencyKey: idempotencyKey,
 		RequestSHA256: requestFingerprint(map[string]any{
 			"mediaId": mediaID, "ownerType": ownerType, "ownerId": ownerID,
 			"warehouseId": warehouseID, "expectedVersion": *body.ExpectedVersion,
@@ -2074,6 +2220,10 @@ func (server *Server) mediaPrincipal(response http.ResponseWriter, request *http
 	authorization := request.Header.Get("Authorization")
 	user, userErr := server.auth.Validate(request.Context(), authorization)
 	if userErr == nil {
+		if user.IsCustomerIdentity() && !user.IsCustomerRental() {
+			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+			return mediaRequestPrincipal{}, false
+		}
 		return mediaRequestPrincipal{
 			subjectID: user.SubjectID, principalType: persistence.PrincipalTypeUser,
 			actor: persistence.ActorReference{SubjectID: user.SubjectID, PrincipalType: persistence.PrincipalTypeUser},

@@ -90,7 +90,7 @@ class AssetFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsTransferredWarehouseData() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(41);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(44);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -130,6 +130,7 @@ class AssetFlywayMigrationIntegrationTest {
         "presentation_unit_hold",
         "order_unit_reservation",
         "order_equipment_reservation",
+        "transfer_unit_reservation",
         "asset_warehouse_readiness_fence");
     assertThat(columnCount("order_unit_reservation", "client_id")).isEqualTo(1);
     assertThat(columnCount("order_unit_reservation", "tenant_snapshot")).isEqualTo(1);
@@ -137,7 +138,13 @@ class AssetFlywayMigrationIntegrationTest {
     assertThat(columnCount("order_unit_reservation", "source_status")).isZero();
     assertThat(columnCount("order_equipment_reservation", "order_id")).isEqualTo(1);
     assertThat(columnCount("order_equipment_reservation", "equipment_id")).isEqualTo(1);
+    assertThat(toRegclass("uk_order_equipment_reservation_active_order_equipment")).isNull();
+    assertThat(
+            toRegclass(
+                "uk_order_equipment_reservation_active_order_warehouse_equipment"))
+        .isNotNull();
     assertThat(columnCount("equipment_catalog_item", "maximum_per_cabin")).isEqualTo(1);
+    assertThat(columnCount("equipment_allocation_hold", "movement_purpose")).isEqualTo(1);
     assertThat(
             constraintDefinition(
                 "equipment_catalog_item", "ck_equipment_catalog_maximum_per_cabin"))
@@ -269,12 +276,12 @@ class AssetFlywayMigrationIntegrationTest {
         """, existingId, UUID.randomUUID());
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(39);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(42);
     latest.validate();
 
     assertThat(appliedVersions())
         .containsExactly(
-            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41");
+            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44");
     assertThat(columnCount("rental_item", "number")).isZero();
     assertThat(columnCount("rental_item", "display_canonical_number")).isEqualTo(1);
     assertThat(columnCount("rental_item", "identity_match_key")).isEqualTo(1);
@@ -310,7 +317,7 @@ class AssetFlywayMigrationIntegrationTest {
         "a".repeat(64));
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(6);
     latest.validate();
 
     assertThat(columnCount("inventory_asset_outcome_watermark", "passport_observation_sha256"))
@@ -346,7 +353,7 @@ class AssetFlywayMigrationIntegrationTest {
         .doesNotContain("CUSTOMER");
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isOne();
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(4);
     latest.validate();
     assertThat(
             constraintDefinition(
@@ -416,6 +423,141 @@ class AssetFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void versionFortyTwoAddsHistoricalTransferUnitReservationFences() {
+    Flyway versionFortyOne = configuration(MIGRATIONS).target("41").load();
+    assertThat(versionFortyOne.migrate().migrationsExecuted).isEqualTo(41);
+    assertThat(toRegclass("transfer_unit_reservation")).isNull();
+
+    Flyway versionFortyTwo = configuration(MIGRATIONS).target("42").load();
+    assertThat(versionFortyTwo.migrate().migrationsExecuted).isOne();
+    versionFortyTwo.validate();
+
+    assertThat(toRegclass("transfer_unit_reservation")).isNotNull();
+    assertThat(
+            constraintDefinition(
+                "transfer_unit_reservation", "uk_transfer_unit_reservation_line"))
+        .isEqualTo("UNIQUE (transfer_id, line_id)");
+    assertThat(indexDefinition("uk_transfer_unit_reservation_active_item"))
+        .contains("UNIQUE", "rental_item_id", "WHERE", "state", "ACTIVE");
+    assertThat(versionFortyTwo.migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
+  void versionFortyThreePersistsClosedEquipmentMovementPurpose() {
+    Flyway versionFortyTwo = configuration(MIGRATIONS).target("42").load();
+    assertThat(versionFortyTwo.migrate().migrationsExecuted).isEqualTo(42);
+    assertThat(columnCount("equipment_allocation_hold", "movement_purpose")).isZero();
+    Map<String, Object> stock =
+        jdbc.queryForMap(
+            """
+            select id,equipment_id,warehouse_id
+            from equipment_balance
+            where rental_item_id is null and location_kind='STOCK'
+            order by id
+            limit 1
+            """);
+    UUID legacyReservationId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into equipment_allocation_hold(
+          id,version,equipment_id,warehouse_id,source_balance_id,owner_type,owner_id,quantity,
+          state,idempotency_key,expires_at,created_at,updated_at)
+        values (?,0,?,?,?,'LOGISTICS_EQUIPMENT_MOVEMENT',?,1,'ACTIVE',?,
+          clock_timestamp()+interval '1 hour',clock_timestamp(),clock_timestamp())
+        """,
+        legacyReservationId,
+        stock.get("equipment_id"),
+        stock.get("warehouse_id"),
+        stock.get("id"),
+        UUID.randomUUID() + ":" + UUID.randomUUID(),
+        UUID.randomUUID());
+
+    Flyway latest = configuration(MIGRATIONS).target("43").load();
+    assertThat(latest.migrate().migrationsExecuted).isOne();
+    latest.validate();
+
+    assertThat(columnCount("equipment_allocation_hold", "movement_purpose")).isEqualTo(1);
+    assertThat(
+            constraintDefinition(
+                "equipment_allocation_hold", "ck_equipment_hold_movement_purpose"))
+        .contains(
+            "ALLOCATABLE_REBALANCE",
+            "TRANSFER_REBALANCE",
+            "MAINTENANCE_DISPOSITION");
+    assertThat(
+            jdbc.queryForObject(
+                "select movement_purpose from equipment_allocation_hold where id=?",
+                String.class,
+                legacyReservationId))
+        .isEqualTo("ALLOCATABLE_REBALANCE");
+    assertThat(latest.migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
+  void versionFortyFourPartitionsActiveEquipmentReservationsByPhysicalSource() {
+    Flyway versionFortyThree = configuration(MIGRATIONS).target("43").load();
+    assertThat(versionFortyThree.migrate().migrationsExecuted).isEqualTo(43);
+    assertThat(toRegclass("uk_order_equipment_reservation_active_order_equipment")).isNotNull();
+    assertThat(
+            toRegclass(
+                "uk_order_equipment_reservation_active_order_warehouse_equipment"))
+        .isNull();
+
+    UUID orderId = UUID.randomUUID();
+    UUID equipmentId =
+        jdbc.queryForObject(
+            "select id from equipment_catalog_item order by id limit 1", UUID.class);
+    UUID firstReservationId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into order_equipment_reservation(
+          id,version,order_id,equipment_id,warehouse_id,quantity,state,created_at,updated_at)
+        values (?,0,?,?,?,1,'ACTIVE',clock_timestamp(),clock_timestamp())
+        """,
+        firstReservationId,
+        orderId,
+        equipmentId,
+        SPB_WAREHOUSE_ID);
+
+    Flyway versionFortyFour = configuration(MIGRATIONS).target("44").load();
+    assertThat(versionFortyFour.migrate().migrationsExecuted).isOne();
+    versionFortyFour.validate();
+    assertThat(toRegclass("uk_order_equipment_reservation_active_order_equipment")).isNull();
+    assertThat(
+            toRegclass(
+                "uk_order_equipment_reservation_active_order_warehouse_equipment"))
+        .isNotNull();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from order_equipment_reservation where id=?",
+                Integer.class,
+                firstReservationId))
+        .isOne();
+    assertThat(
+            jdbc.update(
+                """
+                insert into order_equipment_reservation(
+                  id,version,order_id,equipment_id,warehouse_id,quantity,state,created_at,updated_at)
+                values (?,0,?,?,?,1,'ACTIVE',clock_timestamp(),clock_timestamp())
+                """,
+                UUID.randomUUID(),
+                orderId,
+                equipmentId,
+                MSK_WAREHOUSE_ID))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from order_equipment_reservation
+                where order_id=? and equipment_id=? and state='ACTIVE'
+                """,
+                Integer.class,
+                orderId,
+                equipmentId))
+        .isEqualTo(2);
+  }
+
+  @Test
   void versionSevenUpgradeRemovesOnlyKnownOldPanelStockPhotoFields(@TempDir Path directory)
       throws IOException {
     List<String> scripts = List.of(
@@ -458,11 +600,11 @@ class AssetFlywayMigrationIntegrationTest {
     int outboxCount = integer("select count(*) from outbox_event");
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(34);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(37);
     latest.validate();
     assertThat(appliedVersions())
         .containsExactly(
-            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41");
+            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44");
     assertOldPanelTechnicalMetadataRemoved();
     assertLegacyIdentityMetadataRemoved();
     JsonNode unrelated = json(jdbc.queryForObject(
@@ -550,7 +692,7 @@ class AssetFlywayMigrationIntegrationTest {
         order by snapshot.aggregate_version desc limit 1
         """, correctedAggregateId);
     latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(33);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(36);
     latest.validate();
 
     assertThat(integer("select count(*) from rental_item")).isEqualTo(195);
@@ -1510,6 +1652,13 @@ class AssetFlywayMigrationIntegrationTest {
         table,
         column);
     return count == null ? 0 : count;
+  }
+
+  private String indexDefinition(String index) {
+    return jdbc.queryForObject(
+        "select indexdef from pg_indexes where schemaname='public' and indexname=?",
+        String.class,
+        index);
   }
 
   private void insertActiveReservation(

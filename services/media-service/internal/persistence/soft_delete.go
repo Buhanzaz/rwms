@@ -13,15 +13,16 @@ import (
 // DeleteCommand requests an idempotent owner-scoped logical deletion fenced by
 // the caller's expected asset version.
 type DeleteCommand struct {
-	MediaID         uuid.UUID
-	OwnerType       string
-	OwnerID         string
-	WarehouseID     uuid.UUID
-	SubjectID       uuid.UUID
-	IdempotencyKey  uuid.UUID
-	RequestSHA256   string
-	ExpectedVersion int64
-	CorrelationID   uuid.UUID
+	MediaID             uuid.UUID
+	OwnerType           string
+	OwnerID             string
+	WarehouseID         uuid.UUID
+	SubjectID           uuid.UUID
+	AuthorizedSubjectID *uuid.UUID
+	IdempotencyKey      uuid.UUID
+	RequestSHA256       string
+	ExpectedVersion     int64
+	CorrelationID       uuid.UUID
 }
 
 // Delete is an owner-scoped logical transition. It deliberately leaves source
@@ -38,6 +39,11 @@ func (repository *Repository) Delete(
 		!IsPublicOwnerType(command.OwnerType) || command.OwnerID == "" ||
 		!validSHA256(command.RequestSHA256) || command.ExpectedVersion <= 0 {
 		return AssetRecord{}, false, ErrConflict
+	}
+	if command.AuthorizedSubjectID != nil &&
+		(!IsCustomerSubjectBoundOwnerType(command.OwnerType) || *command.AuthorizedSubjectID == uuid.Nil ||
+			*command.AuthorizedSubjectID != command.SubjectID) {
+		return AssetRecord{}, false, ErrOwnerProofMissing
 	}
 	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
@@ -67,8 +73,8 @@ func (repository *Repository) Delete(
 		if asset.Status != media.StatusDeleted || asset.Version != command.ExpectedVersion+1 {
 			return AssetRecord{}, false, ErrConflict
 		}
-		if err := requireOwnerBinding(ctx, tx, asset.OwnerType, asset.OwnerID,
-			asset.WarehouseID, repository.now()); err != nil {
+		if err := requireUploadOwnerAccess(ctx, tx, asset.OwnerType, asset.OwnerID,
+			asset.WarehouseID, command.AuthorizedSubjectID, repository.now()); err != nil {
 			return AssetRecord{}, false, err
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -87,8 +93,8 @@ func (repository *Repository) Delete(
 	if !assetOwnedBy(asset, command.OwnerType, command.OwnerID, command.WarehouseID) {
 		return AssetRecord{}, false, ErrNotFound
 	}
-	if err := requireOwnerBinding(ctx, tx, asset.OwnerType, asset.OwnerID,
-		asset.WarehouseID, repository.now()); err != nil {
+	if err := requireUploadOwnerAccess(ctx, tx, asset.OwnerType, asset.OwnerID,
+		asset.WarehouseID, command.AuthorizedSubjectID, repository.now()); err != nil {
 		return AssetRecord{}, false, err
 	}
 	if asset.Status == media.StatusDeleted || asset.Version != command.ExpectedVersion {

@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
@@ -27,34 +28,64 @@ import tools.jackson.databind.ObjectMapper;
 @Component
 @RequiredArgsConstructor
 public class ValhallaCustomerTravelTimeClient {
+  private static final int MAX_CACHE_ENTRIES = 512;
   private final ObjectMapper json;
+  private final Map<MatrixCacheKey, CustomerTravelTimeMatrix> cache = new ConcurrentHashMap<>();
 
-  /** Requests one square, directed, time-dependent truck matrix. */
+  /** Requests or reuses a departure-bucketed truck matrix for one exact vehicle profile. */
   public CustomerTravelTimeMatrix matrix(
       List<GeoPoint> points,
       LocalDate date,
-      CustomerDeliveryProperties.Validated configuration) {
+      LocalTime departureTime,
+      CustomerDeliveryProperties.Validated configuration,
+      CustomerVehicleRouteProfile profile) {
     if (points == null
         || points.isEmpty()
         || points.size() > 32
         || points.stream().anyMatch(java.util.Objects::isNull)) {
       throw new IllegalArgumentException("Customer route points are invalid");
     }
-    if (configuration == null) throw unavailable();
+    if (configuration == null || date == null || departureTime == null || profile == null) {
+      throw unavailable();
+    }
     if (points.size() == 1) {
       return new CustomerTravelTimeMatrix(List.copyOf(points), List.of(List.of(0L)));
     }
+    LocalTime departureBucket =
+        departureTime.withMinute((departureTime.getMinute() / 15) * 15).withSecond(0).withNano(0);
+    MatrixCacheKey cacheKey =
+        new MatrixCacheKey(
+            List.copyOf(points),
+            date,
+            departureBucket,
+            profile.routingProfileHash(),
+            configuration.valhallaBaseUrl().toString());
+    CustomerTravelTimeMatrix cached = cache.get(cacheKey);
+    if (cached != null) return cached;
+    CustomerTravelTimeMatrix requested =
+        requestMatrix(points, date, departureBucket, configuration, profile);
+    if (cache.size() >= MAX_CACHE_ENTRIES) cache.clear();
+    cache.put(cacheKey, requested);
+    return requested;
+  }
+
+  private CustomerTravelTimeMatrix requestMatrix(
+      List<GeoPoint> points,
+      LocalDate date,
+      LocalTime departureTime,
+      CustomerDeliveryProperties.Validated configuration,
+      CustomerVehicleRouteProfile profile) {
     List<Map<String, Double>> locations =
         points.stream()
             .map(point -> Map.of("lat", point.latitude(), "lon", point.longitude()))
             .toList();
     Map<String, Object> truck = new LinkedHashMap<>();
-    truck.put("height", configuration.truckHeightMeters());
-    truck.put("width", configuration.truckWidthMeters());
-    truck.put("length", configuration.truckLengthMeters());
-    truck.put("weight", configuration.truckWeightTons());
-    truck.put("axle_load", configuration.truckAxleLoadTons());
-    truck.put("axle_count", configuration.truckAxleCount());
+    truck.put("height", profile.heightMeters());
+    truck.put("width", profile.widthMeters());
+    truck.put("length", profile.lengthMeters());
+    truck.put("weight", profile.weightTons());
+    truck.put("axle_load", profile.axleLoadTons());
+    truck.put("axle_count", profile.axleCount());
     truck.put("hgv_no_access_penalty", 43_200);
     truck.put("ignore_restrictions", false);
     truck.put("ignore_access", false);
@@ -73,7 +104,8 @@ public class ValhallaCustomerTravelTimeClient {
             "type",
             1,
             "value",
-            date.atTime(LocalTime.of(9, 0)).format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm"))));
+            date.atTime(departureTime)
+                .format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm"))));
     try {
       String body = json.writeValueAsString(request);
       URI endpoint =
@@ -138,4 +170,12 @@ public class ValhallaCustomerTravelTimeClient {
         "CUSTOMER_ROUTING_UNAVAILABLE",
         "Сервис расчёта маршрута временно недоступен");
   }
+
+  /** Complete cache identity; direction is retained by the ordered square point list. */
+  private record MatrixCacheKey(
+      List<GeoPoint> points,
+      LocalDate date,
+      LocalTime departureBucket,
+      String routingProfileHash,
+      String routingConfigurationVersion) {}
 }

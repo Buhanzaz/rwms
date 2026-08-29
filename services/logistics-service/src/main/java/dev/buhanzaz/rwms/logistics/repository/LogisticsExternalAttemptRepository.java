@@ -30,6 +30,10 @@ public interface LogisticsExternalAttemptRepository
   Optional<LogisticsExternalAttempt> findByDocument_IdAndLine_IdAndOperationType(
       UUID documentId, UUID lineId, String operationType);
 
+  /** Finds one document-scoped external effect whose durable identity has no cabin line. */
+  Optional<LogisticsExternalAttempt> findByDocument_IdAndLineIsNullAndOperationType(
+      UUID documentId, String operationType);
+
   /** Returns active attempts in the supplied closed result set without loading their payloads. */
   long countByResultIn(List<LogisticsExternalAttemptResult> results);
 

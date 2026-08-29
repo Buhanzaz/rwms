@@ -7,8 +7,10 @@ import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.Custome
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerEquipmentAvailability;
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerEquipmentSelectionResponse;
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerInquiryResponse;
+import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerRentalTermsResponse;
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.ReplaceCustomerCabinsRequest;
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.ReplaceCustomerEquipmentRequest;
+import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.ReplaceCustomerRentalTermsRequest;
 
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerProfile;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerRentalSession;
@@ -55,6 +57,7 @@ public class CustomerRentalService {
   private final RentalInquiryCabinSelectionService selections;
   private final CustomerCabinCatalogService catalog;
   private final CustomerEquipmentCodec equipmentCodec;
+  private final CustomerRentalTermCodec rentalTermCodec;
   private final LogisticsDependencyGateway dependencies;
 
   /** Creates a new inquiry/cart for the current profile and selected active warehouse. */
@@ -111,6 +114,7 @@ public class CustomerRentalService {
       Set<UUID> selectedIds = Set.copyOf(held.rentalItemIds());
       String equipmentJson =
           equipmentCodec.retain(prepared.getEquipmentSelectionJson(), selectedIds);
+      String rentalTermsJson = rentalTermCodec.retain(prepared.getRentalTermsJson(), selectedIds);
       CustomerRentalSession completed =
           preparation.completedReplay()
               ? prepared
@@ -119,7 +123,8 @@ public class CustomerRentalService {
                   inquiryId,
                   preparation.commandKey(),
                   requestHash,
-                  equipmentJson);
+                  equipmentJson,
+                  rentalTermsJson);
       return new CustomerCabinSelectionResponse(
           completed.getVersion(),
           held.expiresAt(),
@@ -192,6 +197,23 @@ public class CustomerRentalService {
         updated.getVersion(), equipmentCodec.decode(updated.getEquipmentSelectionJson()));
   }
 
+  /** Replaces the complete per-cabin rental durations for the current held cabin set. */
+  public CustomerRentalTermsResponse replaceRentalTerms(
+      CustomerIdentity identity,
+      UUID inquiryId,
+      ReplaceCustomerRentalTermsRequest request) {
+    CustomerRentalSession current = sessionStore.required(identity.subjectId(), inquiryId);
+    CabinSelectionResponse held =
+        selections.get(access.orderActor(identity, current.getWarehouseId()), inquiryId);
+    Set<UUID> selectedCabins = Set.copyOf(held.rentalItemIds());
+    String normalized = rentalTermCodec.encode(request.terms(), selectedCabins);
+    CustomerRentalSession updated =
+        sessionStore.replaceRentalTerms(
+            identity.subjectId(), inquiryId, request.expectedVersion(), normalized);
+    return new CustomerRentalTermsResponse(
+        updated.getVersion(), rentalTermCodec.decode(updated.getRentalTermsJson()));
+  }
+
   /** Returns the complete customer cart from authoritative cabin holds plus local furniture intent. */
   public CustomerCartResponse cart(CustomerIdentity identity, UUID inquiryId) {
     CustomerRentalSession session = sessionStore.required(identity.subjectId(), inquiryId);
@@ -204,6 +226,7 @@ public class CustomerRentalService {
         session.getState().name(),
         catalog.heldCabins(identity, inquiryId, held.items().stream().map(CustomerRentalService::cabin).toList()),
         equipmentCodec.decode(session.getEquipmentSelectionJson()),
+        rentalTermCodec.decode(session.getRentalTermsJson()),
         session.getDeliverySlotId());
   }
 

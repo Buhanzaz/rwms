@@ -100,6 +100,15 @@ class WarehouseServiceIntegrationTest {
                 "select count(*) from outbox_event where aggregate_id=?",
                 created.response().id().toString()))
         .isOne();
+    assertThatThrownBy(
+            () ->
+                service.create(
+                    subject,
+                    key,
+                    new CreateWarehouseRequest(
+                        "Test west", "Москва", "", "Europe/Moscow", 4, true)))
+        .isInstanceOf(WarehouseConflictException.class)
+        .hasMessageContaining("Idempotency-Key");
     assertThatThrownBy(() -> service.create(subject, key, request("Test east", 4)))
         .isInstanceOf(WarehouseConflictException.class)
         .hasMessageContaining("Idempotency-Key");
@@ -116,6 +125,107 @@ class WarehouseServiceIntegrationTest {
     assertThat(idempotency.cleanupExpired()).isOne();
     assertThat(service.create(subject, key, request("Test east", 4)).replayed())
         .isFalse();
+  }
+
+  @Test
+  void createsOrdinaryAndRepresentativeWarehousesAndReplacesTheCharacteristic() {
+    WarehouseResponse ordinary =
+        service
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("Ordinary depot", null))
+            .response();
+    WarehouseResponse representative =
+        service
+            .create(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                new CreateWarehouseRequest(
+                    "Representative depot",
+                    "Великий Новгород",
+                    "Большая Санкт-Петербургская улица, 1",
+                    "Europe/Moscow",
+                    null,
+                    true))
+            .response();
+
+    assertThat(ordinary.representative()).isFalse();
+    assertThat(representative.representative()).isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "select representative from warehouse where id=?",
+                Boolean.class,
+                representative.id()))
+        .isTrue();
+
+    WarehouseResponse replaced =
+        service.replace(
+            ordinary.id(),
+            new ReplaceWarehouseRequest(
+                ordinary.version(),
+                ordinary.name(),
+                ordinary.city(),
+                ordinary.address(),
+                ordinary.timeZone(),
+                ordinary.sortOrder(),
+                true));
+
+    assertThat(replaced.representative()).isTrue();
+    assertThat(service.get(ordinary.id()).representative()).isTrue();
+    assertThat(service.logisticsIdentity(ordinary.id()).representative()).isTrue();
+  }
+
+  @Test
+  void legacyJsonOmissionDefaultsRepresentativeToFalseForCreateAndFullReplace()
+      throws Exception {
+    JsonNode created =
+        objectMapper.readTree(
+            mockMvc
+                .perform(
+                    post("/api/warehouse/v1/warehouses")
+                        .with(systemAdminWriteJwt())
+                        .header("Idempotency-Key", UUID.randomUUID())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(
+                            """
+                            {
+                              "name": "Legacy JSON depot",
+                              "city": "Москва",
+                              "address": null,
+                              "timeZone": "Europe/Moscow",
+                              "sortOrder": null
+                            }
+                            """))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString());
+
+    assertThat(created.get("representative").booleanValue()).isFalse();
+    UUID warehouseId = UUID.fromString(created.get("id").stringValue());
+    JsonNode replaced =
+        objectMapper.readTree(
+            mockMvc
+                .perform(
+                    put("/api/warehouse/v1/warehouses/{id}", warehouseId)
+                        .with(systemAdminWriteJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(
+                            """
+                            {
+                              "expectedVersion": %d,
+                              "name": "Legacy JSON depot updated",
+                              "city": "Москва",
+                              "address": null,
+                              "timeZone": "Europe/Moscow",
+                              "sortOrder": null
+                            }
+                            """
+                                .formatted(created.get("version").longValue())))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString());
+
+    assertThat(replaced.get("representative").booleanValue()).isFalse();
   }
 
   @Test
@@ -767,13 +877,26 @@ class WarehouseServiceIntegrationTest {
     JsonNode response = objectMapper.readTree(body);
     assertThat(Set.copyOf(response.propertyNames()))
         .containsExactlyInAnyOrder(
-            "id", "version", "active", "name", "city", "timeZone");
+            "id",
+            "version",
+            "active",
+            "name",
+            "city",
+            "address",
+            "latitude",
+            "longitude",
+            "timeZone",
+            "representative");
     assertThat(response.get("id").stringValue()).isEqualTo(SPB.toString());
     assertThat(response.get("version").longValue()).isZero();
     assertThat(response.get("active").booleanValue()).isTrue();
     assertThat(response.get("name").stringValue()).isEqualTo("СПБ");
     assertThat(response.get("city").stringValue()).isEqualTo("Санкт-Петербург");
+    assertThat(response.get("address").isNull()).isTrue();
+    assertThat(response.get("latitude").isNull()).isTrue();
+    assertThat(response.get("longitude").isNull()).isTrue();
     assertThat(response.get("timeZone").stringValue()).isEqualTo("Europe/Moscow");
+    assertThat(response.get("representative").booleanValue()).isFalse();
 
     WarehouseResponse logisticsCreated =
         service

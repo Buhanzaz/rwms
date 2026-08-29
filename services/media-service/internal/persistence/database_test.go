@@ -9,6 +9,8 @@ import (
 	"time"
 
 	mediamigration "dev.buhanzaz.rwms/media-service/db/migration"
+	"dev.buhanzaz.rwms/media-service/internal/testsupport"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
@@ -31,6 +33,8 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 	v15 := flywayChecksum(mediamigration.V15)
 	v16 := flywayChecksum(mediamigration.V16)
 	v17 := flywayChecksum(mediamigration.V17)
+	v18 := flywayChecksum(mediamigration.V18)
+	v19 := flywayChecksum(mediamigration.V19)
 	const (
 		flyway124V1      int32 = -1307356325
 		flyway124V2      int32 = -573926044
@@ -51,6 +55,8 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 		flyway124V15     int32 = 1136570652
 		flyway124V16     int32 = 153703059
 		flyway124V17     int32 = -621987001
+		flyway124V18     int32 = -227466898
+		flyway124V19     int32 = 1811753772
 	)
 	if v1 != flyway124V1 || v2 != flyway124V2 || v3 != flyway124V3 || v4 != flyway124V4 ||
 		v4Guard != flyway124V4Guard || v5 != flyway124V5 || v5Guard != flyway124V5Guard ||
@@ -100,6 +106,12 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 	if v17 != flyway124V17 {
 		t.Fatalf("Flyway 12.4 checksum drift: V17=%d (want %d)", v17, flyway124V17)
 	}
+	if v18 != flyway124V18 {
+		t.Fatalf("Flyway 12.4 checksum drift: V18=%d (want %d)", v18, flyway124V18)
+	}
+	if v19 != flyway124V19 {
+		t.Fatalf("Flyway 12.4 checksum drift: V19=%d (want %d)", v19, flyway124V19)
+	}
 }
 
 func TestVerifyMigrationHistoryAcceptsCanonicalAndOutOfOrderFlywayRanks(t *testing.T) {
@@ -115,7 +127,8 @@ func TestVerifyMigrationHistoryAcceptsCanonicalAndOutOfOrderFlywayRanks(t *testi
 		canonical[0], canonical[1], canonical[2], canonical[3], canonical[5],
 		canonical[4], canonical[6], canonical[7], canonical[8], canonical[9], canonical[10],
 		canonical[11], canonical[12],
-		canonical[13], canonical[14], canonical[15], canonical[16], canonical[17], canonical[18],
+		canonical[13], canonical[14], canonical[15], canonical[16], canonical[17], canonical[18], canonical[19],
+		canonical[20],
 	}
 	if err := verifyMigrationHistory(outOfOrder); err != nil {
 		t.Fatalf("real out-of-order Flyway upgrade history rejected: %v", err)
@@ -237,6 +250,8 @@ func approvedMigrationHistory() []migrationHistoryRow {
 		{"15", "inventory finding membership markers", "V15__inventory_finding_membership_markers.sql", mediamigration.V15},
 		{"16", "client image variants", "V16__client_image_variants.sql", mediamigration.V16},
 		{"17", "consolidate legacy cabin photo folders", "V17__consolidate_legacy_cabin_photo_folders.sql", mediamigration.V17},
+		{"18", "customer shipment subject binding", "V18__customer_shipment_subject_binding.sql", mediamigration.V18},
+		{"19", "customer profile avatar owner", "V19__customer_profile_avatar_owner.sql", mediamigration.V19},
 	}
 	history := make([]migrationHistoryRow, 0, len(migrations))
 	for _, migration := range migrations {
@@ -492,6 +507,89 @@ func TestLegacyCabinPhotoFolderMigrationRetainsEveryPhotoAndInventoryFolder(t *t
 			t.Errorf("V17 contains destructive or inventory-folder mutation %q", forbidden)
 		}
 	}
+}
+
+func TestCustomerShipmentSubjectMigrationIsNullableAndOwnerScoped(t *testing.T) {
+	sql := strings.ToLower(string(mediamigration.V18))
+	for _, required := range []string{
+		"alter table media_service_owner_proof_checkpoint",
+		"alter table media_service_owner_proof_receipt",
+		"alter table media_owner_binding",
+		"add column authorized_subject_id uuid",
+		"authorized_subject_id is null or owner_type = 'logistics_shipment'",
+		"where authorized_subject_id is not null and active",
+	} {
+		if !strings.Contains(sql, required) {
+			t.Errorf("V18 does not contain %q", required)
+		}
+	}
+	for _, forbidden := range []string{"drop table", "truncate table", "delete from", "update media_"} {
+		if strings.Contains(sql, forbidden) {
+			t.Errorf("V18 contains destructive statement %q", forbidden)
+		}
+	}
+}
+
+func TestCustomerProfileAvatarMigrationExtendsProofsWithoutRewritingMedia(t *testing.T) {
+	sql := strings.ToLower(string(mediamigration.V19))
+	for _, required := range []string{
+		"logistics_customer_profile", "customer_profile", "authorized_subject_id is not null",
+		"document_id is null and line_id is null", "owner_id = aggregate_id::text",
+	} {
+		if !strings.Contains(sql, required) {
+			t.Errorf("V19 does not contain %q", required)
+		}
+	}
+	for _, forbidden := range []string{"drop table", "truncate table", "delete from", "update media_"} {
+		if strings.Contains(sql, forbidden) {
+			t.Errorf("V19 contains destructive statement %q", forbidden)
+		}
+	}
+}
+
+func TestV18ToV19CustomerProfileAvatarUpgradeIntegration(t *testing.T) {
+	baseURL := os.Getenv("MEDIA_TEST_DATABASE_URL")
+	if baseURL == "" {
+		t.Skip("MEDIA_TEST_DATABASE_URL is not configured")
+	}
+	databaseURL := testsupport.NewMigratedMediaDatabaseThroughV18(t, baseURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open V18 media database: %v", err)
+	}
+	var assetsBefore int64
+	if err := pool.QueryRow(ctx, `select count(*) from media_asset`).Scan(&assetsBefore); err != nil {
+		pool.Close()
+		t.Fatalf("count V18 media assets: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(mediamigration.V19)); err != nil {
+		pool.Close()
+		t.Fatalf("apply V19 profile avatar migration: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
+		installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
+	values ((select coalesce(max(installed_rank),0)+1 from flyway_schema_history),
+		'19','customer profile avatar owner','SQL','V19__customer_profile_avatar_owner.sql',$1,
+		current_user,0,true)`, flywayChecksum(mediamigration.V19)); err != nil {
+		pool.Close()
+		t.Fatalf("record V19 profile avatar migration: %v", err)
+	}
+	var assetsAfter int64
+	if err := pool.QueryRow(ctx, `select count(*) from media_asset`).Scan(&assetsAfter); err != nil {
+		pool.Close()
+		t.Fatalf("count V19 media assets: %v", err)
+	}
+	pool.Close()
+	if assetsAfter != assetsBefore {
+		t.Fatalf("V19 changed media asset count: before=%d after=%d", assetsBefore, assetsAfter)
+	}
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open upgraded V19 media database: %v", err)
+	}
+	database.Close()
 }
 
 func TestInventoryOwnerDLTWireValidationMatchesClosedFailureEnum(t *testing.T) {

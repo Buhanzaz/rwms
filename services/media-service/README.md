@@ -56,6 +56,15 @@ This design solves four concrete problems:
   historical assigned/evidence readers. Every task-entry authorization locks
   its local proof before binding and audience rows, matching proof replacement
   order so a concurrent projection refresh cannot deadlock media access.
+- **Customer-bound logistics media:** the exact `USER/CUSTOMER`,
+  `rwms-customer-android`, sole-`customer.rental` identity may use only
+  `LOGISTICS_SHIPMENT/SHIPMENT` or
+  `LOGISTICS_CUSTOMER_PROFILE/PROFILE_AVATAR` media whose current logistics
+  owner proof is bound to that JWT subject. The selected active warehouse is
+  an authorization scope for the profile avatar, not profile identity. Create
+  replay, upload session, source/variant content, finalize, list, reads and
+  logical delete all recheck the same subject; a customer-shaped malformed
+  token, another subject, manager or worker fails closed for profile media.
 - **Recoverable delivery:** PostgreSQL owns state and exact replay; Kafka
   carries at-least-once facts through a transactional outbox and idempotent
   consumers. A broker outage cannot make Kafka the media database.
@@ -126,12 +135,14 @@ Flyway is external to this process. Apply
 `db/migration/V14__task_board_reader_audience.sql`, then
 `db/migration/V15__inventory_finding_membership_markers.sql`, then
 `db/migration/V16__client_image_variants.sql`, then
-`db/migration/V17__consolidate_legacy_cabin_photo_folders.sql` before starting
-the service. The Go application never migrates, baselines, repairs or silently
+`db/migration/V17__consolidate_legacy_cabin_photo_folders.sql`, then
+`db/migration/V18__customer_shipment_subject_binding.sql`, then
+`db/migration/V19__customer_profile_avatar_owner.sql` before starting the
+service. The Go application never migrates, baselines, repairs or silently
 adopts a database.
 
-- New local/test databases migrate through V1 to V17.
-- A database already at V16 applies V17. V14 adds
+- New local/test databases migrate through V1 to V19.
+- A database already at V18 applies V19. V14 adds
   and backfills the task-entry read audience without deleting owner proofs,
   media rows or objects. V15 replaces only
   `media_inventory_finding_inbox_check2`: canonical departed, refreshed and
@@ -144,6 +155,10 @@ adopts a database.
   archive folder and refreshes the cover-folder pointer. It deletes no media,
   association or object, preserves source `media_asset.folder_id` values, and
   leaves inventory, direct-upload and task-evidence folders unchanged.
+  V18 adds nullable, owner-scoped shipment subject columns and leaves every
+  existing owner unbound. V19 admits the non-structured
+  `LOGISTICS_CUSTOMER_PROFILE`/`CUSTOMER_PROFILE` proof, requires its exact
+  subject binding, and preserves every existing media, proof and shipment row.
 - `baselineOnMigrate` must remain `false`; a non-empty unversioned database is
   rejected.
 - Startup verifies both successful Flyway history rows, their versions,
@@ -237,8 +252,10 @@ rows, variants and versioned object bytes/history remain retained. It does not
 automatically select a replacement cover
 ([`Repository.Delete`](internal/persistence/soft_delete.go)).
 
-Public access is restricted to a `USER` JWT with a UUID subject, exact RWMS
-scope and warehouse grant. Canonical owner/context pairs cover inventory,
+Manager public access is restricted to a `USER` JWT with a UUID subject,
+exact RWMS scope and warehouse grant. CustomerApp instead uses the exact
+customer identity and subject-bound shipment proof above. Canonical
+owner/context pairs cover inventory,
 cabins, maintenance estimates/repairs/acceptance/catalog nodes and logistics
 returns/shipments/transfers. All are authorized from local owner bindings,
 never from caller-supplied owner/warehouse values. Logistics browser requests
@@ -383,6 +400,15 @@ MEDIA_DATABASE_URL=... media-service reconcile-cabin-owner reviewed-batch.json
 
 Maintenance and logistics services establish their own scopes through
 `POST /api/internal/media/v1/owner-proofs` with exact service identity/scope.
+For `LOGISTICS_SHIPMENT` and `LOGISTICS_CUSTOMER_PROFILE`, a CustomerApp-bound
+proof additionally carries `authorizedSubjectId`. V18 introduces shipment
+subject storage; V19 extends checkpoint, receipt and binding constraints to the
+profile owner, requires the profile subject and forbids a subject on every
+other owner type. The subject therefore participates in payload hashing and
+exact replay instead of becoming caller-owned authorization state. Before
+binding an avatar, logistics-service validates exactly one current READY
+`PROFILE_AVATAR` generation through the private logistics-reference endpoint;
+owner, warehouse and authorized subject must all match.
 The first receipt establishes a baseline. Every later owner proof requires the
 exact next owner revision, while its aggregate version must strictly advance
 but may skip aggregate mutations that do not emit a media proof. Exact event
@@ -536,9 +562,11 @@ go build -trimpath -o /tmp/rwms-media-service ./cmd/media-service
 ```
 
 Migration verification must run separately with Flyway and PostgreSQL and
-cover clean V1-to-V17 install, V12-to-V13-to-V14-to-V15-to-V16-to-V17 upgrade,
+cover clean V1-to-V19 install, V12-to-current upgrade,
 V13-to-V14 reader backfill, V14-to-V15 membership-constraint upgrade, the
 additive V16 image-bundle upgrade, V17 legacy-folder consolidation, repeat,
 checksum drift and non-empty unversioned rejection. MinIO integration checks
-must use a versioned local/test bucket; Kafka checks must use the canonical
-topics and broker acknowledgements.
+must use a versioned local/test bucket. Kafka integration checks must use a
+dedicated local/test broker, never the broker of a running RWMS environment;
+the canonical topics and broker acknowledgements are verified inside that
+isolated broker.

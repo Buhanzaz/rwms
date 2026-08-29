@@ -63,8 +63,9 @@ public final class OrderAssetApiModels {
               String actorRole,
       @NotNull @Size(max = 100) List<@NotNull @Valid OrderUnitEquipmentRequirements> units) {}
 
-  /** Shared reservation view with live global availability and the catalog per-cabin maximum. */
+  /** Source-partitioned reservation view with live availability and the catalog cabin maximum. */
   public record OrderEquipmentReservationView(
+      UUID warehouseId,
       UUID equipmentId,
       String equipmentName,
       long quantity,
@@ -120,9 +121,13 @@ public final class OrderAssetApiModels {
       @NotNull UUID replacementRentalItemId,
       @Valid OrderUnitReplacementMovementBundle movement) {}
 
-  /** Authoritative post-replacement composition for one atomic multi-cabin swap. */
+  /**
+   * Authoritative post-replacement composition for one atomic multi-cabin swap. A null physical
+   * source retains the historical same-warehouse command behavior.
+   */
   public record ReplaceOrderUnitsRequest(
       @NotNull UUID warehouseId,
+      UUID inventorySourceWarehouseId,
       UUID presentationId,
       @NotNull UUID actorSubjectId,
       @NotBlank
@@ -134,7 +139,24 @@ public final class OrderAssetApiModels {
       @NotNull @Size(min = 1, max = 100)
           List<@NotNull @Valid OrderUnitEquipmentRequirements> units,
       @NotNull @Size(min = 1, max = 100)
-          List<@NotNull @Valid OrderUnitReplacement> replacements) {}
+          List<@NotNull @Valid OrderUnitReplacement> replacements) {
+    public ReplaceOrderUnitsRequest(
+        UUID warehouseId,
+        UUID presentationId,
+        UUID actorSubjectId,
+        String actorRole,
+        List<OrderUnitEquipmentRequirements> units,
+        List<OrderUnitReplacement> replacements) {
+      this(
+          warehouseId,
+          null,
+          presentationId,
+          actorSubjectId,
+          actorRole,
+          units,
+          replacements);
+    }
+  }
 
   /** Result for one pair within an all-or-nothing replacement receipt. */
   public record OrderUnitReplacementReceipt(

@@ -14,6 +14,7 @@ import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiMod
 
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlot;
+import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotKind;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerDeliverySlotStore;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
@@ -105,13 +106,14 @@ public class RentalOrderPlanningIntegrationService {
         LocalDate date = approvedDates.get(index);
         if (!date.isBefore(dateFrom) && !date.isAfter(dateTo)) {
           if (customerSlot != null && customerSlot.getDeliveryDate().equals(date)) {
+            boolean fixedWindow = customerSlot.getKind() == CustomerDeliverySlotKind.FIXED_WINDOW;
             options.add(
                 new PlanningDateOption(
                     date,
                     index,
-                    true,
-                    customerSlot.getWindowStart(),
-                    customerSlot.getWindowEnd(),
+                    fixedWindow,
+                    fixedWindow ? customerSlot.getWindowStart() : null,
+                    fixedWindow ? customerSlot.getWindowEnd() : null,
                     customerSlot.getTravelZoneHours()));
           } else {
             options.add(new PlanningDateOption(date, index, approvedDates.size() == 1));
@@ -129,10 +131,14 @@ public class RentalOrderPlanningIntegrationService {
           Set.copyOf(documentLines.findAssignedRentalShipmentAssetIds(order.getId(), unitIds));
       List<UUID> available = unitIds.stream().filter(id -> !assigned.contains(id)).toList();
       if (available.isEmpty()) continue;
+      Boolean trailerAccessAllowed =
+          customerSlot == null ? null : customerSlot.getSiteCabinCapacity() >= 2;
       result.add(
           new PlanningRequestResponse(
               order.getId(),
               order.getVersion(),
+              PlanningRequestRevision.sha256(
+                  order, available, options, trailerAccessAllowed),
               order.getOrderNumber(),
               order.getClient().getDisplayName(),
               order.getDeliveryAddress(),
@@ -141,6 +147,7 @@ public class RentalOrderPlanningIntegrationService {
               available.size(),
               available,
               options,
+              trailerAccessAllowed,
               order.getCreatedAt()));
     }
     return new PlanningRequestFeedResponse(

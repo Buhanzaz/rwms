@@ -1,7 +1,16 @@
 package dev.buhanzaz.rwms.logistics.customer.service;
 
-import dev.buhanzaz.rwms.logistics.customer.capacity.domain.ScenarioCapacityJob;
-import dev.buhanzaz.rwms.logistics.customer.capacity.repository.ScenarioCapacityJobRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityJob;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityPriceZone;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityRestrictionZone;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityShift;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacitySnapshot;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityTaskType;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityJobRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityPriceZoneRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityRestrictionZoneRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityShiftRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacitySnapshotRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.service.CustomerDeliveryCapacityFence;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlot;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotState;
@@ -32,7 +41,11 @@ import org.springframework.transaction.annotation.Transactional;
 class CustomerDeliverySlotHoldStore {
   private final CustomerRentalSessionStore sessions;
   private final CustomerDeliverySlotRepository slots;
-  private final ScenarioCapacityJobRepository scenarioJobs;
+  private final WarehouseCapacityJobRepository warehouseCapacityJobs;
+  private final WarehouseCapacityShiftRepository warehouseCapacityShifts;
+  private final WarehouseCapacityPriceZoneRepository warehouseCapacityPriceZones;
+  private final WarehouseCapacityRestrictionZoneRepository warehouseCapacityRestrictionZones;
+  private final WarehouseCapacitySnapshotRepository warehouseCapacitySnapshots;
   private final DriverLogisticsTaskRepository driverTasks;
   private final CustomerDeliveryCapacityFence capacityFence;
   private final Clock clock;
@@ -40,7 +53,7 @@ class CustomerDeliverySlotHoldStore {
   /** Commits a route decision only if every local capacity input still matches its calculation. */
   @Transactional
   HeldSlot hold(HoldCommand command) {
-    capacityFence.acquireDayAndScenario(command.warehouseId(), command.deliveryDate());
+    capacityFence.acquireDayAndWarehouseCapacity(command.warehouseId(), command.deliveryDate());
     CustomerRentalSession session =
         sessions.selectSlot(
             command.subjectId(),
@@ -72,13 +85,30 @@ class CustomerDeliverySlotHoldStore {
                 now),
             command.subjectId(),
             command.inquiryId());
-    List<ScenarioCapacityJob> generated =
-        scenarioJobs.findCapacityWorkload(command.warehouseId(), command.deliveryDate());
+    List<WarehouseCapacityJob> generated =
+        warehouseCapacityJobs.findCapacityWorkload(command.warehouseId(), command.deliveryDate()).stream()
+            .filter(job -> job.getTaskType() == WarehouseCapacityTaskType.DELIVERY)
+            .toList();
+    List<WarehouseCapacityShift> shifts =
+        warehouseCapacityShifts.findCapacityShifts(command.warehouseId(), command.deliveryDate());
+    List<WarehouseCapacityPriceZone> priceZones =
+        warehouseCapacityPriceZones.findTariffZones(command.warehouseId());
+    List<WarehouseCapacityRestrictionZone> restrictionZones =
+        warehouseCapacityRestrictionZones.findRestrictionZones(command.warehouseId());
+    WarehouseCapacitySnapshot snapshot =
+        warehouseCapacitySnapshots.findByWarehouseId(command.warehouseId()).orElse(null);
     long reservations =
         driverTasks.countWholeDayDeliveryReservations(
             command.warehouseId(), command.deliveryDate());
     String currentFingerprint =
-        CustomerCapacityWorkloadFingerprint.sha256(workload, generated, reservations);
+        CustomerCapacityWorkloadFingerprint.sha256(
+            workload,
+            generated,
+            shifts,
+            snapshot,
+            priceZones,
+            restrictionZones,
+            reservations);
     if (!command.workloadSha256().equals(currentFingerprint)) throw taken();
 
     for (CustomerDeliverySlot prior :
@@ -89,7 +119,11 @@ class CustomerDeliverySlotHoldStore {
         slots.save(prior);
       }
     }
-    offered.hold(now.plus(command.holdLifetime()), command.capacityRemaining());
+    offered.hold(
+        now.plus(command.holdLifetime()),
+        command.capacityRemaining(),
+        command.privateSiteAccessConfirmed(),
+        command.failedTripChargeAcknowledged());
     return new HeldSlot(session, slots.saveAndFlush(offered));
   }
 
@@ -129,6 +163,8 @@ class CustomerDeliverySlotHoldStore {
       LocalDate deliveryDate,
       String workloadSha256,
       int capacityRemaining,
+      boolean privateSiteAccessConfirmed,
+      boolean failedTripChargeAcknowledged,
       Duration holdLifetime) {}
 
   /** Atomically persisted cart and slot returned to the customer boundary. */

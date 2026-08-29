@@ -8,6 +8,7 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskWorkerContent;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
@@ -58,6 +59,7 @@ class DriverTaskWorkflowStore {
   private final LogisticsDocumentLineRepository documentLines;
   private final RentalOrderUnitTermRepository rentalTerms;
   private final CustomerDeliveryCapacityFence capacityFence;
+  private final DriverTaskWorkerContentCodec workerContentCodec;
 
   @Transactional
   public Optional<Work> nextWork(UUID taskId) {
@@ -80,7 +82,8 @@ class DriverTaskWorkflowStore {
                   new LogisticsDependencyGateway.DriverTaskAudience(
                       task.getDriverAudienceMode(),
                       task.getPlannedDriverWorkerId(),
-                      task.getPlannedDriverNameSnapshot())));
+                      task.getPlannedDriverNameSnapshot()),
+                  workerContentCodec.decode(task.getWorkerContentJson())));
       case SCHEDULED ->
           task.hasManualPromotionHold()
                   && task.getKind().consumesRepairPlace()
@@ -232,14 +235,22 @@ class DriverTaskWorkflowStore {
             .findForUpdate(task.getSourceId())
             .orElseThrow(
                 () -> new LogisticsConflictException("Логистический документ ходки не найден"));
-    if (!task.getWarehouseId().equals(document.getWarehouseId())
-        || !matchesDocumentType(task.getKind(), document.getDocumentType())) {
+    if (!matchesDocumentType(task.getKind(), document.getDocumentType())) {
       throw new LogisticsConflictException("Задание водителя не соответствует документу ходки");
     }
     try {
       document.requirePreStartTripReschedule();
     } catch (IllegalStateException exception) {
       throw new LogisticsConflictException("Начатую ходку нельзя перенести или переупорядочить");
+    }
+    UUID documentTaskWarehouse =
+        document.getDocumentType() == LogisticsDocumentType.SHIPMENT
+            ? DocumentDriverTaskPlanner.taskWarehouse(
+                document,
+                documentLines.findAllByDocument_IdOrderByLineNumber(document.getId()))
+            : document.getWarehouseId();
+    if (!task.getWarehouseId().equals(documentTaskWarehouse)) {
+      throw new LogisticsConflictException("Задание водителя не соответствует документу ходки");
     }
   }
 
@@ -260,7 +271,15 @@ class DriverTaskWorkflowStore {
             .findForUpdate(task.getSourceId())
             .orElseThrow(
                 () -> new LogisticsConflictException("Логистический документ ходки не найден"));
-    if (!task.getWarehouseId().equals(document.getWarehouseId())
+    List<LogisticsDocumentLine> shipmentLines =
+        document.getDocumentType() == LogisticsDocumentType.SHIPMENT
+            ? documentLines.findAllByDocument_IdOrderByLineNumber(document.getId())
+            : List.of();
+    UUID documentTaskWarehouse =
+        document.getDocumentType() == LogisticsDocumentType.SHIPMENT
+            ? DocumentDriverTaskPlanner.taskWarehouse(document, shipmentLines)
+            : document.getWarehouseId();
+    if (!task.getWarehouseId().equals(documentTaskWarehouse)
         || !matchesDocumentType(task.getKind(), document.getDocumentType())) {
       throw new LogisticsConflictException("Задание водителя не соответствует документу ходки");
     }
@@ -272,7 +291,7 @@ class DriverTaskWorkflowStore {
     } catch (IllegalStateException exception) {
       throw new LogisticsConflictException("Начатую ходку нельзя перенести на другую дату");
     }
-    synchronizeRentalTerms(document, board.scheduledDate());
+    synchronizeRentalTerms(document, shipmentLines, board.scheduledDate());
     documents.saveAndFlush(document);
   }
 
@@ -282,15 +301,15 @@ class DriverTaskWorkflowStore {
     }
   }
 
-  private void synchronizeRentalTerms(LogisticsDocument document, java.time.LocalDate date) {
+  private void synchronizeRentalTerms(
+      LogisticsDocument document,
+      List<LogisticsDocumentLine> shipmentLines,
+      java.time.LocalDate date) {
     if (document.getDocumentType() != LogisticsDocumentType.SHIPMENT
         || document.getRentalOrderId() == null) {
       return;
     }
-    List<UUID> unitIds =
-        documentLines.findAllByDocument_IdOrderByLineNumber(document.getId()).stream()
-            .map(LogisticsDocumentLine::getAssetId)
-            .toList();
+    List<UUID> unitIds = shipmentLines.stream().map(LogisticsDocumentLine::getAssetId).toList();
     List<RentalOrderUnitTerm> terms =
         rentalTerms.findAllByOrder_IdAndRentalItemIdInOrderByRentalItemIdAsc(
             document.getRentalOrderId(), unitIds);
@@ -597,6 +616,9 @@ class DriverTaskWorkflowStore {
   }
 
   private static String title(DriverLogisticsTask task) {
+    if (task.isFurnitureCargoTransfer()) {
+      return "Переместить мебель между складами";
+    }
     if (task.isGroupedDocument()) {
       return "Отгрузить бытовки";
     }
@@ -639,7 +661,8 @@ class DriverTaskWorkflowStore {
       String description,
       java.time.LocalDate scheduledDate,
       int priority,
-      LogisticsDependencyGateway.DriverTaskAudience driverAudience)
+      LogisticsDependencyGateway.DriverTaskAudience driverAudience,
+      DriverTaskWorkerContent workerContent)
       implements Work {}
 
   /** Status lookup used only to reconcile an already registered task-board identity. */

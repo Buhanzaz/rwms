@@ -12,8 +12,13 @@ import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import jakarta.persistence.Version;
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
@@ -59,6 +64,18 @@ public class Warehouse {
   @Column(name = "address", length = 1000)
   private String address;
 
+  @DecimalMin("-90.000000")
+  @DecimalMax("90.000000")
+  @Digits(integer = 2, fraction = 6)
+  @Column(name = "latitude", precision = 8, scale = 6)
+  private BigDecimal latitude;
+
+  @DecimalMin("-180.000000")
+  @DecimalMax("180.000000")
+  @Digits(integer = 3, fraction = 6)
+  @Column(name = "longitude", precision = 9, scale = 6)
+  private BigDecimal longitude;
+
   @NotBlank
   @Column(name = "time_zone", nullable = false, length = 64)
   private String timeZone;
@@ -86,6 +103,14 @@ public class Warehouse {
   @Column(name = "active", nullable = false)
   private boolean active = true;
 
+  /** Additional warehouse characteristic; it does not change lifecycle or operation admission. */
+  @Column(name = "representative", nullable = false)
+  private boolean representative;
+
+  /** Forces aggregate-version increments when the owned support-link collection changes. */
+  @Column(name = "support_link_revision", nullable = false)
+  private long supportLinkRevision;
+
   @Column(name = "sort_order")
   private Integer sortOrder;
 
@@ -99,33 +124,146 @@ public class Warehouse {
 
   protected Warehouse() {}
 
+  /**
+   * Creates an ordinary warehouse for source-compatible callers that predate the representative
+   * characteristic.
+   *
+   * @param name display name
+   * @param city human-readable city
+   * @param address optional human-readable address
+   * @param timeZone canonical IANA timezone
+   * @param sortOrder optional non-negative directory ordering value
+   * @return new ordinary warehouse aggregate
+   */
   public static Warehouse create(
       String name,
       String city,
       String address,
       ZoneId timeZone,
       Integer sortOrder) {
+    return create(name, city, address, timeZone, sortOrder, false);
+  }
+
+  /**
+   * Creates a warehouse with its independently managed representative characteristic.
+   *
+   * @param name display name
+   * @param city human-readable city
+   * @param address optional human-readable address
+   * @param timeZone canonical IANA timezone
+   * @param sortOrder optional non-negative directory ordering value
+   * @param representative whether the warehouse is representative
+   * @return new warehouse aggregate
+   */
+  public static Warehouse create(
+      String name,
+      String city,
+      String address,
+      ZoneId timeZone,
+      Integer sortOrder,
+      boolean representative) {
+    return create(name, city, address, null, null, timeZone, sortOrder, representative);
+  }
+
+  /**
+   * Creates a warehouse with optional logistics coordinates and its representative characteristic.
+   *
+   * @param name display name
+   * @param city human-readable city
+   * @param address optional human-readable address
+   * @param latitude optional WGS84 latitude; requires longitude
+   * @param longitude optional WGS84 longitude; requires latitude
+   * @param timeZone canonical IANA timezone
+   * @param sortOrder optional non-negative directory ordering value
+   * @param representative whether the warehouse is representative
+   * @return new warehouse aggregate
+   */
+  public static Warehouse create(
+      String name,
+      String city,
+      String address,
+      BigDecimal latitude,
+      BigDecimal longitude,
+      ZoneId timeZone,
+      Integer sortOrder,
+      boolean representative) {
     Warehouse warehouse = new Warehouse();
-    warehouse.assign(name, city, address, timeZone, sortOrder);
+    warehouse.assign(
+        name, city, address, latitude, longitude, timeZone, sortOrder, representative);
     return warehouse;
   }
 
+  /**
+   * Fully replaces mutable metadata for source-compatible callers that predate the representative
+   * characteristic.
+   *
+   * @param name display name
+   * @param city human-readable city
+   * @param address optional human-readable address
+   * @param sortOrder optional non-negative directory ordering value
+   * @return whether aggregate state changed
+   */
   public Mutation replace(String name, String city, String address, Integer sortOrder) {
+    return replace(name, city, address, sortOrder, false);
+  }
+
+  /**
+   * Fully replaces mutable metadata, including the representative characteristic.
+   *
+   * @param name display name
+   * @param city human-readable city
+   * @param address optional human-readable address
+   * @param sortOrder optional non-negative directory ordering value
+   * @param representative whether the warehouse is representative
+   * @return whether aggregate state changed
+   */
+  public Mutation replace(
+      String name, String city, String address, Integer sortOrder, boolean representative) {
+    return replace(name, city, address, null, null, sortOrder, representative);
+  }
+
+  /**
+   * Fully replaces mutable metadata, including coordinates and representative characteristic.
+   *
+   * @param name display name
+   * @param city human-readable city
+   * @param address optional human-readable address
+   * @param latitude optional WGS84 latitude; requires longitude
+   * @param longitude optional WGS84 longitude; requires latitude
+   * @param sortOrder optional non-negative directory ordering value
+   * @param representative whether the warehouse is representative
+   * @return whether aggregate state changed
+   */
+  public Mutation replace(
+      String name,
+      String city,
+      String address,
+      BigDecimal latitude,
+      BigDecimal longitude,
+      Integer sortOrder,
+      boolean representative) {
     CanonicalName canonicalName = canonicalName(name);
     String normalizedCity = normalizeRequired(city, "city", 255);
     String normalizedAddress = normalizeOptional(address, 1000);
+    Coordinates coordinates = coordinates(latitude, longitude);
     validateSortOrder(sortOrder);
     boolean changed =
         !Objects.equals(this.name, canonicalName.displayName())
             || !Objects.equals(this.normalizedName, canonicalName.normalizedName())
             || !Objects.equals(this.city, normalizedCity)
             || !Objects.equals(this.address, normalizedAddress)
+            || !Objects.equals(this.latitude, coordinates.latitude())
+            || !Objects.equals(this.longitude, coordinates.longitude())
+            || this.representative != representative
             || !Objects.equals(this.sortOrder, sortOrder);
     if (!changed) return Mutation.NONE;
     this.name = canonicalName.displayName();
     this.normalizedName = canonicalName.normalizedName();
     this.city = normalizedCity;
     this.address = normalizedAddress;
+    this.latitude = coordinates.latitude();
+    this.longitude = coordinates.longitude();
+    this.representative = representative;
     this.sortOrder = sortOrder;
     return Mutation.CHANGED;
   }
@@ -170,6 +308,11 @@ public class Warehouse {
     lifecycleRevision++;
   }
 
+  /** Records a changed support-link collection under this aggregate's version fence. */
+  public void recordSupportLinkDecision() {
+    supportLinkRevision++;
+  }
+
   public boolean allowsIncomingOperations() {
     return lifecycleState == WarehouseLifecycleState.ACTIVE;
   }
@@ -196,18 +339,25 @@ public class Warehouse {
       String name,
       String city,
       String address,
+      BigDecimal latitude,
+      BigDecimal longitude,
       ZoneId timeZone,
-      Integer sortOrder) {
+      Integer sortOrder,
+      boolean representative) {
     CanonicalName canonicalName = canonicalName(name);
     this.name = canonicalName.displayName();
     this.normalizedName = canonicalName.normalizedName();
     this.city = normalizeRequired(city, "city", 255);
     this.address = normalizeOptional(address, 1000);
+    Coordinates coordinates = coordinates(latitude, longitude);
+    this.latitude = coordinates.latitude();
+    this.longitude = coordinates.longitude();
     this.timeZone = normalizeTimeZone(timeZone);
     validateSortOrder(sortOrder);
     this.lifecycleState = WarehouseLifecycleState.ACTIVE;
     this.lifecycleRevision = 0;
     this.active = true;
+    this.representative = representative;
     this.sortOrder = sortOrder;
   }
 
@@ -217,10 +367,16 @@ public class Warehouse {
     normalizedName = canonicalName.normalizedName();
     city = normalizeRequired(city, "city", 255);
     address = normalizeOptional(address, 1000);
+    Coordinates coordinates = coordinates(latitude, longitude);
+    latitude = coordinates.latitude();
+    longitude = coordinates.longitude();
     timeZone = normalizeTimeZone(ZoneId.of(timeZone));
     validateSortOrder(sortOrder);
     if (lifecycleState == null) throw new IllegalArgumentException("lifecycleState is required");
     if (lifecycleRevision < 0) throw new IllegalArgumentException("lifecycleRevision must not be negative");
+    if (supportLinkRevision < 0) {
+      throw new IllegalArgumentException("supportLinkRevision must not be negative");
+    }
     active = lifecycleState == WarehouseLifecycleState.ACTIVE;
   }
 
@@ -275,6 +431,31 @@ public class Warehouse {
     if (value != null && value < 0) throw new IllegalArgumentException("sortOrder must not be negative");
   }
 
+  private static Coordinates coordinates(BigDecimal latitude, BigDecimal longitude) {
+    if ((latitude == null) != (longitude == null)) {
+      throw new IllegalArgumentException("latitude and longitude must be supplied together");
+    }
+    if (latitude == null) return new Coordinates(null, null);
+    BigDecimal normalizedLatitude = normalizeCoordinate(latitude, "latitude", 90);
+    BigDecimal normalizedLongitude = normalizeCoordinate(longitude, "longitude", 180);
+    return new Coordinates(normalizedLatitude, normalizedLongitude);
+  }
+
+  private static BigDecimal normalizeCoordinate(
+      BigDecimal value, String field, int absoluteMaximum) {
+    BigDecimal normalized;
+    try {
+      normalized = value.setScale(6, RoundingMode.UNNECESSARY);
+    } catch (ArithmeticException exception) {
+      throw new IllegalArgumentException(field + " must have at most 6 decimal places", exception);
+    }
+    BigDecimal maximum = BigDecimal.valueOf(absoluteMaximum).setScale(6);
+    if (normalized.abs().compareTo(maximum) > 0) {
+      throw new IllegalArgumentException(field + " is outside the WGS84 range");
+    }
+    return normalized;
+  }
+
   public UUID getId() {
     return id;
   }
@@ -299,6 +480,14 @@ public class Warehouse {
     return address;
   }
 
+  public BigDecimal getLatitude() {
+    return latitude;
+  }
+
+  public BigDecimal getLongitude() {
+    return longitude;
+  }
+
   public String getTimeZone() {
     return timeZone;
   }
@@ -317,6 +506,15 @@ public class Warehouse {
 
   public boolean isActive() {
     return lifecycleState == WarehouseLifecycleState.ACTIVE;
+  }
+
+  /** Returns the independent representative characteristic without inferring lifecycle state. */
+  public boolean isRepresentative() {
+    return representative;
+  }
+
+  public long getSupportLinkRevision() {
+    return supportLinkRevision;
   }
 
   public Integer getSortOrder() {
@@ -361,4 +559,7 @@ public class Warehouse {
   }
 
   private record CanonicalName(String displayName, String normalizedName) {}
+
+  /** Canonical all-or-none coordinate pair used only inside the aggregate. */
+  private record Coordinates(BigDecimal latitude, BigDecimal longitude) {}
 }

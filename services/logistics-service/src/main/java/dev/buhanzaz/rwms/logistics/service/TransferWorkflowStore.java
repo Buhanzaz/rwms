@@ -62,6 +62,7 @@ class TransferWorkflowStore {
   private final LogisticsMediaReferenceRepository mediaReferenceRepository;
   private final LogisticsReconciliationRepository reconciliationRepository;
   private final LogisticsEventStore eventStore;
+  private final TransferPlanWorkflowStore transferPlanWorkflow;
 
   /**
    * Builds local transfer request data for one exact lease. A claimed operation that is not yet the
@@ -299,6 +300,7 @@ class TransferWorkflowStore {
       requireDepartedSnapshot(document, line, guard, snapshot);
       attempt.confirm(snapshotDigest("TRANSFER_ASSET_DEPART_RESPONSE", snapshot), completedAt);
       guard.recordObservedAssetVersion(snapshot.version());
+      line.consumeTransferUnitReservation();
       line.markDeparted();
       lineRepository.saveAndFlush(line);
       if (everyLineDeparted(document)) {
@@ -311,6 +313,7 @@ class TransferWorkflowStore {
             document.getRequestedBySubjectId(),
             LogisticsEventType.TRANSFER_DEPARTED,
             null);
+        transferPlanWorkflow.beginTransit(document);
       }
       return;
     }
@@ -373,15 +376,7 @@ class TransferWorkflowStore {
         LogisticsEventType.TRANSFER_LINE_ARRIVED,
         null);
     if (everyLineArrived(document)) {
-      document.completeTransfer();
-      documentRepository.saveAndFlush(document);
-      eventStore.append(
-          document,
-          lineCount(document),
-          document.getCorrelationId(),
-          document.getRequestedBySubjectId(),
-          LogisticsEventType.TRANSFER_COMPLETED,
-          null);
+      transferPlanWorkflow.requestCompletion(document);
     }
   }
 

@@ -54,6 +54,7 @@ public interface OrderAssetResponseMapper {
   OrderEquipmentContent toOrderEquipmentContent(EquipmentContentResponse response);
 
   @Mapping(target = "equipmentId", source = "reservation.equipmentId")
+  @Mapping(target = "warehouseId", source = "reservation.warehouseId")
   @Mapping(target = "equipmentName", source = "equipment.name")
   @Mapping(target = "quantity", source = "reservation.quantity")
   @Mapping(target = "availableQuantity", source = "availableQuantity")

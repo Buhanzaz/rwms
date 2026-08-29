@@ -12,7 +12,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 /**
@@ -26,6 +25,7 @@ class RentalOrderShipmentService {
   private final OrderAuthorizer access;
   private final RentalOrderReadService reads;
   private final LogisticsDocumentService documents;
+  private final RentalOrderInventorySourcePolicy inventorySources;
 
   LogisticsDocumentService.CreateResult createRentalShipment(
       OrderActor actor,
@@ -41,19 +41,22 @@ class RentalOrderShipmentService {
    * keeps a retry replayable after later order changes while still rejecting callers that lack
    * write access to the warehouse before any admission intent is reserved.
    */
-  UUID rentalShipmentAdmissionWarehouse(OrderActor actor, UUID orderId, LocalDate scheduledDate) {
+  UUID rentalShipmentAdmissionWarehouse(
+      OrderActor actor,
+      UUID orderId,
+      LocalDate scheduledDate,
+      UUID inventorySourceWarehouseId) {
     if (actor == null || orderId == null || scheduledDate == null) {
       throw new IllegalArgumentException("Rental shipment admission identity is invalid");
     }
     RentalOrder order = store.requiredOrder(orderId);
     access.requireVisible(actor, order);
-    UUID warehouseId = order.getWarehouseId();
-    if (!actor.writeScope()
-        || warehouseId == null
-        || !access.canEditWarehouse(actor, warehouseId)) {
-      throw new AccessDeniedException("Insufficient warehouse access");
-    }
-    return warehouseId;
+    return inventorySources.requireWritableShipmentSource(
+        actor, order, inventorySourceWarehouseId, scheduledDate);
+  }
+
+  UUID rentalShipmentAdmissionWarehouse(OrderActor actor, UUID orderId, LocalDate scheduledDate) {
+    return rentalShipmentAdmissionWarehouse(actor, orderId, scheduledDate, null);
   }
 
   /**
@@ -92,7 +95,9 @@ class RentalOrderShipmentService {
           "Перед назначением отгрузки получите от клиента адрес и желаемую дату");
     }
     RentalOrderProblems.requireVersion(order, request.expectedVersion());
-    List<LogisticsDependencyGateway.OrderUnitReservation> units = reads.readUnits(order);
+    inventorySources.requireWritableShipmentSource(
+        actor, order, request.inventorySourceWarehouseId(), request.scheduledDate());
+    List<LogisticsDependencyGateway.OrderUnitReservation> units = reads.readUnitsForShipment(order);
     return admission == null
         ? documents.createRentalOrderShipment(
             actor.subjectId(), idempotencyKey, correlationId, order, units, request, checksum)
@@ -142,6 +147,10 @@ class RentalOrderShipmentService {
       values.add(request.driverWorkerId().toString());
     }
     values.add(Boolean.toString(request.warehouseDriverPool()));
+    values.add(
+        request.inventorySourceWarehouseId() == null
+            ? "SERVICE_WAREHOUSE_SOURCE"
+            : request.inventorySourceWarehouseId().toString());
     values.add(request.scheduledDate().toString());
     request.unitIds().stream().sorted().map(UUID::toString).forEach(values::add);
     return OrderCommandChecksum.sha256("CREATE_RENTAL_ORDER_SHIPMENT", values);

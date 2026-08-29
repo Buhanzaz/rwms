@@ -4,9 +4,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import dev.buhanzaz.rwms.logistics.customer.capacity.repository.ScenarioCapacityJobRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityJobRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityPriceZoneRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityRestrictionZoneRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityShiftRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacitySnapshotRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.service.CustomerDeliveryCapacityFence;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacitySnapshot;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityRestrictionKind;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityRestrictionZone;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlot;
+import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotKind;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotState;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerRentalSession;
 import dev.buhanzaz.rwms.logistics.customer.repository.CustomerDeliverySlotRepository;
@@ -43,6 +51,7 @@ class CustomerDeliverySlotHoldStoreTest {
             inquiryId,
             warehouseId,
             date,
+            CustomerDeliverySlotKind.FIXED_WINDOW,
             LocalTime.of(9, 0),
             LocalTime.of(12, 0),
             "Москва",
@@ -52,17 +61,44 @@ class CustomerDeliverySlotHoldStoreTest {
             1_800,
             1,
             1,
+            2,
+            null,
+            null,
+            false,
+            false,
+            4.0,
+            2.55,
+            12.0,
+            18.0,
+            10.0,
+            3,
             OffsetDateTime.parse("2026-08-27T08:10:00Z"));
     ReflectionTestUtils.setField(offered, "id", slotId);
     CustomerRentalSession session = mock(CustomerRentalSession.class);
     CustomerRentalSessionStore sessions = mock(CustomerRentalSessionStore.class);
     CustomerDeliverySlotRepository slots = mock(CustomerDeliverySlotRepository.class);
-    ScenarioCapacityJobRepository generated = mock(ScenarioCapacityJobRepository.class);
+    WarehouseCapacityJobRepository generated = mock(WarehouseCapacityJobRepository.class);
+    WarehouseCapacityShiftRepository shifts = mock(WarehouseCapacityShiftRepository.class);
+    WarehouseCapacityPriceZoneRepository priceZones =
+        mock(WarehouseCapacityPriceZoneRepository.class);
+    WarehouseCapacityRestrictionZoneRepository restrictionZones =
+        mock(WarehouseCapacityRestrictionZoneRepository.class);
+    WarehouseCapacitySnapshotRepository snapshots =
+        mock(WarehouseCapacitySnapshotRepository.class);
     DriverLogisticsTaskRepository drivers = mock(DriverLogisticsTaskRepository.class);
     CustomerDeliveryCapacityFence capacityFence = mock(CustomerDeliveryCapacityFence.class);
     CustomerDeliverySlotHoldStore store =
         new CustomerDeliverySlotHoldStore(
-            sessions, slots, generated, drivers, capacityFence, CLOCK);
+            sessions,
+            slots,
+            generated,
+            shifts,
+            priceZones,
+            restrictionZones,
+            snapshots,
+            drivers,
+            capacityFence,
+            CLOCK);
     when(sessions.selectSlot(subjectId, inquiryId, 4, slotId)).thenReturn(session);
     when(slots.findByIdForUpdate(slotId)).thenReturn(Optional.of(offered));
     when(slots.findCapacityWorkloadForUpdate(
@@ -74,11 +110,25 @@ class CustomerDeliverySlotHoldStoreTest {
             OffsetDateTime.parse("2026-08-27T08:00:00Z")))
         .thenReturn(List.of());
     when(generated.findCapacityWorkload(warehouseId, date)).thenReturn(List.of());
+    when(shifts.findCapacityShifts(warehouseId, date)).thenReturn(List.of());
+    when(priceZones.findTariffZones(warehouseId)).thenReturn(List.of());
+    when(restrictionZones.findRestrictionZones(warehouseId)).thenReturn(List.of());
+    WarehouseCapacitySnapshot snapshot =
+        WarehouseCapacitySnapshot.create(
+            warehouseId,
+            1,
+            "a".repeat(64),
+            List.of(),
+            List.of(),
+            List.of(),
+            OffsetDateTime.parse("2026-08-27T07:00:00Z"));
+    when(snapshots.findByWarehouseId(warehouseId)).thenReturn(Optional.of(snapshot));
     when(slots.findHeldForUpdate(inquiryId, CustomerDeliverySlotState.HELD))
         .thenReturn(List.of());
     when(slots.saveAndFlush(offered)).thenReturn(offered);
     String fingerprint =
-        CustomerCapacityWorkloadFingerprint.sha256(List.of(), List.of(), 0);
+        CustomerCapacityWorkloadFingerprint.sha256(
+            List.of(), List.of(), List.of(), snapshot, List.of(), List.of(), 0);
 
     CustomerDeliverySlotHoldStore.HeldSlot held =
         store.hold(
@@ -92,12 +142,64 @@ class CustomerDeliverySlotHoldStoreTest {
                 date,
                 fingerprint,
                 1,
+                true,
+                true,
                 Duration.ofMinutes(20)));
 
     assertThat(held.session()).isSameAs(session);
     assertThat(held.slot().getState()).isEqualTo(CustomerDeliverySlotState.HELD);
     assertThat(held.slot().getExpiresAt())
         .isEqualTo(OffsetDateTime.parse("2026-08-27T08:20:00Z"));
-    org.mockito.Mockito.verify(capacityFence).acquireDayAndScenario(warehouseId, date);
+    assertThat(held.slot().isPrivateSiteAccessConfirmed()).isTrue();
+    assertThat(held.slot().isFailedTripChargeAcknowledged()).isTrue();
+    org.mockito.Mockito.verify(capacityFence)
+        .acquireDayAndWarehouseCapacity(warehouseId, date);
+  }
+
+  @Test
+  void tariffAndRestrictionFactsParticipateInTheFinalWorkloadFence() {
+    UUID warehouseId = UUID.randomUUID();
+    WarehouseCapacitySnapshot defaults =
+        WarehouseCapacitySnapshot.create(
+            warehouseId,
+            1,
+            "a".repeat(64),
+            List.of(),
+            List.of(),
+            List.of(),
+            OffsetDateTime.parse("2026-08-27T07:00:00Z"));
+    WarehouseCapacitySnapshot custom =
+        WarehouseCapacitySnapshot.create(
+            warehouseId,
+            1,
+            "a".repeat(64),
+            List.of(),
+            List.of(),
+            List.of(),
+            11_000,
+            16_000,
+            21_000,
+            26_000,
+            List.of(),
+            OffsetDateTime.parse("2026-08-27T07:00:00Z"));
+    WarehouseCapacityRestrictionZone restriction = mock(WarehouseCapacityRestrictionZone.class);
+    when(restriction.getSourceZoneId()).thenReturn(UUID.randomUUID());
+    when(restriction.getSourceZoneVersion()).thenReturn(1L);
+    when(restriction.getKind()).thenReturn(WarehouseCapacityRestrictionKind.FORBIDDEN);
+    when(restriction.getGeometryJson())
+        .thenReturn("{\"type\":\"MultiPolygon\",\"coordinates\":[]}");
+
+    String baseline =
+        CustomerCapacityWorkloadFingerprint.sha256(
+            List.of(), List.of(), List.of(), defaults, List.of(), List.of(), 0);
+    String changedTariff =
+        CustomerCapacityWorkloadFingerprint.sha256(
+            List.of(), List.of(), List.of(), custom, List.of(), List.of(), 0);
+    String changedRestriction =
+        CustomerCapacityWorkloadFingerprint.sha256(
+            List.of(), List.of(), List.of(), defaults, List.of(), List.of(restriction), 0);
+
+    assertThat(changedTariff).isNotEqualTo(baseline);
+    assertThat(changedRestriction).isNotEqualTo(baseline);
   }
 }

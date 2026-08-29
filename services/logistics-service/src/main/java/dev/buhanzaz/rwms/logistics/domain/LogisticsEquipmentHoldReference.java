@@ -151,6 +151,24 @@ public class LogisticsEquipmentHoldReference {
     updatedAt = now();
   }
 
+  /**
+   * Makes a locally known hold releaseable after its historical shipment failed. The caller must
+   * first prove that acquisition or commitment has a terminal known outcome; release uses the
+   * persisted hold capability and version regardless of its pre-failure active/committed state.
+   */
+  public void prepareReleaseAfterFailedHistoricalShipment() {
+    if (holdState == LogisticsEquipmentHoldState.ACTIVE
+        || holdState == LogisticsEquipmentHoldState.COMMITTED) {
+      return;
+    }
+    if (holdState != LogisticsEquipmentHoldState.CONFLICT
+        && holdState != LogisticsEquipmentHoldState.RECONCILIATION_REQUIRED) {
+      throw new IllegalStateException("Failed historical shipment hold cannot be released safely");
+    }
+    holdState = LogisticsEquipmentHoldState.ACTIVE;
+    updatedAt = now();
+  }
+
   private void transition(
       LogisticsEquipmentHoldState expected,
       LogisticsEquipmentHoldState target,

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Asset Service API
-  version: 1.14.0
+  version: 1.15.0
   description: >-
     Stage 5 canonical asset boundary plus narrow Stage 7 inventory-service and
     Stage 8 logistics-service private surfaces. Rental-item comments and
@@ -1009,6 +1009,59 @@ paths:
               schema: { $ref: '#/components/schemas/LogisticsCabinPhotoPresentationSnapshot' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /api/internal/asset/v1/logistics/transfer-unit-reservations:
+    post:
+      operationId: confirmLogisticsTransferUnitReservations
+      description: >-
+        Requires SERVICE logistics-service with exactly asset.logistics. Atomically locks every
+        selected cabin in stable UUID order, verifies source warehouse, expected rental-item
+        version, FREE status, active catalog-backed type/dimension/finishing/characteristics and
+        linoleum requirements, and rejects order, presentation, lease, inventory, disposition or
+        another transfer custody. Success persists immutable transferId:lineId ownership history
+        and changes each canonical rental item to RESERVED without changing its warehouse.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConfirmTransferUnitReservationsRequest' }
+      responses:
+        '201':
+          description: Active batch reservation receipt or original subject-bound replay.
+          headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransferUnitReservationReceipt' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/DependencyFailure' }
+        '503': { $ref: '#/components/responses/DependencyFailure' }
+  /api/internal/asset/v1/logistics/transfer-unit-reservations/release:
+    put:
+      operationId: releaseLogisticsTransferUnitReservations
+      description: >-
+        Releases only exact ACTIVE transferId:lineId reservation owners with matching reservation
+        versions. Every cabin returns to FREE without changing warehouse; RELEASED and CONSUMED
+        rows remain immutable history, and a subject-bound command replay is response-stable.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReleaseTransferUnitReservationsRequest' }
+      responses:
+        '200':
+          description: Released batch receipt or original subject-bound replay.
+          headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransferUnitReservationReceipt' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/internal/asset/v1/logistics/operation-leases:
     post:
       operationId: acquireLogisticsOperationLease
@@ -1089,7 +1142,7 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsLeaseCommandRequest' } } } }
       responses:
         '200':
-          description: Released lease or original subject-bound replay.
+          description: Released lease, matching already terminal lease (RELEASED or EXPIRED), or original subject-bound replay.
           headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
           content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsOperationLease' } } }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1401,9 +1454,10 @@ paths:
       operationId: replaceOrderEquipmentReservations
       description: >-
         Replaces the order-wide catalogue reservation from requirements grouped by existing order
-        cabins. Capacity is allocatable physical furniture less other orders' unfulfilled
-        reservation portions, plus physical furniture already fulfilling this order's active
-        cabins; every configured per-cabin maximum is validated atomically.
+        cabins and partitions it by each cabin's physical warehouse. Capacity is allocatable
+        physical furniture less other orders' unfulfilled reservation portions, plus physical
+        furniture already fulfilling this order's active cabins at the same source; every
+        configured per-cabin maximum is validated atomically.
       requestBody:
         required: true
         content:
@@ -2521,8 +2575,9 @@ components:
     OrderEquipmentReservation:
       type: object
       additionalProperties: false
-      required: [equipmentId, equipmentName, quantity, availableQuantity, maximumPerCabin]
+      required: [warehouseId, equipmentId, equipmentName, quantity, availableQuantity, maximumPerCabin]
       properties:
+        warehouseId: { type: string, format: uuid }
         equipmentId: { type: string, format: uuid }
         equipmentName: { type: string, minLength: 1, maxLength: 255 }
         quantity: { type: integer, format: int64, minimum: 1 }
@@ -2609,6 +2664,13 @@ components:
       required: [warehouseId, presentationId, actorSubjectId, actorRole, units, replacements]
       properties:
         warehouseId: { type: string, format: uuid }
+        inventorySourceWarehouseId:
+          description: >-
+            Physical warehouse of every replacement cabin in this batch. Omission preserves the
+            historical same-warehouse behavior by using warehouseId.
+          oneOf:
+            - { type: string, format: uuid }
+            - { type: 'null' }
         presentationId:
           description: Existing presentation hold scope atomically consumed for every target cabin.
           oneOf:
@@ -3691,6 +3753,80 @@ components:
           maxItems: 100
           items: { type: string, minLength: 1, maxLength: 255 }
         linoleum: { type: [boolean, 'null'] }
+    ConfirmTransferUnitReservationLine:
+      type: object
+      additionalProperties: false
+      required: [lineId, rentalItemId, expectedRentalItemVersion, rentalTypeId, characteristicIds]
+      properties:
+        lineId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        expectedRentalItemVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+        rentalTypeId: { type: string, format: uuid }
+        dimensionId: { $ref: '#/components/schemas/NullableUuid' }
+        finishingId: { $ref: '#/components/schemas/NullableUuid' }
+        characteristicIds:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        linoleum: { type: [boolean, 'null'] }
+    ConfirmTransferUnitReservationsRequest:
+      type: object
+      additionalProperties: false
+      required: [transferId, sourceWarehouseId, lines]
+      properties:
+        transferId: { type: string, format: uuid }
+        sourceWarehouseId: { type: string, format: uuid }
+        lines:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: '#/components/schemas/ConfirmTransferUnitReservationLine' }
+    ReleaseTransferUnitReservationLine:
+      type: object
+      additionalProperties: false
+      required: [reservationId, lineId, rentalItemId, expectedReservationVersion]
+      properties:
+        reservationId: { type: string, format: uuid }
+        lineId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        expectedReservationVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+    ReleaseTransferUnitReservationsRequest:
+      type: object
+      additionalProperties: false
+      required: [transferId, lines]
+      properties:
+        transferId: { type: string, format: uuid }
+        lines:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: '#/components/schemas/ReleaseTransferUnitReservationLine' }
+    TransferUnitReservationState:
+      type: string
+      enum: [ACTIVE, RELEASED, CONSUMED]
+    TransferUnitReservationLineReceipt:
+      type: object
+      additionalProperties: false
+      required: [reservationId, version, lineId, rentalItemId, currentRentalItemVersion, state]
+      properties:
+        reservationId: { type: string, format: uuid }
+        version: { $ref: '#/components/schemas/ExpectedVersion' }
+        lineId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        currentRentalItemVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+        state: { $ref: '#/components/schemas/TransferUnitReservationState' }
+    TransferUnitReservationReceipt:
+      type: object
+      additionalProperties: false
+      required: [transferId, lines]
+      properties:
+        transferId: { type: string, format: uuid }
+        lines:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: '#/components/schemas/TransferUnitReservationLineReceipt' }
     AcquireLogisticsOperationLeaseRequest:
       type: object
       additionalProperties: false
@@ -3815,11 +3951,14 @@ components:
       enum: [LOGISTICS_EQUIPMENT_MOVEMENT, MAINTENANCE_DISPOSITION_MOVEMENT]
     LogisticsEquipmentMovementPurpose:
       type: string
-      enum: [ALLOCATABLE_REBALANCE, MAINTENANCE_DISPOSITION]
+      enum: [ALLOCATABLE_REBALANCE, TRANSFER_REBALANCE, MAINTENANCE_DISPOSITION]
       description: >-
         ALLOCATABLE_REBALANCE uses the canonical allocatable-source policy when
         order context is omitted and may use fenced physical surplus between
         active cabins of the same order when complete order context is present.
+        TRANSFER_REBALANCE reserves warehouse STOCK and may execute only as a
+        STOCK-to-STOCK movement between two different warehouses, without cabin
+        or order context.
         MAINTENANCE_DISPOSITION must match the prepared decision fence whose
         decisionId is movementId and may consume its nested committed hold.
     AcquireLogisticsEquipmentMovementReservationRequest:
@@ -3832,6 +3971,7 @@ components:
         remaining deficit; active source and inbound target holds are subtracted atomically.
         replacementSourceReservationId is accepted only to replay a movement pre-held by the
         atomic order-unit replacement effect; it can never mint a new reservation.
+        TRANSFER_REBALANCE must omit every order/cabin context field and reserve source STOCK.
       required: [movementId, lineId, purpose, equipmentId, sourceWarehouseId, sourceLocationKind, expectedSourceBalanceVersion, quantity, reservedUntil]
       properties:
         movementId: { type: string, format: uuid }

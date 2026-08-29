@@ -210,6 +210,24 @@ public class LogisticsExternalAttempt {
     clearLease();
   }
 
+  /**
+   * Reopens the exact persisted request after an operator selected a recovery workflow that can
+   * safely interpret its replay. The operation id and request digest remain unchanged, so the
+   * target service receives the original idempotency key instead of a second business effect.
+   */
+  public void reopenForRecovery(OffsetDateTime nextAttemptAt) {
+    if (result != LogisticsExternalAttemptResult.RECONCILIATION_REQUIRED) {
+      throw new IllegalStateException("Only an ambiguous attempt can be reopened for recovery");
+    }
+    if (nextAttemptAt == null) throw new IllegalArgumentException("nextAttemptAt is required");
+    result = LogisticsExternalAttemptResult.RETRY;
+    retryCount = Math.addExact(retryCount, 1);
+    this.nextAttemptAt = nextAttemptAt;
+    responseSha256 = null;
+    completedAt = null;
+    clearLease();
+  }
+
   public boolean isDue(OffsetDateTime now) {
     return (result == LogisticsExternalAttemptResult.PENDING
             || result == LogisticsExternalAttemptResult.RETRY)

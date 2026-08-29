@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.logistics.driver.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -20,10 +21,12 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskWorkerContent;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.driver.settings.service.ShipmentTaskSettingsService;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
+import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
@@ -31,6 +34,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
+import tools.jackson.databind.ObjectMapper;
 
 /** Verifies document-derived task planning without crossing the task-board transport boundary. */
 class DocumentDriverTaskPlannerTest {
@@ -42,9 +46,17 @@ class DocumentDriverTaskPlannerTest {
       mock(ShipmentTaskSettingsService.class);
   private final CustomerDeliveryCapacityFence capacityFence =
       mock(CustomerDeliveryCapacityFence.class);
+  private final DriverTaskWorkerContentCodec workerContentCodec =
+      new DriverTaskWorkerContentCodec(new ObjectMapper());
   private final DocumentDriverTaskPlanner planner =
       new DocumentDriverTaskPlanner(
-          tasks, documents, dependencies, workflowStore, shipmentTaskSettings, capacityFence);
+          tasks,
+          documents,
+          dependencies,
+          workflowStore,
+          shipmentTaskSettings,
+          capacityFence,
+          workerContentCodec);
 
   @Test
   void shipmentCreatesOneAssignedFixedDateGroupTaskAndReplaysByChecksum() {
@@ -113,6 +125,74 @@ class DocumentDriverTaskPlannerTest {
     verify(tasks, times(1)).saveAndFlush(any(DriverLogisticsTask.class));
     verify(capacityFence, times(2))
         .acquireTaskDay(warehouseId, date, DriverTaskKind.SHIPMENT);
+  }
+
+  @Test
+  void directRegionalShipmentCreatesDriverTaskAtItsSinglePhysicalSource() {
+    UUID serviceWarehouseId = UUID.randomUUID();
+    UUID sourceWarehouseId = UUID.randomUUID();
+    UUID queueDefinitionId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    LocalDate date = LocalDate.of(2026, 9, 14);
+    LogisticsDocument document =
+        LogisticsDocument.createShipment(
+            serviceWarehouseId,
+            UUID.randomUUID(),
+            "Региональный клиент",
+            "Петров",
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID());
+    document.scheduleShipment("Петров", document.getDriverWorkerId(), date);
+    LogisticsDocumentLine line =
+        LogisticsDocumentLine.create(
+            document, 1, assetId, 7, "Региональный клиент", UUID.randomUUID(), sourceWarehouseId);
+    ReflectionTestUtils.setField(line, "id", UUID.randomUUID());
+    persist(document);
+    stubDependencies(sourceWarehouseId, queueDefinitionId, assetId, "БТ-СП-14");
+    when(tasks.findActiveForUpdateBySourceTypeAndSourceIdAndKind(
+            DriverTaskSourceType.LOGISTICS_DOCUMENT, document.getId(), DriverTaskKind.SHIPMENT))
+        .thenReturn(Optional.empty());
+
+    planner.plan(document, List.of(line));
+
+    ArgumentCaptor<DriverLogisticsTask> task =
+        ArgumentCaptor.forClass(DriverLogisticsTask.class);
+    verify(tasks).saveAndFlush(task.capture());
+    assertThat(task.getValue().getWarehouseId()).isEqualTo(sourceWarehouseId);
+    assertThat(document.getWarehouseId()).isEqualTo(serviceWarehouseId);
+    verify(capacityFence).acquireTaskDay(sourceWarehouseId, date, DriverTaskKind.SHIPMENT);
+    verify(dependencies).readWarehouseDriverQueue(sourceWarehouseId);
+  }
+
+  @Test
+  void mixedPhysicalSourcesAreRejectedBeforeAnyDriverTaskIsCreated() {
+    UUID serviceWarehouseId = UUID.randomUUID();
+    LogisticsDocument document =
+        LogisticsDocument.createShipment(
+            serviceWarehouseId,
+            UUID.randomUUID(),
+            "Региональный клиент",
+            "Петров",
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID());
+    document.scheduleShipment(
+        "Петров", document.getDriverWorkerId(), LocalDate.of(2026, 9, 14));
+    LogisticsDocumentLine first =
+        LogisticsDocumentLine.create(
+            document, 1, UUID.randomUUID(), 7, "Клиент", UUID.randomUUID(), UUID.randomUUID());
+    LogisticsDocumentLine second =
+        LogisticsDocumentLine.create(
+            document, 2, UUID.randomUUID(), 7, "Клиент", UUID.randomUUID(), UUID.randomUUID());
+    ReflectionTestUtils.setField(first, "id", UUID.randomUUID());
+    ReflectionTestUtils.setField(second, "id", UUID.randomUUID());
+    persist(document);
+
+    assertThatThrownBy(() -> planner.plan(document, List.of(first, second)))
+        .isInstanceOf(LogisticsConflictException.class)
+        .hasMessageContaining("несколько складов-источников");
+    verify(tasks, never()).saveAndFlush(any());
   }
 
   @Test
@@ -339,6 +419,215 @@ class DocumentDriverTaskPlannerTest {
   }
 
   @Test
+  void furnitureOnlyTransferCreatesOneAssignedDocumentTaskAndReplaysByCargoChecksum() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID workerId = UUID.randomUUID();
+    UUID queueDefinitionId = UUID.randomUUID();
+    LocalDate date = LocalDate.of(2026, 8, 30);
+    LogisticsDocument document =
+        LogisticsDocument.createTransfer(
+            warehouseId, UUID.randomUUID(), date, UUID.randomUUID(), UUID.randomUUID());
+    document.assignTransferTripDriver(workerId, "Петров Алексей");
+    persist(document);
+    when(dependencies.readWarehouseDriverQueue(warehouseId))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseDriverQueue(
+                warehouseId, queueDefinitionId, UUID.randomUUID()));
+    when(tasks.findActiveForUpdateBySourceTypeAndSourceIdAndKind(
+            DriverTaskSourceType.LOGISTICS_DOCUMENT, document.getId(), DriverTaskKind.TRANSFER))
+        .thenReturn(Optional.empty());
+
+    DriverTaskWorkerContent workerContent =
+        new DriverTaskWorkerContent(
+            "Склад A → Склад B",
+            List.of(
+                new DriverTaskWorkerContent.Work(
+                    UUID.randomUUID(), "Загрузить мебель", 1, null, null, null)),
+            List.of(),
+            List.of());
+    planner.planTransferCargo(document, "  12 предметов мебели  ", workerContent);
+
+    ArgumentCaptor<DriverLogisticsTask> taskCaptor =
+        ArgumentCaptor.forClass(DriverLogisticsTask.class);
+    verify(tasks).saveAndFlush(taskCaptor.capture());
+    DriverLogisticsTask created = taskCaptor.getValue();
+    assertThat(created.getCabinId()).isNull();
+    assertThat(created.getMembers()).isEmpty();
+    assertThat(created.isFurnitureCargoTransfer()).isTrue();
+    assertThat(created.getSourceId()).isEqualTo(document.getId());
+    assertThat(created.getUnitNumber()).isEqualTo("12 предметов мебели");
+    assertThat(created.getComment()).isEqualTo("Межскладской груз: 12 предметов мебели");
+    assertThat(created.getDriverAudienceMode()).isEqualTo(DriverTaskAudienceMode.ASSIGNED_DRIVER);
+    assertThat(created.getPlannedDriverWorkerId()).isEqualTo(workerId);
+    assertThat(created.getPlannedDriverNameSnapshot()).isEqualTo("Петров Алексей");
+    assertThat(workerContentCodec.decode(created.getWorkerContentJson())).isEqualTo(workerContent);
+    verify(capacityFence).acquireTaskDay(warehouseId, date, DriverTaskKind.TRANSFER);
+    verify(shipmentTaskSettings, never()).requireWithinLimit(any(), anyInt(), any());
+
+    when(tasks.findActiveForUpdateBySourceTypeAndSourceIdAndKind(
+            DriverTaskSourceType.LOGISTICS_DOCUMENT, document.getId(), DriverTaskKind.TRANSFER))
+        .thenReturn(Optional.of(created));
+    planner.planTransferCargo(document, "12 предметов мебели", workerContent);
+
+    verify(tasks, times(1)).saveAndFlush(any(DriverLogisticsTask.class));
+    verify(capacityFence, times(2))
+        .acquireTaskDay(warehouseId, date, DriverTaskKind.TRANSFER);
+  }
+
+  @Test
+  void registeredTransferReplacesStructuredContentBeforeMovingTheUnstartedTask() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID documentId = UUID.randomUUID();
+    UUID localTaskId = UUID.randomUUID();
+    UUID boardTaskId = UUID.randomUUID();
+    UUID oldEntryId = UUID.randomUUID();
+    UUID newEntryId = UUID.randomUUID();
+    UUID queueDefinitionId = UUID.randomUUID();
+    UUID queueId = UUID.randomUUID();
+    LocalDate date = LocalDate.of(2026, 9, 14);
+    LogisticsDocument document =
+        LogisticsDocument.createTransfer(
+            warehouseId, UUID.randomUUID(), date, UUID.randomUUID(), UUID.randomUUID());
+    persist(document);
+    ReflectionTestUtils.setField(document, "id", documentId);
+    DriverLogisticsTask existing =
+        DriverLogisticsTask.createFurnitureCargoTransfer(
+            warehouseId,
+            documentId,
+            date,
+            3,
+            "Межскладской груз: 4 предмета мебели",
+            "4 предмета мебели",
+            queueDefinitionId,
+            DriverTaskAudienceMode.WAREHOUSE_DRIVERS,
+            null,
+            null,
+            document.getRequestedBySubjectId(),
+            UUID.randomUUID(),
+            "a".repeat(64));
+    ReflectionTestUtils.setField(existing, "id", localTaskId);
+    existing.registerBoardTask(boardTaskId, 1, oldEntryId, "WAITING", "SCHEDULED", null);
+    DriverTaskWorkerContent content =
+        new DriverTaskWorkerContent(
+            "Склад A → Склад B",
+            List.of(
+                new DriverTaskWorkerContent.Work(
+                    UUID.randomUUID(), "Загрузить мебель", 1, null, null, null)),
+            List.of(),
+            List.of());
+    var audience =
+        new LogisticsDependencyGateway.DriverTaskAudience(
+            DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null);
+    var current =
+        boardTask(
+            boardTaskId,
+            1,
+            warehouseId,
+            existing.getExternalTaskId(),
+            oldEntryId,
+            0,
+            date,
+            audience);
+    var updated =
+        boardTask(
+            boardTaskId,
+            2,
+            warehouseId,
+            existing.getExternalTaskId(),
+            newEntryId,
+            0,
+            date,
+            audience);
+    var moved =
+        boardTask(
+            boardTaskId,
+            3,
+            warehouseId,
+            existing.getExternalTaskId(),
+            newEntryId,
+            1,
+            date,
+            audience);
+    when(dependencies.readWarehouseDriverQueue(warehouseId))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseDriverQueue(
+                warehouseId, queueDefinitionId, queueId));
+    when(tasks.findActiveForUpdateBySourceTypeAndSourceIdAndKind(
+            DriverTaskSourceType.LOGISTICS_DOCUMENT, documentId, DriverTaskKind.TRANSFER))
+        .thenReturn(Optional.of(existing));
+    when(dependencies.readDriverTask(existing.getExternalTaskId())).thenReturn(current);
+    when(dependencies.updateDriverTaskBeforeStart(
+            existing.getExternalTaskId(),
+            1,
+            "Переместить мебель между складами",
+            "4 предмета мебели",
+            "Межскладской груз: 4 предмета мебели",
+            queueDefinitionId,
+            content))
+        .thenReturn(updated);
+    when(dependencies.readDriverBoard(warehouseId))
+        .thenReturn(
+            new LogisticsDependencyGateway.DriverBoardSnapshot(
+                warehouseId, queueId, 0, List.of(), List.of()));
+    when(dependencies.moveDriverTask(
+            existing.getExternalTaskId(), 2, 0, "SCHEDULED", date, 0, audience))
+        .thenReturn(moved);
+    when(tasks.findForUpdate(localTaskId)).thenReturn(Optional.of(existing));
+
+    planner.planTransferCargo(document, "4 предмета мебели", content);
+
+    verify(dependencies)
+        .updateDriverTaskBeforeStart(
+            existing.getExternalTaskId(),
+            1,
+            "Переместить мебель между складами",
+            "4 предмета мебели",
+            "Межскладской груз: 4 предмета мебели",
+            queueDefinitionId,
+            content);
+    verify(dependencies)
+        .moveDriverTask(existing.getExternalTaskId(), 2, 0, "SCHEDULED", date, 0, audience);
+    verify(workflowStore).confirmStatus(localTaskId, moved);
+    assertThat(workerContentCodec.decode(existing.getWorkerContentJson())).isEqualTo(content);
+  }
+
+  @Test
+  void cancellationAcceptsFurnitureOnlyTransferWithoutDocumentLines() {
+    UUID warehouseId = UUID.randomUUID();
+    LogisticsDocument document =
+        LogisticsDocument.createTransfer(
+            warehouseId,
+            UUID.randomUUID(),
+            LocalDate.of(2026, 8, 30),
+            UUID.randomUUID(),
+            UUID.randomUUID());
+    persist(document);
+    DriverLogisticsTask task =
+        DriverLogisticsTask.createFurnitureCargoTransfer(
+            warehouseId,
+            document.getId(),
+            document.getScheduledDate(),
+            3,
+            "Межскладской груз: 12 предметов",
+            "12 предметов",
+            UUID.randomUUID(),
+            DriverTaskAudienceMode.WAREHOUSE_DRIVERS,
+            null,
+            null,
+            document.getRequestedBySubjectId(),
+            UUID.randomUUID(),
+            "e".repeat(64));
+    when(tasks.findAllForUpdateBySourceTypeAndSourceIdIn(
+            DriverTaskSourceType.LOGISTICS_DOCUMENT, List.of(document.getId())))
+        .thenReturn(List.of(task));
+
+    planner.cancelBeforeStart(document, List.of());
+
+    assertThat(task.getState()).isEqualTo(DriverTaskState.CANCELLED);
+    verify(tasks).saveAndFlush(task);
+  }
+
+  @Test
   void explicitlyPublishedShipmentCreatesWarehouseSharedTaskWithoutDriverIdentity() {
     UUID warehouseId = UUID.randomUUID();
     UUID assetId = UUID.randomUUID();
@@ -522,6 +811,36 @@ class DocumentDriverTaskPlannerTest {
     ReflectionTestUtils.setField(task, "id", UUID.randomUUID());
     task.registerBoardTask(UUID.randomUUID(), 1, UUID.randomUUID(), "WAITING", "SCHEDULED", null);
     return task;
+  }
+
+  private static LogisticsDependencyGateway.DriverBoardTask boardTask(
+      UUID taskId,
+      long taskVersion,
+      UUID warehouseId,
+      UUID externalTaskId,
+      UUID entryId,
+      long entryVersion,
+      LocalDate date,
+      LogisticsDependencyGateway.DriverTaskAudience audience) {
+    return new LogisticsDependencyGateway.DriverBoardTask(
+        taskId,
+        taskVersion,
+        warehouseId,
+        externalTaskId,
+        "Переместить мебель между складами",
+        "4 предмета мебели",
+        "Склад A → Склад B",
+        audience,
+        "ACTIVE",
+        date,
+        "SCHEDULED",
+        3,
+        false,
+        null,
+        entryId,
+        entryVersion,
+        "WAITING",
+        0);
   }
 
   private static LogisticsDependencyGateway.DriverBoardTask waiting(

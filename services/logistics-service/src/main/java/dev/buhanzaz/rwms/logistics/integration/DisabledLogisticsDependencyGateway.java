@@ -22,6 +22,12 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
   }
 
   @Override
+  public java.util.List<WarehouseSupportLink> listWarehouseSupportLinks(
+      UUID servedWarehouseId, java.time.OffsetDateTime at) {
+    throw unavailable();
+  }
+
+  @Override
   public WarehouseLifecycleReadinessWorkPage warehouseLifecycleReadinessWork(
       UUID after, int limit) {
     throw unavailable();
@@ -47,6 +53,30 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
   @Override
   public boolean productionReady() {
     return false;
+  }
+
+  @Override
+  public java.util.List<WarehouseDriverIdentity> listWarehouseDrivers(UUID warehouseId) {
+    throw unavailable();
+  }
+
+  @Override
+  public WorkerOperationalAssignment createWorkerOperationalAssignment(
+      UUID transferId,
+      UUID workerId,
+      UUID sourceWarehouseId,
+      UUID destinationWarehouseId,
+      String mode,
+      java.time.OffsetDateTime travelStartsAt,
+      java.time.OffsetDateTime effectiveFrom,
+      java.time.OffsetDateTime effectiveUntil) {
+    throw unavailable();
+  }
+
+  @Override
+  public WorkerOperationalAssignment transitionWorkerOperationalAssignment(
+      UUID assignmentId, long expectedVersion, String targetStatus) {
+    throw unavailable();
   }
 
   @Override
@@ -139,6 +169,15 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
   }
 
   @Override
+  public CustomerProfileMediaValidation validateCustomerProfileMediaReference(
+      UUID profileId,
+      UUID warehouseId,
+      UUID authorizedSubjectId,
+      MediaReference reference) {
+    throw unavailable();
+  }
+
+  @Override
   public MediaOwnerProof upsertMediaOwnerProof(
       LogisticsOwnerType ownerType,
       UUID documentId,
@@ -147,7 +186,17 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
       long ownerRevision,
       long aggregateVersion,
       UUID proofEventId,
+      UUID authorizedSubjectId,
       boolean active) {
+    throw unavailable();
+  }
+
+  @Override
+  public CustomerProfileMediaOwnerProof upsertCustomerProfileMediaOwnerProof(
+      UUID profileId,
+      UUID warehouseId,
+      UUID authorizedSubjectId,
+      UUID proofEventId) {
     throw unavailable();
   }
 
@@ -218,6 +267,23 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
       UUID idempotencyKey,
       UUID movementId,
       java.util.List<EquipmentMovementExecutionRequestLine> lines) {
+    throw unavailable();
+  }
+
+  @Override
+  public TransferUnitReservationReceipt reserveTransferUnits(
+      UUID idempotencyKey,
+      UUID transferId,
+      UUID sourceWarehouseId,
+      java.util.List<TransferUnitReservationRequestLine> lines) {
+    throw unavailable();
+  }
+
+  @Override
+  public TransferUnitReservationReceipt releaseTransferUnits(
+      UUID idempotencyKey,
+      UUID transferId,
+      java.util.List<TransferUnitReservationReleaseLine> lines) {
     throw unavailable();
   }
 
@@ -313,6 +379,7 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
       UUID idempotencyKey,
       UUID orderId,
       UUID warehouseId,
+      UUID inventorySourceWarehouseId,
       UUID presentationId,
       UUID actorSubjectId,
       String actorRole,

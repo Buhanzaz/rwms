@@ -166,7 +166,9 @@ unchanged. It ends conflicting cabin leases, order and presentation bindings, or
 reservations and live allocation holds, preserves their audit rows/events, and then overwrites the
 current quantities with reviewed absolute counts. A maintenance or logistics lease-release retry
 may read the same-owner `RELEASED` or `EXPIRED` terminal lease with the original fencing token; a
-wrong owner or token remains fenced.
+wrong owner or token remains fenced. Logistics release first materializes natural expiry under the
+same rental-item/lease lock, so an expired-but-not-yet-observed row is returned as `EXPIRED` instead
+of producing a false stale-lease conflict.
 
 ## Internal application structure
 

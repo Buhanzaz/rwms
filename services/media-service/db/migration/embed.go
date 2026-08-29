@@ -99,3 +99,13 @@ var V16 []byte
 //
 //go:embed V17__consolidate_legacy_cabin_photo_folders.sql
 var V17 []byte
+
+// V18 contains the immutable CustomerApp shipment-subject binding migration bytes.
+//
+//go:embed V18__customer_shipment_subject_binding.sql
+var V18 []byte
+
+// V19 contains the immutable CustomerApp profile-avatar owner migration bytes.
+//
+//go:embed V19__customer_profile_avatar_owner.sql
+var V19 []byte

@@ -37,18 +37,51 @@ state: auth-service validates CSRF, while production ingress must independently
 throttle the anonymous registration route.
 
 [`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml)
-defines the public `/api/logistics/customer/v1/**` family for profile,
+defines the public `/api/logistics/customer/v1/**` family for profile create/read/version-fenced
+contact updates and avatar prepare/bind,
 warehouses, inquiry/cart, facets, free cabin cards/photos, complete selection,
-positive-stock equipment, delivery offers/hold, checkout and booking history.
+positive-stock equipment, complete per-cabin initial rental terms, delivery
+offers/hold, checkout, booking history, arrived-cabin acceptance and problem
+reports.
 Mutable creates and hold conversion use `Idempotency-Key`; profile, cart, asset
-and delivery-slot versions are explicit fences. Each warehouse response carries
+and delivery-slot versions are explicit fences. Profile kind and auth/client binding are immutable;
+facets, selection and cart reads explicitly declare `409` because a terminal
+`BOOKED` inquiry returns `INQUIRY_ARCHIVED`, while the inquiry identity remains
+readable so the client can preserve its booking and open a separate cart;
+avatar prepare fixes one warehouse as media authorization scope and avatar bind accepts only an
+exact media-service-validated current `READY` generation. Each warehouse response carries
 the logistics-owned depot latitude/longitude used by both the client map and
-slot routing. Slot responses carry exact date/window, `travelZoneHours`,
-capacity remaining and expiry; the only offered local windows are
-`09:00-12:00`, `12:00-15:00` and
-`15:00-18:00`, and the supported travel band is one through four hours. The
-remaining capacity is computed from the whole-day multi-point driver schedule,
-not per-window arithmetic. Only the exact CUSTOMER/client/scope token is accepted.
+slot routing. The transport keeps `false` search-time attestations compatible with provisional-date
+clients; the current CustomerApp collects private-site trailer access and possible failed-trip
+charge acknowledgements in a modal before search. For two or more cabins the search and hold also
+carry `siteCabinCapacity=1|2`; one requires sequential solo-truck visits and two permits a trailer
+configuration without overriding road safety. The hold command rechecks and must supply any
+attestation not already attached to an offer. Held slot responses freeze both true facts,
+successful public-road truck routing, site capacity, independently classified delivery price and
+the exact applicable height/width/length/weight/axle profile together with date, required
+`kind=FIXED_WINDOW|DURING_DAY`, non-null display/hold bounds, informational `travelZoneHours`,
+capacity remaining and expiry. Each date exposes the three fixed local windows
+`09:00-12:00`, `12:00-15:00`, `15:00-18:00` plus one `DURING_DAY` choice spanning the configured
+delivery day. The travel band has no upper feasibility cutoff. The
+remaining capacity is computed from the whole-day multi-point schedule over
+warehouse-capacity period shifts, not per-window arithmetic; an
+empty shift set or missing truck route fails closed. Ordinary price comes from the warehouse's
+inclusive 60/120/180/240-minute isochrone tariff. `SPECIAL_PRICE` overrides it, `FORBIDDEN`
+rejects the stop and `NO_TRAILER` rejects a trailer-attached alternative; the polygons never
+replace exact truck routing.
+Arrival requires the exact shipment document
+line/member's `COMPLETED` grouped driver task. Acceptance stores one bounded
+drawn signature, while a problem report can reference at most 20 exact READY
+media generations for that shipment line. Only the exact
+CUSTOMER/client/scope token is accepted.
+
+[`media-service.yaml`](../../contracts/openapi/media-service.yaml) exposes the
+ordinary upload/session/finalize/variant operations to that same exact
+CustomerApp token only for `LOGISTICS_SHIPMENT/SHIPMENT` or
+`LOGISTICS_CUSTOMER_PROFILE/PROFILE_AVATAR` owners whose logistics proof is bound to the token
+subject. Profile media is image-only and its non-structured proof/validation carries the profile
+UUID, warehouse, context and exact subject. Manager/worker profile access and another customer
+subject fail closed; existing non-customer owner proofs remain unchanged.
 
 [`asset-service.yaml`](../../contracts/openapi/asset-service.yaml) keeps the
 customer cabin/equipment projection private to logistics. It exposes only
@@ -58,6 +91,7 @@ still owns availability, holds, physical contents and equipment balance.
 Evidence:
 [`registration owner`](../../services/auth-service/src/main/java/dev/buhanzaz/rwms/auth/service/CustomerRegistrationService.java),
 [`customer API owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/api/CustomerController.java),
+[`customer profile owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/service/CustomerProfileService.java),
 and
 [`customer asset projection`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/api/LogisticsAssetController.java).
 
@@ -104,12 +138,22 @@ the exact result mode/facets and remain the hold-effect boundary.
 
 The logistics contract also owns user-entered historical rental movements.
 Create accepts one visible client, cabin/version fence and non-future
-warehouse-local date without a driver. An already `RENTED`, repair-free cabin
-is a provenance-recovery branch: the maintenance private response proves
-`RENTED/ALREADY_RENTED`, and logistics completes the imported shipment without
-repeating lease, hold or asset effects. The public version-fenced PUT on that
-historical document changes only its client and physical date under a separate
-idempotency key. The same document identity is retained.
+warehouse-local date. A shipment accepts either one complete driver
+snapshot/worker-ID pair or a null pair meaning unknown; a return rejects driver
+data, and neither operation creates route/driver work. An already `RENTED`,
+repair-free cabin is a provenance-recovery branch: the maintenance private
+response proves `RENTED/ALREADY_RENTED`, and logistics completes the imported
+shipment without repeating lease, hold or asset effects. The public
+version-fenced PUT on that historical document changes only its client,
+optional driver pair and physical date under a separate idempotency key. The
+same document identity is retained. The existing shipment-cancel operation
+also accepts an imported shipment only from `CONFLICT` or
+`RECONCILIATION_REQUIRED` when durable attempts prove there is no completed or
+unknown asset-confirm effect. An ambiguous lease acquisition is not guessed:
+logistics reopens the same durable request with its original operation ID,
+records the idempotent asset replay, then releases the exact `RELEASED` or
+`EXPIRED` lease. Known capabilities are compensated and the open reconciliation
+audit is resolved rather than deleted.
 
 Evidence:
 [`logistics OpenAPI`](../../contracts/openapi/logistics-service.yaml),
@@ -152,16 +196,27 @@ and
 ### Driver Task Audience And Document Tasks
 
 The logistics HTTP contract carries an optional opaque `driverWorkerId` only
-on shipment and return scheduling commands and document responses. Transfer
-creation has no driver identity. Shipment, return and transfer scheduling use
+on shipment/return scheduling commands and document responses; the transfer-plan contract keeps
+its trip driver separately from any post-arrival resource-reposition intent. Shipment, return and transfer scheduling use
 only the actual `scheduledDate`. Driver tasks and board cards expose
 `UNASSIGNED`, `ASSIGNED_DRIVER` and `WAREHOUSE_DRIVERS`: shipment/return may be
-unassigned or assigned to exactly one driver, while every transfer is
-warehouse-shared and cannot carry an identity snapshot. The warehouse-scoped
+unassigned or assigned to exactly one driver, while an unassigned transfer is
+warehouse-shared and an assigned transfer is visible only to its trip driver. The warehouse-scoped
 `shipment-task-settings` GET/PUT contract owns the 1–100 cabin cap and its
 optimistic version. It applies to every newly grouped shipment, return and
 transfer: one local driver task is sourced from the document and carries a
-stable trip number, immutable cabin members and client/cabin task text. New
+stable trip number, immutable cabin members and client/cabin task text. Transfer registration also
+uses the existing route-step `works`, `materials` and `comments` snapshots, so native offline sync
+does not need a second transport. Logistics persists their canonical JSON in its own driver-task
+row and includes it in the task checksum; an exact retry is a no-op, while a changed pre-start
+snapshot uses task-board's existing version-fenced full-task replacement before the normal move.
+Historical rows decode the additive `{}` default as empty content. This persistence behavior is
+defined by
+[`DriverTaskWorkerContentCodec.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverTaskWorkerContentCodec.java),
+[`DocumentDriverTaskPlanner.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DocumentDriverTaskPlanner.java),
+and
+[`V73__driver_task_worker_content.sql`](../../services/logistics-service/src/main/resources/db/migration/V73__driver_task_worker_content.sql),
+without adding a second public or native contract. New
 document-line tasks are forbidden; pre-start historical line work converges to
 the group, while started history is retained. The public logistics move command
 contains no audience or member replacement and moves the whole group under
@@ -182,68 +237,79 @@ Evidence:
 and
 [`task-board-events-v1.schema.json`](../../contracts/events/task-board/task-board-events-v1.schema.json).
 
-### Standalone Logistics Planning Boundary
+### Warehouse Logistics Planning Boundary
 
 [`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml)
-defines four private operation families that are not gateway routes:
-`GET /api/internal/logistics/v1/planning/requests` returns a
-warehouse/date-bounded minimal feed of saved order remainders, and
-`POST /api/internal/logistics/v1/planning/assignments` applies one exact
-external plan/version with a required `Idempotency-Key`.
-`GET /api/internal/logistics/v1/planning/assignments` returns current audience,
-driver and task state only for planner-created shipment parts on one
-warehouse/date; manual documents and customer contacts are excluded.
-`PUT /api/internal/logistics/v1/planning/capacity-snapshots/{scenarioId}`
-idempotently replaces the one active anonymous generated-delivery projection
-for a warehouse. It carries no order, customer, cabin or driver identity. Its
-required simulator-wide monotonic `sourceGeneration` rejects a previously
-unaccepted command older than the active warehouse projection; immutable
-receipts still return the original result for an exact accepted replay. All
-four require a service token whose subject/client is exactly
-`logistics-planner`, audience is
-`rwms-services`, and sole scope is `logistics.planning`; an interactive user or
-a broader/mixed token is rejected.
+defines private planning operations that are not gateway routes. `GET
+/api/internal/logistics/v1/planning/warehouses` returns active canonical
+warehouse identity, display metadata, owner-held address, coordinates,
+representative characteristic and timezone. The planner reconciles that list
+by stable UUID; there is no public “connect warehouse” command. `GET
+/api/internal/logistics/v1/planning/drivers?warehouseId=...` returns only active
+task-board workers with an active primary qualification for that warehouse's
+active logistics-driver queue. It exposes only `workerId` and `displayName`.
+Both directories fail closed and never use a planner-local identity fallback.
 
-The feed carries order/version, minimal client/address/coordinate facts,
-unshipped cabin IDs and allowed dates. A confirmed CustomerApp option additionally
-carries hard `windowStart`, `windowEnd` and one-to-four-hour `travelZoneHours`.
-The simulator persists and returns the band on its accepted date option and uses
-it to rank multi-point candidates before exact route validation. Coordinates,
-when present, are authoritative over address. Applying assignments rechecks warehouse, order
-version, selected date, cabin membership and uniqueness, driver identity and
-the automatic-date fence. Automatic today/tomorrow assignment is rejected;
-valid parts may succeed while every invalid part is returned with its reason.
-Only deliveries whose simulator source is exactly `RWMS` may enter an
-assignment command; generated and manual scenario work stays local.
-`PlanningAssignment.driverAudienceMode=WAREHOUSE_DRIVERS` is an explicit
-future-delivery publication: `driverWorkerId` is null, today is rejected and
-tomorrow is allowed. Omitted simulator leftovers and ordinary `UNASSIGNED`
-shipments are never made visible to DriverApp implicitly.
-The simulator-side public operations remain its own API:
-`POST /api/scenarios/{scenarioId}/rwms/sync` and
-`POST /api/scenarios/{scenarioId}/rwms/capacity`,
-`POST /api/plans/{planId}/rwms/apply`, plus the read-only exact-plan status
-refresh. Loading a linked workspace invokes the same sync for the current
-31-day horizon before requests are listed, so a scenario switch cannot erase
-the authoritative request. These operations never grant database access to an
-RWMS owner.
-The capacity operation publishes only active generated deliveries after the
-local generator/delete transaction commits. Generated pickups do not consume
-CustomerApp delivery capacity. A remote failure is explicit and is reconciled
-by repeating the complete snapshot; real bookings and confirmed slots are
-stored separately and survive every scenario replacement. Immutable command
-receipts make a delayed retry return its original revision result without
-rolling the active warehouse projection back. The simulator allocates
-`sourceGeneration` from its database-global sequence in the same local
-transaction as generator/delete state; explicit reconciliation allocates a new
-generation before publishing the current complete snapshot.
+`GET /api/internal/logistics/v1/planning/requests` returns the bounded
+warehouse/date feed of SAVED order remainders. It carries order/version,
+minimal address/coordinate facts, unshipped cabin IDs and accepted dates. A
+confirmed fixed CustomerApp option carries its exact hard window; a confirmed
+`DURING_DAY` option is exported as a soft date-only choice with null planning
+bounds. Both carry `travelZoneHours` and site-derived `trailerAccessAllowed`. Coordinates are
+authoritative over address. `orderVersion` fences rental-order assignment;
+`sourceRevision` fingerprints the complete exported planning snapshot, so a
+changed payload under the same revision is a conflict.
+
+`POST /api/internal/logistics/v1/planning/assignments` applies one exact
+external plan/version with `Idempotency-Key`; the matching `GET` returns only
+planner-created assignment audience, worker and task state. Applying rechecks
+warehouse, order version, date, cabin membership and uniqueness, qualified
+driver identity and the automatic-date fence. Only `RWMS` deliveries may enter
+the command. `ASSIGNED_DRIVER` requires an exact worker UUID;
+`WAREHOUSE_DRIVERS` deliberately has no worker UUID and exposes a future job to
+the qualified pool. Manual/generated work and pickups stay local.
+
+`PUT /api/internal/logistics/v1/planning/capacity-snapshots/{warehouseId}`
+idempotently replaces one warehouse's active anonymous capacity projection.
+Warehouse identity exists only in the URL. The body carries generated delivery
+and pickup jobs, mandatory/trailer-access facts, period-shift windows and
+vehicle capacity, plus the owning warehouse's GeoJSON tariff zones identified
+by
+`sourceZoneId` UUID and version. `SPECIAL_PRICE` carries delivery/pickup prices;
+`FORBIDDEN` and `NO_TRAILER` carry access policy without a price. It carries no
+order, customer, cabin or driver personal identity. Monotonic
+`sourceGeneration` rejects an older unaccepted command, while an immutable
+receipt replays the original result for an exact retry.
+
+All private operations require subject/client `logistics-planner`, audience
+`rwms-services` and sole scope `logistics.planning`; interactive and mixed-scope
+tokens are rejected. The standalone public API is warehouse-rooted:
+`GET /api/warehouses/{warehouseId}/workspace` performs the automatic 31-day
+refresh, `/planning-days/{date}` and `/close` own day finalization, and
+`/rwms/capacity` is an audited reconciliation endpoint. Plan apply/status
+operations remain diagnostic recovery tools, not routine browser controls.
+Zone commands are nested under `/api/warehouses/{warehouseId}/zones`; a zone
+cannot be read, changed or deleted through another warehouse, and capacity
+publishing includes only the selected warehouse's zones. Warehouse update also owns four
+non-negative isochrone tariff values for the inclusive 60/120/180/240-minute bands.
+
+The same standalone OpenAPI exposes server-keyed Yandex
+suggestion/resolve/reverse operations for operator input and address-only
+canonical warehouse binding. This does not permit address-only customer-order
+feed geocoding. A slot response identifies its tariff with
+`price_zone_id`/`price_zone_name`; the canonical CustomerApp response uses
+nullable UUID `priceZoneId`, never a business code.
 
 Evidence:
 [`planning API models`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/planning/api/PlanningIntegrationApiModels.java),
 [`planning controller`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/planning/api/PlanningIntegrationController.java),
+[`planning directory`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/planning/service/PlanningResourceDirectoryService.java),
 [`planning owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderPlanningIntegrationService.java),
-[`capacity owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/capacity/service/ScenarioCapacitySnapshotService.java),
-[`simulator adapter`](../../logistics/backend/app/integrations/rwms.py).
+[`planning revision`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/PlanningRequestRevision.java),
+[`capacity owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/capacity/service/WarehouseCapacitySnapshotService.java),
+[`planner adapter`](../../logistics/backend/app/integrations/rwms.py),
+[`planner OpenAPI`](../../logistics/backend/openapi.json), and
+[`dynamic-slot design`](../isochrone-slot-planning.md).
 
 ### Aggregate Ordinary Task Board
 
@@ -715,6 +781,16 @@ operation marks and an as-of timezone read. Incoming work is admitted only for
 blocker may commit behind a readiness fence. A timezone correction is immediate
 only before the first operation. Once used, a change has an `effectiveFrom` and
 historical operations keep the zone effective at their own timestamp.
+
+The same warehouse contract carries nullable `address`, an all-or-none
+latitude/longitude pair and the backward-compatible `representative=false`
+characteristic on create, replace and reads. A version-fenced support-link
+collection represents the directed many-to-many service graph; each edge has
+independent capabilities, priority and recurring/date-exception availability.
+Public commands reject self-links, duplicate support warehouses and links on a
+non-representative served warehouse. The private logistics directory and
+date-filtered support-link read reuse those owner-held identities and
+coordinates.
 
 Actual inter-warehouse movement is represented by
 [`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml).

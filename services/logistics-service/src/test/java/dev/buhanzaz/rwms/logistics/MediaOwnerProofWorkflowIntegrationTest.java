@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -146,6 +147,7 @@ class MediaOwnerProofWorkflowIntegrationTest {
             eq(0L),
             eq(0L),
             any(UUID.class),
+            isNull(),
             eq(true));
     verify(dependencies)
         .upsertMediaOwnerProof(
@@ -156,6 +158,7 @@ class MediaOwnerProofWorkflowIntegrationTest {
             eq(0L),
             eq(0L),
             any(UUID.class),
+            isNull(),
             eq(true));
     assertThat(
             jdbc.queryForObject(
@@ -189,7 +192,7 @@ class MediaOwnerProofWorkflowIntegrationTest {
                 + "where operation_type='RETURN_MEDIA_OWNER_PROOF_REGISTER'",
             UUID.class);
     when(dependencies.upsertMediaOwnerProof(
-            any(), any(), any(), any(), anyLong(), anyLong(), any(), anyBoolean()))
+            any(), any(), any(), any(), anyLong(), anyLong(), any(), isNull(), anyBoolean()))
         .thenThrow(
             new LogisticsDependencyException(
                 LogisticsDependencyException.FailureKind.TRANSIENT, "media unavailable"))
@@ -220,6 +223,7 @@ class MediaOwnerProofWorkflowIntegrationTest {
             eq(0L),
             eq(0L),
             proofEvents.capture(),
+            isNull(),
             eq(true));
     assertThat(proofEvents.getAllValues()).containsOnly(proofEventId);
     assertThat(
@@ -270,6 +274,7 @@ class MediaOwnerProofWorkflowIntegrationTest {
             revisions.capture(),
             versions.capture(),
             any(UUID.class),
+            isNull(),
             active.capture());
     assertThat(revisions.getAllValues()).containsExactly(0L, 1L);
     assertThat(versions.getAllValues()).containsExactly(0L, 1L);
@@ -293,7 +298,7 @@ class MediaOwnerProofWorkflowIntegrationTest {
             new CreateReturnRequest(
                 ORIGIN, List.of(new ReturnLineRequest(RETURN_ASSET, 4, "Tenant"))));
     when(dependencies.upsertMediaOwnerProof(
-            any(), any(), any(), any(), anyLong(), anyLong(), any(), anyBoolean()))
+            any(), any(), any(), any(), anyLong(), anyLong(), any(), isNull(), anyBoolean()))
         .thenThrow(
             new LogisticsDependencyException(
                 LogisticsDependencyException.FailureKind.PERMANENT_REJECTION,
@@ -317,7 +322,7 @@ class MediaOwnerProofWorkflowIntegrationTest {
 
   private void echoProofs() {
     when(dependencies.upsertMediaOwnerProof(
-            any(), any(), any(), any(), anyLong(), anyLong(), any(), anyBoolean()))
+            any(), any(), any(), any(), anyLong(), anyLong(), any(), isNull(), anyBoolean()))
         .thenAnswer(MediaOwnerProofWorkflowIntegrationTest::echoProof);
   }
 
@@ -335,6 +340,7 @@ class MediaOwnerProofWorkflowIntegrationTest {
         invocation.getArgument(4),
         invocation.getArgument(5),
         invocation.getArgument(6),
-        invocation.getArgument(7));
+        invocation.getArgument(7),
+        invocation.getArgument(8));
   }
 }

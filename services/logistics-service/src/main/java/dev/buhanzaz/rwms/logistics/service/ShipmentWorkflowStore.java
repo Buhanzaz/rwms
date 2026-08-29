@@ -172,21 +172,30 @@ class ShipmentWorkflowStore {
     if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
     LogisticsDocument document = attempt.getDocument();
     LogisticsDocumentLine line = requiredLine(attempt);
-    if (document.getState() != LogisticsDocumentState.PREPARING) return;
+    boolean cancellationRecovery =
+        document.getState() == LogisticsDocumentState.CANCELLING
+            && document.isHistoricalRentalImport();
+    if (document.getState() != LogisticsDocumentState.PREPARING && !cancellationRecovery) return;
     requireActiveLease(line, lease);
 
     OffsetDateTime completedAt = now();
     attempt.confirm(leaseDigest("SHIPMENT_ASSET_LEASE_RESPONSE", lease), completedAt);
     Optional<LogisticsGuard> existing = guardRepository.findByLine_Id(line.getId());
+    LogisticsGuard guard;
     if (existing.isPresent()) {
-      LogisticsGuard guard = existing.get();
-      if (guard.getGuardState() != LogisticsGuardState.ACTIVE
-          || !lease.leaseId().equals(guard.getLeaseId())
+      guard = existing.get();
+      if (!lease.leaseId().equals(guard.getLeaseId())
           || lease.fencingToken() != guard.getFenceToken()) {
         throw malformed("Shipment line has a conflicting asset guard");
       }
+      if (cancellationRecovery) {
+        guard.prepareReleaseAfterFailedHistoricalShipment();
+      } else if (guard.getGuardState() != LogisticsGuardState.ACTIVE) {
+        throw malformed("Shipment line has a conflicting asset guard");
+      }
     } else {
-      guardRepository.save(
+      guard =
+          guardRepository.save(
           LogisticsGuard.active(
               document,
               line,
@@ -195,6 +204,10 @@ class ShipmentWorkflowStore {
               lease.fencingToken(),
               line.getAssetVersion(),
               completedAt));
+    }
+    if (cancellationRecovery) {
+      createLeaseReleaseAttempt(document, line, guard, completedAt);
+      return;
     }
     List<Allocation> allocations = allocations(line);
     if (allocations.isEmpty()) {
@@ -212,7 +225,7 @@ class ShipmentWorkflowStore {
               operation,
               List.of(
                   allocation.equipmentId().toString(),
-                  document.getWarehouseId().toString(),
+                  line.getInventorySourceWarehouseId().toString(),
                   document.getId().toString(),
                   line.getId().toString(),
                   Long.toString(allocation.quantity()),
@@ -251,7 +264,7 @@ class ShipmentWorkflowStore {
               line,
               hold.holdId(),
               allocation.equipmentId(),
-              document.getWarehouseId(),
+              line.getInventorySourceWarehouseId(),
               allocation.quantity(),
               allocation.expectedStockVersion(),
               hold.version(),
@@ -360,6 +373,10 @@ class ShipmentWorkflowStore {
             "SHIPMENT_FAILURE", List.of(attempt.getOperationType(), exception.kind().name()));
     if (exception.kind() == LogisticsDependencyException.FailureKind.PERMANENT_REJECTION) {
       attempt.reject(responseDigest, completedAt);
+      if (isHistoricalLeaseCancellationRecovery(document, attempt)) {
+        finishCancellationIfComplete(document);
+        return;
+      }
       markConflict(line);
       document.shipmentConflict();
       documentRepository.saveAndFlush(document);
@@ -402,7 +419,10 @@ class ShipmentWorkflowStore {
         attempt.getOperationType())) {
       return Optional.of(
           Work.historicalMaintenanceClose(
-              attempt.getOperationId(), document.getId(), document.getWarehouseId(), line.getAssetId()));
+              attempt.getOperationId(),
+              document.getId(),
+              line.getInventorySourceWarehouseId(),
+              line.getAssetId()));
     }
     if (LogisticsDocumentService.SHIPMENT_ASSET_SNAPSHOT.equals(attempt.getOperationType())) {
       return Optional.of(Work.snapshot(attempt.getOperationId(), line.getAssetId()));
@@ -425,7 +445,7 @@ class ShipmentWorkflowStore {
               attempt.getOperationId(),
               document.getId(),
               line.getId(),
-              document.getWarehouseId(),
+              line.getInventorySourceWarehouseId(),
               allocation));
     }
     return Optional.empty();
@@ -467,6 +487,18 @@ class ShipmentWorkflowStore {
 
   private Optional<Work> cancellationWork(
       LogisticsExternalAttempt attempt, LogisticsDocument document, LogisticsDocumentLine line) {
+    if (document.isHistoricalRentalImport()
+        && LogisticsDocumentService.SHIPMENT_ASSET_LEASE_ACQUIRE.equals(
+            attempt.getOperationType())) {
+      return Optional.of(
+          Work.lease(
+              attempt.getOperationId(),
+              document.getId(),
+              line.getId(),
+              line.getAssetId(),
+              line.getAssetVersion(),
+              line.getRentalOrderId()));
+    }
     if (attempt.getOperationType().startsWith(LogisticsDocumentService.SHIPMENT_HOLD_RELEASE_PREFIX)) {
       LogisticsEquipmentHoldReference hold =
           holdForOperation(attempt, LogisticsDocumentService.SHIPMENT_HOLD_RELEASE_PREFIX);
@@ -654,6 +686,18 @@ class ShipmentWorkflowStore {
       if (hold.getHoldState() != LogisticsEquipmentHoldState.RELEASED) return;
     }
     for (LogisticsDocumentLine line : lines(document.getId())) {
+      Optional<LogisticsExternalAttempt> leaseAcquisition =
+          attemptRepository.findByDocument_IdAndLine_IdAndOperationType(
+              document.getId(),
+              line.getId(),
+              LogisticsDocumentService.SHIPMENT_ASSET_LEASE_ACQUIRE);
+      if (document.isHistoricalRentalImport()
+          && leaseAcquisition.isPresent()
+          && leaseAcquisition.get().getResult() != LogisticsExternalAttemptResult.CONFIRMED
+          && leaseAcquisition.get().getResult()
+              != LogisticsExternalAttemptResult.PERMANENT_REJECTION) {
+        return;
+      }
       Optional<LogisticsGuard> guard = guardRepository.findByLine_Id(line.getId());
       if (guard.isPresent() && guard.get().getGuardState() != LogisticsGuardState.RELEASED) return;
     }
@@ -666,7 +710,15 @@ class ShipmentWorkflowStore {
         document.getCorrelationId(),
         document.getRequestedBySubjectId(),
         LogisticsEventType.SHIPMENT_CANCELLED,
-        null);
+        document.isHistoricalRentalImport() ? "FAILED_HISTORICAL_RENTAL_IMPORT" : null);
+  }
+
+  private static boolean isHistoricalLeaseCancellationRecovery(
+      LogisticsDocument document, LogisticsExternalAttempt attempt) {
+    return document.isHistoricalRentalImport()
+        && document.getState() == LogisticsDocumentState.CANCELLING
+        && LogisticsDocumentService.SHIPMENT_ASSET_LEASE_ACQUIRE.equals(
+            attempt.getOperationType());
   }
 
   private Optional<LogisticsEquipmentHoldReference> findHoldById(UUID holdId) {
@@ -743,7 +795,7 @@ class ShipmentWorkflowStore {
             || (line.getRentalOrderId() != null && "BOOKED".equals(snapshot.status()));
     if (!line.getAssetId().equals(snapshot.assetId())
         || snapshot.version() != line.getAssetVersion()
-        || !document.getWarehouseId().equals(snapshot.warehouseId())
+        || !line.getInventorySourceWarehouseId().equals(snapshot.warehouseId())
         || !allowedStatus) {
       throw new LogisticsDependencyException(
           LogisticsDependencyException.FailureKind.PERMANENT_REJECTION,
@@ -757,7 +809,7 @@ class ShipmentWorkflowStore {
       LogisticsDependencyGateway.HistoricalShipmentRepairClosure closure) {
     if (closure == null
         || !document.getId().equals(closure.shipmentId())
-        || !document.getWarehouseId().equals(closure.warehouseId())
+        || !line.getInventorySourceWarehouseId().equals(closure.warehouseId())
         || !line.getAssetId().equals(closure.rentalItemId())
         || closure.rentalItemVersion() < line.getAssetVersion()
         || closure.closedRepairIds() == null
@@ -784,7 +836,7 @@ class ShipmentWorkflowStore {
       LogisticsDependencyGateway.RentalItemSnapshot snapshot) {
     requireSnapshotShape(snapshot);
     if (!line.getAssetId().equals(snapshot.assetId())
-        || !document.getWarehouseId().equals(snapshot.warehouseId())
+        || !line.getInventorySourceWarehouseId().equals(snapshot.warehouseId())
         || snapshot.version() <= guard.getObservedAssetVersion()
         || !"RENTED".equals(snapshot.status())) {
       throw malformed("Asset-service returned malformed shipment confirmation truth");
@@ -824,7 +876,7 @@ class ShipmentWorkflowStore {
         || !line.getAssetId().equals(lease.rentalItemId())
         || lease.version() < guard.getLeaseVersion()
         || lease.fencingToken() != guard.getFenceToken()
-        || !"RELEASED".equals(lease.state())
+        || (!"RELEASED".equals(lease.state()) && !"EXPIRED".equals(lease.state()))
         || lease.expiresAt() == null) {
       throw malformed("Asset-service returned malformed released operation lease");
     }

@@ -88,10 +88,10 @@ class AuthEventStoreMigrationIntegrationTest {
     }
 
     @Test
-    void explicitVersionTwoBaselineMigratesWithoutChangingLegacyOrOAuthRows() throws Exception {
+    void explicitVersionTwoBaselinePreservesSeedRowsAndBackfillsEntitlements() throws Exception {
         applyVersionTwo();
         seedVersionTwoRows();
-        Map<String, String> before = legacyDigests();
+        Map<String, String> before = seededRowDigests();
 
         Flyway adopted = configuration(MIGRATION_LOCATION)
                 .baselineVersion("2")
@@ -103,10 +103,10 @@ class AuthEventStoreMigrationIntegrationTest {
         adopted.validate();
         assertThat(adopted.migrate().migrationsExecuted).isZero();
 
-        assertThat(legacyDigests()).containsExactlyInAnyOrderEntriesOf(before);
+        assertThat(seededRowDigests()).containsExactlyInAnyOrderEntriesOf(before);
         assertThat(jdbc.queryForObject("select count(*) from event_stream_head", Integer.class)).isEqualTo(2);
-        assertThat(jdbc.queryForObject("select count(*) from domain_event", Integer.class)).isEqualTo(2);
-        assertThat(jdbc.queryForObject("select count(*) from outbox_event", Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from domain_event", Integer.class)).isEqualTo(3);
+        assertThat(jdbc.queryForObject("select count(*) from outbox_event", Integer.class)).isOne();
         assertThat(jdbc.queryForObject(
                         "select count(*) from projection_checkpoint where projection_name='auth-live-v1'",
                         Integer.class))
@@ -122,7 +122,7 @@ class AuthEventStoreMigrationIntegrationTest {
                                 + "and event.aggregate_id=checkpoint.aggregate_id "
                                 + "and event.aggregate_version=checkpoint.aggregate_version "
                                 + "and event.payload_sha256=checkpoint.projection_sha256 "
-                                + "where checkpoint.projection_name='auth-live-v1' and event.baseline",
+                                + "where checkpoint.projection_name='auth-live-v1'",
                         Integer.class))
                 .isEqualTo(2);
         assertThat(jdbc.queryForObject(
@@ -140,7 +140,7 @@ class AuthEventStoreMigrationIntegrationTest {
                                 + "where aggregate_type='USER_AUTHORIZATION' and aggregate_id=?",
                         Long.class,
                         USER_ID.toString()))
-                .isEqualTo(7L);
+                .isEqualTo(8L);
         assertThat(jdbc.queryForObject(
                         "select current_version from event_stream_head "
                                 + "where aggregate_type='WORKER_ACCESS' and aggregate_id=?",
@@ -153,7 +153,13 @@ class AuthEventStoreMigrationIntegrationTest {
                                 + "and aggregate_id=?",
                         Long.class,
                         USER_ID.toString()))
-                .isEqualTo(7L);
+                .isEqualTo(8L);
+        assertThat(jdbc.queryForMap(
+                        "select version, mobile_app_access, rental_access from auth_subject where id=?",
+                        USER_ID))
+                .containsEntry("version", 8)
+                .containsEntry("mobile_app_access", true)
+                .containsEntry("rental_access", true);
         assertThat(jdbc.queryForObject(
                         "select aggregate_version from projection_checkpoint "
                                 + "where projection_name='auth-live-v1' and aggregate_type='WORKER_ACCESS' "
@@ -196,17 +202,19 @@ class AuthEventStoreMigrationIntegrationTest {
 
         assertThat(deterministicBaselineProjection()).isEqualTo(firstBaseline);
         assertThat(jdbc.queryForObject(
-                        "select count(*) from domain_event where not baseline or occurred_at is not null",
+                        "select count(*) from domain_event where not baseline and occurred_at is not null",
                         Integer.class))
-                .isZero();
-        assertThat(jdbc.queryForObject("select count(*) from outbox_event", Integer.class)).isZero();
+                .isOne();
+        assertThat(jdbc.queryForObject("select count(*) from outbox_event", Integer.class)).isOne();
     }
 
     @Test
     void domainEventsAreAppendOnly() throws Exception {
         migrateSeededVersionTwo();
         UUID eventId = jdbc.queryForObject(
-                "select event_id from domain_event where aggregate_id=?", UUID.class, USER_ID.toString());
+                "select event_id from domain_event where aggregate_id=? and baseline",
+                UUID.class,
+                USER_ID.toString());
 
         assertThatThrownBy(() -> jdbc.update("update domain_event set payload='{}'::jsonb where event_id=?", eventId))
                 .isInstanceOf(DataAccessException.class)
@@ -301,7 +309,9 @@ class AuthEventStoreMigrationIntegrationTest {
     void outboxAcceptsOnlyRuntimeFactsWithMatchingDomainIdentityAndTopic() throws Exception {
         migrateSeededVersionTwo();
         UUID baselineEventId = jdbc.queryForObject(
-                "select event_id from domain_event where aggregate_id=?", UUID.class, USER_ID.toString());
+                "select event_id from domain_event where aggregate_id=? and baseline",
+                UUID.class,
+                USER_ID.toString());
         UUID runtimeEventId = insertRuntimeUserEvent("auth.user-authorization.created.v1");
 
         assertThatThrownBy(() -> insertOutbox(
@@ -788,7 +798,7 @@ class AuthEventStoreMigrationIntegrationTest {
                 "insert into domain_event(event_id, aggregate_type, aggregate_id, aggregate_version, "
                         + "event_type, event_version, occurred_at, recorded_at, correlation_id, causation_id, "
                         + "actor_ref, payload, payload_sha256, baseline) "
-                        + "values (?, 'USER_AUTHORIZATION', ?, 8, ?, ?, "
+                        + "values (?, 'USER_AUTHORIZATION', ?, 9, ?, ?, "
                         + "case when ? then null else now() end, now(), ?, null, null, ?::jsonb, ?, ?)",
                 eventId,
                 USER_ID.toString(),
@@ -878,7 +888,7 @@ class AuthEventStoreMigrationIntegrationTest {
         return jdbc.queryForList(
                 "select event_id::text, aggregate_type, aggregate_id, aggregate_version, event_type, "
                         + "correlation_id::text, payload::text, payload_sha256 "
-                        + "from domain_event order by aggregate_type, aggregate_id");
+                        + "from domain_event where baseline order by aggregate_type, aggregate_id");
     }
 
     private String eventPayloadText() {
@@ -895,7 +905,7 @@ class AuthEventStoreMigrationIntegrationTest {
                         + "cross join lateral jsonb_array_elements(event.payload->'warehouseAccess') grant_item "
                         + "join user_warehouse_access_note note "
                         + "on note.note_revision=(grant_item->>'noteRevision')::uuid "
-                        + "where event.aggregate_type='USER_AUTHORIZATION' "
+                        + "where event.aggregate_type='USER_AUTHORIZATION' and event.baseline "
                         + "order by grant_item->>'accessId'",
                 String.class);
     }
@@ -933,21 +943,35 @@ class AuthEventStoreMigrationIntegrationTest {
                 .digest(value.getBytes(StandardCharsets.UTF_8)));
     }
 
-    private Map<String, String> legacyDigests() {
+    private Map<String, String> seededRowDigests() {
         return Map.of(
-                "auth_subject", digest("auth_subject"),
-                "user_warehouse_access", digest("user_warehouse_access"),
-                "oauth2_registered_client", digest("oauth2_registered_client"),
-                "oauth2_authorization", digest("oauth2_authorization"),
-                "oauth2_authorization_consent", digest("oauth2_authorization_consent"));
+                "auth_subject",
+                        digestQuery(
+                                "select id, principal_type, username, password_hash, first_name, "
+                                        + "last_name, email, time_zone_id, global_role, active, "
+                                        + "external_worker_id, warehouse_id, created_at "
+                                        + "from auth_subject where id in ('"
+                                        + USER_ID
+                                        + "','"
+                                        + WORKER_ID
+                                        + "')"),
+                "user_warehouse_access", digestQuery("select * from user_warehouse_access"),
+                "oauth2_registered_client",
+                        digestQuery("select * from oauth2_registered_client where id='client-row'"),
+                "oauth2_authorization",
+                        digestQuery("select * from oauth2_authorization where id='authorization-row'"),
+                "oauth2_authorization_consent",
+                        digestQuery(
+                                "select * from oauth2_authorization_consent "
+                                        + "where registered_client_id='client-row'"));
     }
 
-    private String digest(String table) {
+    private String digestQuery(String query) {
         return jdbc.queryForObject(
                 "select md5(coalesce(string_agg(to_jsonb(row_value)::text, '|' "
-                        + "order by to_jsonb(row_value)::text), '')) from "
-                        + table
-                        + " row_value",
+                        + "order by to_jsonb(row_value)::text), '')) from ("
+                        + query
+                        + ") row_value",
                 String.class);
     }
 

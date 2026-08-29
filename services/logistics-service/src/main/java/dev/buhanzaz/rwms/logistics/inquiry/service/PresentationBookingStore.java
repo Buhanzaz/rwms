@@ -77,7 +77,7 @@ public class PresentationBookingStore {
         normalizedAdditionalContacts(request.additionalContacts());
     if (presentation.getMode() == ClientPresentationMode.NORMAL) {
       desiredDeliveryWindows = requiredNormalWindows(desiredDeliveryWindows);
-      rentalMonths = requiredRentalMonths(rentalMonths);
+      rentalMonths = requiredRentalTerms(selections, rentalMonths);
       deliveryAddress = requiredNormalDeliveryAddress(deliveryAddress);
       requireCoordinatePair(latitude, longitude);
       latitude = normalizedDecimal(latitude);
@@ -304,7 +304,8 @@ public class PresentationBookingStore {
       for (var item : tree) {
         if (item.isString()) {
           result.add(
-              new PresentationCabinSelectionInput(UUID.fromString(item.stringValue()), List.of()));
+              new PresentationCabinSelectionInput(
+                  UUID.fromString(item.stringValue()), List.of(), null));
         } else {
           result.add(json.treeToValue(item, PresentationCabinSelectionInput.class));
         }
@@ -403,7 +404,13 @@ public class PresentationBookingStore {
                   })
               .sorted(Comparator.comparing(PresentationEquipmentSelectionInput::equipmentId))
               .toList();
-      selections.add(new PresentationCabinSelectionInput(value.rentalItemId(), equipment));
+      if (value.rentalMonths() != null
+          && (value.rentalMonths() < 1 || value.rentalMonths() > 120)) {
+        throw new IllegalArgumentException("Presentation rental term is invalid");
+      }
+      selections.add(
+          new PresentationCabinSelectionInput(
+              value.rentalItemId(), equipment, value.rentalMonths()));
     }
     return List.copyOf(selections);
   }
@@ -458,14 +465,28 @@ public class PresentationBookingStore {
     return values.stream().sorted(Comparator.comparing(DesiredDeliveryWindowInput::startDate)).toList();
   }
 
-  private static Long requiredRentalMonths(Long value) {
-    if (value == null || value < 1) {
+  private static Long requiredRentalTerms(
+      List<PresentationCabinSelectionInput> selections, Long uniformRentalMonths) {
+    if (uniformRentalMonths != null
+        && (uniformRentalMonths < 1 || uniformRentalMonths > 120)) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "CLIENT_PRESENTATION_RENTAL_MONTHS_INVALID",
+          "Срок аренды должен быть от 1 до 120 месяцев");
+    }
+    boolean everySelectionHasTerm =
+        selections.stream().allMatch(selection -> selection.rentalMonths() != null);
+    boolean noSelectionHasTerm =
+        selections.stream().noneMatch(selection -> selection.rentalMonths() != null);
+    if ((everySelectionHasTerm && uniformRentalMonths != null)
+        || (!everySelectionHasTerm && !noSelectionHasTerm)
+        || (uniformRentalMonths == null && !everySelectionHasTerm)) {
       throw new OrderProblemException(
           HttpStatus.CONFLICT,
           "CLIENT_PRESENTATION_RENTAL_MONTHS_REQUIRED",
-          "Укажите срок аренды в месяцах");
+          "Укажите срок аренды для каждой бытовки");
     }
-    return value;
+    return uniformRentalMonths;
   }
 
   private static String requiredNormalDeliveryAddress(String value) {

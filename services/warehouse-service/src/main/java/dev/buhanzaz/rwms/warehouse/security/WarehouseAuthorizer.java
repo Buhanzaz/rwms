@@ -5,6 +5,8 @@ import dev.buhanzaz.rwms.warehouse.service.WarehouseLifecycleReadinessOwner;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
@@ -59,6 +61,40 @@ public class WarehouseAuthorizer {
     if (developmentPublicBypass) return;
     requireSystemAdmin(jwt);
     requireScope(jwt, "rwms.write");
+  }
+
+  /**
+   * Requires a warehouse manager or administrator who can view the served warehouse.
+   *
+   * @param jwt authenticated user
+   * @param servedWarehouseId warehouse whose support collection is read
+   */
+  public void requireWarehouseSupportRead(Jwt jwt, UUID servedWarehouseId) {
+    if (developmentPublicBypass) return;
+    requireUser(jwt);
+    requireScope(jwt, "warehouse.read");
+    requireWarehouseManagementRole(jwt);
+    requireWarehouseGrant(jwt, servedWarehouseId, 0);
+  }
+
+  /**
+   * Requires MANAGE grants for the served warehouse and every resource-providing warehouse.
+   *
+   * <p>Checking both ends prevents a local manager from volunteering another warehouse's drivers,
+   * vehicles or inventory without authority over that source.
+   *
+   * @param jwt authenticated user
+   * @param servedWarehouseId warehouse whose support collection changes
+   * @param supportWarehouseIds resource-providing warehouses in the replacement
+   */
+  public void requireWarehouseSupportWrite(
+      Jwt jwt, UUID servedWarehouseId, Collection<UUID> supportWarehouseIds) {
+    if (developmentPublicBypass) return;
+    requireUser(jwt);
+    requireScope(jwt, "rwms.write");
+    requireWarehouseManagementRole(jwt);
+    requireWarehouseGrant(jwt, servedWarehouseId, 2);
+    Set.copyOf(supportWarehouseIds).forEach(id -> requireWarehouseGrant(jwt, id, 2));
   }
 
   /**
@@ -258,6 +294,39 @@ public class WarehouseAuthorizer {
     if (jwt == null || !"USER".equals(jwt.getClaimAsString("principal_type"))) {
       throw new AccessDeniedException("USER principal is required");
     }
+  }
+
+  private static void requireWarehouseManagementRole(Jwt jwt) {
+    String role = jwt.getClaimAsString("global_role");
+    if (!"SYSTEM_ADMIN".equals(role)
+        && !"WMS_ADMIN".equals(role)
+        && !"WAREHOUSE_MANAGER".equals(role)) {
+      throw new AccessDeniedException("Warehouse management role is required");
+    }
+  }
+
+  private static void requireWarehouseGrant(Jwt jwt, UUID warehouseId, int requiredRank) {
+    String role = jwt.getClaimAsString("global_role");
+    if ("SYSTEM_ADMIN".equals(role) || "WMS_ADMIN".equals(role)) return;
+    Object claim = jwt.getClaims().get("warehouse_access");
+    if (claim instanceof Collection<?> entries) {
+      for (Object candidate : entries) {
+        if (!(candidate instanceof Map<?, ?> access)) continue;
+        if (!warehouseId.toString().equals(access.get("warehouseId"))) continue;
+        Object level = access.get("level");
+        if (level instanceof String value && warehouseAccessRank(value) >= requiredRank) return;
+      }
+    }
+    throw new AccessDeniedException("Insufficient warehouse access");
+  }
+
+  private static int warehouseAccessRank(String value) {
+    return switch (value) {
+      case "VIEW" -> 0;
+      case "EDIT" -> 1;
+      case "MANAGE" -> 2;
+      default -> -1;
+    };
   }
 
   private void requireScope(Jwt jwt, String required) {

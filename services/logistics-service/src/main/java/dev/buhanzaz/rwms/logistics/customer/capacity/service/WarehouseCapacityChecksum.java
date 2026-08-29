@@ -1,0 +1,104 @@
+package dev.buhanzaz.rwms.logistics.customer.capacity.service;
+
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityJobRequest;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityPriceZoneRequest;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityRestrictionZoneRequest;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityShiftRequest;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.ReplacePlanningCapacitySnapshotRequest;
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.UUID;
+
+/** Produces the canonical fingerprint used to fence capacity-snapshot command replays. */
+final class WarehouseCapacityChecksum {
+  private WarehouseCapacityChecksum() {}
+
+  /** Preserves checksum call sites that have no restriction polygons to sort. */
+  static String sha256(
+      UUID warehouseId,
+      ReplacePlanningCapacitySnapshotRequest request,
+      List<PlanningCapacityJobRequest> sortedJobs,
+      List<PlanningCapacityShiftRequest> sortedShifts,
+      List<PlanningCapacityPriceZoneRequest> sortedPriceZones) {
+    return sha256(
+        warehouseId, request, sortedJobs, sortedShifts, sortedPriceZones, List.of());
+  }
+
+  /** Hashes the path owner and every sorted anonymous delivery fact with length delimiters. */
+  static String sha256(
+      UUID warehouseId,
+      ReplacePlanningCapacitySnapshotRequest request,
+      List<PlanningCapacityJobRequest> sortedJobs,
+      List<PlanningCapacityShiftRequest> sortedShifts,
+      List<PlanningCapacityPriceZoneRequest> sortedPriceZones,
+      List<PlanningCapacityRestrictionZoneRequest> sortedRestrictionZones) {
+    try {
+      MessageDigest digest = MessageDigest.getInstance("SHA-256");
+      append(digest, "REPLACE_WAREHOUSE_CAPACITY");
+      append(digest, warehouseId.toString());
+      append(digest, Long.toString(request.sourceGeneration()));
+      append(digest, request.sourceRevision());
+      append(digest, Long.toString(request.isochronePrice60Minutes()));
+      append(digest, Long.toString(request.isochronePrice120Minutes()));
+      append(digest, Long.toString(request.isochronePrice180Minutes()));
+      append(digest, Long.toString(request.isochronePrice240Minutes()));
+      for (PlanningCapacityJobRequest job : sortedJobs) {
+        append(digest, job.sourceJobId().toString());
+        append(digest, job.taskType().name());
+        append(digest, job.deliveryDate().toString());
+        append(digest, decimal(job.latitude()));
+        append(digest, decimal(job.longitude()));
+        append(digest, Integer.toString(job.cabinCount()));
+        append(digest, job.windowStart().toString());
+        append(digest, job.windowEnd().toString());
+        append(digest, Integer.toString(job.serviceMinutes()));
+        append(digest, Boolean.toString(job.trailerAccessAllowed()));
+        append(digest, Integer.toString(job.priority()));
+        append(digest, Boolean.toString(job.mandatory()));
+      }
+      for (PlanningCapacityShiftRequest shift : sortedShifts) {
+        append(digest, shift.sourceShiftId().toString());
+        append(digest, shift.deliveryDate().toString());
+        append(digest, shift.shiftStart().toString());
+        append(digest, shift.shiftEnd().toString());
+        append(digest, Integer.toString(shift.breakMinutes()));
+        append(digest, Integer.toString(shift.cabinCapacity()));
+      }
+      for (PlanningCapacityPriceZoneRequest zone : sortedPriceZones) {
+        append(digest, zone.sourceZoneId().toString());
+        append(digest, Long.toString(zone.sourceZoneVersion()));
+        append(digest, Long.toString(zone.deliveryPriceRubles()));
+        append(digest, Long.toString(zone.pickupPriceRubles()));
+        append(digest, zone.geometry().type());
+        append(digest, zone.geometry().coordinates().toString());
+      }
+      for (PlanningCapacityRestrictionZoneRequest zone : sortedRestrictionZones) {
+        append(digest, zone.sourceZoneId().toString());
+        append(digest, Long.toString(zone.sourceZoneVersion()));
+        append(digest, zone.kind().name());
+        append(digest, zone.geometry().type());
+        append(digest, zone.geometry().coordinates().toString());
+      }
+      return HexFormat.of().formatHex(digest.digest());
+    } catch (NoSuchAlgorithmException exception) {
+      throw new IllegalStateException("SHA-256 is unavailable", exception);
+    }
+  }
+
+  private static String decimal(BigDecimal value) {
+    return value.stripTrailingZeros().toPlainString();
+  }
+
+  private static void append(MessageDigest digest, String value) {
+    byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+    digest.update((byte) (bytes.length >>> 24));
+    digest.update((byte) (bytes.length >>> 16));
+    digest.update((byte) (bytes.length >>> 8));
+    digest.update((byte) bytes.length);
+    digest.update(bytes);
+  }
+}

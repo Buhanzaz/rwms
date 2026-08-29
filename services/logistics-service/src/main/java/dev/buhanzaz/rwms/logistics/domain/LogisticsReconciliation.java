@@ -80,4 +80,19 @@ public class LogisticsReconciliation {
     reconciliation.openedAt = openedAt;
     return reconciliation;
   }
+
+  /** Closes an operator-reviewed ambiguity while retaining its complete audit row. */
+  public void resolve(String reason, UUID subjectId, OffsetDateTime resolvedAt) {
+    if (state == LogisticsReconciliationState.RESOLVED) return;
+    if (reason == null || reason.isBlank() || reason.length() > 500) {
+      throw new IllegalArgumentException("Reconciliation resolution reason is invalid");
+    }
+    if (subjectId == null || resolvedAt == null || resolvedAt.isBefore(openedAt)) {
+      throw new IllegalArgumentException("Reconciliation resolution identity and timing are invalid");
+    }
+    state = LogisticsReconciliationState.RESOLVED;
+    resolutionReason = reason;
+    resolvedBySubjectId = subjectId;
+    this.resolvedAt = resolvedAt;
+  }
 }

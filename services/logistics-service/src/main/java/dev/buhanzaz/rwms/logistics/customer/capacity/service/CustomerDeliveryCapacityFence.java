@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * Serializes every logistics-local write that can change CustomerApp delivery capacity for one
- * warehouse day. The shared advisory-lock namespace makes a slot hold, simulator replacement and
+ * warehouse day. The shared advisory-lock namespace makes a slot hold, planner replacement and
  * whole-day driver reservation observe one deterministic transaction order.
  */
 @Component
@@ -24,15 +24,15 @@ public class CustomerDeliveryCapacityFence {
     transactionLock.acquire(dayKey(warehouseId, deliveryDate));
   }
 
-  /** Acquires the warehouse-wide simulator-capacity fence. */
-  public void acquireScenario(UUID warehouseId) {
-    transactionLock.acquire(scenarioKey(warehouseId));
+  /** Acquires the warehouse-wide planner-capacity fence. */
+  public void acquireWarehouseCapacity(UUID warehouseId) {
+    transactionLock.acquire(warehouseCapacityKey(warehouseId));
   }
 
   /** Acquires both capacity inputs in deterministic key order for the final slot transaction. */
-  public void acquireDayAndScenario(UUID warehouseId, LocalDate deliveryDate) {
+  public void acquireDayAndWarehouseCapacity(UUID warehouseId, LocalDate deliveryDate) {
     transactionLock.acquireAll(
-        List.of(dayKey(warehouseId, deliveryDate), scenarioKey(warehouseId)));
+        List.of(dayKey(warehouseId, deliveryDate), warehouseCapacityKey(warehouseId)));
   }
 
   /**
@@ -55,8 +55,8 @@ public class CustomerDeliveryCapacityFence {
         + Objects.requireNonNull(deliveryDate, "Delivery date is required");
   }
 
-  private static String scenarioKey(UUID warehouseId) {
-    return "customer-scenario-capacity:"
+  private static String warehouseCapacityKey(UUID warehouseId) {
+    return "customer-warehouse-capacity:"
         + Objects.requireNonNull(warehouseId, "Warehouse is required");
   }
 }

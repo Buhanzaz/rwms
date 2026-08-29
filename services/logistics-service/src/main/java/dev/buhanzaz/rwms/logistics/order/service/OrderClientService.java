@@ -161,6 +161,56 @@ public class OrderClientService {
         request.additionalContacts());
   }
 
+  /**
+   * Synchronizes the rental-client projection owned by one CustomerApp profile inside the
+   * profile transaction. Phone uniqueness and normalized search fields are rechecked atomically.
+   */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public OrderClient updateCustomerProfile(
+      UUID clientId,
+      ClientType expectedType,
+      String requestedDisplayName,
+      String requestedPhone,
+      String requestedContactPerson,
+      String requestedEmail,
+      String requestedComment) {
+    if (clientId == null || expectedType == null) {
+      throw new IllegalArgumentException("Customer profile client identity is required");
+    }
+    OrderClient client = clients.findById(clientId).orElseThrow(OrderClientService::notFound);
+    if (client.getClientType() != expectedType) {
+      throw new IllegalStateException("Customer profile client type is inconsistent");
+    }
+    String displayName = normalizeDisplayName(requestedDisplayName);
+    String normalizedName = normalizeName(displayName);
+    String normalizedPhone = normalizePhone(requestedPhone);
+    String contactPerson = normalizeOptionalText(requestedContactPerson, 255, "contactPerson");
+    if (expectedType == ClientType.LEGAL_ENTITY && contactPerson == null) {
+      throw new IllegalArgumentException("contactPerson is required for this client type");
+    }
+    String normalizedEmail = normalizeEmail(requestedEmail);
+    String comment = normalizeOptionalText(requestedComment, 2_000, "comment");
+    transactionLock.acquire("order-client:phone:" + expectedType + ":" + normalizedPhone);
+    clients
+        .findByClientTypeAndNormalizedPhone(expectedType, normalizedPhone)
+        .filter(duplicate -> !duplicate.getId().equals(clientId))
+        .ifPresent(
+            duplicate -> {
+              throw conflict(
+                  "CLIENT_ALREADY_EXISTS", "Клиент с указанными реквизитами уже существует");
+            });
+    client.updateCustomerProfile(
+        displayName,
+        normalizedName,
+        normalizedPhone,
+        normalizedPhone,
+        normalizedEmail,
+        normalizedEmail,
+        contactPerson,
+        comment);
+    return clients.saveAndFlush(client);
+  }
+
   /** Resolves an existing client under the same no-disclosure policy as the client detail API. */
   public OrderClient required(OrderActor actor, UUID clientId) {
     return requiredVisible(actor, clientId);

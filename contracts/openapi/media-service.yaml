@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Media Service API
-  version: 1.16.0
+  version: 1.17.0
   license: { name: UNLICENSED }
   description: >-
     Stateful Go media API. PostgreSQL owns metadata and replay state; MinIO
@@ -62,8 +62,12 @@ paths:
         MAINTENANCE_* proofs require only sub=client_id=maintenance-service and
         exactly media.maintenance. LOGISTICS_* proofs require only
         sub=client_id=logistics-service and exactly media.logistics. Maintenance
-        supplies a UUID ownerId. Logistics supplies documentId plus lineId and
-        media-service alone derives its internal composite identity. Exact
+        supplies a UUID ownerId. Structured logistics owners supply documentId
+        plus lineId and media-service alone derives their internal composite
+        identity. LOGISTICS_CUSTOMER_PROFILE instead supplies the authoritative
+        customer-profile UUID as ownerId. LOGISTICS_SHIPMENT and
+        LOGISTICS_CUSTOMER_PROFILE proofs bind exactly one CustomerApp subject;
+        only that customer can use the bound media scope. Exact
         proofEventId/canonical-body replay is safe. After the first accepted
         proof, ownerRevision must be exactly next. aggregateVersion must
         strictly increase but may skip source aggregate mutations that emit no
@@ -302,12 +306,14 @@ paths:
         '503': { $ref: '#/components/responses/Unavailable' }
   /api/internal/media/v1/logistics/references/validate:
     post:
-      summary: Validate opaque READY media references for one logistics document line
+      summary: Validate opaque READY media references for one logistics owner
       operationId: validateLogisticsMediaReferences
       description: >-
         Requires only a SERVICE JWT with sub=client_id=logistics-service,
-        audience rwms-services and exactly media.logistics. The request derives
-        the opaque owner ID from documentId and lineId. It is read-only and
+        audience rwms-services and exactly media.logistics. A structured request
+        derives the opaque owner ID from documentId and lineId. A customer
+        profile request carries the profile ownerId, exact authorizedSubjectId,
+        PROFILE_AVATAR context and exactly one reference. It is read-only and
         reveals neither URLs, object keys, filenames, MIME details nor media
         policy internals.
       requestBody:
@@ -317,7 +323,7 @@ paths:
             schema: { $ref: '#/components/schemas/LogisticsMediaReferenceValidationRequest' }
       responses:
         '200':
-          description: Every supplied reference is READY at the requested current generation for this exact owner and warehouse.
+          description: Every supplied reference is READY at the requested current generation for this exact owner, warehouse and optional customer subject.
           headers:
             Cache-Control: { schema: { const: no-store } }
           content:
@@ -440,7 +446,9 @@ paths:
       summary: Authorize one constrained same-origin upload session
       operationId: createUploadSession
       description: >-
-        Requires USER with rwms.write and warehouse EDIT, or WORKER with exactly
+        Requires USER with rwms.write and warehouse EDIT, CustomerApp USER with
+        exactly customer.rental for its subject-bound LOGISTICS_SHIPMENT or
+        LOGISTICS_CUSTOMER_PROFILE owner, or WORKER with exactly
         one of worker.tasks or driver.tasks only for TASK_BOARD_ENTRY/WORK_RESULT
         and a current owner proof containing its worker_id. Only proven canonical owner/context
         pairs declared by MediaOwnerType are accepted.
@@ -489,7 +497,7 @@ paths:
       description: >-
         Requires the session-owning USER or WORKER principal authorized when
         the session was created; authorization is rechecked against the current
-        owner proof. The
+        owner proof, including an exact CustomerApp subject binding when applicable. The
         request Content-Type and Content-Length must exactly match the upload
         session. Idempotency-Key is shared with the following completion call.
         On success the immutable MinIO version is already finalized and a
@@ -613,6 +621,8 @@ paths:
         folderId is the media-owned association gallery folder, so a completed
         inventory batch is returned as one folder while all earlier direct,
         task-evidence and inventory folders remain separately grouped.
+        CustomerApp may list only its exact subject-bound shipment or profile
+        avatar owner; manager and worker identities cannot read profile avatars.
       parameters:
         - $ref: '#/components/parameters/OwnerType'
         - $ref: '#/components/parameters/OwnerId'
@@ -674,6 +684,10 @@ paths:
     get:
       summary: Stream one owner-scoped ORIGINAL through the same-origin API
       operationId: getOriginalMedia
+      description: >-
+        CustomerApp may stream only its exact subject-bound shipment or profile
+        avatar original. Manager and worker identities cannot read profile
+        avatars.
       parameters:
         - $ref: '#/components/parameters/MediaId'
         - name: generation
@@ -714,6 +728,10 @@ paths:
     get:
       summary: Stream one owner-scoped derived variant through the same-origin API
       operationId: getMediaVariantContent
+      description: >-
+        CustomerApp may stream only its exact subject-bound shipment or profile
+        avatar derivative. Manager and worker identities cannot read profile
+        avatars.
       parameters:
         - $ref: '#/components/parameters/MediaId'
         - $ref: '#/components/parameters/Variant'
@@ -746,7 +764,9 @@ paths:
       summary: Soft-delete one owner-scoped logical media asset
       operationId: deleteMedia
       description: >-
-        Requires USER, rwms.write and warehouse EDIT. The command sets DELETED
+        Requires USER, rwms.write and warehouse EDIT, or the exact CustomerApp
+        subject for a subject-bound shipment/profile-avatar proof. Manager and
+        worker identities cannot delete profile avatars. The command sets DELETED
         and deletedAt, emits exactly one media.media.deleted.v1 fact and never
         deletes source or derived MinIO versions. Wrong owner scope is 404;
         stale expectedVersion is 409; an exact Idempotency-Key replay is safe.
@@ -815,19 +835,19 @@ components:
       name: ownerId
       in: query
       required: false
-      description: Required for inventory, cabin, maintenance and task-board owners; forbidden for logistics owners.
+      description: Required for inventory, cabin, maintenance, task-board and LOGISTICS_CUSTOMER_PROFILE owners; forbidden for structured logistics owners.
       schema: { type: string, format: uuid }
     DocumentId:
       name: documentId
       in: query
       required: false
-      description: Required with lineId for logistics owners; forbidden for all other owners.
+      description: Required with lineId for structured logistics owners; forbidden for all other owners.
       schema: { type: string, format: uuid }
     LineId:
       name: lineId
       in: query
       required: false
-      description: Required with documentId for logistics owners; forbidden for all other owners.
+      description: Required with documentId for structured logistics owners; forbidden for all other owners.
       schema: { type: string, format: uuid }
     WarehouseId:
       name: warehouseId
@@ -984,10 +1004,11 @@ components:
         - LOGISTICS_RETURN
         - LOGISTICS_SHIPMENT
         - LOGISTICS_TRANSFER
+        - LOGISTICS_CUSTOMER_PROFILE
         - TASK_BOARD_ENTRY
     MediaOwnerContext:
       type: string
-      enum: [INSPECTION, WAREHOUSE, ESTIMATE, REPAIR, ACCEPTANCE, CATALOG, RETURN_INSPECTION, SHIPMENT, TRANSFER, WORK_RESULT]
+      enum: [INSPECTION, WAREHOUSE, ESTIMATE, REPAIR, ACCEPTANCE, CATALOG, RETURN_INSPECTION, SHIPMENT, TRANSFER, PROFILE_AVATAR, WORK_RESULT]
     MaintenanceOwnerType:
       type: string
       enum: [MAINTENANCE_ESTIMATE, MAINTENANCE_REPAIR, MAINTENANCE_ACCEPTANCE, MAINTENANCE_CATALOG_NODE]
@@ -1003,6 +1024,10 @@ components:
         ownerId: { type: string, format: uuid }
         documentId: { type: string, format: uuid }
         lineId: { type: string, format: uuid }
+        authorizedSubjectId:
+          type: string
+          format: uuid
+          description: Required for CustomerApp-owned LOGISTICS_SHIPMENT and LOGISTICS_CUSTOMER_PROFILE scopes; it never grants manager or worker permissions.
         warehouseId:
           description: >-
             Authorizing warehouse. LOGISTICS_RETURN uses the destination/receiving
@@ -1028,10 +1053,25 @@ components:
             anyOf:
               - required: [documentId]
               - required: [lineId]
+              - required: [authorizedSubjectId]
         - required: [documentId, lineId]
           properties:
-            ownerType: { $ref: '#/components/schemas/LogisticsOwnerType' }
+            ownerType: { enum: [LOGISTICS_RETURN, LOGISTICS_TRANSFER] }
+          not:
+            anyOf:
+              - required: [ownerId]
+              - required: [authorizedSubjectId]
+        - required: [documentId, lineId, authorizedSubjectId]
+          properties:
+            ownerType: { const: LOGISTICS_SHIPMENT }
           not: { required: [ownerId] }
+        - required: [ownerId, authorizedSubjectId]
+          properties:
+            ownerType: { const: LOGISTICS_CUSTOMER_PROFILE }
+          not:
+            anyOf:
+              - required: [documentId]
+              - required: [lineId]
     ServiceOwnerProof:
       type: object
       additionalProperties: false
@@ -1041,6 +1081,7 @@ components:
         ownerId: { type: string, format: uuid }
         documentId: { type: string, format: uuid }
         lineId: { type: string, format: uuid }
+        authorizedSubjectId: { type: string, format: uuid }
         warehouseId: { type: string, format: uuid }
         ownerRevision:
           description: The applied contiguous owner-proof revision.
@@ -1060,10 +1101,25 @@ components:
             anyOf:
               - required: [documentId]
               - required: [lineId]
+              - required: [authorizedSubjectId]
         - required: [documentId, lineId]
           properties:
-            ownerType: { $ref: '#/components/schemas/LogisticsOwnerType' }
+            ownerType: { enum: [LOGISTICS_RETURN, LOGISTICS_TRANSFER] }
+          not:
+            anyOf:
+              - required: [ownerId]
+              - required: [authorizedSubjectId]
+        - required: [documentId, lineId, authorizedSubjectId]
+          properties:
+            ownerType: { const: LOGISTICS_SHIPMENT }
           not: { required: [ownerId] }
+        - required: [ownerId, authorizedSubjectId]
+          properties:
+            ownerType: { const: LOGISTICS_CUSTOMER_PROFILE }
+          not:
+            anyOf:
+              - required: [documentId]
+              - required: [lineId]
     OpaqueReadyMediaReference:
       type: object
       additionalProperties: false
@@ -1131,6 +1187,10 @@ components:
           description: True only for the exact frozen Idempotency-Key receipt.
           type: boolean
     LogisticsMediaReferenceValidationRequest:
+      oneOf:
+        - $ref: '#/components/schemas/StructuredLogisticsMediaReferenceValidationRequest'
+        - $ref: '#/components/schemas/CustomerProfileMediaReferenceValidationRequest'
+    StructuredLogisticsMediaReferenceValidationRequest:
       type: object
       additionalProperties: false
       required: [ownerType, documentId, lineId, warehouseId, references]
@@ -1151,7 +1211,36 @@ components:
           maxItems: 20
           uniqueItems: true
           items: { $ref: '#/components/schemas/OpaqueReadyMediaReference' }
+    CustomerProfileMediaReferenceValidationRequest:
+      type: object
+      additionalProperties: false
+      required: [ownerType, ownerId, authorizedSubjectId, warehouseId, context, references]
+      properties:
+        ownerType: { const: LOGISTICS_CUSTOMER_PROFILE }
+        ownerId:
+          description: Authoritative logistics customer_profile.id.
+          type: string
+          format: uuid
+        authorizedSubjectId:
+          description: Exact CustomerApp JWT subject bound by the current owner proof.
+          type: string
+          format: uuid
+        warehouseId:
+          description: Explicitly selected active CustomerApp warehouse used only as media authorization scope.
+          type: string
+          format: uuid
+        context: { const: PROFILE_AVATAR }
+        references:
+          description: Exactly one READY current-generation profile avatar.
+          type: array
+          minItems: 1
+          maxItems: 1
+          items: { $ref: '#/components/schemas/OpaqueReadyMediaReference' }
     LogisticsMediaReferenceValidation:
+      oneOf:
+        - $ref: '#/components/schemas/StructuredLogisticsMediaReferenceValidation'
+        - $ref: '#/components/schemas/CustomerProfileMediaReferenceValidation'
+    StructuredLogisticsMediaReferenceValidation:
       type: object
       additionalProperties: false
       required: [ownerType, documentId, lineId, warehouseId, references]
@@ -1164,6 +1253,21 @@ components:
           type: array
           minItems: 1
           maxItems: 20
+          items: { $ref: '#/components/schemas/OpaqueReadyMediaReference' }
+    CustomerProfileMediaReferenceValidation:
+      type: object
+      additionalProperties: false
+      required: [ownerType, ownerId, authorizedSubjectId, warehouseId, context, references]
+      properties:
+        ownerType: { const: LOGISTICS_CUSTOMER_PROFILE }
+        ownerId: { type: string, format: uuid }
+        authorizedSubjectId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        context: { const: PROFILE_AVATAR }
+        references:
+          type: array
+          minItems: 1
+          maxItems: 1
           items: { $ref: '#/components/schemas/OpaqueReadyMediaReference' }
     CabinPresentationSnapshotRequest:
       type: object
@@ -1355,6 +1459,11 @@ components:
             ownerType: { const: LOGISTICS_TRANSFER }
             context: { const: TRANSFER }
           not: { anyOf: [{ required: [ownerId] }, { required: [clientReferenceId] }] }
+        - required: [ownerId]
+          properties:
+            ownerType: { const: LOGISTICS_CUSTOMER_PROFILE }
+            context: { const: PROFILE_AVATAR }
+          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }, { required: [clientReferenceId] }] }
         - required: [ownerId, clientReferenceId]
           properties:
             ownerType: { const: TASK_BOARD_ENTRY }

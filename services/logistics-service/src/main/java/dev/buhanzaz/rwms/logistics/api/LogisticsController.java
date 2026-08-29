@@ -16,6 +16,8 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureReadi
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureTaskResult;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferFurnitureReadinessView;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferArrivalPreflightView;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferPlanView;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.UpdateTransferPlanRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
@@ -297,6 +299,64 @@ public class LogisticsController {
     return read(jwt, documentId, LogisticsDocumentType.TRANSFER);
   }
 
+  @GetMapping("/transfers/{documentId}/plan")
+  public TransferPlanView getTransferPlan(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID documentId) {
+    read(jwt, documentId, LogisticsDocumentType.TRANSFER);
+    return service.getTransferPlan(documentId);
+  }
+
+  @PutMapping("/transfers/{documentId}/plan")
+  public ResponseEntity<TransferPlanView> updateTransferPlan(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID documentId,
+      @RequestParam @Min(0) long expectedVersion,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody UpdateTransferPlanRequest request,
+      HttpServletRequest servletRequest) {
+    LogisticsDocumentView current = service.get(documentId, LogisticsDocumentType.TRANSFER);
+    access.requireManageBoth(jwt, current.warehouseId(), current.destinationWarehouseId());
+    return acceptedPlan(
+        service.updateTransferPlan(
+            access.subjectId(jwt),
+            idempotencyKey,
+            correlationId(servletRequest),
+            documentId,
+            expectedVersion,
+            request,
+            warehouseLifecycle.currentLocalDate(current.warehouseId())));
+  }
+
+  @PostMapping("/transfers/{documentId}/confirm")
+  public ResponseEntity<TransferPlanView> confirmTransferPlan(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID documentId,
+      @RequestParam @Min(0) long expectedVersion,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      HttpServletRequest servletRequest) {
+    LogisticsDocumentView current = service.get(documentId, LogisticsDocumentType.TRANSFER);
+    access.requireManageBoth(jwt, current.warehouseId(), current.destinationWarehouseId());
+    UUID subjectId = access.subjectId(jwt);
+    var admission =
+        warehouseLifecycle.prepareDocument(
+            subjectId,
+            "CONFIRM_TRANSFER_PLAN",
+            idempotencyKey,
+            List.of(
+                new AdmissionRequirement(
+                    current.warehouseId(), WarehouseOperationDirection.OUTGOING),
+                new AdmissionRequirement(
+                    current.destinationWarehouseId(), WarehouseOperationDirection.INCOMING)));
+    return acceptedPlan(
+        service.confirmTransferPlan(
+            subjectId,
+            idempotencyKey,
+            correlationId(servletRequest),
+            documentId,
+            expectedVersion,
+            admission));
+  }
+
   @GetMapping("/transfers/{documentId}/furniture-readiness")
   public TransferFurnitureReadinessView getTransferFurnitureReadiness(
       @AuthenticationPrincipal Jwt jwt, @PathVariable UUID documentId) {
@@ -489,6 +549,15 @@ public class LogisticsController {
       LogisticsDocumentService.CreateResult result) {
     ResponseEntity.BodyBuilder response =
         ResponseEntity.accepted().header(HttpHeaders.ETAG, eTag(result.response().version()));
+    if (result.replayed()) response.header("Idempotency-Replayed", "true");
+    return response.body(result.response());
+  }
+
+  private static ResponseEntity<TransferPlanView> acceptedPlan(
+      LogisticsDocumentService.PlanResult result) {
+    ResponseEntity.BodyBuilder response =
+        ResponseEntity.accepted()
+            .header(HttpHeaders.ETAG, eTag(result.response().documentVersion()));
     if (result.replayed()) response.header("Idempotency-Replayed", "true");
     return response.body(result.response());
   }

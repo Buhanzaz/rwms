@@ -113,6 +113,8 @@ class HistoricalRentalMovementCoordinator {
                 request.warehouseId(),
                 request.clientId(),
                 clientSnapshot,
+                request.driverSnapshot(),
+                request.driverWorkerId(),
                 request.occurredOn(),
                 subjectId,
                 correlationId)
@@ -195,7 +197,11 @@ class HistoricalRentalMovementCoordinator {
 
     boolean documentChanged =
         document.correctHistoricalRentalShipment(
-            request.clientId(), clientSnapshot, request.occurredOn());
+            request.clientId(),
+            clientSnapshot,
+            request.driverSnapshot(),
+            request.driverWorkerId(),
+            request.occurredOn());
     boolean lineChanged = lines.getFirst().correctHistoricalShipmentTenantSnapshot(clientSnapshot);
     if (lineChanged) {
       lineRepository.saveAndFlush(lines.getFirst());
@@ -304,6 +310,8 @@ class HistoricalRentalMovementCoordinator {
             request.rentalItemId().toString(),
             Long.toString(request.expectedRentalItemVersion()),
             request.clientId().toString(),
+            normalizedDriverSnapshot(request.driverSnapshot()),
+            nullableId(request.driverWorkerId()),
             request.kind().name(),
             request.occurredOn().toString()));
   }
@@ -317,6 +325,8 @@ class HistoricalRentalMovementCoordinator {
             Long.toString(request.expectedVersion()),
             request.rentalItemId().toString(),
             request.clientId().toString(),
+            normalizedDriverSnapshot(request.driverSnapshot()),
+            nullableId(request.driverWorkerId()),
             request.occurredOn().toString()));
   }
 
@@ -350,6 +360,7 @@ class HistoricalRentalMovementCoordinator {
         || request.clientId() == null
         || request.kind() == null
         || request.occurredOn() == null
+        || invalidDriver(request.kind(), request.driverSnapshot(), request.driverWorkerId())
         || subjectId == null
         || idempotencyKey == null
         || correlationId == null
@@ -379,12 +390,34 @@ class HistoricalRentalMovementCoordinator {
         || request.rentalItemId() == null
         || request.clientId() == null
         || request.occurredOn() == null
+        || invalidDriver(
+            HistoricalRentalMovementKind.SHIPMENT,
+            request.driverSnapshot(),
+            request.driverWorkerId())
         || warehouseToday == null
         || clientSnapshot == null
         || clientSnapshot.isBlank()
         || clientSnapshot.trim().length() > 512) {
       throw new IllegalArgumentException("Historical rental shipment update is incomplete");
     }
+  }
+
+  private static boolean invalidDriver(
+      HistoricalRentalMovementKind kind, String driverSnapshot, UUID driverWorkerId) {
+    String normalized = normalizedDriverSnapshot(driverSnapshot);
+    boolean missingSnapshot = normalized.isEmpty();
+    boolean missingWorker = driverWorkerId == null;
+    return missingSnapshot != missingWorker
+        || normalized.length() > 512
+        || (kind == HistoricalRentalMovementKind.RETURN && !missingSnapshot);
+  }
+
+  private static String normalizedDriverSnapshot(String value) {
+    return value == null ? "" : value.trim();
+  }
+
+  private static String nullableId(UUID value) {
+    return value == null ? "" : value.toString();
   }
 
   private static OffsetDateTime now() {

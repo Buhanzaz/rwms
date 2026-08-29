@@ -168,7 +168,11 @@ public class OrderController {
       HttpServletRequest servletRequest) {
     OrderActor actor = access.writeActor(jwt);
     UUID warehouseId =
-        orders.rentalShipmentAdmissionWarehouse(actor, orderId, request.scheduledDate());
+        orders.rentalShipmentAdmissionWarehouse(
+            actor,
+            orderId,
+            request.scheduledDate(),
+            request.inventorySourceWarehouseId());
     var admission =
         warehouseLifecycle.prepareDocument(
             actor.subjectId(),
@@ -187,8 +191,10 @@ public class OrderController {
       @PathVariable UUID orderId,
       @RequestParam(defaultValue = "0") @Min(0) int page,
       @RequestParam(defaultValue = "50") @Min(1) @Max(100) int size,
-      @RequestParam(defaultValue = "") String search) {
-    return orders.availableUnits(access.readActor(jwt), orderId, page, size, search);
+      @RequestParam(defaultValue = "") String search,
+      @RequestParam(required = false) UUID inventorySourceWarehouseId) {
+    return orders.availableUnits(
+        access.readActor(jwt), orderId, inventorySourceWarehouseId, page, size, search);
   }
 
   @DeleteMapping("/orders/{orderId}/units/{unitId}")

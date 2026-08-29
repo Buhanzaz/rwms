@@ -62,6 +62,16 @@ public class LogisticsDocumentLine {
   @Column(name = "asset_version", nullable = false)
   private long assetVersion;
 
+  /** Asset-owned exclusive reservation associated with a confirmed transfer line. */
+  @Column(name = "transfer_unit_reservation_id")
+  private UUID transferUnitReservationId;
+
+  @Column(name = "transfer_unit_reservation_version")
+  private Long transferUnitReservationVersion;
+
+  @Column(name = "transfer_unit_reservation_state", length = 16)
+  private String transferUnitReservationState;
+
   @Enumerated(EnumType.STRING)
   @Column(name = "state", nullable = false, length = 16)
   private LogisticsLineState state;
@@ -72,6 +82,14 @@ public class LogisticsDocumentLine {
   /** Opaque existing rental-order reference used to prove client ownership. */
   @Column(name = "rental_order_id")
   private UUID rentalOrderId;
+
+  /**
+   * Warehouse that physically owned this cabin when the outbound line was frozen. The document
+   * warehouse remains the regional/service owner; old rows fall back to it during rolling upgrade.
+   */
+  @Getter(AccessLevel.NONE)
+  @Column(name = "inventory_source_warehouse_id")
+  private UUID inventorySourceWarehouseId;
 
   @JdbcTypeCode(SqlTypes.JSON)
   @Column(name = "passport_snapshot", columnDefinition = "jsonb")
@@ -178,10 +196,32 @@ public class LogisticsDocumentLine {
       long assetVersion,
       String tenantSnapshot,
       UUID rentalOrderId) {
+    return create(
+        document,
+        lineNumber,
+        assetId,
+        assetVersion,
+        tenantSnapshot,
+        rentalOrderId,
+        document == null ? null : document.getWarehouseId());
+  }
+
+  /** Creates a line with a physical inventory source independent from the service warehouse. */
+  public static LogisticsDocumentLine create(
+      LogisticsDocument document,
+      int lineNumber,
+      UUID assetId,
+      long assetVersion,
+      String tenantSnapshot,
+      UUID rentalOrderId,
+      UUID inventorySourceWarehouseId) {
     if (document == null) throw new IllegalArgumentException("document is required");
     if (lineNumber < 1) throw new IllegalArgumentException("lineNumber must be positive");
     if (assetId == null) throw new IllegalArgumentException("assetId is required");
     if (assetVersion < 0) throw new IllegalArgumentException("assetVersion must not be negative");
+    if (inventorySourceWarehouseId == null) {
+      throw new IllegalArgumentException("inventorySourceWarehouseId is required");
+    }
     LogisticsDocumentLine line = new LogisticsDocumentLine();
     line.document = document;
     line.lineNumber = lineNumber;
@@ -190,7 +230,13 @@ public class LogisticsDocumentLine {
     line.state = LogisticsLineState.PENDING;
     line.tenantSnapshot = optionalSnapshot(tenantSnapshot);
     line.rentalOrderId = rentalOrderId;
+    line.inventorySourceWarehouseId = inventorySourceWarehouseId;
     return line;
+  }
+
+  /** Returns the frozen physical source, with a rolling-upgrade fallback for legacy rows. */
+  public UUID getInventorySourceWarehouseId() {
+    return inventorySourceWarehouseId == null ? document.getWarehouseId() : inventorySourceWarehouseId;
   }
 
   /**
@@ -237,6 +283,62 @@ public class LogisticsDocumentLine {
 
   public void markDeparted() {
     transition(LogisticsLineState.DEPARTING, LogisticsLineState.DEPARTED);
+  }
+
+  /**
+   * Attaches the exact asset-service reservation receipt and advances the cabin version used by the
+   * existing fenced departure saga. Replaying the same receipt is a no-op; another reservation can
+   * never replace it.
+   */
+  public void attachTransferUnitReservation(
+      UUID reservationId, long reservationVersion, long currentAssetVersion) {
+    if (document.getDocumentType() != LogisticsDocumentType.TRANSFER
+        || state != LogisticsLineState.PENDING
+        || reservationId == null
+        || reservationVersion < 0
+        || currentAssetVersion < assetVersion) {
+      throw new IllegalStateException("Transfer cabin reservation receipt is invalid");
+    }
+    if (transferUnitReservationId != null) {
+      if (!transferUnitReservationId.equals(reservationId)
+          || !Objects.equals(transferUnitReservationVersion, reservationVersion)
+          || !"ACTIVE".equals(transferUnitReservationState)
+          || assetVersion != currentAssetVersion) {
+        throw new IllegalStateException("Transfer cabin reservation is immutable");
+      }
+      return;
+    }
+    transferUnitReservationId = reservationId;
+    transferUnitReservationVersion = reservationVersion;
+    transferUnitReservationState = "ACTIVE";
+    assetVersion = currentAssetVersion;
+  }
+
+  /** Records the asset-owned release receipt during a pre-departure cancellation. */
+  public void releaseTransferUnitReservation(
+      UUID reservationId, long reservationVersion, long currentAssetVersion) {
+    if (transferUnitReservationId == null
+        || !transferUnitReservationId.equals(reservationId)
+        || !"ACTIVE".equals(transferUnitReservationState)
+        || transferUnitReservationVersion == null
+        || reservationVersion != Math.addExact(transferUnitReservationVersion, 1)
+        || currentAssetVersion < assetVersion) {
+      throw new IllegalStateException("Transfer cabin reservation release receipt is invalid");
+    }
+    transferUnitReservationVersion = reservationVersion;
+    transferUnitReservationState = "RELEASED";
+    assetVersion = currentAssetVersion;
+  }
+
+  /** Marks the attached reservation consumed after the existing asset departure effect succeeds. */
+  public void consumeTransferUnitReservation() {
+    if (transferUnitReservationId == null) return;
+    if (!"ACTIVE".equals(transferUnitReservationState)
+        || transferUnitReservationVersion == null) {
+      throw new IllegalStateException("Transfer cabin reservation cannot be consumed");
+    }
+    transferUnitReservationVersion = Math.addExact(transferUnitReservationVersion, 1);
+    transferUnitReservationState = "CONSUMED";
   }
 
   public void beginArrival() {
@@ -345,6 +447,22 @@ public class LogisticsDocumentLine {
   /** Replaces an unstarted rental-order line after an asset-side atomic cabin swap. */
   public void replaceRentalItem(
       UUID expectedOldRentalItemId, UUID replacementRentalItemId, long replacementAssetVersion) {
+    replaceRentalItem(
+        expectedOldRentalItemId,
+        replacementRentalItemId,
+        replacementAssetVersion,
+        getInventorySourceWarehouseId());
+  }
+
+  /**
+   * Atomically changes an unstarted order line's cabin fence and physical inventory source while
+   * retaining its document-level service warehouse.
+   */
+  public void replaceRentalItem(
+      UUID expectedOldRentalItemId,
+      UUID replacementRentalItemId,
+      long replacementAssetVersion,
+      UUID replacementInventorySourceWarehouseId) {
     if (rentalOrderId == null
         || state != LogisticsLineState.PENDING
         || !assetId.equals(expectedOldRentalItemId)) {
@@ -355,6 +473,9 @@ public class LogisticsDocumentLine {
     }
     assetId = Objects.requireNonNull(replacementRentalItemId, "replacementRentalItemId");
     assetVersion = replacementAssetVersion;
+    inventorySourceWarehouseId =
+        Objects.requireNonNull(
+            replacementInventorySourceWarehouseId, "replacementInventorySourceWarehouseId");
   }
 
   public void captureExpectedContents(JsonNode snapshot) {

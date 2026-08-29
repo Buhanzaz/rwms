@@ -34,8 +34,8 @@ import org.springframework.stereotype.Service;
 
 /**
  * Orchestrates the two entry points of the existing same-order cabin replacement: a direct
- * warehouse-manager command and a client presentation selection. Durable recovery is carried by the
- * existing furniture movement task/link rather than a parallel replacement aggregate.
+ * warehouse-manager command and a client presentation selection. The service warehouse remains on
+ * the order while an authorized physical source is checkpointed independently for recovery.
  */
 @Service
 @RequiredArgsConstructor
@@ -44,6 +44,7 @@ public class RentalOrderUnitReplacementService {
 
   private final RentalOrderReadService reads;
   private final RentalOrderReservationService reservations;
+  private final RentalOrderInventorySourcePolicy inventorySources;
   private final OrderAuthorizer access;
   private final LogisticsDependencyGateway dependencies;
   private final ShipmentFurnitureTaskService furnitureTasks;
@@ -62,6 +63,27 @@ public class RentalOrderUnitReplacementService {
       UUID replacementRentalItemId,
       String reason,
       UUID idempotencyKey) {
+    return replaceDirect(
+        actor,
+        orderId,
+        expectedVersion,
+        oldRentalItemId,
+        replacementRentalItemId,
+        reason,
+        null,
+        idempotencyKey);
+  }
+
+  /** Performs one source-aware nonblank-reason replacement without a client presentation. */
+  public OrderDetailResponse replaceDirect(
+      OrderActor actor,
+      UUID orderId,
+      long expectedVersion,
+      UUID oldRentalItemId,
+      UUID replacementRentalItemId,
+      String reason,
+      UUID inventorySourceWarehouseId,
+      UUID idempotencyKey) {
     String normalizedReason = requireReason(reason);
     return replaceBatch(
         actor,
@@ -69,6 +91,7 @@ public class RentalOrderUnitReplacementService {
         expectedVersion,
         List.of(new ReplacementPair(oldRentalItemId, replacementRentalItemId)),
         normalizedReason,
+        inventorySourceWarehouseId,
         null,
         idempotencyKey);
   }
@@ -100,7 +123,7 @@ public class RentalOrderUnitReplacementService {
     }
     OrderDetailResponse current = reads.get(actor, orderId);
     return replaceBatch(
-        actor, orderId, current.version(), List.copyOf(pairs), null, holdScopeId, bookingId);
+        actor, orderId, current.version(), List.copyOf(pairs), null, null, holdScopeId, bookingId);
   }
 
   /**
@@ -146,6 +169,7 @@ public class RentalOrderUnitReplacementService {
       long expectedVersion,
       List<ReplacementPair> pairs,
       String reason,
+      UUID requestedInventorySourceWarehouseId,
       UUID presentationId,
       UUID batchIdempotencyKey) {
     if (actor == null
@@ -172,6 +196,9 @@ public class RentalOrderUnitReplacementService {
       throw new IllegalArgumentException("Cabin replacement command is invalid");
     }
     requireManagerAndOrder(actor, order, expectedVersion, mapping);
+    UUID inventorySourceWarehouseId =
+        inventorySources.requireWritableReplacementSource(
+            actor, order.warehouseId(), requestedInventorySourceWarehouseId);
     mapping.keySet().forEach(oldUnitId -> requireTripNotStarted(orderId, oldUnitId));
     preflightOldFurnitureTasks(
         actor, orderId, mapping.keySet(), batchIdempotencyKey, presentationId != null);
@@ -191,7 +218,7 @@ public class RentalOrderUnitReplacementService {
         plan =
             dependencies.planOrderFurnitureMovements(
                 orderId,
-                order.warehouseId(),
+                inventorySourceWarehouseId,
                 pair.replacementRentalItemId(),
                 pair.oldRentalItemId(),
                 replacementRequirements,
@@ -202,7 +229,7 @@ public class RentalOrderUnitReplacementService {
       requireDirectReplacementPlan(
           plan,
           orderId,
-          order.warehouseId(),
+          inventorySourceWarehouseId,
           pair.oldRentalItemId(),
           pair.replacementRentalItemId());
       UUID pairIdempotencyKey =
@@ -225,6 +252,7 @@ public class RentalOrderUnitReplacementService {
                   Integer.toString(index),
                   pair.oldRentalItemId().toString(),
                   pair.replacementRentalItemId().toString(),
+                  inventorySourceWarehouseId.toString(),
                   reason == null ? "" : reason,
                   presentationId == null ? "" : presentationId.toString(),
                   batchIdempotencyKey.toString()));
@@ -234,6 +262,7 @@ public class RentalOrderUnitReplacementService {
                   orderId,
                   expectedVersion,
                   order.warehouseId(),
+                  inventorySourceWarehouseId,
                   pair.oldRentalItemId(),
                   pair.replacementRentalItemId(),
                   reason,
@@ -271,6 +300,15 @@ public class RentalOrderUnitReplacementService {
       throw RentalOrderProblems.conflict(
           "REPLACEMENT_BATCH_INCONSISTENT", "Пакетная замена требует восстановления");
     }
+    if (checkpoints.stream()
+        .anyMatch(
+            checkpoint ->
+                !first
+                    .inventorySourceWarehouseId()
+                    .equals(checkpoint.inventorySourceWarehouseId()))) {
+      throw RentalOrderProblems.conflict(
+          "REPLACEMENT_BATCH_INCONSISTENT", "Пакетная замена содержит разные склады-источники");
+    }
     Map<UUID, UUID> mapping = new LinkedHashMap<>();
     checkpoints.forEach(
         checkpoint ->
@@ -289,15 +327,26 @@ public class RentalOrderUnitReplacementService {
     try {
       fenceAffectedTrips(checkpoints);
       LogisticsDependencyGateway.OrderUnitsReplacementReceipt receipt =
-          dependencies.replaceOrderUnits(
-              batchIdempotencyKey,
-              orderId,
-              first.warehouseId(),
-              first.presentationId(),
-              first.actorSubjectId(),
-              first.actorRole(),
-              composition,
-              replacements);
+          first.warehouseId().equals(first.inventorySourceWarehouseId())
+              ? dependencies.replaceOrderUnits(
+                  batchIdempotencyKey,
+                  orderId,
+                  first.warehouseId(),
+                  first.presentationId(),
+                  first.actorSubjectId(),
+                  first.actorRole(),
+                  composition,
+                  replacements)
+              : dependencies.replaceOrderUnits(
+                  batchIdempotencyKey,
+                  orderId,
+                  first.warehouseId(),
+                  first.inventorySourceWarehouseId(),
+                  first.presentationId(),
+                  first.actorSubjectId(),
+                  first.actorRole(),
+                  composition,
+                  replacements);
       try {
         return reservations.finalizeReplacements(orderId, batchIdempotencyKey, receipt).response();
       } catch (RuntimeException exception) {
@@ -492,7 +541,7 @@ public class RentalOrderUnitReplacementService {
   private static void requireDirectReplacementPlan(
       LogisticsDependencyGateway.OrderFurnitureMovementPlan plan,
       UUID orderId,
-      UUID warehouseId,
+      UUID inventorySourceWarehouseId,
       UUID oldRentalItemId,
       UUID replacementRentalItemId) {
     if (plan == null
@@ -503,9 +552,10 @@ public class RentalOrderUnitReplacementService {
     }
     for (LogisticsDependencyGateway.OrderFurnitureMovementPlanLine line : plan.lines()) {
       if (line == null
-          || !warehouseId.equals(line.sourceWarehouseId())
-          || !warehouseId.equals(line.targetWarehouseId())
-          || !oldRentalItemId.equals(line.sourceRentalItemId())
+          || !inventorySourceWarehouseId.equals(line.sourceWarehouseId())
+          || !inventorySourceWarehouseId.equals(line.targetWarehouseId())
+          || line.sourceRentalItemId() != null
+              && !oldRentalItemId.equals(line.sourceRentalItemId())
           || !replacementRentalItemId.equals(line.targetRentalItemId())
           || line.sourceBalanceId() == null
           || line.expectedSourceBalanceVersion() < 0
@@ -522,8 +572,8 @@ public class RentalOrderUnitReplacementService {
         checkpoint.actorSubjectId(),
         checkpoint.actorRole(),
         checkpoint.actorSubjectId().toString(),
-        Set.of(checkpoint.warehouseId()),
-        Set.of(checkpoint.warehouseId()),
+        warehouseScopes(checkpoint.warehouseId(), checkpoint.inventorySourceWarehouseId()),
+        warehouseScopes(checkpoint.warehouseId(), checkpoint.inventorySourceWarehouseId()),
         global,
         local,
         true,
@@ -536,6 +586,13 @@ public class RentalOrderUnitReplacementService {
       throw new IllegalArgumentException("Replacement reason is required");
     }
     return normalized;
+  }
+
+  private static Set<UUID> warehouseScopes(UUID serviceWarehouseId, UUID sourceWarehouseId) {
+    java.util.LinkedHashSet<UUID> values = new java.util.LinkedHashSet<>();
+    values.add(serviceWarehouseId);
+    values.add(sourceWarehouseId);
+    return Set.copyOf(values);
   }
 
   private static OrderProblemException started() {

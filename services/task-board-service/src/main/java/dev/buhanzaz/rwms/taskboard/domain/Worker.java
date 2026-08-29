@@ -63,6 +63,20 @@ public class Worker extends AbstractVersionedEntity {
   @Column(name = "comment_text", length = 1000)
   private String comment;
 
+  @NotNull
+  @Enumerated(EnumType.STRING)
+  @Column(name = "employment_type", nullable = false, length = 16)
+  private WorkerEmploymentType employmentType = WorkerEmploymentType.STAFF;
+
+  @Column(name = "phone", length = 64)
+  private String phone;
+
+  @Column(name = "contract_available_from")
+  private OffsetDateTime contractAvailableFrom;
+
+  @Column(name = "contract_available_until")
+  private OffsetDateTime contractAvailableUntil;
+
   @Column(name = "app_login", length = 128)
   private String appLogin;
 
@@ -95,6 +109,7 @@ public class Worker extends AbstractVersionedEntity {
     firstName = trim(firstName);
     lastName = trim(lastName);
     middleName = trim(middleName);
+    phone = trim(phone);
     String normalizedLogin = trim(appLogin);
     appLogin = normalizedLogin == null ? null : normalizedLogin.toLowerCase(Locale.ROOT);
     List<String> parts = new ArrayList<>();
@@ -103,6 +118,7 @@ public class Worker extends AbstractVersionedEntity {
     if (middleName != null) parts.add(middleName);
     displayName = trim(displayName);
     if (displayName == null && !parts.isEmpty()) displayName = String.join(" ", parts);
+    validateEmployment();
   }
 
   private String trim(String value) {
@@ -163,6 +179,51 @@ public class Worker extends AbstractVersionedEntity {
 
   public void setComment(String comment) {
     this.comment = comment;
+  }
+
+  /** Configures this profile as a contractor available only inside the supplied time range. */
+  public void configureContractor(
+      String phone, OffsetDateTime availableFrom, OffsetDateTime availableUntil) {
+    String normalizedPhone = trim(phone);
+    if (normalizedPhone == null) {
+      throw new IllegalArgumentException("Укажите телефон наёмного водителя");
+    }
+    if (availableFrom == null
+        || availableUntil == null
+        || !availableUntil.isAfter(availableFrom)) {
+      throw new IllegalArgumentException(
+          "Период доступности наёмного водителя задан некорректно");
+    }
+    employmentType = WorkerEmploymentType.CONTRACTOR;
+    this.phone = normalizedPhone;
+    contractAvailableFrom = availableFrom;
+    contractAvailableUntil = availableUntil;
+  }
+
+  /** Returns whether a contractor contract covers the supplied instant; staff are always covered. */
+  public boolean contractCovers(OffsetDateTime at) {
+    if (employmentType == WorkerEmploymentType.STAFF) {
+      return true;
+    }
+    return at != null
+        && !at.isBefore(contractAvailableFrom)
+        && at.isBefore(contractAvailableUntil);
+  }
+
+  public WorkerEmploymentType getEmploymentType() {
+    return employmentType;
+  }
+
+  public String getPhone() {
+    return phone;
+  }
+
+  public OffsetDateTime getContractAvailableFrom() {
+    return contractAvailableFrom;
+  }
+
+  public OffsetDateTime getContractAvailableUntil() {
+    return contractAvailableUntil;
   }
 
   public String getAppLogin() {
@@ -227,5 +288,22 @@ public class Worker extends AbstractVersionedEntity {
 
   public UUID getRevisionMarker() {
     return revisionMarker;
+  }
+
+  private void validateEmployment() {
+    if (employmentType == WorkerEmploymentType.STAFF) {
+      if (phone != null || contractAvailableFrom != null || contractAvailableUntil != null) {
+        throw new IllegalArgumentException(
+            "Период подрядчика допустим только для наёмного водителя");
+      }
+      return;
+    }
+    if (employmentType != WorkerEmploymentType.CONTRACTOR
+        || phone == null
+        || contractAvailableFrom == null
+        || contractAvailableUntil == null
+        || !contractAvailableUntil.isAfter(contractAvailableFrom)) {
+      throw new IllegalArgumentException("Профиль наёмного водителя заполнен не полностью");
+    }
   }
 }

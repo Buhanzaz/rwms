@@ -13,31 +13,33 @@ import (
 // ServiceOwnerProofCommand is one private service's authoritative ownership
 // assertion for a media scope and revision.
 type ServiceOwnerProofCommand struct {
-	SourceService    string
-	OwnerType        string
-	OwnerID          uuid.UUID
-	DocumentID       uuid.UUID
-	LineID           uuid.UUID
-	WarehouseID      uuid.UUID
-	OwnerRevision    int64
-	AggregateVersion int64
-	ProofEventID     uuid.UUID
-	Active           bool
+	SourceService       string
+	OwnerType           string
+	OwnerID             uuid.UUID
+	DocumentID          uuid.UUID
+	LineID              uuid.UUID
+	AuthorizedSubjectID *uuid.UUID
+	WarehouseID         uuid.UUID
+	OwnerRevision       int64
+	AggregateVersion    int64
+	ProofEventID        uuid.UUID
+	Active              bool
 }
 
 // ServiceOwnerProofRecord is the normalized, safe result of a stored private
 // service owner proof.
 type ServiceOwnerProofRecord struct {
-	SourceService    string
-	OwnerType        string
-	OwnerID          uuid.UUID
-	DocumentID       uuid.UUID
-	LineID           uuid.UUID
-	WarehouseID      uuid.UUID
-	OwnerRevision    int64
-	AggregateVersion int64
-	ProofEventID     uuid.UUID
-	Active           bool
+	SourceService       string
+	OwnerType           string
+	OwnerID             uuid.UUID
+	DocumentID          uuid.UUID
+	LineID              uuid.UUID
+	AuthorizedSubjectID *uuid.UUID
+	WarehouseID         uuid.UUID
+	OwnerRevision       int64
+	AggregateVersion    int64
+	ProofEventID        uuid.UUID
+	Active              bool
 }
 
 type normalizedServiceOwnerProof struct {
@@ -56,20 +58,21 @@ type persistedServiceOwnerProof struct {
 }
 
 type serviceOwnerCheckpoint struct {
-	SourceService    string
-	ConsumerName     string
-	AggregateType    string
-	AggregateID      uuid.UUID
-	AggregateVersion int64
-	OwnerRevision    int64
-	WarehouseID      uuid.UUID
-	DocumentID       *uuid.UUID
-	LineID           *uuid.UUID
-	Active           bool
-	ProofEventID     uuid.UUID
-	RequestSHA256    string
-	Quarantined      bool
-	QuarantineReason string
+	SourceService       string
+	ConsumerName        string
+	AggregateType       string
+	AggregateID         uuid.UUID
+	AggregateVersion    int64
+	OwnerRevision       int64
+	WarehouseID         uuid.UUID
+	DocumentID          *uuid.UUID
+	LineID              *uuid.UUID
+	AuthorizedSubjectID *uuid.UUID
+	Active              bool
+	ProofEventID        uuid.UUID
+	RequestSHA256       string
+	Quarantined         bool
+	QuarantineReason    string
 }
 
 type serviceOwnerProofQuarantine struct {
@@ -280,6 +283,15 @@ func normalizeServiceOwnerProof(command ServiceOwnerProofCommand) (normalizedSer
 		proof.OwnerID = command.OwnerID
 		proof.InternalOwnerID = command.OwnerID.String()
 	}
+	if IsCustomerSubjectBoundOwnerType(command.OwnerType) {
+		if command.AuthorizedSubjectID == nil || *command.AuthorizedSubjectID == uuid.Nil {
+			return normalizedServiceOwnerProof{}, ErrConflict
+		}
+		subjectID := *command.AuthorizedSubjectID
+		proof.AuthorizedSubjectID = &subjectID
+	} else if command.AuthorizedSubjectID != nil {
+		return normalizedServiceOwnerProof{}, ErrConflict
+	}
 	proof.AggregateID, found = ServiceOwnerAggregateID(proof.OwnerType, proof.InternalOwnerID)
 	if !found {
 		return normalizedServiceOwnerProof{}, ErrConflict
@@ -288,10 +300,18 @@ func normalizeServiceOwnerProof(command ServiceOwnerProofCommand) (normalizedSer
 		"sourceService": proof.SourceService, "ownerType": proof.OwnerType,
 		"ownerId": nullableUUID(proof.OwnerID), "documentId": nullableUUID(proof.DocumentID),
 		"lineId": nullableUUID(proof.LineID), "warehouseId": proof.WarehouseID,
-		"ownerRevision": proof.OwnerRevision, "aggregateVersion": proof.AggregateVersion,
+		"authorizedSubjectId": nullableUUIDPointer(proof.AuthorizedSubjectID),
+		"ownerRevision":       proof.OwnerRevision, "aggregateVersion": proof.AggregateVersion,
 		"proofEventId": proof.ProofEventID, "active": proof.Active,
 	})
 	return proof, nil
+}
+
+func nullableUUIDPointer(value *uuid.UUID) any {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
 
 func nullableUUID(value uuid.UUID) any {
@@ -321,7 +341,7 @@ func readServiceOwnerProofReceipt(
 	proofEventID uuid.UUID,
 ) (persistedServiceOwnerProof, bool, error) {
 	row := tx.QueryRow(ctx, `select source_service,consumer_name,owner_type,owner_id,
-		document_id,line_id,warehouse_id,owner_revision,aggregate_type,aggregate_id,
+		document_id,line_id,authorized_subject_id,warehouse_id,owner_revision,aggregate_type,aggregate_id,
 		aggregate_version,proof_event_id,active,request_sha256,outcome,coalesce(failure_code,'')
 		from media_service_owner_proof_receipt where proof_event_id=$1 for update`, proofEventID)
 	proof, err := scanPersistedServiceOwnerProof(row)
@@ -355,7 +375,7 @@ func readServiceOwnerProofVersion(
 	proofEventID uuid.UUID,
 ) (persistedServiceOwnerProof, bool, error) {
 	row := tx.QueryRow(ctx, `select source_service,consumer_name,owner_type,owner_id,
-		document_id,line_id,warehouse_id,owner_revision,aggregate_type,aggregate_id,
+		document_id,line_id,authorized_subject_id,warehouse_id,owner_revision,aggregate_type,aggregate_id,
 		aggregate_version,proof_event_id,active,request_sha256,outcome,coalesce(failure_code,'')
 		from media_service_owner_proof_receipt
 		where owner_type=$1 and owner_id=$2 and aggregate_version=$3 and proof_event_id <> $4
@@ -370,9 +390,9 @@ func readServiceOwnerProofVersion(
 func scanPersistedServiceOwnerProof(row rowScanner) (persistedServiceOwnerProof, error) {
 	var proof persistedServiceOwnerProof
 	var ownerID string
-	var documentID, lineID *uuid.UUID
+	var documentID, lineID, authorizedSubjectID *uuid.UUID
 	err := row.Scan(&proof.SourceService, &proof.ConsumerName, &proof.OwnerType, &ownerID,
-		&documentID, &lineID, &proof.WarehouseID, &proof.OwnerRevision, &proof.AggregateType,
+		&documentID, &lineID, &authorizedSubjectID, &proof.WarehouseID, &proof.OwnerRevision, &proof.AggregateType,
 		&proof.AggregateID, &proof.AggregateVersion, &proof.ProofEventID, &proof.Active,
 		&proof.RequestSHA256, &proof.Outcome, &proof.FailureCode)
 	if err != nil {
@@ -385,6 +405,7 @@ func scanPersistedServiceOwnerProof(row rowScanner) (persistedServiceOwnerProof,
 	if lineID != nil {
 		proof.LineID = *lineID
 	}
+	proof.AuthorizedSubjectID = authorizedSubjectID
 	if documentID == nil {
 		proof.OwnerID, err = uuid.Parse(ownerID)
 		if err != nil {
@@ -401,13 +422,14 @@ func readServiceOwnerCheckpoint(
 ) (serviceOwnerCheckpoint, bool, error) {
 	var checkpoint serviceOwnerCheckpoint
 	err := tx.QueryRow(ctx, `select source_service,consumer_name,aggregate_type,aggregate_id,
-		aggregate_version,owner_revision,warehouse_id,document_id,line_id,active,
+		aggregate_version,owner_revision,warehouse_id,document_id,line_id,authorized_subject_id,active,
 		last_proof_event_id,last_request_sha256,quarantined,coalesce(quarantine_reason,'')
 		from media_service_owner_proof_checkpoint
 		where owner_type=$1 and owner_id=$2 for update`, ownerType, ownerID).Scan(
 		&checkpoint.SourceService, &checkpoint.ConsumerName, &checkpoint.AggregateType,
 		&checkpoint.AggregateID, &checkpoint.AggregateVersion, &checkpoint.OwnerRevision,
-		&checkpoint.WarehouseID, &checkpoint.DocumentID, &checkpoint.LineID, &checkpoint.Active,
+		&checkpoint.WarehouseID, &checkpoint.DocumentID, &checkpoint.LineID,
+		&checkpoint.AuthorizedSubjectID, &checkpoint.Active,
 		&checkpoint.ProofEventID, &checkpoint.RequestSHA256, &checkpoint.Quarantined,
 		&checkpoint.QuarantineReason)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -437,6 +459,7 @@ func (checkpoint serviceOwnerCheckpoint) persistedProof(ownerType, ownerID strin
 	} else {
 		proof.OwnerID = uuid.MustParse(ownerID)
 	}
+	proof.AuthorizedSubjectID = checkpoint.AuthorizedSubjectID
 	return proof
 }
 
@@ -505,20 +528,22 @@ func persistServiceOwnerProofState(
 ) error {
 	_, err := tx.Exec(ctx, `insert into media_service_owner_proof_checkpoint (
 		owner_type,owner_id,source_service,consumer_name,aggregate_type,aggregate_id,
-		aggregate_version,owner_revision,warehouse_id,document_id,line_id,active,
+		aggregate_version,owner_revision,warehouse_id,document_id,line_id,authorized_subject_id,active,
 		last_proof_event_id,last_request_sha256,quarantined,quarantine_reason,updated_at)
-	values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,false,null,$15)
+	values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,false,null,$16)
 	on conflict (owner_type,owner_id) do update set
 		source_service=excluded.source_service,consumer_name=excluded.consumer_name,
 		aggregate_type=excluded.aggregate_type,aggregate_id=excluded.aggregate_id,
 		aggregate_version=excluded.aggregate_version,owner_revision=excluded.owner_revision,
 		warehouse_id=excluded.warehouse_id,document_id=excluded.document_id,line_id=excluded.line_id,
+		authorized_subject_id=excluded.authorized_subject_id,
 		active=excluded.active,last_proof_event_id=excluded.last_proof_event_id,
 		last_request_sha256=excluded.last_request_sha256,quarantined=false,
 		quarantine_reason=null,updated_at=excluded.updated_at`, proof.OwnerType,
 		proof.InternalOwnerID, proof.SourceService, proof.ConsumerName, proof.AggregateType,
 		proof.AggregateID, proof.AggregateVersion, proof.OwnerRevision, proof.WarehouseID,
-		nullableUUID(proof.DocumentID), nullableUUID(proof.LineID), proof.Active,
+		nullableUUID(proof.DocumentID), nullableUUID(proof.LineID),
+		nullableUUIDPointer(proof.AuthorizedSubjectID), proof.Active,
 		proof.ProofEventID, proof.RequestSHA256, recordedAt)
 	if err != nil {
 		return translateConstraint(err)
@@ -535,18 +560,20 @@ func persistServiceOwnerProofState(
 	_, err = tx.Exec(ctx, `insert into media_owner_binding (
 		owner_type,owner_id,warehouse_id,owner_revision,proof_event_id,
 		proof_consumer_name,proof_aggregate_type,proof_aggregate_id,
-		proof_aggregate_version,proof_recorded_at,active,updated_at)
-	values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$10)
+		proof_aggregate_version,proof_recorded_at,authorized_subject_id,active,updated_at)
+	values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$10)
 	on conflict (owner_type,owner_id) do update set
 		warehouse_id=excluded.warehouse_id,owner_revision=excluded.owner_revision,
 		proof_event_id=excluded.proof_event_id,proof_consumer_name=excluded.proof_consumer_name,
 		proof_aggregate_type=excluded.proof_aggregate_type,
 		proof_aggregate_id=excluded.proof_aggregate_id,
 		proof_aggregate_version=excluded.proof_aggregate_version,
-		proof_recorded_at=excluded.proof_recorded_at,active=excluded.active,
+		proof_recorded_at=excluded.proof_recorded_at,
+		authorized_subject_id=excluded.authorized_subject_id,active=excluded.active,
 		updated_at=excluded.updated_at`, proof.OwnerType, proof.InternalOwnerID,
 		proof.WarehouseID, proof.OwnerRevision, proof.ProofEventID, proof.ConsumerName,
-		proof.AggregateType, proof.AggregateID, proof.AggregateVersion, recordedAt, proof.Active)
+		proof.AggregateType, proof.AggregateID, proof.AggregateVersion, recordedAt,
+		nullableUUIDPointer(proof.AuthorizedSubjectID), proof.Active)
 	return translateConstraint(err)
 }
 
@@ -562,13 +589,14 @@ func insertServiceOwnerProofReceipt(
 		failure = failureCode
 	}
 	_, err := tx.Exec(ctx, `insert into media_service_owner_proof_receipt (
-		proof_event_id,source_service,consumer_name,owner_type,owner_id,document_id,line_id,
+		proof_event_id,source_service,consumer_name,owner_type,owner_id,document_id,line_id,authorized_subject_id,
 		warehouse_id,owner_revision,aggregate_type,aggregate_id,aggregate_version,active,
 		request_sha256,outcome,failure_code,received_at)
-	values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+	values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
 		proof.ProofEventID, proof.SourceService, proof.ConsumerName, proof.OwnerType,
 		proof.InternalOwnerID, nullableUUID(proof.DocumentID), nullableUUID(proof.LineID),
-		proof.WarehouseID, proof.OwnerRevision, proof.AggregateType, proof.AggregateID,
+		nullableUUIDPointer(proof.AuthorizedSubjectID), proof.WarehouseID,
+		proof.OwnerRevision, proof.AggregateType, proof.AggregateID,
 		proof.AggregateVersion, proof.Active, proof.RequestSHA256, outcome, failure, recordedAt)
 	return translateConstraint(err)
 }

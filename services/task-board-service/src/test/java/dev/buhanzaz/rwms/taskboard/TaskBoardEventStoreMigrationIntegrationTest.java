@@ -67,10 +67,10 @@ class TaskBoardEventStoreMigrationIntegrationTest {
   }
 
   @Test
-  void cleanInstallAppliesV4ThroughV36AndRepeatIsNoOp() {
+  void cleanInstallAppliesV4ThroughV38AndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(33);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(35);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -92,6 +92,7 @@ class TaskBoardEventStoreMigrationIntegrationTest {
             "worker_feed_revision",
             "worker_media_event_inbox",
             "worker_device_registration",
+            "worker_operational_assignment",
             "task_board_outbox",
             "task_board_inbox",
             "warehouse_metadata",
@@ -697,7 +698,7 @@ class TaskBoardEventStoreMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(32);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(34);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
     assertThat(retainedContentDigests()).containsExactlyInAnyOrderEntriesOf(before);
@@ -933,7 +934,9 @@ class TaskBoardEventStoreMigrationIntegrationTest {
                         : "worker_group_member".equals(table)
                             ? "to_jsonb(row_value) - 'role_in_group'"
                             : "worker".equals(table)
-                                ? "to_jsonb(row_value) - 'current_group_id'"
+                                ? "to_jsonb(row_value) - array['current_group_id',"
+                                    + "'employment_type','phone','contract_available_from',"
+                                    + "'contract_available_until']"
                                 : "worker_group".equals(table)
                                     ? "to_jsonb(row_value) - array['operational_status',"
                                         + "'unavailable_since','unavailability_reason']"

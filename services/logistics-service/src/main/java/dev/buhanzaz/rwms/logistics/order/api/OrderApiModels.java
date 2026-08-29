@@ -125,11 +125,20 @@ public final class OrderApiModels {
       @Size(min = 1, max = 32) String contactPhone,
       @Size(min = 1, max = 2_000) String comment) {}
 
-  /** Warehouse-manager command replacing one cabin in the same order with a recorded reason. */
+  /**
+   * Warehouse-manager command replacing one cabin while retaining the order's regional warehouse.
+   * A null source preserves the historical same-warehouse behavior.
+   */
   public record ReplaceOrderUnitRequest(
       @NotNull @Min(0) Long expectedVersion,
       @NotNull UUID replacementRentalItemId,
-      @NotBlank @Size(max = 2000) String reason) {}
+      @NotBlank @Size(max = 2000) String reason,
+      UUID inventorySourceWarehouseId) {
+    public ReplaceOrderUnitRequest(
+        Long expectedVersion, UUID replacementRentalItemId, String reason) {
+      this(expectedVersion, replacementRentalItemId, reason, null);
+    }
+  }
 
   public record OrderDesiredEquipmentInput(
       @NotNull UUID equipmentId, @NotNull @Min(1) Long quantity) {}
@@ -154,7 +163,8 @@ public final class OrderApiModels {
       UUID driverWorkerId,
       @NotNull LocalDate scheduledDate,
       @NotNull @Size(min = 1, max = 100) List<@NotNull UUID> unitIds,
-      Boolean warehouseDriverPool) {
+      Boolean warehouseDriverPool,
+      UUID inventorySourceWarehouseId) {
     public CreateOrderRentalShipmentRequest {
       warehouseDriverPool = Boolean.TRUE.equals(warehouseDriverPool);
     }
@@ -171,6 +181,24 @@ public final class OrderApiModels {
     public CreateOrderRentalShipmentRequest(
         Long expectedVersion, String driverSnapshot, LocalDate scheduledDate, List<UUID> unitIds) {
       this(expectedVersion, driverSnapshot, null, scheduledDate, unitIds, false);
+    }
+
+    /** Preserves source compatibility for callers that only select driver-pool publication. */
+    public CreateOrderRentalShipmentRequest(
+        Long expectedVersion,
+        String driverSnapshot,
+        UUID driverWorkerId,
+        LocalDate scheduledDate,
+        List<UUID> unitIds,
+        Boolean warehouseDriverPool) {
+      this(
+          expectedVersion,
+          driverSnapshot,
+          driverWorkerId,
+          scheduledDate,
+          unitIds,
+          warehouseDriverPool,
+          null);
     }
   }
 
@@ -271,8 +299,9 @@ public final class OrderApiModels {
   public record OrderUnitPageResponse(
       List<OrderUnitResponse> content, long page, long size, long totalElements, long totalPages) {}
 
-  /** One cabin line in a logistics-owned shipment or return document. */
-  public record OrderMovementCabinResponse(UUID rentalItemId, String lineState) {}
+  /** Cabin movement fact retaining the physical inventory source independently from the region. */
+  public record OrderMovementCabinResponse(
+      UUID rentalItemId, UUID inventorySourceWarehouseId, String lineState) {}
 
   /**
    * Shipment or return timeline fact owned by logistics. {@code scheduledDate} stays null for an

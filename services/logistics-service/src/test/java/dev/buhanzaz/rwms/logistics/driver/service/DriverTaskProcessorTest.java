@@ -7,10 +7,14 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskWorkerContent;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -21,6 +25,72 @@ class DriverTaskProcessorTest {
   private final DriverTaskWorkflowStore store = mock(DriverTaskWorkflowStore.class);
   private final LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
   private final DriverTaskProcessor processor = new DriverTaskProcessor(store, dependencies);
+
+  @Test
+  void registrationForwardsTheDurableStructuredWorkerContent() {
+    UUID taskId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID externalTaskId = UUID.randomUUID();
+    UUID queueDefinitionId = UUID.randomUUID();
+    LocalDate date = LocalDate.of(2026, 9, 14);
+    DriverTaskWorkerContent content =
+        new DriverTaskWorkerContent(
+            "Склад A → Склад B",
+            List.of(
+                new DriverTaskWorkerContent.Work(
+                    UUID.randomUUID(), "Загрузить №172", 1, null, null, null)),
+            List.of(),
+            List.of());
+    LogisticsDependencyGateway.DriverTaskAudience audience =
+        new LogisticsDependencyGateway.DriverTaskAudience(
+            DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null);
+    DriverTaskWorkflowStore.RegisterWork work =
+        new DriverTaskWorkflowStore.RegisterWork(
+            taskId,
+            warehouseId,
+            externalTaskId,
+            queueDefinitionId,
+            "1 бытовка",
+            "Переместить бытовку между складами",
+            "Перемещение",
+            date,
+            3,
+            audience,
+            content);
+    LogisticsDependencyGateway.DriverBoardTask board =
+        mock(LogisticsDependencyGateway.DriverBoardTask.class);
+    when(store.nextWork(taskId)).thenReturn(Optional.of(work), Optional.empty());
+    when(dependencies.registerDriverTask(
+            warehouseId,
+            externalTaskId,
+            taskId,
+            "Переместить бытовку между складами",
+            "1 бытовка",
+            "Перемещение",
+            queueDefinitionId,
+            date,
+            3,
+            audience,
+            content))
+        .thenReturn(board);
+
+    assertThat(processor.processUntilIdle(taskId)).isEqualTo(1);
+
+    verify(dependencies)
+        .registerDriverTask(
+            warehouseId,
+            externalTaskId,
+            taskId,
+            "Переместить бытовку между складами",
+            "1 бытовка",
+            "Перемещение",
+            queueDefinitionId,
+            date,
+            3,
+            audience,
+            content);
+    verify(store).confirmRegistration(taskId, board);
+  }
 
   @Test
   void groupedShipmentUsesOneDistinctMediaCommandKeyPerCabin() {

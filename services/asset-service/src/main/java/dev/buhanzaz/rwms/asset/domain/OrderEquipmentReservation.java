@@ -20,8 +20,9 @@ import lombok.NoArgsConstructor;
 import org.hibernate.proxy.HibernateProxy;
 
 /**
- * A generic allocation for an order. It deliberately has no source cabin: the
- * physical source is selected only when a warehouse worker task is created.
+ * A warehouse-partitioned generic allocation for an order. It deliberately has no source cabin:
+ * the physical source is selected only when a warehouse worker task is created, while warehouseId
+ * keeps mixed-source orders from consuming another warehouse's capacity.
  */
 @Entity
 @Table(name = "order_equipment_reservation")

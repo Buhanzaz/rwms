@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.buhanzaz.rwms.logistics.customer.config.CustomerDeliveryProperties;
+import dev.buhanzaz.rwms.logistics.customer.routing.CustomerRouteCapacityPlanner.CapacityShift;
 import dev.buhanzaz.rwms.logistics.customer.routing.CustomerRouteCapacityPlanner.DeliveryJob;
 import dev.buhanzaz.rwms.logistics.customer.routing.CustomerTravelTimeMatrix.GeoPoint;
 import java.math.BigDecimal;
@@ -30,25 +31,70 @@ class CustomerRouteCapacityPlannerTest {
   @Test
   void distributesDistantMorningPointsAcrossTwoDrivers() {
     var decision =
-        planner.evaluate(
+        evaluateConfigured(
             uniformMatrix(2, 5_400L, 10_000L),
             List.of(
                 job(1, 1, MORNING_START, MORNING_END, false),
                 job(2, 1, MORNING_START, MORNING_END, true)),
-            configuration(2, 1));
+            2,
+            1,
+            0);
 
     assertThat(decision.feasible()).isTrue();
   }
 
   @Test
-  void servesDifferentArrivalWindowsOnOneDriverDay() {
+  void distributesDistantMorningPointsAcrossPublishedDriverShifts() {
+    var jobs =
+        List.of(
+            job(1, 1, MORNING_START, MORNING_END, false),
+            job(2, 1, MORNING_START, MORNING_END, true));
+    var oneDriver =
+        planner.evaluate(
+            uniformMatrix(2, 5_400L, 10_000L),
+            jobs,
+            configuration(),
+            List.of(new CapacityShift(LocalTime.of(9, 0), LocalTime.of(18, 0), 30, 1)),
+            0);
+    var twoDrivers =
+        planner.evaluate(
+            uniformMatrix(2, 5_400L, 10_000L),
+            jobs,
+            configuration(),
+            List.of(
+                new CapacityShift(LocalTime.of(9, 0), LocalTime.of(18, 0), 30, 1),
+                new CapacityShift(LocalTime.of(9, 0), LocalTime.of(18, 0), 30, 1)),
+            0);
+
+    assertThat(oneDriver.feasible()).isFalse();
+    assertThat(twoDrivers.feasible()).isTrue();
+  }
+
+  @Test
+  void failsClosedWithoutPublishedDriverShifts() {
     var decision =
         planner.evaluate(
+            twoPointMatrix(600L, 600L),
+            List.of(job(1, 1, MORNING_START, MORNING_END, true)),
+            configuration(),
+            List.of(),
+            0);
+
+    assertThat(decision.feasible()).isFalse();
+    assertThat(decision.capacityRemaining()).isZero();
+  }
+
+  @Test
+  void servesDifferentArrivalWindowsOnOneDriverDay() {
+    var decision =
+        evaluateConfigured(
             uniformMatrix(2, 600L, 600L),
             List.of(
                 job(1, 1, MORNING_START, MORNING_END, false),
                 job(2, 1, MIDDAY_START, MIDDAY_END, true)),
-            configuration(1, 2));
+            1,
+            2,
+            0);
 
     assertThat(decision.feasible()).isTrue();
   }
@@ -67,12 +113,14 @@ class CustomerRouteCapacityPlannerTest {
                 List.of(3_600L, 600L, 0L)));
 
     var decision =
-        planner.evaluate(
+        evaluateConfigured(
             matrix,
             List.of(
                 job(1, 1, MORNING_START, MORNING_END, false),
                 job(2, 1, MORNING_START, MORNING_END, true)),
-            configuration(1, 2));
+            1,
+            2,
+            0);
 
     assertThat(decision.feasible()).isTrue();
   }
@@ -80,12 +128,29 @@ class CustomerRouteCapacityPlannerTest {
   @Test
   void returnsToDepotToReloadBeforeAnotherCustomerPoint() {
     var decision =
-        planner.evaluate(
+        evaluateConfigured(
             uniformMatrix(2, 600L, 600L),
             List.of(
                 job(1, 1, MORNING_START, MORNING_END, false),
                 job(2, 1, MORNING_START, MORNING_END, true)),
-            configuration(1, 1));
+            1,
+            1,
+            0);
+
+    assertThat(decision.feasible()).isTrue();
+  }
+
+  @Test
+  void splitsTwoCabinDeliveryAcrossSoloTruckTripsWhenTrailerCannotEnter() {
+    var decision =
+        planner.evaluate(
+            twoPointMatrix(600L, 600L),
+            List.of(
+                new DeliveryJob(
+                    1, 2, MORNING_START, MORNING_END, 30, true, false)),
+            configuration(),
+            List.of(new CapacityShift(LocalTime.of(8, 0), LocalTime.of(20, 0), 0, 2)),
+            0);
 
     assertThat(decision.feasible()).isTrue();
   }
@@ -93,12 +158,14 @@ class CustomerRouteCapacityPlannerTest {
   @Test
   void includesDepotReloadTimeAtTheArrivalWindowBoundary() {
     var decision =
-        planner.evaluate(
+        evaluateConfigured(
             uniformMatrix(2, 2_401L, 2_401L),
             List.of(
                 job(1, 1, MORNING_START, MORNING_END, false),
                 job(2, 1, MORNING_START, MORNING_END, true)),
-            configuration(1, 1));
+            1,
+            1,
+            0);
 
     assertThat(decision.feasible()).isFalse();
   }
@@ -106,12 +173,14 @@ class CustomerRouteCapacityPlannerTest {
   @Test
   void rejectsCrossWindowConflictForTheOnlyDriver() {
     var decision =
-        planner.evaluate(
+        evaluateConfigured(
             uniformMatrix(2, 7_200L, 7_200L),
             List.of(
                 job(1, 1, MORNING_START, MORNING_END, false),
                 job(2, 1, MIDDAY_START, MIDDAY_END, true)),
-            configuration(1, 1));
+            1,
+            1,
+            0);
 
     assertThat(decision.feasible()).isFalse();
     assertThat(decision.capacityRemaining()).isZero();
@@ -120,33 +189,39 @@ class CustomerRouteCapacityPlannerTest {
   @Test
   void acceptsFourHourTravelZoneAtBoundary() {
     var decision =
-        planner.evaluate(
+        evaluateConfigured(
             twoPointMatrix(14_400L, 14_400L),
             List.of(job(1, 1, EVENING_START, EVENING_END, true)),
-            configuration(1, 2));
+            1,
+            2,
+            0);
 
     assertThat(decision.feasible()).isTrue();
     assertThat(decision.capacityRemaining()).isEqualTo(1);
   }
 
   @Test
-  void rejectsTravelOutsideConfiguredFourHourIsochrone() {
+  void acceptsTravelOutsideTheFormerZoneLimitWhenTheScheduleStillFits() {
     var decision =
-        planner.evaluate(
+        evaluateConfigured(
             twoPointMatrix(14_401L, 14_400L),
             List.of(job(1, 1, EVENING_START, EVENING_END, true)),
-            configuration(1, 1));
+            1,
+            1,
+            0);
 
-    assertThat(decision.feasible()).isFalse();
+    assertThat(decision.feasible()).isTrue();
   }
 
   @Test
   void rejectsCandidateWhenReturnLegToDepotIsUnreachable() {
     var decision =
-        planner.evaluate(
+        evaluateConfigured(
             twoPointMatrix(600L, -1L),
             List.of(job(1, 1, MORNING_START, MORNING_END, true)),
-            configuration(1, 2));
+            1,
+            2,
+            0);
 
     assertThat(decision.feasible()).isFalse();
   }
@@ -154,10 +229,12 @@ class CustomerRouteCapacityPlannerTest {
   @Test
   void rejectsReturnAfterConfiguredOvertimeDeadline() {
     var decision =
-        planner.evaluate(
+        evaluateConfigured(
             twoPointMatrix(14_400L, 16_201L),
             List.of(job(1, 1, EVENING_START, EVENING_END, true)),
-            configuration(1, 1));
+            1,
+            1,
+            0);
 
     assertThat(decision.feasible()).isFalse();
   }
@@ -165,16 +242,18 @@ class CustomerRouteCapacityPlannerTest {
   @Test
   void reservesWholeDriversForExistingDateOnlyTransportTasks() {
     var oneDriverFree =
-        planner.evaluate(
+        evaluateConfigured(
             twoPointMatrix(600L, 600L),
             List.of(job(1, 1, MORNING_START, MORNING_END, true)),
-            configuration(2, 1),
+            2,
+            1,
             1);
     var noDriverFree =
-        planner.evaluate(
+        evaluateConfigured(
             twoPointMatrix(600L, 600L),
             List.of(job(1, 1, MORNING_START, MORNING_END, true)),
-            configuration(2, 1),
+            2,
+            1,
             2);
 
     assertThat(oneDriverFree.feasible()).isTrue();
@@ -187,15 +266,22 @@ class CustomerRouteCapacityPlannerTest {
         planner.evaluate(
             twoPointMatrix(60L, 60L),
             List.of(job(1, 129, MORNING_START, MORNING_END, true)),
-            configuration(8, 20));
+            configuration(),
+            java.util.stream.IntStream.range(0, 8)
+                .mapToObj(
+                    ignored ->
+                        new CapacityShift(
+                            LocalTime.of(9, 0), LocalTime.of(18, 0), 30, 2))
+                .toList(),
+            0);
 
     assertThat(decision.feasible()).isFalse();
     assertThat(decision.capacityRemaining()).isZero();
   }
 
   @Test
-  void rejectsConfiguredTravelZoneBeyondCanonicalFourHours() {
-    assertThatThrownBy(() -> properties(2, 2, 5).validated(WAREHOUSE))
+  void rejectsTravelMultiplierBelowTheConservativeFloor() {
+    assertThatThrownBy(() -> properties(0.99).validated(WAREHOUSE))
         .isInstanceOf(IllegalStateException.class)
         .hasMessage("Customer delivery capacity configuration is invalid");
   }
@@ -206,7 +292,8 @@ class CustomerRouteCapacityPlannerTest {
       LocalTime windowStart,
       LocalTime windowEnd,
       boolean candidate) {
-    return new DeliveryJob(matrixIndex, cabinCount, windowStart, windowEnd, 30, candidate);
+    return new DeliveryJob(
+        matrixIndex, cabinCount, windowStart, windowEnd, 30, candidate, true);
   }
 
   private static CustomerTravelTimeMatrix twoPointMatrix(long outbound, long inbound) {
@@ -234,13 +321,27 @@ class CustomerRouteCapacityPlannerTest {
     return new CustomerTravelTimeMatrix(List.copyOf(points), List.copyOf(seconds));
   }
 
-  private static CustomerDeliveryProperties.Validated configuration(
-      int driverCount, int cabinCapacity) {
-    return properties(driverCount, cabinCapacity, 4).validated(WAREHOUSE);
+  private CustomerRouteCapacityPlanner.CapacityDecision evaluateConfigured(
+      CustomerTravelTimeMatrix matrix,
+      List<DeliveryJob> jobs,
+      int driverCount,
+      int cabinCapacity,
+      int reservedDrivers) {
+    List<CapacityShift> shifts =
+        java.util.stream.IntStream.range(0, driverCount)
+            .mapToObj(
+                ignored ->
+                    new CapacityShift(
+                        LocalTime.of(9, 0), LocalTime.of(20, 0), 0, cabinCapacity))
+            .toList();
+    return planner.evaluate(matrix, jobs, configuration(), shifts, reservedDrivers);
   }
 
-  private static CustomerDeliveryProperties properties(
-      int driverCount, int cabinCapacity, int maxTravelZoneHours) {
+  private static CustomerDeliveryProperties.Validated configuration() {
+    return properties(1.0).validated(WAREHOUSE);
+  }
+
+  private static CustomerDeliveryProperties properties(double travelTimeMultiplier) {
     return new CustomerDeliveryProperties(
         true,
         List.of(
@@ -252,18 +353,31 @@ class CustomerRouteCapacityPlannerTest {
         "http://127.0.0.1:8002",
         Duration.ofSeconds(1),
         Duration.ofSeconds(2),
-        driverCount,
-        cabinCapacity,
         30,
-        LocalTime.of(9, 0),
-        LocalTime.of(18, 0),
-        Duration.ofHours(2),
-        maxTravelZoneHours,
         30,
         2,
         31,
         Duration.ofMinutes(10),
         Duration.ofMinutes(20),
+        travelTimeMultiplier,
+        0,
+        LocalTime.of(8, 0),
+        LocalTime.of(9, 0),
+        LocalTime.of(18, 0),
+        LocalTime.of(20, 0),
+        180,
+        60,
+        30,
+        30,
+        30,
+        CustomerDeliveryProperties.DeliveryWindowSemantics.START_WITHIN_SLOT,
+        CustomerDeliveryProperties.PickupPolicy.RETURN_LEG_ONLY,
+        4.0,
+        2.5,
+        10.0,
+        12.0,
+        8.0,
+        2,
         4.0,
         2.5,
         12.0,

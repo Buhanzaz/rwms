@@ -110,6 +110,16 @@ public class LogisticsPayloadSafetyValidatorsConfiguration {
   }
 
   @Bean
+  RwmsKafkaPayloadSafetyValidator logisticsTransferPlanUpdatedPayloadSafetyValidator() {
+    return new LogisticsPayloadSafetyValidator(LogisticsEventType.TRANSFER_PLAN_UPDATED);
+  }
+
+  @Bean
+  RwmsKafkaPayloadSafetyValidator logisticsTransferConfirmedPayloadSafetyValidator() {
+    return new LogisticsPayloadSafetyValidator(LogisticsEventType.TRANSFER_CONFIRMED);
+  }
+
+  @Bean
   RwmsKafkaPayloadSafetyValidator logisticsTransferDepartureStartedPayloadSafetyValidator() {
     return new LogisticsPayloadSafetyValidator(LogisticsEventType.TRANSFER_DEPARTURE_STARTED);
   }

@@ -22,18 +22,31 @@ public record CustomerDeliveryProperties(
     String valhallaBaseUrl,
     Duration connectTimeout,
     Duration readTimeout,
-    int driverCount,
-    int truckCabinCapacity,
     int depotReloadMinutes,
-    LocalTime workdayStart,
-    LocalTime workdayEnd,
-    Duration maxOvertime,
-    int maxTravelZoneHours,
     int serviceMinutes,
     int earliestDeliveryDays,
     int bookingHorizonDays,
     Duration offerLifetime,
     Duration holdLifetime,
+    double travelTimeMultiplier,
+    int fixedTravelBufferMinutes,
+    LocalTime driverWorkStart,
+    LocalTime customerDeliveryStart,
+    LocalTime customerDeliveryEnd,
+    LocalTime driverShiftEnd,
+    int deliverySlotMinutes,
+    int pickupServiceMinutes,
+    int warehouseLoadOneMinutes,
+    int warehouseLoadTwoMinutes,
+    int warehouseUnloadMinutes,
+    DeliveryWindowSemantics deliveryWindowSemantics,
+    PickupPolicy pickupPolicy,
+    double soloTruckHeightMeters,
+    double soloTruckWidthMeters,
+    double soloTruckLengthMeters,
+    double soloTruckWeightTons,
+    double soloTruckAxleLoadTons,
+    int soloTruckAxleCount,
     double truckHeightMeters,
     double truckWidthMeters,
     double truckLengthMeters,
@@ -51,20 +64,37 @@ public record CustomerDeliveryProperties(
     } catch (IllegalArgumentException exception) {
       throw new IllegalStateException("valhalla-base-url must be an absolute URI", exception);
     }
-    if (driverCount < 1
-        || truckCabinCapacity < 1
-        || depotReloadMinutes < 1
-        || workdayStart == null
-        || workdayEnd == null
-        || !workdayStart.isBefore(workdayEnd)
-        || workdayStart.isAfter(LocalTime.of(9, 0))
-        || workdayEnd.isBefore(LocalTime.of(18, 0))
-        || maxTravelZoneHours < 1
-        || maxTravelZoneHours > 4
+    if (depotReloadMinutes < 1
         || serviceMinutes < 1
+        || pickupServiceMinutes < 1
+        || warehouseLoadOneMinutes < 1
+        || warehouseLoadTwoMinutes < warehouseLoadOneMinutes
+        || warehouseUnloadMinutes < 1
+        || travelTimeMultiplier < 1.0
+        || !Double.isFinite(travelTimeMultiplier)
+        || fixedTravelBufferMinutes < 0
+        || driverWorkStart == null
+        || customerDeliveryStart == null
+        || customerDeliveryEnd == null
+        || driverShiftEnd == null
+        || !driverWorkStart.isBefore(customerDeliveryStart)
+        || !customerDeliveryStart.isBefore(customerDeliveryEnd)
+        || !customerDeliveryEnd.isBefore(driverShiftEnd)
+        || deliverySlotMinutes < 1
+        || java.time.Duration.between(customerDeliveryStart, customerDeliveryEnd).toMinutes()
+                % deliverySlotMinutes
+            != 0
+        || deliveryWindowSemantics != DeliveryWindowSemantics.START_WITHIN_SLOT
+        || pickupPolicy != PickupPolicy.RETURN_LEG_ONLY
         || earliestDeliveryDays < 1
         || bookingHorizonDays < earliestDeliveryDays
         || bookingHorizonDays > 90
+        || soloTruckHeightMeters <= 0
+        || soloTruckWidthMeters <= 0
+        || soloTruckLengthMeters <= 0
+        || soloTruckWeightTons <= 0
+        || soloTruckAxleLoadTons <= 0
+        || soloTruckAxleCount < 2
         || truckHeightMeters <= 0
         || truckWidthMeters <= 0
         || truckLengthMeters <= 0
@@ -72,11 +102,6 @@ public record CustomerDeliveryProperties(
         || truckAxleLoadTons <= 0
         || truckAxleCount < 2) {
       throw new IllegalStateException("Customer delivery capacity configuration is invalid");
-    }
-    Duration validatedOvertime = nonNegative(maxOvertime, "max-overtime");
-    if (validatedOvertime.compareTo(Duration.ofDays(1)) >= 0
-        || workdayEnd.toSecondOfDay() + validatedOvertime.toSeconds() >= 24L * 60L * 60L) {
-      throw new IllegalStateException("Customer delivery overtime must end within the local date");
     }
     List<Depot> source = depots == null ? List.of() : depots;
     Map<UUID, Validated> result = new LinkedHashMap<>();
@@ -95,18 +120,31 @@ public record CustomerDeliveryProperties(
               valhalla,
               positive(connectTimeout, "connect-timeout"),
               positive(readTimeout, "read-timeout"),
-              driverCount,
-              truckCabinCapacity,
               depotReloadMinutes,
-              workdayStart,
-              workdayEnd,
-              validatedOvertime,
-              maxTravelZoneHours,
               serviceMinutes,
               earliestDeliveryDays,
               bookingHorizonDays,
               positive(offerLifetime, "offer-lifetime"),
               positive(holdLifetime, "hold-lifetime"),
+              travelTimeMultiplier,
+              fixedTravelBufferMinutes,
+              driverWorkStart,
+              customerDeliveryStart,
+              customerDeliveryEnd,
+              driverShiftEnd,
+              deliverySlotMinutes,
+              pickupServiceMinutes,
+              warehouseLoadOneMinutes,
+              warehouseLoadTwoMinutes,
+              warehouseUnloadMinutes,
+              deliveryWindowSemantics,
+              pickupPolicy,
+              soloTruckHeightMeters,
+              soloTruckWidthMeters,
+              soloTruckLengthMeters,
+              soloTruckWeightTons,
+              soloTruckAxleLoadTons,
+              soloTruckAxleCount,
               truckHeightMeters,
               truckWidthMeters,
               truckLengthMeters,
@@ -138,13 +176,6 @@ public record CustomerDeliveryProperties(
   private static Duration positive(Duration value, String name) {
     if (value == null || value.isZero() || value.isNegative()) {
       throw new IllegalStateException(name + " must be positive");
-    }
-    return value;
-  }
-
-  private static Duration nonNegative(Duration value, String name) {
-    if (value == null || value.isNegative()) {
-      throw new IllegalStateException(name + " must not be negative");
     }
     return value;
   }
@@ -183,6 +214,16 @@ public record CustomerDeliveryProperties(
     }
   }
 
+  /** Delivery-window policy currently promised by CustomerApp. */
+  public enum DeliveryWindowSemantics {
+    START_WITHIN_SLOT
+  }
+
+  /** Pickup placement policy that protects all outbound deliveries. */
+  public enum PickupPolicy {
+    RETURN_LEG_ONLY
+  }
+
   /** Fully validated immutable delivery runtime configuration for one warehouse. */
   public record Validated(
       UUID warehouseId,
@@ -191,22 +232,41 @@ public record CustomerDeliveryProperties(
       URI valhallaBaseUrl,
       Duration connectTimeout,
       Duration readTimeout,
-      int driverCount,
-      int truckCabinCapacity,
       int depotReloadMinutes,
-      LocalTime workdayStart,
-      LocalTime workdayEnd,
-      Duration maxOvertime,
-      int maxTravelZoneHours,
       int serviceMinutes,
       int earliestDeliveryDays,
       int bookingHorizonDays,
       Duration offerLifetime,
       Duration holdLifetime,
+      double travelTimeMultiplier,
+      int fixedTravelBufferMinutes,
+      LocalTime driverWorkStart,
+      LocalTime customerDeliveryStart,
+      LocalTime customerDeliveryEnd,
+      LocalTime driverShiftEnd,
+      int deliverySlotMinutes,
+      int pickupServiceMinutes,
+      int warehouseLoadOneMinutes,
+      int warehouseLoadTwoMinutes,
+      int warehouseUnloadMinutes,
+      DeliveryWindowSemantics deliveryWindowSemantics,
+      PickupPolicy pickupPolicy,
+      double soloTruckHeightMeters,
+      double soloTruckWidthMeters,
+      double soloTruckLengthMeters,
+      double soloTruckWeightTons,
+      double soloTruckAxleLoadTons,
+      int soloTruckAxleCount,
       double truckHeightMeters,
       double truckWidthMeters,
       double truckLengthMeters,
       double truckWeightTons,
       double truckAxleLoadTons,
-      int truckAxleCount) {}
+      int truckAxleCount) {
+
+    /** Returns the load duration for a conservative one- or two-cabin trip. */
+    public int warehouseLoadMinutes(int cabinCapacity) {
+      return cabinCapacity > 1 ? warehouseLoadTwoMinutes : warehouseLoadOneMinutes;
+    }
+  }
 }

@@ -89,7 +89,7 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
 
   @Test
   @Transactional
-  void bootMigratesAdoptedVersionFourThroughVersionThirtyFourAndValidatesJpa() {
+  void bootMigratesAdoptedVersionFourThroughVersionThirtyEightAndValidatesJpa() {
     assertThat(entityManagerFactory.isOpen()).isTrue();
     assertThat(retainedDigests(jdbc)).containsExactlyInAnyOrderEntriesOf(beforeStartup);
     assertThat(
@@ -548,7 +548,9 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
                         : "worker_group_member".equals(table)
                             ? "to_jsonb(row_value) - 'role_in_group'"
                             : "worker".equals(table)
-                                ? "to_jsonb(row_value) - 'current_group_id'"
+                                ? "to_jsonb(row_value) - array['current_group_id',"
+                                    + "'employment_type','phone','contract_available_from',"
+                                    + "'contract_available_until']"
                                 : "worker_group".equals(table)
                                     ? "to_jsonb(row_value) - array['operational_status',"
                                         + "'unavailable_since','unavailability_reason']"

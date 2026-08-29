@@ -191,6 +191,21 @@ class LogisticsAssetBoundaryIntegrationTest {
         "update operation_lease set expires_at=clock_timestamp() - interval '1 minute' where id=?",
         acquired.response().leaseId());
     entityManager.clear();
+    var expiredRelease =
+        service.releaseLogisticsLease(
+            subject,
+            UUID.randomUUID(),
+            acquired.response().leaseId(),
+            new LogisticsLeaseCommandRequest(
+                acquired.response().version(),
+                acquired.response().fencingToken(),
+                LOGISTICS_SHIPMENT,
+                document,
+                line));
+    assertThat(expiredRelease.replayed()).isFalse();
+    assertThat(expiredRelease.response().state()).isEqualTo("EXPIRED");
+    assertThat(expiredRelease.response().version()).isGreaterThan(acquired.response().version());
+
     UUID replacementDocument = UUID.randomUUID();
     UUID replacementLine = UUID.randomUUID();
     var replacement = service.acquireLogisticsLease(
@@ -879,7 +894,7 @@ class LogisticsAssetBoundaryIntegrationTest {
         new AcquireLogisticsEquipmentMovementReservationRequest(
             movementId,
             lineId,
-            LogisticsEquipmentMovementPurpose.ALLOCATABLE_REBALANCE,
+            LogisticsEquipmentMovementPurpose.TRANSFER_REBALANCE,
             equipmentId,
             origin,
             null,
@@ -889,9 +904,7 @@ class LogisticsAssetBoundaryIntegrationTest {
             OffsetDateTime.now(ZoneOffset.UTC).plusHours(1)))
         .response();
 
-    service.executeLogisticsEquipmentMovementReservations(
-        subject,
-        UUID.randomUUID(),
+    ExecuteLogisticsEquipmentMovementReservationsRequest execution =
         new ExecuteLogisticsEquipmentMovementReservationsRequest(
             movementId,
             List.of(new ExecuteLogisticsEquipmentMovementReservationLine(
@@ -900,7 +913,33 @@ class LogisticsAssetBoundaryIntegrationTest {
                 lineId,
                 destination,
                 null,
-                BalanceLocationKind.STOCK))));
+                BalanceLocationKind.STOCK)));
+    UUID executionKey = UUID.randomUUID();
+
+    var executed =
+        service.executeLogisticsEquipmentMovementReservations(
+            subject, executionKey, execution);
+    var replayed =
+        service.executeLogisticsEquipmentMovementReservations(
+            subject, executionKey, execution);
+
+    assertThat(executed.replayed()).isFalse();
+    assertThat(replayed.replayed()).isTrue();
+    assertThat(replayed.response()).isEqualTo(executed.response());
+    assertThat(executed.response().lines())
+        .singleElement()
+        .satisfies(
+            line -> {
+              assertThat(line.reservationId()).isEqualTo(reserved.reservationId());
+              assertThat(line.movement().kind()).isEqualTo("WAREHOUSE_TO_WAREHOUSE");
+              assertThat(line.movement().quantity()).isEqualTo(2L);
+            });
+    assertThat(
+            jdbc.queryForObject(
+                "select movement_purpose from equipment_allocation_hold where id=?",
+                String.class,
+                reserved.reservationId()))
+        .isEqualTo("TRANSFER_REBALANCE");
 
     assertThat(jdbc.queryForObject(
         "select quantity from equipment_balance where equipment_id=? and warehouse_id=? and location_kind='STOCK'",

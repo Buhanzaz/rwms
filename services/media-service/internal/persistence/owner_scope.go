@@ -11,6 +11,7 @@ const (
 	OwnerTypeMaintenanceRepair        = "MAINTENANCE_REPAIR"
 	OwnerTypeMaintenanceAcceptance    = "MAINTENANCE_ACCEPTANCE"
 	OwnerTypeMaintenanceCatalogNode   = "MAINTENANCE_CATALOG_NODE"
+	OwnerTypeLogisticsCustomerProfile = "LOGISTICS_CUSTOMER_PROFILE"
 	OwnerTypeTaskBoardEntry           = "TASK_BOARD_ENTRY"
 	ViewerContextEstimate             = "ESTIMATE"
 	ViewerContextRepair               = "REPAIR"
@@ -19,6 +20,7 @@ const (
 	ViewerContextReturnInspection     = "RETURN_INSPECTION"
 	ViewerContextShipment             = "SHIPMENT"
 	ViewerContextTransfer             = "TRANSFER"
+	ViewerContextProfileAvatar        = "PROFILE_AVATAR"
 	ViewerContextWorkResult           = "WORK_RESULT"
 	MaintenanceOwnerProofConsumer     = "media-service-maintenance-owner-proof-v1"
 	LogisticsOwnerProofConsumer       = "media-service-logistics-owner-proof-v1"
@@ -85,6 +87,11 @@ var ownerScopeDefinitions = map[string]OwnerScopeDefinition{
 		SourceService: LogisticsOwnerProofService, ServiceScope: LogisticsOwnerProofScope,
 		ConsumerName: LogisticsOwnerProofConsumer, AggregateType: "TRANSFER", Structured: true,
 	},
+	OwnerTypeLogisticsCustomerProfile: {
+		OwnerType: OwnerTypeLogisticsCustomerProfile, ViewerContext: ViewerContextProfileAvatar,
+		SourceService: LogisticsOwnerProofService, ServiceScope: LogisticsOwnerProofScope,
+		ConsumerName: LogisticsOwnerProofConsumer, AggregateType: "CUSTOMER_PROFILE",
+	},
 	OwnerTypeTaskBoardEntry: {
 		OwnerType: OwnerTypeTaskBoardEntry, ViewerContext: ViewerContextWorkResult,
 		ConsumerName:  TaskBoardEntryOwnerProofConsumer,
@@ -125,6 +132,12 @@ func IsMaintenanceOwnerType(ownerType string) bool {
 func IsPublicOwnerType(ownerType string) bool {
 	_, found := ownerScopeDefinitions[ownerType]
 	return found
+}
+
+// IsCustomerSubjectBoundOwnerType reports whether public access to the owner
+// must match the exact CustomerApp subject in the current logistics proof.
+func IsCustomerSubjectBoundOwnerType(ownerType string) bool {
+	return ownerType == OwnerTypeLogisticsShipment || ownerType == OwnerTypeLogisticsCustomerProfile
 }
 
 // LogisticsOwnerParts validates and splits a canonical documentId:lineId owner

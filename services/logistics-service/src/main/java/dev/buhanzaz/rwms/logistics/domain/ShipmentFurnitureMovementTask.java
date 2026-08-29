@@ -110,6 +110,10 @@ public class ShipmentFurnitureMovementTask {
   @Column(name = "replacement_presentation_id")
   private UUID replacementPresentationId;
 
+  /** Physical warehouse whose furniture and replacement cabin are prepared. */
+  @Column(name = "replacement_inventory_source_warehouse_id")
+  private UUID replacementInventorySourceWarehouseId;
+
   @Column(name = "replacement_source_reservation_id")
   private UUID replacementSourceReservationId;
 
@@ -160,6 +164,45 @@ public class ShipmentFurnitureMovementTask {
       String requestSha256,
       UUID presentationId,
       OffsetDateTime now) {
+    return createReplacement(
+        order,
+        document,
+        oldRentalItemId,
+        replacementRentalItemId,
+        replacementUnitNumber,
+        equipmentMovementTaskId,
+        lineCount,
+        reason,
+        actorSubjectId,
+        actorRole,
+        idempotencyKey,
+        batchIdempotencyKey,
+        pairIndex,
+        requestSha256,
+        presentationId,
+        order == null ? null : order.getWarehouseId(),
+        now);
+  }
+
+  /** Creates a replacement checkpoint with its physical inventory source frozen for recovery. */
+  public static ShipmentFurnitureMovementTask createReplacement(
+      RentalOrder order,
+      LogisticsDocument document,
+      UUID oldRentalItemId,
+      UUID replacementRentalItemId,
+      String replacementUnitNumber,
+      UUID equipmentMovementTaskId,
+      int lineCount,
+      String reason,
+      UUID actorSubjectId,
+      String actorRole,
+      UUID idempotencyKey,
+      UUID batchIdempotencyKey,
+      int pairIndex,
+      String requestSha256,
+      UUID presentationId,
+      UUID inventorySourceWarehouseId,
+      OffsetDateTime now) {
     if (lineCount < 0 || (lineCount == 0) != (equipmentMovementTaskId == null)) {
       throw new IllegalArgumentException("Replacement movement identity is invalid");
     }
@@ -186,6 +229,8 @@ public class ShipmentFurnitureMovementTask {
     link.replacementPairIndex = pairIndex;
     link.replacementRequestSha256 = requireHash(requestSha256);
     link.replacementPresentationId = presentationId;
+    link.replacementInventorySourceWarehouseId =
+        Objects.requireNonNull(inventorySourceWarehouseId, "inventorySourceWarehouseId");
     link.createdAt = Objects.requireNonNull(now, "now");
     return link;
   }

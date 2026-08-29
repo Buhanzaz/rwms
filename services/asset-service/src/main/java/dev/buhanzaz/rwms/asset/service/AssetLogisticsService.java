@@ -55,6 +55,7 @@ final class AssetLogisticsService {
   private final JdbcTemplate jdbc;
   private final AssetJsonCodec json;
   private final AssetEquipmentMovementService movements;
+  private final TransferUnitReservationService transferUnitReservations;
 
   AssetLogisticsService(
       AssetRentalItemService rentals,
@@ -71,7 +72,8 @@ final class AssetLogisticsService {
       RentalItemRepository rentalItems,
       JdbcTemplate jdbc,
       AssetJsonCodec json,
-      AssetEquipmentMovementService movements) {
+      AssetEquipmentMovementService movements,
+      TransferUnitReservationService transferUnitReservations) {
     this.rentals = rentals;
     this.projections = projections;
     this.leases = leases;
@@ -87,6 +89,7 @@ final class AssetLogisticsService {
     this.jdbc = jdbc;
     this.json = json;
     this.movements = movements;
+    this.transferUnitReservations = transferUnitReservations;
   }
 
   LogisticsRentalItemSnapshot snapshot(UUID id) {
@@ -165,6 +168,9 @@ final class AssetLogisticsService {
       return new AssetService.CreateResult<>(
           json.read(replay.get(), LogisticsOperationLeaseResponse.class), true);
     }
+    leases.expire(current.getRentalItemId());
+    current = leases.requireForUpdate(id);
+    assertLeaseOwner(current, request.ownerType(), request.documentId(), request.lineId());
     if (request.expectedVersion() == null || request.expectedVersion() < 0) {
       throw new IllegalArgumentException("expectedVersion is required");
     }
@@ -208,6 +214,14 @@ final class AssetLogisticsService {
     RentalItem item = rentals.require(id);
     AssetLeaseService.assertVersion(item.getVersion(), request.expectedVersion());
     AssetLeaseService.assertRentalItemAllowsLeaseEffects(item);
+    long effectExpectedVersion = request.expectedVersion();
+    if (request.action() == LogisticsRentalItemAction.TRANSFER_DEPART
+        && item.getStatus() == RentalItemStatus.RESERVED) {
+      item =
+          transferUnitReservations.consumeForDeparture(
+              subjectId, key, item, request.documentId(), request.lineId());
+      effectExpectedVersion = item.getVersion();
+    }
     RentalItemStatus target =
         LogisticsAssetTransitionPolicy.target(
             item.getStatus(),
@@ -255,7 +269,7 @@ final class AssetLogisticsService {
     events.append(
         AssetAggregateType.RENTAL_ITEM,
         saved.getId(),
-        request.expectedVersion(),
+        effectExpectedVersion,
         AssetEventType.RENTAL_ITEM_LOGISTICS_EFFECT_APPLIED,
         projections.fact(saved),
         projections.snapshot(saved));

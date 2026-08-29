@@ -17,17 +17,17 @@ class CustomerDeliveryCapacityFenceTest {
   private final CustomerDeliveryCapacityFence fence = new CustomerDeliveryCapacityFence(locks);
 
   @Test
-  void finalHoldAcquiresTheExactDayAndScenarioKeysTogether() {
+  void finalHoldAcquiresTheExactDayAndWarehouseCapacityKeysTogether() {
     UUID warehouseId = UUID.randomUUID();
     LocalDate date = LocalDate.of(2026, 8, 29);
 
-    fence.acquireDayAndScenario(warehouseId, date);
+    fence.acquireDayAndWarehouseCapacity(warehouseId, date);
 
     verify(locks)
         .acquireAll(
             List.of(
                 "customer-delivery-slot:" + warehouseId + ":" + date,
-                "customer-scenario-capacity:" + warehouseId));
+                "customer-warehouse-capacity:" + warehouseId));
   }
 
   @Test
@@ -41,6 +41,6 @@ class CustomerDeliveryCapacityFenceTest {
 
     verify(locks, org.mockito.Mockito.times(2))
         .acquire("customer-delivery-slot:" + warehouseId + ":" + date);
-    verify(locks, never()).acquire("customer-scenario-capacity:" + warehouseId);
+    verify(locks, never()).acquire("customer-warehouse-capacity:" + warehouseId);
   }
 }

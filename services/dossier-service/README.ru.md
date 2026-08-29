@@ -42,6 +42,11 @@ Maintenance repair transfer facts проецируются как `REPAIR_TRANSF
 
 Cover facts `rwms.media.cabin-photo.v1` также сохраняются как media evidence. Только `media.cabin.cover-changed.v1` с non-null `taskBoardEntryId` создаёт `MEDIA_TASK_EVIDENCE_ATTACHED`; прямые изменения cover остаются только в journal и не попадают в normal media lifecycle projection. Dossier API возвращает лишь opaque `mediaId`, `generation` и `taskBoardEntryId`; клиент получает изображение через свой authorized task-board media owner scope в public gateway. Dossier никогда не сохраняет и не публикует object-store location, signed URL или прямую ссылку на фото.
 
+Корректные media facts для owners вне dossier, включая `LOGISTICS_CUSTOMER_PROFILE`, принимаются и
+сохраняются как unlinked operational evidence с `subjectCapable=false`; они не создают cabin activity
+и не считаются ошибочной source-схемой. Только media owners `CABIN` и `INVENTORY_FINDING` могут
+передать subject для dossier. Это правило классификации consumer, а не владение media профиля.
+
 Replay строит новую projection generation из local source journal, tail/verify её и атомарно активирует. Под write lock active pointer успешная parity переносит unresolved DLT visibility coverage с source generation на target до смены pointer; rejected replay оставляет coverage на source generation и никогда не создаёт повторную DLT publication. Replay является service-owned operational work и включается только документированной configuration; Kafka retention не является replay authority. Владеющие пути: [DossierReplayTransactions](src/main/java/dev/buhanzaz/rwms/dossier/service/DossierReplayTransactions.java) и [DossierSanitizedDeadLetterRepository](src/main/java/dev/buhanzaz/rwms/dossier/repository/DossierSanitizedDeadLetterRepository.java).
 
 ## Публичный API, security и warehouse isolation

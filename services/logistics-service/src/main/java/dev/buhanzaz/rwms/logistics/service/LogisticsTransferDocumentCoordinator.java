@@ -2,7 +2,10 @@ package dev.buhanzaz.rwms.logistics.service;
 
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ArriveTransferLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateTransferRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferPlanRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferPlanView;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferArrivalPreflightView;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.UpdateTransferPlanRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
@@ -11,6 +14,8 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsLineState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsMediaPurpose;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsMediaReference;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsTargetService;
+import dev.buhanzaz.rwms.logistics.domain.TransferPlan;
+import dev.buhanzaz.rwms.logistics.domain.TransferPlanSnapshot;
 import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
 import dev.buhanzaz.rwms.logistics.equipment.api.EquipmentMovementTaskApiModels.CancelEquipmentMovementTaskRequest;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
@@ -45,6 +50,8 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 class LogisticsTransferDocumentCoordinator {
   private static final String CREATE_TRANSFER = "CREATE_TRANSFER";
+  private static final String UPDATE_TRANSFER_PLAN = "UPDATE_TRANSFER_PLAN";
+  private static final String CONFIRM_TRANSFER_PLAN = "CONFIRM_TRANSFER_PLAN";
   private static final String DEPART_TRANSFER_LINE = "DEPART_TRANSFER_LINE";
   private static final String ARRIVE_TRANSFER_LINE = "ARRIVE_TRANSFER_LINE";
   private static final String CANCEL_TRANSFER = "CANCEL_TRANSFER";
@@ -61,6 +68,8 @@ class LogisticsTransferDocumentCoordinator {
   private final LogisticsDocumentReadProjection readProjection;
   private final LogisticsDocumentAttemptWriter attemptWriter;
   private final DocumentDriverTaskPlanner driverTaskPlanner;
+  private final TransferPlanService transferPlanning;
+  private final TransferPlanWorkflowStore transferPlanWorkflow;
 
   LogisticsDocumentCommandResult createTransfer(
       UUID subjectId, UUID idempotencyKey, UUID correlationId, CreateTransferRequest request) {
@@ -92,7 +101,7 @@ class LogisticsTransferDocumentCoordinator {
     List<AdmissionRequirement> requirements = transferAdmission(request);
     warehouseAdmission.requireAdmission(admission, requirements);
     validateTransferSchedule(request, admission.localDate(request.warehouseId()));
-    validateTransferFurnitureReplacements(request);
+    validateTransferCreateShape(request);
 
     LogisticsDocument document =
         documentRepository.saveAndFlush(
@@ -102,33 +111,152 @@ class LogisticsTransferDocumentCoordinator {
                 request.scheduledDate(),
                 subjectId,
                 correlationId));
-    List<LogisticsDocumentLine> lines =
-        lineRepository.saveAllAndFlush(transferLines(document, request.lines()));
-    driverTaskPlanner.plan(document, lines);
-    OffsetDateTime proofCreatedAt = now();
-    for (LogisticsDocumentLine line : lines) {
-      attemptWriter.createLineAttempt(
-          document,
-          line,
-          LogisticsTargetService.MEDIA,
-          LogisticsDocumentEffectOperations.TRANSFER_MEDIA_OWNER_PROOF_REGISTER,
-          attemptWriter.ownerProofDigest(
-              LogisticsDocumentEffectOperations.TRANSFER_MEDIA_OWNER_PROOF_REGISTER,
-              document,
-              line,
-              transferDestination(document),
-              0,
-              0,
-              true),
-          proofCreatedAt);
+    List<LogisticsDocumentLine> lines = List.of();
+    int eventLineCount;
+    if (request.plan() == null) {
+      lines = lineRepository.saveAllAndFlush(transferLines(document, request.lines()));
+      driverTaskPlanner.plan(document, lines);
+      createMediaOwnerProofAttempts(document, lines);
+      transferFurnitureTasks.createForTransfer(
+          subjectId, document, request.scheduledDate(), request.furnitureReplacements(), admission);
+      eventLineCount = lines.size();
+    } else {
+      TransferPlan plan =
+          transferPlanning.createDraft(document, request.scheduledDate(), request.plan());
+      eventLineCount = transferPlanning.auditLineCount(plan);
     }
-    transferFurnitureTasks.createForTransfer(
-        subjectId, document, request.scheduledDate(), request.furnitureReplacements(), admission);
-    eventStore.initialize(document, lines.size(), correlationId, subjectId);
+    eventStore.initialize(document, eventLineCount, correlationId, subjectId);
     warehouseAdmission.enqueue(document, document.getWarehouseId(), admission);
     warehouseAdmission.enqueue(document, document.getDestinationWarehouseId(), admission);
     idempotency.remember(subjectId, idempotencyKey, CREATE_TRANSFER, checksum, document);
     return result(document, false);
+  }
+
+  /** Replaces one complete transfer plan under document and idempotency fences. */
+  TransferPlanCommandResult updateTransferPlan(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      UUID documentId,
+      long expectedDocumentVersion,
+      UpdateTransferPlanRequest request,
+      LocalDate warehouseToday) {
+    requirePlanCommand(
+        subjectId,
+        idempotencyKey,
+        correlationId,
+        documentId,
+        expectedDocumentVersion,
+        request,
+        warehouseToday);
+    String checksum =
+        LogisticsCommandChecksum.sha256(
+            UPDATE_TRANSFER_PLAN,
+            transferPlanFingerprintValues(
+                documentId,
+                expectedDocumentVersion,
+                request.scheduledDate(),
+                request.plan()));
+    idempotency.acquireLock(subjectId, UPDATE_TRANSFER_PLAN, idempotencyKey);
+    TransferPlanView replay =
+        idempotency.replayResponse(
+            subjectId,
+            idempotencyKey,
+            UPDATE_TRANSFER_PLAN,
+            checksum,
+            TransferPlanView.class);
+    if (replay != null) return new TransferPlanCommandResult(replay, true);
+
+    LogisticsDocument document = requiredTransferForUpdate(documentId);
+    requireExpectedVersion(
+        document, expectedDocumentVersion, "Transfer document version changed concurrently");
+    validateTransferSchedule(request.scheduledDate(), warehouseToday);
+    document.updateTransferDraftSchedule(request.scheduledDate());
+    TransferPlan plan =
+        transferPlanning.replaceDraft(document, request.scheduledDate(), request.plan());
+    documentRepository.saveAndFlush(document);
+    eventStore.append(
+        document,
+        transferPlanning.auditLineCount(plan),
+        correlationId,
+        subjectId,
+        LogisticsEventType.TRANSFER_PLAN_UPDATED,
+        "PLAN_REPLACED");
+    TransferPlanView response = transferPlanning.view(document, 0);
+    idempotency.remember(
+        subjectId, idempotencyKey, UPDATE_TRANSFER_PLAN, checksum, document, response);
+    return new TransferPlanCommandResult(response, false);
+  }
+
+  /**
+   * Freezes a complete plan and materializes its physical cabin lines. Asset reservation readiness
+   * remains explicit NOT_RESERVED; planned transfers therefore cannot depart yet.
+   */
+  TransferPlanCommandResult confirmTransferPlan(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      UUID documentId,
+      long expectedDocumentVersion,
+      AdmissionTicket admission) {
+    if (subjectId == null
+        || idempotencyKey == null
+        || correlationId == null
+        || documentId == null
+        || expectedDocumentVersion < 0
+        || admission == null) {
+      throw new IllegalArgumentException("Transfer confirmation identity and version are required");
+    }
+    String checksum =
+        LogisticsCommandChecksum.sha256(
+            CONFIRM_TRANSFER_PLAN,
+            List.of(documentId.toString(), Long.toString(expectedDocumentVersion)));
+    idempotency.acquireLock(subjectId, CONFIRM_TRANSFER_PLAN, idempotencyKey);
+    TransferPlanView replay =
+        idempotency.replayResponse(
+            subjectId,
+            idempotencyKey,
+            CONFIRM_TRANSFER_PLAN,
+            checksum,
+            TransferPlanView.class);
+    if (replay != null) return new TransferPlanCommandResult(replay, true);
+
+    LogisticsDocument document = requiredTransferForUpdate(documentId);
+    requireExpectedVersion(
+        document, expectedDocumentVersion, "Transfer document version changed concurrently");
+    List<AdmissionRequirement> requirements = transferAdmission(document);
+    warehouseAdmission.requireAdmission(admission, requirements);
+    validateTransferSchedule(
+        document.getScheduledDate(), admission.localDate(document.getWarehouseId()));
+    if (!readProjection.lines(documentId).isEmpty()) {
+      throw new LogisticsConflictException("Planned transfer already has physical cabin lines");
+    }
+
+    TransferPlan plan = transferPlanning.confirm(document);
+    List<LogisticsDocumentLine> lines =
+        lineRepository.saveAllAndFlush(
+            plannedTransferLines(document, transferPlanning.allocatedCabins(plan)));
+    createMediaOwnerProofAttempts(document, lines);
+    transferFurnitureTasks.createForTransfer(
+        subjectId,
+        document,
+        document.getScheduledDate(),
+        transferPlanning.furnitureReplacements(plan),
+        admission);
+    document.touchTransferPlanConfirmation();
+    documentRepository.saveAndFlush(document);
+    transferPlanWorkflow.enqueueConfirmation(document, plan, lines);
+    eventStore.append(
+        document,
+        transferPlanning.auditLineCount(plan),
+        correlationId,
+        subjectId,
+        LogisticsEventType.TRANSFER_CONFIRMED,
+        "RESERVING");
+    TransferPlanView response = transferPlanning.view(document, lines.size());
+    idempotency.remember(
+        subjectId, idempotencyKey, CONFIRM_TRANSFER_PLAN, checksum, document, response);
+    return new TransferPlanCommandResult(response, false);
   }
 
   LogisticsDocumentCommandResult departTransferLine(
@@ -158,6 +286,7 @@ class LogisticsTransferDocumentCoordinator {
         readProjection.document(documentId, LogisticsDocumentType.TRANSFER);
     requireExpectedVersion(
         document, expectedDocumentVersion, "Transfer document version changed concurrently");
+    transferPlanning.requireDepartureAllowed(document);
     if (document.getState() != LogisticsDocumentState.DRAFT
         && document.getState() != LogisticsDocumentState.DEPARTING) {
       throw new LogisticsConflictException(
@@ -381,7 +510,7 @@ class LogisticsTransferDocumentCoordinator {
     if (document.getState() != LogisticsDocumentState.DRAFT) {
       throw new LogisticsConflictException("A transfer cannot be cancelled after departure begins");
     }
-    List<LogisticsDocumentLine> lines = readProjection.linesRequired(documentId);
+    List<LogisticsDocumentLine> lines = readProjection.lines(documentId);
     if (lines.stream().anyMatch(line -> line.getState() != LogisticsLineState.PENDING)) {
       throw new LogisticsConflictException(
           "A transfer can be cancelled only while every line is pending");
@@ -410,24 +539,18 @@ class LogisticsTransferDocumentCoordinator {
               false),
           proofUpdatedAt);
     }
+    int eventLineCount =
+        lines.isEmpty()
+            ? transferPlanning.auditLineCount(transferPlanning.required(documentId))
+            : lines.size();
     eventStore.append(
         document,
-        lines.size(),
+        eventLineCount,
         correlationId,
         subjectId,
         LogisticsEventType.TRANSFER_CANCELLATION_STARTED,
         null);
-    document.cancelTransfer();
-    documentRepository.saveAndFlush(document);
-    for (LogisticsDocumentLine line : lines) line.cancel();
-    lineRepository.saveAllAndFlush(lines);
-    eventStore.append(
-        document,
-        lines.size(),
-        correlationId,
-        subjectId,
-        LogisticsEventType.TRANSFER_CANCELLED,
-        null);
+    transferPlanWorkflow.requestCancellation(document);
     idempotency.remember(subjectId, idempotencyKey, CANCEL_TRANSFER, checksum, document);
     return result(document, false);
   }
@@ -629,6 +752,13 @@ class LogisticsTransferDocumentCoordinator {
             request.destinationWarehouseId(), WarehouseOperationDirection.INCOMING));
   }
 
+  private static List<AdmissionRequirement> transferAdmission(LogisticsDocument document) {
+    return List.of(
+        new AdmissionRequirement(document.getWarehouseId(), WarehouseOperationDirection.OUTGOING),
+        new AdmissionRequirement(
+            transferDestination(document), WarehouseOperationDirection.INCOMING));
+  }
+
   private static List<LogisticsDocumentLine> transferLines(
       LogisticsDocument document,
       List<dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferLineRequest> inputs) {
@@ -639,6 +769,22 @@ class LogisticsTransferDocumentCoordinator {
       lines.add(
           LogisticsDocumentLine.create(
               document, index + 1, input.assetId(), input.assetVersion(), null));
+    }
+    return lines;
+  }
+
+  private static List<LogisticsDocumentLine> plannedTransferLines(
+      LogisticsDocument document, List<TransferPlanSnapshot.Allocation> allocations) {
+    List<LogisticsDocumentLine> lines = new ArrayList<>(allocations.size());
+    for (int index = 0; index < allocations.size(); index++) {
+      TransferPlanSnapshot.Allocation allocation = allocations.get(index);
+      lines.add(
+          LogisticsDocumentLine.create(
+              document,
+              index + 1,
+              allocation.assetId(),
+              allocation.assetVersion(),
+              null));
     }
     return lines;
   }
@@ -679,12 +825,33 @@ class LogisticsTransferDocumentCoordinator {
                         values.add(Long.toString(furniture.quantity()));
                       });
             });
+    // A concrete-line request must retain its pre-V67 digest so an idempotent retry that crosses
+    // the deployment boundary still replays the existing durable command receipt.
+    if (request.plan() != null) {
+      values.add("TRANSFER_PLAN_V1");
+      appendPlanFingerprint(values, request.plan());
+    }
     return values;
   }
 
   private static void validateTransferSchedule(CreateTransferRequest request, LocalDate today) {
-    if (request.scheduledDate() == null || request.scheduledDate().isBefore(today)) {
+    validateTransferSchedule(request.scheduledDate(), today);
+  }
+
+  private static void validateTransferSchedule(LocalDate scheduledDate, LocalDate today) {
+    if (scheduledDate == null || today == null || scheduledDate.isBefore(today)) {
       throw new IllegalArgumentException("Transfer task date cannot be in the past");
+    }
+  }
+
+  private static void validateTransferCreateShape(CreateTransferRequest request) {
+    if (request.plan() == null) {
+      validateTransferFurnitureReplacements(request);
+      return;
+    }
+    if (!request.lines().isEmpty() || !request.furnitureReplacements().isEmpty()) {
+      throw new IllegalArgumentException(
+          "A planned transfer cannot mix legacy concrete lines with planning detail");
     }
   }
 
@@ -722,6 +889,130 @@ class LogisticsTransferDocumentCoordinator {
         }
       }
     }
+  }
+
+  private void createMediaOwnerProofAttempts(
+      LogisticsDocument document, List<LogisticsDocumentLine> lines) {
+    OffsetDateTime proofCreatedAt = now();
+    for (LogisticsDocumentLine line : lines) {
+      attemptWriter.createLineAttempt(
+          document,
+          line,
+          LogisticsTargetService.MEDIA,
+          LogisticsDocumentEffectOperations.TRANSFER_MEDIA_OWNER_PROOF_REGISTER,
+          attemptWriter.ownerProofDigest(
+              LogisticsDocumentEffectOperations.TRANSFER_MEDIA_OWNER_PROOF_REGISTER,
+              document,
+              line,
+              transferDestination(document),
+              0,
+              0,
+              true),
+          proofCreatedAt);
+    }
+  }
+
+  private LogisticsDocument requiredTransferForUpdate(UUID documentId) {
+    LogisticsDocument document =
+        documentRepository.findForUpdate(documentId).orElseThrow(LogisticsNotFoundException::new);
+    if (document.getDocumentType() != LogisticsDocumentType.TRANSFER) {
+      throw new LogisticsNotFoundException();
+    }
+    return document;
+  }
+
+  private static void requirePlanCommand(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      UUID documentId,
+      long expectedDocumentVersion,
+      UpdateTransferPlanRequest request,
+      LocalDate warehouseToday) {
+    if (subjectId == null
+        || idempotencyKey == null
+        || correlationId == null
+        || documentId == null
+        || expectedDocumentVersion < 0
+        || request == null
+        || request.plan() == null
+        || request.scheduledDate() == null
+        || warehouseToday == null) {
+      throw new IllegalArgumentException("Transfer plan command identity and version are required");
+    }
+  }
+
+  private static List<String> transferPlanFingerprintValues(
+      UUID documentId,
+      long expectedDocumentVersion,
+      LocalDate scheduledDate,
+      TransferPlanRequest plan) {
+    List<String> values = new ArrayList<>();
+    values.add(documentId.toString());
+    values.add(Long.toString(expectedDocumentVersion));
+    values.add(scheduledDate.toString());
+    appendPlanFingerprint(values, plan);
+    return values;
+  }
+
+  private static void appendPlanFingerprint(List<String> values, TransferPlanRequest plan) {
+    values.add(nullable(plan.plannedDepartureAt()));
+    values.add(nullable(plan.plannedArrivalAt()));
+    values.add(normalized(plan.logisticsComment()));
+    values.add(nullable(plan.tripDriverId()));
+    values.add(nullable(plan.tripVehicleId()));
+    appendResourceFingerprint(values, plan.driverReposition());
+    appendResourceFingerprint(values, plan.vehicleReposition());
+    for (var group : plan.cabinGroups()) {
+      values.add(group.rentalTypeId().toString());
+      values.add(nullable(group.dimensionId()));
+      values.add(nullable(group.finishingId()));
+      values.add(nullable(group.linoleum()));
+      values.add(Integer.toString(group.quantity()));
+      group.characteristicIds().stream()
+          .sorted(Comparator.comparing(UUID::toString))
+          .forEach(characteristicId -> values.add(characteristicId.toString()));
+      values.add("FURNITURE");
+      for (var furniture : group.furniturePerCabin()) {
+        values.add(furniture.furnitureCatalogItemId().toString());
+        values.add(Long.toString(furniture.quantityPerCabin()));
+      }
+      values.add("ALLOCATIONS");
+      for (var allocation : group.allocatedCabins()) {
+        values.add(allocation.assetId().toString());
+        values.add(Long.toString(allocation.assetVersion()));
+      }
+      values.add("GROUP_END");
+    }
+    values.add("LOOSE_FURNITURE");
+    for (var furniture : plan.looseFurniture()) {
+      values.add(furniture.furnitureCatalogItemId().toString());
+      values.add(Long.toString(furniture.quantity()));
+    }
+  }
+
+  private static void appendResourceFingerprint(
+      List<String> values,
+      dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferResourceRepositionRequest
+          resource) {
+    if (resource == null) {
+      values.add("NONE");
+      values.add(null);
+      values.add(null);
+      return;
+    }
+    values.add(resource.mode() == null ? null : resource.mode().name());
+    values.add(nullable(resource.resourceId()));
+    values.add(nullable(resource.until()));
+  }
+
+  private static String normalized(String value) {
+    if (value == null || value.isBlank()) return null;
+    return value.trim();
+  }
+
+  private static String nullable(Object value) {
+    return value == null ? null : value.toString();
   }
 
   private static UUID transferEquipmentCancellationIdempotencyKey(UUID documentId) {

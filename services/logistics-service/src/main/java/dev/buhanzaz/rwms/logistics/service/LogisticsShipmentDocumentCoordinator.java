@@ -8,7 +8,6 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsEquipmentHoldReference;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsEquipmentHoldState;
-import dev.buhanzaz.rwms.logistics.domain.LogisticsExternalAttempt;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsGuard;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsGuardState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsTargetService;
@@ -23,7 +22,6 @@ import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderUnitTermRepositor
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsEquipmentHoldReferenceRepository;
-import dev.buhanzaz.rwms.logistics.repository.LogisticsExternalAttemptRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsGuardRepository;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
@@ -54,10 +52,8 @@ class LogisticsShipmentDocumentCoordinator {
   private static final String PLAN_SHIPMENT = "PLAN_SHIPMENT";
   private static final String CONFIRM_SHIPMENT = "CONFIRM_SHIPMENT";
   private static final String CANCEL_SHIPMENT = "CANCEL_SHIPMENT";
-
   private final LogisticsDocumentRepository documentRepository;
   private final LogisticsDocumentLineRepository lineRepository;
-  private final LogisticsExternalAttemptRepository externalAttemptRepository;
   private final LogisticsGuardRepository guardRepository;
   private final LogisticsEquipmentHoldReferenceRepository holdReferenceRepository;
   private final RentalOrderUnitTermRepository rentalTerms;
@@ -69,6 +65,7 @@ class LogisticsShipmentDocumentCoordinator {
   private final LogisticsDocumentReadProjection readProjection;
   private final LogisticsDocumentAttemptWriter attemptWriter;
   private final LogisticsShipmentCreationPolicy creationPolicy;
+  private final LogisticsShipmentCancellationRecovery cancellationRecovery;
   private final DocumentDriverTaskPlanner driverTaskPlanner;
 
   LogisticsDocumentCommandResult createShipment(
@@ -358,32 +355,37 @@ class LogisticsShipmentDocumentCoordinator {
         readProjection.document(documentId, LogisticsDocumentType.SHIPMENT);
     requireExpectedVersion(
         document, expectedDocumentVersion, "Shipment document version changed concurrently");
-    rejectManualHistoricalImport(document);
+    boolean failedHistoricalImport = isFailedHistoricalImport(document);
+    if (document.isHistoricalRentalImport() && !failedHistoricalImport) {
+      throw new LogisticsConflictException(
+          "Only a failed historical rental shipment can be cancelled");
+    }
     boolean cancellingDraft = document.getState() == LogisticsDocumentState.DRAFT;
     List<LogisticsDocumentLine> lines = readProjection.linesRequired(documentId);
-    for (LogisticsExternalAttempt attempt :
-        externalAttemptRepository.findAllByDocument_IdOrderByCreatedAtAsc(documentId)) {
-      String operation = attempt.getOperationType();
-      boolean mutatingPreparation =
-          LogisticsDocumentEffectOperations.SHIPMENT_ASSET_LEASE_ACQUIRE.equals(operation)
-              || operation.startsWith(
-                  LogisticsDocumentEffectOperations.SHIPMENT_HOLD_ACQUIRE_PREFIX);
-      if (mutatingPreparation
-          && attempt.getResult()
-              != dev.buhanzaz.rwms.logistics.domain.LogisticsExternalAttemptResult.CONFIRMED) {
-        throw new LogisticsConflictException(
-            "A shipment preparation effect has an unknown outcome");
-      }
-    }
+    cancellationRecovery.requireSafe(documentId, failedHistoricalImport);
     driverTaskPlanner.cancelBeforeStart(document, lines);
 
     OffsetDateTime now = now();
-    document.beginShipmentCancellation();
+    if (failedHistoricalImport) {
+      document.beginFailedHistoricalShipmentCancellation();
+      cancellationRecovery.resolveHistoricalReconciliations(documentId, subjectId, now);
+    } else {
+      document.beginShipmentCancellation();
+    }
     documentRepository.saveAndFlush(document);
+    boolean compensationRequired =
+        failedHistoricalImport
+            && cancellationRecovery.reopenHistoricalLeaseAcquisitionIfRequired(documentId, now);
     for (LogisticsEquipmentHoldReference hold :
         holdReferenceRepository.findAllByDocument_IdOrderByCreatedAtAsc(documentId)) {
+      if (failedHistoricalImport
+          && (hold.getHoldState() == LogisticsEquipmentHoldState.CONFLICT
+              || hold.getHoldState() == LogisticsEquipmentHoldState.RECONCILIATION_REQUIRED)) {
+        hold.prepareReleaseAfterFailedHistoricalShipment();
+      }
       if (hold.getHoldState() == LogisticsEquipmentHoldState.ACTIVE
           || hold.getHoldState() == LogisticsEquipmentHoldState.COMMITTED) {
+        compensationRequired = true;
         String operation = LogisticsDocumentEffectOperations.holdReleaseOperation(hold.getHoldId());
         attemptWriter.createLineAttempt(
             document,
@@ -401,25 +403,32 @@ class LogisticsShipmentDocumentCoordinator {
       }
     }
     for (LogisticsDocumentLine line : lines) {
-      guardRepository
-          .findByLine_Id(line.getId())
-          .filter(guard -> guard.getGuardState() == LogisticsGuardState.ACTIVE)
-          .ifPresent(
-              guard ->
-                  attemptWriter.createLineAttempt(
-                      document,
-                      line,
-                      LogisticsTargetService.ASSET,
-                      LogisticsDocumentEffectOperations.SHIPMENT_ASSET_LEASE_RELEASE,
-                      LogisticsCommandChecksum.sha256(
-                          LogisticsDocumentEffectOperations.SHIPMENT_ASSET_LEASE_RELEASE,
-                          List.of(
-                              guard.getLeaseId().toString(),
-                              Long.toString(guard.getLeaseVersion()),
-                              Long.toString(guard.getFenceToken()),
-                              documentId.toString(),
-                              line.getId().toString())),
-                      now));
+      LogisticsGuard guard =
+          guardRepository
+              .findByLine_Id(line.getId())
+              .orElse(null);
+      if (guard == null) continue;
+      if (failedHistoricalImport
+          && (guard.getGuardState() == LogisticsGuardState.CONFLICT
+              || guard.getGuardState() == LogisticsGuardState.RECONCILIATION_REQUIRED)) {
+        guard.prepareReleaseAfterFailedHistoricalShipment();
+      }
+      if (guard.getGuardState() != LogisticsGuardState.ACTIVE) continue;
+      compensationRequired = true;
+      attemptWriter.createLineAttempt(
+          document,
+          line,
+          LogisticsTargetService.ASSET,
+          LogisticsDocumentEffectOperations.SHIPMENT_ASSET_LEASE_RELEASE,
+          LogisticsCommandChecksum.sha256(
+              LogisticsDocumentEffectOperations.SHIPMENT_ASSET_LEASE_RELEASE,
+              List.of(
+                  guard.getLeaseId().toString(),
+                  Long.toString(guard.getLeaseVersion()),
+                  Long.toString(guard.getFenceToken()),
+                  documentId.toString(),
+                  line.getId().toString())),
+          now);
     }
     eventStore.append(
         document,
@@ -427,8 +436,8 @@ class LogisticsShipmentDocumentCoordinator {
         correlationId,
         subjectId,
         LogisticsEventType.SHIPMENT_CANCELLATION_STARTED,
-        null);
-    if (cancellingDraft) {
+        failedHistoricalImport ? "FAILED_HISTORICAL_RENTAL_IMPORT" : null);
+    if (cancellingDraft || (failedHistoricalImport && !compensationRequired)) {
       document.cancelShipment();
       documentRepository.saveAndFlush(document);
       clearRentalShipmentTerms(document);
@@ -438,21 +447,28 @@ class LogisticsShipmentDocumentCoordinator {
           correlationId,
           subjectId,
           LogisticsEventType.SHIPMENT_CANCELLED,
-          null);
+          failedHistoricalImport ? "FAILED_HISTORICAL_RENTAL_IMPORT" : null);
     }
     idempotency.remember(subjectId, idempotencyKey, CANCEL_SHIPMENT, checksum, document);
     return result(document, false);
   }
 
   /**
-   * Imported rental shipment documents deliberately have no driver, route, or manual confirmation
-   * stage. Their durable effects are advanced only by the historical-import workflow.
+   * Imported rental shipment documents may retain driver audit metadata but never create a route,
+   * driver task, or manual confirmation stage. Their durable effects are advanced only by the
+   * historical-import workflow.
    */
   private static void rejectManualHistoricalImport(LogisticsDocument document) {
     if (document.isHistoricalRentalImport()) {
       throw new LogisticsConflictException(
           "Historical rental shipment is advanced automatically and cannot be changed manually");
     }
+  }
+
+  private static boolean isFailedHistoricalImport(LogisticsDocument document) {
+    return document.isHistoricalRentalImport()
+        && (document.getState() == LogisticsDocumentState.CONFLICT
+            || document.getState() == LogisticsDocumentState.RECONCILIATION_REQUIRED);
   }
 
   private void startShipmentPreparation(

@@ -81,7 +81,7 @@ public class LogisticsDocument {
   @Column(name = "client_id")
   private UUID clientId;
 
-  /** True only for a user-entered historical rental operation that deliberately has no driver. */
+  /** True only for a user-entered historical rental operation that never creates driver work. */
   @Column(name = "historical_rental_import", nullable = false)
   private boolean historicalRentalImport;
 
@@ -311,10 +311,7 @@ public class LogisticsDocument {
     return document;
   }
 
-  /**
-   * Creates an imported rental shipment that remains a normal logistics document and asset saga,
-   * but contains no driver assignment because the physical departure happened in the past.
-   */
+  /** Creates an imported rental shipment whose driver is not known. */
   public static LogisticsDocument createHistoricalRentalShipment(
       UUID warehouseId,
       UUID clientId,
@@ -322,16 +319,44 @@ public class LogisticsDocument {
       LocalDate occurredOn,
       UUID subjectId,
       UUID correlationId) {
+    return createHistoricalRentalShipment(
+        warehouseId,
+        clientId,
+        clientSnapshot,
+        null,
+        null,
+        occurredOn,
+        subjectId,
+        correlationId);
+  }
+
+  /**
+   * Creates an imported rental shipment that retains optional driver evidence without creating a
+   * route or driver task. The driver snapshot and worker identity must either both be present or
+   * both be absent.
+   */
+  public static LogisticsDocument createHistoricalRentalShipment(
+      UUID warehouseId,
+      UUID clientId,
+      String clientSnapshot,
+      String driverSnapshot,
+      UUID driverWorkerId,
+      LocalDate occurredOn,
+      UUID subjectId,
+      UUID correlationId) {
+    String normalizedDriver = optionalSnapshot(driverSnapshot, "driverSnapshot");
+    requireOptionalDriverPair(normalizedDriver, driverWorkerId);
     LogisticsDocument document =
         initialize(
             LogisticsDocumentType.SHIPMENT,
             warehouseId,
             null,
             requiredSnapshot(clientSnapshot, "clientSnapshot"),
-            null,
+            normalizedDriver,
             subjectId,
             correlationId);
     document.clientId = Objects.requireNonNull(clientId, "clientId");
+    document.driverWorkerId = driverWorkerId;
     document.historicalRentalImport = true;
     document.scheduleHistoricalRentalOperation(occurredOn);
     return document;
@@ -466,11 +491,15 @@ public class LogisticsDocument {
   }
 
   /**
-   * Corrects the client and physical date of a user-entered historical shipment without replaying
-   * any asset, stock, lease, or driver effect.
+   * Corrects the client, optional driver evidence and physical date of a user-entered historical
+   * shipment without replaying any asset, stock, lease, route, or driver-task effect.
    */
   public boolean correctHistoricalRentalShipment(
-      UUID nextClientId, String nextPartySnapshot, LocalDate nextOccurredOn) {
+      UUID nextClientId,
+      String nextPartySnapshot,
+      String nextDriverSnapshot,
+      UUID nextDriverWorkerId,
+      LocalDate nextOccurredOn) {
     if (!historicalRentalImport
         || documentType != LogisticsDocumentType.SHIPMENT
         || !Set.of(
@@ -484,14 +513,20 @@ public class LogisticsDocument {
     }
     UUID requiredClientId = Objects.requireNonNull(nextClientId, "clientId");
     String requiredPartySnapshot = requiredSnapshot(nextPartySnapshot, "partySnapshot");
+    String optionalDriverSnapshot = optionalSnapshot(nextDriverSnapshot, "driverSnapshot");
+    requireOptionalDriverPair(optionalDriverSnapshot, nextDriverWorkerId);
     LocalDate requiredOccurredOn = Objects.requireNonNull(nextOccurredOn, "occurredOn");
     if (Objects.equals(clientId, requiredClientId)
         && Objects.equals(partySnapshot, requiredPartySnapshot)
+        && Objects.equals(driverSnapshot, optionalDriverSnapshot)
+        && Objects.equals(driverWorkerId, nextDriverWorkerId)
         && Objects.equals(scheduledDate, requiredOccurredOn)) {
       return false;
     }
     clientId = requiredClientId;
     partySnapshot = requiredPartySnapshot;
+    driverSnapshot = optionalDriverSnapshot;
+    driverWorkerId = nextDriverWorkerId;
     scheduledDate = requiredOccurredOn;
     touch();
     return true;
@@ -540,6 +575,45 @@ public class LogisticsDocument {
             correlationId);
     document.scheduledDate = Objects.requireNonNull(scheduledDate, "scheduledDate");
     return document;
+  }
+
+  /** Changes only the warehouse-local date of an editable interwarehouse transfer plan. */
+  public void updateTransferDraftSchedule(LocalDate date) {
+    if (documentType != LogisticsDocumentType.TRANSFER
+        || state != LogisticsDocumentState.DRAFT) {
+      throw new IllegalStateException("Only a transfer draft schedule can be changed");
+    }
+    LocalDate target = Objects.requireNonNull(date, "scheduledDate");
+    if (!target.equals(scheduledDate)) scheduledDate = target;
+    touch();
+  }
+
+  /** Advances the aggregate/event fence after its separate planning projection is confirmed. */
+  public void touchTransferPlanConfirmation() {
+    if (documentType != LogisticsDocumentType.TRANSFER
+        || state != LogisticsDocumentState.DRAFT) {
+      throw new IllegalStateException("Only a transfer draft plan can be confirmed");
+    }
+    touch();
+  }
+
+  /**
+   * Freezes the authoritative task-board worker identity used only to execute this transfer trip;
+   * it does not change the worker's home or operational warehouse.
+   */
+  public void assignTransferTripDriver(UUID workerId, String displayName) {
+    if (documentType != LogisticsDocumentType.TRANSFER || state != LogisticsDocumentState.DRAFT) {
+      throw new IllegalStateException("Only a pre-start transfer can assign its trip driver");
+    }
+    UUID requiredWorkerId = Objects.requireNonNull(workerId, "workerId");
+    String requiredName = requiredSnapshot(displayName, "driverSnapshot");
+    if (driverWorkerId != null
+        && (!driverWorkerId.equals(requiredWorkerId) || !driverSnapshot.equals(requiredName))) {
+      throw new IllegalStateException("Transfer trip driver identity is immutable after confirmation");
+    }
+    driverWorkerId = requiredWorkerId;
+    driverSnapshot = requiredName;
+    touch();
   }
 
   public void linkEquipmentMovementTask(UUID taskId) {
@@ -781,8 +855,6 @@ public class LogisticsDocument {
     if (!historicalRentalImport
         || documentType != LogisticsDocumentType.SHIPMENT
         || state != LogisticsDocumentState.PREPARING
-        || driverSnapshot != null
-        || driverWorkerId != null
         || scheduledDate == null) {
       throw new IllegalStateException(
           "Only a preparing historical shipment may confirm an already rented cabin");
@@ -802,6 +874,25 @@ public class LogisticsDocument {
           "Shipment cannot be cancelled in its current lifecycle state");
     }
     state = LogisticsDocumentState.CANCELLING;
+  }
+
+  /**
+   * Begins operator cancellation of a failed historical import. A successful ordinary shipment or
+   * a successful historical asset transition is deliberately outside this transition; the owning
+   * coordinator proves that no irreversible asset effect occurred before calling it.
+   */
+  public void beginFailedHistoricalShipmentCancellation() {
+    boolean allowed =
+        historicalRentalImport
+            && documentType == LogisticsDocumentType.SHIPMENT
+            && (state == LogisticsDocumentState.CONFLICT
+                || state == LogisticsDocumentState.RECONCILIATION_REQUIRED);
+    if (!allowed) {
+      throw new IllegalStateException(
+          "Only a failed historical shipment can enter cancellation recovery");
+    }
+    state = LogisticsDocumentState.CANCELLING;
+    touch();
   }
 
   public void cancelShipment() {
@@ -1063,9 +1154,18 @@ public class LogisticsDocument {
   private void requireHistoricalSchedule(String subject) {
     if (!historicalRentalImport
         || scheduledDate == null
-        || driverSnapshot != null
-        || driverWorkerId != null) {
-      throw new IllegalStateException(subject + " historical date is required without a driver");
+        || (driverSnapshot == null) != (driverWorkerId == null)
+        || (documentType == LogisticsDocumentType.RETURN
+            && (driverSnapshot != null || driverWorkerId != null))) {
+      throw new IllegalStateException(
+          subject + " historical date and optional shipment driver pair are invalid");
+    }
+  }
+
+  private static void requireOptionalDriverPair(String snapshot, UUID workerId) {
+    if ((snapshot == null) != (workerId == null)) {
+      throw new IllegalArgumentException(
+          "Historical shipment driver snapshot and worker identity must be supplied together");
     }
   }
 

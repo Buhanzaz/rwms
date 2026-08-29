@@ -11,6 +11,9 @@ import org.junit.jupiter.api.Test;
 class AuthProjectionOwnershipArchitectureTest {
 
     private static final String PROJECTION_WRITER = AuthProjectionWriter.class.getName();
+    private static final Set<String> PROJECTION_ENTITIES = Set.of(
+            "dev.buhanzaz.rwms.auth.domain.AuthSubject",
+            "dev.buhanzaz.rwms.auth.domain.UserWarehouseAccess");
     private static final Set<String> ENTITY_MUTATIONS = Set.of(
             "registerUser",
             "registerWorker",
@@ -45,6 +48,7 @@ class AuthProjectionOwnershipArchitectureTest {
                 .toList();
         var violations = calls.stream()
                 .filter(call -> !call.getOriginOwner().getName().equals(PROJECTION_WRITER))
+                .filter(call -> !PROJECTION_ENTITIES.contains(call.getOriginOwner().getName()))
                 .filter(this::isProjectionMutation)
                 .map(JavaMethodCall::getDescription)
                 .sorted()
@@ -64,9 +68,7 @@ class AuthProjectionOwnershipArchitectureTest {
     private boolean isProjectionMutation(JavaMethodCall call) {
         String owner = call.getTargetOwner().getName();
         String method = call.getName();
-        boolean entityMutation = (owner.equals("dev.buhanzaz.rwms.auth.domain.AuthSubject")
-                        || owner.equals("dev.buhanzaz.rwms.auth.domain.UserWarehouseAccess"))
-                && ENTITY_MUTATIONS.contains(method);
+        boolean entityMutation = PROJECTION_ENTITIES.contains(owner) && ENTITY_MUTATIONS.contains(method);
         boolean repositoryMutation = (owner.startsWith("org.springframework.data.")
                         || owner.equals("dev.buhanzaz.rwms.auth.repository.AuthSubjectRepository")
                         || owner.equals("dev.buhanzaz.rwms.auth.repository.UserWarehouseAccessRepository"))

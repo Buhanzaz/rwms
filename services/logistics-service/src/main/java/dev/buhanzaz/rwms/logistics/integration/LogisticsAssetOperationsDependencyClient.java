@@ -555,6 +555,68 @@ final class LogisticsAssetOperationsDependencyClient {
     return movementExecution(response);
   }
 
+  /** Calls the asset-owned all-or-nothing selected-cabin reservation boundary. */
+  TransferUnitReservationReceipt reserveTransferUnits(
+      UUID idempotencyKey,
+      UUID transferId,
+      UUID sourceWarehouseId,
+      List<TransferUnitReservationRequestLine> lines) {
+    TransferUnitReservationReceiptResponse response =
+        transport.post(
+            assetBase + "/transfer-unit-reservations",
+            idempotencyKey,
+            new ConfirmTransferUnitReservationsRequest(
+                transferId,
+                sourceWarehouseId,
+                lines.stream()
+                    .map(
+                        line ->
+                            new ConfirmTransferUnitReservationLine(
+                                line.lineId(),
+                                line.rentalItemId(),
+                                line.expectedRentalItemVersion(),
+                                line.rentalTypeId(),
+                                line.dimensionId(),
+                                line.finishingId(),
+                                line.characteristicIds(),
+                                line.linoleum()))
+                    .toList()),
+            TransferUnitReservationReceiptResponse.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE,
+            "Asset-service returned an empty transfer reservation receipt",
+            DEFAULT);
+    return transferReservationReceipt(response, transferId, lines, "ACTIVE");
+  }
+
+  /** Releases one exact active selected-cabin reservation batch before departure. */
+  TransferUnitReservationReceipt releaseTransferUnits(
+      UUID idempotencyKey,
+      UUID transferId,
+      List<TransferUnitReservationReleaseLine> lines) {
+    TransferUnitReservationReceiptResponse response =
+        transport.put(
+            assetBase + "/transfer-unit-reservations/release",
+            idempotencyKey,
+            new ReleaseTransferUnitReservationsRequest(
+                transferId,
+                lines.stream()
+                    .map(
+                        line ->
+                            new ReleaseTransferUnitReservationLine(
+                                line.reservationId(),
+                                line.lineId(),
+                                line.rentalItemId(),
+                                line.expectedReservationVersion()))
+                    .toList()),
+            TransferUnitReservationReceiptResponse.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE,
+            "Asset-service returned an empty transfer reservation release receipt",
+            DEFAULT);
+    return transferReleaseReceipt(response, transferId, lines);
+  }
+
   private static RentalItemSnapshot snapshot(RentalItemSnapshotResponse response) {
     if (response == null || response.contents() == null) {
       throw malformed("Asset-service returned an empty rental-item snapshot");
@@ -667,6 +729,98 @@ final class LogisticsAssetOperationsDependencyClient {
                 })
             .toList();
     return new EquipmentMovementExecution(response.movementId(), lines);
+  }
+
+  private static TransferUnitReservationReceipt transferReservationReceipt(
+      TransferUnitReservationReceiptResponse response,
+      UUID transferId,
+      List<TransferUnitReservationRequestLine> requested,
+      String expectedState) {
+    if (response == null
+        || response.transferId() == null
+        || !response.transferId().equals(transferId)
+        || response.lines() == null
+        || response.lines().size() != requested.size()) {
+      throw malformed("Asset-service returned an incomplete transfer reservation receipt");
+    }
+    java.util.Map<UUID, TransferUnitReservationRequestLine> expected =
+        requested.stream()
+            .collect(
+                java.util.stream.Collectors.toMap(
+                    TransferUnitReservationRequestLine::lineId, value -> value));
+    List<TransferUnitReservationLineReceipt> receipts =
+        response.lines().stream()
+            .map(
+                line -> {
+                  TransferUnitReservationRequestLine request =
+                      line == null ? null : expected.get(line.lineId());
+                  if (request == null
+                      || line.reservationId() == null
+                      || line.version() < 0
+                      || !request.rentalItemId().equals(line.rentalItemId())
+                      || line.currentRentalItemVersion()
+                          != Math.addExact(request.expectedRentalItemVersion(), 1)
+                      || !expectedState.equals(line.state())) {
+                    throw malformed(
+                        "Asset-service returned a mismatched transfer reservation receipt");
+                  }
+                  return new TransferUnitReservationLineReceipt(
+                      line.reservationId(),
+                      line.version(),
+                      line.lineId(),
+                      line.rentalItemId(),
+                      line.currentRentalItemVersion(),
+                      line.state());
+                })
+            .toList();
+    if (receipts.stream().map(TransferUnitReservationLineReceipt::lineId).distinct().count()
+        != receipts.size()) {
+      throw malformed("Asset-service returned duplicate transfer reservation lines");
+    }
+    return new TransferUnitReservationReceipt(transferId, receipts);
+  }
+
+  private static TransferUnitReservationReceipt transferReleaseReceipt(
+      TransferUnitReservationReceiptResponse response,
+      UUID transferId,
+      List<TransferUnitReservationReleaseLine> requested) {
+    if (response == null
+        || response.transferId() == null
+        || !response.transferId().equals(transferId)
+        || response.lines() == null
+        || response.lines().size() != requested.size()) {
+      throw malformed("Asset-service returned an incomplete transfer reservation release receipt");
+    }
+    java.util.Map<UUID, TransferUnitReservationReleaseLine> expected =
+        requested.stream()
+            .collect(
+                java.util.stream.Collectors.toMap(
+                    TransferUnitReservationReleaseLine::lineId, value -> value));
+    List<TransferUnitReservationLineReceipt> receipts =
+        response.lines().stream()
+            .map(
+                line -> {
+                  TransferUnitReservationReleaseLine request =
+                      line == null ? null : expected.get(line.lineId());
+                  if (request == null
+                      || !request.reservationId().equals(line.reservationId())
+                      || !request.rentalItemId().equals(line.rentalItemId())
+                      || line.version() != Math.addExact(request.expectedReservationVersion(), 1)
+                      || line.currentRentalItemVersion() < 0
+                      || !"RELEASED".equals(line.state())) {
+                    throw malformed(
+                        "Asset-service returned a mismatched transfer reservation release receipt");
+                  }
+                  return new TransferUnitReservationLineReceipt(
+                      line.reservationId(),
+                      line.version(),
+                      line.lineId(),
+                      line.rentalItemId(),
+                      line.currentRentalItemVersion(),
+                      line.state());
+                })
+            .toList();
+    return new TransferUnitReservationReceipt(transferId, receipts);
   }
 
   private static boolean sameReturnEquipmentReceiptLines(
@@ -911,4 +1065,45 @@ final class LogisticsAssetOperationsDependencyClient {
   /** Batch execution result correlated to the originating logistics movement. */
   private record EquipmentMovementExecutionResponse(
       UUID movementId, List<EquipmentMovementExecutionLineResponse> lines) {}
+
+  /** Wire request for one exact cabin and its catalog-driven transfer requirement. */
+  private record ConfirmTransferUnitReservationLine(
+      UUID lineId,
+      UUID rentalItemId,
+      long expectedRentalItemVersion,
+      UUID rentalTypeId,
+      UUID dimensionId,
+      UUID finishingId,
+      List<UUID> characteristicIds,
+      Boolean linoleum) {}
+
+  /** Asset-service all-or-nothing transfer cabin reservation command. */
+  private record ConfirmTransferUnitReservationsRequest(
+      UUID transferId,
+      UUID sourceWarehouseId,
+      List<ConfirmTransferUnitReservationLine> lines) {}
+
+  /** Wire request for releasing one exact active transfer cabin reservation. */
+  private record ReleaseTransferUnitReservationLine(
+      UUID reservationId,
+      UUID lineId,
+      UUID rentalItemId,
+      long expectedReservationVersion) {}
+
+  /** Asset-service all-or-nothing transfer cabin release command. */
+  private record ReleaseTransferUnitReservationsRequest(
+      UUID transferId, List<ReleaseTransferUnitReservationLine> lines) {}
+
+  /** One authoritative cabin reservation receipt returned by asset-service. */
+  private record TransferUnitReservationLineReceiptResponse(
+      UUID reservationId,
+      long version,
+      UUID lineId,
+      UUID rentalItemId,
+      long currentRentalItemVersion,
+      String state) {}
+
+  /** Deterministic batch receipt correlated to the existing logistics transfer. */
+  private record TransferUnitReservationReceiptResponse(
+      UUID transferId, List<TransferUnitReservationLineReceiptResponse> lines) {}
 }

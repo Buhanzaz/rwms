@@ -32,62 +32,120 @@ active and logistics has an enabled delivery-depot entry for its UUID. Each depo
 coordinates; the warehouse response exposes that same origin to CustomerApp, so both the initial
 map camera and slot routing start at the warehouse selected by that session. Cabin availability,
 holds, photos and positive equipment balances remain asset-owned; the customer catalog exposes only
-`FREE` cabins or the same session's existing hold and never exposes the cabin dossier. Nullable
+`FREE` cabins or the same session's existing hold and never exposes the cabin dossier. The profile's
+individual/legal kind and auth/client bindings are immutable; contact/display fields update under
+its version fence and synchronize the logistics rental-client projection in the same transaction.
+The first validated warehouse used for an avatar becomes an immutable media authorization scope,
+not profile identity or warehouse access. Logistics publishes a deterministic subject-bound
+`LOGISTICS_CUSTOMER_PROFILE/PROFILE_AVATAR` proof, validates one current `READY` generation before
+binding it and retains only media identity/generation; media-service owns bytes and variants. Nullable
 legacy passport facts are omitted from the least-privilege card rather than failing the complete
-catalog page. Every mutable step uses an idempotency key and the contract-defined profile, session,
+catalog page. The cart stores one initial rental duration per selected cabin and initializes a newly
+selected cabin to one month. Replacing the complete term set or furniture set detaches an earlier
+slot. Checkout applies that same one-month default to an unfinished older cart whose stored term set
+is incomplete, then carries one exact duration per held cabin into the booking.
+Every mutable step uses an idempotency key and the contract-defined profile, session,
 asset or slot version fence. First profile and inquiry-session creation take a transaction-scoped
 advisory lock before their unique-row lookup, so concurrent first requests converge instead of
-turning the database uniqueness constraint into an API failure. See
+turning the database uniqueness constraint into an API failure.
+Once checkout makes a customer session `BOOKED`, its inquiry identity remains readable for order
+history, but cart-scoped facets, selection and cart reads return canonical
+`409 INQUIRY_ARCHIVED`. A client starts a separately idempotent inquiry for another cart; the terminal
+session and its booking are never reopened or overwritten. See
 [`CustomerController`](src/main/java/dev/buhanzaz/rwms/logistics/customer/api/CustomerController.java),
-[`CustomerAuthorizer`](src/main/java/dev/buhanzaz/rwms/logistics/customer/security/CustomerAuthorizer.java)
-and [`V59`](src/main/resources/db/migration/V59__customer_app_booking_and_delivery_slots.sql).
+[`CustomerAuthorizer`](src/main/java/dev/buhanzaz/rwms/logistics/customer/security/CustomerAuthorizer.java),
+[`V59`](src/main/resources/db/migration/V59__customer_app_booking_and_delivery_slots.sql),
+[`V61`](src/main/resources/db/migration/V61__customer_terms_capacity_shifts_and_reception.sql) and
+[`V63`](src/main/resources/db/migration/V63__customer_profile_edit_and_avatar.sql), plus the dynamic
+slot/tariff extension in
+[`V64`](src/main/resources/db/migration/V64__dynamic_delivery_slots_and_tariff_zones.sql) and the
+explicit fixed/flexible slot kind in
+[`V66`](src/main/resources/db/migration/V66__customer_delivery_slot_kind.sql).
 
 Delivery offers are the fixed warehouse-local windows `09:00-12:00`, `12:00-15:00` and
-`15:00-18:00`. [`CustomerDeliverySlotService`](src/main/java/dev/buhanzaz/rwms/logistics/customer/service/CustomerDeliverySlotService.java)
+`15:00-18:00`, plus one `DURING_DAY` choice spanning the complete configured delivery day.
+[`CustomerDeliverySlotService`](src/main/java/dev/buhanzaz/rwms/logistics/customer/service/CustomerDeliverySlotService.java)
 persists offered and held capacity and uses a private Valhalla truck matrix to calculate exact road
-time plus the outward one-hour ring `ceil(travelSeconds / 3600)`. Only rings one through four are
-supported. One directed matrix is fetched for each candidate local date and reused for all three
-windows. Feasibility evaluates the complete local working day against configured drivers, truck
-cabin capacity, service time, held/checkout-pending/confirmed customer windows, anonymous
-generated-delivery capacity and active dated shipment/transfer work. Date-only returns do not
-reserve a whole driver: pickups remain backhaul work after priority deliveries. One driver may
-visit multiple points in different windows, continuing from the previous delivery point, wait
-before an early window, return to the depot to reload and continue, but must finish the final depot
-return inside the configured workday plus bounded overtime. Every reload consumes the
-configured depot turnaround (`LOGISTICS_CUSTOMER_DEPOT_RELOAD_MINUTES`, 30 minutes by default).
-Directed travel times and every hard arrival-window end are authoritative; a date-only active
+time. `travelZoneHours` remains an informational unbounded depot band; neither that band nor a
+tariff polygon participates in feasibility. Every fixed or full-day choice is route-capacity
+checked before it is offered. `kind`, `window_start` and `window_end` are persisted together:
+fixed bounds remain the exact arrival promise, while full-day bounds remain non-null and fence the
+hold-time recheck without promising a particular arrival hour. Feasibility simulates the complete local working day
+against the exact anonymous shifts published by the simulator for that warehouse/date, including
+each shift's local start/end, break and one- or two-cabin capacity, plus conservative travel/service
+buffers, warehouse load/unload, every later trip, held/checkout-pending/confirmed customer windows,
+generated delivery workload and active dated shipment/transfer work. No published shift or exact
+truck route means no offered slot. Pickups are tested only after priority deliveries on a return
+leg and are deferred whenever they threaten a current or later delivery. One driver may visit
+multiple points in different windows, wait before an early window, return to the depot to unload
+and reload, and perform multiple trips, but must finish the final warehouse operation by the
+configured shift end (20:00 by default). Directed travel times and service-start window ends are
+authoritative; a date-only active
 shipment or transfer conservatively reserves one driver for the whole day, except an order shipment
 already represented by its exact confirmed CustomerApp slot. Reported remaining capacity is the additional candidate-point cabin load
-that the same day plan can still accept, not an arithmetic free-truck counter. Any cabin or furniture
-mutation detaches the old slot from the cart. Route calculation runs outside a database transaction;
+that the same day plan can still accept, not an arithmetic free-truck counter. For two or more
+cabins CustomerApp sends `siteCabinCapacity=1|2`: one creates sequential solo-truck visits; two
+permits a trailer only when its exact truck route exists. Any cabin, site-capacity or furniture
+mutation detaches the old slot from the cart. Every offer also freezes the applicable solo or
+truck-and-trailer height, width, length, weight, axle load and axle count used by Valhalla's truck
+route. The independently matched tariff polygon contributes delivery price and its stable source
+UUID (`priceZoneId`) to the
+offer/hold, but never to availability. The transport
+contract can retain `false` search-time attestations for compatible clients that only discover
+provisional dates; the current CustomerApp collects both facts and, when needed, site capacity in a
+modal after binding the address/point and before requesting slots. The final hold merges compatible search-time
+attestations with its own recheck;
+without both facts an offer cannot be held or checked out. Route calculation runs outside a database transaction;
 the final hold transaction locks the cart, offer and current local workload under warehouse/day and
-scenario advisory locks, then accepts the route only if the canonical workload fingerprint is
+warehouse-capacity advisory locks, then accepts the route only if the canonical workload fingerprint is
 unchanged. The same warehouse/day fence is acquired by simulator replacement and every
 capacity-counted shipment/transfer create, replan, manual calendar move and lost-response status
 recovery. A driver reservation therefore cannot commit inside the final fingerprint/hold window;
 concurrent writers have one deterministic transaction order. Checkout replaces `HELD` with durable `CHECKOUT_PENDING` capacity using the stable command
 key before any remote presentation/booking call, then atomically binds the durable booking receipt.
-A terminal result confirms or releases that capacity. Checkout creates the ordinary saved rental order and
-deterministic per-cabin furniture tasks. A transport retry with the same intent reuses the original
+A terminal result confirms or releases that capacity. Checkout creates the ordinary saved rental order,
+carries each cabin's own initial rental duration into it and creates deterministic per-cabin
+furniture tasks. A transport retry with the same intent reuses the original
 domain idempotency key and reconciles a lost response through
 [`CustomerCheckoutService`](src/main/java/dev/buhanzaz/rwms/logistics/customer/service/CustomerCheckoutService.java),
 not by a browser rollback. Scheduled recovery processes the oldest deterministic batch of at most
 100 pending carts per pass.
 
+My Orders derives each cabin's arrival only from the exact `LOGISTICS_DOCUMENT` shipment task,
+matching document line/member and terminal `COMPLETED` state. An arrived cabin can be accepted once
+with an idempotent full-screen drawn signature, or receive immutable missing-equipment,
+unsuitable-cabin or other problem reports before or after acceptance. A problem may reference up to
+20 READY media generations owned by that exact shipment line. Logistics stores acceptance/problem
+facts; media-service owns the subject-bound photo/video bytes.
+
 Shipment and return commands carry an optional opaque task-board `driverWorkerId` together with
-the historical display snapshot; logistics never derives identity from the name. Transfer commands
-carry no driver identity and remain shared `WAREHOUSE_DRIVERS` work, so concrete-driver assignment
-applies to customer shipment/return trips but not warehouse transfers. Every newly scheduled
-shipment, return or transfer stores one durable
+the historical display snapshot; logistics never derives identity from the name. A transfer plan
+keeps the trip driver's worker ID independently from optional post-arrival driver/vehicle
+reposition intents. An unassigned transfer remains shared `WAREHOUSE_DRIVERS` work; an assigned
+transfer is visible only to its trip driver. Merely performing the trip never changes the driver's
+home or operational warehouse. Every newly scheduled shipment, return or transfer stores one durable
 `LOGISTICS_DOCUMENT` driver task with an immutable client snapshot and ordered, immutable cabin
 members. Its persisted `tripNumber` is stable within the rental order. Pre-start historical
 document-line tasks are cancelled before one grouped task is created; a started historical member
 prevents regrouping, and no new document-line task is created.
 
+An interwarehouse transfer draft separates cargo requirements from allocated physical cabins,
+loose furniture from furniture already attached to a cabin, the service warehouse from the
+physical inventory source, and the trip resource from a resource being repositioned. Confirmation
+uses asset-owned fenced reservations; departure moves exact property to in-transit custody, and
+idempotent arrival records one destination receipt and releases the reservations. A transfer can be
+furniture-only. The resulting task-board registration reuses the existing structured `taskText`,
+`works`, `materials` and `comments` fields. Logistics freezes the exact route, cabin
+characteristics, required/actual furniture difference and ordered load/travel/unload instructions
+in `driver_logistics_task.worker_content_json`, so a lost registration response or a pre-start
+content correction converges on the same DriverApp/WorkerApp projection without a second mobile API.
+
 `POST /api/logistics/v1/historical-rental-movements` records one past shipment or return directly
 from a cabin card. It accepts a visible logistics client, the current cabin version and a
-non-future warehouse-local date, but no driver or route. The command creates a normal logistics
-document, line, event and durable effect attempts. An imported shipment first asks maintenance to
+non-future warehouse-local date. A shipment accepts one complete driver snapshot/worker-ID pair or
+a null pair for an unknown driver; a return rejects driver data. Neither form creates a route or
+driver task. The command creates a normal logistics document, line, event and durable effect
+attempts. An imported shipment first asks maintenance to
 finish eligible ordinary repair work or cancel eligible capital/movement work with the audit reason
 `Автоматически закрыто в связи с отгрузкой.`. A released `FREE` cabin then completes the normal
 fenced shipment effect. If maintenance proves that the cabin is already `RENTED` and has no repair
@@ -95,18 +153,28 @@ to close, logistics synchronizes the observed version and completes the imported
 `SHIPPED` without acquiring a lease or repeating the asset/stock effects.
 An imported return enters the ordinary fenced return-intake path and reaches
 `INSPECTION_REQUIRED`, so its estimate and repair remain normal maintenance-owned work. The
-`historicalRentalImport` document fact keeps either import out of driver planning and manual
-shipment/return lifecycle commands.
+`historicalRentalImport` document fact keeps either import out of driver planning and ordinary
+manual shipment/return lifecycle commands; an optional shipment driver remains audit metadata only.
 The command records `CREATE_HISTORICAL_RENTAL_MOVEMENT` in the same durable idempotency table as
 other document creates. Its accepted response is frozen as JSON before the normal document saga can
 advance, so an exact lost-response retry returns the original version/state before consulting
 warehouse lifecycle or time. Both the domain validator and database constraint admit that exact
 operation.
-`PUT /api/logistics/v1/historical-rental-movements/{documentId}` corrects the client and
-warehouse-local date of that same user-entered shipment under its document version and a separate
-idempotency key. It updates both document and line client snapshots under one next aggregate event,
-stores its own immutable response, and does not create another document or repeat driver, lease,
-stock or asset effects.
+`PUT /api/logistics/v1/historical-rental-movements/{documentId}` corrects the client, optional
+driver pair and warehouse-local date of that same user-entered shipment under its document version
+and a separate idempotency key. It updates the document audit metadata and line client snapshot
+under one next aggregate event, stores its own immutable response, and does not create another
+document or repeat driver, route, lease, stock or asset effects.
+
+The ordinary shipment cancel endpoint additionally accepts a user-entered historical shipment only
+from `CONFLICT` or `RECONCILIATION_REQUIRED`. Before transition it proves from durable attempts that
+no completed or unknown `SHIPMENT_ASSET_CONFIRM` exists. A
+`SHIPMENT_ASSET_LEASE_ACQUIRE` with a lost response is reopened under its original operation ID,
+so asset-service idempotently returns the exact lease instead of creating another effect; logistics
+then releases that lease, accepting its matching `RELEASED` or naturally `EXPIRED` terminal state.
+Known holds and leases are released, open reconciliation rows are retained as `RESOLVED`, and a
+proven rejection with no acquired capability becomes `CANCELLED` immediately. Successful
+historical shipments remain non-cancellable.
 
 An equipment-movement worker task is still accepted by Task Board after its operational deadline.
 When its authoritative `DONE` time is at or after the asset-reservation deadline, logistics records
@@ -232,8 +300,11 @@ The standalone route simulator integrates only through the private
 whose sole scope is `logistics.planning`. The bounded request feed exports saved order identity,
 version, address/coordinates, still-unplanned cabin IDs and every client-approved date; a confirmed
 CustomerApp booking additionally carries its exact `windowStart`, `windowEnd` and
-`travelZoneHours`. The simulator persists that one-to-four-hour source band and uses it during
-multi-point candidate construction while exact route legs and the hard window remain decisive. It
+informational positive `travelZoneHours`, plus the site-derived trailer-access fact. The simulator
+persists the band for explanation but never uses it or a tariff zone for candidate feasibility or
+ranking. `FIXED_WINDOW` is exported as the existing hard interval; `DURING_DAY` is exported as a
+soft date-only option with null planner-window fields so the optimizer chooses the feasible hour.
+Exact route legs and any hard window remain decisive. It
 excludes phone numbers and furniture details. Applying a plan reuses the
 existing idempotent rental-shipment
 command with exact order version, concrete cabin IDs and an opaque task-board worker ID. Automatic
@@ -245,22 +316,45 @@ can read back only planner-created assignment status for one warehouse/date, so 
 shown with the authoritative driver after claim; ordinary manually created documents and customer
 contacts are excluded. It never reads or writes the RWMS database directly.
 
-`PUT /api/internal/logistics/v1/planning/capacity-snapshots/{scenarioId}` atomically replaces the
-one active anonymous simulator snapshot for a warehouse. It accepts only coordinates, hard local
-delivery windows, cabin count and service duration; it carries no order, customer, cabin or driver
-identity. The idempotency key and 64-character source revision fence exact replay. V60 stores this
-projection plus immutable accepted-command results. The required simulator-wide monotonic
-`sourceGeneration` rejects a previously unaccepted stale command, while a delayed retry of an
-already accepted revision returns its original response without replacing newer capacity. Receipt
-identity includes generation as well as revision, so a valid `A -> B -> A` revision sequence across
-three increasing generations applies the third snapshot while the first-generation command still
-replays its own immutable result. Real
-delivery slots remain separate, so replacing or clearing a scenario never deletes
-or changes a real booking. Generated delivery points constrain CustomerApp slot routing; generated
-pickups do not. Assignment apply accepts only `RWMS`-sourced deliveries, so generated and manual
-scenario tasks remain inside the simulator. See
-[`ScenarioCapacitySnapshotService`](src/main/java/dev/buhanzaz/rwms/logistics/customer/capacity/service/ScenarioCapacitySnapshotService.java)
-and [`V60`](src/main/resources/db/migration/V60__customer_scenario_capacity_projection.sql).
+`GET /api/internal/logistics/v1/planning/warehouses` exposes only active warehouse-service facts
+`{warehouseId,name,city,address,timeZone}`; the owner-held address is nullable. After validating that
+warehouse identity, `GET /api/internal/logistics/v1/planning/drivers?warehouseId=...` exposes only
+task-board's active primary-qualified `{workerId,displayName}` directory. The cohesive
+[`PlanningResourceDirectoryService`](src/main/java/dev/buhanzaz/rwms/logistics/planning/service/PlanningResourceDirectoryService.java)
+fails closed on malformed, duplicate or unavailable owner data and stores no duplicate directory.
+Every planning-feed read reloads `SAVED` orders and their confirmed CustomerApp slots from the
+logistics-owned stores. A newly booked CustomerApp delivery therefore appears on the next feed read
+with its order and cabin identities and `sourceRevision`; no planner-local task ID crosses this
+boundary.
+
+Each request separates `orderVersion`, which remains the rental-order assignment fence, from the
+64-character deterministic `sourceRevision` of every exported planning fact. The revision also
+covers confirmed-slot and current unplanned-cabin facts owned outside the order aggregate. An
+independent slot or reservation change can therefore refresh the simulator without inventing an
+order version, while the same revision with different payload is rejected as a source conflict.
+
+`PUT /api/internal/logistics/v1/planning/capacity-snapshots/{warehouseId}` atomically replaces one
+active anonymous capacity snapshot for the warehouse named by the authoritative path. The request
+does not repeat a warehouse ID; the response does not expose an obsolete source identity. It accepts
+typed generated delivery and pickup coordinates, hard local windows, cabin count, service duration,
+priority, mandatory/trailer facts, anonymous dated shifts with local start/end, break and one- or
+two-cabin capacity, and versioned GeoJSON tariff polygons. A tariff polygon contains only
+`sourceZoneId`, `sourceZoneVersion`, delivery/pickup prices and geometry. Covering polygons are
+classified by smallest geometry, then source UUID; new customer quotes expose that UUID as
+`priceZoneId`. Neither a code nor a zone priority exists in the active model, and tariff polygons
+remain absent from route feasibility.
+
+The snapshot carries no order, customer, cabin or driver personal identity. An idempotency key,
+64-character source revision and warehouse-local monotonic `sourceGeneration` fence exact replay
+and stale replacement. A delayed retry of an accepted generation returns its immutable response;
+a valid `A -> B -> A` revision sequence across three increasing generations applies the third
+snapshot. Real delivery slots remain separate, so capacity replacement never deletes or changes a
+booking. Generated deliveries constrain CustomerApp slot routing; generated pickups are removable
+return-leg work and never displace a delivery. Assignment apply accepts only `RWMS`-sourced
+deliveries, leaving generated and manual planner jobs in the simulator. See
+[`WarehouseCapacitySnapshotService`](src/main/java/dev/buhanzaz/rwms/logistics/customer/capacity/service/WarehouseCapacitySnapshotService.java)
+and
+[`V65__warehouse_capacity_identity_and_tariff_zones.sql`](src/main/resources/db/migration/V65__warehouse_capacity_identity_and_tariff_zones.sql).
 
 Replacement reuses the same presentation/booking or direct order command. A warehouse manager can
 replace only the requested pre-start cabins, with exact client-selection cardinality; direct replace
@@ -359,25 +453,38 @@ input is a conflict.
 dependency port. Its unchanged constructor composes six owner clients and the
 facade delegates every interface operation:
 
+`LogisticsDependencyGateway` is now only the source-compatible composition of
+six cohesive ports: `LogisticsWarehouseDependencyPort`,
+`LogisticsAssetOperationsDependencyPort`, `LogisticsMaintenanceDependencyPort`,
+`LogisticsMediaDependencyPort`, `LogisticsTaskBoardDependencyPort` and
+`LogisticsOrderPresentationDependencyPort`. Existing nested transport types and
+call sites keep their names; business decisions remain in the owning workflow
+services and leaf clients.
+
 | Owner client | Private boundary |
 | --- | --- |
-| `LogisticsWarehouseDependencyClient` | Warehouse identity, admission, timezone and lifecycle |
+| `LogisticsWarehouseDependencyClient` | Warehouse identity/directory including nullable owner address, admission, timezone and lifecycle |
 | `LogisticsAssetOperationsDependencyClient` | Rental and photo-presentation snapshots, leases, fenced effects, equipment holds and movements |
 | `LogisticsAssetOrderPresentationDependencyClient` | Order units, reservations, cabin availability/search and presentation holds |
 | `LogisticsMaintenanceDependencyClient` | Transfer repair, estimate source, capital repair and repair-place calls |
 | `LogisticsMediaDependencyClient` | Media validation, owner proof, evidence, snapshots and binary presentation media |
-| `LogisticsTaskBoardDependencyClient` | Movement tasks, driver queue/task, board and completion calls |
+| `LogisticsTaskBoardDependencyClient` | Movement tasks, driver queue/task, active qualified driver directory, board and completion calls |
 | `LogisticsOAuthHttpTransport` | Exact-scope client credentials, HTTP exchange and established dependency error mapping only |
 | `RentalInquiryCabinSearchService` | Non-transactional warehouse/asset call sequence over one frozen downstream command |
 | `RentalInquiryCabinSearchStore` | Locked PREPARE/COMPLETE/REJECTED/EXPIRED receipt transactions and frozen-response replay |
 | `RentalInquiryCabinSelectionService` | Owner-scoped authoritative hold reads and exact full-selection replace/release calls outside local transactions |
 | `RentalInquiryCabinSelectionStore` | Locked PREPARE/COMPLETE/REJECTED/EXPIRED selection receipt transactions, exact-byte retry and frozen-response replay |
 | `RentalInquiryCabinCatalogService` | Bounded facts-only cabin lookup with inquiry, warehouse and owner authorization |
+| `CustomerRentalService`, `CustomerRentalTermCodec` | Version-fenced complete per-cabin cart terms, canonical JSON and exact selected-cabin cardinality |
+| `CustomerBookingService`, `CustomerReceptionResponseMapper` | Exact completed shipment-member arrival, subject-owned booking reads, signed acceptance and immutable problem reports |
 | `LogisticsDocumentService` | Stable return/shipment/transfer and rental-order hook facade over seven exact owners |
-| `HistoricalRentalMovementCoordinator` | One-client, one-cabin historical shipment/return intake plus version-fenced correction of an existing imported shipment; creates normal documents and durable owner effects without a driver or browser-owned saga |
+| `HistoricalRentalMovementCoordinator` | One-client, one-cabin historical shipment/return intake plus version-fenced correction of an existing imported shipment; retains optional shipment-driver audit metadata while creating normal documents and durable owner effects without driver work or a browser-owned saga |
 | `CabinPhotoPresentationService`, `CabinPhotoPresentationStore`, `CabinPhotoPresentationTokenService` | Version-fenced immutable READY-photo snapshot, exact idempotent replay and non-expiring signed public capability; no general media proxy or private cabin data |
 | Return, shipment and transfer document coordinators | Independent document state machines with their existing transaction and recovery order |
+| `LogisticsShipmentCancellationRecovery` | Shipment-cancellation evidence checks, historical reconciliation audit closure and exact lost-response lease-attempt reopening; the shipment coordinator retains the document state machine and compensation ordering |
 | `DocumentDriverTaskPlanner` | One idempotent document-owned task with ordered cabin members for each new scheduled shipment, return or transfer; waiting legacy line tasks converge to the group and started ones fence replanning |
+| `TransferPlanService`, `TransferPlanWorkflowStore` | Versioned transfer draft/confirmation/departure/arrival/cancellation owner; coordinates fenced asset reservations, trip commitments and explicit resource reposition without changing stock during draft evaluation |
+| `TransferDriverTaskContentService`, `DriverTaskWorkerContentCodec` | Deterministic exact transfer route/cargo/furniture instructions over the existing task-board DriverApp/WorkerApp projection, durably retained for idempotent retries and pre-start replacement |
 | `DriverTripProjectionService` | Structured task/board trip facts with one asset read per distinct order and explicit unavailable readiness on dependency failure |
 | `ShipmentTaskSettingsService` | Warehouse-scoped, version-fenced cap reused by every grouped trip; materializes default one atomically and rejects over-limit planning |
 | Rental-order shipment/completion and reconciliation coordinators | Document hooks for rental shipment, terminal return and reconciliation request commands |
@@ -385,6 +492,8 @@ facade delegates every interface operation:
 | `RentalOrderService` | Stable order facade over reads, creation, lifecycle, reservations, terms and shipment hand-off |
 | `RentalOrderUnitReplacementService` | Direct and presentation replacement over ordered batch checkpoints, pre-start driver-task cancellation and same-order document/member convergence |
 | `RentalOrderPlanningIntegrationService` | Minimal versioned planner feed plus idempotent application through the existing rental-shipment owner; no cross-database state |
+| `PlanningResourceDirectoryService` | Validated least-privilege warehouse and active primary-driver resources composed from their exact domain owners without a local projection |
+| `WarehouseCapacitySnapshotService` | Per-warehouse idempotent capacity replacement, monotonic generation fencing and canonical tariff-zone UUID persistence |
 | `FutureDriverTaskClaimService` | Future-only shared-task preview/claim with task-board qualification and version fencing; it never starts work |
 | `ClientDeliveryDatePolicy` | Warehouse-local day +2 through day +5 request horizon for ordinary public confirmations |
 | `ShipmentFurnitureTaskService` | All-active-order furniture composition, existing movement-task readiness and replacement recovery checkpoints |
@@ -574,6 +683,38 @@ Migration
 adds `UPDATE_HISTORICAL_RENTAL_MOVEMENT` to that same check and requires immutable response JSON for
 both historical operations. It does not rewrite historical receipts, documents, lines or events.
 
+Migration
+[`V65__warehouse_capacity_identity_and_tariff_zones.sql`](src/main/resources/db/migration/V65__warehouse_capacity_identity_and_tariff_zones.sql)
+renames all five capacity tables, constraints and indexes to their warehouse-owned names, preserves
+every snapshot/job/shift/receipt/zone row, removes the duplicate source identity, and drops tariff
+zone code and priority. Customer slot quotes now persist `price_zone_id` as UUID: parseable UUIDs and
+codes that still match exactly one active warehouse zone are backfilled before the old column is removed;
+an unmatched retained price remains truthful with a null zone identity instead of receiving a
+fabricated UUID. New offers require price and zone UUID together.
+
+Migrations
+[`V67__interwarehouse_transfer_planning.sql`](src/main/resources/db/migration/V67__interwarehouse_transfer_planning.sql)
+and
+[`V68__transfer_plan_reservation_workflow.sql`](src/main/resources/db/migration/V68__transfer_plan_reservation_workflow.sql)
+add the transfer plan, configuration groups, exact allocations, per-cabin and loose furniture,
+trip/reposition resource intents and durable reservation/workflow checkpoints. They keep draft
+evaluation side-effect free and store only opaque IDs for asset- and task-board-owned aggregates.
+[`V69__warehouse_isochrone_tariffs_and_zone_policies.sql`](src/main/resources/db/migration/V69__warehouse_isochrone_tariffs_and_zone_policies.sql)
+adds configurable 60/120/180/240-minute warehouse prices, exact quoted isochrone bands and
+warehouse-scoped `FORBIDDEN`/`NO_TRAILER` restriction snapshots; special-price zones retain their
+existing explicit quote role.
+[`V70__furniture_only_transfer_driver_tasks.sql`](src/main/resources/db/migration/V70__furniture_only_transfer_driver_tasks.sql)
+admits a transfer driver task without a cabin and an exact assigned trip driver without widening
+other movement audiences.
+[`V71__shipment_inventory_source_warehouse.sql`](src/main/resources/db/migration/V71__shipment_inventory_source_warehouse.sql)
+backfills and freezes the physical source per document line while preserving the document's service
+warehouse.
+[`V72__replacement_inventory_source_checkpoint.sql`](src/main/resources/db/migration/V72__replacement_inventory_source_checkpoint.sql)
+keeps that source in the existing replacement/furniture recovery checkpoint.
+[`V73__driver_task_worker_content.sql`](src/main/resources/db/migration/V73__driver_task_worker_content.sql)
+adds an object-shaped, false-effect structured worker snapshot with `{}` as the backward-compatible
+default for all historical tasks.
+
 Logistics commits facts, projection checkpoints and a transactional outbox together. Kafka delivery
 is at-least-once: aggregate IDs are record keys, event IDs are dedupe identities, and consumers retain
 local replay/version-gap handling. Durable stores and relays recover external attempts, owner proofs,
@@ -661,9 +802,10 @@ requires `ENABLED=true`, `WAREHOUSE_ID`, `LATITUDE` and `LONGITUDE`. Disabled po
 while an empty registry, duplicate warehouse UUID or invalid coordinates fail closed. The former
 single-depot `LOGISTICS_CUSTOMER_WAREHOUSE_ID`/`LOGISTICS_CUSTOMER_DEPOT_LATITUDE`/
 `LOGISTICS_CUSTOMER_DEPOT_LONGITUDE` settings are not read.
-`LOGISTICS_CUSTOMER_DRIVER_COUNT`, `LOGISTICS_CUSTOMER_TRUCK_CABIN_CAPACITY`, service time, booking
-horizon, offer/hold lifetimes and the truck dimensions/weights define the capacity model; all exact
-names and defaults are in `application.yaml`. Valhalla must remain private and is bound to host
+`LOGISTICS_CUSTOMER_SERVICE_MINUTES`, booking horizon, offer/hold lifetimes and the truck
+dimensions/weights define the shared capacity and route profile; current driver availability and
+vehicle capacity come only from simulator-published shifts. All exact names and defaults are in
+`application.yaml`. Valhalla must remain private and is bound to host
 loopback by the logistics simulator Compose file.
 
 ## Observability and operations

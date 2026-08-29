@@ -344,20 +344,37 @@ public class OrderAssetService {
     if (lockedItems.size() != lockedItemIds.size()) {
       throw new AssetNotFoundException("Rental item was not found");
     }
-    for (RentalItem item : lockedItems.values()) {
-      if (!request.warehouseId().equals(item.getWarehouseId())) {
-        throw conflict("UNIT_WAREHOUSE_MISMATCH", "Бытовки находятся на разных складах");
-      }
+    List<OrderUnitReservation> active =
+        reservations.findAllActiveForUpdate(orderId, OrderUnitReservationState.ACTIVE);
+    Map<UUID, OrderUnitReservation> activeByItem =
+        active.stream()
+            .collect(Collectors.toMap(OrderUnitReservation::getRentalItemId, Function.identity()));
+    if (!activeByItem.keySet().containsAll(oldIds)) {
+      throw new AssetNotFoundException("Order unit reservation was not found");
     }
+    UUID replacementSourceWarehouseId =
+        request.inventorySourceWarehouseId() == null
+            ? request.warehouseId()
+            : request.inventorySourceWarehouseId();
     for (UUID oldId : oldIds) {
-      if (lockedItems.get(oldId).getStatus() != RentalItemStatus.BOOKED) {
+      RentalItem old = lockedItems.get(oldId);
+      OrderUnitReservation oldReservation = activeByItem.get(oldId);
+      if (old.getStatus() != RentalItemStatus.BOOKED) {
         throw conflict(
             "REPLACEMENT_UNIT_NOT_EDITABLE",
             "Заменять можно только забронированную бытовку до начала отгрузки");
       }
+      if (!old.getWarehouseId().equals(oldReservation.getWarehouseId())) {
+        throw conflict(
+            "UNIT_WAREHOUSE_MISMATCH", "Склад старой бытовки не совпадает с её резервом");
+      }
     }
     for (UUID replacementId : replacementIds) {
-      if (lockedItems.get(replacementId).getStatus() != RentalItemStatus.FREE) {
+      RentalItem replacement = lockedItems.get(replacementId);
+      if (!replacementSourceWarehouseId.equals(replacement.getWarehouseId())) {
+        throw conflict("UNIT_WAREHOUSE_MISMATCH", "Заменяющая бытовка находится на другом складе");
+      }
+      if (replacement.getStatus() != RentalItemStatus.FREE) {
         throw conflict("REPLACEMENT_UNIT_NOT_AVAILABLE", "Заменяющая бытовка недоступна");
       }
       if (reservations
@@ -368,15 +385,6 @@ public class OrderAssetService {
             "Заменяющая бытовка уже занята другим заказом");
       }
     }
-
-    List<OrderUnitReservation> active =
-        reservations.findAllActiveForUpdate(orderId, OrderUnitReservationState.ACTIVE);
-    Map<UUID, OrderUnitReservation> activeByItem =
-        active.stream()
-            .collect(Collectors.toMap(OrderUnitReservation::getRentalItemId, Function.identity()));
-    if (!activeByItem.keySet().containsAll(oldIds)) {
-      throw new AssetNotFoundException("Order unit reservation was not found");
-    }
     Map<UUID, Map<UUID, Long>> requiredByUnit = requirementsByUnit(request.units());
     Set<UUID> expectedUnitIds = new java.util.LinkedHashSet<>(activeByItem.keySet());
     expectedUnitIds.removeAll(oldIds);
@@ -386,8 +394,30 @@ public class OrderAssetService {
           "ORDER_UNIT_RESERVATION_MISMATCH",
           "Состав бытовок заказа изменился, обновите замену и повторите действие");
     }
+    Map<UUID, UUID> currentSources =
+        activeByItem.values().stream()
+            .collect(
+                Collectors.toMap(
+                    OrderUnitReservation::getRentalItemId,
+                    OrderUnitReservation::getWarehouseId,
+                    (left, right) -> left,
+                    LinkedHashMap::new));
+    Map<UUID, UUID> preReplacementSources = new LinkedHashMap<>();
+    Map<UUID, UUID> postReplacementSources = new LinkedHashMap<>();
+    currentSources.forEach(
+        (unitId, source) -> {
+          if (!oldIds.contains(unitId)) {
+            preReplacementSources.put(unitId, source);
+            postReplacementSources.put(unitId, source);
+          }
+        });
+    for (OrderUnitReplacement pair : pairs) {
+      UUID oldSource = activeByItem.get(pair.rentalItemId()).getWarehouseId();
+      preReplacementSources.put(pair.replacementRentalItemId(), oldSource);
+      postReplacementSources.put(pair.replacementRentalItemId(), replacementSourceWarehouseId);
+    }
+    assertOrderReservations(orderId, requiredByUnit, preReplacementSources);
     Map<UUID, Long> orderRequirements = aggregateRequirements(requiredByUnit.values());
-    assertOrderReservations(orderId, request.warehouseId(), orderRequirements);
     Map<UUID, EquipmentCatalogItem> catalog = catalogItems(orderRequirements.keySet());
     assertMaximumPerCabin(requiredByUnit, catalog);
 
@@ -431,7 +461,10 @@ public class OrderAssetService {
       }
       Map<UUID, Long> desired = requiredByUnit.get(replacement.getId());
       List<OrderFurnitureMovementPlanLine> exactPlan =
-          directReplacementMovementLines(oldUnit, replacement, desired, catalog);
+          oldUnit.getWarehouseId().equals(replacement.getWarehouseId())
+              ? directReplacementMovementLines(oldUnit, replacement, desired, catalog)
+              : sourceLocalReplacementMovementLines(
+                  replacement, desired, requiredByUnit, catalog);
       if (exactPlan.isEmpty() && pair.movement() != null) {
         throw conflict(
             "REPLACEMENT_MOVEMENT_NOT_REQUIRED",
@@ -463,6 +496,14 @@ public class OrderAssetService {
               exactPlan,
               rentalItemContents(replacement).equals(desired) && exactPlan.isEmpty()));
     }
+
+    replaceEquipmentReservationsForSources(
+        orderId,
+        request.actorSubjectId(),
+        request.actorRole(),
+        requiredByUnit,
+        postReplacementSources,
+        transientReplacementPhysicalBySource(lockedItems, pairs, requiredByUnit));
 
     List<List<dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsEquipmentMovementReservationResponse>>
         heldByPair = new ArrayList<>();
@@ -501,6 +542,7 @@ public class OrderAssetService {
           OrderUnitReservation.replace(
               value.oldReservation(),
               value.replacement().getId(),
+              value.replacement().getWarehouseId(),
               request.actorSubjectId(),
               request.actorRole());
       value.oldReservation().release(request.actorSubjectId(), request.actorRole());
@@ -643,35 +685,75 @@ public class OrderAssetService {
       UUID orderId, ReplaceOrderEquipmentReservationsRequest request) {
     acquireOrderCompositionLock(orderId);
     Map<UUID, Map<UUID, Long>> requiredByUnit = requirementsByUnit(request.units());
-    assertRequestedUnitsBelongToOrder(orderId, request.warehouseId(), requiredByUnit.keySet());
-    Map<UUID, Long> required = aggregateRequirements(requiredByUnit.values());
-    Set<UUID> lockEquipmentIds = new java.util.LinkedHashSet<>(required.keySet());
+    Map<UUID, UUID> sourceByUnit =
+        activeUnitSources(orderId, requiredByUnit.keySet(), "ORDER_UNIT_RESERVATION_MISMATCH");
+    return replaceEquipmentReservationsForSources(
+        orderId,
+        request.actorSubjectId(),
+        request.actorRole(),
+        requiredByUnit,
+        sourceByUnit,
+        Map.of());
+  }
+
+  /**
+   * Replaces the existing aggregate as one active row per physical source and equipment kind. The
+   * caller supplies the exact post-command unit/source projection so cabin replacement can migrate
+   * capacity before the replacement reservation row itself is inserted in the same transaction.
+   */
+  private List<OrderEquipmentReservationView> replaceEquipmentReservationsForSources(
+      UUID orderId,
+      UUID actorSubjectId,
+      String actorRole,
+      Map<UUID, Map<UUID, Long>> requiredByUnit,
+      Map<UUID, UUID> sourceByUnit,
+      Map<SourceEquipmentKey, Long> transientPhysicalBySource) {
+    Objects.requireNonNull(actorSubjectId, "actorSubjectId");
+    Objects.requireNonNull(actorRole, "actorRole");
+    if (!requiredByUnit.keySet().equals(sourceByUnit.keySet())
+        || sourceByUnit.values().stream().anyMatch(Objects::isNull)) {
+      throw conflict(
+          "ORDER_UNIT_RESERVATION_MISMATCH",
+          "Состав бытовок и их складов изменился, обновите мебель и повторите действие");
+    }
+    Map<SourceEquipmentKey, Long> required =
+        aggregateRequirementsBySource(requiredByUnit, sourceByUnit);
+    Set<SourceEquipmentKey> lockKeys = new java.util.LinkedHashSet<>(required.keySet());
     equipmentReservations
         .findAllByOrderIdAndStateOrderByEquipmentId(
             orderId, OrderEquipmentReservationState.ACTIVE)
         .stream()
-        .map(OrderEquipmentReservation::getEquipmentId)
-        .forEach(lockEquipmentIds::add);
-    List<UUID> equipmentIds = lockEquipmentIds.stream().sorted().toList();
-    for (UUID equipmentId : equipmentIds) {
+        .map(
+            reservation ->
+                new SourceEquipmentKey(
+                    reservation.getWarehouseId(), reservation.getEquipmentId()))
+        .forEach(lockKeys::add);
+    List<SourceEquipmentKey> sortedLockKeys = lockKeys.stream().sorted().toList();
+    for (SourceEquipmentKey key : sortedLockKeys) {
       equipmentReservations.acquireTransactionLock(
-          "order-equipment:" + request.warehouseId() + ":" + equipmentId);
+          "order-equipment:" + key.warehouseId() + ":" + key.equipmentId());
     }
 
     List<OrderEquipmentReservation> current =
         equipmentReservations.findAllActiveForUpdate(orderId, OrderEquipmentReservationState.ACTIVE);
-    Map<UUID, OrderEquipmentReservation> currentByEquipment =
+    Map<SourceEquipmentKey, OrderEquipmentReservation> currentByKey =
         current.stream()
             .collect(
                 Collectors.toMap(
-                    OrderEquipmentReservation::getEquipmentId,
+                    reservation ->
+                        new SourceEquipmentKey(
+                            reservation.getWarehouseId(), reservation.getEquipmentId()),
                     Function.identity(),
                     (left, right) -> {
-                      throw new IllegalStateException("Duplicate active order equipment reservation");
+                      throw new IllegalStateException("Duplicate active source equipment reservation");
                     },
                     LinkedHashMap::new));
 
-    Map<UUID, EquipmentCatalogItem> catalog = catalogItems(required.keySet());
+    Set<UUID> requiredEquipmentIds =
+        required.keySet().stream()
+            .map(SourceEquipmentKey::equipmentId)
+            .collect(Collectors.toCollection(java.util.LinkedHashSet::new));
+    Map<UUID, EquipmentCatalogItem> catalog = catalogItems(requiredEquipmentIds);
     for (EquipmentCatalogItem item : catalog.values()) {
       if (!item.isActive()) {
         throw conflict("EQUIPMENT_NOT_AVAILABLE", "Позиция дополнительного оборудования отключена");
@@ -679,12 +761,17 @@ public class OrderAssetService {
     }
     assertMaximumPerCabin(requiredByUnit, catalog);
 
-    Map<UUID, Long> availableAfter = new LinkedHashMap<>();
-    for (UUID equipmentId : required.keySet().stream().sorted().toList()) {
+    Map<SourceEquipmentKey, Long> availableAfter = new LinkedHashMap<>();
+    for (SourceEquipmentKey key : required.keySet().stream().sorted().toList()) {
       AssetService.OrderEquipmentCapacity capacity =
-          assets.orderEquipmentCapacity(equipmentId, request.warehouseId(), orderId);
-      long requested = required.get(equipmentId);
-      long satisfiedByOrderCabins = Math.min(requested, capacity.orderPhysicalQuantity());
+          assets.orderEquipmentCapacity(key.equipmentId(), key.warehouseId(), orderId);
+      long requested = required.get(key);
+      long satisfiedByOrderCabins =
+          Math.min(
+              requested,
+              Math.addExact(
+                  capacity.orderPhysicalQuantity(),
+                  transientPhysicalBySource.getOrDefault(key, 0L)));
       long requestedOutstanding = Math.subtractExact(requested, satisfiedByOrderCabins);
       long freeForOrder =
           Math.max(
@@ -697,49 +784,53 @@ public class OrderAssetService {
             "Недостаточно доступного дополнительного оборудования для заказа");
       }
       availableAfter.put(
-          equipmentId, Math.subtractExact(freeForOrder, requestedOutstanding));
+          key, Math.subtractExact(freeForOrder, requestedOutstanding));
     }
 
     List<OrderEquipmentReservation> changed = new ArrayList<>();
     for (OrderEquipmentReservation reservation : current) {
-      Long nextQuantity = required.remove(reservation.getEquipmentId());
+      SourceEquipmentKey key =
+          new SourceEquipmentKey(reservation.getWarehouseId(), reservation.getEquipmentId());
+      Long nextQuantity = required.remove(key);
       if (nextQuantity == null) {
         if (reservation.release()) {
           changed.add(reservation);
         }
-      } else if (reservation.getWarehouseId().equals(request.warehouseId())) {
+      } else {
         if (reservation.changeQuantity(nextQuantity)) {
           changed.add(reservation);
         }
-      } else {
-        throw conflict(
-            "ORDER_WAREHOUSE_MISMATCH",
-            "Склад заказа нельзя изменить, пока в нём есть резерв мебели");
       }
     }
-    for (Map.Entry<UUID, Long> entry : required.entrySet()) {
+    for (Map.Entry<SourceEquipmentKey, Long> entry : required.entrySet()) {
+      SourceEquipmentKey key = entry.getKey();
       OrderEquipmentReservation created =
-          OrderEquipmentReservation.create(orderId, entry.getKey(), request.warehouseId(), entry.getValue());
+          OrderEquipmentReservation.create(
+              orderId, key.equipmentId(), key.warehouseId(), entry.getValue());
       changed.add(created);
-      currentByEquipment.put(entry.getKey(), created);
+      currentByKey.put(key, created);
     }
     if (!changed.isEmpty()) {
       equipmentReservations.saveAllAndFlush(changed);
     }
 
     return
-        currentByEquipment.values().stream()
+        currentByKey.values().stream()
             .filter(value -> value.getState() == OrderEquipmentReservationState.ACTIVE)
             .sorted(
-                Comparator.<OrderEquipmentReservation, String>comparing(
-                    value -> catalog.get(value.getEquipmentId()).getName())
+                Comparator.comparing(OrderEquipmentReservation::getWarehouseId)
+                    .thenComparing(
+                        value -> catalog.get(value.getEquipmentId()).getName())
                     .thenComparing(OrderEquipmentReservation::getEquipmentId))
             .map(
                 value ->
                     responses.toOrderEquipmentReservation(
                         value,
                         catalog.get(value.getEquipmentId()),
-                        availableAfter.getOrDefault(value.getEquipmentId(), 0L)))
+                        availableAfter.getOrDefault(
+                            new SourceEquipmentKey(
+                                value.getWarehouseId(), value.getEquipmentId()),
+                            0L)))
             .toList();
   }
 
@@ -754,17 +845,12 @@ public class OrderAssetService {
     acquireOrderCompositionLock(orderId);
     Map<UUID, Long> desired = requirementsByEquipment(request.requirements());
     Map<UUID, Map<UUID, Long>> requiredByUnit = requirementsByUnit(request.units());
-    Map<UUID, Long> orderRequired = aggregateRequirements(requiredByUnit.values());
-    for (UUID equipmentId : orderRequired.keySet().stream().sorted().toList()) {
-      equipmentReservations.acquireTransactionLock(
-          "order-equipment:" + request.warehouseId() + ":" + equipmentId);
-    }
-    assertOrderReservations(orderId, request.warehouseId(), orderRequired);
-
     if (request.replacementForRentalItemId() != null) {
       return replacementFurnitureMovementPlan(orderId, request, desired, requiredByUnit);
     }
-    assertRequestedUnitsBelongToOrder(orderId, request.warehouseId(), requiredByUnit.keySet());
+    Map<UUID, UUID> sourceByUnit =
+        activeUnitSources(orderId, requiredByUnit.keySet(), "ORDER_UNIT_RESERVATION_MISMATCH");
+    assertOrderReservations(orderId, requiredByUnit, sourceByUnit);
     if (!desired.equals(requiredByUnit.get(request.rentalItemId()))) {
       throw conflict(
           "ORDER_UNIT_REQUIREMENTS_MISMATCH",
@@ -782,6 +868,9 @@ public class OrderAssetService {
             .orElseThrow(() -> new AssetNotFoundException("Rental item was not found"));
     if (!request.warehouseId().equals(unit.getWarehouseId())) {
       throw conflict("UNIT_WAREHOUSE_MISMATCH", "Бытовка находится на другом складе");
+    }
+    if (!request.warehouseId().equals(sourceByUnit.get(unit.getId()))) {
+      throw conflict("UNIT_WAREHOUSE_MISMATCH", "Резерв бытовки относится к другому складу");
     }
     if (!ORDER_EDITABLE_STATUSES.contains(unit.getStatus())) {
       throw conflict("UNIT_NOT_EDITABLE", "Наполнение этой бытовки нельзя изменить");
@@ -906,13 +995,16 @@ public class OrderAssetService {
     }
     RentalItem oldUnit = items.get(oldRentalItemId);
     RentalItem replacement = items.get(request.rentalItemId());
-    if (!request.warehouseId().equals(oldUnit.getWarehouseId())
-        || !request.warehouseId().equals(replacement.getWarehouseId())) {
-      throw conflict("UNIT_WAREHOUSE_MISMATCH", "Бытовки находятся на разных складах");
+    OrderUnitReservation oldReservation =
+        reservations
+            .findActiveForUpdate(orderId, oldRentalItemId, OrderUnitReservationState.ACTIVE)
+            .orElseThrow(() -> new AssetNotFoundException("Order unit reservation was not found"));
+    if (!oldUnit.getWarehouseId().equals(oldReservation.getWarehouseId())) {
+      throw conflict("UNIT_WAREHOUSE_MISMATCH", "Резерв старой бытовки относится к другому складу");
     }
-    reservations
-        .findActiveForUpdate(orderId, oldRentalItemId, OrderUnitReservationState.ACTIVE)
-        .orElseThrow(() -> new AssetNotFoundException("Order unit reservation was not found"));
+    if (!request.warehouseId().equals(replacement.getWarehouseId())) {
+      throw conflict("UNIT_WAREHOUSE_MISMATCH", "Заменяющая бытовка находится на другом складе");
+    }
     if (reservations
             .findByRentalItemIdAndState(replacement.getId(), OrderUnitReservationState.ACTIVE)
             .isPresent()
@@ -928,7 +1020,10 @@ public class OrderAssetService {
 
     Map<UUID, EquipmentCatalogItem> catalog = catalogItems(desired.keySet());
     List<OrderFurnitureMovementPlanLine> lines =
-        directReplacementMovementLines(oldUnit, replacement, desired, catalog);
+        oldUnit.getWarehouseId().equals(replacement.getWarehouseId())
+            ? directReplacementMovementLines(oldUnit, replacement, desired, catalog)
+            : sourceLocalReplacementMovementLines(
+                replacement, desired, requiredByUnit, catalog);
     return new OrderFurnitureMovementPlan(
         orderId, replacement.getId(), replacement.getNumber(), List.copyOf(lines));
   }
@@ -978,6 +1073,127 @@ public class OrderAssetService {
     return List.copyOf(lines);
   }
 
+  /**
+   * Reuses the ordinary warehouse-local furniture sources when a replacement cabin is at another
+   * warehouse. Furniture physically attached to the old cabin never teleports between warehouses;
+   * deficits and surplus are reconciled only at the replacement source.
+   */
+  private List<OrderFurnitureMovementPlanLine> sourceLocalReplacementMovementLines(
+      RentalItem replacement,
+      Map<UUID, Long> desired,
+      Map<UUID, Map<UUID, Long>> requiredByUnit,
+      Map<UUID, EquipmentCatalogItem> requestedCatalog) {
+    Map<UUID, Long> actual = rentalItemContents(replacement);
+    Set<UUID> equipmentIds = new java.util.LinkedHashSet<>();
+    equipmentIds.addAll(desired.keySet());
+    equipmentIds.addAll(actual.keySet());
+    Map<UUID, EquipmentCatalogItem> catalog = new LinkedHashMap<>(requestedCatalog);
+    catalog.putAll(catalogItems(equipmentIds));
+    List<OrderFurnitureMovementPlanLine> lines = new ArrayList<>();
+    for (UUID equipmentId : equipmentIds.stream().sorted().toList()) {
+      long desiredQuantity = desired.getOrDefault(equipmentId, 0L);
+      long actualQuantity = actual.getOrDefault(equipmentId, 0L);
+      if (desiredQuantity == actualQuantity) continue;
+      EquipmentCatalogItem equipment = catalog.get(equipmentId);
+      var totals = assets.equipmentTotals(equipmentId, replacement.getWarehouseId());
+      if (desiredQuantity > actualQuantity) {
+        long outstanding = Math.subtractExact(desiredQuantity, actualQuantity);
+        for (OrderSurplusSource source :
+            sameOrderSurplusSources(
+                totals.balances(), replacement.getId(), equipmentId, requiredByUnit)) {
+          if (outstanding == 0) break;
+          long quantity = Math.min(outstanding, source.availableQuantity());
+          if (quantity < 1) continue;
+          lines.add(
+              movementLine(
+                  equipment,
+                  source.balance(),
+                  replacement.getWarehouseId(),
+                  replacement.getId(),
+                  BalanceLocationKind.CABIN_NON_RENTED,
+                  quantity));
+          outstanding = Math.subtractExact(outstanding, quantity);
+        }
+        for (EquipmentBalanceResponse source :
+            eligibleSources(totals.balances(), replacement.getId())) {
+          if (outstanding == 0) break;
+          long quantity = Math.min(outstanding, source.availableStock());
+          if (quantity < 1) continue;
+          lines.add(
+              movementLine(
+                  equipment,
+                  source,
+                  replacement.getWarehouseId(),
+                  replacement.getId(),
+                  BalanceLocationKind.CABIN_NON_RENTED,
+                  quantity));
+          outstanding = Math.subtractExact(outstanding, quantity);
+        }
+        if (outstanding > 0) {
+          throw conflict(
+              "INSUFFICIENT_EQUIPMENT_SOURCE",
+              "Не удалось подобрать мебель на складе заменяющей бытовки");
+        }
+      } else {
+        EquipmentBalanceResponse source =
+            totals.balances().stream()
+                .filter(
+                    balance ->
+                        replacement.getId().equals(balance.rentalItemId())
+                            && balance.locationKind() == BalanceLocationKind.CABIN_NON_RENTED)
+                .findFirst()
+                .orElseThrow(
+                    () ->
+                        conflict(
+                            "EQUIPMENT_QUANTITY_CONFLICT",
+                            "Фактическое наполнение заменяющей бытовки изменилось"));
+        lines.add(
+            movementLine(
+                equipment,
+                source,
+                replacement.getWarehouseId(),
+                null,
+                BalanceLocationKind.STOCK,
+                Math.subtractExact(actualQuantity, desiredQuantity)));
+      }
+    }
+    return List.copyOf(lines);
+  }
+
+  /**
+   * Counts required furniture already attached to cross-source replacement cabins. Those cabins
+   * are still FREE while capacity is fenced, so the ordinary active-order capacity projection does
+   * not see them until the new unit reservation is persisted later in the same transaction.
+   */
+  private Map<SourceEquipmentKey, Long> transientReplacementPhysicalBySource(
+      Map<UUID, RentalItem> lockedItems,
+      List<OrderUnitReplacement> pairs,
+      Map<UUID, Map<UUID, Long>> requiredByUnit) {
+    Map<SourceEquipmentKey, Long> result = new LinkedHashMap<>();
+    for (OrderUnitReplacement pair : pairs) {
+      RentalItem oldUnit = lockedItems.get(pair.rentalItemId());
+      RentalItem replacement = lockedItems.get(pair.replacementRentalItemId());
+      if (oldUnit.getWarehouseId().equals(replacement.getWarehouseId())) {
+        continue;
+      }
+      Map<UUID, Long> actual = rentalItemContents(replacement);
+      requiredByUnit
+          .get(replacement.getId())
+          .forEach(
+              (equipmentId, requiredQuantity) -> {
+                long physical =
+                    Math.min(requiredQuantity, actual.getOrDefault(equipmentId, 0L));
+                if (physical > 0) {
+                  result.merge(
+                      new SourceEquipmentKey(replacement.getWarehouseId(), equipmentId),
+                      physical,
+                      Math::addExact);
+                }
+              });
+    }
+    return Map.copyOf(result);
+  }
+
   private Map<UUID, Long> rentalItemContents(RentalItem rentalItem) {
     return toOrderRentalItem(rentalItem).contents().stream()
         .filter(content -> content.quantity() > 0)
@@ -989,11 +1205,8 @@ public class OrderAssetService {
                 LinkedHashMap::new));
   }
 
-  private void assertRequestedUnitsBelongToOrder(
-      UUID orderId, UUID warehouseId, Set<UUID> requestedUnitIds) {
-    if (requestedUnitIds.isEmpty()) {
-      return;
-    }
+  private Map<UUID, UUID> activeUnitSources(
+      UUID orderId, Set<UUID> requestedUnitIds, String mismatchCode) {
     Map<UUID, OrderUnitReservation> active =
         reservations
             .findAllByOrderIdAndStateOrderByCreatedAtAscIdAsc(
@@ -1002,20 +1215,20 @@ public class OrderAssetService {
             .collect(Collectors.toMap(OrderUnitReservation::getRentalItemId, Function.identity()));
     if (!active.keySet().equals(requestedUnitIds)) {
       throw conflict(
-          "ORDER_UNIT_RESERVATION_MISMATCH",
+          mismatchCode,
           "Состав бытовок заказа изменился, обновите мебель и повторите действие");
     }
+    Map<UUID, UUID> result = new LinkedHashMap<>();
     for (UUID rentalItemId : requestedUnitIds) {
       OrderUnitReservation reservation = active.get(rentalItemId);
       if (reservation == null) {
         throw conflict(
-            "ORDER_UNIT_RESERVATION_MISMATCH",
+            mismatchCode,
             "Мебель можно назначить только забронированной бытовке заказа");
       }
-      if (!warehouseId.equals(reservation.getWarehouseId())) {
-        throw conflict("ORDER_WAREHOUSE_MISMATCH", "Бытовка относится к другому складу");
-      }
+      result.put(rentalItemId, reservation.getWarehouseId());
     }
+    return Map.copyOf(result);
   }
 
   private static void assertMaximumPerCabin(
@@ -1034,15 +1247,24 @@ public class OrderAssetService {
   }
 
   private void assertOrderReservations(
-      UUID orderId, UUID warehouseId, Map<UUID, Long> expectedRequirements) {
+      UUID orderId,
+      Map<UUID, Map<UUID, Long>> requiredByUnit,
+      Map<UUID, UUID> sourceByUnit) {
+    Map<SourceEquipmentKey, Long> expectedRequirements =
+        aggregateRequirementsBySource(requiredByUnit, sourceByUnit);
+    for (SourceEquipmentKey key : expectedRequirements.keySet().stream().sorted().toList()) {
+      equipmentReservations.acquireTransactionLock(
+          "order-equipment:" + key.warehouseId() + ":" + key.equipmentId());
+    }
     List<OrderEquipmentReservation> active =
         equipmentReservations.findAllActiveForUpdate(orderId, OrderEquipmentReservationState.ACTIVE);
-    Map<UUID, Long> actualRequirements = new LinkedHashMap<>();
+    Map<SourceEquipmentKey, Long> actualRequirements = new LinkedHashMap<>();
     for (OrderEquipmentReservation reservation : active) {
-      if (!warehouseId.equals(reservation.getWarehouseId())) {
-        throw conflict("ORDER_RESERVATION_MISMATCH", "Резерв мебели относится к другому складу");
+      SourceEquipmentKey key =
+          new SourceEquipmentKey(reservation.getWarehouseId(), reservation.getEquipmentId());
+      if (actualRequirements.putIfAbsent(key, reservation.getQuantity()) != null) {
+        throw new IllegalStateException("Duplicate active source equipment reservation");
       }
-      actualRequirements.put(reservation.getEquipmentId(), reservation.getQuantity());
     }
     if (!actualRequirements.equals(expectedRequirements)) {
       throw conflict(
@@ -1217,6 +1439,27 @@ public class OrderAssetService {
     return result;
   }
 
+  private static Map<SourceEquipmentKey, Long> aggregateRequirementsBySource(
+      Map<UUID, Map<UUID, Long>> requiredByUnit, Map<UUID, UUID> sourceByUnit) {
+    if (!requiredByUnit.keySet().equals(sourceByUnit.keySet())) {
+      throw conflict(
+          "ORDER_UNIT_RESERVATION_MISMATCH",
+          "Состав бытовок и их складов изменился, обновите мебель и повторите действие");
+    }
+    Map<SourceEquipmentKey, Long> result = new LinkedHashMap<>();
+    requiredByUnit.forEach(
+        (unitId, requirements) -> {
+          UUID warehouseId = Objects.requireNonNull(sourceByUnit.get(unitId), "warehouseId");
+          requirements.forEach(
+              (equipmentId, quantity) ->
+                  result.merge(
+                      new SourceEquipmentKey(warehouseId, equipmentId),
+                      quantity,
+                      Math::addExact));
+        });
+    return result;
+  }
+
   private OrderUnitReservationView view(OrderUnitReservation reservation, boolean replayed) {
     RentalItem item =
         rentalItems
@@ -1337,4 +1580,19 @@ public class OrderAssetService {
   /** One active same-order cabin balance and its unheld physical surplus over desired content. */
   private record OrderSurplusSource(
       EquipmentBalanceResponse balance, long availableQuantity) {}
+
+  /** Composite identity of one active order furniture allocation at one physical source. */
+  private record SourceEquipmentKey(UUID warehouseId, UUID equipmentId)
+      implements Comparable<SourceEquipmentKey> {
+    private SourceEquipmentKey {
+      Objects.requireNonNull(warehouseId, "warehouseId");
+      Objects.requireNonNull(equipmentId, "equipmentId");
+    }
+
+    @Override
+    public int compareTo(SourceEquipmentKey other) {
+      int warehouse = warehouseId.compareTo(other.warehouseId);
+      return warehouse == 0 ? equipmentId.compareTo(other.equipmentId) : warehouse;
+    }
+  }
 }

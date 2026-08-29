@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.logistics.service;
 
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentSummary;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentView;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferPlanView;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
@@ -24,6 +25,7 @@ class LogisticsDocumentReadProjection {
   private final LogisticsDocumentRepository documentRepository;
   private final LogisticsDocumentLineRepository lineRepository;
   private final LogisticsDocumentResponseMapper responseMapper;
+  private final TransferPlanService transferPlanning;
 
   LogisticsDocumentView view(LogisticsDocument document) {
     LogisticsDocumentSummary summary = responseMapper.toSummary(document);
@@ -63,6 +65,17 @@ class LogisticsDocumentReadProjection {
         lineRepository.findAllByDocument_IdOrderByLineNumber(documentId);
     if (lines.isEmpty()) throw new IllegalStateException("Logistics document has no lines");
     return lines;
+  }
+
+  List<LogisticsDocumentLine> lines(UUID documentId) {
+    return lineRepository.findAllByDocument_IdOrderByLineNumber(documentId);
+  }
+
+  /** Returns planned transfer requirements or a compatible view for a pre-planning transfer. */
+  TransferPlanView transferPlan(UUID documentId) {
+    LogisticsDocument document = document(documentId, LogisticsDocumentType.TRANSFER);
+    List<LogisticsDocumentLine> lines = lines(documentId);
+    return transferPlanning.view(document, lines.size());
   }
 
   LogisticsDocumentLine transferLine(LogisticsDocument document, UUID lineId) {

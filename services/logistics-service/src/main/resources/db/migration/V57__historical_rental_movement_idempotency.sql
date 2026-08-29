@@ -25,11 +25,3 @@ ALTER TABLE public.logistics_idempotency_record
       'RECONCILE_DOCUMENT'
     )
   );
-
--- Historical creates need an immutable lost-response receipt because their normal document saga
--- may advance before the client retries. Older command families keep their existing nullable shape.
-ALTER TABLE public.logistics_idempotency_record
-  ADD COLUMN response_json jsonb,
-  ADD CONSTRAINT ck_logistics_idempotency_response_json CHECK (
-    response_json IS NULL OR jsonb_typeof(response_json) = 'object'
-  );

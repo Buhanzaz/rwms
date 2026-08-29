@@ -4,10 +4,12 @@ import static dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway
 import static dev.buhanzaz.rwms.logistics.integration.LogisticsOAuthHttpTransport.FailurePolicy.DEFAULT;
 import static dev.buhanzaz.rwms.logistics.integration.LogisticsOAuthHttpTransport.malformed;
 
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskWorkerContent;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.core.ParameterizedTypeReference;
 
 /**
  * Private task-board client for equipment movement and driver-board logistics tasks.
@@ -25,6 +27,7 @@ final class LogisticsTaskBoardDependencyClient {
   private final String taskBoardTaskBase;
   private final String taskBoardDriverBase;
   private final String taskBoardDriverTaskBase;
+  private final String taskBoardOperationalAssignmentBase;
 
   LogisticsTaskBoardDependencyClient(LogisticsOAuthHttpTransport transport, String taskBoardBase) {
     this.transport = transport;
@@ -34,6 +37,178 @@ final class LogisticsTaskBoardDependencyClient {
     taskBoardTaskBase = taskBoardBase + "/api/internal/task-board/v1/tasks";
     taskBoardDriverBase = taskBoardBase + "/api/internal/task-board/v1/logistics/warehouses";
     taskBoardDriverTaskBase = taskBoardBase + "/api/internal/task-board/v1/logistics/tasks";
+    taskBoardOperationalAssignmentBase =
+        taskBoardBase + "/api/internal/task-board/v1/logistics/operational-assignments";
+  }
+
+  List<WarehouseDriverIdentity> listWarehouseDrivers(UUID warehouseId) {
+    return listWarehouseDrivers(warehouseId, null, false);
+  }
+
+  List<WarehouseDriverIdentity> listWarehouseDrivers(
+      UUID warehouseId, OffsetDateTime at, boolean includeIncoming) {
+    if (warehouseId == null) {
+      throw new IllegalArgumentException("Warehouse driver directory identity is required");
+    }
+    StringBuilder path =
+        new StringBuilder(taskBoardDriverBase)
+            .append("/")
+            .append(warehouseId)
+            .append("/drivers?includeIncoming=")
+            .append(includeIncoming);
+    if (at != null) path.append("&at=").append(at.toInstant());
+    List<WarehouseDriverIdentityResponse> response =
+        transport.getList(
+            path.toString(),
+            new ParameterizedTypeReference<>() {},
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE,
+            "Task-board returned an empty driver directory",
+            DEFAULT);
+    if (response.stream()
+            .anyMatch(value -> invalidDriverIdentity(value, warehouseId, includeIncoming))
+        || response.stream().map(WarehouseDriverIdentityResponse::workerId).distinct().count()
+            != response.size()) {
+      throw malformed("Task-board returned an invalid warehouse driver directory");
+    }
+    return response.stream()
+        .map(
+            value ->
+                new WarehouseDriverIdentity(
+                    value.workerId(),
+                    value.displayName().trim(),
+                    value.employmentType(),
+                    normalize(value.phone()),
+                    value.operationalWarehouseId(),
+                    value.availableFrom(),
+                    value.availableUntil(),
+                    value.availabilityKind()))
+        .toList();
+  }
+
+  WorkerOperationalAssignment createWorkerOperationalAssignment(
+      UUID transferId,
+      UUID workerId,
+      UUID sourceWarehouseId,
+      UUID destinationWarehouseId,
+      String mode,
+      OffsetDateTime travelStartsAt,
+      OffsetDateTime effectiveFrom,
+      OffsetDateTime effectiveUntil) {
+    WorkerOperationalAssignmentResponse response =
+        transport.postWithoutIdempotency(
+            taskBoardOperationalAssignmentBase,
+            new CreateWorkerOperationalAssignmentRequest(
+                transferId,
+                workerId,
+                sourceWarehouseId,
+                destinationWarehouseId,
+                mode,
+                travelStartsAt,
+                effectiveFrom,
+                effectiveUntil),
+            WorkerOperationalAssignmentResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE,
+            "Task-board returned an empty operational driver assignment",
+            DEFAULT);
+    return operationalAssignment(response);
+  }
+
+  WorkerOperationalAssignment transitionWorkerOperationalAssignment(
+      UUID assignmentId, long expectedVersion, String targetStatus) {
+    WorkerOperationalAssignmentResponse response =
+        transport.postWithoutIdempotency(
+            taskBoardOperationalAssignmentBase + "/" + assignmentId + "/transition",
+            new TransitionWorkerOperationalAssignmentRequest(expectedVersion, targetStatus),
+            WorkerOperationalAssignmentResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE,
+            "Task-board returned an empty operational driver assignment transition",
+            DEFAULT);
+    WorkerOperationalAssignment assignment = operationalAssignment(response);
+    if (!assignmentId.equals(assignment.assignmentId())
+        || assignment.version() < expectedVersion
+        || !targetStatus.equals(assignment.status())) {
+      throw malformed("Task-board returned a mismatched operational assignment transition");
+    }
+    return assignment;
+  }
+
+  private static boolean invalidDriverIdentity(
+      WarehouseDriverIdentityResponse value, UUID warehouseId, boolean includeIncoming) {
+    return value == null
+        || value.workerId() == null
+        || value.displayName() == null
+        || value.displayName().isBlank()
+        || value.displayName().length() > 256
+        || !("STAFF".equals(value.employmentType())
+            || "CONTRACTOR".equals(value.employmentType()))
+        || value.operationalWarehouseId() == null
+        || !warehouseId.equals(value.operationalWarehouseId())
+        || !("HOME".equals(value.availabilityKind())
+            || "ACTIVE_ASSIGNMENT".equals(value.availabilityKind())
+            || "INCOMING".equals(value.availabilityKind()))
+        || (!includeIncoming && "INCOMING".equals(value.availabilityKind()))
+        || (value.availableFrom() != null
+            && value.availableUntil() != null
+            && !value.availableFrom().isBefore(value.availableUntil()))
+        || ("CONTRACTOR".equals(value.employmentType())
+            && (value.phone() == null
+                || value.phone().isBlank()
+                || value.availableFrom() == null
+                || value.availableUntil() == null));
+  }
+
+  private static String normalize(String value) {
+    if (value == null) return null;
+    String result = value.trim();
+    return result.isEmpty() ? null : result;
+  }
+
+  private static WorkerOperationalAssignment operationalAssignment(
+      WorkerOperationalAssignmentResponse response) {
+    if (response == null
+        || response.id() == null
+        || response.version() < 0
+        || response.transferId() == null
+        || response.workerId() == null
+        || response.homeWarehouseId() == null
+        || response.sourceWarehouseId() == null
+        || response.destinationWarehouseId() == null
+        || response.sourceWarehouseId().equals(response.destinationWarehouseId())
+        || !("TEMPORARY".equals(response.mode())
+            || "PERMANENT".equals(response.mode())
+            || "TRIP_ONLY".equals(response.mode()))
+        || !("PLANNED".equals(response.status())
+            || "IN_TRANSIT".equals(response.status())
+            || "ACTIVE".equals(response.status())
+            || "COMPLETED".equals(response.status())
+            || "CANCELLED".equals(response.status()))
+        || response.travelStartsAt() == null
+        || response.effectiveFrom() == null
+        || !response.travelStartsAt().isBefore(response.effectiveFrom())
+        || ("TEMPORARY".equals(response.mode())
+            && (response.effectiveUntil() == null
+                || !response.effectiveUntil().isAfter(response.effectiveFrom())))
+        || ("PERMANENT".equals(response.mode()) && response.effectiveUntil() != null)
+        || ("TRIP_ONLY".equals(response.mode())
+            && !response.effectiveFrom().equals(response.effectiveUntil()))) {
+      throw malformed("Task-board returned an invalid operational driver assignment");
+    }
+    return new WorkerOperationalAssignment(
+        response.id(),
+        response.version(),
+        response.transferId(),
+        response.workerId(),
+        response.homeWarehouseId(),
+        response.sourceWarehouseId(),
+        response.destinationWarehouseId(),
+        response.mode(),
+        response.status(),
+        response.travelStartsAt(),
+        response.effectiveFrom(),
+        response.effectiveUntil());
   }
 
   EquipmentMovementBoardTask registerEquipmentMovementTask(
@@ -139,6 +314,34 @@ final class LogisticsTaskBoardDependencyClient {
       LocalDate scheduledDate,
       int priority,
       DriverTaskAudience driverAudience) {
+    return registerDriverTask(
+        warehouseId,
+        externalTaskId,
+        sourceId,
+        title,
+        unitNumber,
+        description,
+        queueDefinitionId,
+        scheduledDate,
+        priority,
+        driverAudience,
+        DriverTaskWorkerContent.empty());
+  }
+
+  DriverBoardTask registerDriverTask(
+      UUID warehouseId,
+      UUID externalTaskId,
+      UUID sourceId,
+      String title,
+      String unitNumber,
+      String description,
+      UUID queueDefinitionId,
+      LocalDate scheduledDate,
+      int priority,
+      DriverTaskAudience driverAudience,
+      DriverTaskWorkerContent workerContent) {
+    DriverTaskWorkerContent content =
+        workerContent == null ? DriverTaskWorkerContent.empty() : workerContent;
     DriverBoardTaskResponse response =
         transport.postWithoutIdempotency(
             taskBoardTaskBase,
@@ -150,7 +353,7 @@ final class LogisticsTaskBoardDependencyClient {
                 description,
                 null,
                 null,
-                List.of(new DriverRouteStepRequest(queueDefinitionId, description, null)),
+                List.of(routeStep(queueDefinitionId, description, content)),
                 scheduledDate,
                 priority,
                 new DriverTaskSourceRequest("LOGISTICS_DRIVER_TASK", sourceId),
@@ -162,6 +365,41 @@ final class LogisticsTaskBoardDependencyClient {
             "Dependency returned an empty response",
             DEFAULT);
     return driverBoardTask(response);
+  }
+
+  DriverBoardTask updateDriverTaskBeforeStart(
+      UUID externalTaskId,
+      long expectedTaskVersion,
+      String title,
+      String unitNumber,
+      String description,
+      UUID queueDefinitionId,
+      DriverTaskWorkerContent workerContent) {
+    if (externalTaskId == null
+        || expectedTaskVersion < 0
+        || title == null
+        || title.isBlank()
+        || queueDefinitionId == null) {
+      throw new IllegalArgumentException("Invalid pre-start driver task update");
+    }
+    DriverTaskWorkerContent content =
+        workerContent == null ? DriverTaskWorkerContent.empty() : workerContent;
+    return driverBoardTask(
+        transport.putWithoutIdempotency(
+            taskBoardTaskBase + "/" + externalTaskId,
+            new PreStartUpdateDriverTaskRequest(
+                expectedTaskVersion,
+                title,
+                unitNumber,
+                description,
+                null,
+                null,
+                List.of(routeStep(queueDefinitionId, description, content))),
+            DriverBoardTaskResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE,
+            "Dependency returned an empty response",
+            DEFAULT));
   }
 
   DriverBoardTask readDriverTask(UUID externalTaskId) {
@@ -505,6 +743,51 @@ final class LogisticsTaskBoardDependencyClient {
   /** Optimistically fenced driver-task cancellation command with an auditable reason. */
   private record CancelDriverTaskRequest(long expectedTaskVersion, String reason) {}
 
+  /** Least-privilege task-board directory response for one qualified worker. */
+  private record WarehouseDriverIdentityResponse(
+      UUID workerId,
+      String displayName,
+      String employmentType,
+      String phone,
+      UUID operationalWarehouseId,
+      OffsetDateTime availableFrom,
+      OffsetDateTime availableUntil,
+      String availabilityKind) {}
+
+  /** Transfer-backed driver placement creation payload. */
+  private record CreateWorkerOperationalAssignmentRequest(
+      UUID transferId,
+      UUID workerId,
+      UUID sourceWarehouseId,
+      UUID destinationWarehouseId,
+      String mode,
+      OffsetDateTime travelStartsAt,
+      OffsetDateTime effectiveFrom,
+      OffsetDateTime effectiveUntil) {}
+
+  /** Expected-version operational placement lifecycle payload. */
+  private record TransitionWorkerOperationalAssignmentRequest(
+      long expectedVersion, String targetStatus) {}
+
+  /** Authoritative task-board operational assignment wire response. */
+  private record WorkerOperationalAssignmentResponse(
+      UUID id,
+      long version,
+      UUID transferId,
+      UUID workerId,
+      UUID homeWarehouseId,
+      UUID sourceWarehouseId,
+      UUID destinationWarehouseId,
+      String mode,
+      String status,
+      OffsetDateTime travelStartsAt,
+      OffsetDateTime effectiveFrom,
+      OffsetDateTime effectiveUntil,
+      OffsetDateTime createdAt,
+      OffsetDateTime updatedAt,
+      String createdBy,
+      String updatedBy) {}
+
   /** Authoritative task-board result after a driver task is cancelled. */
   private record CancelDriverTaskResponse(
       UUID taskId,
@@ -550,9 +833,33 @@ final class LogisticsTaskBoardDependencyClient {
   /** Planned task audience echoed by task-board. */
   private record DriverTaskAudienceResponse(String mode, UUID workerId, String workerName) {}
 
-  /** Desired task-board route step with queue, text, and planned effort. */
+  /** Sanitized immutable work snapshot sent through task-board to WorkerApp. */
+  private record DriverWorkSnapshotRequest(
+      UUID id,
+      String name,
+      double quantity,
+      String unit,
+      Integer durationMinutes,
+      String comment,
+      List<UUID> sourceMediaIds) {}
+
+  /** Sanitized immutable material snapshot sent through task-board to WorkerApp. */
+  private record DriverMaterialSnapshotRequest(
+      UUID id, String name, double quantity, String unit) {}
+
+  /** Sanitized immutable worker-visible logistics comment. */
+  private record DriverCommentSnapshotRequest(
+      UUID id, String text, String authorDisplayName, OffsetDateTime createdAt) {}
+
+  /** Desired task-board route step with queue, text, planned effort, and worker content. */
   private record DriverRouteStepRequest(
-      UUID queueDefinitionId, String taskText, Integer plannedDurationMinutes) {}
+      UUID queueDefinitionId,
+      String taskText,
+      Integer plannedDurationMinutes,
+      List<DriverWorkSnapshotRequest> works,
+      List<DriverMaterialSnapshotRequest> materials,
+      List<DriverCommentSnapshotRequest> comments,
+      List<Object> sourceMedia) {}
 
   /**
    * Complete driver-task registration command carrying scheduling, route, source, lane, and
@@ -572,6 +879,16 @@ final class LogisticsTaskBoardDependencyClient {
       DriverTaskSourceRequest source,
       String lane,
       DriverTaskAudienceRequest driverAudience) {}
+
+  /** Complete source-owned route replacement accepted only before driver execution begins. */
+  private record PreStartUpdateDriverTaskRequest(
+      long expectedTaskVersion,
+      String title,
+      String unitNumber,
+      String description,
+      Integer plannedDurationMinutes,
+      OffsetDateTime deadlineAt,
+      List<DriverRouteStepRequest> route) {}
 
   /** Version-fenced command changing only a driver task's operational lane. */
   private record SetDriverTaskLaneRequest(long expectedTaskVersion, String lane) {}
@@ -662,6 +979,46 @@ final class LogisticsTaskBoardDependencyClient {
       LocalDate targetDate,
       int targetIndex,
       DriverTaskAudienceRequest targetDriverAudience) {}
+
+  private static DriverRouteStepRequest routeStep(
+      UUID queueDefinitionId, String fallbackTaskText, DriverTaskWorkerContent content) {
+    String taskText = content.taskText() == null ? fallbackTaskText : content.taskText();
+    return new DriverRouteStepRequest(
+        queueDefinitionId,
+        taskText,
+        null,
+        content.works().stream()
+            .map(
+                work ->
+                    new DriverWorkSnapshotRequest(
+                        work.id(),
+                        work.name(),
+                        work.quantity(),
+                        work.unit(),
+                        work.durationMinutes(),
+                        work.comment(),
+                        List.of()))
+            .toList(),
+        content.materials().stream()
+            .map(
+                material ->
+                    new DriverMaterialSnapshotRequest(
+                        material.id(),
+                        material.name(),
+                        material.quantity(),
+                        material.unit()))
+            .toList(),
+        content.comments().stream()
+            .map(
+                comment ->
+                    new DriverCommentSnapshotRequest(
+                        comment.id(),
+                        comment.text(),
+                        comment.authorDisplayName(),
+                        comment.createdAt()))
+            .toList(),
+        List.of());
+  }
 
   private static DriverTaskAudienceRequest audienceRequest(DriverTaskAudience audience) {
     if (audience == null || audience.mode() == null) {

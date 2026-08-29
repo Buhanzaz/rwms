@@ -44,7 +44,7 @@ class WarehouseFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndOwnsOnlyWarehouseOutboxAndIdempotencyData() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(6);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(8);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -59,6 +59,10 @@ class WarehouseFlywayMigrationIntegrationTest {
             "warehouse_operation_mark",
             "warehouse_operation_state",
             "warehouse_outbox_recovery_audit",
+            "warehouse_support_link",
+            "warehouse_support_link_allowed_date",
+            "warehouse_support_link_excluded_date",
+            "warehouse_support_link_weekday",
             "warehouse_time_zone_history");
     assertThat(toRegclass("domain_event")).isNull();
     assertThat(toRegclass("aggregate_snapshot")).isNull();
@@ -71,19 +75,24 @@ class WarehouseFlywayMigrationIntegrationTest {
     assertThat(columnExists("warehouse", "time_zone_revision")).isTrue();
     assertThat(columnExists("warehouse", "lifecycle_state")).isTrue();
     assertThat(columnExists("warehouse", "lifecycle_revision")).isTrue();
+    assertThat(columnExists("warehouse", "representative")).isTrue();
+    assertThat(columnExists("warehouse", "latitude")).isTrue();
+    assertThat(columnExists("warehouse", "longitude")).isTrue();
+    assertThat(columnExists("warehouse", "support_link_revision")).isTrue();
     assertThat(columnExists("outbox_event", "review_version")).isTrue();
     assertThat(
             jdbc.queryForList(
                 """
                 select id::text || '|' || name || '|' || normalized_name || '|' || city || '|'
                        || coalesce(address, '<null>') || '|' || time_zone || '|' || active::text
-                       || '|' || coalesce(sort_order::text, '<null>')
+                       || '|' || coalesce(sort_order::text, '<null>') || '|'
+                       || representative::text
                   from warehouse order by id
                 """,
                 String.class))
         .containsExactly(
-            "00000000-0000-0000-0000-000000000001|СПБ|спб|Санкт-Петербург|<null>|Europe/Moscow|true|<null>",
-            "00000000-0000-0000-0000-000000000002|Москва|москва|Москва|<null>|Europe/Moscow|true|<null>");
+            "00000000-0000-0000-0000-000000000001|СПБ|спб|Санкт-Петербург|<null>|Europe/Moscow|true|<null>|false",
+            "00000000-0000-0000-0000-000000000002|Москва|москва|Москва|<null>|Europe/Moscow|true|<null>|false");
     assertThat(
             jdbc.queryForList(
                 "select lifecycle_state from warehouse order by id", String.class))
@@ -181,6 +190,174 @@ class WarehouseFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void versionSevenBackfillsExistingWarehousesAndDurableCreateReplays() {
+    Flyway throughVersionSix = configuration(MIGRATIONS).target("6").load();
+    assertThat(throughVersionSix.migrate().migrationsExecuted).isEqualTo(6);
+    assertThat(columnExists("warehouse", "representative")).isFalse();
+    UUID warehouseId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+    UUID subjectId = UUID.randomUUID();
+    UUID idempotencyKey = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into idempotency_record(
+          subject_id,idempotency_key,request_sha256,response_status,response_body,warehouse_id,
+          created_at,expires_at)
+        values (?,?,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',201,
+          jsonb_build_object('id', ?::text),?,clock_timestamp(),clock_timestamp()+interval '1 hour')
+        """,
+        subjectId,
+        idempotencyKey,
+        warehouseId,
+        warehouseId);
+
+    Flyway current = configuration(MIGRATIONS).target("7").load();
+    assertThat(current.migrate().migrationsExecuted).isOne();
+    current.validate();
+
+    assertThat(
+            jdbc.queryForList(
+                "select representative from warehouse order by id", Boolean.class))
+        .containsExactly(false, false);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select is_nullable || '|' || column_default
+                  from information_schema.columns
+                 where table_schema='public' and table_name='warehouse'
+                   and column_name='representative'
+                """,
+                String.class))
+        .isEqualTo("NO|false");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select response_body->>'representative'
+                  from idempotency_record
+                 where subject_id=? and idempotency_key=?
+                """,
+                String.class,
+                subjectId,
+                idempotencyKey))
+        .isEqualTo("false");
+  }
+
+  @Test
+  void versionEightAddsNullableCoordinatePairsAndConstrainedDirectedSupportLinks() {
+    Flyway throughVersionSeven = configuration(MIGRATIONS).target("7").load();
+    assertThat(throughVersionSeven.migrate().migrationsExecuted).isEqualTo(7);
+    UUID replayWarehouse = UUID.fromString("00000000-0000-0000-0000-000000000001");
+    UUID subjectId = UUID.randomUUID();
+    UUID idempotencyKey = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into idempotency_record(
+          subject_id,idempotency_key,request_sha256,response_status,response_body,warehouse_id,
+          created_at,expires_at)
+        values (?,?,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',201,
+          jsonb_build_object('id', ?::text),?,clock_timestamp(),clock_timestamp()+interval '1 hour')
+        """,
+        subjectId,
+        idempotencyKey,
+        replayWarehouse,
+        replayWarehouse);
+
+    Flyway current = flyway(MIGRATIONS);
+    assertThat(current.migrate().migrationsExecuted).isOne();
+    current.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select jsonb_exists(response_body, 'latitude')
+                   and jsonb_exists(response_body, 'longitude')
+                  from idempotency_record
+                 where subject_id=? and idempotency_key=?
+                """,
+                Boolean.class,
+                subjectId,
+                idempotencyKey))
+        .isTrue();
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update warehouse set latitude=59.900000, longitude=null where id=?",
+                    replayWarehouse))
+        .isInstanceOf(DataIntegrityViolationException.class)
+        .hasMessageContaining("ck_warehouse_coordinate_pair");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update warehouse set latitude=91.000000, longitude=30.000000 where id=?",
+                    replayWarehouse))
+        .isInstanceOf(DataIntegrityViolationException.class)
+        .hasMessageContaining("ck_warehouse_latitude");
+
+    UUID servedWarehouse = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into warehouse(
+          id,version,name,normalized_name,city,address,latitude,longitude,time_zone,
+          lifecycle_state,lifecycle_revision,time_zone_revision,active,representative,
+          support_link_revision,sort_order,created_at,updated_at)
+        values (?,0,'Regional','regional','Regional',null,58.500000,31.200000,'Europe/Moscow',
+          'ACTIVE',0,0,true,true,0,null,clock_timestamp(),clock_timestamp())
+        """,
+        servedWarehouse);
+    UUID linkId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into warehouse_support_link(
+          id,version,support_warehouse_id,served_warehouse_id,active,priority,
+          allow_drivers,allow_vehicles,allow_inventory,allow_direct_fulfillment,
+          allow_interwarehouse_transfer,allow_contractor_fallback,service_start,service_end,
+          created_at,updated_at)
+        values (?,0,?,?,true,1,true,true,true,true,true,true,'08:00','18:00',
+          clock_timestamp(),clock_timestamp())
+        """,
+        linkId,
+        replayWarehouse,
+        servedWarehouse);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    insert into warehouse_support_link(
+                      id,version,support_warehouse_id,served_warehouse_id,active,priority,
+                      allow_drivers,allow_vehicles,allow_inventory,allow_direct_fulfillment,
+                      allow_interwarehouse_transfer,allow_contractor_fallback,created_at,updated_at)
+                    values (?,0,?,?,true,1,true,true,true,true,true,true,
+                      clock_timestamp(),clock_timestamp())
+                    """,
+                    UUID.randomUUID(),
+                    replayWarehouse,
+                    servedWarehouse))
+        .isInstanceOf(DataIntegrityViolationException.class)
+        .hasMessageContaining("uk_warehouse_support_link_direction");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    insert into warehouse_support_link(
+                      id,version,support_warehouse_id,served_warehouse_id,active,priority,
+                      allow_drivers,allow_vehicles,allow_inventory,allow_direct_fulfillment,
+                      allow_interwarehouse_transfer,allow_contractor_fallback,created_at,updated_at)
+                    values (?,0,?,?,true,1,true,true,true,true,true,true,
+                      clock_timestamp(),clock_timestamp())
+                    """,
+                    UUID.randomUUID(),
+                    servedWarehouse,
+                    servedWarehouse))
+        .isInstanceOf(DataIntegrityViolationException.class)
+        .hasMessageContaining("ck_warehouse_support_link_direction");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update warehouse set representative=false where id=?", servedWarehouse))
+        .isInstanceOf(RuntimeException.class)
+        .hasMessageContaining("remove warehouse support links");
+  }
+
+  @Test
   void versionTwoSanitizesHistoricalOutboxAndIdempotencyBodiesBeforeDroppingCode() {
     Flyway versionOne = configuration(MIGRATIONS).target("1").load();
     assertThat(versionOne.migrate().migrationsExecuted).isOne();
@@ -229,7 +406,7 @@ class WarehouseFlywayMigrationIntegrationTest {
         warehouseId);
 
     Flyway versionTwo = flyway(MIGRATIONS);
-    assertThat(versionTwo.migrate().migrationsExecuted).isEqualTo(5);
+    assertThat(versionTwo.migrate().migrationsExecuted).isEqualTo(7);
     versionTwo.validate();
 
     assertThat(columnExists("warehouse", "code")).isFalse();
@@ -249,6 +426,13 @@ class WarehouseFlywayMigrationIntegrationTest {
                 subjectId,
                 idempotencyKey))
         .isEqualTo("ACTIVE");
+    assertThat(
+            jdbc.queryForObject(
+                "select response_body->>'representative' from idempotency_record where subject_id=? and idempotency_key=?",
+                String.class,
+                subjectId,
+                idempotencyKey))
+        .isEqualTo("false");
     assertThat(jdbc.queryForObject(
         """
         select envelope_sha256=encode(sha256(convert_to(envelope_body::text,'UTF8')),'hex')

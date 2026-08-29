@@ -128,6 +128,9 @@ rwms:
       relay-enabled: ${LOGISTICS_TRANSFER_RELAY_ENABLED:true}
       relay-delay: ${LOGISTICS_TRANSFER_RELAY_DELAY:1s}
       relay-initial-delay: ${LOGISTICS_TRANSFER_RELAY_INITIAL_DELAY:1s}
+      plan-workflow:
+        reservation-grace: ${LOGISTICS_TRANSFER_RESERVATION_GRACE:24h}
+        resource-arrival-buffer: ${LOGISTICS_TRANSFER_RESOURCE_ARRIVAL_BUFFER:40m}
     owner-proof:
       relay-enabled: ${LOGISTICS_OWNER_PROOF_RELAY_ENABLED:true}
       relay-delay: ${LOGISTICS_OWNER_PROOF_RELAY_DELAY:1s}
@@ -178,24 +181,37 @@ rwms:
         valhalla-base-url: ${LOGISTICS_CUSTOMER_VALHALLA_URL:http://127.0.0.1:8002}
         connect-timeout: ${LOGISTICS_CUSTOMER_VALHALLA_CONNECT_TIMEOUT:2s}
         read-timeout: ${LOGISTICS_CUSTOMER_VALHALLA_READ_TIMEOUT:10s}
-        driver-count: ${LOGISTICS_CUSTOMER_DRIVER_COUNT:2}
-        truck-cabin-capacity: ${LOGISTICS_CUSTOMER_TRUCK_CABIN_CAPACITY:2}
         depot-reload-minutes: ${LOGISTICS_CUSTOMER_DEPOT_RELOAD_MINUTES:30}
-        workday-start: ${LOGISTICS_CUSTOMER_WORKDAY_START:09:00}
-        workday-end: ${LOGISTICS_CUSTOMER_WORKDAY_END:18:00}
-        max-overtime: ${LOGISTICS_CUSTOMER_MAX_OVERTIME:2h}
-        max-travel-zone-hours: ${LOGISTICS_CUSTOMER_MAX_TRAVEL_ZONE_HOURS:4}
-        service-minutes: ${LOGISTICS_CUSTOMER_SERVICE_MINUTES:30}
+        service-minutes: ${LOGISTICS_CUSTOMER_SERVICE_MINUTES:60}
         earliest-delivery-days: ${LOGISTICS_CUSTOMER_EARLIEST_DELIVERY_DAYS:2}
         booking-horizon-days: ${LOGISTICS_CUSTOMER_BOOKING_HORIZON_DAYS:14}
         offer-lifetime: ${LOGISTICS_CUSTOMER_OFFER_LIFETIME:10m}
-        hold-lifetime: ${LOGISTICS_CUSTOMER_HOLD_LIFETIME:15m}
+        hold-lifetime: ${LOGISTICS_CUSTOMER_HOLD_LIFETIME:10m}
+        travel-time-multiplier: ${LOGISTICS_CUSTOMER_TRAVEL_TIME_MULTIPLIER:1.15}
+        fixed-travel-buffer-minutes: ${LOGISTICS_CUSTOMER_FIXED_TRAVEL_BUFFER_MINUTES:5}
+        driver-work-start: ${LOGISTICS_CUSTOMER_DRIVER_WORK_START:08:00}
+        customer-delivery-start: ${LOGISTICS_CUSTOMER_DELIVERY_START:09:00}
+        customer-delivery-end: ${LOGISTICS_CUSTOMER_DELIVERY_END:18:00}
+        driver-shift-end: ${LOGISTICS_CUSTOMER_DRIVER_SHIFT_END:20:00}
+        delivery-slot-minutes: ${LOGISTICS_CUSTOMER_DELIVERY_SLOT_MINUTES:180}
+        pickup-service-minutes: ${LOGISTICS_CUSTOMER_PICKUP_SERVICE_MINUTES:60}
+        warehouse-load-one-minutes: ${LOGISTICS_CUSTOMER_WAREHOUSE_LOAD_ONE_MINUTES:30}
+        warehouse-load-two-minutes: ${LOGISTICS_CUSTOMER_WAREHOUSE_LOAD_TWO_MINUTES:45}
+        warehouse-unload-minutes: ${LOGISTICS_CUSTOMER_WAREHOUSE_UNLOAD_MINUTES:30}
+        delivery-window-semantics: ${LOGISTICS_CUSTOMER_DELIVERY_WINDOW_SEMANTICS:START_WITHIN_SLOT}
+        pickup-policy: ${LOGISTICS_CUSTOMER_PICKUP_POLICY:RETURN_LEG_ONLY}
+        solo-truck-height-meters: ${LOGISTICS_CUSTOMER_SOLO_TRUCK_HEIGHT_METERS:4.0}
+        solo-truck-width-meters: ${LOGISTICS_CUSTOMER_SOLO_TRUCK_WIDTH_METERS:2.55}
+        solo-truck-length-meters: ${LOGISTICS_CUSTOMER_SOLO_TRUCK_LENGTH_METERS:10.5}
+        solo-truck-weight-tons: ${LOGISTICS_CUSTOMER_SOLO_TRUCK_WEIGHT_TONS:12.0}
+        solo-truck-axle-load-tons: ${LOGISTICS_CUSTOMER_SOLO_TRUCK_AXLE_LOAD_TONS:11.5}
+        solo-truck-axle-count: ${LOGISTICS_CUSTOMER_SOLO_TRUCK_AXLE_COUNT:2}
         truck-height-meters: ${LOGISTICS_CUSTOMER_TRUCK_HEIGHT_METERS:4.0}
         truck-width-meters: ${LOGISTICS_CUSTOMER_TRUCK_WIDTH_METERS:2.55}
-        truck-length-meters: ${LOGISTICS_CUSTOMER_TRUCK_LENGTH_METERS:12.0}
+        truck-length-meters: ${LOGISTICS_CUSTOMER_TRUCK_LENGTH_METERS:18.1}
         truck-weight-tons: ${LOGISTICS_CUSTOMER_TRUCK_WEIGHT_TONS:18.0}
-        truck-axle-load-tons: ${LOGISTICS_CUSTOMER_TRUCK_AXLE_LOAD_TONS:10.0}
-        truck-axle-count: ${LOGISTICS_CUSTOMER_TRUCK_AXLE_COUNT:3}
+        truck-axle-load-tons: ${LOGISTICS_CUSTOMER_TRUCK_AXLE_LOAD_TONS:11.5}
+        truck-axle-count: ${LOGISTICS_CUSTOMER_TRUCK_AXLE_COUNT:4}
     rental-inquiry:
       outbox-enabled: ${LOGISTICS_RENTAL_INQUIRY_OUTBOX_ENABLED:true}
       outbox-delay: ${LOGISTICS_RENTAL_INQUIRY_OUTBOX_DELAY:1s}

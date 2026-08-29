@@ -72,9 +72,10 @@ public class CustomerRentalSessionStore {
       UUID inquiryId,
       UUID commandKey,
       String commandSha256,
-      String equipmentJson) {
+      String equipmentJson,
+      String rentalTermsJson) {
     CustomerRentalSession session = locked(subjectId, inquiryId);
-    session.completeSelection(commandKey, commandSha256, equipmentJson);
+    session.completeSelection(commandKey, commandSha256, equipmentJson, rentalTermsJson);
     return sessions.saveAndFlush(session);
   }
 
@@ -95,6 +96,15 @@ public class CustomerRentalSessionStore {
       UUID subjectId, UUID inquiryId, long expectedVersion, String equipmentJson) {
     CustomerRentalSession session = locked(subjectId, inquiryId);
     translateVersion(() -> session.replaceEquipment(expectedVersion, equipmentJson));
+    return sessions.saveAndFlush(session);
+  }
+
+  /** Replaces the complete rental-term intent under an optimistic row fence. */
+  @Transactional
+  public CustomerRentalSession replaceRentalTerms(
+      UUID subjectId, UUID inquiryId, long expectedVersion, String rentalTermsJson) {
+    CustomerRentalSession session = locked(subjectId, inquiryId);
+    translateVersion(() -> session.replaceRentalTerms(expectedVersion, rentalTermsJson));
     return sessions.saveAndFlush(session);
   }
 

@@ -1,16 +1,21 @@
 package dev.buhanzaz.rwms.logistics.planning.api;
 
-import dev.buhanzaz.rwms.logistics.customer.capacity.service.ScenarioCapacitySnapshotService;
+import dev.buhanzaz.rwms.logistics.customer.capacity.service.WarehouseCapacitySnapshotService;
 import dev.buhanzaz.rwms.logistics.order.service.RentalOrderPlanningIntegrationService;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.ApplyPlanningAssignmentsRequest;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.ApplyPlanningAssignmentsResponse;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningAssignmentStatusResponse;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacitySnapshotResponse;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverResource;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningRequestFeedResponse;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningWarehouseResource;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningWarehouseSupportLinkResource;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.ReplacePlanningCapacitySnapshotRequest;
+import dev.buhanzaz.rwms.logistics.planning.service.PlanningResourceDirectoryService;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -35,7 +40,37 @@ import org.springframework.web.bind.annotation.RestController;
 public class PlanningIntegrationController {
   private final LogisticsAuthorizer access;
   private final RentalOrderPlanningIntegrationService planning;
-  private final ScenarioCapacitySnapshotService capacitySnapshots;
+  private final WarehouseCapacitySnapshotService capacitySnapshots;
+  private final PlanningResourceDirectoryService resources;
+
+  /** Returns active RWMS warehouses with their owner-held address and timezone. */
+  @GetMapping("/warehouses")
+  public java.util.List<PlanningWarehouseResource> warehouses(
+      @AuthenticationPrincipal Jwt jwt) {
+    access.requirePlanningIntegration(jwt);
+    return resources.warehouses();
+  }
+
+  /** Returns calendar-eligible directed support edges for route candidate generation. */
+  @GetMapping("/warehouses/{servedWarehouseId}/support-links")
+  public java.util.List<PlanningWarehouseSupportLinkResource> supportLinks(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID servedWarehouseId,
+      @RequestParam OffsetDateTime at) {
+    access.requirePlanningIntegration(jwt);
+    return resources.supportLinks(servedWarehouseId, at);
+  }
+
+  /** Returns active task-board-qualified drivers for one validated RWMS warehouse. */
+  @GetMapping("/drivers")
+  public java.util.List<PlanningDriverResource> drivers(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestParam UUID warehouseId,
+      @RequestParam(required = false) OffsetDateTime at,
+      @RequestParam(defaultValue = "false") boolean includeIncoming) {
+    access.requirePlanningIntegration(jwt);
+    return resources.drivers(warehouseId, at, includeIncoming);
+  }
 
   /** Exports one warehouse's unscheduled delivery demand for a bounded date range. */
   @GetMapping("/requests")
@@ -69,13 +104,13 @@ public class PlanningIntegrationController {
   }
 
   /** Replaces the active anonymous simulator capacity used only by CustomerApp slot searches. */
-  @PutMapping("/capacity-snapshots/{scenarioId}")
+  @PutMapping("/capacity-snapshots/{warehouseId}")
   public PlanningCapacitySnapshotResponse replaceCapacitySnapshot(
       @AuthenticationPrincipal Jwt jwt,
-      @PathVariable UUID scenarioId,
+      @PathVariable UUID warehouseId,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody ReplacePlanningCapacitySnapshotRequest request) {
     access.requirePlanningIntegration(jwt);
-    return capacitySnapshots.replace(scenarioId, idempotencyKey, request);
+    return capacitySnapshots.replace(warehouseId, idempotencyKey, request);
   }
 }

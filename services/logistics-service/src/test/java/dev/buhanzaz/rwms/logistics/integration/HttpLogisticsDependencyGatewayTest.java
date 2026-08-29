@@ -14,6 +14,7 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskWorkerContent;
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
@@ -301,7 +302,11 @@ class HttpLogisticsDependencyGatewayTest {
                   "active":true,
                   "name":"СПБ",
                   "city":"Санкт-Петербург",
-                  "timeZone":"Europe/Moscow"
+                  "address":"Кубинская улица, 75",
+                  "latitude":59.850001,
+                  "longitude":30.300001,
+                  "timeZone":"Europe/Moscow",
+                  "representative":true
                 }
                 """
                     .formatted(warehouseId),
@@ -313,7 +318,206 @@ class HttpLogisticsDependencyGatewayTest {
     assertThat(identity)
         .isEqualTo(
             new LogisticsDependencyGateway.WarehouseIdentity(
-                warehouseId, 4, true, "СПБ", "Санкт-Петербург", "Europe/Moscow"));
+                warehouseId,
+                4,
+                true,
+                "СПБ",
+                "Санкт-Петербург",
+                "Кубинская улица, 75",
+                new java.math.BigDecimal("59.850001"),
+                new java.math.BigDecimal("30.300001"),
+                "Europe/Moscow",
+                true));
+    server.verify();
+  }
+
+  @Test
+  void readsCalendarFilteredWarehouseSupportLinksWithOwnerCoordinates() {
+    UUID servedWarehouseId = UUID.randomUUID();
+    UUID supportWarehouseId = UUID.randomUUID();
+    UUID supportLinkId = UUID.randomUUID();
+    OffsetDateTime at = OffsetDateTime.parse("2026-09-15T08:30:00Z");
+    server
+        .expect(
+            requestTo(
+                "http://warehouse.test/api/internal/warehouse/v1/warehouses/logistics/"
+                    + servedWarehouseId
+                    + "/support-links?at="
+                    + at))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer test-warehouse.logistics"))
+        .andRespond(
+            withSuccess(
+                """
+                [{
+                  "id":"%s",
+                  "version":2,
+                  "supportWarehouse":{
+                    "id":"%s","version":4,"active":true,"name":"Опорный",
+                    "city":"Город A","address":null,"latitude":59.900000,
+                    "longitude":30.300000,"timeZone":"Europe/Moscow",
+                    "representative":false
+                  },
+                  "servedWarehouse":{
+                    "id":"%s","version":6,"active":true,"name":"Региональный",
+                    "city":"Город B","address":"Складская, 1","latitude":58.500000,
+                    "longitude":31.200000,"timeZone":"Europe/Moscow",
+                    "representative":true
+                  },
+                  "priority":1,
+                  "allowDrivers":true,
+                  "allowVehicles":true,
+                  "allowInventory":true,
+                  "allowDirectFulfillment":true,
+                  "allowInterwarehouseTransfer":true,
+                  "allowContractorFallback":true,
+                  "allowedWeekdays":["TUESDAY","THURSDAY"],
+                  "allowedDates":[],
+                  "excludedDates":[],
+                  "serviceStart":"08:00:00",
+                  "serviceEnd":"20:00:00"
+                }]
+                """
+                    .formatted(supportLinkId, supportWarehouseId, servedWarehouseId),
+                MediaType.APPLICATION_JSON));
+
+    assertThat(gateway.listWarehouseSupportLinks(servedWarehouseId, at))
+        .singleElement()
+        .satisfies(
+            link -> {
+              assertThat(link.id()).isEqualTo(supportLinkId);
+              assertThat(link.supportWarehouse().id()).isEqualTo(supportWarehouseId);
+              assertThat(link.servedWarehouse().id()).isEqualTo(servedWarehouseId);
+              assertThat(link.servedWarehouse().representative()).isTrue();
+              assertThat(link.allowDirectFulfillment()).isTrue();
+              assertThat(link.allowedWeekdays())
+                  .containsExactlyInAnyOrder(
+                      java.time.DayOfWeek.TUESDAY, java.time.DayOfWeek.THURSDAY);
+            });
+    server.verify();
+  }
+
+  @Test
+  void readsOnlyTheQualifiedTaskBoardDriverDirectory() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID anna = UUID.randomUUID();
+    UUID zoya = UUID.randomUUID();
+    server
+        .expect(
+            requestTo(
+                "http://task-board.test/api/internal/task-board/v1/logistics/warehouses/"
+                    + warehouseId
+                    + "/drivers?includeIncoming=false"))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer test-task-board.logistics"))
+        .andRespond(
+            withSuccess(
+                """
+                [
+                  {
+                    "workerId":"%s",
+                    "displayName":"Анна",
+                    "employmentType":"STAFF",
+                    "phone":null,
+                    "operationalWarehouseId":"%s",
+                    "availableFrom":null,
+                    "availableUntil":null,
+                    "availabilityKind":"HOME"
+                  },
+                  {
+                    "workerId":"%s",
+                    "displayName":"Зоя",
+                    "employmentType":"STAFF",
+                    "phone":null,
+                    "operationalWarehouseId":"%s",
+                    "availableFrom":null,
+                    "availableUntil":null,
+                    "availabilityKind":"HOME"
+                  }
+                ]
+                """
+                    .formatted(anna, warehouseId, zoya, warehouseId),
+                MediaType.APPLICATION_JSON));
+
+    assertThat(gateway.listWarehouseDrivers(warehouseId))
+        .containsExactly(
+            new LogisticsDependencyGateway.WarehouseDriverIdentity(
+                anna, "Анна", "STAFF", null, warehouseId, null, null, "HOME"),
+            new LogisticsDependencyGateway.WarehouseDriverIdentity(
+                zoya, "Зоя", "STAFF", null, warehouseId, null, null, "HOME"));
+    server.verify();
+  }
+
+  @Test
+  void acceptsTheTaskBoardTripOnlyCommitmentWithoutChangingOperationalPlacement() {
+    UUID transferId = UUID.randomUUID();
+    UUID workerId = UUID.randomUUID();
+    UUID homeWarehouseId = UUID.randomUUID();
+    UUID destinationWarehouseId = UUID.randomUUID();
+    UUID assignmentId = UUID.randomUUID();
+    OffsetDateTime departure = OffsetDateTime.parse("2026-09-14T08:30:00Z");
+    OffsetDateTime arrival = departure.plusHours(4);
+    server
+        .expect(
+            requestTo(
+                "http://task-board.test/api/internal/task-board/v1/logistics/operational-assignments"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header("Authorization", "Bearer test-task-board.logistics"))
+        .andExpect(jsonPath("$.transferId").value(transferId.toString()))
+        .andExpect(jsonPath("$.workerId").value(workerId.toString()))
+        .andExpect(jsonPath("$.mode").value("TRIP_ONLY"))
+        .andExpect(jsonPath("$.effectiveFrom").value("2026-09-14T12:30:00Z"))
+        .andExpect(jsonPath("$.effectiveUntil").value("2026-09-14T12:30:00Z"))
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "id":"%s",
+                  "version":0,
+                  "transferId":"%s",
+                  "workerId":"%s",
+                  "homeWarehouseId":"%s",
+                  "sourceWarehouseId":"%s",
+                  "destinationWarehouseId":"%s",
+                  "mode":"TRIP_ONLY",
+                  "status":"PLANNED",
+                  "travelStartsAt":"%s",
+                  "effectiveFrom":"%s",
+                  "effectiveUntil":"%s",
+                  "createdAt":"2026-09-01T10:00:00Z",
+                  "updatedAt":"2026-09-01T10:00:00Z",
+                  "createdBy":"logistics-service",
+                  "updatedBy":"logistics-service"
+                }
+                """
+                    .formatted(
+                        assignmentId,
+                        transferId,
+                        workerId,
+                        homeWarehouseId,
+                        homeWarehouseId,
+                        destinationWarehouseId,
+                        departure,
+                        arrival,
+                        arrival),
+                MediaType.APPLICATION_JSON));
+
+    LogisticsDependencyGateway.WorkerOperationalAssignment assignment =
+        gateway.createWorkerOperationalAssignment(
+            transferId,
+            workerId,
+            homeWarehouseId,
+            destinationWarehouseId,
+            "TRIP_ONLY",
+            departure,
+            arrival,
+            arrival);
+
+    assertThat(assignment.assignmentId()).isEqualTo(assignmentId);
+    assertThat(assignment.mode()).isEqualTo("TRIP_ONLY");
+    assertThat(assignment.homeWarehouseId()).isEqualTo(homeWarehouseId);
+    assertThat(assignment.sourceWarehouseId()).isEqualTo(homeWarehouseId);
+    assertThat(assignment.effectiveUntil()).isEqualTo(arrival);
     server.verify();
   }
 
@@ -1619,7 +1823,7 @@ class HttpLogisticsDependencyGatewayTest {
   }
 
   @Test
-  void registersDriverTaskWithoutObsoleteDailyCapacity() {
+  void registersDriverTaskWithStructuredWorkerContentAndWithoutObsoleteDailyCapacity() {
     UUID taskId = UUID.randomUUID();
     UUID externalTaskId = UUID.randomUUID();
     UUID sourceId = UUID.randomUUID();
@@ -1628,7 +1832,23 @@ class HttpLogisticsDependencyGatewayTest {
     UUID queueDefinitionId = UUID.randomUUID();
     UUID queueId = UUID.randomUUID();
     UUID driverId = UUID.randomUUID();
+    UUID workId = UUID.randomUUID();
+    UUID materialId = UUID.randomUUID();
+    UUID commentId = UUID.randomUUID();
     LocalDate scheduledDate = LocalDate.parse("2026-08-03");
+    OffsetDateTime commentAt = OffsetDateTime.parse("2026-08-03T06:00:00Z");
+    DriverTaskWorkerContent workerContent =
+        new DriverTaskWorkerContent(
+            "Склад A → Склад B\nБытовки: №172",
+            List.of(
+                new DriverTaskWorkerContent.Work(
+                    workId, "Загрузить бытовку №172", 1, "шт.", 20, "Проверить мебель")),
+            List.of(
+                new DriverTaskWorkerContent.Material(
+                    materialId, "Бытовка №172 · BK2", 1, "шт.")),
+            List.of(
+                new DriverTaskWorkerContent.Comment(
+                    commentId, "Комментарий логиста", "Логист", commentAt)));
     server
         .expect(requestTo("http://task-board.test/api/internal/task-board/v1/tasks"))
         .andExpect(method(HttpMethod.POST))
@@ -1639,6 +1859,14 @@ class HttpLogisticsDependencyGatewayTest {
         .andExpect(jsonPath("$.priority").value(2))
         .andExpect(jsonPath("$.dailyCapacity").doesNotExist())
         .andExpect(jsonPath("$.route[0].queueDefinitionId").value(queueDefinitionId.toString()))
+        .andExpect(jsonPath("$.route[0].taskText").value(workerContent.taskText()))
+        .andExpect(jsonPath("$.route[0].works[0].id").value(workId.toString()))
+        .andExpect(jsonPath("$.route[0].works[0].name").value("Загрузить бытовку №172"))
+        .andExpect(jsonPath("$.route[0].works[0].sourceMediaIds").isArray())
+        .andExpect(jsonPath("$.route[0].materials[0].id").value(materialId.toString()))
+        .andExpect(jsonPath("$.route[0].comments[0].id").value(commentId.toString()))
+        .andExpect(jsonPath("$.route[0].comments[0].createdAt").value("2026-08-03T06:00:00Z"))
+        .andExpect(jsonPath("$.route[0].sourceMedia").isArray())
         .andExpect(jsonPath("$.source.type").value("LOGISTICS_DRIVER_TASK"))
         .andExpect(jsonPath("$.source.sourceId").value(sourceId.toString()))
         .andExpect(jsonPath("$.lane").value("SCHEDULED"))
@@ -1691,12 +1919,91 @@ class HttpLogisticsDependencyGatewayTest {
             new LogisticsDependencyGateway.DriverTaskAudience(
                 dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode.ASSIGNED_DRIVER,
                 driverId,
-                "Петров Пётр"));
+                "Петров Пётр"),
+            workerContent);
 
     assertThat(registered.externalTaskId()).isEqualTo(externalTaskId);
     assertThat(registered.scheduledDate()).isEqualTo(scheduledDate);
     assertThat(registered.lane()).isEqualTo("SCHEDULED");
     assertThat(registered.driverAudience().workerId()).isEqualTo(driverId);
+    server.verify();
+  }
+
+  @Test
+  void replacesStructuredDriverRouteOnlyThroughThePreStartVersionFence() {
+    UUID externalTaskId = UUID.randomUUID();
+    UUID taskId = UUID.randomUUID();
+    UUID entryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID queueDefinitionId = UUID.randomUUID();
+    UUID queueId = UUID.randomUUID();
+    UUID workId = UUID.randomUUID();
+    LocalDate scheduledDate = LocalDate.parse("2026-08-03");
+    DriverTaskWorkerContent content =
+        new DriverTaskWorkerContent(
+            "Склад A → Склад B",
+            List.of(
+                new DriverTaskWorkerContent.Work(
+                    workId, "Выгрузить бытовку №172", 1, null, null, null)),
+            List.of(),
+            List.of());
+    server
+        .expect(
+            requestTo(
+                "http://task-board.test/api/internal/task-board/v1/tasks/" + externalTaskId))
+        .andExpect(method(HttpMethod.PUT))
+        .andExpect(header("Authorization", "Bearer test-task-board.logistics"))
+        .andExpect(jsonPath("$.expectedTaskVersion").value(3))
+        .andExpect(jsonPath("$.title").value("Межскладское перемещение"))
+        .andExpect(jsonPath("$.route[0].queueDefinitionId").value(queueDefinitionId.toString()))
+        .andExpect(jsonPath("$.route[0].taskText").value("Склад A → Склад B"))
+        .andExpect(jsonPath("$.route[0].works[0].id").value(workId.toString()))
+        .andExpect(jsonPath("$.route[0].materials").isArray())
+        .andExpect(jsonPath("$.route[0].comments").isArray())
+        .andExpect(jsonPath("$.route[0].sourceMedia").isArray())
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "taskId":"%s","taskVersion":4,"warehouseId":"%s",
+                  "externalTaskId":"%s","title":"Межскладское перемещение",
+                  "unitNumber":"1 бытовка","description":"Перемещение",
+                  "driverAudience":{"mode":"WAREHOUSE_DRIVERS","workerId":null,"workerName":null},
+                  "status":"ACTIVE","plannedDurationMinutes":null,"deadlineAt":null,
+                  "scheduledDate":"%s","lane":"SCHEDULED","priority":3,
+                  "pinned":false,"doneAt":null,
+                  "route":[{
+                    "entryId":"%s","entryVersion":0,
+                    "queueDefinitionId":"%s","workQueueId":"%s","queueName":"Водители",
+                    "routeIndex":0,"queuePosition":0,"entryType":"REAL",
+                    "status":"WAITING","taskText":"Склад A → Склад B",
+                    "plannedDurationMinutes":null
+                  }]
+                }
+                """
+                    .formatted(
+                        taskId,
+                        warehouseId,
+                        externalTaskId,
+                        scheduledDate,
+                        entryId,
+                        queueDefinitionId,
+                        queueId),
+                MediaType.APPLICATION_JSON));
+
+    LogisticsDependencyGateway.DriverBoardTask updated =
+        gateway.updateDriverTaskBeforeStart(
+            externalTaskId,
+            3,
+            "Межскладское перемещение",
+            "1 бытовка",
+            "Перемещение",
+            queueDefinitionId,
+            content);
+
+    assertThat(updated.taskVersion()).isEqualTo(4);
+    assertThat(updated.entryVersion()).isZero();
+    assertThat(updated.taskText()).isEqualTo(content.taskText());
     server.verify();
   }
 

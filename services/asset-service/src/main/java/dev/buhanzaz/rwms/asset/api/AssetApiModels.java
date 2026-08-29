@@ -559,8 +559,10 @@ public final class AssetApiModels {
     MAINTENANCE_DISPOSITION_MOVEMENT
   }
 
+  /** Closed asset validation policy for one persisted equipment-movement reservation. */
   public enum LogisticsEquipmentMovementPurpose {
     ALLOCATABLE_REBALANCE,
+    TRANSFER_REBALANCE,
     MAINTENANCE_DISPOSITION
   }
 

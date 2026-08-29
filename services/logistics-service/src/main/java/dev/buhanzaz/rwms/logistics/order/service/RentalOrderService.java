@@ -103,6 +103,18 @@ public class RentalOrderService {
     return reads.availableUnits(actor, orderId, page, size, search);
   }
 
+  /** Lists candidates from an explicitly authorized physical source without changing the region. */
+  public OrderUnitPageResponse availableUnits(
+      OrderActor actor,
+      UUID orderId,
+      UUID inventorySourceWarehouseId,
+      int page,
+      int size,
+      String search) {
+    return reads.availableUnits(
+        actor, orderId, inventorySourceWarehouseId, page, size, search);
+  }
+
   public List<OrderHistoryEventResponse> history(OrderActor actor, UUID orderId) {
     return reads.history(actor, orderId);
   }
@@ -155,6 +167,7 @@ public class RentalOrderService {
             oldRentalItemId,
             request.replacementRentalItemId(),
             request.reason(),
+            request.inventorySourceWarehouseId(),
             idempotencyKey);
     return new MutationResult(response, false);
   }
@@ -185,7 +198,8 @@ public class RentalOrderService {
           conversion,
       Map<UUID, Map<UUID, Long>> selectedRequirements,
       List<DesiredDeliveryWindow> desiredDeliveryWindows,
-      long rentalMonths,
+      Map<UUID, Long> rentalTerms,
+      Long legacyUniformRentalMonths,
       String deliveryAddress,
       BigDecimal latitude,
       BigDecimal longitude,
@@ -199,7 +213,8 @@ public class RentalOrderService {
             conversion,
             selectedRequirements,
             desiredDeliveryWindows,
-            rentalMonths,
+            rentalTerms,
+            legacyUniformRentalMonths,
             deliveryAddress,
             latitude,
             longitude,
@@ -257,8 +272,17 @@ public class RentalOrderService {
   }
 
   public UUID rentalShipmentAdmissionWarehouse(
+      OrderActor actor,
+      UUID orderId,
+      LocalDate scheduledDate,
+      UUID inventorySourceWarehouseId) {
+    return shipments.rentalShipmentAdmissionWarehouse(
+        actor, orderId, scheduledDate, inventorySourceWarehouseId);
+  }
+
+  public UUID rentalShipmentAdmissionWarehouse(
       OrderActor actor, UUID orderId, LocalDate scheduledDate) {
-    return shipments.rentalShipmentAdmissionWarehouse(actor, orderId, scheduledDate);
+    return rentalShipmentAdmissionWarehouse(actor, orderId, scheduledDate, null);
   }
 
   /** Returns the exact prior shipment result without re-running mutable planning checks. */

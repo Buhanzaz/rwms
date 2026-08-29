@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Task Board Service API
-  version: 1.8.0
+  version: 1.11.0
   description: >-
     Canonical F2 inventory of the active task-board, workforce and queue
     registry HTTP API. All warehouse-scoped operations validate the warehouse
@@ -598,6 +598,157 @@ paths:
               schema: { $ref: '#/components/schemas/LogisticsBoardSnapshot' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /internal/task-board/v1/logistics/warehouses/{warehouseId}/drivers:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: listInternalLogisticsDrivers
+      description: >-
+        Private least-privilege logistics-service directory. Requires exactly the
+        logistics-service SERVICE principal with one task-board.logistics scope.
+        Staff must hold an active qualification for the primary class of their
+        home warehouse's active LOGISTICS_DRIVER queue. Time-bounded contractor
+        profiles are eligible only during their contract. Login, credentials and
+        groups are never exposed; contractor phone is the only contact field.
+        Operational assignments do not rewrite the home warehouse. IN_TRANSIT
+        drivers are excluded. A PLANNED driver stops being available at the source
+        from travelStartsAt and can appear as INCOMING at the destination only when
+        includeIncoming=true and the queried instant is not before the buffered
+        effectiveFrom supplied by logistics-service.
+      parameters:
+        - name: at
+          in: query
+          required: false
+          description: Availability instant; current UTC time when omitted.
+          schema: { type: string, format: date-time }
+        - name: includeIncoming
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Operationally available warehouse drivers in canonical order.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LogisticsDriverIdentityList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /internal/task-board/v1/logistics/warehouses/{warehouseId}/contractors:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    post:
+      operationId: createInternalContractorDriver
+      description: >-
+        Creates a time-bounded contractor Worker profile at the selected home
+        warehouse. contractorId is the stable idempotency identity. An identical
+        replay returns the existing profile; a different payload conflicts. No
+        credential or app access is provisioned by this command.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateContractorDriverRequest' }
+      responses:
+        '201':
+          description: Created contractor or identical stable-ID replay.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContractorDriver' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /internal/task-board/v1/logistics/operational-assignments:
+    post:
+      operationId: createInternalWorkerOperationalAssignment
+      description: >-
+        Creates a PLANNED transfer-backed assignment without changing Worker.warehouseId.
+        travelStartsAt begins the driver's all-warehouse unavailability, while
+        effectiveFrom begins destination availability after arrival and buffer.
+        The transferId+workerId identity makes identical retries safe. The command
+        locks the worker and rejects overlapping nonterminal travel/assignment intervals.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateWorkerOperationalAssignmentRequest' }
+      responses:
+        '201':
+          description: Created assignment or identical replay.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerOperationalAssignment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      operationId: listInternalWorkerOperationalAssignments
+      description: Requires exactly one transferId or workerId filter.
+      parameters:
+        - name: transferId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: workerId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Ordered matching assignment history.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerOperationalAssignmentList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /internal/task-board/v1/logistics/operational-assignments/{assignmentId}:
+    parameters:
+      - name: assignmentId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getInternalWorkerOperationalAssignment
+      responses:
+        '200':
+          description: Current assignment snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerOperationalAssignment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /internal/task-board/v1/logistics/operational-assignments/{assignmentId}/transition:
+    parameters:
+      - name: assignmentId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: transitionInternalWorkerOperationalAssignment
+      description: >-
+        Applies PLANNED -> IN_TRANSIT -> ACTIVE -> COMPLETED, or cancels a
+        PLANNED assignment. Replaying the current target is safe even with the
+        original expectedVersion; every other transition is version-fenced.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransitionWorkerOperationalAssignmentRequest' }
+      responses:
+        '200':
+          description: Assignment after transition or safe same-target replay.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerOperationalAssignment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
   /internal/task-board/v1/logistics/tasks/{externalTaskId}/move:
     parameters:
@@ -1556,6 +1707,58 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '502': { $ref: '#/components/responses/BadGateway' }
+  /warehouses/{warehouseId}/logistics-drivers:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: listWarehouseLogisticsDrivers
+      description: >-
+        Public least-privilege resource directory for an authenticated panel operator. The caller
+        needs rwms.read and VIEW access to the warehouse. Availability is derived from the same
+        home, contractor and transfer-backed operational assignment history as the private
+        logistics-service directory; credentials and ordinary worker groups are never returned.
+      parameters:
+        - name: at
+          in: query
+          required: false
+          description: Availability instant; current UTC time when omitted.
+          schema: { type: string, format: date-time }
+        - name: includeIncoming
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Operationally available warehouse drivers in canonical order.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LogisticsDriverIdentityList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /warehouses/{warehouseId}/logistics-drivers/contractors:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    post:
+      operationId: createWarehouseContractorDriver
+      description: >-
+        Creates or exactly replays a time-bounded contractor profile for a panel operator with
+        rwms.write and EDIT warehouse access. The command provisions no credentials or DriverApp
+        access; contractorId is the stable business idempotency identity.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateContractorDriverRequest' }
+      responses:
+        '201':
+          description: Created contractor or identical stable-ID replay.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContractorDriver' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /warehouses/{warehouseId}/worker-groups:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -3462,6 +3665,129 @@ components:
         registeredAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
       additionalProperties: false
+    LogisticsDriverIdentity:
+      type: object
+      required: [workerId, displayName]
+      properties:
+        workerId: { type: string, format: uuid }
+        displayName: { type: string, minLength: 1, maxLength: 256 }
+        employmentType: { $ref: '#/components/schemas/WorkerEmploymentType' }
+        phone:
+          oneOf:
+            - { type: string, minLength: 1, maxLength: 64 }
+            - { type: 'null' }
+        operationalWarehouseId: { type: string, format: uuid }
+        availableFrom:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: 'null' }
+        availableUntil:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: 'null' }
+        availabilityKind: { $ref: '#/components/schemas/LogisticsDriverAvailabilityKind' }
+      additionalProperties: false
+    LogisticsDriverIdentityList:
+      type: array
+      items: { $ref: '#/components/schemas/LogisticsDriverIdentity' }
+    WorkerEmploymentType:
+      type: string
+      enum: [STAFF, CONTRACTOR]
+    LogisticsDriverAvailabilityKind:
+      type: string
+      enum: [HOME, ACTIVE_ASSIGNMENT, INCOMING]
+    WorkerOperationalAssignmentMode:
+      type: string
+      enum: [TRIP_ONLY, TEMPORARY, PERMANENT]
+      description: >-
+        TRIP_ONLY blocks the worker for the travel interval but never changes home or operational
+        warehouse and never advertises the worker as incoming at the destination. TEMPORARY and
+        PERMANENT activate destination operational placement only after the IN_TRANSIT phase.
+    WorkerOperationalAssignmentStatus:
+      type: string
+      enum: [PLANNED, IN_TRANSIT, ACTIVE, COMPLETED, CANCELLED]
+    CreateContractorDriverRequest:
+      type: object
+      required: [contractorId, displayName, phone, availableFrom, availableUntil]
+      properties:
+        contractorId: { type: string, format: uuid }
+        displayName: { type: string, minLength: 1, maxLength: 256 }
+        phone: { type: string, minLength: 1, maxLength: 64 }
+        availableFrom: { type: string, format: date-time }
+        availableUntil: { type: string, format: date-time }
+        comment:
+          oneOf:
+            - { type: string, maxLength: 1000 }
+            - { type: 'null' }
+      additionalProperties: false
+    ContractorDriver:
+      type: object
+      required: [workerId, version, homeWarehouseId, displayName, phone, availableFrom, availableUntil, comment, active, employmentType]
+      properties:
+        workerId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        homeWarehouseId: { type: string, format: uuid }
+        displayName: { type: string, minLength: 1, maxLength: 256 }
+        phone: { type: string, minLength: 1, maxLength: 64 }
+        availableFrom: { type: string, format: date-time }
+        availableUntil: { type: string, format: date-time }
+        comment:
+          oneOf:
+            - { type: string, maxLength: 1000 }
+            - { type: 'null' }
+        active: { type: boolean }
+        employmentType: { type: string, const: CONTRACTOR }
+      additionalProperties: false
+    CreateWorkerOperationalAssignmentRequest:
+      type: object
+      required: [transferId, workerId, sourceWarehouseId, destinationWarehouseId, mode, travelStartsAt, effectiveFrom]
+      properties:
+        transferId: { type: string, format: uuid }
+        workerId: { type: string, format: uuid }
+        sourceWarehouseId: { type: string, format: uuid }
+        destinationWarehouseId: { type: string, format: uuid }
+        mode: { $ref: '#/components/schemas/WorkerOperationalAssignmentMode' }
+        travelStartsAt: { type: string, format: date-time }
+        effectiveFrom: { type: string, format: date-time }
+        effectiveUntil:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: 'null' }
+      additionalProperties: false
+    TransitionWorkerOperationalAssignmentRequest:
+      type: object
+      required: [expectedVersion, targetStatus]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        targetStatus: { $ref: '#/components/schemas/WorkerOperationalAssignmentStatus' }
+      additionalProperties: false
+    WorkerOperationalAssignment:
+      type: object
+      required: [id, version, transferId, workerId, homeWarehouseId, sourceWarehouseId, destinationWarehouseId, mode, status, travelStartsAt, effectiveFrom, effectiveUntil, createdAt, updatedAt, createdBy, updatedBy]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        transferId: { type: string, format: uuid }
+        workerId: { type: string, format: uuid }
+        homeWarehouseId: { type: string, format: uuid }
+        sourceWarehouseId: { type: string, format: uuid }
+        destinationWarehouseId: { type: string, format: uuid }
+        mode: { $ref: '#/components/schemas/WorkerOperationalAssignmentMode' }
+        status: { $ref: '#/components/schemas/WorkerOperationalAssignmentStatus' }
+        travelStartsAt: { type: string, format: date-time }
+        effectiveFrom: { type: string, format: date-time }
+        effectiveUntil:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: 'null' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        createdBy: { type: string, minLength: 1, maxLength: 128 }
+        updatedBy: { type: string, minLength: 1, maxLength: 128 }
+      additionalProperties: false
+    WorkerOperationalAssignmentList:
+      type: array
+      items: { $ref: '#/components/schemas/WorkerOperationalAssignment' }
     FieldViolation:
       type: object
       required: [field, code, message]

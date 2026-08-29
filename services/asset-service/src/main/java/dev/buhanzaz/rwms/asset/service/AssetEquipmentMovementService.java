@@ -110,6 +110,13 @@ final class AssetEquipmentMovementService {
           "Order movement context must be fully present or fully absent");
     }
     boolean orderContext = request.orderId() != null;
+    if (request.purpose() == LogisticsEquipmentMovementPurpose.TRANSFER_REBALANCE
+        && (orderContext
+            || request.sourceRentalItemId() != null
+            || request.sourceLocationKind() != BalanceLocationKind.STOCK)) {
+      throw new IllegalArgumentException(
+          "Transfer rebalance must reserve warehouse stock without order or cabin context");
+    }
     if (orderContext) {
       if (request.purpose() != LogisticsEquipmentMovementPurpose.ALLOCATABLE_REBALANCE
           || request.sourceRentalItemId() == null
@@ -228,9 +235,9 @@ final class AssetEquipmentMovementService {
           """
           insert into equipment_allocation_hold(
             id,version,equipment_id,warehouse_id,source_balance_id,owner_type,owner_id,
-            quantity,state,idempotency_key,expires_at,order_id,target_rental_item_id,order_units,
-            replacement_source_reservation_id,created_at,updated_at)
-          values (?,0,?,?,?,?,?,?,'ACTIVE',?,?,?,?,?::jsonb,?,?,?)
+            movement_purpose,quantity,state,idempotency_key,expires_at,order_id,
+            target_rental_item_id,order_units,replacement_source_reservation_id,created_at,updated_at)
+          values (?,0,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?,?::jsonb,?,?,?)
           """,
           reservationId,
           request.equipmentId(),
@@ -238,6 +245,7 @@ final class AssetEquipmentMovementService {
           source.id(),
           ownerType.name(),
           logisticsOwnerId(request.movementId(), request.lineId()),
+          request.purpose().name(),
           request.quantity(),
           key,
           request.reservedUntil(),
@@ -379,9 +387,9 @@ final class AssetEquipmentMovementService {
             """
             insert into equipment_allocation_hold(
               id,version,equipment_id,warehouse_id,source_balance_id,owner_type,owner_id,
-              quantity,state,idempotency_key,expires_at,order_id,target_rental_item_id,order_units,
-              replacement_source_reservation_id,created_at,updated_at)
-            values (?,0,?,?,?,?,?,?,'ACTIVE',?,?,?,?,?::jsonb,?,?,?)
+              movement_purpose,quantity,state,idempotency_key,expires_at,order_id,
+              target_rental_item_id,order_units,replacement_source_reservation_id,created_at,updated_at)
+            values (?,0,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?,?::jsonb,?,?,?)
             """,
             reservationId,
             line.equipmentId(),
@@ -389,6 +397,7 @@ final class AssetEquipmentMovementService {
             line.sourceBalanceId(),
             LogisticsEquipmentMovementReservationOwnerType.LOGISTICS_EQUIPMENT_MOVEMENT.name(),
             logisticsOwnerId(value.movement().movementId(), line.lineId()),
+            LogisticsEquipmentMovementPurpose.ALLOCATABLE_REBALANCE.name(),
             line.quantity(),
             idempotencyKey,
             value.movement().reservedUntil(),
@@ -476,7 +485,7 @@ final class AssetEquipmentMovementService {
             """
             select id,version,equipment_id,warehouse_id,source_balance_id,owner_type,owner_id,
               quantity,state,expires_at,committed_at,executed_at,order_id,target_rental_item_id,
-              order_units::text order_units,replacement_source_reservation_id
+              order_units::text order_units,replacement_source_reservation_id,movement_purpose
             from equipment_allocation_hold
             where owner_type in (?,?) and owner_id=? and state='ACTIVE'
             for update
@@ -496,7 +505,7 @@ final class AssetEquipmentMovementService {
       AssetBalanceRow source) {
     EquipmentHoldResponse hold = prepared.hold();
     List<String> mismatches = new ArrayList<>();
-    if (request.purpose() != LogisticsEquipmentMovementPurpose.ALLOCATABLE_REBALANCE) {
+    if (prepared.purpose() != request.purpose()) {
       mismatches.add("purpose");
     }
     if (!LogisticsEquipmentMovementReservationOwnerType.LOGISTICS_EQUIPMENT_MOVEMENT
@@ -555,7 +564,7 @@ final class AssetEquipmentMovementService {
             """
             select id,version,equipment_id,warehouse_id,source_balance_id,owner_type,owner_id,
               quantity,state,expires_at,committed_at,executed_at,order_id,target_rental_item_id,
-              order_units::text order_units,replacement_source_reservation_id
+              order_units::text order_units,replacement_source_reservation_id,movement_purpose
             from equipment_allocation_hold
             where id=?
             """,
@@ -585,7 +594,8 @@ final class AssetEquipmentMovementService {
         result.getObject("order_id", UUID.class),
         result.getObject("target_rental_item_id", UUID.class),
         result.getString("order_units"),
-        result.getObject("replacement_source_reservation_id", UUID.class));
+        result.getObject("replacement_source_reservation_id", UUID.class),
+        LogisticsEquipmentMovementPurpose.valueOf(result.getString("movement_purpose")));
   }
 
   AssetService.CreateResult<LogisticsEquipmentMovementReservationResponse> releaseMovementReservation(
@@ -679,7 +689,8 @@ final class AssetEquipmentMovementService {
               stored.orderId(),
               stored.targetRentalItemId(),
               storedOrderUnits(stored),
-              stored.replacementSourceReservationId()));
+              stored.replacementSourceReservationId(),
+              stored.purpose()));
     }
     candidates.stream()
         .map(MovementReservationCandidate::orderId)
@@ -803,6 +814,9 @@ final class AssetEquipmentMovementService {
                 source.equipmentId(),
                 source.id(),
                 reservation.quantity());
+      } else if (candidate.purpose()
+          == LogisticsEquipmentMovementPurpose.TRANSFER_REBALANCE) {
+        requireTransferRebalance(candidate.source(), candidate.line());
       } else if (candidate.orderId() == null) {
         requireAllocatableSource(source);
       }
@@ -1200,6 +1214,19 @@ final class AssetEquipmentMovementService {
     }
   }
 
+  /** Enforces the persisted loose-furniture transfer policy when the destination is known. */
+  private static void requireTransferRebalance(
+      AssetBalanceRow source, ExecuteLogisticsEquipmentMovementReservationLine target) {
+    if (source.kind() != BalanceLocationKind.STOCK
+        || source.rentalItemId() != null
+        || target.targetLocationKind() != BalanceLocationKind.STOCK
+        || target.targetRentalItemId() != null
+        || source.warehouseId().equals(target.targetWarehouseId())) {
+      throw new AssetConflictException(
+          "Transfer rebalance must move stock to stock between different warehouses");
+    }
+  }
+
   private UUID requireMaintenanceParentHold(
       AcquireLogisticsEquipmentMovementReservationRequest request, AssetBalanceRow source) {
     if (request.sourceRentalItemId() == null
@@ -1378,7 +1405,8 @@ final class AssetEquipmentMovementService {
       UUID orderId,
       UUID targetRentalItemId,
       List<OrderUnitEquipmentRequirements> units,
-      UUID replacementSourceReservationId) {}
+      UUID replacementSourceReservationId,
+      LogisticsEquipmentMovementPurpose purpose) {}
 
   /**
    * Complete locked-balance execution plan, including any parent hold whose quantity must be
@@ -1398,7 +1426,8 @@ final class AssetEquipmentMovementService {
       UUID orderId,
       UUID targetRentalItemId,
       String orderUnitsJson,
-      UUID replacementSourceReservationId) {}
+      UUID replacementSourceReservationId,
+      LogisticsEquipmentMovementPurpose purpose) {}
 
   /** Authoritative per-unit equipment composition validated under the order lock. */
   private record OrderMovementComposition(

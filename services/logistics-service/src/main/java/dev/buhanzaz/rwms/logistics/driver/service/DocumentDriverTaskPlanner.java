@@ -9,6 +9,7 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskWorkerContent;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.driver.settings.service.ShipmentTaskSettingsService;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
@@ -47,20 +48,96 @@ public class DocumentDriverTaskPlanner {
   private final DriverTaskWorkflowStore workflowStore;
   private final ShipmentTaskSettingsService shipmentTaskSettings;
   private final CustomerDeliveryCapacityFence capacityFence;
+  private final DriverTaskWorkerContentCodec workerContentCodec;
 
   /** Creates or idempotently replans every driver task required by a scheduled document. */
   @Transactional
   public void plan(LogisticsDocument document, List<LogisticsDocumentLine> lines) {
+    plan(document, lines, DriverTaskWorkerContent.empty());
+  }
+
+  /**
+   * Creates or replans a document task with an immutable structured payload for the existing
+   * WorkerApp offline route.
+   */
+  @Transactional
+  public void plan(
+      LogisticsDocument document,
+      List<LogisticsDocumentLine> lines,
+      DriverTaskWorkerContent workerContent) {
     requirePlan(document, lines);
+    String workerContentJson = workerContentCodec.encode(workerContent);
     DriverTaskKind kind = kind(document.getDocumentType());
+    UUID taskWarehouseId = taskWarehouse(document, lines);
+    DriverTaskAudience audience = audience(document);
+    LogisticsDependencyGateway.WarehouseDriverQueue queue =
+        dependencies.readWarehouseDriverQueue(taskWarehouseId);
+    shipmentTaskSettings.requireWithinLimit(
+        taskWarehouseId, lines.size(), document.getRequestedBySubjectId());
+    capacityFence.acquireTaskDay(taskWarehouseId, document.getScheduledDate(), kind);
+    cancelLegacyLineTasksBeforeGrouping(document, lines, taskWarehouseId);
+    planGroupedDocument(
+        document, lines, taskWarehouseId, kind, audience, queue, workerContent, workerContentJson);
+  }
+
+  /**
+   * Creates or idempotently replans the ordinary document-owned driver task for a confirmed
+   * transfer containing only loose furniture. The supplied summary is the frozen cargo snapshot
+   * shown through the same queue and WorkerApp task path as cabin transfers; this method neither
+   * invents a cabin nor crosses the asset boundary.
+   */
+  @Transactional
+  public void planTransferCargo(LogisticsDocument document, String cargoSummary) {
+    planTransferCargo(document, cargoSummary, DriverTaskWorkerContent.empty());
+  }
+
+  /** Creates or replans a furniture-only transfer with its exact WorkerApp cargo manifest. */
+  @Transactional
+  public void planTransferCargo(
+      LogisticsDocument document,
+      String cargoSummary,
+      DriverTaskWorkerContent workerContent) {
+    requireTransferCargoPlan(document);
+    String normalizedSummary = normalizedCargoSummary(cargoSummary);
+    String workerContentJson = workerContentCodec.encode(workerContent);
+    DriverTaskKind kind = DriverTaskKind.TRANSFER;
     DriverTaskAudience audience = audience(document);
     LogisticsDependencyGateway.WarehouseDriverQueue queue =
         dependencies.readWarehouseDriverQueue(document.getWarehouseId());
-    shipmentTaskSettings.requireWithinLimit(
-        document.getWarehouseId(), lines.size(), document.getRequestedBySubjectId());
     capacityFence.acquireTaskDay(document.getWarehouseId(), document.getScheduledDate(), kind);
-    cancelLegacyLineTasksBeforeGrouping(document, lines);
-    planGroupedDocument(document, lines, kind, audience, queue);
+
+    DriverLogisticsTask existing =
+        tasks
+            .findActiveForUpdateBySourceTypeAndSourceIdAndKind(
+                DriverTaskSourceType.LOGISTICS_DOCUMENT, document.getId(), kind)
+            .orElse(null);
+    String checksum =
+        furnitureCargoChecksum(
+            document, normalizedSummary, audience, queue, workerContentJson);
+    if (existing == null) {
+      DriverLogisticsTask created =
+          DriverLogisticsTask.createFurnitureCargoTransfer(
+              document.getWarehouseId(),
+              document.getId(),
+              document.getScheduledDate(),
+              DEFAULT_PRIORITY,
+              furnitureCargoTaskText(normalizedSummary),
+              normalizedSummary,
+              queue.queueDefinitionId(),
+              audience.mode(),
+              audience.workerId(),
+              audience.workerName(),
+              document.getRequestedBySubjectId(),
+              idempotencyKey(document.getId(), kind, checksum),
+              checksum);
+      created.captureWorkerContent(workerContentJson);
+      tasks.saveAndFlush(created);
+      return;
+    }
+    requireSameFurnitureCargoIntent(document, normalizedSummary, queue, existing);
+    if (existing.matchesRequest(checksum)) return;
+    replanRegisteredTask(
+        document, existing, audience, workerContent, workerContentJson, checksum);
   }
 
   /**
@@ -71,39 +148,57 @@ public class DocumentDriverTaskPlanner {
    */
   @Transactional
   public void cancelBeforeStart(LogisticsDocument document, List<LogisticsDocumentLine> lines) {
-    if (document == null || lines == null || lines.isEmpty()) {
-      throw new IllegalArgumentException("Document and lines are required for driver cancellation");
+    if (document == null
+        || document.getId() == null
+        || lines == null
+        || lines.stream().anyMatch(line -> line == null || line.getId() == null)
+        || (lines.isEmpty() && document.getDocumentType() != LogisticsDocumentType.TRANSFER)) {
+      throw new IllegalArgumentException(
+          "Document and persisted lines are required for cancellation");
     }
     List<UUID> sourceIds = lines.stream().map(LogisticsDocumentLine::getId).toList();
     List<DriverLogisticsTask> documentTasks = new ArrayList<>();
     documentTasks.addAll(
         tasks.findAllForUpdateBySourceTypeAndSourceIdIn(
             DriverTaskSourceType.LOGISTICS_DOCUMENT, List.of(document.getId())));
-    documentTasks.addAll(
-        tasks.findAllForUpdateBySourceTypeAndSourceIdIn(
-            DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE, sourceIds));
+    if (!sourceIds.isEmpty()) {
+      documentTasks.addAll(
+          tasks.findAllForUpdateBySourceTypeAndSourceIdIn(
+              DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE, sourceIds));
+    }
     for (DriverLogisticsTask task : documentTasks) {
-      cancelTask(document, task);
+      cancelTask(document, task, taskWarehouse(document, lines));
     }
   }
 
   private void planGroupedDocument(
       LogisticsDocument document,
       List<LogisticsDocumentLine> lines,
+      UUID taskWarehouseId,
       DriverTaskKind kind,
       DriverTaskAudience audience,
-      LogisticsDependencyGateway.WarehouseDriverQueue queue) {
+      LogisticsDependencyGateway.WarehouseDriverQueue queue,
+      DriverTaskWorkerContent workerContent,
+      String workerContentJson) {
     DriverLogisticsTask existing =
         tasks
             .findActiveForUpdateBySourceTypeAndSourceIdAndKind(
                 DriverTaskSourceType.LOGISTICS_DOCUMENT, document.getId(), kind)
             .orElse(null);
     List<DocumentMember> members = documentMembers(document, lines);
-    String checksum = groupedChecksum(document, kind, members, audience, queue);
+    String checksum =
+        groupedChecksum(
+            document,
+            taskWarehouseId,
+            kind,
+            members,
+            audience,
+            queue,
+            workerContentJson);
     if (existing == null) {
       DriverLogisticsTask created =
           DriverLogisticsTask.createGroupedDocument(
-              document.getWarehouseId(),
+              taskWarehouseId,
               members.getFirst().cabinId(),
               document.getId(),
               kind,
@@ -124,12 +219,15 @@ public class DocumentDriverTaskPlanner {
         created.addGroupedDocumentMember(
             member.lineId(), member.cabinId(), member.unitNumber(), member.position());
       }
+      created.captureWorkerContent(workerContentJson);
       tasks.saveAndFlush(created);
       return;
     }
-    requireSameGroupedDocumentIntent(document, kind, members, queue, existing);
+    requireSameGroupedDocumentIntent(
+        document, taskWarehouseId, kind, members, queue, existing);
     if (existing.matchesRequest(checksum)) return;
-    replanRegisteredTask(document, existing, audience, checksum);
+    replanRegisteredTask(
+        document, existing, audience, workerContent, workerContentJson, checksum);
   }
 
   /**
@@ -138,7 +236,9 @@ public class DocumentDriverTaskPlanner {
    * prevents regrouping without mutating its siblings. New line tasks are never created.
    */
   private void cancelLegacyLineTasksBeforeGrouping(
-      LogisticsDocument document, List<LogisticsDocumentLine> lines) {
+      LogisticsDocument document,
+      List<LogisticsDocumentLine> lines,
+      UUID taskWarehouseId) {
     List<DriverLogisticsTask> legacyTasks =
         tasks
             .findAllForUpdateBySourceTypeAndSourceIdIn(
@@ -151,7 +251,7 @@ public class DocumentDriverTaskPlanner {
 
     List<LegacyLineCancellation> cancellations = new ArrayList<>(legacyTasks.size());
     for (DriverLogisticsTask task : legacyTasks) {
-      if (!document.getWarehouseId().equals(task.getWarehouseId())) {
+      if (!taskWarehouseId.equals(task.getWarehouseId())) {
         throw new LogisticsConflictException("Старое задание водителя принадлежит другому складу");
       }
       if (task.getState() == DriverTaskState.REGISTERING && task.getTaskBoardTaskId() == null) {
@@ -260,11 +360,12 @@ public class DocumentDriverTaskPlanner {
 
   private static void requireSameGroupedDocumentIntent(
       LogisticsDocument document,
+      UUID taskWarehouseId,
       DriverTaskKind kind,
       List<DocumentMember> members,
       LogisticsDependencyGateway.WarehouseDriverQueue queue,
       DriverLogisticsTask task) {
-    if (!document.getWarehouseId().equals(task.getWarehouseId())
+    if (!taskWarehouseId.equals(task.getWarehouseId())
         || !members.getFirst().cabinId().equals(task.getCabinId())
         || !document.getId().equals(task.getSourceId())
         || task.getSourceType() != DriverTaskSourceType.LOGISTICS_DOCUMENT
@@ -286,10 +387,29 @@ public class DocumentDriverTaskPlanner {
     }
   }
 
+  private static void requireSameFurnitureCargoIntent(
+      LogisticsDocument document,
+      String cargoSummary,
+      LogisticsDependencyGateway.WarehouseDriverQueue queue,
+      DriverLogisticsTask task) {
+    if (!document.getWarehouseId().equals(task.getWarehouseId())
+        || !document.getId().equals(task.getSourceId())
+        || task.getSourceType() != DriverTaskSourceType.LOGISTICS_DOCUMENT
+        || task.getKind() != DriverTaskKind.TRANSFER
+        || !task.isFurnitureCargoTransfer()
+        || !queue.queueDefinitionId().equals(task.getDriverQueueDefinitionId())
+        || !cargoSummary.equals(task.getUnitNumber())) {
+      throw new LogisticsConflictException(
+          "Перемещение мебели уже связано с другим заданием водителя");
+    }
+  }
+
   private void replanRegisteredTask(
       LogisticsDocument document,
       DriverLogisticsTask task,
       DriverTaskAudience audience,
+      DriverTaskWorkerContent workerContent,
+      String workerContentJson,
       String checksum) {
     if (task.getState() == DriverTaskState.REGISTERING && task.getTaskBoardTaskId() == null) {
       task.replanBeforeStart(
@@ -298,6 +418,7 @@ public class DocumentDriverTaskPlanner {
           audience.workerId(),
           audience.workerName(),
           checksum);
+      task.captureWorkerContent(workerContentJson);
       tasks.saveAndFlush(task);
       return;
     }
@@ -309,12 +430,24 @@ public class DocumentDriverTaskPlanner {
       throw new LogisticsConflictException(
           "Начатое задание водителя нельзя перепланировать из документа");
     }
-    int targetIndex = targetDateSize(document.getWarehouseId(), document.getScheduledDate());
+    LogisticsDependencyGateway.DriverBoardTask contentUpdated = current;
+    if (!Objects.equals(task.getWorkerContentJson(), workerContentJson)) {
+      contentUpdated =
+          dependencies.updateDriverTaskBeforeStart(
+              task.getExternalTaskId(),
+              current.taskVersion(),
+              current.title(),
+              task.getUnitNumber(),
+              task.getComment() == null ? current.title() : task.getComment(),
+              task.getDriverQueueDefinitionId(),
+              workerContent);
+    }
+    int targetIndex = targetDateSize(task.getWarehouseId(), document.getScheduledDate());
     LogisticsDependencyGateway.DriverBoardTask moved =
         dependencies.moveDriverTask(
             task.getExternalTaskId(),
-            current.taskVersion(),
-            current.entryVersion(),
+            contentUpdated.taskVersion(),
+            contentUpdated.entryVersion(),
             "SCHEDULED",
             document.getScheduledDate(),
             targetIndex,
@@ -327,6 +460,7 @@ public class DocumentDriverTaskPlanner {
         audience.workerId(),
         audience.workerName(),
         checksum);
+    refreshed.captureWorkerContent(workerContentJson);
     tasks.saveAndFlush(refreshed);
   }
 
@@ -348,8 +482,9 @@ public class DocumentDriverTaskPlanner {
     throw new LogisticsConflictException("Ходка не входит в текущий заказ");
   }
 
-  private void cancelTask(LogisticsDocument document, DriverLogisticsTask task) {
-    if (!document.getWarehouseId().equals(task.getWarehouseId())) {
+  private void cancelTask(
+      LogisticsDocument document, DriverLogisticsTask task, UUID taskWarehouseId) {
+    if (!taskWarehouseId.equals(task.getWarehouseId())) {
       throw new LogisticsConflictException("Задание водителя принадлежит другому складу");
     }
     if (task.getState() == DriverTaskState.CANCELLED) return;
@@ -392,7 +527,10 @@ public class DocumentDriverTaskPlanner {
     UUID workerId = document.getDriverWorkerId();
     String workerName = document.getDriverSnapshot();
     if (document.getDocumentType() == LogisticsDocumentType.TRANSFER) {
-      return new DriverTaskAudience(DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null);
+      return workerId == null
+          ? new DriverTaskAudience(DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null)
+          : new DriverTaskAudience(
+              DriverTaskAudienceMode.ASSIGNED_DRIVER, workerId, workerName);
     }
     return workerId == null
         ? new DriverTaskAudience(DriverTaskAudienceMode.UNASSIGNED, null, null)
@@ -428,13 +566,36 @@ public class DocumentDriverTaskPlanner {
     }
   }
 
+  private static void requireTransferCargoPlan(LogisticsDocument document) {
+    if (document == null
+        || document.getId() == null
+        || document.getDocumentType() != LogisticsDocumentType.TRANSFER
+        || document.getWarehouseId() == null
+        || document.getScheduledDate() == null
+        || document.getRequestedBySubjectId() == null) {
+      throw new IllegalArgumentException("Scheduled persisted transfer is required");
+    }
+  }
+
+  private static String normalizedCargoSummary(String cargoSummary) {
+    String normalized = cargoSummary == null ? "" : cargoSummary.trim();
+    if (normalized.isEmpty() || normalized.length() > 64) {
+      throw new IllegalArgumentException("cargoSummary is invalid");
+    }
+    return normalized;
+  }
+
+  private static String furnitureCargoTaskText(String cargoSummary) {
+    return "Межскладской груз: " + cargoSummary;
+  }
+
   private static void requireCabin(
       LogisticsDocument document,
       LogisticsDocumentLine line,
       LogisticsDependencyGateway.RentalItemSnapshot cabin) {
     if (cabin == null
         || !line.getAssetId().equals(cabin.assetId())
-        || !document.getWarehouseId().equals(cabin.warehouseId())
+        || !line.getInventorySourceWarehouseId().equals(cabin.warehouseId())
         || cabin.number() == null
         || cabin.number().isBlank()) {
       throw new LogisticsConflictException(
@@ -444,19 +605,23 @@ public class DocumentDriverTaskPlanner {
 
   private static String groupedChecksum(
       LogisticsDocument document,
+      UUID taskWarehouseId,
       DriverTaskKind kind,
       List<DocumentMember> members,
       DriverTaskAudience audience,
-      LogisticsDependencyGateway.WarehouseDriverQueue queue) {
+      LogisticsDependencyGateway.WarehouseDriverQueue queue,
+      String workerContentJson) {
     List<String> values = new ArrayList<>();
     values.add(document.getId().toString());
     values.add(document.getWarehouseId().toString());
+    values.add(taskWarehouseId.toString());
     values.add(kind.name());
     values.add(document.getScheduledDate().toString());
     values.add(audience.mode().name());
     values.add(audience.workerId() == null ? null : audience.workerId().toString());
     values.add(audience.workerName());
     values.add(queue.queueDefinitionId().toString());
+    values.add(workerContentJson);
     for (DocumentMember member : members) {
       values.add(member.lineId().toString());
       values.add(member.cabinId().toString());
@@ -466,9 +631,50 @@ public class DocumentDriverTaskPlanner {
     return DriverTaskChecksum.sha256(PLAN_OPERATION, values);
   }
 
+  private static String furnitureCargoChecksum(
+      LogisticsDocument document,
+      String cargoSummary,
+      DriverTaskAudience audience,
+      LogisticsDependencyGateway.WarehouseDriverQueue queue,
+      String workerContentJson) {
+    return DriverTaskChecksum.sha256(
+        PLAN_OPERATION,
+        List.of(
+            document.getId().toString(),
+            document.getWarehouseId().toString(),
+            DriverTaskKind.TRANSFER.name(),
+            "FURNITURE_CARGO",
+            document.getScheduledDate().toString(),
+            cargoSummary,
+            audience.mode().name(),
+            audience.workerId() == null ? "" : audience.workerId().toString(),
+            audience.workerName() == null ? "" : audience.workerName(),
+            queue.queueDefinitionId().toString(),
+            workerContentJson));
+  }
+
   private static LogisticsConflictException legacyStarted() {
     return new LogisticsConflictException(
         "Старые задания бытовок уже начаты; объединить их в одну ходку нельзя");
+  }
+
+  /** Resolves the physical task origin and rejects an unsupported mixed-source shipment batch. */
+  static UUID taskWarehouse(
+      LogisticsDocument document, List<LogisticsDocumentLine> lines) {
+    if (document.getDocumentType() != LogisticsDocumentType.SHIPMENT) {
+      return document.getWarehouseId();
+    }
+    if (lines == null || lines.isEmpty()) {
+      throw new LogisticsConflictException("В ходке отгрузки отсутствуют бытовки");
+    }
+    UUID source = lines.getFirst().getInventorySourceWarehouseId();
+    if (source == null
+        || lines.stream()
+            .anyMatch(line -> !source.equals(line.getInventorySourceWarehouseId()))) {
+      throw new LogisticsConflictException(
+          "Одна ходка отгрузки не может содержать несколько складов-источников");
+    }
+    return source;
   }
 
   /** Derives one stable local task identity from a grouped logistics document. */

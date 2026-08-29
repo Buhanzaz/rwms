@@ -25,6 +25,34 @@
 Сервис не владеет кабинами, inventory sessions, repairs, tasks, logistics
 documents, пользователями, warehouse grants или client-side выбором склада.
 
+## Представительские склады и граф обслуживания
+
+Представительский склад остаётся тем же aggregate `Warehouse` с независимым признаком
+`representative`. По умолчанию признак равен `false` и не означает lifecycle-состояние, отсутствие
+персонала, ограничение направления остатков или запрет обычной доставки. WGS84-поля `latitude` и
+`longitude` принадлежат метаданным склада и задаются только парой; `address` может отсутствовать,
+если координаты заполнены. Склад без координат остаётся валидным в directory, но его logistics-
+projection помечает его как неготовый к маршрутизации, поэтому новый workspace карты для него не
+материализуется.
+
+Owner также хранит направленный many-to-many граф обслуживания. Одна активная связь означает, что
+опорный склад может предоставлять выбранные возможности одному обслуживаемому представительскому
+складу. Policy независимо разрешает водителей, автомобили, имущество, прямое исполнение,
+межскладские перемещения и fallback на подрядчика, а также задаёт приоритет, дни недели,
+разрешённые даты, исключения и необязательный дневной интервал. Связи склада с самим собой и
+дубликаты опорного склада запрещены. Полная коллекция заменяется атомарно под aggregate-version
+fence обслуживаемого склада; снять представительский признак при существующих связях нельзя.
+
+Логистика читает тот же UUID склада, owner-held координаты, представительский признак и
+отфильтрованные по дате опорные связи через private warehouse boundary. Она не создаёт вторую
+identity склада или точки карты. Самостоятельный планировщик сверяет directory по UUID и версии
+склада; изменение версии или координат инвалидирует изменяемые планы маршрутов до использования
+новой точки. См. [`Warehouse`](src/main/java/dev/buhanzaz/rwms/warehouse/domain/Warehouse.java),
+[`WarehouseSupportLinkService`](src/main/java/dev/buhanzaz/rwms/warehouse/service/WarehouseSupportLinkService.java),
+[`LogisticsWarehouseController`](src/main/java/dev/buhanzaz/rwms/warehouse/api/LogisticsWarehouseController.java)
+и
+[`сверку directory`](../../logistics/backend/app/services/catalog.py) планировщика.
+
 ## Поток запроса и lifecycle
 
 ```text
@@ -65,11 +93,13 @@ owner сохраняет pending, ambiguous, quarantined и non-terminal work к
 | Граница | Audience | Назначение |
 | --- | --- | --- |
 | `/api/warehouse/v1/warehouses/**` | Authenticated `USER`; writes требуют exact administrator policy | Global directory, create/replace, draining, inactivation и timezone scheduling |
+| `/api/warehouse/v1/warehouses/{id}/support-links` | Authenticated warehouse manager с grants для всех endpoints | Чтение или атомарная замена полного графа обслуживания представительского склада |
 | `/api/warehouse/v1/admin/outbox-events/**` | Reviewed administrator recovery | Повтор одного immutable terminal/quarantined outbox fact под review fence |
 | `/api/internal/warehouse/v1/warehouses/{id}/existence` | Exact auth-service credential/scope | Узкая existence-проверка warehouse grants |
 | `/api/internal/warehouse/v1/warehouses/asset/**` | Exact asset-service credential/scope | Asset-specific existence boundary |
 | `/api/internal/warehouse/v1/warehouses/inventory/**` | Exact inventory-service credential/scope | Inventory metadata snapshot |
 | `/api/internal/warehouse/v1/warehouses/logistics/**` | Exact logistics-service credential/scope | Logistics identity/directory view |
+| `/api/internal/warehouse/v1/warehouses/logistics/{id}/support-links` | Exact logistics-service credential/scope | Активные опорные связи, допустимые в переданный момент, с координатами обоих endpoints |
 | `/api/internal/warehouse/v1/warehouses/{id}/admission` | Contract-defined operation owner | Directional lifecycle admission |
 | `/api/internal/warehouse/v1/warehouses/{id}/lifecycle-readiness` | Contract-defined operation owner | Exact-version readiness confirmation |
 | `/api/internal/warehouse/v1/lifecycle/readiness-work` | Service credential | Reconciliation незавершённых подтверждений |
@@ -78,6 +108,12 @@ owner сохраняет pending, ambiguous, quarantined и non-terminal work к
 
 Public directory намеренно является глобальным authenticated read. Warehouse
 grants его не фильтруют; write- и domain access checks остаются отдельными.
+
+Responses logistics identity и directory всегда содержат принадлежащее
+warehouse-service поле `address`; оно nullable для складов, адрес которых ещё
+не записан. Directory включает только активные склады в canonical порядке
+warehouse-service и доступна исключительно точным credential и scope
+logistics-service.
 
 ## Identity, concurrency и время
 
@@ -91,6 +127,9 @@ grants его не фильтруют; write- и domain access checks остаю
 - Inactive warehouse остаётся доступным для исторических references.
 - Lifecycle readiness привязан к точной warehouse version, поэтому позднее
   подтверждение не может деактивировать более новое состояние.
+- Изменение координат, представительского признака и коллекции связей увеличивает ту же aggregate
+  version; замена связей дополнительно увеличивает принадлежащую складу revision и не может
+  конкурировать с lifecycle-изменениями endpoints.
 
 ## Persistence и события
 
@@ -98,6 +137,11 @@ grants его не фильтруют; write- и domain access checks остаю
 [`src/main/resources/db/migration`](src/main/resources/db/migration/) —
 единственный schema authority; Hibernate использует `ddl-auto=validate` и не
 изменяет схему.
+
+V7 добавляет обратносуместимый non-null столбец `representative=false`. V8 добавляет пару координат,
+warehouse-owned support revision, направленные строки связей и их weekday/date value tables с
+ограничениями уникальности и направления. Отдельной таблицы представительского склада и
+`parentWarehouseId` нет.
 
 Aggregate transition, append-only domain history и outbox envelope фиксируются
 локально. Kafka relay забирает упорядоченную запись с lease, проверяет immutable

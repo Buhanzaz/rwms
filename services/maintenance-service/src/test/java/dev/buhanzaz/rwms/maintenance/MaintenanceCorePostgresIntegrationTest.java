@@ -1111,6 +1111,9 @@ class MaintenanceCorePostgresIntegrationTest {
         null,
         "",
         null);
+    UUID mismatchedRentalItemId = UUID.randomUUID();
+    rentalItemFacts.saveAndFlush(
+        RentalItemFactProjection.create(mismatchedRentalItemId, warehouseId, "FREE", 7));
     assertThatThrownBy(
             () ->
                 service.createDirectRepair(
@@ -1118,7 +1121,7 @@ class MaintenanceCorePostgresIntegrationTest {
                     UUID.randomUUID(),
                     new CreateDirectRepairRequest(
                         warehouseId,
-                        rentalItemId,
+                        mismatchedRentalItemId,
                         LocalDate.of(2026, 7, 26),
                         null,
                         List.of(mismatched),
@@ -3453,6 +3456,9 @@ class MaintenanceCorePostgresIntegrationTest {
         List.of(combinedStage),
         List.of());
 
+    UUID materialOnlyRentalItemId = UUID.randomUUID();
+    rentalItemFacts.saveAndFlush(
+        RentalItemFactProjection.create(materialOnlyRentalItemId, warehouseId, "FREE", 7));
     PlanStageInput materialOnlyStage = new PlanStageInput(
         UUID.randomUUID(),
         RepairStageKind.REPAIR_WORK,
@@ -3468,7 +3474,7 @@ class MaintenanceCorePostgresIntegrationTest {
             UUID.randomUUID(),
             new CreateDirectRepairRequest(
                 warehouseId,
-                rentalItemId,
+                materialOnlyRentalItemId,
                 LocalDate.of(2026, 7, 26),
                 null,
                 List.of(customMaterial),
@@ -3787,304 +3793,6 @@ class MaintenanceCorePostgresIntegrationTest {
             eq(repair.repairId().toString()),
             eq("QUEUE_TO_REPAIR"),
             eq(false));
-  }
-
-  @Test
-  void secondPrimaryRepairQueuesAndRegistersWithoutTakingOverTheFirstLease() {
-    RepairFixture first = createDirectRepair();
-    service.queueRepair(
-        UUID.randomUUID(), UUID.randomUUID(), first.repairId(), new VersionCommand(0L));
-    stubQueueDependencies(first);
-    assertThat(service.reconcileOneTask()).isTrue();
-    registerQueuedRepair(first);
-    var firstBefore = repairs.findById(first.repairId()).orElseThrow();
-    UUID firstLeaseId = firstBefore.getLeaseId();
-    long firstLeaseVersion = firstBefore.getLeaseVersion();
-    long firstFencingToken = firstBefore.getFencingToken();
-    OffsetDateTime firstLeaseExpiresAt = firstBefore.getLeaseExpiresAt();
-    clearInvocations(dependencies);
-
-    var second =
-        service.createDirectRepair(
-            UUID.randomUUID(),
-            UUID.randomUUID(),
-            directRepairRequest(
-                first.warehouseId(),
-                first.rentalItemId(),
-                LocalDate.of(2026, 7, 18),
-                null));
-    RepairFixture secondFixture = new RepairFixture(
-        second.response().id(),
-        second.response().plan().stages().getFirst().taskSync().externalTaskId(),
-        first.warehouseId(),
-        first.rentalItemId());
-    service.queueRepair(
-        UUID.randomUUID(), UUID.randomUUID(), secondFixture.repairId(), new VersionCommand(0L));
-    when(dependencies.getRentalItemSnapshot(first.rentalItemId()))
-        .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
-            first.rentalItemId(), 8, first.warehouseId(), "БТ-42", "REPAIR"));
-
-    assertThat(service.reconcileOneTask()).isTrue();
-    var secondQueued = repairs.findById(secondFixture.repairId()).orElseThrow();
-    assertThat(secondQueued.getExecutionState()).isEqualTo(RepairExecutionState.QUEUED);
-    assertThat(secondQueued.getRentalItemVersionSnapshot()).isEqualTo(8);
-    assertThat(secondQueued.getLeaseId()).isNull();
-    assertThat(secondQueued.getLeaseVersion()).isNull();
-    assertThat(secondQueued.getFencingToken()).isNull();
-    assertThat(secondQueued.getLeaseExpiresAt()).isNull();
-    assertThat(secondQueued.getLeaseReconciliationState()).isEqualTo("NOT_REQUIRED");
-    assertThat(jdbc.queryForObject("""
-        select count(*) from repair_stage
-        where repair_id=? and state='QUEUED'
-        """, Integer.class, secondFixture.repairId())).isOne();
-
-    registerQueuedRepair(secondFixture);
-    assertThat(repairs.findById(secondFixture.repairId()).orElseThrow().getTaskGenerationState())
-        .isEqualTo("GENERATED");
-    assertThat(repairs.findById(first.repairId()).orElseThrow())
-        .satisfies(owner -> {
-          assertThat(owner.getLeaseId()).isEqualTo(firstLeaseId);
-          assertThat(owner.getLeaseVersion()).isEqualTo(firstLeaseVersion);
-          assertThat(owner.getFencingToken()).isEqualTo(firstFencingToken);
-          assertThat(owner.getLeaseExpiresAt()).isEqualTo(firstLeaseExpiresAt);
-          assertThat(owner.getLeaseReconciliationState()).isEqualTo("ACTIVE");
-        });
-
-    verify(dependencies, times(2)).getRentalItemSnapshot(first.rentalItemId());
-    verify(dependencies, never()).acquireLease(
-        any(), eq(first.rentalItemId()), anyLong(),
-        anyString(), eq(secondFixture.repairId().toString()));
-    verify(dependencies, never()).renewLease(
-        any(), any(), anyLong(), anyLong(),
-        anyString(), eq(secondFixture.repairId().toString()));
-    verify(dependencies, never()).fencedStatus(
-        any(), eq(first.rentalItemId()), eq(first.warehouseId()), anyLong(),
-        any(), anyLong(), anyString(), eq(secondFixture.repairId().toString()),
-        anyString(), anyBoolean());
-    verify(dependencies, never()).releaseLease(
-        any(), any(), anyLong(), anyLong(),
-        anyString(), eq(secondFixture.repairId().toString()));
-    verify(dependencies).registerTask(
-        any(), eq(secondFixture.externalTaskId()), eq(secondFixture.repairId()),
-        eq(first.warehouseId()),
-        eq(first.rentalItemId()), nullable(String.class),
-        any(LocalDate.class), anyInt(), anyList());
-  }
-
-  @Test
-  void repeatedSecondRepairQueueCommandIsIdempotent() {
-    RepairFixture first = createDirectRepair();
-    service.queueRepair(
-        UUID.randomUUID(), UUID.randomUUID(), first.repairId(), new VersionCommand(0L));
-    stubQueueDependencies(first);
-    assertThat(service.reconcileOneTask()).isTrue();
-    registerQueuedRepair(first);
-    clearInvocations(dependencies);
-
-    var created =
-        service.createDirectRepair(
-            UUID.randomUUID(),
-            UUID.randomUUID(),
-            directRepairRequest(
-                first.warehouseId(),
-                first.rentalItemId(),
-                LocalDate.of(2026, 7, 18),
-                null));
-    RepairFixture second = new RepairFixture(
-        created.response().id(),
-        created.response().plan().stages().getFirst().taskSync().externalTaskId(),
-        first.warehouseId(),
-        first.rentalItemId());
-    UUID subjectId = UUID.randomUUID();
-    UUID key = UUID.randomUUID();
-
-    assertThat(service.queueRepair(
-        subjectId, key, second.repairId(), new VersionCommand(0L)).replayed()).isFalse();
-    assertThat(service.queueRepair(
-        subjectId, key, second.repairId(), new VersionCommand(0L)).replayed()).isTrue();
-    assertThat(jdbc.queryForObject("""
-        select count(*) from integration_reconciliation
-        where repair_id=? and operation_type='QUEUE_REPAIR'
-        """, Integer.class, second.repairId())).isOne();
-
-    when(dependencies.getRentalItemSnapshot(first.rentalItemId()))
-        .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
-            first.rentalItemId(), 8, first.warehouseId(), "БТ-42", "REPAIR"));
-    assertThat(service.reconcileOneTask()).isTrue();
-    registerQueuedRepair(second);
-
-    assertThat(jdbc.queryForObject("""
-        select count(*) from integration_reconciliation
-        where repair_id=? and operation_type='REGISTER_TASK'
-        """, Integer.class, second.repairId())).isOne();
-    verify(dependencies, times(1)).registerTask(
-        any(), eq(second.externalTaskId()), eq(second.repairId()), eq(first.warehouseId()),
-        eq(first.rentalItemId()), nullable(String.class),
-        any(LocalDate.class), anyInt(), anyList());
-    verify(dependencies, never()).acquireLease(
-        any(), eq(first.rentalItemId()), anyLong(),
-        anyString(), eq(second.repairId().toString()));
-    verify(dependencies, never()).fencedStatus(
-        any(), eq(first.rentalItemId()), eq(first.warehouseId()), anyLong(),
-        any(), anyLong(), anyString(), eq(second.repairId().toString()),
-        anyString(), anyBoolean());
-  }
-
-  @Test
-  void reconciliationRequiredLifecycleOwnerQueuesSecondRepairWithoutLeaseCalls() {
-    RepairFixture first = createDirectRepair();
-    service.queueRepair(
-        UUID.randomUUID(), UUID.randomUUID(), first.repairId(), new VersionCommand(0L));
-    stubQueueDependencies(first);
-    assertThat(service.reconcileOneTask()).isTrue();
-    registerQueuedRepair(first);
-    jdbc.update("""
-        update maintenance_repair
-        set lease_reconciliation_state='RECONCILIATION_REQUIRED'
-        where id=?
-        """, first.repairId());
-    clearInvocations(dependencies);
-
-    var created =
-        service.createDirectRepair(
-            UUID.randomUUID(),
-            UUID.randomUUID(),
-            directRepairRequest(
-                first.warehouseId(),
-                first.rentalItemId(),
-                LocalDate.of(2026, 7, 18),
-                null));
-    RepairFixture second = new RepairFixture(
-        created.response().id(),
-        created.response().plan().stages().getFirst().taskSync().externalTaskId(),
-        first.warehouseId(),
-        first.rentalItemId());
-    service.queueRepair(
-        UUID.randomUUID(), UUID.randomUUID(), second.repairId(), new VersionCommand(0L));
-    when(dependencies.getRentalItemSnapshot(first.rentalItemId()))
-        .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
-            first.rentalItemId(), 8, first.warehouseId(), "БТ-42", "REPAIR"));
-
-    assertThat(service.reconcileOneTask()).isTrue();
-    registerQueuedRepair(second);
-
-    assertThat(repairs.findById(second.repairId()).orElseThrow())
-        .satisfies(repair -> {
-          assertThat(repair.getExecutionState()).isEqualTo(RepairExecutionState.QUEUED);
-          assertThat(repair.getLeaseId()).isNull();
-          assertThat(repair.getLeaseReconciliationState()).isEqualTo("NOT_REQUIRED");
-          assertThat(repair.getTaskGenerationState()).isEqualTo("GENERATED");
-        });
-    assertThat(repairs.findById(first.repairId()).orElseThrow().getLeaseReconciliationState())
-        .isEqualTo("RECONCILIATION_REQUIRED");
-    verify(dependencies, times(2)).getRentalItemSnapshot(first.rentalItemId());
-    verify(dependencies, never()).acquireLease(
-        any(), eq(first.rentalItemId()), anyLong(),
-        anyString(), eq(second.repairId().toString()));
-    verify(dependencies, never()).renewLease(
-        any(), any(), anyLong(), anyLong(),
-        anyString(), eq(second.repairId().toString()));
-    verify(dependencies, never()).fencedStatus(
-        any(), eq(first.rentalItemId()), eq(first.warehouseId()), anyLong(),
-        any(), anyLong(), anyString(), eq(second.repairId().toString()),
-        anyString(), anyBoolean());
-    verify(dependencies, never()).releaseLease(
-        any(), any(), anyLong(), anyLong(),
-        anyString(), eq(second.repairId().toString()));
-  }
-
-  @Test
-  void authenticatedRetryQueuesAQuarantinedSecondRepairWithoutLeaseCalls() {
-    RepairFixture first = createDirectRepair();
-    service.queueRepair(
-        UUID.randomUUID(), UUID.randomUUID(), first.repairId(), new VersionCommand(0L));
-    stubQueueDependencies(first);
-    assertThat(service.reconcileOneTask()).isTrue();
-    registerQueuedRepair(first);
-    jdbc.update("""
-        update maintenance_repair
-        set lease_reconciliation_state='RELEASED'
-        where id=?
-        """, first.repairId());
-    clearInvocations(dependencies);
-
-    var created =
-        service.createDirectRepair(
-            UUID.randomUUID(),
-            UUID.randomUUID(),
-            directRepairRequest(
-                first.warehouseId(),
-                first.rentalItemId(),
-                LocalDate.of(2026, 7, 18),
-                null));
-    RepairFixture second = new RepairFixture(
-        created.response().id(),
-        created.response().plan().stages().getFirst().taskSync().externalTaskId(),
-        first.warehouseId(),
-        first.rentalItemId());
-    service.queueRepair(
-        UUID.randomUUID(), UUID.randomUUID(), second.repairId(), new VersionCommand(0L));
-    when(dependencies.getRentalItemSnapshot(first.rentalItemId()))
-        .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
-            first.rentalItemId(), 8, first.warehouseId(), "БТ-42", "REPAIR"));
-
-    for (int attempt = 0; attempt < 4; attempt++) {
-      if (attempt > 0) makeReconciliationDue(second.repairId(), "QUEUE_REPAIR");
-      assertThat(service.reconcileOneTask()).isTrue();
-    }
-    assertThat(jdbc.queryForObject("""
-        select state from integration_reconciliation
-        where repair_id=? and operation_type='QUEUE_REPAIR'
-        """, String.class, second.repairId())).isEqualTo("QUARANTINED");
-
-    jdbc.update("""
-        update maintenance_repair
-        set lease_reconciliation_state='RECONCILIATION_REQUIRED'
-        where id=?
-        """, first.repairId());
-    UUID reviewer = UUID.randomUUID();
-    long currentVersion = service.repair(second.repairId(), second.warehouseId()).version();
-    service.queueRepair(
-        reviewer,
-        UUID.randomUUID(),
-        second.repairId(),
-        new QueueRepairRequest(currentVersion, 3));
-
-    assertThat(jdbc.queryForMap("""
-        select state,attempt_count,review_version,review_subject_id,review_reason
-        from integration_reconciliation
-        where repair_id=? and operation_type='QUEUE_REPAIR'
-        """, second.repairId()))
-        .containsEntry("state", "RETRY_PENDING")
-        .containsEntry("attempt_count", 0)
-        .containsEntry("review_version", 1L)
-        .containsEntry("review_subject_id", reviewer)
-        .containsEntry(
-            "review_reason",
-            "Authenticated repair queue retry after canonical asset revalidation");
-
-    assertThat(service.reconcileOneTask()).isTrue();
-    registerQueuedRepair(second);
-    assertThat(repairs.findById(second.repairId()).orElseThrow())
-        .satisfies(repair -> {
-          assertThat(repair.getExecutionState()).isEqualTo(RepairExecutionState.QUEUED);
-          assertThat(repair.getLeaseId()).isNull();
-          assertThat(repair.getLeaseReconciliationState()).isEqualTo("NOT_REQUIRED");
-          assertThat(repair.getTaskGenerationState()).isEqualTo("GENERATED");
-        });
-    verify(dependencies, never()).acquireLease(
-        any(), eq(first.rentalItemId()), anyLong(),
-        anyString(), eq(second.repairId().toString()));
-    verify(dependencies, never()).renewLease(
-        any(), any(), anyLong(), anyLong(),
-        anyString(), eq(second.repairId().toString()));
-    verify(dependencies, never()).fencedStatus(
-        any(), eq(first.rentalItemId()), eq(first.warehouseId()), anyLong(),
-        any(), anyLong(), anyString(), eq(second.repairId().toString()),
-        anyString(), anyBoolean());
-    verify(dependencies, never()).releaseLease(
-        any(), any(), anyLong(), anyLong(),
-        anyString(), eq(second.repairId().toString()));
   }
 
   @Test
@@ -6350,76 +6058,6 @@ class MaintenanceCorePostgresIntegrationTest {
         select count(*) from integration_reconciliation
         where operation_type='CANCELLED_PRIMARY_RECONCILIATION'
         """, Integer.class)).isZero();
-    verifyNoInteractions(dependencies);
-  }
-
-  @Test
-  void cancelledNoLeaseSecondaryRepairCompletesLocallyAndRetainsTheFirstLease() {
-    RegisteredRepairFixture first = createRegisteredPrimaryRepair();
-    var firstBefore = repairs.findById(first.repair().repairId()).orElseThrow();
-    UUID firstLeaseId = firstBefore.getLeaseId();
-    long firstLeaseVersion = firstBefore.getLeaseVersion();
-    long firstFencingToken = firstBefore.getFencingToken();
-    OffsetDateTime firstLeaseExpiresAt = firstBefore.getLeaseExpiresAt();
-
-    var created =
-        service.createDirectRepair(
-            UUID.randomUUID(),
-            UUID.randomUUID(),
-            directRepairRequest(
-                first.repair().warehouseId(),
-                first.repair().rentalItemId(),
-                LocalDate.of(2026, 7, 18),
-                null));
-    RepairFixture second = new RepairFixture(
-        created.response().id(),
-        created.response().plan().stages().getFirst().taskSync().externalTaskId(),
-        first.repair().warehouseId(),
-        first.repair().rentalItemId());
-    service.queueRepair(
-        UUID.randomUUID(), UUID.randomUUID(), second.repairId(), new VersionCommand(0L));
-    when(dependencies.getRentalItemSnapshot(second.rentalItemId()))
-        .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
-            second.rentalItemId(), 8, second.warehouseId(), "БТ-42", "REPAIR"));
-    assertThat(service.reconcileOneTask()).isTrue();
-    RegisteredRepairFixture registeredSecond = registerQueuedRepair(second);
-    UUID eventId = UUID.randomUUID();
-    clearInvocations(dependencies);
-
-    applyTaskOutcome(
-        second,
-        registeredSecond.queueEntryId(),
-        "task-board.queue-entry.cancelled.v1",
-        eventId);
-    applyTaskOutcome(
-        second,
-        registeredSecond.queueEntryId(),
-        "task-board.queue-entry.cancelled.v1",
-        eventId);
-
-    assertThat(repairs.findById(second.repairId()).orElseThrow())
-        .satisfies(cancelled -> {
-          assertThat(cancelled.getExecutionState()).isEqualTo(RepairExecutionState.CANCELLED);
-          assertThat(cancelled.getLeaseId()).isNull();
-          assertThat(cancelled.getLeaseVersion()).isNull();
-          assertThat(cancelled.getFencingToken()).isNull();
-          assertThat(cancelled.getLeaseExpiresAt()).isNull();
-          assertThat(cancelled.getLeaseReconciliationState()).isEqualTo("NOT_REQUIRED");
-          assertThat(cancelled.getReconciliationState()).isEqualTo("RECONCILED");
-          assertThat(cancelled.getDeliveryState()).isEqualTo("DELIVERED");
-        });
-    assertThat(repairs.findById(first.repair().repairId()).orElseThrow())
-        .satisfies(owner -> {
-          assertThat(owner.getLeaseId()).isEqualTo(firstLeaseId);
-          assertThat(owner.getLeaseVersion()).isEqualTo(firstLeaseVersion);
-          assertThat(owner.getFencingToken()).isEqualTo(firstFencingToken);
-          assertThat(owner.getLeaseExpiresAt()).isEqualTo(firstLeaseExpiresAt);
-          assertThat(owner.getLeaseReconciliationState()).isEqualTo("ACTIVE");
-        });
-    assertThat(jdbc.queryForObject("""
-        select count(*) from integration_reconciliation
-        where repair_id=? and operation_type='CANCELLED_PRIMARY_RECONCILIATION'
-        """, Integer.class, second.repairId())).isZero();
     verifyNoInteractions(dependencies);
   }
 

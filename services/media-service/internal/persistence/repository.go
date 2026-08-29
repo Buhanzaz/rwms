@@ -305,30 +305,31 @@ type CabinPreviewRecord struct {
 // CreateUploadCommand contains all validated data needed to create or replay a
 // constrained upload session for one logical media asset.
 type CreateUploadCommand struct {
-	MediaID           uuid.UUID
-	FolderID          uuid.UUID
-	UploadSessionID   uuid.UUID
-	SubjectID         uuid.UUID
-	PrincipalType     string
-	Actor             ActorReference
-	WorkerID          *uuid.UUID
-	IdempotencyKey    uuid.UUID
-	RequestSHA256     string
-	OwnerType         string
-	OwnerID           string
-	WarehouseID       uuid.UUID
-	ClientReferenceID *uuid.UUID
-	Kind              media.Kind
-	FileName          string
-	ContentType       string
-	ContentLength     int64
-	ChecksumSHA256    string
-	UploadMode        UploadMode
-	ImageVariants     []UploadImageVariantExpectation
-	SortOrder         int64
-	SourceObjectKey   string
-	UploadExpiresAt   time.Time
-	CorrelationID     uuid.UUID
+	MediaID             uuid.UUID
+	FolderID            uuid.UUID
+	UploadSessionID     uuid.UUID
+	SubjectID           uuid.UUID
+	PrincipalType       string
+	Actor               ActorReference
+	WorkerID            *uuid.UUID
+	IdempotencyKey      uuid.UUID
+	RequestSHA256       string
+	OwnerType           string
+	OwnerID             string
+	WarehouseID         uuid.UUID
+	AuthorizedSubjectID *uuid.UUID
+	ClientReferenceID   *uuid.UUID
+	Kind                media.Kind
+	FileName            string
+	ContentType         string
+	ContentLength       int64
+	ChecksumSHA256      string
+	UploadMode          UploadMode
+	ImageVariants       []UploadImageVariantExpectation
+	SortOrder           int64
+	SourceObjectKey     string
+	UploadExpiresAt     time.Time
+	CorrelationID       uuid.UUID
 }
 
 // CreateUpload creates one upload session or returns a safe exact idempotent
@@ -367,6 +368,17 @@ func (repository *Repository) CreateUpload(ctx context.Context, command CreateUp
 		}
 		return asset, replayed, nil
 	}
+	if command.AuthorizedSubjectID != nil && (!IsCustomerSubjectBoundOwnerType(command.OwnerType) ||
+		command.PrincipalType != PrincipalTypeUser || *command.AuthorizedSubjectID == uuid.Nil ||
+		*command.AuthorizedSubjectID != command.SubjectID) {
+		return AssetRecord{}, false, ErrOwnerProofMissing
+	}
+	if command.AuthorizedSubjectID != nil {
+		if err := requireCustomerOwnerBindingLock(ctx, tx, command.OwnerType, command.OwnerID,
+			command.WarehouseID, *command.AuthorizedSubjectID); err != nil {
+			return AssetRecord{}, false, err
+		}
+	}
 
 	if replay, found, err := repository.findCreateReplay(ctx, tx, command); err != nil {
 		return AssetRecord{}, false, err
@@ -376,8 +388,11 @@ func (repository *Repository) CreateUpload(ctx context.Context, command CreateUp
 		}
 		return replay, true, nil
 	}
-	if err := requireOwnerBinding(ctx, tx, command.OwnerType, command.OwnerID, command.WarehouseID, repository.now()); err != nil {
-		return AssetRecord{}, false, err
+	if command.AuthorizedSubjectID == nil {
+		if err := requireOwnerBinding(ctx, tx, command.OwnerType, command.OwnerID,
+			command.WarehouseID, repository.now()); err != nil {
+			return AssetRecord{}, false, err
+		}
 	}
 	if err := enforceOwnerMediaLimit(ctx, tx, command.OwnerType, command.OwnerID, command.WarehouseID, 100); err != nil {
 		return AssetRecord{}, false, err
@@ -851,6 +866,40 @@ func (repository *Repository) UploadSessionForPrincipal(
 	return asset, err
 }
 
+// UploadSessionForCustomer returns a customer-owned upload session only while
+// the exact CustomerApp subject remains bound by the current owner proof.
+func (repository *Repository) UploadSessionForCustomer(
+	ctx context.Context,
+	sessionID, subjectID uuid.UUID,
+) (AssetRecord, error) {
+	if sessionID == uuid.Nil || subjectID == uuid.Nil {
+		return AssetRecord{}, ErrNotFound
+	}
+	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return AssetRecord{}, err
+	}
+	defer tx.Rollback(ctx)
+	asset, err := scanAssetWithSession(tx.QueryRow(ctx,
+		assetWithSessionSQL+` where s.upload_session_id=$1 and s.subject_id=$2
+			and s.principal_type='USER' and media_asset_is_available(a.media_id)`,
+		sessionID, subjectID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AssetRecord{}, ErrNotFound
+	}
+	if err != nil {
+		return AssetRecord{}, err
+	}
+	if err := requireCustomerOwnerBindingLock(ctx, tx, asset.OwnerType, asset.OwnerID,
+		asset.WarehouseID, subjectID); err != nil {
+		return AssetRecord{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return AssetRecord{}, err
+	}
+	return asset, nil
+}
+
 // UploadImageVariantForPrincipal returns one declared WebP part only to the
 // principal that owns its still-open upload session.
 func (repository *Repository) UploadImageVariantForPrincipal(
@@ -874,19 +923,42 @@ func (repository *Repository) UploadImageVariantForPrincipal(
 	return asset, part, err
 }
 
+// UploadImageVariantForCustomer returns one declared customer image part only
+// while the exact CustomerApp subject remains bound to the owner.
+func (repository *Repository) UploadImageVariantForCustomer(
+	ctx context.Context,
+	sessionID, subjectID uuid.UUID,
+	variant media.Variant,
+) (AssetRecord, UploadImageVariantPart, error) {
+	asset, err := repository.UploadSessionForCustomer(ctx, sessionID, subjectID)
+	if err != nil {
+		return AssetRecord{}, UploadImageVariantPart{}, err
+	}
+	if asset.UploadMode != UploadModeImageVariants || asset.Kind != media.KindImage {
+		return AssetRecord{}, UploadImageVariantPart{}, ErrNotFound
+	}
+	part, err := scanUploadImageVariantPart(repository.pool.QueryRow(ctx, uploadImageVariantPartSQL+`
+		where media_id=$1 and variant=$2`, asset.ID, variant))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AssetRecord{}, UploadImageVariantPart{}, ErrNotFound
+	}
+	return asset, part, err
+}
+
 // CompleteUploadImageVariantCommand records immutable metadata for one
 // already streamed and verified client-produced WebP object.
 type CompleteUploadImageVariantCommand struct {
-	SessionID       uuid.UUID
-	SubjectID       uuid.UUID
-	PrincipalType   string
-	MediaID         uuid.UUID
-	Variant         media.Variant
-	IdempotencyKey  uuid.UUID
-	ObjectVersionID string
-	ETag            string
-	ChecksumSHA256  string
-	SizeBytes       int64
+	SessionID           uuid.UUID
+	SubjectID           uuid.UUID
+	PrincipalType       string
+	AuthorizedSubjectID *uuid.UUID
+	MediaID             uuid.UUID
+	Variant             media.Variant
+	IdempotencyKey      uuid.UUID
+	ObjectVersionID     string
+	ETag                string
+	ChecksumSHA256      string
+	SizeBytes           int64
 }
 
 // CompleteUploadImageVariant persists one exact variant PUT or returns an
@@ -906,6 +978,20 @@ func (repository *Repository) CompleteUploadImageVariant(
 		return UploadImageVariantPart{}, false, err
 	}
 	defer tx.Rollback(ctx)
+	if command.AuthorizedSubjectID != nil {
+		if command.PrincipalType != PrincipalTypeUser || *command.AuthorizedSubjectID == uuid.Nil ||
+			*command.AuthorizedSubjectID != command.SubjectID {
+			return UploadImageVariantPart{}, false, ErrOwnerProofMissing
+		}
+		asset, assetErr := repository.assetForUpdate(ctx, tx, command.MediaID)
+		if assetErr != nil {
+			return UploadImageVariantPart{}, false, assetErr
+		}
+		if bindingErr := requireCustomerOwnerBindingLock(ctx, tx, asset.OwnerType, asset.OwnerID,
+			asset.WarehouseID, *command.AuthorizedSubjectID); bindingErr != nil {
+			return UploadImageVariantPart{}, false, bindingErr
+		}
+	}
 	var expiresAt time.Time
 	var completedAt *time.Time
 	var uploadMode UploadMode
@@ -1024,20 +1110,21 @@ type FinalizeImageVariant struct {
 // FinalizeCommand confirms either one pinned compatibility source or one
 // complete client-produced image bundle for an authorized upload session.
 type FinalizeCommand struct {
-	SessionID       uuid.UUID
-	SubjectID       uuid.UUID
-	PrincipalType   string
-	Actor           ActorReference
-	WorkerID        *uuid.UUID
-	IdempotencyKey  uuid.UUID
-	RequestSHA256   string
-	ObjectVersionID string
-	ETag            string
-	ChecksumSHA256  string
-	ContentType     string
-	SizeBytes       int64
-	ImageVariants   []FinalizeImageVariant
-	CorrelationID   uuid.UUID
+	SessionID           uuid.UUID
+	SubjectID           uuid.UUID
+	PrincipalType       string
+	Actor               ActorReference
+	WorkerID            *uuid.UUID
+	AuthorizedSubjectID *uuid.UUID
+	IdempotencyKey      uuid.UUID
+	RequestSHA256       string
+	ObjectVersionID     string
+	ETag                string
+	ChecksumSHA256      string
+	ContentType         string
+	SizeBytes           int64
+	ImageVariants       []FinalizeImageVariant
+	CorrelationID       uuid.UUID
 }
 
 // FinalizeUpload confirms a version-pinned upload and atomically enqueues its
@@ -1056,6 +1143,10 @@ func (repository *Repository) FinalizeUpload(ctx context.Context, command Finali
 	}
 	if command.PrincipalType == PrincipalTypeUser && command.WorkerID != nil {
 		return AssetRecord{}, false, ErrConflict
+	}
+	if command.AuthorizedSubjectID != nil && (command.PrincipalType != PrincipalTypeUser ||
+		*command.AuthorizedSubjectID == uuid.Nil || *command.AuthorizedSubjectID != command.SubjectID) {
+		return AssetRecord{}, false, ErrOwnerProofMissing
 	}
 	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
@@ -1093,7 +1184,8 @@ func (repository *Repository) FinalizeUpload(ctx context.Context, command Finali
 		if routeAssetID != assetID {
 			return AssetRecord{}, false, ErrIdempotencyMismatch
 		}
-		if proofErr := requireOwnerBinding(ctx, tx, asset.OwnerType, asset.OwnerID, asset.WarehouseID, repository.now()); proofErr != nil {
+		if proofErr := requireUploadOwnerAccess(ctx, tx, asset.OwnerType, asset.OwnerID, asset.WarehouseID,
+			command.AuthorizedSubjectID, repository.now()); proofErr != nil {
 			return AssetRecord{}, false, proofErr
 		}
 		if err := requireFinalizeWorkerAccess(ctx, tx, asset, command); err != nil {
@@ -1137,7 +1229,8 @@ func (repository *Repository) FinalizeUpload(ctx context.Context, command Finali
 	if err != nil {
 		return AssetRecord{}, false, err
 	}
-	if err := requireOwnerBinding(ctx, tx, asset.OwnerType, asset.OwnerID, asset.WarehouseID, repository.now()); err != nil {
+	if err := requireUploadOwnerAccess(ctx, tx, asset.OwnerType, asset.OwnerID, asset.WarehouseID,
+		command.AuthorizedSubjectID, repository.now()); err != nil {
 		return AssetRecord{}, false, err
 	}
 	if err := requireFinalizeWorkerAccess(ctx, tx, asset, command); err != nil {
@@ -1341,6 +1434,9 @@ func (repository *Repository) ReadOwnerAssets(
 	if consume == nil {
 		return ErrConflict
 	}
+	if ownerType == OwnerTypeLogisticsCustomerProfile {
+		return ErrOwnerProofMissing
+	}
 	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
@@ -1363,6 +1459,39 @@ func (repository *Repository) ReadOwnerAssets(
 		records, err = readOwnerAssets(ctx, tx, ownerType, ownerID, warehouseID, limit, after,
 			repository.now, true)
 	}
+	if err != nil {
+		return err
+	}
+	if err := consume(records); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// ReadOwnerAssetsForCustomer returns customer media only while the current
+// owner proof names the exact CustomerApp subject for the full callback.
+func (repository *Repository) ReadOwnerAssetsForCustomer(
+	ctx context.Context,
+	ownerType, ownerID string,
+	warehouseID, subjectID uuid.UUID,
+	limit int,
+	after *uuid.UUID,
+	consume func([]AssetWithVariants) error,
+) error {
+	if !IsCustomerSubjectBoundOwnerType(ownerType) || subjectID == uuid.Nil || consume == nil ||
+		limit < 1 || limit > 100 {
+		return ErrOwnerProofMissing
+	}
+	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := requireCustomerOwnerBindingLock(ctx, tx, ownerType, ownerID, warehouseID, subjectID); err != nil {
+		return err
+	}
+	records, err := readOwnerAssets(ctx, tx, ownerType, ownerID, warehouseID, limit, after,
+		repository.now, false)
 	if err != nil {
 		return err
 	}
@@ -1911,6 +2040,9 @@ func (repository *Repository) ReadOriginal(
 	if consume == nil {
 		return ErrConflict
 	}
+	if ownerType == OwnerTypeLogisticsCustomerProfile {
+		return ErrOwnerProofMissing
+	}
 	if ownerType == OwnerTypeTaskBoardEntry {
 		entryID, err := uuid.Parse(ownerID)
 		if err != nil || entryID == uuid.Nil || (generation != nil && *generation <= 0) {
@@ -1918,6 +2050,34 @@ func (repository *Repository) ReadOriginal(
 		}
 		return repository.readTaskBoardEntryOriginalForUser(ctx, entryID, warehouseID, mediaID, generation, consume)
 	}
+	return repository.readOriginal(ctx, mediaID, ownerType, ownerID, warehouseID, generation, nil, consume)
+}
+
+// ReadOriginalForCustomer returns one customer original only while the current
+// owner proof names the exact CustomerApp subject for the full callback.
+func (repository *Repository) ReadOriginalForCustomer(
+	ctx context.Context,
+	mediaID uuid.UUID,
+	ownerType, ownerID string,
+	warehouseID, subjectID uuid.UUID,
+	generation *int,
+	consume func(AssetRecord, *VariantRecord) error,
+) error {
+	if !IsCustomerSubjectBoundOwnerType(ownerType) || subjectID == uuid.Nil || consume == nil {
+		return ErrOwnerProofMissing
+	}
+	return repository.readOriginal(ctx, mediaID, ownerType, ownerID, warehouseID, generation, &subjectID, consume)
+}
+
+func (repository *Repository) readOriginal(
+	ctx context.Context,
+	mediaID uuid.UUID,
+	ownerType, ownerID string,
+	warehouseID uuid.UUID,
+	generation *int,
+	authorizedSubjectID *uuid.UUID,
+	consume func(AssetRecord, *VariantRecord) error,
+) error {
 	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
@@ -1949,12 +2109,14 @@ func (repository *Repository) ReadOriginal(
 		 and variant.generation=a.current_generation and variant.variant='ORIGINAL'
 		where a.media_id=$1 and a.owner_type=$2 and a.owner_id=$3 and a.warehouse_id=$4
 		 and a.deleted_at is null and media_asset_is_available(a.media_id)
+		 and ($5::uuid is null or binding.authorized_subject_id=$5)
 		 and not exists (select 1 from media_quarantined_aggregate quarantine
 			where quarantine.consumer_name=binding.proof_consumer_name
 			  and quarantine.aggregate_type=binding.proof_aggregate_type
 			  and quarantine.aggregate_id=binding.proof_aggregate_id
 			  and quarantine.reconciled_at is null)
-		for share of binding`, mediaID, ownerType, ownerID, warehouseID).Scan(
+		for share of binding`, mediaID, ownerType, ownerID, warehouseID,
+		nullableUUIDPointer(authorizedSubjectID)).Scan(
 		&asset.ID, &asset.FolderID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
 		&asset.FileName, &asset.ContentType, &asset.SourceObjectKey, &asset.SourceVersionID,
 		&asset.SourceETag, &asset.SourceChecksum, &asset.Status, &asset.Version,
@@ -2033,6 +2195,9 @@ func (repository *Repository) ReadCurrentVariant(
 	if consume == nil || generation <= 0 {
 		return ErrConflict
 	}
+	if ownerType == OwnerTypeLogisticsCustomerProfile {
+		return ErrOwnerProofMissing
+	}
 	switch requestedVariant {
 	case media.VariantSmall, media.VariantMedium, media.VariantLarge:
 	default:
@@ -2054,6 +2219,43 @@ func (repository *Repository) ReadCurrentVariant(
 		return repository.readTaskBoardEntryVariantForUser(ctx, entryID, warehouseID, mediaID,
 			generation, requestedVariant, consume)
 	}
+	return repository.readCurrentVariant(ctx, mediaID, ownerType, ownerID, warehouseID,
+		generation, requestedVariant, nil, consume)
+}
+
+// ReadCurrentVariantForCustomer returns one customer derivative only while
+// the current owner proof names the exact CustomerApp subject for the callback.
+func (repository *Repository) ReadCurrentVariantForCustomer(
+	ctx context.Context,
+	mediaID uuid.UUID,
+	ownerType, ownerID string,
+	warehouseID, subjectID uuid.UUID,
+	generation int,
+	requestedVariant media.Variant,
+	consume func(AssetRecord, *VariantRecord) error,
+) error {
+	if !IsCustomerSubjectBoundOwnerType(ownerType) || subjectID == uuid.Nil || consume == nil || generation <= 0 {
+		return ErrOwnerProofMissing
+	}
+	switch requestedVariant {
+	case media.VariantSmall, media.VariantMedium, media.VariantLarge:
+	default:
+		return ErrOwnerProofMissing
+	}
+	return repository.readCurrentVariant(ctx, mediaID, ownerType, ownerID, warehouseID,
+		generation, requestedVariant, &subjectID, consume)
+}
+
+func (repository *Repository) readCurrentVariant(
+	ctx context.Context,
+	mediaID uuid.UUID,
+	ownerType, ownerID string,
+	warehouseID uuid.UUID,
+	generation int,
+	requestedVariant media.Variant,
+	authorizedSubjectID *uuid.UUID,
+	consume func(AssetRecord, *VariantRecord) error,
+) error {
 	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
@@ -2085,13 +2287,14 @@ func (repository *Repository) ReadCurrentVariant(
 		 and variant.generation=$5 and variant.variant=$6
 		where a.media_id=$1 and a.owner_type=$2 and a.owner_id=$3 and a.warehouse_id=$4
 		 and a.current_generation=$5 and a.deleted_at is null and media_asset_is_available(a.media_id)
+		 and ($7::uuid is null or binding.authorized_subject_id=$7)
 		 and not exists (select 1 from media_quarantined_aggregate quarantine
 			where quarantine.consumer_name=binding.proof_consumer_name
 			  and quarantine.aggregate_type=binding.proof_aggregate_type
 			  and quarantine.aggregate_id=binding.proof_aggregate_id
 			  and quarantine.reconciled_at is null)
 		for share of binding`, mediaID, ownerType, ownerID, warehouseID, generation,
-		requestedVariant).Scan(
+		requestedVariant, nullableUUIDPointer(authorizedSubjectID)).Scan(
 		&asset.ID, &asset.FolderID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
 		&asset.FileName, &asset.ContentType, &asset.SourceObjectKey, &asset.SourceVersionID,
 		&asset.SourceETag, &asset.SourceChecksum, &asset.Status, &asset.Version,
@@ -2484,7 +2687,7 @@ type queryer interface {
 }
 
 func requireOwnerBinding(ctx context.Context, database queryer, ownerType, ownerID string, warehouseID uuid.UUID, now time.Time) error {
-	if !IsPublicOwnerType(ownerType) || ownerID == "" {
+	if !IsPublicOwnerType(ownerType) || ownerType == OwnerTypeLogisticsCustomerProfile || ownerID == "" {
 		return ErrOwnerProofMissing
 	}
 	var exists bool
@@ -2510,6 +2713,52 @@ func requireOwnerBinding(ctx context.Context, database queryer, ownerType, owner
 		return ErrOwnerProofMissing
 	}
 	return nil
+}
+
+func requireCustomerOwnerBindingLock(
+	ctx context.Context,
+	tx pgx.Tx,
+	ownerType, ownerID string,
+	warehouseID, subjectID uuid.UUID,
+) error {
+	if !IsCustomerSubjectBoundOwnerType(ownerType) || subjectID == uuid.Nil {
+		return ErrOwnerProofMissing
+	}
+	var lockedSubject uuid.UUID
+	err := tx.QueryRow(ctx, `select binding.authorized_subject_id
+		from media_owner_binding binding
+		join media_consumer_aggregate_checkpoint checkpoint
+		  on checkpoint.consumer_name=binding.proof_consumer_name
+		 and checkpoint.aggregate_type=binding.proof_aggregate_type
+		 and checkpoint.aggregate_id=binding.proof_aggregate_id
+		 and checkpoint.aggregate_version>=binding.proof_aggregate_version
+		where binding.owner_type=$1 and binding.owner_id=$2 and binding.warehouse_id=$3
+		  and binding.active and binding.authorized_subject_id=$4
+		  and not exists (select 1 from media_quarantined_aggregate quarantine
+			where quarantine.consumer_name=binding.proof_consumer_name
+			  and quarantine.aggregate_type=binding.proof_aggregate_type
+			  and quarantine.aggregate_id=binding.proof_aggregate_id
+			  and quarantine.reconciled_at is null)
+		for share of binding`, ownerType, ownerID, warehouseID, subjectID).Scan(&lockedSubject)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrOwnerProofMissing
+	}
+	return err
+}
+
+func requireUploadOwnerAccess(
+	ctx context.Context,
+	tx pgx.Tx,
+	ownerType, ownerID string,
+	warehouseID uuid.UUID,
+	authorizedSubjectID *uuid.UUID,
+	now time.Time,
+) error {
+	if authorizedSubjectID != nil {
+		return requireCustomerOwnerBindingLock(ctx, tx, ownerType, ownerID, warehouseID,
+			*authorizedSubjectID)
+	}
+	return requireOwnerBinding(ctx, tx, ownerType, ownerID, warehouseID, now)
 }
 
 func enforceOwnerMediaLimit(ctx context.Context, tx pgx.Tx, ownerType, ownerID string, warehouseID uuid.UUID, maximum int) error {

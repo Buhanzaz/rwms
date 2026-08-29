@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.customer.api;
 
+import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotKind;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerEntityType;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
@@ -46,6 +47,38 @@ public final class CustomerApiModels {
     }
   }
 
+  /** Updates mutable profile fields while preserving the established entity type and bindings. */
+  public record UpdateCustomerProfileRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @Size(max = 255) String firstName,
+      @Size(max = 255) String lastName,
+      @Size(max = 512) String companyName,
+      @NotBlank @Size(max = 32) String phone,
+      @Size(max = 320) String email,
+      @Size(max = 2_000) String additionalInfo) {}
+
+  /** Initializes the profile avatar owner proof at one validated customer warehouse. */
+  public record PrepareCustomerProfileAvatarUploadRequest(
+      @NotNull @Min(0) Long expectedVersion, @NotNull UUID warehouseId) {}
+
+  /** Exact media owner facts returned to CustomerApp for one profile-avatar upload. */
+  public record CustomerProfileAvatarUploadScope(
+      long profileVersion,
+      String ownerType,
+      UUID ownerId,
+      UUID warehouseId,
+      String context) {}
+
+  /** Binds one exact media-service-validated avatar generation under the profile fence. */
+  public record SetCustomerProfileAvatarRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotNull UUID mediaId,
+      @NotNull @Min(1) Long generation) {}
+
+  /** Current profile avatar with same-origin authenticated media paths. */
+  public record CustomerProfileAvatarResponse(
+      UUID mediaId, long generation, UUID warehouseId, String thumbnailUrl, String url) {}
+
   /** Customer profile projection without authentication or normalized search internals. */
   public record CustomerProfileResponse(
       UUID id,
@@ -56,7 +89,8 @@ public final class CustomerApiModels {
       String companyName,
       String phone,
       String email,
-      String additionalInfo) {}
+      String additionalInfo,
+      CustomerProfileAvatarResponse avatar) {}
 
   /** Active warehouse that is configured for CustomerApp route-capacity calculation. */
   public record CustomerWarehouseResponse(
@@ -141,6 +175,19 @@ public final class CustomerApiModels {
   public record CustomerEquipmentSelectionResponse(
       long version, List<CustomerCabinEquipmentSelection> selections) {}
 
+  /** Initial rental duration selected independently for one cabin in the cart. */
+  public record CustomerCabinRentalTerm(
+      @NotNull UUID cabinUnitId, @NotNull @Min(1) @Max(120) Long rentalMonths) {}
+
+  /** Replaces the complete per-cabin rental term set under the cart fence. */
+  public record ReplaceCustomerRentalTermsRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotNull @Size(min = 1, max = 100) List<@NotNull @Valid CustomerCabinRentalTerm> terms) {}
+
+  /** Persisted per-cabin rental terms and resulting cart version. */
+  public record CustomerRentalTermsResponse(
+      long version, List<CustomerCabinRentalTerm> terms) {}
+
   /** Cart projection used by the floating basket and checkout screen. */
   public record CustomerCartResponse(
       UUID inquiryId,
@@ -149,43 +196,110 @@ public final class CustomerApiModels {
       String state,
       List<CustomerCabinResponse> cabins,
       List<CustomerCabinEquipmentSelection> equipment,
+      List<CustomerCabinRentalTerm> rentalTerms,
       UUID deliverySlotId) {}
 
-  /** Address and map coordinate used to calculate only feasible delivery slots. */
+  /** Address and map coordinate used to calculate feasible dates before route attestations. */
   public record DeliverySlotSearchRequest(
       @NotNull UUID inquiryId,
       @NotBlank @Size(max = 1_000) String address,
       @NotNull @DecimalMin("-90") @DecimalMax("90") @Digits(integer = 2, fraction = 6)
           BigDecimal latitude,
       @NotNull @DecimalMin("-180") @DecimalMax("180") @Digits(integer = 3, fraction = 6)
-          BigDecimal longitude) {}
+          BigDecimal longitude,
+      @Min(1) @Max(2) int siteCabinCapacity,
+      boolean privateSiteAccessConfirmed,
+      boolean failedTripChargeAcknowledged) {}
 
-  /** One server-calculated offer from the fixed working-day window set. */
+  /** Frozen truck-and-trailer dimensions used by the public-road routing decision. */
+  public record CustomerRouteProfile(
+      double combinationHeightMeters,
+      double combinationWidthMeters,
+      double combinationLengthMeters,
+      double combinationWeightTons,
+      double axleLoadTons,
+      int axleCount) {}
+
+  /** One server-calculated fixed-window or full-delivery-day offer. */
   public record CustomerDeliverySlotResponse(
       UUID slotId,
       long version,
       LocalDate date,
+      CustomerDeliverySlotKind kind,
       LocalTime start,
       LocalTime end,
       int travelZoneHours,
       int capacityRemaining,
+      int siteCabinCapacity,
+      Long deliveryPriceRubles,
+      UUID priceZoneId,
+      Integer priceIsochroneMinutes,
+      boolean roadRouteConfirmed,
+      boolean privateSiteAccessConfirmed,
+      boolean failedTripChargeAcknowledged,
+      CustomerRouteProfile routeProfile,
       OffsetDateTime expiresAt,
-      String state) {}
+      String state) {
+    /** Preserves source compatibility for response assemblers predating ordinary tariff tiers. */
+    public CustomerDeliverySlotResponse(
+        UUID slotId,
+        long version,
+        LocalDate date,
+        CustomerDeliverySlotKind kind,
+        LocalTime start,
+        LocalTime end,
+        int travelZoneHours,
+        int capacityRemaining,
+        int siteCabinCapacity,
+        Long deliveryPriceRubles,
+        UUID priceZoneId,
+        boolean roadRouteConfirmed,
+        boolean privateSiteAccessConfirmed,
+        boolean failedTripChargeAcknowledged,
+        CustomerRouteProfile routeProfile,
+        OffsetDateTime expiresAt,
+        String state) {
+      this(
+          slotId,
+          version,
+          date,
+          kind,
+          start,
+          end,
+          travelZoneHours,
+          capacityRemaining,
+          siteCabinCapacity,
+          deliveryPriceRubles,
+          priceZoneId,
+          null,
+          roadRouteConfirmed,
+          privateSiteAccessConfirmed,
+          failedTripChargeAcknowledged,
+          routeProfile,
+          expiresAt,
+          state);
+    }
+  }
 
-  /** Fences a short-lived delivery offer against the latest cart version. */
+  /** Fences a short-lived offer and supplies attestations not already made during search. */
   public record HoldCustomerDeliverySlotRequest(
-      @NotNull UUID inquiryId, @NotNull @Min(0) Long expectedVersion) {}
+      @NotNull UUID inquiryId,
+      @NotNull @Min(0) Long expectedVersion,
+      @Min(1) @Max(2) int siteCabinCapacity,
+      @AssertTrue(message = "Private-site truck and trailer access must be confirmed")
+          Boolean privateSiteAccessConfirmed,
+      @AssertTrue(message = "Failed-trip responsibility must be acknowledged")
+          Boolean failedTripChargeAcknowledged) {}
 
   /** Held delivery slot together with the cart version containing its identity. */
   public record HeldCustomerDeliverySlotResponse(
       long cartVersion, CustomerDeliverySlotResponse slot) {}
 
-  /** Confirms the current cart, held route window and initial rental duration. */
+  /** Confirms the current cart and held route window after per-cabin terms are complete. */
   public record CustomerCheckoutRequest(
       @NotNull @Min(0) Long expectedVersion,
       @NotNull UUID slotId,
-      @NotNull @Min(0) Long slotVersion,
-      @NotNull @Min(1) @Max(120) Long rentalMonths) {}
+      @NotNull @Min(0) Long slotVersion) {}
 
   /** Durable presentation booking created by checkout. */
   public record CustomerBookingResponse(
@@ -194,5 +308,94 @@ public final class CustomerApiModels {
       String status,
       String errorCode,
       UUID inquiryId,
-      UUID slotId) {}
+      UUID slotId,
+      UUID warehouseId,
+      String deliveryAddress,
+      LocalDate deliveryDate,
+      LocalTime windowStart,
+      LocalTime windowEnd,
+      List<CustomerBookingCabin> cabins) {}
+
+  /** Exact shipment media owner that permits subject-bound customer evidence uploads. */
+  public record CustomerShipmentMediaOwner(
+      String ownerType, UUID documentId, UUID lineId, UUID warehouseId, String context) {}
+
+  /** One normalized point in a full-screen customer signature stroke. */
+  public record CustomerSignaturePoint(
+      @DecimalMin("0") @DecimalMax("1") double x,
+      @DecimalMin("0") @DecimalMax("1") double y,
+      @Min(0) @Max(600_000) long elapsedMillis) {}
+
+  /** One ordered stroke of the customer's drawn acceptance signature. */
+  public record CustomerSignatureStroke(
+      @NotNull @Size(min = 1, max = 256)
+          List<@NotNull @Valid CustomerSignaturePoint> points) {}
+
+  /** Drawn signature submitted only after the exact cabin's driver task has arrived. */
+  public record AcceptCustomerCabinRequest(
+      @NotNull @Size(min = 1, max = 32)
+          List<@NotNull @Valid CustomerSignatureStroke> strokes) {
+    /** Bounds the entire signature independently from per-stroke validation. */
+    @AssertTrue(message = "Signature contains too many points")
+    public boolean hasBoundedPointCount() {
+      return strokes == null
+          || strokes.stream().mapToLong(stroke -> stroke.points().size()).sum() <= 8_192;
+    }
+  }
+
+  /** Immutable customer acceptance fact without exposing raw signature coordinates. */
+  public record CustomerCabinAcceptanceResponse(
+      UUID acceptanceId, long version, OffsetDateTime acceptedAt, int signaturePointCount) {}
+
+  /** Ready media generation attached to a customer-reported cabin problem. */
+  public record CustomerProblemMediaReference(
+      @NotNull UUID mediaId, @Min(1) long generation) {}
+
+  /** Supported customer problem categories for an arrived cabin. */
+  public enum CustomerCabinProblemCategory {
+    MISSING_EQUIPMENT,
+    UNSUITABLE_CABIN,
+    OTHER
+  }
+
+  /** Whether a problem was recorded before or after signed customer acceptance. */
+  public enum CustomerCabinProblemPhase {
+    BEFORE_ACCEPTANCE,
+    AFTER_ACCEPTANCE
+  }
+
+  /** Customer problem report linked to ready evidence belonging to the exact shipment line. */
+  public record ReportCustomerCabinProblemRequest(
+      @NotNull CustomerCabinProblemCategory category,
+      @NotBlank @Size(max = 2_000) String description,
+      @NotNull @Size(max = 20)
+          List<@NotNull @Valid CustomerProblemMediaReference> mediaReferences) {
+    /** Rejects duplicate media generations before the owning service validates them. */
+    @AssertTrue(message = "Problem media references must be unique")
+    public boolean hasUniqueMediaReferences() {
+      return mediaReferences == null
+          || mediaReferences.size()
+              == new java.util.LinkedHashSet<>(mediaReferences).size();
+    }
+  }
+
+  /** Immutable problem report shown in the cabin's reception history. */
+  public record CustomerCabinProblemResponse(
+      UUID problemId,
+      CustomerCabinProblemCategory category,
+      CustomerCabinProblemPhase phase,
+      String description,
+      List<CustomerProblemMediaReference> mediaReferences,
+      OffsetDateTime reportedAt) {}
+
+  /** One cabin in My Orders with server-owned arrival, acceptance and problem state. */
+  public record CustomerBookingCabin(
+      UUID cabinUnitId,
+      String accountingNo,
+      long rentalMonths,
+      String deliveryState,
+      boolean arrivalEligible,
+      CustomerShipmentMediaOwner mediaOwner,
+      CustomerCabinAcceptanceResponse acceptance,
+      List<CustomerCabinProblemResponse> problems) {}
 }

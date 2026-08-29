@@ -212,17 +212,23 @@ func PostgresDatabaseURL(baseURL, databaseName string) (string, error) {
 // It is used by legacy integration tests that otherwise share mutable outbox
 // and owner-projection state through MEDIA_TEST_DATABASE_URL.
 func NewMigratedMediaDatabase(t testing.TB, baseURL string) string {
-	return newMigratedMediaDatabase(t, baseURL, true)
+	return newMigratedMediaDatabase(t, baseURL, 0)
 }
 
 // NewMigratedMediaDatabaseThroughV12 returns an isolated database immediately
 // before the authoritative inventory photo migration so its additive upgrade
 // path can be tested without touching a shared database.
 func NewMigratedMediaDatabaseThroughV12(t testing.TB, baseURL string) string {
-	return newMigratedMediaDatabase(t, baseURL, false)
+	return newMigratedMediaDatabase(t, baseURL, 7)
 }
 
-func newMigratedMediaDatabase(t testing.TB, baseURL string, includeCurrentMigrations bool) string {
+// NewMigratedMediaDatabaseThroughV18 creates an isolated database at the exact
+// pre-profile-avatar migration boundary for additive V19 upgrade tests.
+func NewMigratedMediaDatabaseThroughV18(t testing.TB, baseURL string) string {
+	return newMigratedMediaDatabase(t, baseURL, 1)
+}
+
+func newMigratedMediaDatabase(t testing.TB, baseURL string, omittedTail int) string {
 	t.Helper()
 	databaseURL := NewIsolatedPostgresDatabase(t, baseURL)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -267,9 +273,14 @@ func newMigratedMediaDatabase(t testing.TB, baseURL string, includeCurrentMigrat
 		{"inventory finding membership markers", "V15__inventory_finding_membership_markers.sql", mediamigration.V15},
 		{"client image variants", "V16__client_image_variants.sql", mediamigration.V16},
 		{"consolidate legacy cabin photo folders", "V17__consolidate_legacy_cabin_photo_folders.sql", mediamigration.V17},
+		{"customer shipment subject binding", "V18__customer_shipment_subject_binding.sql", mediamigration.V18},
+		{"customer profile avatar owner", "V19__customer_profile_avatar_owner.sql", mediamigration.V19},
 	}
-	if !includeCurrentMigrations {
-		migrations = migrations[:len(migrations)-5]
+	if omittedTail < 0 || omittedTail >= len(migrations) {
+		t.Fatalf("invalid omitted media migration tail: %d", omittedTail)
+	}
+	if omittedTail > 0 {
+		migrations = migrations[:len(migrations)-omittedTail]
 	}
 	for index, migration := range migrations {
 		started := time.Now()
@@ -279,7 +290,7 @@ func newMigratedMediaDatabase(t testing.TB, baseURL string, includeCurrentMigrat
 		if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
 			installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
 		values ($1,$2,$3,'SQL',$4,$5,current_user,$6,true)`, index+1,
-			[]string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17"}[index],
+			[]string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19"}[index],
 			migration.description, migration.script, realFlywayChecksum(migration.body),
 			int(time.Since(started)/time.Millisecond)); err != nil {
 			t.Fatalf("record isolated media %s: %v", migration.script, err)

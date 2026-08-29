@@ -124,7 +124,16 @@ class UserAdministrationServiceWarehouseValidationTest {
         when(subjects.findById(ADMIN_ID)).thenReturn(Optional.of(admin));
         lenient()
                 .when(projectionWriter.insertUser(
-                        any(), any(), any(), any(), any(), any(), any(), anyBoolean()))
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        anyBoolean(),
+                        anyBoolean(),
+                        anyBoolean()))
                 .thenAnswer(invocation -> {
                     var created = new AuthSubject();
                     created.registerUser(
@@ -135,7 +144,9 @@ class UserAdministrationServiceWarehouseValidationTest {
                             invocation.getArgument(4),
                             invocation.getArgument(5),
                             invocation.getArgument(6),
-                            invocation.getArgument(7));
+                            invocation.getArgument(7),
+                            invocation.getArgument(8),
+                            invocation.getArgument(9));
                     ReflectionTestUtils.setField(created, "id", NEW_USER_ID);
                     return created;
                 });
@@ -174,7 +185,17 @@ class UserAdministrationServiceWarehouseValidationTest {
 
         verifyNoInteractions(warehouseExistenceClient);
         verify(projectionWriter, never())
-                .insertUser(any(), any(), any(), any(), any(), any(), any(), anyBoolean());
+                .insertUser(
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        anyBoolean(),
+                        anyBoolean(),
+                        anyBoolean());
         verify(accesses, never()).deleteAllInBatch(any());
     }
 
@@ -190,7 +211,17 @@ class UserAdministrationServiceWarehouseValidationTest {
                         exception -> assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
 
         verify(projectionWriter, never())
-                .insertUser(any(), any(), any(), any(), any(), any(), any(), anyBoolean());
+                .insertUser(
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        anyBoolean(),
+                        anyBoolean(),
+                        anyBoolean());
         verify(projectionWriter, never()).replaceAccesses(any(), any());
         verify(accesses, never()).deleteAllInBatch(any());
         verify(accesses, never()).saveAllAndFlush(any());

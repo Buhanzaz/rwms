@@ -387,6 +387,73 @@ class DriverLogisticsTaskTest {
     assertThat(transfer.getPlannedDriverWorkerId()).isNull();
   }
 
+  @Test
+  void furnitureCargoTransferIsTheOnlyCabinlessTaskAndCompletesWithoutCabinCover() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID documentId = UUID.randomUUID();
+    UUID workerId = UUID.randomUUID();
+    UUID queueDefinitionId = UUID.randomUUID();
+    DriverLogisticsTask task =
+        DriverLogisticsTask.createFurnitureCargoTransfer(
+            warehouseId,
+            documentId,
+            LocalDate.of(2026, 8, 30),
+            3,
+            "Межскладской груз: 12 предметов",
+            "12 предметов",
+            queueDefinitionId,
+            DriverTaskAudienceMode.ASSIGNED_DRIVER,
+            workerId,
+            "Петров Алексей",
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            "f".repeat(64));
+
+    assertThat(task.getCabinId()).isNull();
+    assertThat(task.getRepairId()).isNull();
+    assertThat(task.getSourceType()).isEqualTo(DriverTaskSourceType.LOGISTICS_DOCUMENT);
+    assertThat(task.getKind()).isEqualTo(DriverTaskKind.TRANSFER);
+    assertThat(task.getTripNumber()).isEqualTo(1);
+    assertThat(task.getMembers()).isEmpty();
+    assertThat(task.isFurnitureCargoTransfer()).isTrue();
+    assertThatThrownBy(
+            () ->
+                task.addGroupedDocumentMember(
+                    UUID.randomUUID(), UUID.randomUUID(), "БЫТ-НЕ-ДОБАВЛЯТЬ", 1))
+        .isInstanceOf(IllegalStateException.class);
+
+    UUID entryId = UUID.randomUUID();
+    task.registerBoardTask(
+        UUID.randomUUID(), 0, entryId, "DONE", "CURRENT", OffsetDateTime.now(ZoneOffset.UTC));
+    task.captureEvidence(UUID.randomUUID(), UUID.randomUUID(), 1, entryId);
+    task.complete();
+
+    assertThat(task.getState()).isEqualTo(DriverTaskState.COMPLETED);
+    assertThat(task.isCoverApplied()).isTrue();
+    assertThat(task.isRepairPlaceEffectApplied()).isTrue();
+
+    assertThatThrownBy(
+            () ->
+                DriverLogisticsTask.create(
+                    warehouseId,
+                    null,
+                    null,
+                    DriverTaskSourceType.LOGISTICS_DOCUMENT,
+                    UUID.randomUUID(),
+                    DriverTaskKind.TRANSFER,
+                    DriverTaskPlanningMode.FIXED_DATE,
+                    LocalDate.of(2026, 8, 30),
+                    3,
+                    "Груз",
+                    "12 предметов",
+                    queueDefinitionId,
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    "a".repeat(64)))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("ownership");
+  }
+
   private static DriverLogisticsTask create(
       UUID warehouseId,
       UUID cabinId,

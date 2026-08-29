@@ -268,7 +268,14 @@ public final class RentalInquiryApiModels {
   public record PresentationCabinSelectionInput(
       @NotNull UUID rentalItemId,
       @NotNull @Size(max = 100)
-          List<@NotNull @Valid PresentationEquipmentSelectionInput> equipment) {}
+          List<@NotNull @Valid PresentationEquipmentSelectionInput> equipment,
+      @Min(1) @Max(120) Long rentalMonths) {
+    /** Preserves the existing uniform-term presentation request shape. */
+    public PresentationCabinSelectionInput(
+        UUID rentalItemId, List<PresentationEquipmentSelectionInput> equipment) {
+      this(rentalItemId, equipment, null);
+    }
+  }
 
   public record ConfirmClientPresentationRequest(
       @NotNull @Size(min = 1, max = 100)

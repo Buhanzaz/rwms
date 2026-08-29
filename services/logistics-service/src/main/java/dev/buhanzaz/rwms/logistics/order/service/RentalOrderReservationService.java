@@ -107,8 +107,11 @@ class RentalOrderReservationService {
     List<RentalOrderEquipmentRequirement> existingRequirements =
         equipmentRequirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(
             orderId);
-    Map<UUID, Long> remainingRequirements =
-        aggregateRequirements(existingRequirements, unitId, Map.of());
+    List<LogisticsDependencyGateway.OrderUnitReservation> remainingUnits =
+        currentUnits.stream().filter(reservation -> !unitId.equals(reservation.unitId())).toList();
+    List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> remainingComposition =
+        dependencyUnitRequirements(
+            remainingUnits, existingRequirements, unitId, Map.of());
     try {
       LogisticsDependencyGateway.OrderUnitReservation released =
           dependencies.releaseOrderUnit(
@@ -126,15 +129,11 @@ class RentalOrderReservationService {
               warehouseId,
               actor.subjectId(),
               actor.role(),
-              dependencyUnitRequirements(
-                  currentUnits.stream()
-                      .filter(reservation -> !unitId.equals(reservation.unitId()))
-                      .toList(),
-                  existingRequirements,
-                  unitId,
-                  Map.of()));
+              remainingComposition);
       Map<UUID, LogisticsDependencyGateway.OrderEquipmentReservation> reservationByEquipment =
-          requireEquipmentReservations(furnitureReservations, remainingRequirements);
+          requireEquipmentReservations(
+              furnitureReservations,
+              aggregateCompositionBySource(remainingComposition, remainingUnits));
       boolean furnitureChanged =
           applyDesiredRequirements(
               order,
@@ -201,7 +200,8 @@ class RentalOrderReservationService {
     List<RentalOrderEquipmentRequirement> existing =
         equipmentRequirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(
             orderId);
-    Map<UUID, Long> aggregate = aggregateRequirements(existing, unitId, desired);
+    List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> composition =
+        dependencyUnitRequirements(currentUnits, existing, unitId, desired);
     List<LogisticsDependencyGateway.OrderEquipmentReservation> reservations;
     try {
       reservations =
@@ -211,12 +211,13 @@ class RentalOrderReservationService {
               warehouseId,
               actor.subjectId(),
               actor.role(),
-              dependencyUnitRequirements(currentUnits, existing, unitId, desired));
+              composition);
     } catch (LogisticsDependencyException exception) {
       throw RentalOrderProblems.dependencyProblem(exception);
     }
     Map<UUID, LogisticsDependencyGateway.OrderEquipmentReservation> reservationByEquipment =
-        requireEquipmentReservations(reservations, aggregate);
+        requireEquipmentReservations(
+            reservations, aggregateCompositionBySource(composition, currentUnits));
     boolean changed =
         applyDesiredRequirements(
             order, unitId, unit.unit().number(), existing, desired, reservationByEquipment, actor);
@@ -241,7 +242,8 @@ class RentalOrderReservationService {
       LogisticsDependencyGateway.ConvertedPresentationHolds conversion,
       Map<UUID, Map<UUID, Long>> selectedRequirements,
       List<DesiredDeliveryWindow> desiredDeliveryWindows,
-      long rentalMonths,
+      Map<UUID, Long> rentalTermsBySelection,
+      Long legacyUniformRentalMonths,
       String deliveryAddress,
       BigDecimal latitude,
       BigDecimal longitude,
@@ -249,7 +251,9 @@ class RentalOrderReservationService {
       List<String> legacyDesiredDeliveryTimes) {
     if (selectedRequirements == null
         || selectedRequirements.isEmpty()
-        || rentalMonths < 1) {
+        || rentalTermsBySelection == null
+        || !rentalTermsBySelection.keySet().equals(selectedRequirements.keySet())
+        || rentalTermsBySelection.values().stream().anyMatch(months -> months == null || months < 1 || months > 120)) {
       throw new IllegalArgumentException("Presentation selection is required");
     }
     List<DesiredDeliveryWindow> normalizedDesiredDeliveryWindows =
@@ -260,7 +264,8 @@ class RentalOrderReservationService {
         presentationChecksumValues(
             orderId,
             normalizedDesiredDeliveryWindows,
-            rentalMonths,
+            rentalTermsBySelection,
+            legacyUniformRentalMonths,
             deliveryAddress,
             latitude,
             longitude,
@@ -271,7 +276,7 @@ class RentalOrderReservationService {
         legacyPresentationChecksum(
             orderId,
             normalizedDesiredDeliveryWindows,
-            rentalMonths,
+            legacyUniformRentalMonths,
             legacyDesiredDeliveryTimes,
             selectedRequirements);
     OrderCommandReceipt replay =
@@ -301,12 +306,13 @@ class RentalOrderReservationService {
             orderId);
     List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> composition =
         dependencyUnitRequirements(currentUnits, existing, selectedRequirements);
-    Map<UUID, Long> aggregate = aggregateComposition(composition);
     if (conversion == null || conversion.equipmentReservations() == null) {
       throw RentalOrderProblems.invalidDependencyResponse();
     }
     Map<UUID, LogisticsDependencyGateway.OrderEquipmentReservation> reservationsByEquipment =
-        requireEquipmentReservations(conversion.equipmentReservations(), aggregate);
+        requireEquipmentReservations(
+            conversion.equipmentReservations(),
+            aggregateCompositionBySource(composition, currentUnits));
     Map<UUID, RentalOrderUnitTerm> rentalTermsByUnit =
         rentalTerms.findAllByOrder_IdOrderByRentalItemIdAsc(orderId).stream()
             .collect(
@@ -330,6 +336,7 @@ class RentalOrderReservationService {
               reservationsByEquipment,
               actor);
       RentalOrderUnitTerm existingTerm = rentalTermsByUnit.get(selection.getKey());
+      long rentalMonths = rentalTermsBySelection.get(selection.getKey());
       if (existingTerm == null) {
         newRentalTerms.add(RentalOrderUnitTerm.create(order, selection.getKey(), rentalMonths));
       } else if (existingTerm.getRentalMonths() != rentalMonths) {
@@ -366,7 +373,8 @@ class RentalOrderReservationService {
   private static List<String> presentationChecksumValues(
       UUID orderId,
       List<DesiredDeliveryWindow> desiredDeliveryWindows,
-      long rentalMonths,
+      Map<UUID, Long> rentalTerms,
+      Long legacyUniformRentalMonths,
       String deliveryAddress,
       BigDecimal latitude,
       BigDecimal longitude,
@@ -379,7 +387,18 @@ class RentalOrderReservationService {
           values.add(window.getStartDate().toString());
           values.add(window.getEndDate().toString());
         });
-    values.add(Long.toString(rentalMonths));
+    if (legacyUniformRentalMonths != null) {
+      values.add(Long.toString(legacyUniformRentalMonths));
+    } else {
+      values.add("PER_CABIN_RENTAL_TERMS");
+      rentalTerms.entrySet().stream()
+          .sorted(Map.Entry.comparingByKey())
+          .forEach(
+              term -> {
+                values.add(term.getKey().toString());
+                values.add(Long.toString(term.getValue()));
+              });
+    }
     values.add(deliveryAddress == null ? "" : deliveryAddress);
     values.add(decimal(latitude));
     values.add(decimal(longitude));
@@ -399,10 +418,11 @@ class RentalOrderReservationService {
   private static String legacyPresentationChecksum(
       UUID orderId,
       List<DesiredDeliveryWindow> desiredDeliveryWindows,
-      long rentalMonths,
+      Long legacyUniformRentalMonths,
       List<String> legacyDesiredDeliveryTimes,
       Map<UUID, Map<UUID, Long>> selectedRequirements) {
-    if (desiredDeliveryWindows.size() != 1
+    if (legacyUniformRentalMonths == null
+        || desiredDeliveryWindows.size() != 1
         || legacyDesiredDeliveryTimes == null
         || legacyDesiredDeliveryTimes.size() != 2) return null;
     DesiredDeliveryWindow desiredDeliveryWindow = desiredDeliveryWindows.getFirst();
@@ -412,7 +432,7 @@ class RentalOrderReservationService {
     values.add(desiredDeliveryWindow.getEndDate().toString());
     values.add(legacyDesiredDeliveryTimes.getFirst());
     values.add(legacyDesiredDeliveryTimes.get(1));
-    values.add(Long.toString(rentalMonths));
+    values.add(Long.toString(legacyUniformRentalMonths));
     appendPresentationSelectionChecksumValues(values, selectedRequirements);
     return OrderCommandChecksum.sha256(APPLY_PRESENTATION_SELECTION, values);
   }
@@ -653,7 +673,8 @@ class RentalOrderReservationService {
             link.getDocument().getId(),
             oldUnitId,
             newUnitId,
-            pair.replacementReservation().unit().version());
+            pair.replacementReservation().unit().version(),
+            link.getReplacementInventorySourceWarehouseId());
         affectedDocumentIds.add(link.getDocument().getId());
         ShipmentFurnitureMovementTask oldLink =
             furnitureTaskLinks
@@ -671,9 +692,15 @@ class RentalOrderReservationService {
         Map<String, Object> previous = new LinkedHashMap<>();
         previous.put("rentalItemId", oldUnitId.toString());
         previous.put("unitNumber", pair.releasedReservation().unit().number());
+        previous.put(
+            "inventorySourceWarehouseId",
+            pair.releasedReservation().warehouseId().toString());
         Map<String, Object> replacement = new LinkedHashMap<>();
         replacement.put("rentalItemId", newUnitId.toString());
         replacement.put("unitNumber", pair.replacementReservation().unit().number());
+        replacement.put(
+            "inventorySourceWarehouseId",
+            pair.replacementReservation().warehouseId().toString());
         if (link.getReplacementReason() != null) {
           replacement.put("reason", link.getReplacementReason());
         }
@@ -980,25 +1007,6 @@ class RentalOrderReservationService {
                 Map.Entry::getKey, Map.Entry::getValue, (left, right) -> left, LinkedHashMap::new));
   }
 
-  private static Map<UUID, Long> aggregateRequirements(
-      List<RentalOrderEquipmentRequirement> existing,
-      UUID replacedUnitId,
-      Map<UUID, Long> desired) {
-    Map<UUID, Long> aggregate = new LinkedHashMap<>();
-    for (RentalOrderEquipmentRequirement requirement : existing) {
-      if (!replacedUnitId.equals(requirement.getRentalItemId()) && requirement.getQuantity() > 0) {
-        aggregate.merge(requirement.getEquipmentId(), requirement.getQuantity(), Math::addExact);
-      }
-    }
-    desired.forEach(
-        (equipmentId, quantity) -> aggregate.merge(equipmentId, quantity, Math::addExact));
-    return aggregate.entrySet().stream()
-        .sorted(Map.Entry.comparingByKey())
-        .collect(
-            Collectors.toMap(
-                Map.Entry::getKey, Map.Entry::getValue, (left, right) -> left, LinkedHashMap::new));
-  }
-
   private static List<LogisticsDependencyGateway.OrderEquipmentRequirement> dependencyRequirements(
       Map<UUID, Long> requirements) {
     return requirements.entrySet().stream()
@@ -1072,12 +1080,28 @@ class RentalOrderReservationService {
         .toList();
   }
 
-  private static Map<UUID, Long> aggregateComposition(
-      List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> composition) {
-    Map<UUID, Long> aggregate = new LinkedHashMap<>();
+  private static Map<SourceEquipmentKey, Long> aggregateCompositionBySource(
+      List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> composition,
+      List<LogisticsDependencyGateway.OrderUnitReservation> units) {
+    Map<UUID, UUID> sourceByUnit =
+        units.stream()
+            .collect(
+                Collectors.toMap(
+                    LogisticsDependencyGateway.OrderUnitReservation::unitId,
+                    LogisticsDependencyGateway.OrderUnitReservation::warehouseId,
+                    (left, right) -> {
+                      throw new IllegalStateException("Duplicate active order unit reservation");
+                    },
+                    LinkedHashMap::new));
+    Map<SourceEquipmentKey, Long> aggregate = new LinkedHashMap<>();
     for (LogisticsDependencyGateway.OrderUnitEquipmentRequirements unit : composition) {
+      UUID sourceWarehouseId = sourceByUnit.get(unit.rentalItemId());
+      if (sourceWarehouseId == null) throw RentalOrderProblems.invalidDependencyResponse();
       for (LogisticsDependencyGateway.OrderEquipmentRequirement requirement : unit.requirements()) {
-        aggregate.merge(requirement.equipmentId(), requirement.quantity(), Math::addExact);
+        aggregate.merge(
+            new SourceEquipmentKey(sourceWarehouseId, requirement.equipmentId()),
+            requirement.quantity(),
+            Math::addExact);
       }
     }
     return aggregate;
@@ -1086,25 +1110,47 @@ class RentalOrderReservationService {
   private static Map<UUID, LogisticsDependencyGateway.OrderEquipmentReservation>
       requireEquipmentReservations(
           List<LogisticsDependencyGateway.OrderEquipmentReservation> reservations,
-          Map<UUID, Long> expected) {
+          Map<SourceEquipmentKey, Long> expected) {
     if (reservations == null || reservations.size() != expected.size()) {
       throw RentalOrderProblems.invalidDependencyResponse();
     }
+    Set<UUID> expectedWarehouses =
+        expected.keySet().stream()
+            .map(SourceEquipmentKey::warehouseId)
+            .collect(Collectors.toUnmodifiableSet());
     Map<UUID, LogisticsDependencyGateway.OrderEquipmentReservation> actual = new LinkedHashMap<>();
+    Map<SourceEquipmentKey, Long> actualBySource = new LinkedHashMap<>();
     for (LogisticsDependencyGateway.OrderEquipmentReservation reservation : reservations) {
+      UUID warehouseId = reservation == null ? null : reservation.warehouseId();
+      if (warehouseId == null && expectedWarehouses.size() == 1) {
+        warehouseId = expectedWarehouses.iterator().next();
+      }
       if (reservation == null
+          || warehouseId == null
           || reservation.equipmentId() == null
           || reservation.equipmentName() == null
           || reservation.equipmentName().isBlank()
           || reservation.quantity() < 1
           || reservation.availableQuantity() < 0
           || reservation.maximumPerCabin() != null && reservation.maximumPerCabin() < 1
-          || actual.putIfAbsent(reservation.equipmentId(), reservation) != null
-          || !Objects.equals(expected.get(reservation.equipmentId()), reservation.quantity())) {
+          || actualBySource.putIfAbsent(
+                  new SourceEquipmentKey(warehouseId, reservation.equipmentId()),
+                  reservation.quantity())
+              != null
+          || !Objects.equals(
+              expected.get(new SourceEquipmentKey(warehouseId, reservation.equipmentId())),
+              reservation.quantity())) {
+        throw RentalOrderProblems.invalidDependencyResponse();
+      }
+      LogisticsDependencyGateway.OrderEquipmentReservation existing =
+          actual.putIfAbsent(reservation.equipmentId(), reservation);
+      if (existing != null
+          && (!existing.equipmentName().equals(reservation.equipmentName())
+              || !Objects.equals(existing.maximumPerCabin(), reservation.maximumPerCabin()))) {
         throw RentalOrderProblems.invalidDependencyResponse();
       }
     }
-    if (!actual.keySet().equals(expected.keySet())) {
+    if (!actualBySource.equals(expected)) {
       throw RentalOrderProblems.invalidDependencyResponse();
     }
     return actual;
@@ -1334,13 +1380,13 @@ class RentalOrderReservationService {
         receipt.releasedReservation(),
         order.getId(),
         link.getOldRentalItemId(),
-        order.getWarehouseId(),
+        receipt.releasedReservation().warehouseId(),
         "RELEASED");
     requireReservation(
         receipt.replacementReservation(),
         order.getId(),
         link.getRentalItemId(),
-        order.getWarehouseId(),
+        link.getReplacementInventorySourceWarehouseId(),
         "ACTIVE");
   }
 
@@ -1352,8 +1398,8 @@ class RentalOrderReservationService {
         link.getReplacementActorSubjectId(),
         role,
         link.getReplacementActorSubjectId().toString(),
-        Set.of(warehouseId),
-        Set.of(warehouseId),
+        replacementWarehouseScopes(warehouseId, link.getReplacementInventorySourceWarehouseId()),
+        replacementWarehouseScopes(warehouseId, link.getReplacementInventorySourceWarehouseId()),
         global,
         local,
         true,
@@ -1361,7 +1407,11 @@ class RentalOrderReservationService {
   }
 
   private void replaceDocumentLine(
-      UUID documentId, UUID oldUnitId, UUID newUnitId, long assetVersion) {
+      UUID documentId,
+      UUID oldUnitId,
+      UUID newUnitId,
+      long assetVersion,
+      UUID inventorySourceWarehouseId) {
     LogisticsDocument document =
         documents
             .findForUpdate(documentId)
@@ -1394,8 +1444,17 @@ class RentalOrderReservationService {
       throw RentalOrderProblems.conflict(
           "REPLACEMENT_TRIP_FENCE_LOST", "Ходка должна быть остановлена перед заменой бытовки");
     }
-    line.replaceRentalItem(oldUnitId, newUnitId, assetVersion);
+    line.replaceRentalItem(
+        oldUnitId, newUnitId, assetVersion, inventorySourceWarehouseId);
     documentLines.saveAndFlush(line);
+  }
+
+  private static Set<UUID> replacementWarehouseScopes(
+      UUID serviceWarehouseId, UUID inventorySourceWarehouseId) {
+    LinkedHashSet<UUID> scopes = new LinkedHashSet<>();
+    scopes.add(serviceWarehouseId);
+    scopes.add(inventorySourceWarehouseId);
+    return Set.copyOf(scopes);
   }
 
   private static OffsetDateTime now() {
@@ -1409,4 +1468,7 @@ class RentalOrderReservationService {
     }
     return order.getWarehouseId();
   }
+
+  /** Exact validation key for one source-partitioned asset furniture reservation. */
+  private record SourceEquipmentKey(UUID warehouseId, UUID equipmentId) {}
 }

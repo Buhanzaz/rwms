@@ -12,7 +12,9 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnPickupRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentPlanRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.StartReturnEstimatesRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferArrivalPreflightView;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferPlanView;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.UpdateHistoricalRentalShipmentRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.UpdateTransferPlanRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
@@ -40,6 +42,8 @@ public class LogisticsDocumentService {
       LogisticsDocumentEffectOperations.RETURN_WAREHOUSE_IDENTITY;
   static final String RETURN_MEDIA_OWNER_PROOF_REGISTER =
       LogisticsDocumentEffectOperations.RETURN_MEDIA_OWNER_PROOF_REGISTER;
+  static final String SHIPMENT_MEDIA_OWNER_PROOF_REGISTER =
+      LogisticsDocumentEffectOperations.SHIPMENT_MEDIA_OWNER_PROOF_REGISTER;
   static final String RETURN_MEDIA_VALIDATE =
       LogisticsDocumentEffectOperations.RETURN_MEDIA_VALIDATE;
   static final String RETURN_ASSET_SETTLE_FREE =
@@ -145,8 +149,9 @@ public class LogisticsDocumentService {
   }
 
   /**
-   * Records one past rental fact as a real shipment or return document without a driver. The
-   * coordinator retains all cross-owner recovery work behind durable logistics attempts.
+   * Records one past rental fact as a real shipment or return document. A shipment may retain an
+   * optional driver identity as audit metadata, while the coordinator keeps driver work disabled
+   * and retains all cross-owner recovery behind durable logistics attempts.
    */
   @Transactional
   public CreateResult createHistoricalRentalMovement(
@@ -234,6 +239,52 @@ public class LogisticsDocumentService {
     return result(
         transferCoordinator.createTransfer(
             subjectId, idempotencyKey, correlationId, request, admission));
+  }
+
+  /** Reads the planning projection attached to a transfer or a compatible legacy view. */
+  @Transactional(readOnly = true)
+  public TransferPlanView getTransferPlan(UUID documentId) {
+    return readProjection.transferPlan(documentId);
+  }
+
+  /** Replaces one editable plan under the transfer document version and idempotency fences. */
+  @Transactional
+  public PlanResult updateTransferPlan(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      UUID documentId,
+      long expectedDocumentVersion,
+      UpdateTransferPlanRequest request,
+      LocalDate warehouseToday) {
+    return planResult(
+        transferCoordinator.updateTransferPlan(
+            subjectId,
+            idempotencyKey,
+            correlationId,
+            documentId,
+            expectedDocumentVersion,
+            request,
+            warehouseToday));
+  }
+
+  /** Confirms structurally complete requirements without claiming an asset reservation. */
+  @Transactional
+  public PlanResult confirmTransferPlan(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      UUID documentId,
+      long expectedDocumentVersion,
+      AdmissionTicket admission) {
+    return planResult(
+        transferCoordinator.confirmTransferPlan(
+            subjectId,
+            idempotencyKey,
+            correlationId,
+            documentId,
+            expectedDocumentVersion,
+            admission));
   }
 
   /**
@@ -662,4 +713,11 @@ public class LogisticsDocumentService {
 
   /** Logistics-document create result with stable idempotency replay truth. */
   public record CreateResult(LogisticsDocumentView response, boolean replayed) {}
+
+  private static PlanResult planResult(TransferPlanCommandResult result) {
+    return new PlanResult(result.response(), result.replayed());
+  }
+
+  /** Transfer planning command result with stable idempotency replay truth. */
+  public record PlanResult(TransferPlanView response, boolean replayed) {}
 }
