@@ -2467,10 +2467,10 @@ paths:
   /api/logistics/customer/v1/warehouses:
     get:
       operationId: listCustomerWarehouses
-      description: Lists only active warehouses explicitly enabled for CustomerApp delivery.
+      description: Lists active routable representative warehouses and explicitly enabled ordinary warehouses using canonical Warehouse coordinates.
       responses:
         "200":
-          description: Delivery-enabled warehouses.
+          description: Customer-visible routable warehouses.
           content:
             application/json:
               schema:

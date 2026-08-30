@@ -760,10 +760,12 @@ state and calls other owners through versioned, idempotent boundaries.
 
 The CustomerApp boundary accepts only the exact `USER/CUSTOMER`,
 `customer.rental`, `rwms-customer-android` token combination. One auth subject
-creates one individual/legal logistics profile and selects an explicitly
-available warehouse. Availability is the intersection of warehouse-service's
-active identities and logistics' fail-closed delivery-depot registry. Each
-enabled UUID has independent route-origin coordinates, and the selected UUID is
+creates one individual/legal logistics profile and selects an available
+warehouse. Availability requires an active warehouse-service identity with
+valid coordinates and either the representative flag or an explicit ordinary
+warehouse entry in logistics' fail-closed delivery-depot registry. A
+representative warehouse therefore needs no duplicate registry entry.
+Warehouse-service owns every route-origin coordinate, and the selected UUID is
 immutable for the logistics-owned rental session. Asset-service remains
 authoritative for `FREE` status, own-session holds, photos, equipment
 catalogue/balances and hold conversion. The card projection is least privilege,
@@ -1001,6 +1003,13 @@ override the recurring weekday set. Generated/manual workload stays
 simulator-owned and is never converted into an RWMS order, notification or
 assignment.
 
+The dispatcher warehouse selector presents that ownership explicitly: one root
+row followed by indented direct representatives, then unrelated routable roots.
+The selected warehouse controls the visible context, while `RoutePlan.warehouse_id`
+continues to control planning commands, depot labels and root-driver shift time.
+Consequently, opening a representative never relabels a root-depot departure as
+an arrival at the selected representative.
+
 Customer promises are intentionally narrower than planner candidates. A
 non-representative warehouse keeps the existing fixed-window and full-day
 capacity behavior. A representative warehouse exposes only `DURING_DAY`: local
@@ -1159,19 +1168,28 @@ truck profile or Valhalla/OSM road restrictions. The Plan page may request an
 explicit one/two-cabin split and move a task between driver cycles, but the
 backend remains the owner of the full capacity, ordering, window, shift,
 overlap and truck-route validation before any versioned edit is accepted.
+Changing the shared planning date from the Deliveries inspector preserves that
+inspector section; changing a date is not itself a command to open the Day plan.
+An unassigned `TIME_WINDOW_CONFLICT` exposes the same-day **Change time window**
+action only when the planner supplied a nearest feasible instant. The action
+reuses the existing request editor, while moving the request to another day
+remains a distinct operator choice; either mutation returns to backend-owned
+replanning rather than editing a route only in the browser.
 
-The planner creates a missing pre-plan automatically after RWMS
-synchronization (including committed valid siblings from a partial refresh),
-or generated-workload replacement and through an
+The planner creates a missing pre-plan automatically after a complete RWMS
+synchronization, generated-workload replacement and through an
 idempotent ensure when the operator opens a date. It waits until every eligible
 READY request also has a complete cargo profile and until one active
 driver/vehicle shift exists. It then persists the existing heuristic's exact
 driver, vehicle, delivery-first cycle, optional return pickups, service-start
 ETAs and warehouse return instead of requiring a browser build command. A
 current non-archived plan is preserved; an authoritative input mutation removes
-only the affected stale date before the coordinator runs again. A failed sibling
-feed row remains explicit but does not suppress replanning for committed valid
-orders. CustomerApp's
+only the affected stale date before the coordinator runs again. The group
+workspace preserves that plan identity when every member poll is unchanged. It
+invalidates mutable root plans only after a failure-free poll reports an import
+or update; a partial failure commits its explicit synchronization evidence but
+keeps the last plan until the next complete refresh can include every durable
+valid sibling. CustomerApp's
 standard `09:00-12:00`, `12:00-15:00`, `15:00-18:00` choices do not restrict a
 dispatcher-negotiated hard interval such as `09:00-15:00`. The persisted return
 time is consumed as current-plan context by dynamic-slot search, which still

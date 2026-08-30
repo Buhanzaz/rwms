@@ -11,6 +11,7 @@ import {
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical, Lock, LockOpen, TriangleAlert } from 'lucide-react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { RouteCycle, RoutePlan, RouteStop, UnassignedTask, UUID } from '../../domain/types';
 import { Badge, Button, EmptyState } from '../../components/ui';
 import { formatDistance, formatDuration, formatTime, shortId } from '../../utils/format';
@@ -115,6 +116,12 @@ function DraggableUnassigned({ item, readOnly, onReschedule }: { item: Unassigne
     disabled: readOnly,
     data: { taskId: item.task.id, sourceCycleId: null, sourceSequence: 0 } satisfies DragData,
   });
+  const requestId = item.request?.id ?? item.task.request_id;
+  const canChangeWindow = item.reason_codes.includes('TIME_WINDOW_CONFLICT') && Boolean(item.closest_option);
+  const openRequestEditor = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    onReschedule(requestId);
+  };
   return (
     <article ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), opacity: isDragging ? .5 : 1 }} className="unassigned-card" {...attributes} {...listeners}>
       <div className="entity-card__row"><strong>№{shortId(item.request?.id ?? item.task.request_id)}</strong><span>{item.task.mandatory ? <Badge tone="danger">обязательно</Badge> : null}{!readOnly ? <GripVertical size={15} /> : null}</span></div>
@@ -122,7 +129,10 @@ function DraggableUnassigned({ item, readOnly, onReschedule }: { item: Unassigne
       <ul>{item.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
       {item.closest_option ? <p>Ближайший вариант: {item.closest_option}</p> : null}
       {item.recommendations.length ? <div className="recommendation">{item.recommendations.join(' · ')}</div> : null}
-      <Button type="button" size="sm" disabled={readOnly} onClick={(event) => { event.stopPropagation(); onReschedule(item.request?.id ?? item.task.request_id); }}>Перенести на другой день</Button>
+      <div className="toolbar-row">
+        {canChangeWindow ? <Button type="button" size="sm" variant="primary" disabled={readOnly} onClick={openRequestEditor}>Сменить временное окно</Button> : null}
+        <Button type="button" size="sm" disabled={readOnly} onClick={openRequestEditor}>Перенести на другой день</Button>
+      </div>
     </article>
   );
 }

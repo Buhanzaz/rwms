@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.logistics.customer.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerWarehouseResponse;
@@ -22,9 +23,13 @@ import org.junit.jupiter.api.Test;
 class CustomerWarehouseServiceTest {
   private static final UUID WAREHOUSE_ID =
       UUID.fromString("c89b65f1-2891-4176-bd88-1d231e869a25");
+  private static final UUID REPRESENTATIVE_WAREHOUSE_ID =
+      UUID.fromString("2496028a-3b85-4d08-8541-a6f78900df50");
+  private static final UUID TECHNICAL_WAREHOUSE_ID =
+      UUID.fromString("f41e1a08-d114-4fb9-8cbe-646dd5190ea8");
 
   @Test
-  void exposesConfiguredDepotCoordinatesForEveryVisibleWarehouse() {
+  void exposesConfiguredOrdinaryAndCanonicalRepresentativeWarehouseCoordinates() {
     CustomerDeliveryProperties properties = mock(CustomerDeliveryProperties.class);
     LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
     Validated depot = depot();
@@ -38,14 +43,100 @@ class CustomerWarehouseServiceTest {
                     true,
                     "СПБ",
                     "Санкт-Петербург",
-                    "Europe/Moscow")));
+                    "Колпино, Сапёрный переулок, 6",
+                    new BigDecimal("59.763900"),
+                    new BigDecimal("30.471900"),
+                    "Europe/Moscow",
+                    false),
+                new WarehouseIdentity(
+                    REPRESENTATIVE_WAREHOUSE_ID,
+                    2,
+                    true,
+                    "Великий Новгород",
+                    "Великий Новгород",
+                    "Большая Санкт-Петербургская улица, 82А",
+                    new BigDecimal("58.573100"),
+                    new BigDecimal("31.269200"),
+                    "Europe/Moscow",
+                    true),
+                new WarehouseIdentity(
+                    TECHNICAL_WAREHOUSE_ID,
+                    1,
+                    true,
+                    "Техническая площадка",
+                    null,
+                    null,
+                    new BigDecimal("59.900000"),
+                    new BigDecimal("30.300000"),
+                    "Europe/Moscow",
+                    false)));
 
     List<CustomerWarehouseResponse> response =
         new CustomerWarehouseService(properties, dependencies).list();
 
-    assertThat(response).hasSize(1);
-    assertThat(response.getFirst().depotLatitude()).isEqualByComparingTo("59.763806");
-    assertThat(response.getFirst().depotLongitude()).isEqualByComparingTo("30.471798");
+    assertThat(response).extracting(CustomerWarehouseResponse::id)
+        .containsExactly(WAREHOUSE_ID, REPRESENTATIVE_WAREHOUSE_ID);
+    assertThat(response.getFirst().depotLatitude()).isEqualByComparingTo("59.763900");
+    assertThat(response.getFirst().depotLongitude()).isEqualByComparingTo("30.471900");
+    assertThat(response.get(1).address()).isEqualTo("Большая Санкт-Петербургская улица, 82А");
+  }
+
+  @Test
+  void usesRepresentativeWarehouseCoordinatesForRouteConfiguration() {
+    CustomerDeliveryProperties properties = mock(CustomerDeliveryProperties.class);
+    LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
+    WarehouseIdentity representative =
+        new WarehouseIdentity(
+            REPRESENTATIVE_WAREHOUSE_ID,
+            2,
+            true,
+            "Великий Новгород",
+            "Великий Новгород",
+            null,
+            new BigDecimal("58.573100"),
+            new BigDecimal("31.269200"),
+            "Europe/Moscow",
+            true);
+    when(properties.validatedDepots()).thenReturn(Map.of(WAREHOUSE_ID, depot()));
+    when(dependencies.readWarehouseIdentity(REPRESENTATIVE_WAREHOUSE_ID))
+        .thenReturn(representative);
+    when(properties.validated(
+            REPRESENTATIVE_WAREHOUSE_ID,
+            representative.latitude(),
+            representative.longitude()))
+        .thenReturn(depot());
+
+    new CustomerWarehouseService(properties, dependencies)
+        .validated(REPRESENTATIVE_WAREHOUSE_ID);
+
+    verify(properties)
+        .validated(
+            REPRESENTATIVE_WAREHOUSE_ID,
+            representative.latitude(),
+            representative.longitude());
+  }
+
+  @Test
+  void omitsRepresentativeWarehouseWithoutCoordinates() {
+    CustomerDeliveryProperties properties = mock(CustomerDeliveryProperties.class);
+    LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
+    when(properties.validatedDepots()).thenReturn(Map.of(WAREHOUSE_ID, depot()));
+    when(dependencies.listWarehouseIdentities())
+        .thenReturn(
+            List.of(
+                new WarehouseIdentity(
+                    REPRESENTATIVE_WAREHOUSE_ID,
+                    2,
+                    true,
+                    "Великий Новгород",
+                    "Великий Новгород",
+                    null,
+                    null,
+                    null,
+                    "Europe/Moscow",
+                    true)));
+
+    assertThat(new CustomerWarehouseService(properties, dependencies).list()).isEmpty();
   }
 
   private static Validated depot() {

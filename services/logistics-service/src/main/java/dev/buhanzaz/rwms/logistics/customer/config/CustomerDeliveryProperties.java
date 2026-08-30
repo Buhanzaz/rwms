@@ -168,6 +168,57 @@ public record CustomerDeliveryProperties(
     return result;
   }
 
+  /**
+   * Builds one route profile from warehouse-service's authoritative coordinates.
+   *
+   * <p>The indexed depot registry remains the allow-list for ordinary warehouses, but a
+   * representative warehouse can be discovered from its canonical Warehouse identity. Shared
+   * routing and capacity values are still validated through the existing fail-closed registry.
+   */
+  public Validated validated(
+      UUID warehouseId, BigDecimal warehouseLatitude, BigDecimal warehouseLongitude) {
+    if (warehouseId == null) throw new IllegalStateException("warehouse-id is required");
+    Validated shared = validatedDepots().values().iterator().next();
+    return new Validated(
+        warehouseId,
+        validatedLatitude(warehouseLatitude),
+        validatedLongitude(warehouseLongitude),
+        shared.valhallaBaseUrl(),
+        shared.connectTimeout(),
+        shared.readTimeout(),
+        shared.depotReloadMinutes(),
+        shared.serviceMinutes(),
+        shared.earliestDeliveryDays(),
+        shared.bookingHorizonDays(),
+        shared.offerLifetime(),
+        shared.holdLifetime(),
+        shared.travelTimeMultiplier(),
+        shared.fixedTravelBufferMinutes(),
+        shared.driverWorkStart(),
+        shared.customerDeliveryStart(),
+        shared.customerDeliveryEnd(),
+        shared.driverShiftEnd(),
+        shared.deliverySlotMinutes(),
+        shared.pickupServiceMinutes(),
+        shared.warehouseLoadOneMinutes(),
+        shared.warehouseLoadTwoMinutes(),
+        shared.warehouseUnloadMinutes(),
+        shared.deliveryWindowSemantics(),
+        shared.pickupPolicy(),
+        shared.soloTruckHeightMeters(),
+        shared.soloTruckWidthMeters(),
+        shared.soloTruckLengthMeters(),
+        shared.soloTruckWeightTons(),
+        shared.soloTruckAxleLoadTons(),
+        shared.soloTruckAxleCount(),
+        shared.truckHeightMeters(),
+        shared.truckWidthMeters(),
+        shared.truckLengthMeters(),
+        shared.truckWeightTons(),
+        shared.truckAxleLoadTons(),
+        shared.truckAxleCount());
+  }
+
   private static String required(String value, String name) {
     if (value == null || value.isBlank()) throw new IllegalStateException(name + " is required");
     return value.trim();
@@ -178,6 +229,24 @@ public record CustomerDeliveryProperties(
       throw new IllegalStateException(name + " must be positive");
     }
     return value;
+  }
+
+  private static BigDecimal validatedLatitude(BigDecimal latitude) {
+    if (latitude == null
+        || latitude.compareTo(BigDecimal.valueOf(-90)) < 0
+        || latitude.compareTo(BigDecimal.valueOf(90)) > 0) {
+      throw new IllegalStateException("Depot latitude is invalid");
+    }
+    return latitude;
+  }
+
+  private static BigDecimal validatedLongitude(BigDecimal longitude) {
+    if (longitude == null
+        || longitude.compareTo(BigDecimal.valueOf(-180)) < 0
+        || longitude.compareTo(BigDecimal.valueOf(180)) > 0) {
+      throw new IllegalStateException("Depot longitude is invalid");
+    }
+    return longitude;
   }
 
   /** One independently enabled physical depot in the customer-delivery registry. */
@@ -196,21 +265,11 @@ public record CustomerDeliveryProperties(
     }
 
     private BigDecimal validatedLatitude() {
-      if (depotLatitude == null
-          || depotLatitude.compareTo(BigDecimal.valueOf(-90)) < 0
-          || depotLatitude.compareTo(BigDecimal.valueOf(90)) > 0) {
-        throw new IllegalStateException("Depot latitude is invalid");
-      }
-      return depotLatitude;
+      return CustomerDeliveryProperties.validatedLatitude(depotLatitude);
     }
 
     private BigDecimal validatedLongitude() {
-      if (depotLongitude == null
-          || depotLongitude.compareTo(BigDecimal.valueOf(-180)) < 0
-          || depotLongitude.compareTo(BigDecimal.valueOf(180)) > 0) {
-        throw new IllegalStateException("Depot longitude is invalid");
-      }
-      return depotLongitude;
+      return CustomerDeliveryProperties.validatedLongitude(depotLongitude);
     }
   }
 

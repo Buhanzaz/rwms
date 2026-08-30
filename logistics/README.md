@@ -101,7 +101,8 @@ pairing observable, routing settings remain editable for the selected
 warehouse.
 
 The **Deliveries** section is the dispatcher preparation board. Switching its
-date shows only deliveries and pickups eligible for that day. Every READY item
+date shows only deliveries and pickups eligible for that day and keeps the
+dispatcher in the same inspector section instead of opening **Day plan**. Every READY item
 must receive either a positive service interval or the soft **During the day**
 choice, plus an explicit answer whether the address accepts the truck with its
 trailer; plan generation fails with `PLANNING_INPUT_INCOMPLETE` while either
@@ -329,6 +330,9 @@ travel/service/wait/detour time, score, warnings and persisted assignment
 explanation. Each driver card also shows break-adjusted shift utilization. The
 parallel-start summary reports how many activated resources truly need to begin
 together; unused drivers and vehicles receive no route.
+When a `TIME_WINDOW_CONFLICT` has a same-day nearest option, its card exposes
+**Change time window** and opens the existing request editor without changing the date.
+The separate **Move to another day** action remains available for other scheduling decisions.
 If no feasible cycle exists, the UI opens the unassigned reasons instead of
 claiming routes were built, and simulation remains unavailable until the plan
 contains at least one cycle.
@@ -524,6 +528,12 @@ the same dated plan and root resources, while every regional request retains its
 canonical `serviceWarehouseId`. Exact link exclusions, allowed dates and
 recurring weekdays are applied for the planning date; selecting a representative
 changes the visible map context without creating a duplicate day plan.
+The header selector renders the current root first, its direct representatives
+as indented rows, and then the other routable roots. Selecting a representative
+keeps planning commands on the root while opening that warehouse's own context.
+Depot stops and driver timelines are always labelled from the persisted plan's
+`warehouse_id`, so opening a representative cannot relabel a physical root-depot
+start as an arrival at the representative warehouse.
 
 Planning reads and commands remain on the simulator's same-origin FastAPI. The
 in-map **Create transfer** action is the narrow exception: it opens a local
@@ -580,8 +590,11 @@ both coordinates and an address exist; an address-only row fails explicitly
 with `COORDINATES_REQUIRED` instead of using a fabricated point. Valid sibling
 orders remain durable if another row fails, while
 `RWMS_WORKSPACE_SYNC_INCOMPLETE` prevents the partial result from being called
-current. `refresh_rwms=false` reads that last durable projection for an
-explicit recovery view.
+current. An unchanged poll preserves the current mutable root-plan identity.
+A complete poll invalidates mutable group plans only when at least one order
+was imported or updated; an incomplete poll preserves the last plan and defers
+regeneration until the next complete refresh. `refresh_rwms=false` reads that
+last durable projection for an explicit recovery view.
 
 Creating or changing an authoritative request invalidates only plans on its
 old and new allowed dates. The backend then rebuilds missing draft plans for

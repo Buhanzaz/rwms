@@ -26,11 +26,13 @@ must handle a canonical conflict rather than send a changed retry.
 
 The dedicated `/api/logistics/customer/v1/**` boundary accepts only a `USER` JWT with role
 `CUSTOMER`, scope `customer.rental` and client identity `rwms-customer-android`. A customer creates
-one individual or legal-entity profile, selects an explicitly available warehouse, and works with a
+one individual or legal-entity profile, selects an available warehouse, and works with a
 logistics-owned rental session. A warehouse is available only while warehouse-service reports it
-active and logistics has an enabled delivery-depot entry for its UUID. Each depot entry owns its
-coordinates; the warehouse response exposes that same origin to CustomerApp, so both the initial
-map camera and slot routing start at the warehouse selected by that session. Cabin availability,
+active with valid coordinates and it is either representative or an ordinary warehouse explicitly
+enabled in the logistics delivery-depot registry. Representative warehouses need no duplicate
+registry entry. Warehouse-service coordinates are authoritative for both the CustomerApp response
+and route origin, so the initial map camera and slot routing start at the warehouse selected by that
+session. Cabin availability,
 holds, photos and positive equipment balances remain asset-owned; the customer catalog exposes only
 `FREE` cabins or the same session's existing hold and never exposes the cabin dossier. The profile's
 individual/legal kind and auth/client bindings are immutable; contact/display fields update under
@@ -833,10 +835,14 @@ The presentation-token secret must be at least 32 characters, and production rej
 default. The general API is stateless OAuth2/JWT; dev auth bypass is limited to the `dev` profile.
 
 Customer delivery is fail-closed until `LOGISTICS_CUSTOMER_DELIVERY_ENABLED=true`, private
-`LOGISTICS_CUSTOMER_VALHALLA_URL` and at least one enabled indexed depot are configured. The current
-two registry positions use `LOGISTICS_CUSTOMER_DEPOT_0_*` and `LOGISTICS_CUSTOMER_DEPOT_1_*`; each
-requires `ENABLED=true`, `WAREHOUSE_ID`, `LATITUDE` and `LONGITUDE`. Disabled positions are ignored,
-while an empty registry, duplicate warehouse UUID or invalid coordinates fail closed. The former
+`LOGISTICS_CUSTOMER_VALHALLA_URL` and at least one enabled indexed ordinary depot are configured.
+The current two registry positions use `LOGISTICS_CUSTOMER_DEPOT_0_*` and
+`LOGISTICS_CUSTOMER_DEPOT_1_*`; each requires `ENABLED=true`, `WAREHOUSE_ID`, `LATITUDE` and
+`LONGITUDE`. Disabled positions are ignored, while an empty registry, duplicate warehouse UUID or
+invalid configuration coordinates fail closed. These indexed entries enable ordinary warehouses
+and validate shared routing configuration; runtime route origins always come from warehouse-service.
+An active representative warehouse with valid owner-held coordinates is discovered automatically
+and requires no additional registry position. The former
 single-depot `LOGISTICS_CUSTOMER_WAREHOUSE_ID`/`LOGISTICS_CUSTOMER_DEPOT_LATITUDE`/
 `LOGISTICS_CUSTOMER_DEPOT_LONGITUDE` settings are not read.
 `LOGISTICS_CUSTOMER_SERVICE_MINUTES`, booking horizon, offer/hold lifetimes and the truck

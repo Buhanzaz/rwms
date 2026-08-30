@@ -26,11 +26,12 @@ document/workflow state, но не агрегатами кабин, оборуд
 
 Выделенная граница `/api/logistics/customer/v1/**` принимает только JWT типа `USER` с ролью
 `CUSTOMER`, scope `customer.rental` и client identity `rwms-customer-android`. Клиент создаёт один
-профиль физического или юридического лица, выбирает явно доступный склад и работает с принадлежащей
-logistics rental session. Склад доступен, только пока warehouse-service считает его активным, а в
-logistics включена запись delivery-depot с его UUID. У каждой записи свои координаты, поэтому
-ответ склада передаёт тот же origin в CustomerApp: начальная камера карты и маршрут слота
-начинаются на выбранном в session складе. Доступность и holds бытовок, фотографии и
+профиль физического или юридического лица, выбирает доступный склад и работает с принадлежащей
+logistics rental session. Склад доступен, только пока warehouse-service считает его активным, у
+него есть валидные координаты и он либо представительский, либо обычный склад, явно включённый в
+реестр logistics delivery-depot. Представительскому складу не нужна дублирующая запись реестра.
+Координаты warehouse-service авторитетны и для ответа CustomerApp, и для route origin, поэтому
+начальная камера карты и маршрут слота начинаются на выбранном в session складе. Доступность и holds бытовок, фотографии и
 положительные остатки мебели остаются во владении asset-service; клиентский каталог отдаёт только
 бытовки `FREE` либо уже удерживаемые той же session и никогда не открывает паспорт бытовки. Тип
 профиля физлица/юрлица и auth/client bindings неизменяемы; контактные/display-поля обновляются под
@@ -851,11 +852,14 @@ Kafka settings и, в production, `LOGISTICS_DEPENDENCIES_ENABLED` с
 default. Основной API использует stateless OAuth2/JWT; dev auth bypass ограничен профилем `dev`.
 
 Клиентская доставка fail-closed, пока не заданы `LOGISTICS_CUSTOMER_DELIVERY_ENABLED=true`, private
-`LOGISTICS_CUSTOMER_VALHALLA_URL` и хотя бы один включённый индексированный depot. Текущие две
-позиции реестра используют `LOGISTICS_CUSTOMER_DEPOT_0_*` и `LOGISTICS_CUSTOMER_DEPOT_1_*`; для
-каждой обязательны `ENABLED=true`, `WAREHOUSE_ID`, `LATITUDE` и `LONGITUDE`. Выключенные позиции
-игнорируются, а пустой реестр, повтор UUID склада или неверные координаты приводят к fail-closed.
-Прежние single-depot настройки `LOGISTICS_CUSTOMER_WAREHOUSE_ID`,
+`LOGISTICS_CUSTOMER_VALHALLA_URL` и хотя бы один включённый индексированный обычный depot. Текущие
+две позиции реестра используют `LOGISTICS_CUSTOMER_DEPOT_0_*` и
+`LOGISTICS_CUSTOMER_DEPOT_1_*`; для каждой обязательны `ENABLED=true`, `WAREHOUSE_ID`, `LATITUDE` и
+`LONGITUDE`. Выключенные позиции игнорируются, а пустой реестр, повтор UUID склада или неверные
+конфигурационные координаты приводят к fail-closed. Эти позиции включают обычные склады и проверяют
+общую конфигурацию маршрутизации; runtime route origin всегда берётся из warehouse-service.
+Активный представительский склад с валидными owner-held координатами обнаруживается автоматически
+и не требует дополнительной позиции реестра. Прежние single-depot настройки `LOGISTICS_CUSTOMER_WAREHOUSE_ID`,
 `LOGISTICS_CUSTOMER_DEPOT_LATITUDE` и `LOGISTICS_CUSTOMER_DEPOT_LONGITUDE` больше не читаются.
 `LOGISTICS_CUSTOMER_SERVICE_MINUTES`, горизонт бронирования, сроки offer/hold и размеры/массы
 грузовика задают общую модель ёмкости и route profile; текущая доступность водителей и вместимость

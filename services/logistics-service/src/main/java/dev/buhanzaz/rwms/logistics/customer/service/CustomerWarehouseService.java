@@ -13,58 +13,81 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
-/** Exposes only active warehouses with an explicit CustomerApp delivery-depot configuration. */
+/** Exposes routable active warehouses to CustomerApp without duplicating warehouse coordinates. */
 @Service
 @RequiredArgsConstructor
 public class CustomerWarehouseService {
   private final CustomerDeliveryProperties properties;
   private final LogisticsDependencyGateway dependencies;
 
-  /** Lists delivery-enabled active warehouses without granting general warehouse authority. */
+  /**
+   * Lists configured ordinary depots and representative warehouses from canonical owner facts.
+   */
   public List<CustomerWarehouseResponse> list() {
     Map<UUID, CustomerDeliveryProperties.Validated> delivery = validatedDepots();
     try {
       return dependencies.listWarehouseIdentities().stream()
           .filter(LogisticsDependencyGateway.WarehouseIdentity::active)
-          .filter(warehouse -> delivery.containsKey(warehouse.id()))
+          .filter(warehouse -> visible(warehouse, delivery))
+          .filter(CustomerWarehouseService::hasValidCoordinates)
           .map(
-              warehouse -> {
-                CustomerDeliveryProperties.Validated depot = delivery.get(warehouse.id());
-                return new CustomerWarehouseResponse(
+              warehouse ->
+                  new CustomerWarehouseResponse(
                       warehouse.id(),
                       warehouse.name(),
                       warehouse.city(),
-                      null,
+                      warehouse.address(),
                       warehouse.timeZone(),
-                      depot.depotLatitude(),
-                      depot.depotLongitude());
-              })
+                      warehouse.latitude(),
+                      warehouse.longitude()))
           .toList();
     } catch (LogisticsDependencyException exception) {
       throw unavailable();
     }
   }
 
-  /** Verifies that a selected warehouse is active and has the configured depot. */
+  /** Verifies that a selected warehouse is active, customer-visible and physically routable. */
   public LogisticsDependencyGateway.WarehouseIdentity required(UUID warehouseId) {
-    if (!validatedDepots().containsKey(warehouseId)) throw notFound();
+    Map<UUID, CustomerDeliveryProperties.Validated> delivery = validatedDepots();
     try {
       LogisticsDependencyGateway.WarehouseIdentity warehouse =
           dependencies.readWarehouseIdentity(warehouseId);
-      if (!warehouse.active()) throw notFound();
+      if (!warehouse.active()
+          || !visible(warehouse, delivery)
+          || !hasValidCoordinates(warehouse)) {
+        throw notFound();
+      }
       return warehouse;
     } catch (LogisticsDependencyException exception) {
       throw unavailable();
     }
   }
 
-  /** Returns the selected warehouse's validated route-capacity configuration. */
+  /** Returns route capacity with the selected Warehouse's owner-held route origin. */
   public CustomerDeliveryProperties.Validated validated(UUID warehouseId) {
     try {
-      return properties.validated(warehouseId);
+      LogisticsDependencyGateway.WarehouseIdentity warehouse = required(warehouseId);
+      return properties.validated(
+          warehouse.id(), warehouse.latitude(), warehouse.longitude());
     } catch (IllegalStateException exception) {
       throw unavailable();
     }
+  }
+
+  private static boolean visible(
+      LogisticsDependencyGateway.WarehouseIdentity warehouse,
+      Map<UUID, CustomerDeliveryProperties.Validated> configuredDepots) {
+    return warehouse.representative() || configuredDepots.containsKey(warehouse.id());
+  }
+
+  private static boolean hasValidCoordinates(
+      LogisticsDependencyGateway.WarehouseIdentity warehouse) {
+    return warehouse.latitude() != null
+        && warehouse.latitude().compareTo(java.math.BigDecimal.valueOf(-90)) >= 0
+        && warehouse.latitude().compareTo(java.math.BigDecimal.valueOf(90)) <= 0
+        && warehouse.longitude() != null
+        && warehouse.longitude().compareTo(java.math.BigDecimal.valueOf(-180)) >= 0
+        && warehouse.longitude().compareTo(java.math.BigDecimal.valueOf(180)) <= 0;
   }
 
   private Map<UUID, CustomerDeliveryProperties.Validated> validatedDepots() {

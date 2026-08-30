@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
@@ -92,8 +92,9 @@ describe('application states', () => {
     const user = userEvent.setup();
     renderApp();
 
-    const warehouseLabel = await screen.findByText('Склад СПб');
-    expect(warehouseLabel.parentElement).toHaveTextContent('Склад СПб · Санкт-Петербург');
+    const warehouseSelector = await screen.findByRole('button', { name: 'Склад логистической группы' });
+    expect(warehouseSelector).toHaveTextContent('Склад СПб — Санкт-Петербург');
+    expect(warehouseSelector).toHaveAttribute('aria-expanded', 'false');
     const warehouseHome = screen.getByRole('button', { name: 'Открыть склад' });
     expect(screen.queryByText('RWMS · Логистика')).not.toBeInTheDocument();
     expect(screen.queryByRole('combobox', { name: 'Текущий склад' })).not.toBeInTheDocument();
@@ -101,6 +102,80 @@ describe('application states', () => {
 
     await user.click(warehouseHome);
     expect(useUiStore.getState()).toMatchObject({ mode: 'PLAN_DAY', section: 'WAREHOUSE', selected: { kind: 'warehouse', id: warehouse.id } });
+  });
+
+  it('switches from a planning root to its representative warehouse in the group selector', async () => {
+    const mainWarehouse = warehouseFixture({ id: 'warehouse-main', name: 'Опорный склад', city: 'Основной город' });
+    const representativeWarehouse = warehouseFixture({
+      id: 'warehouse-representative',
+      external_warehouse_id: '22222222-2222-4222-8222-222222222222',
+      name: 'Представительский склад',
+      city: 'Региональный город',
+      representative: true,
+    });
+    const otherRoot = warehouseFixture({
+      id: 'warehouse-other-root',
+      external_warehouse_id: '33333333-3333-4333-8333-333333333333',
+      name: 'Другой основной склад',
+      city: 'Другой город',
+    });
+    const rootWorkspace = workspaceFixture({
+      warehouse: mainWarehouse,
+      planning_root_warehouse_id: mainWarehouse.id,
+      planning_group_warehouse_ids: [mainWarehouse.id, representativeWarehouse.id],
+      warehouses: [otherRoot, representativeWarehouse, mainWarehouse],
+      requests: [],
+      plans: [],
+    });
+    const representativeWorkspace = { ...rootWorkspace, warehouse: representativeWarehouse };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      let body: unknown = null;
+      if (url.endsWith('/warehouses/available')) body = [];
+      else if (url.endsWith('/warehouses')) body = [mainWarehouse, representativeWarehouse, otherRoot];
+      else if (url.includes(`/warehouses/${mainWarehouse.id}/workspace`)) body = rootWorkspace;
+      else if (url.includes(`/warehouses/${representativeWarehouse.id}/workspace`)) body = representativeWorkspace;
+      else if (url.includes(`/warehouses/${mainWarehouse.id}/plans/ensure`)) body = null;
+      else if (url.includes(`/warehouses/${mainWarehouse.id}/planning-days/`)) body = {
+        warehouse_id: mainWarehouse.id,
+        date: mainWarehouse.default_planning_date,
+        accepting_requests: true,
+        closed_at: null,
+        closed_by: null,
+        plan_id: null,
+      };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    useUiStore.setState({ mode: 'PLAN_DAY', section: 'WAREHOUSE', selected: null });
+    const user = userEvent.setup();
+    renderApp();
+
+    const trigger = await screen.findByRole('button', { name: 'Склад логистической группы' });
+    expect(trigger).toHaveTextContent('Опорный склад — Основной город');
+    await user.click(trigger);
+
+    const listbox = screen.getByRole('listbox', { name: 'Склад логистической группы' });
+    const options = within(listbox).getAllByRole('option');
+    expect(options.map((option) => option.textContent)).toEqual([
+      'Опорный склад — Основной город',
+      '\u00a0\u00a0· Представительский склад — Региональный город',
+      'Другой основной склад — Другой город',
+    ]);
+    expect(options[0]).toHaveAttribute('aria-selected', 'true');
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('listbox', { name: 'Склад логистической группы' })).not.toBeInTheDocument();
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    await user.click(trigger);
+    await user.click(within(screen.getByRole('listbox', { name: 'Склад логистической группы' })).getByRole('option', { name: /Представительский склад/ }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Склад логистической группы' })).toHaveTextContent('Представительский склад — Региональный город'));
+    expect(fetchMock.mock.calls.map(([input]) => requestUrl(input))).toContainEqual(expect.stringContaining(`/warehouses/${representativeWarehouse.id}/workspace`));
+    await user.click(screen.getByRole('button', { name: 'Склад логистической группы' }));
+    expect(within(screen.getByRole('listbox', { name: 'Склад логистической группы' })).getByRole('option', { name: /Представительский склад/ })).toHaveAttribute('aria-selected', 'true');
+    await user.click(screen.getByRole('button', { name: 'Дата планирования' }));
+    expect(screen.queryByRole('listbox', { name: 'Склад логистической группы' })).not.toBeInTheDocument();
   });
 
   it('opens a new RWMS request from a direct representative warehouse on its planning date', async () => {
@@ -171,12 +246,48 @@ describe('application states', () => {
     });
   });
 
+  it('keeps deliveries and pickups open when their date arrows change the planning day', async () => {
+    const warehouse = warehouseFixture();
+    const workspace = workspaceFixture({
+      warehouse,
+      requests: [requestFixture()],
+      plans: [],
+    });
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      let body: unknown = null;
+      if (url.endsWith('/warehouses/available')) body = [];
+      else if (url.endsWith('/warehouses')) body = [warehouse];
+      else if (url.includes(`/warehouses/${warehouse.id}/workspace`)) body = workspace;
+      else if (url.includes('/planning-days/')) body = {
+        warehouse_id: warehouse.id,
+        date: url.split('/').at(-1),
+        accepting_requests: true,
+        closed_at: null,
+        closed_by: null,
+        plan_id: null,
+      };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    }));
+    useUiStore.setState({ mode: 'PLAN_DAY', section: 'REQUESTS', selected: null });
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.click(await screen.findByRole('button', { name: /^Доставки/ }));
+    await user.click(screen.getByRole('button', { name: /^Следующая дата: 31 августа 2026/ }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Дата планирования' })).toHaveTextContent('31 августа 2026'));
+    expect(useUiStore.getState().section).toBe('REQUESTS');
+    expect(screen.getByRole('region', { name: 'Подготовка доставок и вывозов на день' })).toBeVisible();
+  });
+
   it('builds and closes the common day through the planning root when a representative is open', async () => {
     const mainWarehouse = warehouseFixture({ id: 'warehouse-main', name: 'Опорный склад' });
     const representativeWarehouse = warehouseFixture({
       id: 'warehouse-representative',
       external_warehouse_id: '22222222-2222-4222-8222-222222222222',
       name: 'Представительский склад',
+      city: 'Региональный город',
       representative: true,
     });
     const workspace = workspaceFixture({
@@ -208,7 +319,7 @@ describe('application states', () => {
 
     renderApp();
 
-    expect(await screen.findByRole('combobox', { name: 'Главный склад группы' })).toHaveValue(mainWarehouse.id);
+    expect(await screen.findByRole('button', { name: 'Склад логистической группы' })).toHaveTextContent('Представительский склад — Региональный город');
     await waitFor(() => {
       const urls = fetchMock.mock.calls.map(([input]) => requestUrl(input));
       expect(urls.some((url) => url.includes(`/warehouses/${mainWarehouse.id}/plans/ensure`))).toBe(true);

@@ -366,12 +366,6 @@ async def get_warehouse_workspace(
             warehouse,
         )
         planning_dates = tuple(date_from + timedelta(days=offset) for offset in range(31))
-        if len(planning_group.members) > 1:
-            await invalidate_mutable_group_root_plans(
-                session,
-                planning_group.root.id,
-                planning_dates,
-            )
         refresh_results: list[tuple[UUID, RwmsSyncResult]] = []
         for member in planning_group.members:
             result = await sync_warehouse_requests(
@@ -410,6 +404,15 @@ async def get_warehouse_workspace(
                     "date_to": (date_from + timedelta(days=30)).isoformat(),
                     "failures": failures,
                 },
+            )
+        if len(planning_group.members) > 1 and any(
+            result.imported > 0 or result.updated > 0
+            for _, result in refresh_results
+        ):
+            await invalidate_mutable_group_root_plans(
+                session,
+                planning_group.root.id,
+                planning_dates,
             )
         await generate_missing_draft_plans(
             session,

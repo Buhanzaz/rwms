@@ -87,13 +87,22 @@ button { color: inherit; }
 .brand-mark { border-color: var(--line-strong); background: var(--panel-raised); color: var(--text); font-weight: 900; }
 .topbar__warehouse-context { overflow: hidden; color: var(--muted); font-size: 12px; line-height: var(--control-height); text-overflow: ellipsis; white-space: nowrap; }
 .topbar__warehouse-context strong { color: var(--text); }
-.topbar__warehouse-selector select { height: var(--control-height); max-width: 300px; border: 1px solid var(--line); border-radius: var(--control-radius); background: var(--input-bg); color: var(--text); padding: 0 30px 0 11px; font-size: 12px; cursor: pointer; }
-.topbar__warehouse-selector select:hover { border-color: var(--line-strong); background: var(--hover); }
+.topbar__warehouse-selector { position: relative; min-width: 0; }
+.topbar__warehouse-selector-trigger { width: min(320px, 100%); min-width: 210px; display: inline-flex; align-items: center; justify-content: space-between; gap: 9px; padding: 0 10px 0 11px; border: 1px solid var(--line); border-radius: var(--control-radius); background: var(--input-bg); color: var(--text); font-size: 12px; cursor: pointer; }
+.topbar__warehouse-selector-trigger:hover, .topbar__warehouse-selector-trigger[aria-expanded="true"] { border-color: var(--line-strong); background: var(--hover); }
+.topbar__warehouse-selector-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar__warehouse-selector-trigger > svg { flex: 0 0 auto; color: var(--muted); transition: transform .16s ease; }
+.topbar__warehouse-selector-trigger[aria-expanded="true"] > svg { transform: rotate(180deg); }
+.topbar__warehouse-selector-popover { position: absolute; z-index: 180; top: calc(100% + 7px); left: 0; width: max-content; min-width: 100%; max-width: min(380px, calc(100vw - 36px)); display: grid; gap: 2px; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); box-shadow: 0 16px 48px var(--shadow); }
+.topbar__warehouse-option { width: 100%; min-width: 0; display: flex; align-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--text); padding: 8px 10px; font-size: 12px; text-align: left; cursor: pointer; }
+.topbar__warehouse-option:hover { background: var(--hover); }
+.topbar__warehouse-option--selected { background: var(--accent-soft); color: var(--accent-soft-text); }
+.topbar__warehouse-option > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .request-map-menu__service-warehouse { margin: 7px 0; color: var(--muted); font-size: 11px; }
 .request-map-menu__service-warehouse strong { color: var(--text); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .topbar__date, .topbar__actions { display: flex; align-items: center; gap: 7px; }
-.topbar .button, .topbar .date-picker__trigger, .topbar .segmented { height: var(--control-height); min-height: var(--control-height); }
+.topbar .button, .topbar .date-picker__trigger, .topbar .segmented, .topbar__warehouse-selector-trigger { height: var(--control-height); min-height: var(--control-height); }
 .workspace-refresh-warning { display: flex; align-items: center; gap: 10px; padding: 8px 18px; border-bottom: 1px solid var(--warning-border); background: var(--warning-bg); color: var(--warning-text); font-size: 11px; }
 .workspace-refresh-warning strong { white-space: nowrap; }
 .date-picker { position: relative; min-width: 0; }

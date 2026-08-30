@@ -54,6 +54,22 @@ class CustomerDeliveryPropertiesTest {
         .hasMessageContaining("not configured");
   }
 
+  @Test
+  void buildsRepresentativeRouteOriginFromCanonicalWarehouseCoordinates() {
+    CustomerDeliveryProperties properties =
+        properties(List.of(depot(MOSCOW, 55.75, 37.39)));
+
+    CustomerDeliveryProperties.Validated representative =
+        properties.validated(
+            SAINT_PETERSBURG,
+            new BigDecimal("58.573100"),
+            new BigDecimal("31.269200"));
+
+    assertThat(representative.warehouseId()).isEqualTo(SAINT_PETERSBURG);
+    assertThat(representative.depotLatitude()).isEqualByComparingTo("58.573100");
+    assertThat(representative.depotLongitude()).isEqualByComparingTo("31.269200");
+  }
+
   private static CustomerDeliveryProperties.Depot depot(
       UUID warehouseId, double latitude, double longitude) {
     return new CustomerDeliveryProperties.Depot(

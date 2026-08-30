@@ -927,8 +927,10 @@ and
    current `READY` generation after private media validation. Media-service owns
    the image bytes and variants. Warehouse selection is a separate Android step
    with an optional remember checkbox. Logistics lists only identities that are
-   both active in warehouse-service and present in its enabled delivery-depot
-   registry; every response carries that entry's route-origin coordinates. The
+   active in warehouse-service, have valid owner-held coordinates and are either
+   representative or present as ordinary warehouses in the enabled delivery-depot
+   registry. A representative warehouse needs no duplicate depot entry, and every
+   response carries the authoritative Warehouse route-origin coordinates. The
    catalog header shows the selected warehouse and opens a downward list of the
    other available warehouses; selecting another creates or resumes that
    warehouse's separately bound inquiry. Before the first remote create,
@@ -1378,10 +1380,13 @@ and
    truck timings rather than retained from the approximate matrix. The overtime
    switch permits only its configured minute bound; capacity publication extends
    the dated shift by the same amount and clamps it before the local day ends.
-   Synchronization immediately invokes the server-owned automatic pre-plan
-   coordinator for affected dates, including after valid siblings commit in a
-   partial refresh; failed rows remain explicit but do not suppress replanning
-   of stored valid demand. Opening a date invokes the same
+   A complete synchronization invokes the server-owned automatic pre-plan
+   coordinator for affected dates. The group workspace keeps the current plan
+   identity when all member polls are unchanged and invalidates mutable root
+   plans only after a failure-free poll reports an import or update. A partial
+   failure remains explicit, commits durable valid siblings and preserves the
+   last plan until a later complete refresh can regenerate from the whole
+   group. Opening a date invokes the same
    idempotent ensure boundary, so no browser **Build routes** action is needed
    for the initial draft. Changing planning details on an existing draft marks
    it stale and exposes **Refresh routes** before the date. That explicit ensure
@@ -1406,6 +1411,12 @@ and
    A workspace mutation refetches the selected planning-day status only after
    the workspace refresh completes, so a cached pre-warehouse `422` cannot keep
    request-acceptance controls disabled once a depot exists.
+   The Deliveries inspector's adjacent-date controls update that shared date
+   without switching its active section to Day plan. For one unassigned
+   `TIME_WINDOW_CONFLICT`, a planner-supplied nearest instant exposes **Change
+   time window** and opens the existing request editor on the same date; the
+   separate move-to-another-day action remains available. Saving either choice
+   follows the same versioned request mutation and automatic plan refresh.
 6. With RWMS sync enabled, the close command first locks the exact final
    plan version and preflights every warehouse, order, cabin slice and
    driver identity without committing the pending closure. A deterministic
@@ -1491,7 +1502,10 @@ and
    representative share one root plan and root resources; each imported order keeps its own
    `serviceWarehouseId`. Selecting a representative therefore changes the visible map context but
    never creates a second regional day plan. Exact calendar exclusions win over allowed dates and
-   recurring weekdays.
+   recurring weekdays. The header lists each selected root before its indented direct
+   representatives; choosing a representative preserves the root command target. Route mapping
+   resolves depot labels and root-shift time from the persisted plan's `warehouse_id`, not from the
+   currently open representative context.
 7. Only real RWMS regional requests create dispatcher notifications. Synthetic/manual workload is
    deliberately filtered. Activating a notification selects the planning date, request layer and
    exact regional request without changing its owner or inventory source.

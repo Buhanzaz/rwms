@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CheckCircle2,
+  ChevronDown,
   LockKeyhole,
   PlayCircle,
   RefreshCw,
@@ -91,6 +92,11 @@ const TRACE_PHASES = [
 const DEFAULT_INSPECTOR_WIDTH = 420;
 const MIN_INSPECTOR_WIDTH = 320;
 
+function warehouseOptionLabel(warehouse: Warehouse): string {
+  const city = warehouse.city?.trim() ?? '';
+  return city && city !== warehouse.name.trim() ? `${warehouse.name} — ${city}` : warehouse.name;
+}
+
 function savedInspectorWidth(): number {
   try {
     const saved = Number(window.localStorage.getItem('rwms:logistics:inspector-width'));
@@ -130,6 +136,7 @@ export function App() {
   const [runId, setRunId] = useState<UUID | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const [warehouseSelectorOpen, setWarehouseSelectorOpen] = useState(false);
   const [slotPlannerOpen, setSlotPlannerOpen] = useState(false);
   const [slotPlannerPoint, setSlotPlannerPoint] = useState<{ latitude: number; longitude: number } | null>(null);
   const [slotPlanningMap, setSlotPlanningMap] = useState<SlotPlanningMapPresentation | null>(null);
@@ -138,6 +145,7 @@ export function App() {
   const surfacedPlanIdRef = useRef<UUID | null>(null);
   const surfacedNotificationIdsRef = useRef(new Set<UUID>());
   const surfacedRepresentativeRequestIdsRef = useRef(new Set<UUID>());
+  const warehouseSelectorRef = useRef<HTMLDivElement>(null);
   const mode = useUiStore((state) => state.mode);
   const sidebarsCollapsed = useUiStore((state) => state.sidebarsCollapsed);
   const setMode = useUiStore((state) => state.setMode);
@@ -183,6 +191,22 @@ export function App() {
     setSlotPlanningMap(null);
   }, []);
 
+  useEffect(() => {
+    if (!warehouseSelectorOpen) return undefined;
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (!warehouseSelectorRef.current?.contains(event.target as Node)) setWarehouseSelectorOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setWarehouseSelectorOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnPointerDown);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnPointerDown);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [warehouseSelectorOpen]);
+
   const selectPlanningDate = useCallback((date: string) => {
     setPlanningDate(date);
     if (plan?.date !== date) {
@@ -192,8 +216,7 @@ export function App() {
       setRoutesNeedRefresh(false);
       clearSimulationOverrides();
     }
-    if (mode === 'PLAN_DAY') setSection('PLAN_DAY');
-  }, [clearSimulationOverrides, mode, plan?.date, setSection]);
+  }, [clearSimulationOverrides, plan?.date]);
 
   const resizeInspector = useCallback((requestedWidth: number) => {
     const width = Math.min(
@@ -237,10 +260,29 @@ export function App() {
 
   const workspace = baseWorkspace;
   const planningWarehouseId = workspace?.planning_root_warehouse_id ?? workspaceWarehouseId;
-  const planningRoots = useMemo(
-    () => (workspace?.warehouses ?? []).filter((candidate) => !candidate.representative && candidate.routing_ready),
-    [workspace?.warehouses],
-  );
+  const warehouseSelectorOptions = useMemo(() => {
+    if (!workspace) return [];
+    const knownWarehouses = workspace.warehouses.some((candidate) => candidate.id === workspace.warehouse.id)
+      ? workspace.warehouses
+      : [...workspace.warehouses, workspace.warehouse];
+    const rootId = workspace.planning_root_warehouse_id
+      ?? (!workspace.warehouse.representative ? workspace.warehouse.id : null);
+    const groupWarehouseIds = new Set(workspace.planning_group_warehouse_ids ?? [workspace.warehouse.id]);
+    if (rootId) groupWarehouseIds.add(rootId);
+    const options: Warehouse[] = [];
+    const append = (candidate: Warehouse | undefined) => {
+      if (candidate && !options.some((option) => option.id === candidate.id)) options.push(candidate);
+    };
+    append(knownWarehouses.find((candidate) => candidate.id === rootId));
+    knownWarehouses
+      .filter((candidate) => candidate.representative && groupWarehouseIds.has(candidate.id))
+      .forEach(append);
+    if (workspace.warehouse.representative) append(workspace.warehouse);
+    knownWarehouses
+      .filter((candidate) => !candidate.representative && candidate.routing_ready)
+      .forEach(append);
+    return options;
+  }, [workspace]);
   useEffect(() => {
     if (!workspace) return;
     const planningGroupWarehouseIds = new Set(
@@ -831,17 +873,42 @@ export function App() {
       <header className="topbar">
         <div className="topbar__brand">
           <Button className="brand-mark" onClick={() => { setMode('PLAN_DAY'); setSection('WAREHOUSE'); setMapTool('SELECT'); setSelected({ kind: 'warehouse', id: warehouseId }); }} aria-label="Открыть склад" title="Открыть склад">L</Button>
-          <label className="topbar__warehouse-selector">
-            <span className="sr-only">Главный склад группы</span>
-            <select aria-label="Главный склад группы" value={workspace.planning_root_warehouse_id ?? workspace.warehouse.id} onChange={(event) => setWarehouseId(event.target.value)}>
-              {(planningRoots.length ? planningRoots : [workspace.warehouse]).map((candidate) => (
-                <option key={candidate.id} value={candidate.id}>
-                  {candidate.name}{candidate.city && candidate.city !== candidate.name ? ` · ${candidate.city}` : ''}
-                </option>
-              ))}
-            </select>
-            <span className="sr-only"><strong>{workspace.warehouse.name}</strong>{workspace.warehouse.city ? ` · ${workspace.warehouse.city}` : ''}</span>
-          </label>
+          <div className="topbar__warehouse-selector" ref={warehouseSelectorRef}>
+            <button
+              type="button"
+              className="topbar__warehouse-selector-trigger"
+              aria-label="Склад логистической группы"
+              aria-haspopup="listbox"
+              aria-expanded={warehouseSelectorOpen}
+              aria-controls="warehouse-group-options"
+              onClick={() => setWarehouseSelectorOpen((current) => !current)}
+            >
+              <span>{warehouseOptionLabel(workspace.warehouse)}</span>
+              <ChevronDown size={14} aria-hidden="true" />
+            </button>
+            {warehouseSelectorOpen ? (
+              <div id="warehouse-group-options" className="topbar__warehouse-selector-popover" role="listbox" aria-label="Склад логистической группы">
+                {warehouseSelectorOptions.map((candidate) => {
+                  const selectedWarehouse = candidate.id === workspace.warehouse.id;
+                  return (
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={selectedWarehouse}
+                      className={`topbar__warehouse-option${selectedWarehouse ? ' topbar__warehouse-option--selected' : ''}`}
+                      key={candidate.id}
+                      onClick={() => {
+                        setWarehouseSelectorOpen(false);
+                        setWarehouseId(candidate.id);
+                      }}
+                    >
+                      <span>{candidate.representative ? '\u00a0\u00a0· ' : ''}{warehouseOptionLabel(candidate)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
         </div>
         <div className="topbar__date">
           {routesNeedRefresh && plan && plan.status !== 'CONFIRMED' ? <Button variant="primary" disabled={busy} onClick={() => void refreshRoutes()}><RefreshCw size={15} aria-hidden="true" /><span>Обновить маршруты</span></Button> : null}

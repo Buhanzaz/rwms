@@ -154,7 +154,7 @@ describe('application shell', () => {
     expect(screen.getByText('неактивна')).toBeVisible();
   });
 
-  it('opens the existing full request editor when an unassigned task is rescheduled', async () => {
+  it('opens the existing request editor when an unassigned time window can change that day', async () => {
     const user = userEvent.setup();
     const simulation: SimulationDerivedState = { timestamp: '2026-08-25T05:45:00Z', vehicles: [], events: [], completed_stop_ids: [], active_stop_ids: [], affected_task_ids: [], warnings: [] };
     const request = requestFixture({ id: 'request-5' });
@@ -165,7 +165,7 @@ describe('application shell', () => {
     act(() => useUiStore.setState({ section: 'UNASSIGNED' }));
     render(<Inspector {...props} />);
 
-    await user.click(screen.getByRole('button', { name: 'Перенести на другой день' }));
+    await user.click(screen.getByRole('button', { name: 'Сменить временное окно' }));
 
     expect(onEdit).toHaveBeenCalledWith('request', request);
   });
@@ -189,8 +189,24 @@ describe('built plan UI', () => {
     expect(screen.getByText('обязательно')).toBeVisible();
     expect(screen.getByText(/Можно назначить.*18:19/)).toBeVisible();
     expect(screen.getByText('увеличить временное окно')).toBeVisible();
-    await user.click(screen.getByRole('button', { name: 'Перенести на другой день' }));
+    await user.click(screen.getByRole('button', { name: 'Сменить временное окно' }));
     expect(onReschedule).toHaveBeenCalledWith('request-5');
+    await user.click(screen.getByRole('button', { name: 'Перенести на другой день' }));
+    expect(onReschedule).toHaveBeenCalledTimes(2);
+    expect(onReschedule).toHaveBeenLastCalledWith('request-5');
+  });
+
+  it('does not offer a time-window action without a same-day planner alternative', () => {
+    const plan = planFixture();
+    plan.unassigned[0] = {
+      ...plan.unassigned[0]!,
+      closest_option: null,
+    };
+
+    render(<PlanPanel plan={plan} timeZone="Europe/Moscow" showUnassignedOnly onSelectCycle={() => undefined} onSelectDriverRoute={() => undefined} onMove={() => undefined} onToggleLock={() => undefined} />);
+
+    expect(screen.queryByRole('button', { name: 'Сменить временное окно' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Перенести на другой день' })).toBeVisible();
   });
 
   it('shows one-off support warehouse service without presenting it as a reposition', () => {

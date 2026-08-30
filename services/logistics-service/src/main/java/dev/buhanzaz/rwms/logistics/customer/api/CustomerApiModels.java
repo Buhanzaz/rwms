@@ -92,7 +92,7 @@ public final class CustomerApiModels {
       String additionalInfo,
       CustomerProfileAvatarResponse avatar) {}
 
-  /** Active warehouse that is configured for CustomerApp route-capacity calculation. */
+  /** Customer-visible active warehouse with its canonical route-origin coordinates. */
   public record CustomerWarehouseResponse(
       UUID id,
       String name,

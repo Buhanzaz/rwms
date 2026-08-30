@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -10,8 +10,10 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api import catalog as catalog_api
 from app.api.catalog import get_warehouse_workspace
 from app.config import Settings
+from app.errors import ApiError
 from app.integrations.rwms_sync import _load_plan_for_rwms_apply, build_assignments_command
 from app.models import RoutePlan, Warehouse
 from app.models.domain import PlanStatus
@@ -19,6 +21,8 @@ from app.schemas.domain import (
     GeneratePlanRequest,
     RwmsPlanningDateOption,
     RwmsPlanningRequest,
+    RwmsSyncFailure,
+    RwmsSyncResult,
     RwmsWarehouseIdentity,
     RwmsWarehouseSupportLink,
 )
@@ -217,6 +221,252 @@ async def test_representative_selection_resolves_the_same_root_without_duplicate
     assert workspace.warehouse.id == representative.id
     assert workspace.planning_root_warehouse_id == root.id
     assert workspace.planning_group_warehouse_ids == [root.id, representative.id]
+
+
+@pytest.mark.asyncio
+async def test_unchanged_group_workspace_refresh_preserves_mutable_plan_identity(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unchanged RWMS poll must not churn the shared root draft plan."""
+
+    planning_date = datetime.now().date()
+    root = await make_warehouse(db_session, name="Main")
+    representative = await make_warehouse(db_session, name="Representative")
+    representative.representative = True
+    draft = RoutePlan(
+        warehouse_id=root.id,
+        date=planning_date,
+        name="Stable draft",
+        status=PlanStatus.DRAFT,
+    )
+    db_session.add(draft)
+    await db_session.flush()
+    client = _NetworkClient([_link(root, representative)])
+    generated_for: list[tuple[UUID, ...]] = []
+
+    async def refresh_directory(*args: object, **kwargs: object) -> list[Warehouse]:
+        """Keep the persisted planning group unchanged during the focused refresh."""
+
+        return [root, representative]
+
+    async def sync_requests(*args: object, **kwargs: object) -> RwmsSyncResult:
+        """Model an idempotent member poll where every source order was skipped."""
+
+        return RwmsSyncResult(imported=0, updated=0, skipped=1)
+
+    async def generate_plans(
+        session: AsyncSession,
+        planner: object,
+        warehouse_id: UUID,
+        planning_dates: object,
+        *,
+        request_warehouse_ids: object = None,
+    ) -> tuple[()]:
+        """Record the aggregate demand scope without replacing an existing draft."""
+
+        del session, planner, warehouse_id, planning_dates
+        generated_for.append(tuple(request_warehouse_ids or ()))  # type: ignore[arg-type]
+        return ()
+
+    monkeypatch.setattr(catalog_api, "refresh_warehouse_directory", refresh_directory)
+    monkeypatch.setattr(catalog_api, "sync_warehouse_requests", sync_requests)
+    monkeypatch.setattr(catalog_api, "generate_missing_draft_plans", generate_plans)
+
+    await get_warehouse_workspace(
+        root.id,
+        db_session,
+        object(),
+        _enabled_settings(),
+        client,  # type: ignore[arg-type]
+        refresh_rwms=True,
+    )
+
+    remaining = await db_session.scalar(select(RoutePlan).where(RoutePlan.id == draft.id))
+    assert remaining is not None
+    assert remaining.id == draft.id
+    assert generated_for == [(root.id, representative.id)]
+
+
+@pytest.mark.asyncio
+async def test_incomplete_group_workspace_refresh_preserves_mutable_plan(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A partially changed but failed member sync must leave the stable draft untouched."""
+
+    planning_date = datetime.now().date()
+    root = await make_warehouse(db_session, name="Main")
+    representative = await make_warehouse(db_session, name="Representative")
+    representative.representative = True
+    draft = RoutePlan(
+        warehouse_id=root.id,
+        date=planning_date,
+        name="Stable draft",
+        status=PlanStatus.DRAFT,
+    )
+    db_session.add(draft)
+    await db_session.flush()
+    client = _NetworkClient([_link(root, representative)])
+    generation_calls = 0
+
+    async def refresh_directory(*args: object, **kwargs: object) -> list[Warehouse]:
+        """Keep the persisted planning group unchanged during the focused refresh."""
+
+        return [root, representative]
+
+    async def sync_requests(
+        session: AsyncSession,
+        warehouse_id: UUID,
+        *args: object,
+        **kwargs: object,
+    ) -> RwmsSyncResult:
+        """Return one partially changed feed containing an explicit synchronization failure."""
+
+        del session, args, kwargs
+        if warehouse_id == root.id:
+            return RwmsSyncResult(
+                imported=1,
+                updated=0,
+                skipped=0,
+                failures=[
+                    RwmsSyncFailure(
+                        order_id=uuid4(),
+                        code="COORDINATES_REQUIRED",
+                        message="Coordinates are required",
+                    )
+                ],
+            )
+        return RwmsSyncResult(imported=0, updated=0, skipped=1)
+
+    async def generate_plans(*args: object, **kwargs: object) -> tuple[()]:
+        """Fail the regression if generation runs after an incomplete synchronization."""
+
+        nonlocal generation_calls
+        generation_calls += 1
+        return ()
+
+    monkeypatch.setattr(catalog_api, "refresh_warehouse_directory", refresh_directory)
+    monkeypatch.setattr(catalog_api, "sync_warehouse_requests", sync_requests)
+    monkeypatch.setattr(catalog_api, "generate_missing_draft_plans", generate_plans)
+
+    with pytest.raises(ApiError) as error:
+        await get_warehouse_workspace(
+            root.id,
+            db_session,
+            object(),
+            _enabled_settings(),
+            client,  # type: ignore[arg-type]
+            refresh_rwms=True,
+        )
+
+    remaining = await db_session.scalar(select(RoutePlan).where(RoutePlan.id == draft.id))
+    assert error.value.code == "RWMS_WORKSPACE_SYNC_INCOMPLETE"
+    assert remaining is not None
+    assert remaining.id == draft.id
+    assert generation_calls == 0
+
+
+@pytest.mark.parametrize(("imported", "updated"), [(1, 0), (0, 1)])
+@pytest.mark.asyncio
+async def test_changed_group_workspace_refresh_rebuilds_only_mutable_root_plan(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    imported: int,
+    updated: int,
+) -> None:
+    """A changed member feed replaces the root draft while preserving confirmation."""
+
+    planning_date = datetime.now().date()
+    root = await make_warehouse(db_session, name="Main")
+    representative = await make_warehouse(db_session, name="Representative")
+    representative.representative = True
+    draft = RoutePlan(
+        warehouse_id=root.id,
+        date=planning_date,
+        name="Stale draft",
+        status=PlanStatus.DRAFT,
+    )
+    confirmed = RoutePlan(
+        warehouse_id=root.id,
+        date=planning_date + timedelta(days=1),
+        name="Confirmed",
+        status=PlanStatus.CONFIRMED,
+    )
+    db_session.add_all([draft, confirmed])
+    await db_session.flush()
+    client = _NetworkClient([_link(root, representative)])
+    rebuilt_ids: list[UUID] = []
+    generated_for: list[tuple[UUID, ...]] = []
+
+    async def refresh_directory(*args: object, **kwargs: object) -> list[Warehouse]:
+        """Keep the persisted planning group unchanged during the focused refresh."""
+
+        return [root, representative]
+
+    async def sync_requests(
+        session: AsyncSession,
+        warehouse_id: UUID,
+        *args: object,
+        **kwargs: object,
+    ) -> RwmsSyncResult:
+        """Report one changed root feed and an unchanged representative feed."""
+
+        del session, args, kwargs
+        if warehouse_id == root.id:
+            return RwmsSyncResult(
+                imported=imported,
+                updated=updated,
+                skipped=0,
+            )
+        return RwmsSyncResult(imported=0, updated=0, skipped=1)
+
+    async def generate_plans(
+        session: AsyncSession,
+        planner: object,
+        warehouse_id: UUID,
+        planning_dates: object,
+        *,
+        request_warehouse_ids: object = None,
+    ) -> tuple[()]:
+        """Represent automatic regeneration after the endpoint removes the stale draft."""
+
+        del planner, planning_dates
+        assert await session.scalar(select(RoutePlan).where(RoutePlan.id == draft.id)) is None
+        generated_for.append(tuple(request_warehouse_ids or ()))  # type: ignore[arg-type]
+        rebuilt = RoutePlan(
+            warehouse_id=warehouse_id,
+            date=planning_date,
+            name="Rebuilt draft",
+            status=PlanStatus.DRAFT,
+        )
+        session.add(rebuilt)
+        await session.flush()
+        rebuilt_ids.append(rebuilt.id)
+        return ()
+
+    monkeypatch.setattr(catalog_api, "refresh_warehouse_directory", refresh_directory)
+    monkeypatch.setattr(catalog_api, "sync_warehouse_requests", sync_requests)
+    monkeypatch.setattr(catalog_api, "generate_missing_draft_plans", generate_plans)
+
+    await get_warehouse_workspace(
+        root.id,
+        db_session,
+        object(),
+        _enabled_settings(),
+        client,  # type: ignore[arg-type]
+        refresh_rwms=True,
+    )
+
+    remaining_ids = set(
+        await db_session.scalars(
+            select(RoutePlan.id).where(RoutePlan.warehouse_id == root.id)
+        )
+    )
+    assert draft.id not in remaining_ids
+    assert confirmed.id in remaining_ids
+    assert rebuilt_ids[0] in remaining_ids
+    assert generated_for == [(root.id, representative.id)]
 
 
 @pytest.mark.asyncio

@@ -286,13 +286,18 @@ function lookupTask(workspace: WarehouseWorkspace, taskId: UUID): { task: Planni
   return null;
 }
 
-function normalizeCycle(raw: RawRouteCycle, workspace: WarehouseWorkspace, planId: UUID): RouteCycle {
+function normalizeCycle(
+  raw: RawRouteCycle,
+  workspace: WarehouseWorkspace,
+  planId: UUID,
+  routeWarehouse: Warehouse,
+): RouteCycle {
   const stops: RouteStop[] = raw.stops.map((stop) => {
     const task = stop.task_id ? lookupTask(workspace, stop.task_id) : null;
     return {
       ...stop,
       route_cycle_id: raw.id,
-      label: task?.request?.name ?? (stop.stop_type.startsWith('DEPOT') ? workspace.warehouse.name : stop.stop_type),
+      label: task?.request?.name ?? (stop.stop_type.startsWith('DEPOT') ? routeWarehouse.name : stop.stop_type),
       warnings: undefined,
     };
   });
@@ -332,8 +337,15 @@ function normalizeCycle(raw: RawRouteCycle, workspace: WarehouseWorkspace, planI
   };
 }
 
+/**
+ * Maps one persisted root plan without confusing its depot with the currently selected group member.
+ */
 export function normalizeRoutePlan(raw: RawRoutePlan, workspace: WarehouseWorkspace): RoutePlan {
-  const cycles = raw.cycles.map((cycle) => normalizeCycle(cycle, workspace, raw.id));
+  const routeWarehouse = workspace.warehouses.find((candidate) => candidate.id === raw.warehouse_id)
+    ?? (workspace.warehouse.id === raw.warehouse_id ? workspace.warehouse : undefined)
+    ?? workspace.warehouses.find((candidate) => candidate.id === workspace.planning_root_warehouse_id)
+    ?? workspace.warehouse;
+  const cycles = raw.cycles.map((cycle) => normalizeCycle(cycle, workspace, raw.id, routeWarehouse));
   const grouped = new Map<UUID, RouteCycle[]>();
   for (const cycle of cycles) grouped.set(cycle.driver_shift_id, [...(grouped.get(cycle.driver_shift_id) ?? []), cycle]);
   const driverRoutes: DriverRoute[] = [...grouped.entries()].map(([shiftId, routeCycles]) => {
@@ -347,8 +359,8 @@ export function normalizeRoutePlan(raw: RawRoutePlan, workspace: WarehouseWorksp
     const dutySeconds = firstCycle && lastCycle
       ? Math.max(0, (Date.parse(lastCycle.planned_finish) - Date.parse(firstCycle.planned_start)) / 1000)
       : 0;
-    const shiftStartAt = shift ? localDateTimeToIso(raw.date, shift.start_time, workspace.warehouse.timezone) : null;
-    const shiftEndAt = shift ? localDateTimeToIso(raw.date, shift.end_time, workspace.warehouse.timezone) : null;
+    const shiftStartAt = shift ? localDateTimeToIso(raw.date, shift.start_time, routeWarehouse.timezone) : null;
+    const shiftEndAt = shift ? localDateTimeToIso(raw.date, shift.end_time, routeWarehouse.timezone) : null;
     const usableShiftSeconds = shiftStartAt && shiftEndAt
       ? Math.max(1, (Date.parse(shiftEndAt) - Date.parse(shiftStartAt)) / 1000 - shift!.break_minutes * 60)
       : 0;
@@ -383,7 +395,7 @@ export function normalizeRoutePlan(raw: RawRoutePlan, workspace: WarehouseWorksp
     if (!found) {
       throw new Error(`Route plan ${raw.id} references missing task ${item.task_id}`);
     }
-    const nearest = item.nearest_option ? nearestOptionText(item.nearest_option, workspace.warehouse.timezone) : null;
+    const nearest = item.nearest_option ? nearestOptionText(item.nearest_option, routeWarehouse.timezone) : null;
     return {
       task: found.task,
       request: found.request,

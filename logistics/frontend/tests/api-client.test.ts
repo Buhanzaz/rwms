@@ -239,6 +239,66 @@ describe('planning lifecycle', () => {
     expect(plan.unassigned[0]?.closest_option).not.toContain('possible_at');
   });
 
+  it('labels the route depot from the plan owner when a representative warehouse is open', () => {
+    const mainWarehouse = warehouseFixture({ id: 'warehouse-main', name: 'СПБ' });
+    const representativeWarehouse = warehouseFixture({
+      id: 'warehouse-representative',
+      name: 'В. Новгород',
+      city: 'Великий Новгород',
+      representative: true,
+    });
+    const workspace = workspaceFixture({
+      warehouse: representativeWarehouse,
+      warehouses: [mainWarehouse, representativeWarehouse],
+      planning_root_warehouse_id: mainWarehouse.id,
+      planning_group_warehouse_ids: [mainWarehouse.id, representativeWarehouse.id],
+    });
+    const plan = normalizeRoutePlan(rawPlan({
+      warehouse_id: mainWarehouse.id,
+      cycles: [{
+        id: 'cycle-main-depot',
+        driver_shift_id: 'shift-main',
+        sequence: 1,
+        planned_start: '2026-08-30T06:00:00Z',
+        planned_finish: '2026-08-30T06:30:00Z',
+        total_distance_meters: 0,
+        total_travel_seconds: 0,
+        total_service_seconds: 1_800,
+        empty_distance_meters: 0,
+        detour_seconds: 0,
+        score: 0,
+        locked: false,
+        manually_changed: false,
+        metrics: {},
+        stops: [{
+          id: 'stop-main-depot',
+          sequence: 0,
+          task_id: null,
+          stop_type: 'DEPOT_LOAD',
+          planned_arrival: '2026-08-30T06:00:00Z',
+          planned_departure: '2026-08-30T06:30:00Z',
+          service_seconds: 1_800,
+          quantity_delta: 0,
+          load_before: 0,
+          load_after: 0,
+          latitude: mainWarehouse.latitude,
+          longitude: mainWarehouse.longitude,
+          warnings: [],
+          locked: false,
+        }],
+        segments: [],
+        explanations: [],
+      }],
+    }) as never, workspace);
+
+    expect(plan.driver_routes[0]?.cycles[0]?.stops[0]).toMatchObject({
+      label: 'СПБ',
+      latitude: mainWarehouse.latitude,
+      longitude: mainWarehouse.longitude,
+    });
+    expect(plan.driver_routes[0]?.cycles[0]?.stops[0]?.label).not.toBe('В. Новгород');
+  });
+
   it('keeps support-warehouse execution facts and exact resource names in the day plan', () => {
     const supportWarehouse = warehouseFixture({
       id: 'support-local',

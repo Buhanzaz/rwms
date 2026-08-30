@@ -89,7 +89,7 @@ public class CustomerController {
     return profiles.setAvatar(identity(jwt), request);
   }
 
-  /** Lists active warehouses explicitly configured for customer delivery. */
+  /** Lists active routable representative and explicitly enabled ordinary warehouses. */
   @GetMapping("/warehouses")
   public List<CustomerWarehouseResponse> warehouses(@AuthenticationPrincipal Jwt jwt) {
     identity(jwt);
