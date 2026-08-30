@@ -48,6 +48,49 @@ not silently choose one. Gather the exact evidence, explain the conflict and
 ask the user the smallest decision needed before changing contract meaning,
 ownership, identity, status semantics, money, time or destructive behavior.
 
+## Mandatory WIP Readiness Gate
+
+Every task starts with a WIP (`work in progress`) readiness gate. This gate is
+an absolute prerequisite to implementation: do not edit task files, delegate a
+coding lane, generate code, run a task build or test, or update a runtime until
+the relevant WIP is prepared and synchronized. Before the gate passes, perform
+only the read-only inspection and explicitly scoped WIP reconciliation needed
+to establish or restore readiness.
+
+The primary agent must confirm all of the following before starting the task:
+
+- the current branch, `git status --short` and relevant diffs have been read
+  from the actual shared worktree, not inferred from conversation context;
+- every relevant modified, deleted or untracked path belongs to an identified
+  WIP scope and has one active owner; unknown work remains protected and is not
+  treated as available task input;
+- the requested task and every parallel lane have non-overlapping write scopes,
+  frozen shared inputs and an explicit dependency/order map;
+- every participating agent has refreshed the current on-disk files and diffs
+  for its scope after the latest upstream or concurrent change; a forked prompt
+  or an earlier handoff is never accepted as proof of synchronization;
+- no relevant lane is based on stale files, a different worktree or branch, an
+  unreviewed generated artifact, or a contract/change that another lane has not
+  finished handing off.
+
+If any condition fails, do not begin or continue the requested task. WIP repair
+and synchronization become the only active task: pause the affected write
+lanes, collect their exact changed-file and status handoffs, reconcile ownership
+and ordering, refresh every affected agent's inputs from the shared worktree,
+and rerun the readiness checks. Edit or validate only the files required to
+make that WIP ready, under the same ownership and protection rules. Preserve
+all existing work while doing so. If synchronization would require choosing
+between competing changes, discarding or overwriting a hunk, changing branches,
+committing, stashing, resetting, or publishing, stop and ask the user for the
+smallest required decision or authorization.
+
+Parallel work never consists of independent WIPs that are assumed to synchronize
+later. When one lane changes a frozen input, shared file, canonical contract or
+dependency used by another lane, impose a synchronization barrier immediately:
+dependent writes pause, the primary reviews the landed diff, all affected lanes
+refresh and acknowledge the new input, and only then may they continue. Repeat
+the WIP readiness gate before final integration, build, test and publication.
+
 ## Mandatory Task Workflow
 
 Every task follows this sequence. The depth is proportional to the risk, but no
