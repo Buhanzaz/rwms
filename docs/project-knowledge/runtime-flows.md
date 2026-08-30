@@ -1304,19 +1304,19 @@ and
    with null bounds. Both add informational `travelZoneHours` and trailer
    access. The planner upserts by
    stable `(warehouse, RWMS, orderId)` identity and source revision. Coordinates
-   win over address; ordinary price uses the warehouse's first matching
-   60/120/180/240-minute isochrone tariff, `SPECIAL_PRICE` may override it, and
-   `FORBIDDEN`/`NO_TRAILER` zones apply their explicit access policy. Address-only input
-   remains explicit `COORDINATES_REQUIRED`. A new cargo-less delivery receives
+   win over address; ordinary price uses the first configured hourly isochrone
+   tier that covers exact one-way Valhalla travel time. The farthest configured
+   tier is the hard order-acceptance boundary. Address-only input remains
+   explicit `COORDINATES_REQUIRED`. A new cargo-less delivery receives
    the warehouse standard-cargo profile without overwriting measured local
    enrichment. New or changed demand removes plans only on the union of its old
    and new dates before automatic rebuild; exact replay is a no-op.
 4. With the separate capacity flag enabled, every capacity-affecting warehouse,
-   resource, period-shift, warehouse-zone or generated-request mutation advances a
+   resource, period-shift, isochrone-tariff or generated-request mutation advances a
    per-warehouse generation and publishes one complete deterministic snapshot.
    It contains generated delivery/return-pickup jobs, mandatory/trailer facts,
-   active shift date ranges and vehicle capacity, and UUID/version/policy/
-   geometry only for that warehouse's exceptional zones. Warehouse identity exists only in the URL.
+   active shift date ranges, vehicle capacity and the warehouse's complete
+   one-to-twelve-entry hourly tariff ladder. Warehouse identity exists only in the URL.
    Logistics stores the snapshot separately from bookings and replaces it
    idempotently. A remote failure is explicit and `/api/warehouses/{id}/rwms/capacity`
    reconciles current state without rolling back local work. Immutable receipts
@@ -1335,17 +1335,17 @@ and
    may be distributed across drivers. Hard service-start windows, load/site/
    trailer capacity, warehouse operations, every later trip, final finish and
    exact directed Valhalla legs decide feasibility. Informational travel bands,
-   tariff geometry and isochrone containment do not replace those legs; explicit
-   forbidden/no-trailer policy is still enforced. It neither mutates an RWMS
+   tariff contours and isochrone containment do not replace those legs. It
+   neither mutates an RWMS
    order nor reads an RWMS database during planning. Separate default-off map
-   switches visualize 60/120/180/240-minute truck-road contours for connected
+   switches visualize every configured hourly truck-road contour for connected
    warehouses or the one selected request/slot-check point; exact route legs
    remain final and slot responses calculate no contour/intersection polygons.
-   The common map shows all routable warehouse markers and only the selected warehouse's
-   exceptional zones. Selecting a warehouse does not move the viewport; an explicit header action
+   The common map shows all routable warehouse markers. Selecting a warehouse
+   does not move the viewport; an explicit header action
    recentres it when requested, and later manual pan/zoom is not reset by refreshes. New canonical
-   warehouses appear from directory reconciliation without a second create form, a covering first
-   zone, temporary identity or browser-owned geometry.
+   warehouses appear from directory reconciliation without a second create form,
+   temporary identity or browser-owned geometry.
    “Создать перемещение” and a support-route “Добавить бытовки” action open the
    same local draft dialog. With the shared renewable panel `USER` session it
    submits the existing public `POST /api/logistics/v1/transfers` command and
@@ -1356,7 +1356,7 @@ and
    resolution and reverse-geocoded map addresses through three same-origin
    FastAPI reads backed by separate server-only Yandex Geosuggest/Geocoder keys.
    Missing credentials or provider results are explicit and do not fabricate a
-   point, address, zone or slot.
+   point, address or slot.
    Delivery protection compares earliest-deadline, longest-first and
    nearest-first reference schedules. After every usable shift is already
    active, an equally feasible current trip uses the shift with the least
@@ -1548,9 +1548,8 @@ Evidence:
 3. Plan deletion, removal of generator-owned requests, road snapping and
    insertion of the replacement batch share one database transaction. Any
    later failure rolls back to the complete previous plan and workload.
-4. **Test for 3 days** creates four deliveries and two pickups per day for
-   three days with one alternative accepted date using the warehouse date and
-   seed. The generic generator accepts a one-to-31-day horizon. Deliveries use
+4. **Create workload** uses the explicit warehouse date and generator settings.
+   The generic generator accepts a one-to-31-day horizon. Deliveries use
    deterministic hard windows round-robin `09:00-12:00`, `12:00-15:00`,
    `15:00-18:00`; pickups use the selected warehouse's working day. When capacity
    publication is enabled, the local transaction commits before the complete
@@ -1558,9 +1557,9 @@ Evidence:
    and the browser reloads that committed workload while reporting the required
    capacity reconciliation.
 5. Manual and RWMS requests, other warehouses, generated requests and plans
-   outside the affected dates are preserved. New points must classify inside a
-   zone owned by the selected warehouse; smallest area and then UUID resolve
-   nested/tied matches.
+   outside the affected dates are preserved. A generated point must have an
+   exact truck route covered by the selected warehouse's farthest configured
+   isochrone tier.
 6. After the replacement commits, the backend invokes automatic pre-planning
    for every horizon date. A date without complete dispatcher/resource facts
    remains intentionally unplanned until the same idempotent ensure can build

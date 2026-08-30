@@ -66,8 +66,9 @@ Delivery offers are the fixed warehouse-local windows `09:00-12:00`, `12:00-15:0
 `15:00-18:00`, plus one `DURING_DAY` choice spanning the complete configured delivery day.
 [`CustomerDeliverySlotService`](src/main/java/dev/buhanzaz/rwms/logistics/customer/service/CustomerDeliverySlotService.java)
 persists offered and held capacity and uses a private Valhalla truck matrix to calculate exact road
-time. `travelZoneHours` remains an informational unbounded depot band; neither that band nor a
-tariff polygon participates in feasibility. Every fixed or full-day choice is route-capacity
+time. `travelZoneHours` remains an informational unbounded depot band; it does not determine either
+feasibility or price. The configured isochrone tiers cap delivery coverage only after an exact road
+route is found. Every fixed or full-day choice is route-capacity
 checked before it is offered. `kind`, `window_start` and `window_end` are persisted together:
 fixed bounds remain the exact arrival promise, while full-day bounds remain non-null and fence the
 hold-time recheck without promising a particular arrival hour. Feasibility simulates the complete local working day
@@ -88,9 +89,10 @@ cabins CustomerApp sends `siteCabinCapacity=1|2`: one creates sequential solo-tr
 permits a trailer only when its exact truck route exists. Any cabin, site-capacity or furniture
 mutation detaches the old slot from the cart. Every offer also freezes the applicable solo or
 truck-and-trailer height, width, length, weight, axle load and axle count used by Valhalla's truck
-route. The independently matched tariff polygon contributes delivery price and its stable source
-UUID (`priceZoneId`) to the
-offer/hold, but never to availability. The transport
+route. The one-way road time selects the first configured hourly isochrone tariff that covers it;
+the greatest configured tier is the delivery boundary, so a point beyond it receives no offer. New
+offers publish the selected tier through `priceIsochroneMinutes` and keep `priceZoneId=null`;
+historical special-zone quotes retain their stored price and nullable zone ID. The transport
 contract can retain `false` search-time attestations for compatible clients that only discover
 provisional dates; the current CustomerApp collects both facts and, when needed, site capacity in a
 modal after binding the address/point and before requesting slots. The final hold merges compatible search-time
@@ -338,11 +340,11 @@ active anonymous capacity snapshot for the warehouse named by the authoritative 
 does not repeat a warehouse ID; the response does not expose an obsolete source identity. It accepts
 typed generated delivery and pickup coordinates, hard local windows, cabin count, service duration,
 priority, mandatory/trailer facts, anonymous dated shifts with local start/end, break and one- or
-two-cabin capacity, and versioned GeoJSON tariff polygons. A tariff polygon contains only
-`sourceZoneId`, `sourceZoneVersion`, delivery/pickup prices and geometry. Covering polygons are
-classified by smallest geometry, then source UUID; new customer quotes expose that UUID as
-`priceZoneId`. Neither a code nor a zone priority exists in the active model, and tariff polygons
-remain absent from route feasibility.
+two-cabin capacity, plus one to twelve ordered isochrone tariffs. Tariffs start at 60 minutes and
+remain contiguous in 60-minute increments through at most 720 minutes; each tier stores its actual
+non-negative ruble price. Valhalla road time, not polygon membership or straight-line distance,
+selects the price and enforces the farthest delivery boundary. Trailer feasibility remains part of
+the exact vehicle route and per-job capacity facts, not a tariff-zone policy.
 
 The snapshot carries no order, customer, cabin or driver personal identity. An idempotency key,
 64-character source revision and warehouse-local monotonic `sourceGeneration` fence exact replay
@@ -354,7 +356,7 @@ return-leg work and never displace a delivery. Assignment apply accepts only `RW
 deliveries, leaving generated and manual planner jobs in the simulator. See
 [`WarehouseCapacitySnapshotService`](src/main/java/dev/buhanzaz/rwms/logistics/customer/capacity/service/WarehouseCapacitySnapshotService.java)
 and
-[`V65__warehouse_capacity_identity_and_tariff_zones.sql`](src/main/resources/db/migration/V65__warehouse_capacity_identity_and_tariff_zones.sql).
+[`V74__normalize_warehouse_isochrone_tariffs.sql`](src/main/resources/db/migration/V74__normalize_warehouse_isochrone_tariffs.sql).
 
 Replacement reuses the same presentation/booking or direct order command. A warehouse manager can
 replace only the requested pre-start cabins, with exact client-selection cardinality; direct replace
@@ -493,7 +495,7 @@ services and leaf clients.
 | `RentalOrderUnitReplacementService` | Direct and presentation replacement over ordered batch checkpoints, pre-start driver-task cancellation and same-order document/member convergence |
 | `RentalOrderPlanningIntegrationService` | Minimal versioned planner feed plus idempotent application through the existing rental-shipment owner; no cross-database state |
 | `PlanningResourceDirectoryService` | Validated least-privilege warehouse and active primary-driver resources composed from their exact domain owners without a local projection |
-| `WarehouseCapacitySnapshotService` | Per-warehouse idempotent capacity replacement, monotonic generation fencing and canonical tariff-zone UUID persistence |
+| `WarehouseCapacitySnapshotService` | Per-warehouse idempotent capacity replacement, monotonic generation fencing and canonical ordered hourly isochrone-tariff persistence |
 | `FutureDriverTaskClaimService` | Future-only shared-task preview/claim with task-board qualification and version fencing; it never starts work |
 | `ClientDeliveryDatePolicy` | Warehouse-local day +2 through day +5 request horizon for ordinary public confirmations |
 | `ShipmentFurnitureTaskService` | All-active-order furniture composition, existing movement-task readiness and replacement recovery checkpoints |
@@ -690,7 +692,8 @@ every snapshot/job/shift/receipt/zone row, removes the duplicate source identity
 zone code and priority. Customer slot quotes now persist `price_zone_id` as UUID: parseable UUIDs and
 codes that still match exactly one active warehouse zone are backfilled before the old column is removed;
 an unmatched retained price remains truthful with a null zone identity instead of receiving a
-fabricated UUID. New offers require price and zone UUID together.
+fabricated UUID. V74 later removes active zone calculation while preserving those historical quote
+fields.
 
 Migrations
 [`V67__interwarehouse_transfer_planning.sql`](src/main/resources/db/migration/V67__interwarehouse_transfer_planning.sql)
@@ -714,6 +717,11 @@ keeps that source in the existing replacement/furniture recovery checkpoint.
 [`V73__driver_task_worker_content.sql`](src/main/resources/db/migration/V73__driver_task_worker_content.sql)
 adds an object-shaped, false-effect structured worker snapshot with `{}` as the backward-compatible
 default for all historical tasks.
+[`V74__normalize_warehouse_isochrone_tariffs.sql`](src/main/resources/db/migration/V74__normalize_warehouse_isochrone_tariffs.sql)
+backfills the four fixed snapshot prices into normalized hourly tariff children, permits contiguous
+fifth through twelfth tiers, and drops fixed price columns plus active price/restriction zone
+tables. Historical customer slot price and `price_zone_id` remain intact; new quotes always use a
+60-to-720-minute configured tier.
 
 Logistics commits facts, projection checkpoints and a transactional outbox together. Kafka delivery
 is at-least-once: aggregate IDs are record keys, event IDs are dedupe identities, and consumers retain

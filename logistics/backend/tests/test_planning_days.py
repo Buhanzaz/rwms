@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.errors import ApiError
 from app.models import PlanningDayClosure
 from app.services.planning_days import close_planning_day, get_planning_day_status
-from tests.factories import make_request, make_warehouse, make_zone
+from tests.factories import make_request, make_warehouse
 
 pytestmark = pytest.mark.integration
 
@@ -51,7 +51,6 @@ async def test_mandatory_unassigned_work_prevents_day_closure(
 
     planning_date = date(2026, 8, 30)
     warehouse = await make_warehouse(db_session, default_planning_date=planning_date)
-    await make_zone(db_session, warehouse)
     request = await make_request(
         db_session,
         warehouse,

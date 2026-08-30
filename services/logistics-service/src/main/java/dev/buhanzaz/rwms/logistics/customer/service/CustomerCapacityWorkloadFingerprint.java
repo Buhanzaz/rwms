@@ -1,8 +1,7 @@
 package dev.buhanzaz.rwms.logistics.customer.service;
 
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityIsochroneTariff;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityJob;
-import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityPriceZone;
-import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityRestrictionZone;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityShift;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacitySnapshot;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlot;
@@ -40,8 +39,7 @@ final class CustomerCapacityWorkloadFingerprint {
       List<WarehouseCapacityJob> generatedJobs,
       List<WarehouseCapacityShift> shifts,
       WarehouseCapacitySnapshot snapshot,
-      List<WarehouseCapacityPriceZone> priceZones,
-      List<WarehouseCapacityRestrictionZone> restrictionZones,
+      List<WarehouseCapacityIsochroneTariff> isochroneTariffs,
       long wholeDayDriverReservations) {
     StringBuilder value = new StringBuilder("drivers\u001f").append(wholeDayDriverReservations);
     if (snapshot == null) {
@@ -53,15 +51,7 @@ final class CustomerCapacityWorkloadFingerprint {
           .append('\u001f')
           .append(snapshot.getSourceGeneration())
           .append('\u001f')
-          .append(snapshot.getSourceRevision())
-          .append('\u001f')
-          .append(snapshot.getIsochronePrice60Minutes())
-          .append('\u001f')
-          .append(snapshot.getIsochronePrice120Minutes())
-          .append('\u001f')
-          .append(snapshot.getIsochronePrice180Minutes())
-          .append('\u001f')
-          .append(snapshot.getIsochronePrice240Minutes());
+          .append(snapshot.getSourceRevision());
     }
     slots.stream()
         .sorted(Comparator.comparing(CustomerDeliverySlot::getId))
@@ -92,8 +82,6 @@ final class CustomerCapacityWorkloadFingerprint {
                     .append(slot.getSiteCabinCapacity())
                     .append('\u001f')
                     .append(slot.getDeliveryPriceRubles())
-                    .append('\u001f')
-                    .append(slot.getPriceZoneId())
                     .append('\u001f')
                     .append(slot.getPriceIsochroneMinutes())
                     .append('\u001f')
@@ -144,34 +132,15 @@ final class CustomerCapacityWorkloadFingerprint {
                     .append(shift.getBreakMinutes())
                     .append('\u001f')
                     .append(shift.getCabinCapacity()));
-    priceZones.stream()
-        .sorted(Comparator.comparing(WarehouseCapacityPriceZone::getSourceZoneId))
+    isochroneTariffs.stream()
+        .sorted(Comparator.comparingInt(WarehouseCapacityIsochroneTariff::getTravelMinutes))
         .forEach(
-            zone ->
+            tariff ->
                 value
-                    .append("\nprice-zone\u001f")
-                    .append(zone.getSourceZoneId())
+                    .append("\nisochrone-tariff\u001f")
+                    .append(tariff.getTravelMinutes())
                     .append('\u001f')
-                    .append(zone.getSourceZoneVersion())
-                    .append('\u001f')
-                    .append(zone.getDeliveryPriceRubles())
-                    .append('\u001f')
-                    .append(zone.getPickupPriceRubles())
-                    .append('\u001f')
-                    .append(zone.getGeometryJson()));
-    restrictionZones.stream()
-        .sorted(Comparator.comparing(WarehouseCapacityRestrictionZone::getSourceZoneId))
-        .forEach(
-            zone ->
-                value
-                    .append("\nrestriction-zone\u001f")
-                    .append(zone.getSourceZoneId())
-                    .append('\u001f')
-                    .append(zone.getSourceZoneVersion())
-                    .append('\u001f')
-                    .append(zone.getKind())
-                    .append('\u001f')
-                    .append(zone.getGeometryJson()));
+                    .append(tariff.getPriceRubles()));
     try {
       return HexFormat.of()
           .formatHex(
@@ -180,23 +149,6 @@ final class CustomerCapacityWorkloadFingerprint {
     } catch (NoSuchAlgorithmException exception) {
       throw new IllegalStateException("SHA-256 is unavailable", exception);
     }
-  }
-
-  /** Preserves tests and callers that predate tariff and restriction workload facts. */
-  static String sha256(
-      List<CustomerDeliverySlot> slots,
-      List<WarehouseCapacityJob> generatedJobs,
-      List<WarehouseCapacityShift> shifts,
-      List<WarehouseCapacityPriceZone> priceZones,
-      long wholeDayDriverReservations) {
-    return sha256(
-        slots,
-        generatedJobs,
-        shifts,
-        null,
-        priceZones,
-        List.of(),
-        wholeDayDriverReservations);
   }
 
   private static String decimal(java.math.BigDecimal value) {

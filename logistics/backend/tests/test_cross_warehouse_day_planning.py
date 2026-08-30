@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import app.services.planner_runtime as runtime_module
 from app.models import Vehicle as DbVehicle
 from app.models import Warehouse as DbWarehouse
+from app.models import WarehouseIsochroneTariff
 from app.planner import (
     DriverShift,
     HeuristicPlanner,
@@ -58,10 +59,12 @@ def warehouse(*, representative: bool = True) -> DbWarehouse:
         turnaround_minutes=15,
         working_day_start=time(8),
         working_day_end=time(20),
-        isochrone_price_60_minutes=10_000,
-        isochrone_price_120_minutes=15_000,
-        isochrone_price_180_minutes=20_000,
-        isochrone_price_240_minutes=25_000,
+        isochrone_tariffs=[
+            WarehouseIsochroneTariff(travel_minutes=60, price_rubles=10_000),
+            WarehouseIsochroneTariff(travel_minutes=120, price_rubles=15_000),
+            WarehouseIsochroneTariff(travel_minutes=180, price_rubles=20_000),
+            WarehouseIsochroneTariff(travel_minutes=240, price_rubles=25_000),
+        ],
     )
 
 
@@ -326,8 +329,6 @@ async def test_day_planner_scores_full_support_positioning_before_link_priority(
         service_minutes=20,
         priority=1,
         status=RequestStatus.READY,
-        zone_id=None,
-        zone_version=None,
         date_options=(
             RequestDateOption(
                 planning_date,

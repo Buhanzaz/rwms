@@ -1,8 +1,7 @@
 package dev.buhanzaz.rwms.logistics.customer.capacity.service;
 
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityIsochroneTariff;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityJobRequest;
-import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityPriceZoneRequest;
-import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityRestrictionZoneRequest;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityShiftRequest;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.ReplacePlanningCapacitySnapshotRequest;
 import java.math.BigDecimal;
@@ -17,35 +16,19 @@ import java.util.UUID;
 final class WarehouseCapacityChecksum {
   private WarehouseCapacityChecksum() {}
 
-  /** Preserves checksum call sites that have no restriction polygons to sort. */
-  static String sha256(
-      UUID warehouseId,
-      ReplacePlanningCapacitySnapshotRequest request,
-      List<PlanningCapacityJobRequest> sortedJobs,
-      List<PlanningCapacityShiftRequest> sortedShifts,
-      List<PlanningCapacityPriceZoneRequest> sortedPriceZones) {
-    return sha256(
-        warehouseId, request, sortedJobs, sortedShifts, sortedPriceZones, List.of());
-  }
-
   /** Hashes the path owner and every sorted anonymous delivery fact with length delimiters. */
   static String sha256(
       UUID warehouseId,
       ReplacePlanningCapacitySnapshotRequest request,
       List<PlanningCapacityJobRequest> sortedJobs,
       List<PlanningCapacityShiftRequest> sortedShifts,
-      List<PlanningCapacityPriceZoneRequest> sortedPriceZones,
-      List<PlanningCapacityRestrictionZoneRequest> sortedRestrictionZones) {
+      List<PlanningCapacityIsochroneTariff> sortedTariffs) {
     try {
       MessageDigest digest = MessageDigest.getInstance("SHA-256");
       append(digest, "REPLACE_WAREHOUSE_CAPACITY");
       append(digest, warehouseId.toString());
       append(digest, Long.toString(request.sourceGeneration()));
       append(digest, request.sourceRevision());
-      append(digest, Long.toString(request.isochronePrice60Minutes()));
-      append(digest, Long.toString(request.isochronePrice120Minutes()));
-      append(digest, Long.toString(request.isochronePrice180Minutes()));
-      append(digest, Long.toString(request.isochronePrice240Minutes()));
       for (PlanningCapacityJobRequest job : sortedJobs) {
         append(digest, job.sourceJobId().toString());
         append(digest, job.taskType().name());
@@ -68,20 +51,9 @@ final class WarehouseCapacityChecksum {
         append(digest, Integer.toString(shift.breakMinutes()));
         append(digest, Integer.toString(shift.cabinCapacity()));
       }
-      for (PlanningCapacityPriceZoneRequest zone : sortedPriceZones) {
-        append(digest, zone.sourceZoneId().toString());
-        append(digest, Long.toString(zone.sourceZoneVersion()));
-        append(digest, Long.toString(zone.deliveryPriceRubles()));
-        append(digest, Long.toString(zone.pickupPriceRubles()));
-        append(digest, zone.geometry().type());
-        append(digest, zone.geometry().coordinates().toString());
-      }
-      for (PlanningCapacityRestrictionZoneRequest zone : sortedRestrictionZones) {
-        append(digest, zone.sourceZoneId().toString());
-        append(digest, Long.toString(zone.sourceZoneVersion()));
-        append(digest, zone.kind().name());
-        append(digest, zone.geometry().type());
-        append(digest, zone.geometry().coordinates().toString());
+      for (PlanningCapacityIsochroneTariff tariff : sortedTariffs) {
+        append(digest, Integer.toString(tariff.travelMinutes()));
+        append(digest, Long.toString(tariff.priceRubles()));
       }
       return HexFormat.of().formatHex(digest.digest());
     } catch (NoSuchAlgorithmException exception) {

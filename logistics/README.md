@@ -20,27 +20,26 @@ needed only to download the Central and Northwestern Federal District extracts
 and the optional map style. A source manifest rebuilds the derived admin,
 routing-tile and tile-extract files whenever either PBF changes.
 If the MapLibre style cannot load, the editor falls back to its coordinate grid
-while zone editing and saved-route simulation remain available.
+while warehouse selection and saved-route simulation remain available.
 The map is one common canvas for every active canonical RWMS warehouse with an
 owner-held coordinate pair. Directory reconciliation creates or updates its
 planner projection under the same UUID; there is no second connect action or
-required first polygon. Exceptional zones belong to exactly one warehouse and
-only the selected warehouse's zones are shown. Selecting a warehouse or its
-marker switches its zones, resources, work and plans without changing the
+required delivery polygon. Selecting a warehouse marker switches its
+resources, work and plans without changing the
 viewport. The explicit header action recentres the map when requested, so
 several warehouse markers can be compared without forced zoom. A warehouse
 without coordinates remains visible in RWMS but is explicitly not routable.
 The **Warehouse isochrones** and **Task isochrones** map layers are off by
-default. Enabling the first requests fixed 60, 120, 180 and 240 minute
-`costing=truck` contours for all connected warehouses; enabling the second
-requests them only for the explicitly selected request or slot-check point.
+default. Enabling the first requests every configured contiguous hourly
+`costing=truck` contour for all connected warehouses; enabling the second
+requests the same boundaries only for the explicitly selected request or slot-check point.
 With a switch off, its contours are neither requested nor rendered. Equal
 coordinates are requested once with depot precedence. The browser keeps at
 most four contour requests in flight, aborts remaining siblings when one fails,
 and renders every contour below operational route lines. The Compose-owned
 [`valhalla/rwms-entrypoint.sh`](valhalla/rwms-entrypoint.sh) keeps Valhalla's
 generated configuration intact while raising its isochrone ceiling from the
-upstream 120-minute default to the required 240 minutes; startup fails if that
+upstream 120-minute default to the supported 720 minutes and twelve contours; startup fails if that
 limit is not applied. Those GeoJSON polygons are a visual estimate and never
 replace exact route legs. Separately, an imported CustomerApp booking
 stores a positive informational `travelZoneHours` band from the source depot.
@@ -54,17 +53,16 @@ and never produces synthetic circles or changes persisted demand.
 ## Interface
 
 ```text
-┌ warehouse selector / date / close acceptance / slot / validate / mode ┐
+┌ warehouse context / date / close acceptance / slot / validate / mode ┐
 ├───────────────┬─────────────────────────────────────┬─────────────────┤
 │ warehouse     │       MapLibre or grid map          │ selected object │
-│ exception zones│                                    │ form / warnings │
 │ deliveries    │ contours · delivery/pickup · routes │ route metrics  │
 │ slot check    │                                     │ explanation     │
 │ drivers       │                                     │                 │
 │ vehicles      │                                     │                 │
 │ shifts        │                                     │                 │
 │ deliveries    │                                     │                 │
-│ routes        │                                     │                 │
+│ day plan      │                                     │                 │
 │ unassigned    │                                     │                 │
 │ settings      │                                     │                 │
 ├───────────────┴─────────────────────────────────────┴─────────────────┤
@@ -94,7 +92,7 @@ The shared planning date filters both the request list and map markers. Until
 the dispatcher selects one date, a request appears on every customer-approved
 date; afterwards it appears only on the selected logistics date. Clicking a
 marker opens a MapLibre popup anchored above that point with address, quantity,
-zone, windows, date selection and the current driver/cycle assignment. Before
+windows, date selection and the current driver/cycle assignment. Before
 approval, selecting another cycle moves the task from its previous cycle under
 the same backend version and route-validation fence.
 A new date requires an explicit agreement action, an assignment can be cleared,
@@ -123,9 +121,9 @@ driver cycles remains version-fenced and fully revalidated by the backend.
 The right inspector has an accessible drag separator, is resizable up to half
 the viewport and reflows its forms and metrics as its width changes. The former
 per-leg truck diagnostic block is not part of the operator interface.
-Header buttons, the date control and the three equal-width mode segments share
-one control height. Warehouse actions use two three-column rows whose buttons
-remain equal within each row while their labels wrap at the minimum inspector width.
+Header buttons, the date control and both equal-width mode segments share one
+control height. Warehouse actions use one equal 2×2 grid whose labels wrap at
+the minimum inspector width.
 
 The **Check new order** view offers debounced navigator-style address
 suggestions. Selecting one resolves its canonical address and coordinates;
@@ -143,8 +141,8 @@ candidate count, stop timeline, load transitions, route before/after and
 pickup candidates. Global map-layer switches own optional visual isochrones.
 `POST /api/planning/slot-holds` retains one versioned result
 for ten minutes by default; confirmation rechecks source/day-plan versions and
-increments the plan version atomically. The matched zone contributes the
-displayed delivery price only.
+increments the plan version atomically. The selected hourly isochrone tier
+contributes the displayed delivery price.
 
 The before/after route layers cover the complete affected driver day. Exact
 directed schedule simulation remains authoritative. Pickup markers expose
@@ -180,8 +178,8 @@ This directory is a monorepo with isolated runtime containers:
   `legacy-routing` Compose profile and are never a truck fallback.
 
 Nginx serves the production frontend and proxies same-origin `/api` and SSE to
-FastAPI. The browser never chooses authoritative request zones. The backend
-stores warehouse-scoped resources and zone versions, plans, validation results, explanations,
+FastAPI. The browser never calculates the authoritative tariff. The backend
+stores warehouse-scoped resources and hourly isochrone tariffs, plans, validation results, explanations,
 optimization traces and manual-change audit entries. See
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and
 [`docs/API.md`](docs/API.md).
@@ -213,29 +211,16 @@ the browser and token form body do not receive the service secret.
 ## Domain model
 
 The persisted model contains automatically reconciled canonical RWMS warehouses and their
-settings, four isochrone tariff prices, warehouse-owned versioned Polygon/MultiPolygon exceptional
-zones with interior rings, display colors and explicit policy, warehouse-scoped drivers, vehicles and
+settings, one-to-twelve contiguous hourly isochrone tariff rows, warehouse-scoped drivers, vehicles and
 monthly shift ranges, logistics requests, date options and a separate
 dispatcher-selected logistics date, split planning tasks, versioned
 route plans/cycles/stops/legs, optimization runs/trace events and manual-change
 audit, versioned day plans and expiring slot holds. All timestamps are
 timezone-aware; a warehouse's canonical timezone is authoritative and
-`Europe/Moscow` is only the configured fallback. Zones have a UUID identity,
-not a business code or priority; relation/group/import models do not exist.
-
-Request coordinates are classified server-side with PostGIS only against zones
-owned by the same warehouse. `FORBIDDEN` rejects delivery, `NO_TRAILER` rejects
-a trailer-attached route, and `SPECIAL_PRICE` overrides the ordinary price
-derived from the exact road-time 60/120/180/240-minute band. The smallest
-covering geometry of each policy wins; an equal-area overlap is resolved by the
-stable zone UUID. A warehouse needs no covering zone and a request outside all
-zones uses its isochrone tariff if the truck route is feasible. Editing a
-zone increments its version and invalidates affected slots. The **Make
-cutout** tool selects an unlocked source zone and then
-draws a strictly internal ring. It opens the new inner-zone form; saving one
-atomic backend command subtracts the ring from the source and creates a
-version-one exceptional zone with exactly that geometry. Cancelling the form changes
-neither zone. Exact truck routing remains authoritative after every policy classification.
+`Europe/Moscow` is only the configured fallback. The tariff list starts at 60
+minutes and advances in contiguous one-hour steps. Exact one-way truck time
+selects the first covering price; the final configured tier is the hard order
+acceptance boundary. No active delivery-zone or request-zone model remains.
 
 ## Logistics rules
 
@@ -274,9 +259,8 @@ neither zone. Exact truck routing remains authoritative after every policy class
 - A driver's next cycle starts no earlier than the preceding depot return plus
   warehouse unload/turnaround and the configured route buffer. Cycles assigned
   to one driver therefore never overlap.
-- `FORBIDDEN` zones reject their customer point and `NO_TRAILER` zones reject
-  trailer-attached alternatives; `SPECIAL_PRICE` changes money only. Every
-  surviving candidate still requires exact road routing and schedule feasibility.
+- Every candidate requires exact road routing and schedule feasibility within
+  the warehouse's farthest configured isochrone.
 - A customer stop's `planned_arrival` is the actual service start, never an
   early physical arrival hidden inside a long stop. For the first late window,
   depot loading and departure move closer to the appointment. For later
@@ -296,7 +280,7 @@ neither zone. Exact truck routing remains authoritative after every policy class
   shift limit. The default 35-minute detour and 1.5 ratio limit only extra road
   travel; pickup
   service still counts in ETA, windows, workload and shift-end feasibility. A
-  special-price zone cannot make the limits tighter. An oversized return becomes a
+  tariff tier cannot make the limits tighter. An oversized return becomes a
   later pickup-only cycle or remains unassigned
   instead of displacing a delivery.
 - Candidate ranking first packs compatible delivery and pickup stops, then
@@ -354,7 +338,7 @@ the map fits the complete plan when it is opened, and the route legend selects
 an entire cycle including its return to the warehouse. Repeated depot segments
 therefore remain understandable instead of hiding later route legs. The
 **Full routes** card is stacked above the optional layer menu, while route
-lines are rendered above zones, restrictions and isochrone polygons.
+lines are rendered above restrictions and isochrone polygons.
 
 Simulation state is a pure derivation from the saved plan, selected timestamp
 and temporary overrides. Seeking backward therefore reproduces the same truck
@@ -381,7 +365,7 @@ Navigator-style operator autocomplete and reverse geocoding require separate
 server-side Yandex Geosuggest and Geocoder credentials in
 `YANDEX_GEOSUGGEST_API_KEY` and `YANDEX_GEOCODER_API_KEY`. They are never sent
 to the browser. If either credential is absent, its endpoint fails explicitly
-and manual coordinates/address entry remains available; slot and zone logic do
+and manual coordinates/address entry remains available; slot logic does
 not fabricate a provider result.
 
 Open <http://localhost:5173>. The API documentation is available at
@@ -588,7 +572,7 @@ recovery and diagnostics and are not exposed as a routine exchange dialog.
 Capacity publication is a separate opt-in and requires synchronization.
 Warehouse resource mutations and generated-workload replacement publish one
 versioned complete snapshot of generated delivery/pickup demand, active
-period-based shifts, vehicle capacity and only that warehouse's exceptional zones. Each committed
+period-based shifts, vehicle capacity and that warehouse's complete hourly tariff list. Each committed
 mutation advances a warehouse capacity generation, so retries are idempotent
 and delayed older generations are rejected. Manual requests and imported RWMS
 orders are not re-published as generated demand; replacing capacity never
@@ -732,18 +716,18 @@ road-snap failure restores the previous workload.
 
 Generated deliveries receive hard windows round-robin `09:00-12:00`,
 `12:00-15:00` and `15:00-18:00`; pickups use the warehouse workday window.
-Every candidate starts inside a tariff zone owned by the selected warehouse and, with Valhalla, must
-snap to an in-zone road point or the complete run fails with
-`422 NO_ROUTABLE_POINT_IN_ZONE`. Equal warehouse-zone geometry, routing graph, input
+Every candidate must snap to a truck-road point and have exact one-way travel
+covered by the selected warehouse's farthest configured isochrone; otherwise
+the complete run fails explicitly. Equal tariff settings, routing graph, input
 and seed reproduce the same business values. Stable external identities prevent
 a repeated generator run from creating duplicate logical visits.
 
 **Delete workload** removes generated requests and saved plans only for the
 selected warehouse date. The date control, request list and map display the
 same filtered work; delivery and pickup markers open their request details.
-Warehouse settings store independent non-negative whole-ruble prices for the
-60/120/180/240-minute isochrone bands. A `SPECIAL_PRICE` zone has its explicit
-override; `FORBIDDEN` and `NO_TRAILER` carry no price. The resolved tariff is
+Warehouse settings store one to twelve independent non-negative whole-ruble
+prices for contiguous hourly isochrone bands. The last band is the maximum
+delivery distance by exact road time. The resolved tariff is
 shown in the request and dynamic-slot views and published through the existing
 capacity boundary.
 

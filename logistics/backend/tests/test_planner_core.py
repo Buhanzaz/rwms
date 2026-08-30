@@ -53,7 +53,6 @@ def request(
     quantity: int = 1,
     lon: float = 37.7,
     lat: float = 55.75,
-    zone_id: str | None = "z1",
     priority: int = 1,
     hard: bool = True,
     window_start: datetime | None = None,
@@ -73,8 +72,6 @@ def request(
         service_minutes=10,
         priority=priority,
         status=status,
-        zone_id=zone_id,
-        zone_version=1 if zone_id else None,
         date_options=(
             RequestDateOption(
                 PLANNING_DATE,
@@ -242,7 +239,7 @@ def test_two_single_deliveries_are_paired_and_load_never_exceeds_capacity() -> N
         planning_input(
             (
                 request("d1", TaskType.DELIVERY, lon=37.70),
-                request("d2", TaskType.DELIVERY, lon=37.72, zone_id="z2"),
+                request("d2", TaskType.DELIVERY, lon=37.72),
             )
         )
     )
@@ -394,7 +391,7 @@ def test_two_single_pickups_pair_and_quantity_two_pickup_uses_full_capacity() ->
         planning_input(
             (
                 request("p1", TaskType.PICKUP, lon=37.70),
-                request("p2", TaskType.PICKUP, lon=37.72, zone_id="z2"),
+                request("p2", TaskType.PICKUP, lon=37.72),
             )
         )
     )
@@ -411,8 +408,8 @@ def test_all_deliveries_precede_pickups_in_mixed_cycle() -> None:
         planning_input(
             (
                 request("d1", TaskType.DELIVERY, lon=38.2),
-                request("d2", TaskType.DELIVERY, lon=38.21, zone_id="z2"),
-                request("p1", TaskType.PICKUP, lon=38.0, zone_id="z2"),
+                request("d2", TaskType.DELIVERY, lon=38.21),
+                request("p1", TaskType.PICKUP, lon=38.0),
                 request("p2", TaskType.PICKUP, lon=37.9),
             )
         ),
@@ -622,10 +619,10 @@ def test_feasible_delivery_and_pickup_pairs_prefer_one_combined_cycle() -> None:
             tuple(
                 with_second_allowed_date(item)
                 for item in (
-                    request("d1", TaskType.DELIVERY, lon=37.70, zone_id="z1"),
-                    request("d2", TaskType.DELIVERY, lon=37.72, zone_id="z2"),
-                    request("p1", TaskType.PICKUP, lon=37.71, zone_id="z2"),
-                    request("p2", TaskType.PICKUP, lon=37.69, zone_id="z1"),
+                    request("d1", TaskType.DELIVERY, lon=37.70),
+                    request("d2", TaskType.DELIVERY, lon=37.72),
+                    request("p1", TaskType.PICKUP, lon=37.71),
+                    request("p2", TaskType.PICKUP, lon=37.69),
                 )
             ),
         ),
@@ -713,7 +710,7 @@ def test_default_settings_minimize_returns_with_two_full_mixed_cycles() -> None:
 def test_delivery_prefers_compatible_return_pickup_over_pickup_only_cycle() -> None:
     """A last-date return must be attached after a feasible delivery when possible."""
 
-    delivery = request("d1", TaskType.DELIVERY, lon=37.70, zone_id="z1", hard=False)
+    delivery = request("d1", TaskType.DELIVERY, lon=37.70, hard=False)
     selected = delivery.date_options[0]
     delivery_with_alternative = replace(
         delivery,
@@ -841,12 +838,12 @@ def test_feasible_work_is_consolidated_without_activating_all_three_resources() 
     result = run_plan(
         three_shift_input(
             (
-                request("d1", TaskType.DELIVERY, lon=37.67, zone_id="z1"),
-                request("d2", TaskType.DELIVERY, lon=37.69, zone_id="z1"),
-                request("d3", TaskType.DELIVERY, lon=37.71, zone_id="z2"),
-                request("d4", TaskType.DELIVERY, lon=37.73, zone_id="z2"),
-                request("p1", TaskType.PICKUP, lon=37.70, zone_id="z2"),
-                request("p2", TaskType.PICKUP, lon=37.68, zone_id="z1"),
+                request("d1", TaskType.DELIVERY, lon=37.67),
+                request("d2", TaskType.DELIVERY, lon=37.69),
+                request("d3", TaskType.DELIVERY, lon=37.71),
+                request("d4", TaskType.DELIVERY, lon=37.73),
+                request("p1", TaskType.PICKUP, lon=37.70),
+                request("p2", TaskType.PICKUP, lon=37.68),
             )
         ),
         PlanningSettings(
@@ -1374,13 +1371,13 @@ def test_driver_workload_can_activate_a_second_shift_before_the_hard_end() -> No
     )
 
 
-def test_different_zone_ids_do_not_block_pickup_on_the_return_leg() -> None:
+def test_pickup_on_return_leg_remains_feasible() -> None:
     settings = PlanningSettings(seed=17, max_detour_minutes=240, max_detour_ratio=10)
     result = run_plan(
         planning_input(
             (
-                request("east-delivery", TaskType.DELIVERY, lon=38.2, zone_id="z2"),
-                request("west-pickup", TaskType.PICKUP, lon=37.9, zone_id="z1"),
+                request("east-delivery", TaskType.DELIVERY, lon=38.2),
+                request("west-pickup", TaskType.PICKUP, lon=37.9),
             ),
         ),
         settings,
@@ -1401,8 +1398,8 @@ def test_large_detour_forces_a_separate_pickup_cycle() -> None:
     result = run_plan(
         planning_input(
             (
-                request("delivery", TaskType.DELIVERY, lon=37.8, zone_id="z1"),
-                request("pickup", TaskType.PICKUP, lon=38.5, zone_id="z1"),
+                request("delivery", TaskType.DELIVERY, lon=37.8),
+                request("pickup", TaskType.PICKUP, lon=38.5),
             ),
         ),
         PlanningSettings(seed=17, max_detour_minutes=1, max_detour_ratio=0.01),
@@ -1574,7 +1571,6 @@ def test_same_snapshot_settings_and_seed_return_identical_semantics() -> None:
                 f"request-{index}",
                 TaskType.DELIVERY if index % 2 == 0 else TaskType.PICKUP,
                 lon=37.7 + index / 100,
-                zone_id="z1" if index % 3 else "z2",
             )
             for index in range(8)
         )
@@ -1652,7 +1648,6 @@ def test_candidate_evaluations_stay_bounded_across_driver_shifts() -> None:
                 TaskType.DELIVERY if index % 2 == 0 else TaskType.PICKUP,
                 lon=37.61 + (index % 8) * 0.008,
                 lat=55.70 + (index // 8) * 0.008,
-                zone_id="z1" if index % 4 < 2 else "z2",
                 priority=100 - index,
                 hard=False,
             ),

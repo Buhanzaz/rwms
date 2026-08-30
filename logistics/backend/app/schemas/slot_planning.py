@@ -99,9 +99,12 @@ class SlotAvailabilityRead(ApiModel):
     date: date
     plan_version: int = Field(ge=1)
     delivery_price_rubles: int | None = Field(default=None, ge=0)
-    price_isochrone_minutes: Literal[60, 120, 180, 240] | None = None
-    price_zone_id: UUID | None = None
-    price_zone_name: str | None = None
+    price_isochrone_minutes: int | None = Field(
+        default=None,
+        ge=60,
+        le=720,
+        multiple_of=60,
+    )
     trailer_access_allowed: bool = True
     slots: list[CustomerSlotRead] = Field(min_length=3, max_length=3)
 
@@ -132,8 +135,12 @@ class SlotHoldRead(ApiModel):
     slot_start: time
     slot_end: time
     delivery_price_rubles: int | None = Field(default=None, ge=0)
-    price_isochrone_minutes: Literal[60, 120, 180, 240] | None = None
-    price_zone_id: UUID | None = None
+    price_isochrone_minutes: int | None = Field(
+        default=None,
+        ge=60,
+        le=720,
+        multiple_of=60,
+    )
     trailer_access_allowed: bool = True
 
 

@@ -159,7 +159,6 @@ public class CustomerDeliverySlot {
       int capacityRemaining,
       int siteCabinCapacity,
       Long deliveryPriceRubles,
-      UUID priceZoneId,
       Integer priceIsochroneMinutes,
       boolean privateSiteAccessConfirmed,
       boolean failedTripChargeAcknowledged,
@@ -190,12 +189,10 @@ public class CustomerDeliverySlot {
         || siteCabinCapacity > 2
         || deliveryPriceRubles == null
         || deliveryPriceRubles < 0
-        || ((priceZoneId == null) == (priceIsochroneMinutes == null))
-        || (priceIsochroneMinutes != null
-            && priceIsochroneMinutes != 60
-            && priceIsochroneMinutes != 120
-            && priceIsochroneMinutes != 180
-            && priceIsochroneMinutes != 240)
+        || priceIsochroneMinutes == null
+        || priceIsochroneMinutes < 60
+        || priceIsochroneMinutes > 720
+        || priceIsochroneMinutes % 60 != 0
         || routeHeightMeters <= 0
         || routeWidthMeters <= 0
         || routeLengthMeters <= 0
@@ -210,7 +207,7 @@ public class CustomerDeliverySlot {
     slot.capacityRemaining = capacityRemaining;
     slot.siteCabinCapacity = siteCabinCapacity;
     slot.deliveryPriceRubles = deliveryPriceRubles;
-    slot.priceZoneId = priceZoneId;
+    slot.priceZoneId = null;
     slot.priceIsochroneMinutes = priceIsochroneMinutes;
     slot.roadRouteConfirmed = true;
     slot.privateSiteAccessConfirmed = privateSiteAccessConfirmed;
@@ -226,73 +223,6 @@ public class CustomerDeliverySlot {
     slot.createdAt = now();
     slot.updatedAt = slot.createdAt;
     return slot;
-  }
-
-  /**
-   * Preserves internal callers that predate explicit ordinary isochrone pricing. A former
-   * unpriced offer receives the canonical default tier while an existing special-zone quote keeps
-   * its zone source.
-   */
-  public static CustomerDeliverySlot offer(
-      UUID customerSubjectId,
-      UUID inquiryId,
-      UUID warehouseId,
-      LocalDate deliveryDate,
-      CustomerDeliverySlotKind kind,
-      LocalTime windowStart,
-      LocalTime windowEnd,
-      String deliveryAddress,
-      BigDecimal latitude,
-      BigDecimal longitude,
-      int cabinCount,
-      long oneWayTravelSeconds,
-      int travelZoneHours,
-      int capacityRemaining,
-      int siteCabinCapacity,
-      Long deliveryPriceRubles,
-      UUID priceZoneId,
-      boolean privateSiteAccessConfirmed,
-      boolean failedTripChargeAcknowledged,
-      double routeHeightMeters,
-      double routeWidthMeters,
-      double routeLengthMeters,
-      double routeWeightTons,
-      double routeAxleLoadTons,
-      int routeAxleCount,
-      OffsetDateTime expiresAt) {
-    Integer tier = priceZoneId == null ? defaultIsochroneTier(oneWayTravelSeconds) : null;
-    Long price =
-        deliveryPriceRubles == null && tier != null
-            ? defaultIsochronePrice(tier)
-            : deliveryPriceRubles;
-    return offer(
-        customerSubjectId,
-        inquiryId,
-        warehouseId,
-        deliveryDate,
-        kind,
-        windowStart,
-        windowEnd,
-        deliveryAddress,
-        latitude,
-        longitude,
-        cabinCount,
-        oneWayTravelSeconds,
-        travelZoneHours,
-        capacityRemaining,
-        siteCabinCapacity,
-        price,
-        priceZoneId,
-        tier,
-        privateSiteAccessConfirmed,
-        failedTripChargeAcknowledged,
-        routeHeightMeters,
-        routeWidthMeters,
-        routeLengthMeters,
-        routeWeightTons,
-        routeAxleLoadTons,
-        routeAxleCount,
-        expiresAt);
   }
 
   /**
@@ -418,23 +348,6 @@ public class CustomerDeliverySlot {
       throw new IllegalArgumentException(field + " is invalid");
     }
     return normalized;
-  }
-
-  private static int defaultIsochroneTier(long oneWayTravelSeconds) {
-    if (oneWayTravelSeconds <= 3_600) return 60;
-    if (oneWayTravelSeconds <= 7_200) return 120;
-    if (oneWayTravelSeconds <= 10_800) return 180;
-    return 240;
-  }
-
-  private static long defaultIsochronePrice(int tier) {
-    return switch (tier) {
-      case 60 -> 10_000;
-      case 120 -> 15_000;
-      case 180 -> 20_000;
-      case 240 -> 25_000;
-      default -> throw new IllegalArgumentException("Unsupported isochrone price tier");
-    };
   }
 
   private static OffsetDateTime now() {

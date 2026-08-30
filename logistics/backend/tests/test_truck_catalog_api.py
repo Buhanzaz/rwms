@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.main import create_app
-from tests.factories import make_warehouse, make_zone
+from tests.factories import make_warehouse
 
 pytestmark = pytest.mark.integration
 
@@ -110,7 +110,6 @@ async def test_full_vehicle_configuration_and_cargo_flow(db_session: AsyncSessio
     """Workspace reads expose full truck configuration and mandatory cargo tasks."""
 
     warehouse = await make_warehouse(db_session)
-    await make_zone(db_session, warehouse)
     async with AsyncClient(
         transport=ASGITransport(app=_application(db_session)),
         base_url="http://test",

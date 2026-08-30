@@ -48,9 +48,8 @@ class ScheduleInfeasible(RuntimeError):
 class FeasibleSlotPlanner:
     """Find every feasible delivery insertion by resimulating complete driver days.
 
-    Isochrones deliberately do not participate here.  The only geographic input is
-    the exact truck-road travel provider; tariff zones are therefore unable to make
-    a slot available or unavailable.
+    Isochrone prices deliberately do not participate here. The only geographic input
+    is the exact truck-road travel provider, so pricing cannot make a slot available.
     """
 
     def __init__(
@@ -73,7 +72,7 @@ class FeasibleSlotPlanner:
         service_duration_minutes: int | None = None,
         trailer_access_allowed: bool | None = None,
     ) -> SlotPlanningResult:
-        """Calculate three slots while enforcing site and exceptional-zone trailer access."""
+        """Calculate three slots while enforcing site-level trailer access."""
 
         if cabin_count < 1 or site_cabin_capacity not in {1, 2}:
             raise ValueError("cabin_count must be positive and site capacity must be one or two")

@@ -40,18 +40,6 @@ function rawPlan(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function zoneInput() {
-  return {
-    name: 'Север',
-    kind: 'SPECIAL_PRICE' as const,
-    color: '#3366FF',
-    delivery_price: 20_000,
-    pickup_price: 15_000,
-    geometry: { type: 'Polygon' as const, coordinates: [[[30, 59], [31, 59], [31, 60], [30, 59]]] },
-    locked: false,
-  };
-}
-
 beforeEach(() => {
   vi.unstubAllGlobals();
 });
@@ -110,27 +98,7 @@ describe('warehouse workspace transport', () => {
   });
 });
 
-describe('warehouse-owned catalogs and zones', () => {
-  it('sends zone color and tariffs through the owning warehouse without obsolete routing metadata', async () => {
-    const input = zoneInput();
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
-      id: 'zone-1',
-      warehouse_id: 'warehouse-1',
-      ...input,
-      version: 1,
-      created_at: '2026-08-28T00:00:00Z',
-      updated_at: '2026-08-28T00:00:00Z',
-    }));
-    vi.stubGlobal('fetch', fetchMock);
-
-    await api.createZone('warehouse-1', input);
-
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/warehouses/warehouse-1/zones');
-    expect(bodyAt(fetchMock, 0)).toEqual(input);
-    expect(bodyAt(fetchMock, 0)).not.toHaveProperty('code');
-    expect(bodyAt(fetchMock, 0)).not.toHaveProperty('priority');
-  });
-
+describe('warehouse-owned catalogs', () => {
   it('uses the active warehouse for drivers, shifts and requests', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ id: 'driver-1' }))

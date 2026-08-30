@@ -1,4 +1,4 @@
-"""CRUD workflows for warehouse-owned logistics inputs and zone classification."""
+"""CRUD workflows for warehouse-owned logistics inputs and planning resources."""
 
 from __future__ import annotations
 
@@ -6,20 +6,14 @@ from collections.abc import Awaitable, Callable, Sequence
 from datetime import date, time
 from uuid import UUID
 
-from geoalchemy2.shape import from_shape, to_shape
 from pydantic import BaseModel
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db import Base
 from app.errors import ApiError, not_found
-from app.geo import (
-    classify_zone_policies,
-    geometry_from_geojson,
-    subtract_polygonal_cutout,
-)
 from app.models import (
     Driver,
     DriverShift,
@@ -33,15 +27,13 @@ from app.models import (
     Vehicle,
     VehicleLoadProfile,
     Warehouse,
-    Zone,
+    WarehouseIsochroneTariff,
 )
 from app.models.domain import (
     PlanStatus,
     RequestStatus,
     RequestType,
     TaskStatus,
-    ZoneClassificationStatus,
-    ZoneKind,
 )
 from app.repositories import get_required, list_for_warehouse
 from app.schemas.domain import (
@@ -67,9 +59,6 @@ from app.schemas.domain import (
     VehicleUpdate,
     WarehouseCreate,
     WarehouseUpdate,
-    ZoneCreate,
-    ZoneCutoutRequest,
-    ZoneUpdate,
 )
 from app.schemas.geocoding import ResolvedAddress
 from app.services import plans as plan_service
@@ -92,6 +81,12 @@ CARGO_PHYSICAL_FIELDS = (
     "cargo_width_mm",
     "cargo_height_mm",
     "cargo_weight_kg",
+)
+DEFAULT_ISOCHRONE_TARIFFS = (
+    (60, 10_000),
+    (120, 15_000),
+    (180, 20_000),
+    (240, 25_000),
 )
 
 
@@ -228,36 +223,15 @@ async def require_warehouse(session: AsyncSession, warehouse_id: UUID) -> Wareho
     return await get_required(session, Warehouse, warehouse_id, "warehouse")
 
 
-async def _lock_warehouse(session: AsyncSession, warehouse_id: UUID) -> Warehouse:
-    """Serialize geometry mutations through their owning warehouse row."""
+def _tariff_entities(
+    values: Sequence[tuple[int, int]],
+) -> list[WarehouseIsochroneTariff]:
+    """Build persistence rows from an already validated ordered tariff sequence."""
 
-    warehouse = await session.scalar(
-        select(Warehouse).where(Warehouse.id == warehouse_id).with_for_update()
-    )
-    if warehouse is None:
-        raise not_found("warehouse", warehouse_id)
-    return warehouse
-
-
-async def require_zone(
-    session: AsyncSession,
-    warehouse_id: UUID,
-    zone_id: UUID,
-    *,
-    for_update: bool = False,
-) -> Zone:
-    """Resolve a nested zone without revealing a zone owned by another warehouse."""
-
-    statement = select(Zone).where(
-        Zone.id == zone_id,
-        Zone.warehouse_id == warehouse_id,
-    )
-    if for_update:
-        statement = statement.with_for_update()
-    entity = await session.scalar(statement)
-    if entity is None:
-        raise not_found("zone", zone_id)
-    return entity
+    return [
+        WarehouseIsochroneTariff(travel_minutes=minutes, price_rubles=price)
+        for minutes, price in values
+    ]
 
 
 async def _insert_canonical_warehouse(
@@ -288,6 +262,7 @@ async def _insert_canonical_warehouse(
         representative=identity.representative,
         routing_ready=True,
         settings=PlanningSettings().model_dump(mode="json"),
+        isochrone_tariffs=_tariff_entities(DEFAULT_ISOCHRONE_TARIFFS),
     )
     try:
         async with session.begin_nested():
@@ -458,24 +433,13 @@ async def create_warehouse(
         representative=identity.representative,
         routing_ready=True,
         settings=PlanningSettings().model_dump(mode="json"),
-        **payload.model_dump(exclude={"external_warehouse_id", "initial_zone"}),
+        **payload.model_dump(exclude={"external_warehouse_id", "isochrone_tariffs"}),
+        isochrone_tariffs=_tariff_entities(
+            [(item.travel_minutes, item.price_rubles) for item in payload.isochrone_tariffs]
+        ),
     )
     session.add(entity)
     await session.flush()
-    if payload.initial_zone is not None:
-        _validate_zone_semantics(
-            payload.initial_zone.kind,
-            payload.initial_zone.delivery_price,
-            payload.initial_zone.pickup_price,
-        )
-        initial_zone = Zone(
-            warehouse_id=entity.id,
-            geometry=geometry_from_geojson(payload.initial_zone.geometry),
-            version=1,
-            **payload.initial_zone.model_dump(exclude={"geometry"}),
-        )
-        session.add(initial_zone)
-        await session.flush()
     return entity
 
 
@@ -490,175 +454,18 @@ async def update_warehouse(
     end = values.get("working_day_end", entity.working_day_end)
     if end <= start:
         raise ApiError(422, "INVALID_WORKING_DAY", "working_day_end must be after start")
-    apply_update(entity, payload)
-    await session.flush()
-    return entity
-
-
-def _validate_zone_semantics(
-    kind: ZoneKind | str,
-    delivery_price: int,
-    pickup_price: int,
-) -> None:
-    """Keep ordinary isochrone tariffs out of access-restriction polygons."""
-
-    resolved_kind = ZoneKind(kind)
-    if resolved_kind is not ZoneKind.SPECIAL_PRICE and (
-        delivery_price != 0 or pickup_price != 0
-    ):
-        raise ApiError(
-            422,
-            "ZONE_PRICE_NOT_ALLOWED",
-            "Only a SPECIAL_PRICE zone may define delivery or pickup prices",
-        )
-
-
-async def create_zone(
-    session: AsyncSession,
-    warehouse_id: UUID,
-    payload: ZoneCreate,
-) -> Zone:
-    """Persist a validated zone under one locked warehouse root."""
-
-    await _lock_warehouse(session, warehouse_id)
-    _validate_zone_semantics(payload.kind, payload.delivery_price, payload.pickup_price)
-    values = payload.model_dump(exclude={"geometry"})
-    entity = Zone(
-        warehouse_id=warehouse_id,
-        geometry=geometry_from_geojson(payload.geometry),
-        version=1,
-        **values,
-    )
-    session.add(entity)
-    await session.flush()
-    return entity
-
-
-async def update_zone(
-    session: AsyncSession,
-    warehouse_id: UUID,
-    zone_id: UUID,
-    payload: ZoneUpdate,
-) -> Zone:
-    """Update an owner exceptional zone under the warehouse command lock."""
-
-    await _lock_warehouse(session, warehouse_id)
-    entity = await require_zone(session, warehouse_id, zone_id, for_update=True)
-    if entity.locked:
-        raise ApiError(409, "ZONE_LOCKED", "Unlock the zone before editing it")
-    values = payload.model_dump(exclude_unset=True, exclude={"geometry"})
-    _validate_zone_semantics(
-        values.get("kind", entity.kind),
-        values.get("delivery_price", entity.delivery_price),
-        values.get("pickup_price", entity.pickup_price),
-    )
+    values = payload.model_dump(exclude_unset=True, exclude={"isochrone_tariffs"})
     for field, value in values.items():
         setattr(entity, field, value)
-    if payload.geometry is not None:
-        entity.geometry = geometry_from_geojson(payload.geometry)
-        entity.version += 1
+    if payload.isochrone_tariffs is not None:
+        entity.isochrone_tariffs = _tariff_entities(
+            [
+                (item.travel_minutes, item.price_rubles)
+                for item in payload.isochrone_tariffs
+            ]
+        )
     await session.flush()
-    await session.refresh(entity)
     return entity
-
-
-async def cut_zone(
-    session: AsyncSession,
-    warehouse_id: UUID,
-    zone_id: UUID,
-    payload: ZoneCutoutRequest,
-) -> tuple[Zone, Zone]:
-    """Cut an owner zone and create an inner zone under the same warehouse."""
-
-    await _lock_warehouse(session, warehouse_id)
-    entity = await require_zone(session, warehouse_id, zone_id, for_update=True)
-    if entity.locked:
-        raise ApiError(
-            409,
-            "ZONE_LOCKED",
-            "Сначала разблокируйте зону, чтобы создать в ней вырез.",
-        )
-    try:
-        geometry = subtract_polygonal_cutout(
-            to_shape(entity.geometry),
-            payload.geometry.to_shapely(),
-        )
-    except ValueError as exc:
-        raise ApiError(
-            422,
-            "ZONE_CUTOUT_OUTSIDE",
-            (
-                "Вырез должен целиком находиться внутри выбранной зоны и не касаться "
-                "её внешней границы или существующих вырезов."
-            ),
-        ) from exc
-    entity.geometry = from_shape(geometry, srid=4326, extended=True)
-    entity.version += 1
-    _validate_zone_semantics(
-        payload.inner_zone.kind,
-        payload.inner_zone.delivery_price,
-        payload.inner_zone.pickup_price,
-    )
-    inner_zone = Zone(
-        warehouse_id=warehouse_id,
-        geometry=geometry_from_geojson(payload.geometry),
-        version=1,
-        **payload.inner_zone.model_dump(),
-    )
-    session.add(inner_zone)
-    await session.flush()
-    await session.refresh(entity)
-    await session.refresh(inner_zone)
-    return entity, inner_zone
-
-
-async def set_zone_lock(
-    session: AsyncSession,
-    warehouse_id: UUID,
-    zone_id: UUID,
-    locked: bool,
-) -> Zone:
-    """Set an owner zone's editor lock without changing capacity facts."""
-
-    entity = await require_zone(session, warehouse_id, zone_id, for_update=True)
-    entity.locked = locked
-    await session.flush()
-    await session.refresh(entity)
-    return entity
-
-
-async def delete_zone(session: AsyncSession, warehouse_id: UUID, zone_id: UUID) -> None:
-    """Delete one exceptional zone without affecting isochrone delivery coverage."""
-
-    await _lock_warehouse(session, warehouse_id)
-    entity = await require_zone(session, warehouse_id, zone_id, for_update=True)
-    requests = list(
-        await session.scalars(select(LogisticsRequest).where(LogisticsRequest.zone_id == zone_id))
-    )
-    tasks = list(await session.scalars(select(PlanningTask).where(PlanningTask.zone_id == zone_id)))
-    for request in requests:
-        request.zone_id = None
-        request.zone_classification_status = ZoneClassificationStatus.OUTSIDE_ZONES
-    for task in tasks:
-        task.zone_id = None
-    await session.flush()
-    await session.delete(entity)
-    await session.flush()
-
-
-async def count_stale_requests(session: AsyncSession, zone: Zone) -> int:
-    """Count requests retaining an older version of a still-selected zone."""
-
-    return int(
-        await session.scalar(
-            select(func.count(LogisticsRequest.id)).where(
-                LogisticsRequest.zone_id == zone.id,
-                LogisticsRequest.zone_version.is_not(None),
-                LogisticsRequest.zone_version != zone.version,
-            )
-        )
-        or 0
-    )
 
 
 async def create_driver(
@@ -986,37 +793,8 @@ async def delete_catalog_entity[MutableModel: Base](
     await session.flush()
 
 
-async def _set_request_classification(session: AsyncSession, request: LogisticsRequest) -> None:
-    """Apply special-price identity and hard access policies at stored coordinates."""
-
-    policies = await classify_zone_policies(
-        session,
-        request.warehouse_id,
-        request.latitude,
-        request.longitude,
-    )
-    if policies.forbidden is not None:
-        raise ApiError(
-            422,
-            "DELIVERY_FORBIDDEN_ZONE",
-            "The address is inside a warehouse zone where delivery is prohibited",
-            extra={"zone_id": str(policies.forbidden.id), "zone_name": policies.forbidden.name},
-        )
-    match = policies.special_price
-    if match is None:
-        request.zone_id = None
-        request.zone_version = None
-        request.zone_classification_status = ZoneClassificationStatus.OUTSIDE_ZONES
-    else:
-        request.zone_id = match.id
-        request.zone_version = match.version
-        request.zone_classification_status = ZoneClassificationStatus.CLASSIFIED
-    if policies.no_trailer is not None:
-        request.trailer_access_allowed = False
-
-
 def _build_task(request: LogisticsRequest, part_number: int, quantity: int) -> PlanningTask:
-    """Copy the classification snapshot and planning fields into one request part."""
+    """Copy physical and planning fields into one vehicle-sized request part."""
 
     return PlanningTask(
         request=request,
@@ -1029,8 +807,6 @@ def _build_task(request: LogisticsRequest, part_number: int, quantity: int) -> P
         type=request.type,
         latitude=request.latitude,
         longitude=request.longitude,
-        zone_id=request.zone_id,
-        zone_version=request.zone_version,
         service_minutes=request.service_minutes,
         priority=request.priority,
         mandatory=request.mandatory,
@@ -1107,7 +883,7 @@ def _date_option_facts(
 async def create_request(
     session: AsyncSession, warehouse_id: UUID, payload: LogisticsRequestCreate
 ) -> LogisticsRequest:
-    """Create, classify, date, and split a source request atomically."""
+    """Create, date, and split a source request atomically."""
 
     await require_warehouse(session, warehouse_id)
     await _invalidate_route_plans_for_dates(
@@ -1119,7 +895,6 @@ async def create_request(
     entity = LogisticsRequest(warehouse_id=warehouse_id, **values)
     session.add(entity)
     await session.flush()
-    await _set_request_classification(session, entity)
     for option in payload.date_options:
         session.add(_date_option_entity(entity, option))
     await _replace_request_tasks(session, entity)
@@ -1341,11 +1116,8 @@ async def update_request(
         *CARGO_PHYSICAL_FIELDS,
     }
     regenerate_tasks = bool(task_fields.intersection(changed))
-    moved = "latitude" in changed or "longitude" in changed
     for field, value in changed.items():
         setattr(entity, field, value)
-    if moved or "trailer_access_allowed" in changed:
-        await _set_request_classification(session, entity)
     if "trailer_access_allowed" in changed:
         current_quantities = [
             task.quantity for task in sorted(entity.tasks, key=lambda task: task.part_number)
@@ -1507,7 +1279,6 @@ async def set_request_planning_details(
     planning_dates = previous_dates | {payload.date}
     previous_trailer_access = entity.trailer_access_allowed
     entity.trailer_access_allowed = payload.trailer_access_allowed
-    await _set_request_classification(session, entity)
     trailer_access_changed = previous_trailer_access != entity.trailer_access_allowed
     scheduled_date_changed = (
         entity.scheduled_date is not None and entity.scheduled_date != payload.date

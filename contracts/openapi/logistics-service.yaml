@@ -3359,15 +3359,17 @@ components:
           type: [integer, "null"]
           format: int64
           minimum: 0
-          description: Delivery price from exactly one special polygon or ordinary isochrone tier.
+          description: Actual delivery price from the configured isochrone tier or a historical special-zone quote.
         priceZoneId:
           type: [string, "null"]
           format: uuid
-          description: Stable special-price source UUID; mutually exclusive with priceIsochroneMinutes.
+          description: Historical special-price source UUID; new offers return null.
         priceIsochroneMinutes:
           type: [integer, "null"]
-          enum: [60, 120, 180, 240, null]
-          description: Ordinary one-way Valhalla tariff tier; null only when priceZoneId supplies the special price.
+          minimum: 60
+          maximum: 720
+          multipleOf: 60
+          description: Configured one-way Valhalla tariff tier; null only on a historical special-zone quote.
         roadRouteConfirmed:
           type: boolean
           const: true
@@ -3728,58 +3730,24 @@ components:
         shiftEnd: { type: string, format: time }
         breakMinutes: { type: integer, minimum: 0, maximum: 720 }
         cabinCapacity: { type: integer, minimum: 1, maximum: 2 }
-    PlanningCapacityPriceZone:
+    PlanningCapacityIsochroneTariff:
       type: object
       additionalProperties: false
-      required:
-        [sourceZoneId, sourceZoneVersion, deliveryPriceRubles, pickupPriceRubles, geometry]
+      required: [travelMinutes, priceRubles]
       properties:
-        sourceZoneId: { type: string, format: uuid }
-        sourceZoneVersion: { type: integer, format: int64, minimum: 0 }
-        deliveryPriceRubles: { type: integer, format: int64, minimum: 0 }
-        pickupPriceRubles: { type: integer, format: int64, minimum: 0 }
-        geometry: { $ref: "#/components/schemas/GeoJsonMultiPolygon" }
-    PlanningCapacityRestrictionZone:
-      type: object
-      additionalProperties: false
-      required: [sourceZoneId, sourceZoneVersion, kind, geometry]
-      properties:
-        sourceZoneId: { type: string, format: uuid }
-        sourceZoneVersion: { type: integer, format: int64, minimum: 0 }
-        kind:
-          type: string
-          enum: [FORBIDDEN, NO_TRAILER]
-          description: FORBIDDEN suppresses delivery offers; NO_TRAILER forces one-cabin trailer-free routing.
-        geometry: { $ref: "#/components/schemas/GeoJsonMultiPolygon" }
-    GeoJsonPosition:
-      type: array
-      prefixItems:
-        - { type: number, minimum: -180, maximum: 180 }
-        - { type: number, minimum: -90, maximum: 90 }
-      minItems: 2
-      maxItems: 2
-    GeoJsonLinearRing:
-      type: array
-      minItems: 4
-      items: { $ref: "#/components/schemas/GeoJsonPosition" }
-    GeoJsonPolygonCoordinates:
-      type: array
-      minItems: 1
-      items: { $ref: "#/components/schemas/GeoJsonLinearRing" }
-    GeoJsonMultiPolygon:
-      type: object
-      additionalProperties: false
-      required: [type, coordinates]
-      properties:
-        type: { type: string, const: MultiPolygon }
-        coordinates:
-          type: array
-          minItems: 1
-          items: { $ref: "#/components/schemas/GeoJsonPolygonCoordinates" }
+        travelMinutes:
+          type: integer
+          minimum: 60
+          maximum: 720
+          multipleOf: 60
+        priceRubles:
+          type: integer
+          format: int64
+          minimum: 0
     ReplacePlanningCapacitySnapshotRequest:
       type: object
       additionalProperties: false
-      required: [sourceGeneration, sourceRevision, jobs, shifts, priceZones]
+      required: [sourceGeneration, sourceRevision, jobs, shifts, isochroneTariffs]
       properties:
         sourceGeneration:
           type: integer
@@ -3799,42 +3767,17 @@ components:
           type: array
           maxItems: 2000
           items: { $ref: "#/components/schemas/PlanningCapacityShift" }
-        priceZones:
+        isochroneTariffs:
           type: array
-          maxItems: 500
-          description: SPECIAL_PRICE GeoJSON polygons; they override the ordinary isochrone tariff only.
-          items: { $ref: "#/components/schemas/PlanningCapacityPriceZone" }
-        isochronePrice60Minutes:
-          type: integer
-          format: int64
-          minimum: 0
-          default: 10000
-        isochronePrice120Minutes:
-          type: integer
-          format: int64
-          minimum: 0
-          default: 15000
-        isochronePrice180Minutes:
-          type: integer
-          format: int64
-          minimum: 0
-          default: 20000
-        isochronePrice240Minutes:
-          type: integer
-          format: int64
-          minimum: 0
-          default: 25000
-        restrictionZones:
-          type: array
-          maxItems: 500
-          default: []
-          description: Exceptional FORBIDDEN and NO_TRAILER polygons; never ordinary delivery coverage.
-          items: { $ref: "#/components/schemas/PlanningCapacityRestrictionZone" }
+          minItems: 1
+          maxItems: 12
+          description: Ordered contiguous hourly tiers starting at 60 minutes; the last tier is the delivery boundary.
+          items: { $ref: "#/components/schemas/PlanningCapacityIsochroneTariff" }
     PlanningCapacitySnapshotResponse:
       type: object
       additionalProperties: false
       required:
-        [warehouseId, sourceGeneration, version, sourceRevision, jobCount, shiftCount, priceZoneCount, restrictionZoneCount, replayed, updatedAt]
+        [warehouseId, sourceGeneration, version, sourceRevision, jobCount, shiftCount, isochroneTariffCount, replayed, updatedAt]
       properties:
         warehouseId: { type: string, format: uuid }
         sourceGeneration: { type: integer, format: int64, minimum: 1 }
@@ -3844,8 +3787,7 @@ components:
           pattern: '^[0-9a-f]{64}$'
         jobCount: { type: integer, minimum: 0 }
         shiftCount: { type: integer, minimum: 0 }
-        priceZoneCount: { type: integer, minimum: 0 }
-        restrictionZoneCount: { type: integer, minimum: 0 }
+        isochroneTariffCount: { type: integer, minimum: 1, maximum: 12 }
         replayed: { type: boolean }
         updatedAt: { type: string, format: date-time }
     PlanningAssignment:

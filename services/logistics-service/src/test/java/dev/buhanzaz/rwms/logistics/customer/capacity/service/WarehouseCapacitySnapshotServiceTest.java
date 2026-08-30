@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityCommandReceipt;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityIsochroneTariff;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityJob;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityTaskType;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacitySnapshot;
@@ -16,6 +17,7 @@ import dev.buhanzaz.rwms.logistics.customer.capacity.mapper.WarehouseCapacitySna
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityCommandReceiptRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacitySnapshotRepository;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityIsochroneTariff;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityJobRequest;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacitySnapshotResponse;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityTaskType;
@@ -32,7 +34,6 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import tools.jackson.databind.ObjectMapper;
 
 /** Covers atomic canonicalization and replay fencing for anonymous warehouse capacity. */
 class WarehouseCapacitySnapshotServiceTest {
@@ -54,7 +55,7 @@ class WarehouseCapacitySnapshotServiceTest {
     CustomerDeliveryCapacityFence capacityFence = mock(CustomerDeliveryCapacityFence.class);
     WarehouseCapacitySnapshotService service =
         new WarehouseCapacitySnapshotService(
-            repository, receipts, mapper, locks, capacityFence, CLOCK, new ObjectMapper());
+            repository, receipts, mapper, locks, capacityFence, CLOCK);
     ReplacePlanningCapacitySnapshotRequest request = request("a".repeat(64), 2);
     when(repository.findByWarehouseIdForUpdate(WAREHOUSE)).thenReturn(Optional.empty());
     when(repository.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
@@ -76,7 +77,7 @@ class WarehouseCapacitySnapshotServiceTest {
                   snapshot.getSourceRevision(),
                   snapshot.getJobs().size(),
                   snapshot.getShifts().size(),
-                  snapshot.getPriceZones().size(),
+                  snapshot.getIsochroneTariffs().size(),
                   replayed,
                   snapshot.getUpdatedAt());
             });
@@ -92,7 +93,7 @@ class WarehouseCapacitySnapshotServiceTest {
                   receipt.getSourceRevision(),
                   receipt.getJobCount(),
                   receipt.getShiftCount(),
-                  receipt.getPriceZoneCount(),
+                  receipt.getIsochroneTariffCount(),
                   replayed,
                   receipt.getResponseUpdatedAt());
             });
@@ -108,11 +109,15 @@ class WarehouseCapacitySnapshotServiceTest {
 
     assertThat(created.replayed()).isFalse();
     assertThat(snapshot.getJobs()).extracting(job -> job.getDeliveryDate()).isSorted();
-    assertThat(snapshot.getIsochronePrice60Minutes()).isEqualTo(10_000);
-    assertThat(snapshot.getIsochronePrice120Minutes()).isEqualTo(15_000);
-    assertThat(snapshot.getIsochronePrice180Minutes()).isEqualTo(20_000);
-    assertThat(snapshot.getIsochronePrice240Minutes()).isEqualTo(25_000);
-    assertThat(snapshot.getRestrictionZones()).isEmpty();
+    assertThat(snapshot.getIsochroneTariffs())
+        .extracting(
+            WarehouseCapacityIsochroneTariff::getTravelMinutes,
+            WarehouseCapacityIsochroneTariff::getPriceRubles)
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(60, 10_000L),
+            org.assertj.core.groups.Tuple.tuple(120, 15_000L),
+            org.assertj.core.groups.Tuple.tuple(180, 20_000L),
+            org.assertj.core.groups.Tuple.tuple(240, 25_000L));
 
     when(receipts.findById(COMMAND)).thenReturn(Optional.of(receiptCaptor.getValue()));
     PlanningCapacitySnapshotResponse replayed = service.replace(WAREHOUSE, COMMAND, request);
@@ -133,10 +138,12 @@ class WarehouseCapacitySnapshotServiceTest {
     CustomerDeliveryCapacityFence capacityFence = mock(CustomerDeliveryCapacityFence.class);
     WarehouseCapacitySnapshotService service =
         new WarehouseCapacitySnapshotService(
-            repository, receipts, mapper, locks, capacityFence, CLOCK, new ObjectMapper());
+            repository, receipts, mapper, locks, capacityFence, CLOCK);
     ReplacePlanningCapacitySnapshotRequest original = request("a".repeat(64), 1);
-    List<PlanningCapacityJobRequest> sorted = original.jobs().stream().sorted(
-        java.util.Comparator.comparing(PlanningCapacityJobRequest::deliveryDate)).toList();
+    List<PlanningCapacityJobRequest> sorted =
+        original.jobs().stream()
+            .sorted(java.util.Comparator.comparing(PlanningCapacityJobRequest::deliveryDate))
+            .toList();
     WarehouseCapacitySnapshot snapshot =
         WarehouseCapacitySnapshot.create(
             WAREHOUSE,
@@ -144,14 +151,14 @@ class WarehouseCapacitySnapshotServiceTest {
             original.sourceRevision(),
             sorted.stream().map(WarehouseCapacitySnapshotServiceTest::facts).toList(),
             List.of(),
-            List.of(),
+            tariffFacts(),
             java.time.OffsetDateTime.now(CLOCK));
     WarehouseCapacityCommandReceipt receipt =
         WarehouseCapacityCommandReceipt.applied(
             COMMAND,
             snapshot,
             WarehouseCapacityChecksum.sha256(
-                WAREHOUSE, original, sorted, List.of(), List.of()),
+                WAREHOUSE, original, sorted, List.of(), original.isochroneTariffs()),
             java.time.OffsetDateTime.now(CLOCK));
     when(receipts.findById(COMMAND)).thenReturn(Optional.of(receipt));
 
@@ -174,7 +181,7 @@ class WarehouseCapacitySnapshotServiceTest {
     CustomerDeliveryCapacityFence capacityFence = mock(CustomerDeliveryCapacityFence.class);
     WarehouseCapacitySnapshotService service =
         new WarehouseCapacitySnapshotService(
-            repository, receipts, mapper, locks, capacityFence, CLOCK, new ObjectMapper());
+            repository, receipts, mapper, locks, capacityFence, CLOCK);
     ReplacePlanningCapacitySnapshotRequest activeRequest =
         request(2, "b".repeat(64), 1);
     WarehouseCapacitySnapshot active =
@@ -186,7 +193,7 @@ class WarehouseCapacitySnapshotServiceTest {
                 .map(WarehouseCapacitySnapshotServiceTest::facts)
                 .toList(),
             List.of(),
-            List.of(),
+            tariffFacts(),
             java.time.OffsetDateTime.now(CLOCK));
     when(receipts.findById(COMMAND)).thenReturn(Optional.empty());
     when(receipts
@@ -215,7 +222,7 @@ class WarehouseCapacitySnapshotServiceTest {
     CustomerDeliveryCapacityFence capacityFence = mock(CustomerDeliveryCapacityFence.class);
     WarehouseCapacitySnapshotService service =
         new WarehouseCapacitySnapshotService(
-            repository, receipts, mapper, locks, capacityFence, CLOCK, new ObjectMapper());
+            repository, receipts, mapper, locks, capacityFence, CLOCK);
     ReplacePlanningCapacitySnapshotRequest activeRequest = request(2, "b".repeat(64), 1);
     WarehouseCapacitySnapshot active =
         WarehouseCapacitySnapshot.create(
@@ -226,7 +233,7 @@ class WarehouseCapacitySnapshotServiceTest {
                 .map(WarehouseCapacitySnapshotServiceTest::facts)
                 .toList(),
             List.of(),
-            List.of(),
+            tariffFacts(),
             java.time.OffsetDateTime.now(CLOCK));
     ReplacePlanningCapacitySnapshotRequest returning = request(3, "a".repeat(64), 1);
     when(receipts.findById(COMMAND)).thenReturn(Optional.empty());
@@ -243,6 +250,29 @@ class WarehouseCapacitySnapshotServiceTest {
     assertThat(active.getSourceGeneration()).isEqualTo(3);
     assertThat(active.getSourceRevision()).isEqualTo("a".repeat(64));
     verify(repository).saveAndFlush(active);
+  }
+
+  @Test
+  void rejectsMissingOrNonContiguousIsochroneTariffsAtTheTransportBoundary() {
+    assertThatThrownBy(
+            () ->
+                new ReplacePlanningCapacitySnapshotRequest(
+                    1, "a".repeat(64), List.of(), List.of(), null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("requires isochrone tariffs");
+
+    assertThatThrownBy(
+            () ->
+                new ReplacePlanningCapacitySnapshotRequest(
+                    1,
+                    "a".repeat(64),
+                    List.of(),
+                    List.of(),
+                    List.of(
+                        new PlanningCapacityIsochroneTariff(60, 10_000),
+                        new PlanningCapacityIsochroneTariff(180, 20_000))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("contiguous hourly tiers");
   }
 
   private static ReplacePlanningCapacitySnapshotRequest request(String revision, int jobs) {
@@ -270,7 +300,24 @@ class WarehouseCapacitySnapshotServiceTest {
                         true))
             .toList();
     return new ReplacePlanningCapacitySnapshotRequest(
-        sourceGeneration, revision, values, List.of(), List.of());
+        sourceGeneration, revision, values, List.of(), tariffs());
+  }
+
+  private static List<PlanningCapacityIsochroneTariff> tariffs() {
+    return List.of(
+        new PlanningCapacityIsochroneTariff(60, 10_000),
+        new PlanningCapacityIsochroneTariff(120, 15_000),
+        new PlanningCapacityIsochroneTariff(180, 20_000),
+        new PlanningCapacityIsochroneTariff(240, 25_000));
+  }
+
+  private static List<WarehouseCapacityIsochroneTariff.Facts> tariffFacts() {
+    return tariffs().stream()
+        .map(
+            tariff ->
+                new WarehouseCapacityIsochroneTariff.Facts(
+                    tariff.travelMinutes(), tariff.priceRubles()))
+        .toList();
   }
 
   private static WarehouseCapacityJob.Facts facts(PlanningCapacityJobRequest request) {

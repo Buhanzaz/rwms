@@ -321,15 +321,13 @@ export function SlotAvailabilityPanel({
         <div className="slot-planner__point"><MapPin size={15} />{point ? `Точка: ${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)}` : 'Нажмите на карту, чтобы поставить точку клиента'}</div>
 
         <section className="slot-price" aria-label="Стоимость доставки">
-          <small>Стоимость доставки · изохрона или особая цена</small>
+          <small>Стоимость доставки · изохрона склада</small>
           {response?.delivery_price_rubles !== undefined
-            ? <strong>{response.delivery_price_rubles.toLocaleString('ru-RU')} ₽{response.price_zone_name ? <span> · {response.price_zone_name}</span> : response.price_isochrone_minutes ? <span> · до {response.price_isochrone_minutes / 60} ч</span> : null}</strong>
+            ? <strong>{response.delivery_price_rubles.toLocaleString('ru-RU')} ₽{response.price_isochrone_minutes ? <span> · до {response.price_isochrone_minutes / 60} ч</span> : null}</strong>
             : <strong>Время и стоимость подтвердит логист</strong>}
-          <p>{response?.price_zone_name
-            ? 'Применена особая ценовая зона.'
-            : response?.price_isochrone_minutes
+          <p>{response?.price_isochrone_minutes
               ? `Цена рассчитана по времени пути от склада: до ${response.price_isochrone_minutes / 60} ч.`
-              : 'Гарантированный маршрут с подтверждённым ресурсом пока не найден.'}{response?.trailer_access_allowed === false ? ' Для этого адреса проезд с прицепом запрещён.' : ''}</p>
+              : 'Гарантированный маршрут с подтверждённым ресурсом пока не найден.'}{response?.trailer_access_allowed === false ? ' Для этого адреса проезд с прицепом не подтверждён.' : ''}</p>
         </section>
 
         {status === 'loading' ? <div className="slot-planner__status"><Spinner label="Идёт расчёт свободных слотов" /></div> : null}

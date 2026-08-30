@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.rwms import RwmsPlanningClient
-from app.models import PlanningDayClosure, ZoneKind
+from app.models import PlanningDayClosure, WarehouseIsochroneTariff
 from app.schemas.domain import RwmsCapacitySnapshotCommand, RwmsCapacitySnapshotResult
 from app.services.capacity_projection import build_capacity_projection, publish_warehouse_capacity
 from app.services.workload_generator import GENERATOR_SOURCE_SYSTEM
@@ -18,7 +18,6 @@ from tests.factories import (
     make_shift,
     make_vehicle,
     make_warehouse,
-    make_zone,
 )
 
 pytestmark = pytest.mark.integration
@@ -51,7 +50,6 @@ async def test_projection_extends_shift_capacity_only_for_enabled_soft_overtime(
         "allow_soft_overtime": allow_soft_overtime,
         "soft_overtime_limit_minutes": limit_minutes,
     }
-    await make_zone(db_session, warehouse)
     driver = await make_driver(db_session, warehouse)
     vehicle = await make_vehicle(db_session, warehouse)
     await make_shift(
@@ -75,48 +73,18 @@ async def test_projection_extends_shift_capacity_only_for_enabled_soft_overtime(
 async def test_projection_expands_monthly_shifts_and_carries_mandatory_jobs(
     db_session: AsyncSession,
 ) -> None:
-    """Capacity contains generated jobs, open daily shifts, and only owner zones."""
+    """Capacity contains generated jobs, open daily shifts, and ordered tariffs."""
 
     start = date(2026, 8, 29)
     warehouse = await make_warehouse(db_session, default_planning_date=start)
     warehouse.capacity_generation = 7
-    warehouse.isochrone_price_60_minutes = 11_000
-    warehouse.isochrone_price_120_minutes = 16_000
-    warehouse.isochrone_price_180_minutes = 21_000
-    warehouse.isochrone_price_240_minutes = 26_000
-    first_zone = await make_zone(db_session, warehouse, name="Green", color="#22C55E")
-    second_zone = await make_zone(
-        db_session,
-        warehouse,
-        name="Purple",
-        color="#A855F7",
-        west=30.25,
-        south=59.85,
-        east=30.4,
-        north=59.98,
-    )
-    other_warehouse = await make_warehouse(db_session, name="Other warehouse")
-    other_zone = await make_zone(db_session, other_warehouse, name="Foreign zone")
-    forbidden = await make_zone(
-        db_session,
-        warehouse,
-        name="Forbidden",
-        kind=ZoneKind.FORBIDDEN,
-        west=10.0,
-        south=10.0,
-        east=11.0,
-        north=11.0,
-    )
-    no_trailer = await make_zone(
-        db_session,
-        warehouse,
-        name="No trailer",
-        kind=ZoneKind.NO_TRAILER,
-        west=12.0,
-        south=12.0,
-        east=13.0,
-        north=13.0,
-    )
+    warehouse.isochrone_tariffs = [
+        WarehouseIsochroneTariff(travel_minutes=60, price_rubles=11_000),
+        WarehouseIsochroneTariff(travel_minutes=120, price_rubles=16_000),
+        WarehouseIsochroneTariff(travel_minutes=180, price_rubles=21_000),
+        WarehouseIsochroneTariff(travel_minutes=240, price_rubles=26_000),
+        WarehouseIsochroneTariff(travel_minutes=300, price_rubles=31_000),
+    ]
     request = await make_request(
         db_session,
         warehouse,
@@ -156,37 +124,24 @@ async def test_projection_expands_monthly_shifts_and_carries_mandatory_jobs(
         date(2026, 8, 31),
     ]
     assert all(item.source_shift_id != shift.id for item in projection.command.shifts)
-    assert {zone.source_zone_id for zone in projection.command.price_zones} == {
-        first_zone.id,
-        second_zone.id,
-    }
-    assert other_zone.id not in {zone.source_zone_id for zone in projection.command.price_zones}
-    assert {
-        (zone.source_zone_id, zone.kind) for zone in projection.command.restriction_zones
-    } == {
-        (forbidden.id, "FORBIDDEN"),
-        (no_trailer.id, "NO_TRAILER"),
-    }
-    assert projection.command.isochrone_price_60_minutes == 11_000
-    assert projection.command.isochrone_price_120_minutes == 16_000
-    assert projection.command.isochrone_price_180_minutes == 21_000
-    assert projection.command.isochrone_price_240_minutes == 26_000
+    assert [
+        (tariff.travel_minutes, tariff.price_rubles)
+        for tariff in projection.command.isochrone_tariffs
+    ] == [
+        (60, 11_000),
+        (120, 16_000),
+        (180, 21_000),
+        (240, 26_000),
+        (300, 31_000),
+    ]
     payload = projection.command.model_dump(mode="json", by_alias=True)
     assert "warehouseId" not in payload
-    assert all(
-        set(zone) == {
-            "sourceZoneId",
-            "sourceZoneVersion",
-            "deliveryPriceRubles",
-            "pickupPriceRubles",
-            "geometry",
-        }
-        for zone in payload["priceZones"]
-    )
-    assert all(
-        set(zone) == {"sourceZoneId", "sourceZoneVersion", "kind", "geometry"}
-        for zone in payload["restrictionZones"]
-    )
+    assert payload["isochroneTariffs"][-1] == {
+        "travelMinutes": 300,
+        "priceRubles": 31_000,
+    }
+    assert "priceZones" not in payload
+    assert "restrictionZones" not in payload
 
 
 @pytest.mark.asyncio
@@ -197,17 +152,6 @@ async def test_projection_revision_is_deterministic_and_changes_with_obligation(
 
     warehouse = await make_warehouse(db_session)
     warehouse.capacity_generation = 3
-    await make_zone(db_session, warehouse)
-    restriction = await make_zone(
-        db_session,
-        warehouse,
-        name="Revision restriction",
-        kind=ZoneKind.FORBIDDEN,
-        west=10.0,
-        south=10.0,
-        east=11.0,
-        north=11.0,
-    )
     request = await make_request(db_session, warehouse, mandatory=False)
     request.source_system = GENERATOR_SOURCE_SYSTEM
     request.external_id = uuid4()
@@ -225,37 +169,28 @@ async def test_projection_revision_is_deterministic_and_changes_with_obligation(
     assert changed.command.source_revision != first.command.source_revision
     assert changed.idempotency_key != first.idempotency_key
 
-    warehouse.isochrone_price_60_minutes += 1
+    warehouse.isochrone_tariffs[0].price_rubles += 1
     await db_session.flush()
     changed_tariff = await build_capacity_projection(db_session, warehouse.id)
     assert changed_tariff.command.source_revision != changed.command.source_revision
     assert changed_tariff.idempotency_key != changed.idempotency_key
 
-    restriction.version += 1
-    await db_session.flush()
-    changed_restriction = await build_capacity_projection(db_session, warehouse.id)
-    assert changed_restriction.command.source_revision != changed_tariff.command.source_revision
-    assert changed_restriction.idempotency_key != changed_tariff.idempotency_key
+def test_capacity_command_requires_contiguous_isochrone_tariffs() -> None:
+    """The capacity boundary rejects omitted or gapped tariff tiers."""
 
-
-def test_capacity_command_defaults_omitted_isochrone_policy_fields() -> None:
-    """An older publisher receives canonical prices and no fabricated restrictions."""
-
-    command = RwmsCapacitySnapshotCommand.model_validate(
-        {
-            "sourceGeneration": 1,
-            "sourceRevision": "a" * 64,
-            "jobs": [],
-            "shifts": [],
-            "priceZones": [],
-        }
-    )
-
-    assert command.isochrone_price_60_minutes == 10_000
-    assert command.isochrone_price_120_minutes == 15_000
-    assert command.isochrone_price_180_minutes == 20_000
-    assert command.isochrone_price_240_minutes == 25_000
-    assert command.restriction_zones == []
+    with pytest.raises(ValueError, match="isochroneTariffs"):
+        RwmsCapacitySnapshotCommand.model_validate(
+            {
+                "sourceGeneration": 1,
+                "sourceRevision": "a" * 64,
+                "jobs": [],
+                "shifts": [],
+                "isochroneTariffs": [
+                    {"travelMinutes": 60, "priceRubles": 1},
+                    {"travelMinutes": 180, "priceRubles": 2},
+                ],
+            }
+        )
 
 
 @pytest.mark.asyncio
@@ -266,7 +201,6 @@ async def test_publication_uses_external_warehouse_as_path_authority(
 
     warehouse = await make_warehouse(db_session)
     warehouse.capacity_generation = 1
-    await make_zone(db_session, warehouse)
     await db_session.flush()
     projection = await build_capacity_projection(db_session, warehouse.id)
     result = RwmsCapacitySnapshotResult(
@@ -276,8 +210,7 @@ async def test_publication_uses_external_warehouse_as_path_authority(
         sourceRevision=projection.command.source_revision,
         jobCount=0,
         shiftCount=0,
-        priceZoneCount=1,
-        restrictionZoneCount=0,
+        isochroneTariffCount=4,
         replayed=False,
         updatedAt=datetime(2026, 8, 30, tzinfo=UTC),
     )

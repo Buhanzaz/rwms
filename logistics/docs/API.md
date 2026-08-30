@@ -32,17 +32,12 @@ returns `warehouse_id`, canonical `name`, `city`, nullable `address`,
   "turnaround_minutes": 15,
   "working_day_start": "08:00:00",
   "working_day_end": "20:00:00",
-  "initial_zone": {
-    "name": "North",
-    "color": "#3366FF",
-    "delivery_price": 20000,
-    "pickup_price": 15000,
-    "locked": false,
-    "geometry": {
-      "type": "Polygon",
-      "coordinates": [[[30.0, 59.0], [31.0, 59.0], [31.0, 60.0], [30.0, 59.0]]]
-    }
-  }
+  "isochrone_tariffs": [
+    {"travel_minutes": 60, "price_rubles": 10000},
+    {"travel_minutes": 120, "price_rubles": 15000},
+    {"travel_minutes": 180, "price_rubles": 20000},
+    {"travel_minutes": 240, "price_rubles": 25000}
+  ]
 }
 ```
 
@@ -66,7 +61,7 @@ the next automatic directory reconciliation replaces it with RWMS-owned facts.
 `GET /api/warehouses/{warehouse_id}/workspace` returns:
 
 ```text
-warehouse, warehouses, zones, drivers, vehicles, trailers, shifts, requests
+warehouse, warehouses, drivers, vehicles, trailers, shifts, requests
 ```
 
 With RWMS synchronization enabled, the default `refresh_rwms=true` performs
@@ -85,26 +80,14 @@ Each workspace vehicle embeds `load_profiles` as
 only trailer list. There are no separate list or mutation endpoints for axle
 profiles and no separate trailer list endpoint.
 
-## Warehouse tariff zones
+## Warehouse isochrone tariffs
 
-`GET/POST /api/warehouses/{warehouse_id}/zones` and
-`GET/PATCH/DELETE /api/warehouses/{warehouse_id}/zones/{zone_id}` operate only
-on that warehouse's catalog. A zone contains its non-null `warehouse_id`, UUID,
-name, validated six-digit hex `color`, Polygon/MultiPolygon geometry, version,
-integer-ruble `delivery_price`/`pickup_price`, lock state and timestamps. A zone
-UUID owned by another warehouse is rejected.
-
-Classification is server-owned and constrained to the request's warehouse.
-When its polygons overlap, PostGIS selects the smallest covering area and then
-UUID. Request create/update never accepts a client-selected zone. Price
-classification does not constrain routing, capacity or plan score. `POST
-/api/warehouses/{warehouse_id}/zones/{zone_id}/lock` changes editability.
-`POST /api/warehouses/{warehouse_id}/zones/{zone_id}/cutouts` atomically subtracts one strictly contained
-polygon from an unlocked source and creates the independently priced inner
-zone. Geometry changes increment version; price/color/name changes do not. A
-geometry mutation or deletion is rejected if the warehouse address would no
-longer be covered by at least one owned zone.
-See [`classification.py`](../backend/app/geo/classification.py) and
+Warehouse create/update accepts `isochrone_tariffs`, an ordered list with one
+to twelve entries. `travel_minutes` starts at 60 and advances in contiguous
+60-minute steps; `price_rubles` is a non-negative integer. The first tier that
+covers exact one-way Valhalla truck time supplies the price. The last tier is
+also the hard order-acceptance boundary. The active API has no zone CRUD and no
+client-selected zone identity. See
 [`catalog.py`](../backend/app/services/catalog.py).
 
 ## Warehouse resources and requests
@@ -142,8 +125,8 @@ Request and task response schemas are defined in
 
 `POST /api/warehouses/{warehouse_id}/generate-workload` supports a bounded
 1–31-day horizon, seeded delivery/pickup counts, accepted alternative dates and
-one complete cargo profile. Points are sampled inside the selected warehouse's zones and snapped
-to the configured road provider. The command replaces only generator-owned
+one complete cargo profile. Points are sampled inside the selected warehouse's
+farthest isochrone and must snap to the configured truck-road provider. The command replaces only generator-owned
 requests in its horizon, deletes affected saved plans first and rolls back the
 whole transaction on failure. `DELETE
 /api/warehouses/{warehouse_id}/generated-workload?date=...` removes one exact
@@ -198,9 +181,9 @@ failed remote response. Shared drivers publish explicitly as
 coordinates, cabin count, site capacity and optional service duration. It
 returns exactly the three standard windows `09:00–12:00`, `12:00–15:00` and
 `15:00–18:00`. Each result contains availability, candidate count, structured
-reasons/explanation and the best exact route insertion when available. Tariff
-classification is exposed separately as `delivery_price_rubles`,
-`price_zone_id` and `price_zone_name`.
+reasons/explanation and the best exact route insertion when available. The
+calculated tariff is exposed as `delivery_price_rubles` and
+`price_isochrone_minutes`.
 
 Availability performs complete multi-driver/multi-trip day resimulation,
 including delivery-first ordering, return pickups, site/trailer capacity,
@@ -266,7 +249,7 @@ The private directory contract is
 `GET .../planning/drivers?warehouseId=... -> [{workerId,displayName}]`.
 Capacity uses `PUT .../capacity-snapshots/{externalWarehouseId}`; the path UUID
 is authoritative. Its request contains generation/revision, jobs, shifts and
-tariff zones. A tariff-zone item contains only `sourceZoneId`,
-`sourceZoneVersion`, delivery/pickup ruble prices and geometry. The browser
+the complete ordered `isochroneTariffs` list. A tariff item contains only
+`travelMinutes` and `priceRubles`; the final item is the delivery boundary. The browser
 never receives OAuth credentials. See [`rwms.py`](../backend/app/integrations/rwms.py)
 and [`capacity_projection.py`](../backend/app/services/capacity_projection.py).

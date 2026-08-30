@@ -23,7 +23,6 @@ from tests.factories import (
     make_shift,
     make_vehicle,
     make_warehouse,
-    make_zone,
 )
 
 pytestmark = pytest.mark.integration
@@ -40,7 +39,6 @@ async def _unassigned_plan(
 
     planning_date = date(2026, 8, 30)
     warehouse = await make_warehouse(session, default_planning_date=planning_date)
-    await make_zone(session, warehouse)
     request = await make_request(
         session,
         warehouse,
@@ -82,7 +80,6 @@ async def _mixed_generated_plan(
 
     planning_date = date(2026, 8, 30)
     warehouse = await make_warehouse(session, default_planning_date=planning_date)
-    await make_zone(session, warehouse)
     first_delivery = await make_request(
         session,
         warehouse,
@@ -146,7 +143,6 @@ async def _two_cycle_generated_plan(
 
     planning_date = date(2026, 8, 30)
     warehouse = await make_warehouse(session, default_planning_date=planning_date)
-    await make_zone(session, warehouse)
     requests = tuple(
         [
             await make_request(

@@ -545,8 +545,8 @@ async def test_open_day_adds_pickup_only_after_new_delivery_fills_outbound_load(
 
 
 @pytest.mark.asyncio
-async def test_tariff_zone_changes_cannot_enter_pure_feasibility_input() -> None:
-    """The same road/day snapshot is invariant because the planner has no zone argument."""
+async def test_tariff_changes_cannot_enter_pure_feasibility_input() -> None:
+    """The same road/day snapshot is invariant because pricing is outside feasibility."""
 
     day = DayPlan(PLANNING_DATE, (driver(),))
     first = await calculate(FakeTruckTravelTimeProvider(), day)

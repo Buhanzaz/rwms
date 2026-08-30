@@ -3,7 +3,8 @@
 set -o errexit -o nounset -o pipefail
 
 readonly RWMS_VALHALLA_CONFIG_FILE="/custom_files/valhalla.json"
-readonly RWMS_MAX_TIME_CONTOUR_MINUTES=240
+readonly RWMS_MAX_TIME_CONTOUR_MINUTES=720
+readonly RWMS_MAX_TIME_CONTOURS=12
 readonly RWMS_SOURCE_MANIFEST="/osm-source/rwms-pbf-manifest.sha256"
 readonly RWMS_APPLIED_SOURCE_MANIFEST="/custom_files/rwms-pbf-manifest.sha256"
 
@@ -30,14 +31,16 @@ fi
 
 jq \
   --argjson maximum_minutes "${RWMS_MAX_TIME_CONTOUR_MINUTES}" \
-  '.service_limits.isochrone.max_contours = 4
+  --argjson maximum_contours "${RWMS_MAX_TIME_CONTOURS}" \
+  '.service_limits.isochrone.max_contours = $maximum_contours
    | .service_limits.isochrone.max_time_contour = $maximum_minutes' \
   "${RWMS_VALHALLA_CONFIG_FILE}" \
   | sponge "${RWMS_VALHALLA_CONFIG_FILE}"
 
 jq --exit-status \
   --argjson maximum_minutes "${RWMS_MAX_TIME_CONTOUR_MINUTES}" \
-  '.service_limits.isochrone.max_contours == 4
+  --argjson maximum_contours "${RWMS_MAX_TIME_CONTOURS}" \
+  '.service_limits.isochrone.max_contours == $maximum_contours
    and .service_limits.isochrone.max_time_contour == $maximum_minutes' \
   "${RWMS_VALHALLA_CONFIG_FILE}" >/dev/null
 

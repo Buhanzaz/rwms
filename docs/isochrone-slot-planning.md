@@ -60,11 +60,11 @@ The following are hard constraints:
   end;
 - every road leg has an exact `costing=truck` result.
 
-Isochrone or special-price containment, route group, straight-line distance,
-or an ordinary geometric circle cannot prove that a slot is available.
-Exceptional forbidden-delivery and forbidden-trailer polygons can reject the
-affected candidate, but every remaining candidate still needs an exact road
-and day-plan calculation.
+Isochrone containment, route group, straight-line distance, or an ordinary
+geometric circle cannot prove that a slot is available. Warehouses no longer
+publish delivery-zone polygons: the farthest configured hourly isochrone is
+the hard acceptance boundary, while every candidate inside it still needs an
+exact road and day-plan calculation.
 
 ## Day, trip, stop, and load model
 
@@ -78,8 +78,8 @@ infeasibility reason.
 The simulator's immutable planning types are in
 [`models.py`](../logistics/backend/app/slot_planning/models.py). The live service
 receives dated deliveries, pickups, shifts, vehicle capacity, trailer state,
-truck dimensions, isochrone tariffs, and exceptional policy polygons through
-the scenario capacity snapshot;
+truck dimensions, and isochrone tariffs through the scenario capacity
+snapshot;
 Flyway `V64` stores the additive fields in the owning logistics database.
 
 Orders may contain more cabins than one vehicle trip. They are split into
@@ -135,8 +135,8 @@ mixed. The simulator adapter is
 and the live customer matrix adapter is
 [`ValhallaCustomerTravelTimeClient.java`](../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/routing/ValhallaCustomerTravelTimeClient.java).
 
-The global map has separate default-off 60-, 120-, 180-, and 240-minute GeoJSON
-layers for visible scenario warehouses and for one explicitly selected request
+The global map has separate default-off GeoJSON layers for every configured
+hourly tariff boundary of visible scenario warehouses and for one explicitly selected request
 or slot-check point. A disabled layer makes no request. These polygons are
 loaded through the independent read-only contour endpoint, rendered below
 operational routes and never included in a slot response.
@@ -145,7 +145,7 @@ The slot route-before and route-after layers contain exact truck-road geometry
 for the winning candidate's selected trip only. Pickup point features are
 labelled `SELECTED`, `DEFERRED`, or `CANDIDATE` according to the winning exact
 schedule. The response has no isochrone or insertion-lens fields, eliminating
-provider calls that do not affect availability, price or zone classification.
+provider calls that do not affect availability or price.
 
 ## Availability, hold, and confirmation
 
@@ -168,26 +168,22 @@ CustomerApp uses the canonical public
 the corresponding capacity calculation and final transaction fence; the app
 does not derive availability from a local calendar or map polygon.
 
-## Isochrone prices and exceptional zones
+## Isochrone prices and delivery boundary
 
-The ordinary delivery price comes from the smallest configured 60-, 120-,
-180-, or 240-minute warehouse road isochrone that contains the destination.
-The default bands are 10,000, 15,000, 20,000, and 25,000 rubles; each warehouse
-capacity snapshot carries its own values, so neither client hardcodes them.
-The selected band and price are retained in the offer and hold.
+The ordinary delivery price comes from the first configured hourly warehouse
+tariff whose minute boundary covers the exact one-way truck travel time. The
+list starts at 60 minutes, advances in contiguous 60-minute steps and contains
+one to twelve entries. The defaults are 10,000, 15,000, 20,000, and 25,000
+rubles for the first four hours; each warehouse capacity snapshot carries its
+own full list, so neither client hardcodes it. The selected band and price are
+retained in the offer and hold. The final configured boundary is also the hard
+limit beyond which orders are not accepted.
 
-Polygons are exceptional policies only: delivery forbidden, trailer forbidden,
-or special price. A forbidden polygon makes the matching candidate infeasible;
-a trailer-forbidden polygon removes only trailer configurations; a special-price
-polygon overrides the isochrone price without making an otherwise impossible
-road route feasible. Overlaps are resolved deterministically by policy,
-priority, and geometry specificity. Editing an isochrone tariff or exceptional
-zone changes the capacity-source revision, invalidates stale holds, and forces
-confirmation to repeat the authoritative checks.
-
-Neither an isochrone nor a polygon creates a road or opens a slot. Exact truck
+Editing the tariff list changes the capacity-source revision, invalidates stale
+holds, and forces confirmation to repeat the authoritative checks. An
+isochrone never creates a road or opens a slot. Exact truck
 routing, capacity, shifts, reservations, and the full remaining day continue
-to decide availability after the policy checks.
+to decide availability within the configured delivery boundary.
 
 ## Warehouse configuration
 
@@ -270,4 +266,5 @@ The mandatory scenarios cover insertion before/after/between deliveries,
 waiting, capacity exhaustion, multiple trips and drivers, one versus two
 pickups, next-trip protection, locked assignments, no truck route, solo versus
 trailer cache separation, arbitrary cabin counts, TTL, idempotent confirmation,
-version conflict, invalid coordinates, timezone handling, and price-only zones.
+version conflict, invalid coordinates, timezone handling, dynamic tariff tiers,
+and rejection beyond the farthest configured isochrone.

@@ -4,15 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityIsochroneTariff;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityIsochroneTariffRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityJobRepository;
-import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityPriceZoneRepository;
-import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityRestrictionZoneRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityShiftRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacitySnapshotRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.service.CustomerDeliveryCapacityFence;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacitySnapshot;
-import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityRestrictionKind;
-import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityRestrictionZone;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlot;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotKind;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotState;
@@ -62,8 +60,8 @@ class CustomerDeliverySlotHoldStoreTest {
             1,
             1,
             2,
-            null,
-            null,
+            10_000L,
+            60,
             false,
             false,
             4.0,
@@ -79,10 +77,8 @@ class CustomerDeliverySlotHoldStoreTest {
     CustomerDeliverySlotRepository slots = mock(CustomerDeliverySlotRepository.class);
     WarehouseCapacityJobRepository generated = mock(WarehouseCapacityJobRepository.class);
     WarehouseCapacityShiftRepository shifts = mock(WarehouseCapacityShiftRepository.class);
-    WarehouseCapacityPriceZoneRepository priceZones =
-        mock(WarehouseCapacityPriceZoneRepository.class);
-    WarehouseCapacityRestrictionZoneRepository restrictionZones =
-        mock(WarehouseCapacityRestrictionZoneRepository.class);
+    WarehouseCapacityIsochroneTariffRepository isochroneTariffs =
+        mock(WarehouseCapacityIsochroneTariffRepository.class);
     WarehouseCapacitySnapshotRepository snapshots =
         mock(WarehouseCapacitySnapshotRepository.class);
     DriverLogisticsTaskRepository drivers = mock(DriverLogisticsTaskRepository.class);
@@ -93,8 +89,7 @@ class CustomerDeliverySlotHoldStoreTest {
             slots,
             generated,
             shifts,
-            priceZones,
-            restrictionZones,
+            isochroneTariffs,
             snapshots,
             drivers,
             capacityFence,
@@ -111,8 +106,6 @@ class CustomerDeliverySlotHoldStoreTest {
         .thenReturn(List.of());
     when(generated.findCapacityWorkload(warehouseId, date)).thenReturn(List.of());
     when(shifts.findCapacityShifts(warehouseId, date)).thenReturn(List.of());
-    when(priceZones.findTariffZones(warehouseId)).thenReturn(List.of());
-    when(restrictionZones.findRestrictionZones(warehouseId)).thenReturn(List.of());
     WarehouseCapacitySnapshot snapshot =
         WarehouseCapacitySnapshot.create(
             warehouseId,
@@ -120,15 +113,22 @@ class CustomerDeliverySlotHoldStoreTest {
             "a".repeat(64),
             List.of(),
             List.of(),
-            List.of(),
+            tariffFacts(10_000),
             OffsetDateTime.parse("2026-08-27T07:00:00Z"));
+    when(isochroneTariffs.findTariffs(warehouseId))
+        .thenReturn(snapshot.getIsochroneTariffs());
     when(snapshots.findByWarehouseId(warehouseId)).thenReturn(Optional.of(snapshot));
     when(slots.findHeldForUpdate(inquiryId, CustomerDeliverySlotState.HELD))
         .thenReturn(List.of());
     when(slots.saveAndFlush(offered)).thenReturn(offered);
     String fingerprint =
         CustomerCapacityWorkloadFingerprint.sha256(
-            List.of(), List.of(), List.of(), snapshot, List.of(), List.of(), 0);
+            List.of(),
+            List.of(),
+            List.of(),
+            snapshot,
+            snapshot.getIsochroneTariffs(),
+            0);
 
     CustomerDeliverySlotHoldStore.HeldSlot held =
         store.hold(
@@ -157,7 +157,7 @@ class CustomerDeliverySlotHoldStoreTest {
   }
 
   @Test
-  void tariffAndRestrictionFactsParticipateInTheFinalWorkloadFence() {
+  void isochroneTariffFactsParticipateInTheFinalWorkloadFence() {
     UUID warehouseId = UUID.randomUUID();
     WarehouseCapacitySnapshot defaults =
         WarehouseCapacitySnapshot.create(
@@ -166,7 +166,7 @@ class CustomerDeliverySlotHoldStoreTest {
             "a".repeat(64),
             List.of(),
             List.of(),
-            List.of(),
+            tariffFacts(10_000),
             OffsetDateTime.parse("2026-08-27T07:00:00Z"));
     WarehouseCapacitySnapshot custom =
         WarehouseCapacitySnapshot.create(
@@ -175,31 +175,34 @@ class CustomerDeliverySlotHoldStoreTest {
             "a".repeat(64),
             List.of(),
             List.of(),
-            List.of(),
-            11_000,
-            16_000,
-            21_000,
-            26_000,
-            List.of(),
+            tariffFacts(11_000),
             OffsetDateTime.parse("2026-08-27T07:00:00Z"));
-    WarehouseCapacityRestrictionZone restriction = mock(WarehouseCapacityRestrictionZone.class);
-    when(restriction.getSourceZoneId()).thenReturn(UUID.randomUUID());
-    when(restriction.getSourceZoneVersion()).thenReturn(1L);
-    when(restriction.getKind()).thenReturn(WarehouseCapacityRestrictionKind.FORBIDDEN);
-    when(restriction.getGeometryJson())
-        .thenReturn("{\"type\":\"MultiPolygon\",\"coordinates\":[]}");
 
     String baseline =
         CustomerCapacityWorkloadFingerprint.sha256(
-            List.of(), List.of(), List.of(), defaults, List.of(), List.of(), 0);
+            List.of(),
+            List.of(),
+            List.of(),
+            defaults,
+            defaults.getIsochroneTariffs(),
+            0);
     String changedTariff =
         CustomerCapacityWorkloadFingerprint.sha256(
-            List.of(), List.of(), List.of(), custom, List.of(), List.of(), 0);
-    String changedRestriction =
-        CustomerCapacityWorkloadFingerprint.sha256(
-            List.of(), List.of(), List.of(), defaults, List.of(), List.of(restriction), 0);
+            List.of(),
+            List.of(),
+            List.of(),
+            custom,
+            custom.getIsochroneTariffs(),
+            0);
 
     assertThat(changedTariff).isNotEqualTo(baseline);
-    assertThat(changedRestriction).isNotEqualTo(baseline);
+  }
+
+  private static List<WarehouseCapacityIsochroneTariff.Facts> tariffFacts(long firstPrice) {
+    return List.of(
+        new WarehouseCapacityIsochroneTariff.Facts(60, firstPrice),
+        new WarehouseCapacityIsochroneTariff.Facts(120, 15_000),
+        new WarehouseCapacityIsochroneTariff.Facts(180, 20_000),
+        new WarehouseCapacityIsochroneTariff.Facts(240, 25_000));
   }
 }

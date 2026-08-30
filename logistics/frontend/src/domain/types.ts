@@ -1,4 +1,4 @@
-import type { Feature, LineString, MultiPolygon, Point, Polygon } from 'geojson';
+import type { Feature, LineString, Point } from 'geojson';
 
 export type UUID = string;
 export type IsoDate = string;
@@ -69,6 +69,12 @@ export interface PlanningSettings {
   trace_enabled?: boolean;
 }
 
+/** One inclusive hourly travel-time boundary and its delivery price. */
+export interface IsochroneTariff {
+  travel_minutes: number;
+  price_rubles: number;
+}
+
 /** One RWMS-bound warehouse that owns its operational planning workspace. */
 export interface Warehouse {
   id: UUID;
@@ -91,10 +97,7 @@ export interface Warehouse {
   turnaround_minutes: number;
   working_day_start: string;
   working_day_end: string;
-  isochrone_price_60_minutes: number;
-  isochrone_price_120_minutes: number;
-  isochrone_price_180_minutes: number;
-  isochrone_price_240_minutes: number;
+  isochrone_tariffs: IsochroneTariff[];
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
 }
@@ -113,26 +116,6 @@ export interface AvailableWarehouse {
   routing_ready: boolean;
   routing_unavailable_reason?: string | null;
   local_warehouse_id?: UUID | null;
-}
-
-/** Supported operational meaning of a warehouse-owned exceptional polygon. */
-export type ZoneKind = 'FORBIDDEN' | 'NO_TRAILER' | 'SPECIAL_PRICE';
-
-/** Access restriction or special-price polygon owned by one warehouse workspace. */
-export interface Zone {
-  id: UUID;
-  warehouse_id: UUID;
-  name: string;
-  kind: ZoneKind;
-  color: string;
-  delivery_price: number;
-  pickup_price: number;
-  geometry: Polygon | MultiPolygon;
-  version: number;
-  locked: boolean;
-  created_at: IsoDateTime;
-  updated_at: IsoDateTime;
-  stale_request_count?: number;
 }
 
 export interface Driver {
@@ -246,7 +229,6 @@ export interface RequestDateOption {
   window_start: string | null;
   window_end: string | null;
   is_hard: boolean;
-  travel_zone_hours?: number | null;
 }
 
 export interface LogisticsRequest {
@@ -268,8 +250,6 @@ export interface LogisticsRequest {
   priority: number;
   mandatory: boolean;
   status: RequestStatus;
-  zone_id: UUID | null;
-  zone_version: number | null;
   split_allowed: boolean;
   notes: string;
   created_at: IsoDateTime;
@@ -281,7 +261,6 @@ export interface LogisticsRequest {
   cargo_weight_kg?: number | null;
   date_options: RequestDateOption[];
   tasks?: PlanningTask[];
-  zone_status?: 'CURRENT' | 'STALE' | 'OUTSIDE_ZONES';
 }
 
 export interface PlanningTask {
@@ -293,8 +272,6 @@ export interface PlanningTask {
   type: RequestType;
   latitude: number;
   longitude: number;
-  zone_id: UUID | null;
-  zone_version: number | null;
   service_minutes: number;
   priority: number;
   mandatory: boolean;
@@ -362,7 +339,6 @@ export interface RouteStop {
   latitude: number;
   longitude: number;
   label?: string;
-  zone_id?: UUID | null;
   completed?: boolean;
   locked?: boolean;
 }
@@ -463,7 +439,6 @@ export type UnassignedReasonCode =
   | 'TIME_WINDOW_CONFLICT'
   | 'SHIFT_LIMIT_EXCEEDED'
   | 'DETOUR_TOO_LARGE'
-  | 'OUTSIDE_ZONES'
   | 'REQUEST_NOT_READY'
   | 'NO_ALLOWED_DATE'
   | 'DUPLICATE_ASSIGNMENT_CONFLICT'
@@ -563,11 +538,10 @@ export interface OptimizationRun {
   cancel_requested: boolean;
 }
 
-/** Selected warehouse resources and zones plus all warehouses shown on the common map. */
+/** Selected warehouse resources plus all warehouses shown on the common map. */
 export interface WarehouseWorkspace {
   warehouse: Warehouse;
   warehouses: Warehouse[];
-  zones: Zone[];
   drivers: Driver[];
   vehicles: Vehicle[];
   trailers?: Trailer[];
@@ -580,7 +554,6 @@ export interface WarehouseWorkspace {
 
 export type MapSelection =
   | { kind: 'warehouse'; id: UUID }
-  | { kind: 'zone'; id: UUID }
   | { kind: 'request'; id: UUID }
   | { kind: 'driver'; id: UUID }
   | { kind: 'vehicle'; id: UUID }

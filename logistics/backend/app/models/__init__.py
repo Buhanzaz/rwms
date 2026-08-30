@@ -26,8 +26,7 @@ from app.models.domain import (
     VehicleLoadProfile,
     VehicleLoadProfileType,
     Warehouse,
-    Zone,
-    ZoneKind,
+    WarehouseIsochroneTariff,
 )
 
 __all__ = [
@@ -56,6 +55,5 @@ __all__ = [
     "VehicleLoadProfile",
     "VehicleLoadProfileType",
     "Warehouse",
-    "Zone",
-    "ZoneKind",
+    "WarehouseIsochroneTariff",
 ]

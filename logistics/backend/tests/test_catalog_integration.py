@@ -9,16 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.errors import ApiError
 from app.models import RoutePlan, UnassignedTask
 from app.schemas.domain import (
-    LogisticsRequestCreate,
     LogisticsRequestUpdate,
-    RequestDateOptionInput,
     RequestPlanningDetailsInput,
     RwmsWarehouseIdentity,
     ShiftCreate,
     WarehouseCreate,
-    ZoneCreate,
-    ZoneCutoutRequest,
-    ZoneUpdate,
 )
 from app.schemas.geocoding import ResolvedAddress
 from app.services import catalog
@@ -28,173 +23,13 @@ from tests.factories import (
     make_shift,
     make_vehicle,
     make_warehouse,
-    make_zone,
 )
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.mark.asyncio
-async def test_warehouse_zone_classification_uses_smallest_covering_area(
-    db_session: AsyncSession,
-) -> None:
-    """Request classification stays in its warehouse and selects the most specific polygon."""
-
-    warehouse = await make_warehouse(db_session)
-    await make_zone(
-        db_session,
-        warehouse,
-        name="Broad",
-        west=29,
-        south=59,
-        east=32,
-        north=61,
-    )
-    specific = await make_zone(
-        db_session,
-        warehouse,
-        name="Specific",
-        color="#A855F7",
-        west=30.2,
-        south=59.8,
-        east=30.5,
-        north=60.0,
-    )
-    request = await catalog.create_request(
-        db_session,
-        warehouse.id,
-        LogisticsRequestCreate(
-            type="DELIVERY",
-            name="Five cabins",
-            latitude=59.9,
-            longitude=30.3,
-            quantity=5,
-            mandatory=True,
-            trailer_access_allowed=True,
-            date_options=[RequestDateOptionInput(date=date(2026, 8, 25))],
-        ),
-    )
-    assert request.zone_id == specific.id
-    assert request.zone_version == 1
-    assert request.mandatory is True
-    assert [task.quantity for task in request.tasks] == [2, 2, 1]
-    assert all(task.mandatory for task in request.tasks)
-
-    await catalog.update_zone(
-        db_session,
-        warehouse.id,
-        specific.id,
-        ZoneUpdate(
-            geometry={
-                "type": "Polygon",
-                "coordinates": [
-                    [[30.2, 59.8], [30.6, 59.8], [30.6, 60.1], [30.2, 60.1], [30.2, 59.8]]
-                ],
-            }
-        ),
-    )
-    assert await catalog.count_stale_requests(db_session, specific) == 1
-
-
-@pytest.mark.asyncio
-async def test_classification_ignores_a_more_specific_foreign_warehouse_zone(
-    db_session: AsyncSession,
-) -> None:
-    """An overlapping zone from another warehouse can never classify this request."""
-
-    warehouse = await make_warehouse(db_session, name="Owner")
-    other = await make_warehouse(db_session, name="Other")
-    owner_zone = await make_zone(db_session, warehouse, name="Owner broad")
-    foreign_zone = await make_zone(
-        db_session,
-        other,
-        name="Foreign specific",
-        west=30.2,
-        south=59.8,
-        east=30.5,
-        north=60.0,
-    )
-    request = await make_request(db_session, warehouse)
-
-    assert request.zone_id == owner_zone.id
-    assert request.zone_id != foreign_zone.id
-
-
-@pytest.mark.asyncio
-async def test_exceptional_zone_can_move_or_be_deleted_without_removing_delivery_coverage(
-    db_session: AsyncSession,
-) -> None:
-    """Isochrones cover delivery; exceptional polygons need not contain the depot."""
-
-    warehouse = await make_warehouse(db_session)
-    zone = await make_zone(db_session, warehouse)
-    warehouse_id = warehouse.id
-    zone_id = zone.id
-    outside = {
-        "type": "Polygon",
-        "coordinates": [[[36, 55], [38, 55], [38, 57], [36, 57], [36, 55]]],
-    }
-
-    moved = await catalog.update_zone(
-        db_session,
-        warehouse_id,
-        zone_id,
-        ZoneUpdate(geometry=outside),
-    )
-    assert moved.version == 2
-
-    await catalog.delete_zone(db_session, warehouse_id, zone_id)
-    with pytest.raises(ApiError) as missing:
-        await catalog.require_zone(db_session, warehouse_id, zone_id)
-    assert missing.value.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_cutout_inherits_owner_and_cross_owner_id_is_not_found(
-    db_session: AsyncSession,
-) -> None:
-    """Both cutout results retain one owner and nested IDs do not disclose foreign zones."""
-
-    warehouse = await make_warehouse(db_session, name="Owner")
-    other = await make_warehouse(db_session, name="Other")
-    source = await make_zone(db_session, warehouse)
-    foreign = await make_zone(db_session, other, name="Foreign")
-
-    with pytest.raises(ApiError) as hidden:
-        await catalog.update_zone(
-            db_session,
-            warehouse.id,
-            foreign.id,
-            ZoneUpdate(name="Must not change"),
-        )
-    assert hidden.value.status_code == 404
-
-    source_after, inner = await catalog.cut_zone(
-        db_session,
-        warehouse.id,
-        source.id,
-        ZoneCutoutRequest(
-            geometry={
-                "type": "Polygon",
-                "coordinates": [
-                    [[29.1, 59.1], [29.2, 59.1], [29.2, 59.2], [29.1, 59.2], [29.1, 59.1]]
-                ],
-            },
-            inner_zone={
-                "name": "Inner",
-                "color": "#EC4899",
-                "delivery_price": 3_000,
-                "pickup_price": 2_000,
-                "locked": False,
-            },
-        ),
-    )
-    assert source_after.warehouse_id == warehouse.id
-    assert inner.warehouse_id == warehouse.id
-
-
-@pytest.mark.asyncio
-async def test_warehouse_binding_needs_no_zone_and_uses_default_isochrone_prices(
+async def test_warehouse_binding_uses_default_ordered_isochrone_tariffs(
     db_session: AsyncSession,
 ) -> None:
     """A canonical depot is deliverable by isochrones without a polygonal coverage zone."""
@@ -223,73 +58,9 @@ async def test_warehouse_binding_needs_no_zone_and_uses_default_isochrone_prices
     assert created.name == identity.name
     assert created.address == "Canonical address"
     assert created.latitude == 55.75
-    assert created.isochrone_price_60_minutes == 10_000
-    assert created.isochrone_price_120_minutes == 15_000
-    assert created.isochrone_price_180_minutes == 20_000
-    assert created.isochrone_price_240_minutes == 25_000
-
-
-@pytest.mark.asyncio
-async def test_zone_policies_reject_forbidden_delivery_and_force_solo_transport(
-    db_session: AsyncSession,
-) -> None:
-    """Forbidden polygons block orders and no-trailer polygons split two cabins."""
-
-    warehouse = await make_warehouse(db_session)
-    forbidden = ZoneCreate(
-        name="Запрет",
-        kind="FORBIDDEN",
-        geometry={
-            "type": "Polygon",
-            "coordinates": [
-                [[30.2, 59.8], [30.4, 59.8], [30.4, 60.0], [30.2, 60.0], [30.2, 59.8]]
-            ],
-        },
-    )
-    forbidden_zone = await catalog.create_zone(db_session, warehouse.id, forbidden)
-    with pytest.raises(ApiError) as rejected:
-        await make_request(db_session, warehouse)
-    assert rejected.value.code == "DELIVERY_FORBIDDEN_ZONE"
-
-    await catalog.delete_zone(db_session, warehouse.id, forbidden_zone.id)
-    await catalog.create_zone(
-        db_session,
-        warehouse.id,
-        ZoneCreate(
-            name="Без прицепа",
-            kind="NO_TRAILER",
-            geometry=forbidden.geometry,
-        ),
-    )
-    request = await make_request(db_session, warehouse, quantity=2)
-    assert request.trailer_access_allowed is False
-    assert [task.quantity for task in request.tasks] == [1, 1]
-
-
-@pytest.mark.asyncio
-async def test_restriction_zone_cannot_carry_a_price(
-    db_session: AsyncSession,
-) -> None:
-    """Only SPECIAL_PRICE may override the warehouse isochrone tariff."""
-
-    warehouse = await make_warehouse(db_session)
-    with pytest.raises(ApiError) as rejected:
-        await catalog.create_zone(
-            db_session,
-            warehouse.id,
-            ZoneCreate(
-                name="Некорректная цена",
-                kind="NO_TRAILER",
-                delivery_price=1,
-                geometry={
-                    "type": "Polygon",
-                    "coordinates": [
-                        [[30.2, 59.8], [30.4, 59.8], [30.4, 60.0], [30.2, 60.0], [30.2, 59.8]]
-                    ],
-                },
-            ),
-        )
-    assert rejected.value.code == "ZONE_PRICE_NOT_ALLOWED"
+    assert [
+        (item.travel_minutes, item.price_rubles) for item in created.isochrone_tariffs
+    ] == [(60, 10_000), (120, 15_000), (180, 20_000), (240, 25_000)]
 
 
 @pytest.mark.asyncio
@@ -338,7 +109,6 @@ async def test_task_regeneration_rejects_an_unassigned_plan_reference(
     """A topology change cannot replace stable task IDs retained by an existing plan."""
 
     warehouse = await make_warehouse(db_session)
-    await make_zone(db_session, warehouse)
     request = await make_request(db_session, warehouse, planning_date=date(2026, 8, 27))
     plan = RoutePlan(
         warehouse_id=warehouse.id,
@@ -385,7 +155,6 @@ async def test_request_mandatory_update_is_copied_to_existing_tasks(
     """Changing the source obligation updates every still-authoritative task row."""
 
     warehouse = await make_warehouse(db_session)
-    await make_zone(db_session, warehouse)
     request = await make_request(db_session, warehouse, mandatory=False)
     task_ids = [task.id for task in request.tasks]
 
@@ -417,7 +186,6 @@ async def test_planning_details_update_operator_mandatory_for_every_request_sour
     """Operator-owned mandatory metadata changes without rewriting source-owned facts."""
 
     warehouse = await make_warehouse(db_session)
-    await make_zone(db_session, warehouse)
     request = await make_request(
         db_session,
         warehouse,
@@ -472,7 +240,6 @@ async def test_rwms_fixed_window_failure_does_not_apply_mandatory_metadata(
     """RWMS window ownership rejects the whole planning-details command before mutation."""
 
     warehouse = await make_warehouse(db_session)
-    await make_zone(db_session, warehouse)
     request = await make_request(db_session, warehouse, mandatory=False)
     request.source_system = "RWMS"
     await db_session.flush()
@@ -505,7 +272,6 @@ async def test_rwms_flexible_day_accepts_mandatory_without_inventing_a_window(
     """Dispatcher metadata can change while CustomerApp's full-day choice stays soft."""
 
     warehouse = await make_warehouse(db_session)
-    await make_zone(db_session, warehouse)
     request = await make_request(db_session, warehouse, mandatory=False)
     request.source_system = "RWMS"
     option = request.date_options[0]
@@ -543,7 +309,6 @@ async def test_rwms_flexible_day_rejects_dispatcher_time_narrowing(
     """A logistics edit cannot silently replace the customer's flexible-day choice."""
 
     warehouse = await make_warehouse(db_session)
-    await make_zone(db_session, warehouse)
     request = await make_request(db_session, warehouse, mandatory=False)
     request.source_system = "RWMS"
     option = request.date_options[0]

@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { App, WarehousePicker } from '../src/app/App';
+import { App } from '../src/app/App';
 import { CatalogDialog, RequestDialog } from '../src/components/EntityDialogs';
 import type { DriverInput, LogisticsRequestInput, VehicleInput } from '../src/api/client';
 import { NotificationCenter, ThemeSwitch, Toasts } from '../src/components/ui';
@@ -70,7 +70,6 @@ describe('application states', () => {
       else if (url.includes(`/warehouses/${warehouse.id}/workspace`)) body = {
         warehouse,
         warehouses: [warehouse],
-        zones: [],
         drivers: [],
         vehicles: [],
         trailers: [],
@@ -89,18 +88,19 @@ describe('application states', () => {
       };
       return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     }));
-    useUiStore.setState({ mode: 'EDITOR', section: 'SETTINGS', selected: null });
+    useUiStore.setState({ mode: 'PLAN_DAY', section: 'SETTINGS', selected: null });
     const user = userEvent.setup();
     renderApp();
 
-    const picker = await screen.findByRole('combobox', { name: 'Текущий склад' });
+    const warehouseLabel = await screen.findByText('Склад СПб');
+    expect(warehouseLabel.parentElement).toHaveTextContent('Склад СПб · Санкт-Петербург');
     const warehouseHome = screen.getByRole('button', { name: 'Открыть склад' });
     expect(screen.queryByText('RWMS · Логистика')).not.toBeInTheDocument();
-    expect(warehouseHome.nextElementSibling).toContainElement(picker);
+    expect(screen.queryByRole('combobox', { name: 'Текущий склад' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Добавить склад' })).not.toBeInTheDocument();
 
     await user.click(warehouseHome);
-    expect(useUiStore.getState()).toMatchObject({ mode: 'EDITOR', section: 'WAREHOUSE', selected: { kind: 'warehouse', id: warehouse.id } });
+    expect(useUiStore.getState()).toMatchObject({ mode: 'PLAN_DAY', section: 'WAREHOUSE', selected: { kind: 'warehouse', id: warehouse.id } });
   });
 });
 
@@ -161,67 +161,12 @@ describe('theme switch', () => {
   });
 });
 
-describe('warehouse picker', () => {
-  it('opens an accessible calendar-style list and switches only after an explicit choice', async () => {
-    const user = userEvent.setup();
-    const warehouses = [
-      warehouseFixture(),
-      warehouseFixture({ id: 'warehouse-2', external_warehouse_id: '22222222-2222-4222-8222-222222222222', name: 'Склад Великий Новгород', city: 'Великий Новгород' }),
-    ];
-    const availableWarehouses = [
-      ...warehouses.map((warehouse) => ({
-        warehouse_id: warehouse.external_warehouse_id,
-        warehouse_version: warehouse.external_warehouse_version,
-        name: warehouse.name,
-        city: warehouse.city ?? '',
-        address: warehouse.address,
-        latitude: warehouse.latitude,
-        longitude: warehouse.longitude,
-        timezone: warehouse.timezone,
-        representative: warehouse.representative,
-        routing_ready: true,
-        local_warehouse_id: warehouse.id,
-      })),
-      {
-        warehouse_id: '33333333-3333-4333-8333-333333333333',
-        warehouse_version: 1,
-        name: 'Склад без координат',
-        city: 'Москва',
-        address: null,
-        latitude: null,
-        longitude: null,
-        timezone: 'Europe/Moscow',
-        representative: false,
-        routing_ready: false,
-        local_warehouse_id: null,
-      },
-    ];
-    const onChange = vi.fn();
-    render(<WarehousePicker warehouses={warehouses} availableWarehouses={availableWarehouses} value="warehouse-1" onChange={onChange} />);
-
-    const picker = screen.getByRole('combobox', { name: 'Текущий склад' });
-    expect(picker).toHaveAttribute('aria-expanded', 'false');
-    expect(picker).toHaveTextContent('Склад СПбСанкт-Петербург');
-    await user.click(picker);
-
-    expect(screen.getByRole('listbox', { name: 'Склады' })).toBeVisible();
-    expect(screen.getByRole('option', { name: /Склад без координат.*Нет координат в RWMS/ })).toBeDisabled();
-    const novgorod = screen.getByRole('option', { name: /Склад Великий Новгород/ });
-    expect(novgorod).toHaveAttribute('aria-selected', 'false');
-    await user.click(novgorod);
-
-    expect(onChange).toHaveBeenCalledWith('warehouse-2');
-    expect(screen.queryByRole('listbox', { name: 'Склады' })).not.toBeInTheDocument();
-  });
-});
-
 describe('request editor', () => {
-  it('keeps the server zone read-only and submits complete cargo dimensions with multiple date windows', async () => {
+  it('submits complete cargo dimensions with multiple date windows', async () => {
     const user = userEvent.setup();
     const submit = vi.fn<(input: LogisticsRequestInput) => Promise<void>>(() => Promise.resolve());
     render(<RequestDialog type="DELIVERY" point={{ latitude: 55.7, longitude: 37.6 }} defaultDate="2026-08-25" busy={false} onClose={() => undefined} onSubmit={submit} />);
-    expect(screen.getByText(/Backend проверит запреты.*изохроне склада/)).toBeVisible();
-    expect(screen.queryByLabelText(/zone_id/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/изохроне склада/)).toBeVisible();
     await user.type(screen.getByLabelText('Название / номер'), '№142');
     await user.type(screen.getByLabelText('Длина бытовки, мм'), '6000');
     await user.type(screen.getByLabelText('Ширина бытовки, мм'), '2400');
@@ -235,7 +180,6 @@ describe('request editor', () => {
     await user.click(screen.getByRole('button', { name: 'Сохранить доставку' }));
     await waitFor(() => expect(submit).toHaveBeenCalledOnce());
     const submitted = submit.mock.calls[0]?.[0];
-    expect(submitted).not.toHaveProperty('zone_id');
     expect(submitted).toMatchObject({ cargo_length_mm: 6000, cargo_width_mm: 2400, cargo_height_mm: 2400, cargo_weight_kg: 2500 });
     expect(submitted?.date_options).toHaveLength(2);
   });

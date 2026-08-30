@@ -1,21 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CheckCircle2,
-  ChevronDown,
   LockKeyhole,
   PlayCircle,
   RefreshCw,
   Route as RouteIcon,
 } from 'lucide-react';
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import type { MultiPolygon, Polygon } from 'geojson';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   api,
   ApiError,
   getWarehouseWorkspace,
   optimizationStreamUrl,
   type RequestPlanningDetailsInput,
-  type ZoneInput,
 } from '../api/client';
 import type {
   Driver,
@@ -30,8 +27,6 @@ import type {
   ValidationResult,
   Vehicle,
   Warehouse,
-  AvailableWarehouse,
-  Zone,
 } from '../domain/types';
 import { Button, EmptyState, ErrorPanel, NotificationCenter, Spinner, ThemeSwitch, Toasts } from '../components/ui';
 import { DatePicker } from '../components/DatePicker';
@@ -43,7 +38,6 @@ import {
   ShiftDialog,
   SimulationOverrideDialog,
   WarehouseDialog,
-  ZoneDialog,
   type VehicleEditorInput,
 } from '../components/EntityDialogs';
 import { MapCanvas } from '../map/MapCanvas';
@@ -55,7 +49,6 @@ import { Inspector, type EditableEntity, type EntityKind } from './Inspector';
 import type { PlanMove } from '../features/planning/PlanPanel';
 import { SimulationBar } from '../features/simulation/SimulationBar';
 import { WorkloadGeneratorDialog } from '../features/workload/WorkloadGeneratorDialog';
-import { saveZoneUpdate } from '../features/zones/zone-update';
 import { actionErrorFeedback } from './action-error';
 import { TrailerDialog } from '../features/trailers/TrailerDialog';
 import { SlotAvailabilityPanel } from '../features/slot-availability/SlotAvailabilityPanel';
@@ -66,14 +59,12 @@ type DialogState =
   | { kind: 'workload-generator' }
   | { kind: 'warehouse'; value: Warehouse }
   | { kind: 'transfer'; sourceWarehouseId?: UUID; destinationWarehouseId?: UUID }
-  | { kind: 'zone'; value?: Zone; geometry: Polygon | MultiPolygon }
-  | { kind: 'zone-cutout'; sourceZone: Zone; geometry: Polygon; initialValues: Partial<Omit<ZoneInput, 'geometry'>> }
   | { kind: 'driver'; value?: Driver }
   | { kind: 'vehicle'; value?: Vehicle }
   | { kind: 'trailer'; value?: Trailer }
   | { kind: 'shift'; value?: DriverShift }
   | { kind: 'request'; value?: LogisticsRequest; point?: { latitude: number; longitude: number }; address?: string; requestType: 'DELIVERY' | 'PICKUP' }
-  | { kind: 'delete-entity'; entityKind: 'zone' | 'driver' | 'vehicle' | 'trailer' | 'shift' | 'request'; id: UUID; label: string }
+  | { kind: 'delete-entity'; entityKind: 'driver' | 'vehicle' | 'trailer' | 'shift' | 'request'; id: UUID; label: string }
   | { kind: 'delete-generated-workload'; date: string }
   | { kind: 'close-planning-day'; date: string }
   | { kind: 'confirm-cross-warehouse-plan' }
@@ -86,7 +77,6 @@ function isTerminal(status: OptimizationRun['status'] | undefined): boolean {
 
 const TRACE_PHASES = [
   'VALIDATING_INPUT',
-  'CLASSIFYING_ZONES',
   'BUILDING_TRAVEL_MATRIX',
   'GROUPING_DELIVERIES',
   'GENERATING_DELIVERY_PAIRS',
@@ -129,152 +119,6 @@ function parseTraceEvent(value: string, runId: UUID): OptimizationTraceEvent | n
   } catch {
     return null;
   }
-}
-
-/** Accessible warehouse selector styled as a first-class logistics header control. */
-export function WarehousePicker({ warehouses, availableWarehouses = [], value, onChange }: {
-  warehouses: Warehouse[];
-  availableWarehouses?: AvailableWarehouse[];
-  value: UUID;
-  onChange: (warehouseId: UUID) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const listboxId = useId();
-  const rootRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const current = warehouses.find((warehouse) => warehouse.id === value) ?? warehouses[0];
-  const localByExternalId = useMemo(
-    () => new Map(warehouses.map((warehouse) => [warehouse.external_warehouse_id, warehouse])),
-    [warehouses],
-  );
-  const options = useMemo(() => {
-    const canonical = availableWarehouses.map((warehouse) => ({
-      warehouse,
-      local: localByExternalId.get(warehouse.warehouse_id)
-        ?? warehouses.find((candidate) => candidate.id === warehouse.local_warehouse_id),
-    }));
-    const represented = new Set(canonical.map(({ warehouse }) => warehouse.warehouse_id));
-    return [
-      ...canonical,
-      ...warehouses
-        .filter((warehouse) => !represented.has(warehouse.external_warehouse_id))
-        .map((local) => ({
-          local,
-          warehouse: {
-            warehouse_id: local.external_warehouse_id,
-            warehouse_version: local.external_warehouse_version,
-            name: local.name,
-            city: local.city ?? '',
-            address: local.address,
-            latitude: local.latitude,
-            longitude: local.longitude,
-            timezone: local.timezone,
-            representative: local.representative,
-            routing_ready: local.routing_ready,
-            routing_unavailable_reason: null,
-            local_warehouse_id: local.id,
-          } satisfies AvailableWarehouse,
-        })),
-    ];
-  }, [availableWarehouses, localByExternalId, warehouses]);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const closeOutside = (event: PointerEvent) => {
-      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) setOpen(false);
-    };
-    document.addEventListener('pointerdown', closeOutside);
-    return () => document.removeEventListener('pointerdown', closeOutside);
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const selectedIndex = Math.max(0, options.findIndex(({ local }) => local?.id === current?.id));
-    queueMicrotask(() => optionRefs.current[selectedIndex]?.focus());
-  }, [current?.id, open, options]);
-
-  if (!current) return null;
-
-  const choose = (warehouseId: UUID) => {
-    onChange(warehouseId);
-    setOpen(false);
-    queueMicrotask(() => triggerRef.current?.focus());
-  };
-  const moveOptionFocus = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      setOpen(false);
-      triggerRef.current?.focus();
-      return;
-    }
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    const options = optionRefs.current.filter((option): option is HTMLButtonElement => Boolean(option));
-    const focusedIndex = Math.max(0, options.indexOf(document.activeElement as HTMLButtonElement));
-    const nextIndex = event.key === 'Home'
-      ? 0
-      : event.key === 'End'
-        ? options.length - 1
-        : event.key === 'ArrowDown'
-          ? (focusedIndex + 1) % options.length
-          : (focusedIndex - 1 + options.length) % options.length;
-    options[nextIndex]?.focus();
-  };
-
-  return (
-    <div className="warehouse-picker" ref={rootRef} onBlur={(event) => {
-      if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setOpen(false);
-    }}>
-      <button
-        ref={triggerRef}
-        type="button"
-        role="combobox"
-        className="warehouse-picker__trigger"
-        aria-label="Текущий склад"
-        aria-controls={open ? listboxId : undefined}
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        onClick={() => setOpen((currentOpen) => !currentOpen)}
-        onKeyDown={(event) => {
-          if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
-          event.preventDefault();
-          setOpen(true);
-        }}
-      >
-        <span><strong>{current.name}</strong>{current.city ? <small>{current.city}</small> : null}</span>
-        <ChevronDown size={15} aria-hidden="true" />
-      </button>
-      {open ? (
-        <div id={listboxId} className="warehouse-picker__popover" role="listbox" aria-label="Склады" onKeyDown={moveOptionFocus}>
-          {options.map(({ warehouse, local }, index) => {
-            const missingCoordinates = warehouse.latitude === null || warehouse.longitude === null;
-            const selectable = Boolean(local && warehouse.routing_ready && !missingCoordinates);
-            const status = missingCoordinates
-              ? 'Нет координат в RWMS'
-              : !warehouse.routing_ready
-                ? warehouse.routing_unavailable_reason ?? 'Недоступен для маршрутизации'
-                : warehouse.city || warehouse.address || 'Готов к маршрутизации';
-            return (
-            <button
-              ref={(node) => { optionRefs.current[index] = node; }}
-              type="button"
-              role="option"
-              aria-selected={local?.id === current.id}
-              aria-disabled={!selectable}
-              disabled={!selectable}
-              className="warehouse-picker__option"
-              key={`${warehouse.warehouse_id}:${local?.id ?? 'unprojected'}`}
-              onClick={() => local && choose(local.id)}
-            >
-              <span><strong>{warehouse.name}</strong><small>{status}</small></span>
-              {local?.id === current.id ? <CheckCircle2 size={14} aria-hidden="true" /> : null}
-            </button>
-          );})}
-        </div>
-      ) : null}
-    </div>
-  );
 }
 
 export function App() {
@@ -329,7 +173,7 @@ export function App() {
     clearSimulationOverrides();
     setSimulationPlaying(false);
     setSimulationTimestamp(null);
-    setMode('EDITOR');
+    setMode('PLAN_DAY');
     setSelected(null);
   }, [clearSimulationOverrides, clearTrace, queryClient, setMode, setSelected, setSimulationPlaying, setSimulationTimestamp]);
 
@@ -347,7 +191,7 @@ export function App() {
       setRoutesNeedRefresh(false);
       clearSimulationOverrides();
     }
-    if (mode === 'PLAN') setSection('PLAN_DAY');
+    if (mode === 'PLAN_DAY') setSection('PLAN_DAY');
   }, [clearSimulationOverrides, mode, plan?.date, setSection]);
 
   const resizeInspector = useCallback((requestedWidth: number) => {
@@ -514,7 +358,7 @@ export function App() {
     if (!run || !isTerminal(run.status)) return;
     if (run.plan_id) {
       setPlanId(run.plan_id);
-      setMode('PLAN');
+      setMode('PLAN_DAY');
       setSection(run.status === 'FAILED' ? 'UNASSIGNED' : 'PLAN_DAY');
       if (run.status !== 'COMPLETED') {
         const detail = run.status === 'TIMED_OUT' ? 'Показан лучший найденный план.' : run.error_message;
@@ -656,7 +500,6 @@ export function App() {
 
   const openEdit = (kind: EntityKind, value: EditableEntity) => {
     if (kind === 'warehouse') setDialog({ kind: 'warehouse', value: value as Warehouse });
-    else if (kind === 'zone') setDialog({ kind: 'zone', value: value as Zone, geometry: (value as Zone).geometry });
     else if (kind === 'driver') setDialog({ kind: 'driver', value: value as Driver });
     else if (kind === 'vehicle') {
       if (workspace?.trailers === undefined) {
@@ -679,10 +522,6 @@ export function App() {
     });
   }, [mapTool]);
 
-  const handleZoneDraw = useCallback((geometry: Polygon) => setDialog({
-    kind: 'zone',
-    geometry,
-  }), []);
   const handleMapError = useCallback((message: string) => {
     toast({ tone: 'warning', title: 'Карта', detail: message });
   }, [toast]);
@@ -694,30 +533,8 @@ export function App() {
       return;
     }
     setDialog({ kind: 'request', value: request, point: { longitude, latitude }, requestType: request.type });
-    toast({ tone: 'info', title: 'Новые координаты не сохранены', detail: 'Проверьте форму и сохраните; backend заново проверит особые зоны и изохрону.' });
+    toast({ tone: 'info', title: 'Новые координаты не сохранены', detail: 'Проверьте форму и сохраните; backend заново проверит маршрут и доступность по изохронам.' });
   }, [toast, workspace]);
-  const handleZoneCutout = useCallback((zoneId: UUID, geometry: Polygon) => {
-    if (!workspace) return;
-    const sourceZone = workspace.zones.find((zone) => zone.id === zoneId);
-    if (!sourceZone) return;
-    const prefix = `${sourceZone.name} · внутренняя`;
-    const innerNumber = workspace.zones.filter((zone) => zone.name.startsWith(prefix)).length + 1;
-    setMapTool('SELECT');
-    setDialog({
-      kind: 'zone-cutout',
-      sourceZone,
-      geometry,
-      initialValues: {
-        name: `${prefix} ${innerNumber}`,
-        kind: sourceZone.kind,
-        color: sourceZone.color,
-        delivery_price: sourceZone.delivery_price,
-        pickup_price: sourceZone.pickup_price,
-        locked: false,
-      },
-    });
-  }, [setMapTool, workspace]);
-
   const cancelOptimization = async () => {
     if (!runId || !workspace) return;
     await execute(async () => {
@@ -826,7 +643,7 @@ export function App() {
       } else {
         await queryClient.invalidateQueries({ queryKey: ['automatic-plan', workspaceWarehouseId, input.date] });
       }
-      setMode('PLAN');
+      setMode('PLAN_DAY');
       setSection('PLAN_DAY');
     }, 'Условия доставки сохранены').catch(() => undefined);
   };
@@ -841,7 +658,7 @@ export function App() {
       } else {
         await queryClient.invalidateQueries({ queryKey: ['automatic-plan', workspaceWarehouseId, planningDate] });
       }
-      setMode('PLAN');
+      setMode('PLAN_DAY');
       setSection('PLAN_DAY');
     }, `Созданы подзадачи: ${quantities.join(' + ')}`).catch(() => undefined);
   };
@@ -863,7 +680,7 @@ export function App() {
     if (bounds && (simulationTimestamp === null || simulationTimestamp < bounds.start || simulationTimestamp > bounds.end)) setSimulationTimestamp(bounds.start);
   }, [mode, plan, setSimulationTimestamp, simulationTimestamp]);
 
-  const changeMode = (nextMode: 'EDITOR' | 'PLAN' | 'SIMULATION') => {
+  const changeMode = (nextMode: 'PLAN_DAY' | 'SIMULATION') => {
     if (nextMode === 'SIMULATION' && plan && !plan.driver_routes.some((route) => route.cycles.length > 0)) {
       setSection('UNASSIGNED');
       toast({ tone: 'warning', title: 'Симуляцию пока запустить нельзя', detail: 'В плане нет ни одного рейса. Открыты причины нераспределения.' });
@@ -874,8 +691,7 @@ export function App() {
       return;
     }
     setMode(nextMode);
-    if (nextMode === 'PLAN') setSection('PLAN_DAY');
-    else if (nextMode === 'SIMULATION') setSection('ROUTES');
+    setSection('PLAN_DAY');
   };
 
   const generateWorkload = async (input: Parameters<typeof api.generateWorkload>[1]) => {
@@ -968,11 +784,11 @@ export function App() {
   const selectedOverrideRoute = dialog?.kind === 'simulation' ? plan?.driver_routes.find((route) => route.driver_shift_id === dialog.driverShiftId) : undefined;
 
   return (
-    <div className={`app-shell ${mode === 'SIMULATION' ? 'app-shell--simulation' : ''} ${mode === 'PLAN' ? 'app-shell--plan' : ''} ${workspace.rwms_refresh_warning ? 'app-shell--refresh-warning' : ''}`}>
+    <div className={`app-shell ${mode === 'SIMULATION' ? 'app-shell--simulation' : 'app-shell--plan'} ${workspace.rwms_refresh_warning ? 'app-shell--refresh-warning' : ''}`}>
       <header className="topbar">
         <div className="topbar__brand">
-          <Button className="brand-mark" onClick={() => { setMode('EDITOR'); setSection('WAREHOUSE'); setMapTool('SELECT'); setSelected({ kind: 'warehouse', id: warehouseId }); }} aria-label="Открыть склад" title="Открыть склад">L</Button>
-          <WarehousePicker warehouses={warehousesQuery.data} availableWarehouses={availableWarehousesQuery.data ?? []} value={warehouseId} onChange={setWarehouseId} />
+          <Button className="brand-mark" onClick={() => { setMode('PLAN_DAY'); setSection('WAREHOUSE'); setMapTool('SELECT'); setSelected({ kind: 'warehouse', id: warehouseId }); }} aria-label="Открыть склад" title="Открыть склад">L</Button>
+          <span className="topbar__warehouse-context"><strong>{workspace.warehouse.name}</strong>{workspace.warehouse.city ? ` · ${workspace.warehouse.city}` : ''}</span>
         </div>
         <div className="topbar__date">
           {routesNeedRefresh && plan && plan.status !== 'CONFIRMED' ? <Button variant="primary" disabled={busy} onClick={() => void refreshRoutes()}><RefreshCw size={15} aria-hidden="true" /><span>Обновить маршруты</span></Button> : null}
@@ -987,7 +803,7 @@ export function App() {
           <Button disabled={!acceptingRequests} variant={slotPlannerOpen ? 'primary' : 'secondary'} onClick={() => slotPlannerOpen ? closeSlotPlanner() : setSlotPlannerOpen(true)}><RouteIcon size={15} aria-hidden="true" /><span>Проверить слот</span></Button>
           {currentRun && !isTerminal(currentRun.status) ? <Button variant="danger" disabled={busy || currentRun.cancel_requested} onClick={() => void cancelOptimization()}><span>{currentRun.cancel_requested ? 'Отменяем…' : 'Отменить'}</span></Button> : null}
           <Button disabled={!plan || busy} onClick={() => void validatePlan()}><CheckCircle2 size={15} aria-hidden="true" /><span>Проверить</span></Button>
-          <div className="segmented" aria-label="Режим приложения">{([['EDITOR', 'Редактор'], ['PLAN', 'План'], ['SIMULATION', 'Симуляция']] as const).map(([value, label]) => <button type="button" key={value} aria-pressed={mode === value} onClick={() => changeMode(value)}>{value === 'EDITOR' ? <RouteIcon size={13} aria-hidden="true" /> : value === 'SIMULATION' ? <PlayCircle size={13} aria-hidden="true" /> : null}{label}</button>)}</div>
+          <div className="segmented" aria-label="Режим приложения">{([['PLAN_DAY', 'План дня'], ['SIMULATION', 'Симуляция']] as const).map(([value, label]) => <button type="button" key={value} aria-pressed={mode === value} onClick={() => changeMode(value)}>{value === 'PLAN_DAY' ? <RouteIcon size={13} aria-hidden="true" /> : <PlayCircle size={13} aria-hidden="true" />}{label}</button>)}</div>
           <ThemeSwitch />
           <NotificationCenter />
         </div>
@@ -1013,8 +829,6 @@ export function App() {
           onSelect={setSelected}
           onWarehouseActivate={setWarehouseId}
           onPlacePoint={handleMapPoint}
-          onZoneDrawn={handleZoneDraw}
-          onZoneCutout={handleZoneCutout}
           onRequestMoveDraft={handleRequestMoveDraft}
           onMapError={handleMapError}
           planningDate={planningDate}
@@ -1085,31 +899,6 @@ export function App() {
         flagCurrentRoutesForRefresh();
         setDialog(null); setMapTool('SELECT');
       }, 'Настройки склада сохранены'); }} /> : null}
-      {dialog?.kind === 'zone' ? <ZoneDialog zone={dialog.value} geometry={dialog.geometry} busy={busy} onClose={() => { setDialog(null); setMapTool('SELECT'); }} onSubmit={async (input) => { await execute(async () => {
-        if (dialog.value) {
-          await saveZoneUpdate(dialog.value, input, {
-            setLocked: (locked) => api.setZoneLocked(workspace.warehouse.id, dialog.value!.id, locked),
-            update: (payload) => api.updateZone(workspace.warehouse.id, dialog.value!.id, payload),
-          });
-        } else await api.createZone(workspace.warehouse.id, input);
-        await refresh(); setDialog(null); setMapTool('SELECT');
-      }, 'Зона сохранена'); }} /> : null}
-      {dialog?.kind === 'zone-cutout' ? <ZoneDialog
-        geometry={dialog.geometry}
-        initialValues={dialog.initialValues}
-        title={`Новая особая зона внутри «${dialog.sourceZone.name}»`}
-        description="Сохранение одной транзакцией вырежет этот контур из исходной зоны и создаст отдельную политику доступа или цены. Отмена не изменит геометрию."
-        submitLabel="Вырезать и создать зону"
-        busy={busy}
-        onClose={() => { setDialog(null); setMapTool('SELECT'); }}
-        onSubmit={async (input) => { await execute(async () => {
-          const result = await api.cutZone(workspace.warehouse.id, dialog.sourceZone.id, input);
-          await refresh();
-          setSelected({ kind: 'zone', id: result.inner_zone.id });
-          setDialog(null);
-          setMapTool('SELECT');
-        }, 'Вырез сохранён, внутренняя зона создана'); }}
-      /> : null}
       {dialog?.kind === 'driver' || dialog?.kind === 'vehicle' ? <CatalogDialog kind={dialog.kind} value={dialog.value} trailers={workspace.trailers ?? []} availableDrivers={availableDriversQuery.data ?? []} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => {
         if (dialog.kind === 'driver') {
           const value = input as Parameters<typeof api.createDriver>[1];
@@ -1140,7 +929,7 @@ export function App() {
       }, 'Прицеп сохранён'); }} /> : null}
       {dialog?.kind === 'shift' ? <ShiftDialog shift={dialog.value} warehouse={workspace.warehouse} drivers={workspace.drivers} vehicles={workspace.vehicles} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => { if (dialog.value) await api.updateShift(dialog.value.id, input); else await api.createShift(workspace.warehouse.id, input); await refresh(); flagCurrentRoutesForRefresh(); setDialog(null); }, 'Смена сохранена'); }} /> : null}
       {dialog?.kind === 'request' ? <RequestDialog request={dialog.value} point={dialog.point} initialAddress={dialog.address} type={dialog.requestType} defaultDate={planningDate} busy={busy} onClose={() => { setDialog(null); setMapTool('SELECT'); }} onSubmit={async (input) => { await execute(async () => { if (dialog.value) await api.updateRequest(dialog.value.id, input); else await api.createRequest(workspace.warehouse.id, input); await refresh(); flagCurrentRoutesForRefresh(); setDialog(null); setMapTool('SELECT'); }, input.type === 'DELIVERY' ? 'Доставка сохранена; ограничения проверены backend' : 'Вывоз сохранён; ограничения проверены backend'); }} /> : null}
-      {dialog?.kind === 'delete-entity' ? <ConfirmDialog title={`Удалить «${dialog.label}»?`} description="Изменение относится к выбранному складу. Backend проверит ссылки и вернёт ошибку, если объект используется." confirmLabel="Удалить" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => { if (dialog.entityKind === 'zone') await api.deleteZone(workspace.warehouse.id, dialog.id); else if (dialog.entityKind === 'driver') await api.deleteDriver(dialog.id); else if (dialog.entityKind === 'vehicle') await api.deleteVehicle(dialog.id); else if (dialog.entityKind === 'trailer') await api.deleteTrailer(dialog.id); else if (dialog.entityKind === 'shift') await api.deleteShift(dialog.id); else await api.deleteRequest(dialog.id); await refresh(); if (dialog.entityKind !== 'zone') flagCurrentRoutesForRefresh(); setDialog(null); }, 'Объект удалён'); }} /> : null}
+      {dialog?.kind === 'delete-entity' ? <ConfirmDialog title={`Удалить «${dialog.label}»?`} description="Изменение относится к выбранному складу. Backend проверит ссылки и вернёт ошибку, если объект используется." confirmLabel="Удалить" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => { if (dialog.entityKind === 'driver') await api.deleteDriver(dialog.id); else if (dialog.entityKind === 'vehicle') await api.deleteVehicle(dialog.id); else if (dialog.entityKind === 'trailer') await api.deleteTrailer(dialog.id); else if (dialog.entityKind === 'shift') await api.deleteShift(dialog.id); else await api.deleteRequest(dialog.id); await refresh(); flagCurrentRoutesForRefresh(); setDialog(null); }, 'Объект удалён'); }} /> : null}
       {dialog?.kind === 'delete-generated-workload' ? <ConfirmDialog title={`Удалить нагрузку за ${formatDate(dialog.date)}?`} description="Будут удалены доставки и вывозы, созданные генератором на эту дату, и все сохранённые планы этой даты. Ручные и RWMS-операции, а также нагрузка и планы других дат останутся без изменений." confirmLabel="Удалить нагрузку" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => {
         const result = await api.deleteGeneratedWorkload(workspace.warehouse.id, dialog.date);
         await refresh();

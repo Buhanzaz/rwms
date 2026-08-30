@@ -31,16 +31,15 @@ from app.models import (
     Warehouse,
 )
 from app.schemas.domain import (
-    GeoJsonGeometry,
     RequestDateOptionInput,
     RequestDateOptionUpdate,
     RwmsCapacitySnapshotCommand,
     RwmsCapacitySnapshotResult,
+    RwmsIsochroneTariff,
     RwmsPlanningCapacityJob,
     RwmsPlanningCapacityShift,
     RwmsPlanningDateOption,
     RwmsPlanningFeed,
-    RwmsPlanningPriceZone,
     RwmsPlanningRequest,
     RwmsSyncFailure,
     RwmsSyncRequest,
@@ -48,7 +47,7 @@ from app.schemas.domain import (
     RwmsWarehouseRefreshResult,
     RwmsWarehouseSyncResult,
 )
-from tests.factories import make_warehouse, make_zone
+from tests.factories import make_warehouse
 
 
 def _enabled_settings(*, capacity_publish_enabled: bool = False) -> Settings:
@@ -307,13 +306,12 @@ def test_warehouse_directory_schema_rejects_partial_or_inconsistent_coordinates(
 
 
 @pytest.mark.asyncio
-async def test_capacity_client_uses_path_authority_and_minimal_zone_shape() -> None:
-    """Use path authority and publish only the active tariff-zone fields."""
+async def test_capacity_client_uses_path_authority_and_dynamic_tariff_shape() -> None:
+    """Use path authority and publish only the ordered dynamic tariff fields."""
 
     warehouse_id = uuid4()
     source_job_id = uuid4()
     source_shift_id = uuid4()
-    source_zone_id = uuid4()
     idempotency_key = uuid4()
     revision = "b" * 64
 
@@ -333,19 +331,11 @@ async def test_capacity_client_uses_path_authority_and_minimal_zone_shape() -> N
             "sourceRevision",
             "jobs",
             "shifts",
-            "priceZones",
-            "restrictionZones",
-            "isochronePrice60Minutes",
-            "isochronePrice120Minutes",
-            "isochronePrice180Minutes",
-            "isochronePrice240Minutes",
+            "isochroneTariffs",
         }
-        assert set(body["priceZones"][0]) == {
-            "sourceZoneId",
-            "sourceZoneVersion",
-            "deliveryPriceRubles",
-            "pickupPriceRubles",
-            "geometry",
+        assert body["isochroneTariffs"][-1] == {
+            "travelMinutes": 300,
+            "priceRubles": 30_000,
         }
         return httpx.Response(
             200,
@@ -356,7 +346,7 @@ async def test_capacity_client_uses_path_authority_and_minimal_zone_shape() -> N
                 "sourceRevision": revision,
                 "jobCount": 1,
                 "shiftCount": 1,
-                "priceZoneCount": 1,
+                "isochroneTariffCount": 5,
                 "replayed": False,
                 "updatedAt": "2026-08-30T08:00:00Z",
             },
@@ -392,20 +382,14 @@ async def test_capacity_client_uses_path_authority_and_minimal_zone_shape() -> N
                 cabin_capacity=2,
             )
         ],
-        price_zones=[
-            RwmsPlanningPriceZone(
-                source_zone_id=source_zone_id,
-                source_zone_version=3,
-                delivery_price_rubles=12_000,
-                pickup_price_rubles=9_000,
-                geometry=GeoJsonGeometry.model_validate(
-                    {
-                        "type": "MultiPolygon",
-                        "coordinates": [
-                            [[[30.0, 59.0], [31.0, 59.0], [31.0, 60.0], [30.0, 59.0]]]
-                        ],
-                    }
-                ),
+        isochrone_tariffs=[
+            RwmsIsochroneTariff(travel_minutes=minutes, price_rubles=price)
+            for minutes, price in (
+                (60, 10_000),
+                (120, 15_000),
+                (180, 20_000),
+                (240, 25_000),
+                (300, 30_000),
             )
         ],
     )
@@ -419,17 +403,16 @@ async def test_capacity_client_uses_path_authority_and_minimal_zone_shape() -> N
 
     assert isinstance(result, RwmsCapacitySnapshotResult)
     assert result.warehouse_id == warehouse_id
-    assert result.price_zone_count == 1
+    assert result.isochrone_tariff_count == 5
     assert set(type(result).model_fields) == {
         "warehouse_id",
         "source_generation",
         "version",
         "source_revision",
         "job_count",
-            "shift_count",
-            "price_zone_count",
-            "restriction_zone_count",
-            "replayed",
+        "shift_count",
+        "isochrone_tariff_count",
+        "replayed",
         "updated_at",
     }
 
@@ -441,7 +424,6 @@ async def test_sync_imports_valid_rows_and_reports_missing_coordinates(
     """Persist valid sibling orders while reporting incomplete upstream rows."""
 
     warehouse = await make_warehouse(db_session)
-    await make_zone(db_session, warehouse)
     valid = _source_request()
     missing = _source_request(latitude=None, longitude=None)
     client = RwmsPlanningClient(_enabled_settings())

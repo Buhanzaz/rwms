@@ -62,13 +62,14 @@ the exact applicable height/width/length/weight/axle profile together with date,
 `kind=FIXED_WINDOW|DURING_DAY`, non-null display/hold bounds, informational `travelZoneHours`,
 capacity remaining and expiry. Each date exposes the three fixed local windows
 `09:00-12:00`, `12:00-15:00`, `15:00-18:00` plus one `DURING_DAY` choice spanning the configured
-delivery day. The travel band has no upper feasibility cutoff. The
+delivery day. The
 remaining capacity is computed from the whole-day multi-point schedule over
 warehouse-capacity period shifts, not per-window arithmetic; an
 empty shift set or missing truck route fails closed. Ordinary price comes from the warehouse's
-inclusive 60/120/180/240-minute isochrone tariff. `SPECIAL_PRICE` overrides it, `FORBIDDEN`
-rejects the stop and `NO_TRAILER` rejects a trailer-attached alternative; the polygons never
-replace exact truck routing.
+ordered hourly isochrone tariff list. It starts at 60 minutes, advances in contiguous
+60-minute steps, contains at most twelve entries and uses the first entry that covers exact
+one-way Valhalla travel time. The farthest configured entry is a hard delivery-acceptance
+boundary; no polygon or straight-line check replaces exact truck routing.
 Arrival requires the exact shipment document
 line/member's `COMPLETED` grouped driver task. Acceptance stores one bounded
 drawn signature, while a problem report can reference at most 20 exact READY
@@ -273,10 +274,10 @@ the qualified pool. Manual/generated work and pickups stay local.
 idempotently replaces one warehouse's active anonymous capacity projection.
 Warehouse identity exists only in the URL. The body carries generated delivery
 and pickup jobs, mandatory/trailer-access facts, period-shift windows and
-vehicle capacity, plus the owning warehouse's GeoJSON tariff zones identified
-by
-`sourceZoneId` UUID and version. `SPECIAL_PRICE` carries delivery/pickup prices;
-`FORBIDDEN` and `NO_TRAILER` carry access policy without a price. It carries no
+vehicle capacity, plus the owning warehouse's complete ordered
+`isochroneTariffs` list. Each tariff carries `travelMinutes` and `priceRubles`;
+the list starts at 60 minutes, remains contiguous in one-hour steps and its
+last item is the delivery boundary. It carries no
 order, customer, cabin or driver personal identity. Monotonic
 `sourceGeneration` rejects an older unaccepted command, while an immutable
 receipt replays the original result for an exact retry.
@@ -288,17 +289,17 @@ tokens are rejected. The standalone public API is warehouse-rooted:
 refresh, `/planning-days/{date}` and `/close` own day finalization, and
 `/rwms/capacity` is an audited reconciliation endpoint. Plan apply/status
 operations remain diagnostic recovery tools, not routine browser controls.
-Zone commands are nested under `/api/warehouses/{warehouseId}/zones`; a zone
-cannot be read, changed or deleted through another warehouse, and capacity
-publishing includes only the selected warehouse's zones. Warehouse update also owns four
-non-negative isochrone tariff values for the inclusive 60/120/180/240-minute bands.
+Warehouse update owns the complete one-to-twelve-entry hourly isochrone tariff
+list. The standalone API has no active zone CRUD or zone-owned request fields;
+calculated prices remain stored on their slot/request history.
 
 The same standalone OpenAPI exposes server-keyed Yandex
 suggestion/resolve/reverse operations for operator input and automatic
 address-only canonical warehouse projection. This does not permit address-only customer-order
-feed geocoding. A slot response identifies its tariff with
-`price_zone_id`/`price_zone_name`; the canonical CustomerApp response uses
-nullable UUID `priceZoneId`, never a business code.
+feed geocoding. A new slot response identifies its selected hourly tier through
+`price_isochrone_minutes`. The canonical CustomerApp response retains nullable
+UUID `priceZoneId` only to render already stored historical special-zone quotes;
+new offers return it as null.
 
 The standalone transfer dialog does not add a FastAPI transport contract. It
 uses the existing public gateway operation

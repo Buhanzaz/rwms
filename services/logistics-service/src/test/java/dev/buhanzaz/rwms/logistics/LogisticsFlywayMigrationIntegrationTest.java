@@ -63,9 +63,8 @@ class LogisticsFlywayMigrationIntegrationTest {
             "client_presentation_item",
             "consumer_aggregate_checkpoint",
             "customer_warehouse_capacity_command_receipt",
+            "customer_warehouse_capacity_isochrone_tariff",
             "customer_warehouse_capacity_job",
-            "customer_warehouse_capacity_price_zone",
-            "customer_warehouse_capacity_restriction_zone",
             "customer_warehouse_capacity_shift",
             "customer_warehouse_capacity_snapshot",
             "driver_logistics_task",
@@ -116,7 +115,13 @@ class LogisticsFlywayMigrationIntegrationTest {
             "warehouse_operation_mark_outbox",
             "warehouse_operation_mark_recovery_audit",
             "version_gap_quarantine")
-        .doesNotContain("warehouse", "rental_item", "inventory_session", "reservation");
+        .doesNotContain(
+            "warehouse",
+            "rental_item",
+            "inventory_session",
+            "reservation",
+            "customer_warehouse_capacity_price_zone",
+            "customer_warehouse_capacity_restriction_zone");
     assertThat(toRegclass("databasechangelog")).isNull();
     assertThat(
             jdbc.queryForObject(
@@ -147,8 +152,7 @@ class LogisticsFlywayMigrationIntegrationTest {
     assertThat(toRegclass("uk_customer_warehouse_capacity_snapshot_warehouse")).isNotNull();
     assertThat(toRegclass("idx_customer_warehouse_capacity_command_revision")).isNotNull();
     assertThat(toRegclass("idx_customer_warehouse_capacity_job_date")).isNotNull();
-    assertThat(toRegclass("idx_customer_warehouse_capacity_price_zone_snapshot")).isNotNull();
-    assertThat(toRegclass("idx_customer_warehouse_capacity_restriction_zone_snapshot"))
+    assertThat(toRegclass("idx_customer_warehouse_capacity_isochrone_tariff_snapshot"))
         .isNotNull();
     assertThat(
             jdbc.queryForObject(
@@ -3502,6 +3506,145 @@ class LogisticsFlywayMigrationIntegrationTest {
                     taskId))
         .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class)
         .hasMessageContaining("ck_driver_logistics_task_worker_content_json");
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v74NormalizesIsochroneTariffsAndPreservesHistoricalSlotQuotes() {
+    Flyway beforeV74 = configuration(MIGRATIONS).target("73").load();
+    assertThat(beforeV74.migrate().migrationsExecuted).isPositive();
+    UUID subjectId = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID snapshotId = UUID.randomUUID();
+    UUID historicalZoneId = UUID.randomUUID();
+    UUID slotId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into customer_warehouse_capacity_snapshot(
+          id,version,warehouse_id,source_generation,source_revision,
+          isochrone_price_60_minutes,isochrone_price_120_minutes,
+          isochrone_price_180_minutes,isochrone_price_240_minutes,created_at,updated_at)
+        values (?,0,?,1,?,11000,16000,21000,26000,clock_timestamp(),clock_timestamp())
+        """,
+        snapshotId,
+        warehouseId,
+        "a".repeat(64));
+    jdbc.update(
+        """
+        insert into customer_warehouse_capacity_command_receipt(
+          idempotency_key,warehouse_id,source_generation,source_revision,request_sha256,
+          snapshot_version,job_count,shift_count,price_zone_count,restriction_zone_count,
+          response_updated_at,created_at)
+        values (?,?,1,?,?,0,0,0,2,1,clock_timestamp(),clock_timestamp())
+        """,
+        UUID.randomUUID(),
+        warehouseId,
+        "a".repeat(64),
+        "b".repeat(64));
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,created_by_subject_id,
+          creation_idempotency_key,creation_request_sha256,phone,normalized_phone,
+          responsible_manager_id,created_at,updated_at)
+        values (?,0,'INDIVIDUAL','V74 client',?,?,?,?,'+79990000001','+79990000001',?,
+          clock_timestamp(),clock_timestamp())
+        """,
+        clientId,
+        "v74-client-" + clientId,
+        subjectId,
+        UUID.randomUUID(),
+        "c".repeat(64),
+        subjectId);
+    jdbc.update(
+        """
+        insert into rental_inquiry(
+          id,version,conversation_id,client_id,manager_id,manager_display_name,manager_role,
+          warehouse_id,state,creation_idempotency_key,created_at,updated_at)
+        values (?,0,null,?,?,'V74 customer','CUSTOMER',?,'ACTIVE',?,
+          clock_timestamp(),clock_timestamp())
+        """,
+        inquiryId,
+        clientId,
+        subjectId,
+        warehouseId,
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into customer_delivery_slot(
+          id,version,customer_subject_id,inquiry_id,warehouse_id,delivery_date,slot_kind,
+          window_start,window_end,delivery_address,latitude,longitude,cabin_count,
+          one_way_travel_seconds,travel_zone_hours,capacity_remaining,site_cabin_capacity,
+          delivery_price_rubles,price_zone_id,price_isochrone_minutes,state,expires_at,
+          created_at,updated_at)
+        values (?,0,?,?,?,date '2026-08-30','FIXED_WINDOW',time '09:00',time '12:00',
+          'Historical special tariff',59.9,30.3,1,1800,1,1,1,7777,?,null,'RELEASED',
+          clock_timestamp(),clock_timestamp(),clock_timestamp())
+        """,
+        slotId,
+        subjectId,
+        inquiryId,
+        warehouseId,
+        historicalZoneId);
+
+    Flyway versionSeventyFour = configuration(MIGRATIONS).target("74").load();
+    assertThat(versionSeventyFour.migrate().migrationsExecuted).isOne();
+    versionSeventyFour.validate();
+
+    assertThat(
+            jdbc.queryForList(
+                """
+                select travel_minutes,price_rubles
+                from customer_warehouse_capacity_isochrone_tariff
+                where snapshot_id=? order by travel_minutes
+                """,
+                snapshotId))
+        .containsExactly(
+            Map.of("travel_minutes", 60, "price_rubles", 11_000L),
+            Map.of("travel_minutes", 120, "price_rubles", 16_000L),
+            Map.of("travel_minutes", 180, "price_rubles", 21_000L),
+            Map.of("travel_minutes", 240, "price_rubles", 26_000L));
+    assertThat(
+            jdbc.queryForObject(
+                "select isochrone_tariff_count from customer_warehouse_capacity_command_receipt",
+                Integer.class))
+        .isEqualTo(4);
+    assertThat(toRegclass("customer_warehouse_capacity_price_zone")).isNull();
+    assertThat(toRegclass("customer_warehouse_capacity_restriction_zone")).isNull();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from information_schema.columns
+                where table_schema='public' and table_name='customer_warehouse_capacity_snapshot'
+                  and column_name like 'isochrone_price_%'
+                """,
+                Integer.class))
+        .isZero();
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select delivery_price_rubles,price_zone_id,price_isochrone_minutes
+                from customer_delivery_slot where id=?
+                """,
+                slotId))
+        .containsEntry("delivery_price_rubles", 7_777L)
+        .containsEntry("price_zone_id", historicalZoneId)
+        .containsEntry("price_isochrone_minutes", null);
+    jdbc.update(
+        """
+        update customer_delivery_slot
+        set delivery_price_rubles=30000,price_zone_id=null,price_isochrone_minutes=300
+        where id=?
+        """,
+        slotId);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update customer_delivery_slot set price_isochrone_minutes=90 where id=?",
+                    slotId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
     assertJpaValidationStarts();
   }
 

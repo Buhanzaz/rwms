@@ -85,20 +85,8 @@ button { color: inherit; }
 .topbar__brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .brand-mark, .topbar-icon-button { width: var(--control-height); min-width: var(--control-height); height: var(--control-height); min-height: var(--control-height); padding: 0; }
 .brand-mark { border-color: var(--line-strong); background: var(--panel-raised); color: var(--text); font-weight: 900; }
-.warehouse-picker { position: relative; min-width: 0; }
-.warehouse-picker__trigger { width: min(330px, 26vw); height: var(--control-height); display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--control-radius); background: var(--input-bg); color: var(--text); cursor: pointer; text-align: left; }
-.warehouse-picker__trigger:hover, .warehouse-picker__trigger[aria-expanded="true"] { border-color: var(--line-strong); background: var(--hover); }
-.warehouse-picker__trigger > span, .warehouse-picker__option > span { min-width: 0; display: grid; gap: 1px; }
-.warehouse-picker__trigger strong, .warehouse-picker__option strong { overflow: hidden; font-size: 12px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
-.warehouse-picker__trigger small, .warehouse-picker__option small { overflow: hidden; color: var(--muted); font-size: 9px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
-.warehouse-picker__trigger > svg { flex: 0 0 auto; color: var(--muted); }
-.warehouse-picker__popover { position: absolute; z-index: 180; top: calc(100% + 7px); left: 0; width: min(360px, calc(100vw - 36px)); display: grid; gap: 3px; padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); box-shadow: 0 16px 48px var(--shadow); }
-.warehouse-picker__option { width: 100%; min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 8px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text); cursor: pointer; text-align: left; }
-.warehouse-picker__option:hover, .warehouse-picker__option:focus-visible { border-color: var(--line); background: var(--hover); }
-.warehouse-picker__option[aria-selected="true"] { border-color: var(--line-strong); background: var(--panel-raised); }
-.warehouse-picker__option:disabled { cursor: not-allowed; opacity: .62; }
-.warehouse-picker__option:disabled:hover { border-color: transparent; background: transparent; }
-.warehouse-picker__option > svg { flex: 0 0 auto; color: var(--accent); }
+.topbar__warehouse-context { overflow: hidden; color: var(--muted); font-size: 12px; line-height: var(--control-height); text-overflow: ellipsis; white-space: nowrap; }
+.topbar__warehouse-context strong { color: var(--text); }
 .topbar__date, .topbar__actions { display: flex; align-items: center; gap: 7px; }
 .topbar .button, .topbar .date-picker__trigger, .topbar .segmented { height: var(--control-height); min-height: var(--control-height); }
 .workspace-refresh-warning { display: flex; align-items: center; gap: 10px; padding: 8px 18px; border-bottom: 1px solid var(--warning-border); background: var(--warning-bg); color: var(--warning-text); font-size: 11px; }
@@ -115,15 +103,14 @@ button { color: inherit; }
 .date-picker .rdp-today:not(.rdp-selected) .rdp-day_button { color: var(--accent); font-weight: 750; }
 .date-picker .rdp-outside { color: var(--muted); opacity: .55; }
 .topbar-date-picker .date-picker__trigger { min-width: 164px; }
-.segmented { width: 246px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; padding: 0; border: 0; border-radius: var(--control-radius); background: transparent; }
-.segmented button { min-width: 0; height: var(--control-height); min-height: var(--control-height); display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid var(--line); border-radius: var(--control-radius); background: var(--input-bg); color: var(--muted); padding: 0 7px; font-size: 11px; cursor: pointer; }
+.segmented { width: 176px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px; padding: 0; border: 0; border-radius: var(--control-radius); background: transparent; }
+.segmented button { min-width: 0; height: var(--control-height); min-height: var(--control-height); display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid var(--line); border-radius: var(--control-radius); background: var(--input-bg); color: var(--muted); padding: 0 7px; font-size: 12px; cursor: pointer; }
 .segmented button:hover { background: var(--hover); color: var(--text); }
 .segmented button[aria-pressed="true"] { border-color: var(--line-strong); background: var(--panel-raised); color: var(--text); }
 
 .workspace { min-height: 0; display: grid; grid-template-columns: 258px minmax(320px, 1fr) var(--inspector-width, 420px); }
 .bootstrap-workspace { position: relative; min-height: 0; overflow: hidden; }
 .warehouse-sync-list { width: min(560px, calc(100vw - 36px)); max-height: min(420px, 55vh); display: grid; gap: 8px; overflow: auto; margin-top: 16px; }
-.bootstrap-zone-map { width: 100%; height: 100%; }
 .bootstrap-onboarding { position: absolute; z-index: 35; top: 18px; right: 18px; width: min(390px, calc(100vw - 36px)); padding: 18px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--glass); box-shadow: 0 20px 60px var(--shadow); }
 .bootstrap-onboarding > svg { color: var(--accent); }
 .bootstrap-onboarding h1 { margin: 10px 0 7px; font-size: 18px; }
@@ -254,13 +241,11 @@ button { color: inherit; }
 .entity-card__row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .entity-card strong { font-size: 13px; }
 .entity-card p, .entity-card__subtitle { margin: 0; color: var(--muted); font-size: 11px; }
-.date-board { margin: 0 0 12px; padding: 9px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-soft); }
-.date-board > strong { display: block; margin-bottom: 7px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-.date-board > div, .request-date-options { display: flex; flex-wrap: wrap; gap: 5px; }
-.date-board button { border: 1px solid var(--line); border-radius: 7px; padding: 5px 7px; background: var(--panel-raised); color: var(--muted); font-size: 10px; cursor: pointer; }
-.date-board button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-soft-text); }
-.date-board button small { margin-left: 3px; color: inherit; opacity: .8; }
-.date-board p { margin: 7px 0 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.planning-date-nav { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px; margin: 0 0 12px; }
+.planning-date-nav > strong { color: var(--text); font-size: 12px; text-align: center; white-space: nowrap; }
+.planning-date-nav button { min-width: 0; height: 32px; display: flex; align-items: center; justify-content: center; gap: 4px; border: 1px solid var(--line); border-radius: var(--control-radius); padding: 0 7px; background: var(--input-bg); color: var(--muted); font-size: 10px; cursor: pointer; }
+.planning-date-nav button:hover { border-color: var(--line-strong); color: var(--text); }
+.request-date-options { display: flex; flex-wrap: wrap; gap: 5px; }
 .request-date-options { margin-top: 8px; }
 .request-date-options span { padding: 3px 5px; border-radius: 5px; background: var(--panel-raised); color: var(--muted); font-size: 10px; }
 .request-date-options .request-date-options__active { background: var(--accent-soft); color: var(--accent-soft-text); }
@@ -287,8 +272,13 @@ button { color: inherit; }
 .planning-request-card__parts { margin-right: auto; color: var(--muted); font-size: 10px; }
 .toolbar-row { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 12px; }
 .warehouse-actions { display: grid; gap: 8px; margin-bottom: 12px; }
-.warehouse-actions__row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.warehouse-actions__row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .warehouse-actions__row .button { width: 100%; height: 48px; min-width: 0; padding: 6px 7px; white-space: normal; line-height: 1.15; text-align: center; }
+.warehouse-actions__row .button--primary { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.date-picker__popover--range { right: auto; left: 0; display: grid; justify-items: end; gap: 8px; }
+.isochrone-tariff-editor { display: grid; gap: 12px; }
+.isochrone-tariff-row { display: grid; grid-template-columns: 70px minmax(0, 1fr) 32px; align-items: end; gap: 8px; }
+.isochrone-tariff-row > strong { align-self: center; font-size: 12px; }
 .detail-grid, .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .detail-item, .metric { padding: 9px; background: var(--panel-soft); border: 1px solid var(--line); border-radius: 8px; }
 .detail-item small, .metric small { display: block; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
@@ -339,10 +329,6 @@ textarea.input { resize: vertical; min-height: 74px; }
 .switch-field--disabled { opacity: .62; }
 .theme-switch { width: var(--control-height); min-width: var(--control-height); height: var(--control-height); min-height: var(--control-height); padding: 0; color: var(--muted); }
 .settings-overtime { display: grid; grid-template-columns: minmax(0, 1fr) minmax(170px, .55fr); align-items: start; gap: 12px; margin: 0 0 18px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-soft); }
-.zone-color-dot { width: 14px; height: 14px; display: inline-block; border: 1px solid #ffffff66; border-radius: 50%; box-shadow: 0 0 0 1px #07101d; }
-.zone-color-picker { position: relative; min-height: 42px; display: grid; grid-template-columns: 48px minmax(0, 1fr); align-items: stretch; gap: 9px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--input-bg); }
-.zone-color-picker input { width: 48px; height: 40px; padding: 4px; border: 0; background: transparent; cursor: pointer; }
-.zone-color-picker__gradient { background: linear-gradient(90deg, #ef4444, #f59e0b, #22c55e, #06b6d4, #3b82f6, #8b5cf6, #ec4899); opacity: .88; }
 
 .modal-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 24px; background: var(--overlay); backdrop-filter: blur(3px); }
 .modal { width: min(520px, 100%); max-height: min(760px, 94vh); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; border: 1px solid var(--line-strong); border-radius: 13px; overflow: hidden; background: var(--panel); box-shadow: 0 25px 80px #000c; }

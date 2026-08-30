@@ -4,20 +4,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityCommandReceiptRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityIsochroneTariffRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityJobRepository;
-import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityPriceZoneRepository;
-import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityRestrictionZoneRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityShiftRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacitySnapshotRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityIsochroneTariff;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityJobRequest;
-import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityPriceZoneRequest;
-import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityRestrictionKind;
-import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityRestrictionZoneRequest;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityShiftRequest;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityTaskType;
-import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningGeoJsonMultiPolygon;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.ReplacePlanningCapacitySnapshotRequest;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -61,11 +57,6 @@ class WarehouseCapacitySnapshotPersistenceIntegrationTest {
       UUID.fromString("00000000-0000-0000-0000-000000000610");
   private static final UUID SOURCE_SHIFT =
       UUID.fromString("00000000-0000-0000-0000-000000000611");
-  private static final UUID SOURCE_ZONE =
-      UUID.fromString("00000000-0000-0000-0000-000000000612");
-  private static final UUID SOURCE_RESTRICTION =
-      UUID.fromString("00000000-0000-0000-0000-000000000613");
-
   @Container
   @ServiceConnection
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
@@ -75,8 +66,7 @@ class WarehouseCapacitySnapshotPersistenceIntegrationTest {
   @Autowired WarehouseCapacityCommandReceiptRepository receipts;
   @Autowired WarehouseCapacityJobRepository jobs;
   @Autowired WarehouseCapacityShiftRepository shifts;
-  @Autowired WarehouseCapacityPriceZoneRepository priceZones;
-  @Autowired WarehouseCapacityRestrictionZoneRepository restrictionZones;
+  @Autowired WarehouseCapacityIsochroneTariffRepository isochroneTariffs;
   @Autowired JdbcTemplate jdbc;
 
   @MockitoBean LogisticsDependencyGateway dependencies;
@@ -126,8 +116,7 @@ class WarehouseCapacitySnapshotPersistenceIntegrationTest {
     assertThat(created.replayed()).isFalse();
     assertThat(created.jobCount()).isEqualTo(2);
     assertThat(created.shiftCount()).isEqualTo(1);
-    assertThat(created.priceZoneCount()).isEqualTo(1);
-    assertThat(created.restrictionZoneCount()).isEqualTo(1);
+    assertThat(created.isochroneTariffCount()).isEqualTo(5);
     assertThat(replaced.replayed()).isFalse();
     assertThat(returned.replayed()).isFalse();
     assertThat(delayedReplay.replayed()).isTrue();
@@ -138,12 +127,8 @@ class WarehouseCapacitySnapshotPersistenceIntegrationTest {
     assertThat(returned.sourceGeneration()).isEqualTo(3);
     assertThat(snapshots.count()).isEqualTo(1);
     assertThat(snapshots.findAll())
-        .singleElement()
-        .satisfies(
-            snapshot -> {
-              assertThat(snapshot.getSourceRevision()).isEqualTo("a".repeat(64));
-              assertThat(snapshot.getIsochronePrice60Minutes()).isEqualTo(11_003);
-            });
+        .extracting(snapshot -> snapshot.getSourceRevision())
+        .containsExactly("a".repeat(64));
     assertThat(receipts.count()).isEqualTo(3);
     assertThat(jobs.findCapacityWorkload(WAREHOUSE, LocalDate.of(2026, 8, 29)))
         .hasSize(2)
@@ -171,21 +156,14 @@ class WarehouseCapacitySnapshotPersistenceIntegrationTest {
               assertThat(shift.getSourceShiftId()).isEqualTo(SOURCE_SHIFT);
               assertThat(shift.getCabinCapacity()).isEqualTo(2);
             });
-    assertThat(priceZones.findTariffZones(WAREHOUSE))
-        .singleElement()
-        .satisfies(
-            zone -> {
-              assertThat(zone.getSourceZoneId()).isEqualTo(SOURCE_ZONE);
-              assertThat(zone.getDeliveryPriceRubles()).isEqualTo(3_000);
-            });
-    assertThat(restrictionZones.findRestrictionZones(WAREHOUSE))
-        .singleElement()
-        .satisfies(
-            zone -> {
-              assertThat(zone.getSourceZoneId()).isEqualTo(SOURCE_RESTRICTION);
-              assertThat(zone.getKind().name()).isEqualTo("NO_TRAILER");
-              assertThat(zone.getSourceZoneVersion()).isEqualTo(3);
-            });
+    assertThat(isochroneTariffs.findTariffs(WAREHOUSE))
+        .extracting(tariff -> tariff.getTravelMinutes(), tariff -> tariff.getPriceRubles())
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(60, 11_003L),
+            org.assertj.core.groups.Tuple.tuple(120, 16_003L),
+            org.assertj.core.groups.Tuple.tuple(180, 21_003L),
+            org.assertj.core.groups.Tuple.tuple(240, 26_003L),
+            org.assertj.core.groups.Tuple.tuple(300, 31_003L));
   }
 
   private static ReplacePlanningCapacitySnapshotRequest request(
@@ -229,34 +207,10 @@ class WarehouseCapacitySnapshotPersistenceIntegrationTest {
                 30,
                 2)),
         List.of(
-            new PlanningCapacityPriceZoneRequest(
-                SOURCE_ZONE,
-                sourceGeneration,
-                3_000,
-                2_000,
-                geometry())),
-        11_000L + sourceGeneration,
-        16_000L + sourceGeneration,
-        21_000L + sourceGeneration,
-        26_000L + sourceGeneration,
-        List.of(
-            new PlanningCapacityRestrictionZoneRequest(
-                SOURCE_RESTRICTION,
-                sourceGeneration,
-                PlanningCapacityRestrictionKind.NO_TRAILER,
-                geometry())));
-  }
-
-  private static PlanningGeoJsonMultiPolygon geometry() {
-    return new PlanningGeoJsonMultiPolygon(
-        "MultiPolygon",
-        List.of(
-            List.of(
-                List.of(
-                    List.of(30.0, 59.0),
-                    List.of(31.0, 59.0),
-                    List.of(31.0, 60.0),
-                    List.of(30.0, 60.0),
-                    List.of(30.0, 59.0)))));
+            new PlanningCapacityIsochroneTariff(60, 11_000L + sourceGeneration),
+            new PlanningCapacityIsochroneTariff(120, 16_000L + sourceGeneration),
+            new PlanningCapacityIsochroneTariff(180, 21_000L + sourceGeneration),
+            new PlanningCapacityIsochroneTariff(240, 26_000L + sourceGeneration),
+            new PlanningCapacityIsochroneTariff(300, 31_000L + sourceGeneration)));
   }
 }

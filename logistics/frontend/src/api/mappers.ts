@@ -22,7 +22,17 @@ import type {
 import { dateInTimeZone, localDateTimeToIso } from '../utils/format';
 import type { components } from './schema';
 
-export type RawWarehouse = components['schemas']['WarehouseRead'];
+/** Generated warehouse payload with the canonical dynamic tariff collection. */
+export type RawWarehouse = components['schemas']['WarehouseRead'] & {
+  isochrone_tariffs?: Warehouse['isochrone_tariffs'];
+};
+
+const DEFAULT_ISOCHRONE_TARIFFS: Warehouse['isochrone_tariffs'] = [
+  { travel_minutes: 60, price_rubles: 10_000 },
+  { travel_minutes: 120, price_rubles: 15_000 },
+  { travel_minutes: 180, price_rubles: 20_000 },
+  { travel_minutes: 240, price_rubles: 25_000 },
+];
 
 export function normalizePlanningSettings(source: Record<string, unknown>): PlanningSettings {
   const normalized: Record<string, unknown> = { ...DEFAULT_PLANNING_SETTINGS };
@@ -38,10 +48,9 @@ export function normalizeWarehouse(raw: RawWarehouse | Warehouse, now = new Date
   return {
     ...raw,
     timezone: timeZone,
-    isochrone_price_60_minutes: raw.isochrone_price_60_minutes ?? 10_000,
-    isochrone_price_120_minutes: raw.isochrone_price_120_minutes ?? 15_000,
-    isochrone_price_180_minutes: raw.isochrone_price_180_minutes ?? 20_000,
-    isochrone_price_240_minutes: raw.isochrone_price_240_minutes ?? 25_000,
+    isochrone_tariffs: raw.isochrone_tariffs?.length
+      ? raw.isochrone_tariffs.map((tariff) => ({ ...tariff }))
+      : DEFAULT_ISOCHRONE_TARIFFS.map((tariff) => ({ ...tariff })),
     default_planning_date: raw.default_planning_date ?? dateInTimeZone(now, timeZone),
     settings: normalizePlanningSettings(raw.settings as unknown as Record<string, unknown>),
   };
@@ -284,7 +293,6 @@ function normalizeCycle(raw: RawRouteCycle, workspace: WarehouseWorkspace, planI
       ...stop,
       route_cycle_id: raw.id,
       label: task?.request?.name ?? (stop.stop_type.startsWith('DEPOT') ? workspace.warehouse.name : stop.stop_type),
-      zone_id: task?.task.zone_id ?? null,
       warnings: undefined,
     };
   });
@@ -486,12 +494,6 @@ export function normalizeWorkspace(workspace: WarehouseWorkspace): WarehouseWork
       contact_phone: request.contact_phone ?? '',
       date_options: request.date_options ?? [],
       tasks: (request.tasks ?? []).map((task) => ({ ...task, mandatory: task.mandatory ?? request.mandatory ?? false })),
-      zone_status: request.zone_status ??
-        ((request as LogisticsRequest & { zone_classification_status?: string }).zone_classification_status === 'OUTSIDE_ZONES'
-          ? 'OUTSIDE_ZONES'
-          : (request as LogisticsRequest & { zone_is_stale?: boolean }).zone_is_stale
-            ? 'STALE'
-            : 'CURRENT'),
     })),
   };
 }

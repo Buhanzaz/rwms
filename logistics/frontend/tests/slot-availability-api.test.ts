@@ -9,8 +9,7 @@ describe('slot availability transport', () => {
       date: '2026-08-29',
       plan_version: 17,
       delivery_price_rubles: 12500,
-      price_zone_id: '22222222-2222-4222-8222-222222222222',
-      price_zone_name: 'СПб · ближняя зона',
+      price_isochrone_minutes: 300,
       trailer_access_allowed: false,
       slots: [{
         start: '09:00',
@@ -64,8 +63,7 @@ describe('slot availability transport', () => {
       site_cabin_capacity: 1,
     });
     expect(response.delivery_price_rubles).toBe(12500);
-    expect(response.price_zone_id).toBe('22222222-2222-4222-8222-222222222222');
-    expect(response.price_zone_name).toBe('СПб · ближняя зона');
+    expect(response.price_isochrone_minutes).toBe(300);
     expect(response.trailer_access_allowed).toBe(false);
     expect(response.slots[0]?.best_candidate?.route_after_geojson?.type).toBe('LineString');
     expect(response.slots[0]?.best_candidate).toMatchObject({

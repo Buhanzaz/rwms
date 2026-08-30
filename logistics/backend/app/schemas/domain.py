@@ -19,8 +19,6 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from shapely.geometry import MultiPolygon, Polygon, shape
-from shapely.geometry.base import BaseGeometry
 
 from app.models.domain import (
     OptimizationStatus,
@@ -30,15 +28,20 @@ from app.models.domain import (
     StopType,
     TaskStatus,
     VehicleLoadProfileType,
-    ZoneClassificationStatus,
-    ZoneKind,
 )
 
 type NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-type Position = tuple[float, float]
-type LinearRing = list[Position]
-type PolygonCoordinates = list[LinearRing]
-type MultiPolygonCoordinates = list[PolygonCoordinates]
+
+
+def _default_isochrone_tariffs() -> list[IsochroneTariff]:
+    """Return an independent copy of the default four hourly tariff tiers."""
+
+    return [
+        IsochroneTariff(travel_minutes=60, price_rubles=10_000),
+        IsochroneTariff(travel_minutes=120, price_rubles=15_000),
+        IsochroneTariff(travel_minutes=180, price_rubles=20_000),
+        IsochroneTariff(travel_minutes=240, price_rubles=25_000),
+    ]
 
 
 class ApiModel(BaseModel):
@@ -150,20 +153,39 @@ class WorkloadDeletionResult(ApiModel):
     deleted_plans: int = 0
 
 
+class IsochroneTariff(ApiModel):
+    """One contiguous hourly road-travel price tier."""
+
+    travel_minutes: int = Field(ge=60, le=720, multiple_of=60)
+    price_rubles: int = Field(ge=0)
+
+
+def _validate_isochrone_tariffs(value: list[IsochroneTariff]) -> list[IsochroneTariff]:
+    """Require one-to-twelve contiguous hourly tiers starting at sixty minutes."""
+
+    expected = list(range(60, 60 * (len(value) + 1), 60))
+    actual = [tariff.travel_minutes for tariff in value]
+    if actual != expected:
+        raise ValueError("isochrone tariffs must be contiguous hourly tiers starting at 60")
+    return value
+
+
 class WarehouseCreate(ApiModel):
-    """Input that binds one RWMS warehouse and optional first exceptional zone."""
+    """Input that binds one RWMS warehouse and its ordered road-travel tariffs."""
 
     external_warehouse_id: UUID
-    initial_zone: ZoneCreate | None = None
     loading_minutes: int = Field(default=30, ge=0)
     unloading_minutes: int = Field(default=30, ge=0)
     turnaround_minutes: int = Field(default=15, ge=0)
     working_day_start: time = time(8)
     working_day_end: time = time(20)
-    isochrone_price_60_minutes: int = Field(default=10_000, ge=0)
-    isochrone_price_120_minutes: int = Field(default=15_000, ge=0)
-    isochrone_price_180_minutes: int = Field(default=20_000, ge=0)
-    isochrone_price_240_minutes: int = Field(default=25_000, ge=0)
+    isochrone_tariffs: list[IsochroneTariff] = Field(
+        default_factory=_default_isochrone_tariffs,
+        min_length=1,
+        max_length=12,
+    )
+
+    _validate_tariffs = field_validator("isochrone_tariffs")(_validate_isochrone_tariffs)
 
     @model_validator(mode="after")
     def validate_working_day(self) -> WarehouseCreate:
@@ -185,10 +207,13 @@ class WarehouseUpdate(ApiModel):
     turnaround_minutes: int | None = Field(default=None, ge=0)
     working_day_start: time | None = None
     working_day_end: time | None = None
-    isochrone_price_60_minutes: int | None = Field(default=None, ge=0)
-    isochrone_price_120_minutes: int | None = Field(default=None, ge=0)
-    isochrone_price_180_minutes: int | None = Field(default=None, ge=0)
-    isochrone_price_240_minutes: int | None = Field(default=None, ge=0)
+    isochrone_tariffs: list[IsochroneTariff] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=12,
+    )
+
+    _validate_tariffs = field_validator("isochrone_tariffs")(_validate_isochrone_tariffs)
 
 
 class WarehouseRead(ApiModel):
@@ -210,10 +235,7 @@ class WarehouseRead(ApiModel):
     turnaround_minutes: int
     working_day_start: time
     working_day_end: time
-    isochrone_price_60_minutes: int
-    isochrone_price_120_minutes: int
-    isochrone_price_180_minutes: int
-    isochrone_price_240_minutes: int
+    isochrone_tariffs: list[IsochroneTariff]
     default_planning_date: date | None
     seed: int
     settings: dict[str, Any]
@@ -239,111 +261,6 @@ class AvailableWarehouseRead(ApiModel):
     local_warehouse_id: UUID | None = None
 
 
-class GeoJsonGeometry(ApiModel):
-    """GeoJSON Polygon or MultiPolygon accepted by the zone editor."""
-
-    type: Literal["Polygon", "MultiPolygon"]
-    coordinates: PolygonCoordinates | MultiPolygonCoordinates
-
-    def to_shapely(self) -> Polygon | MultiPolygon:
-        """Build and validate a non-empty polygonal Shapely geometry."""
-
-        geometry = shape(self.model_dump())
-        if not isinstance(geometry, (Polygon, MultiPolygon)):
-            raise ValueError("zone geometry must be Polygon or MultiPolygon")
-        if geometry.is_empty:
-            raise ValueError("zone geometry must not be empty")
-        if not geometry.is_valid:
-            raise ValueError("zone geometry is invalid or self-intersecting")
-        return geometry
-
-    @model_validator(mode="after")
-    def validate_geometry(self) -> GeoJsonGeometry:
-        """Fail request validation before invalid geometry reaches PostGIS."""
-
-        self.to_shapely()
-        return self
-
-    @classmethod
-    def from_shapely(cls, geometry: BaseGeometry) -> GeoJsonGeometry:
-        """Convert a persisted Polygon or MultiPolygon into JSON-safe GeoJSON."""
-
-        from shapely.geometry import mapping
-
-        payload = mapping(geometry)
-        return cls.model_validate(payload)
-
-
-class ZoneCreate(ApiModel):
-    """Input for a version-one forbidden, no-trailer, or special-price polygon."""
-
-    name: NonBlank
-    kind: ZoneKind = ZoneKind.SPECIAL_PRICE
-    color: str = Field(default="#22C55E", pattern=r"^#[0-9A-Fa-f]{6}$")
-    geometry: GeoJsonGeometry
-    delivery_price: int = Field(default=0, ge=0)
-    pickup_price: int = Field(default=0, ge=0)
-    locked: bool = False
-
-
-class ZoneUpdate(ApiModel):
-    """Partial zone update; geometry changes increment version server-side."""
-
-    name: NonBlank | None = None
-    kind: ZoneKind | None = None
-    color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
-    geometry: GeoJsonGeometry | None = None
-    delivery_price: int | None = Field(default=None, ge=0)
-    pickup_price: int | None = Field(default=None, ge=0)
-
-
-class ZoneRead(ApiModel):
-    """Versioned warehouse-owned exceptional zone and stale-request count."""
-
-    id: UUID
-    warehouse_id: UUID
-    name: str
-    kind: ZoneKind
-    color: str
-    geometry: GeoJsonGeometry
-    version: int
-    delivery_price: int
-    pickup_price: int
-    locked: bool
-    stale_request_count: int = 0
-    created_at: AwareDatetime
-    updated_at: AwareDatetime
-
-
-class ZoneLockRequest(ApiModel):
-    """Explicit desired editing-lock state."""
-
-    locked: bool = True
-
-
-class ZoneCutoutInnerZone(ApiModel):
-    """Required metadata for the operational zone occupying a new cutout."""
-
-    name: NonBlank
-    kind: ZoneKind = ZoneKind.SPECIAL_PRICE
-    color: str = Field(default="#22C55E", pattern=r"^#[0-9A-Fa-f]{6}$")
-    delivery_price: int = Field(default=0, ge=0)
-    pickup_price: int = Field(default=0, ge=0)
-    locked: bool
-
-
-class ZoneCutoutRequest(ApiModel):
-    """Strictly internal geometry plus metadata for its new operational zone."""
-
-    geometry: GeoJsonGeometry
-    inner_zone: ZoneCutoutInnerZone
-
-
-class ZoneCutoutRead(ApiModel):
-    """Both atomic outcomes of cutting a source zone and creating its inner zone."""
-
-    source_zone: ZoneRead
-    inner_zone: ZoneRead
 
 
 class DriverCreate(ApiModel):
@@ -827,8 +744,6 @@ class PlanningTaskRead(ApiModel):
     type: RequestType
     latitude: float
     longitude: float
-    zone_id: UUID | None
-    zone_version: int | None
     service_minutes: int
     priority: int
     mandatory: bool
@@ -837,7 +752,7 @@ class PlanningTaskRead(ApiModel):
 
 
 class LogisticsRequestRead(ApiModel):
-    """Request with backend classification, date options, and split parts."""
+    """Warehouse request with date options and vehicle-sized split parts."""
 
     id: UUID
     warehouse_id: UUID
@@ -857,10 +772,6 @@ class LogisticsRequestRead(ApiModel):
     priority: int
     status: RequestStatus
     scheduled_date: date | None
-    zone_id: UUID | None
-    zone_version: int | None
-    zone_classification_status: ZoneClassificationStatus
-    zone_is_stale: bool = False
     split_allowed: bool
     mandatory: bool
     trailer_access_allowed: bool | None
@@ -879,7 +790,6 @@ class WarehouseWorkspaceRead(ApiModel):
 
     warehouse: WarehouseRead
     warehouses: list[WarehouseRead]
-    zones: list[ZoneRead]
     drivers: list[DriverRead]
     vehicles: list[VehicleRead]
     trailers: list[TrailerRead]
@@ -1200,41 +1110,11 @@ class RwmsPlanningCapacityShift(RwmsApiModel):
         return self
 
 
-class RwmsPlanningPriceZone(RwmsApiModel):
-    """Versioned planning polygon used by RWMS only to classify customer tariffs."""
+class RwmsIsochroneTariff(RwmsApiModel):
+    """One ordered hourly tariff published to the RWMS capacity owner."""
 
-    source_zone_id: UUID = Field(alias="sourceZoneId")
-    source_zone_version: int = Field(alias="sourceZoneVersion", ge=1)
-    delivery_price_rubles: int = Field(alias="deliveryPriceRubles", ge=0)
-    pickup_price_rubles: int = Field(alias="pickupPriceRubles", ge=0)
-    geometry: GeoJsonGeometry
-
-    @field_validator("geometry")
-    @classmethod
-    def require_multipolygon(cls, value: GeoJsonGeometry) -> GeoJsonGeometry:
-        """Publish one canonical MultiPolygon shape for every tariff zone."""
-
-        if value.type != "MultiPolygon":
-            raise ValueError("price-zone geometry must be a GeoJSON MultiPolygon")
-        return value
-
-
-class RwmsPlanningRestrictionZone(RwmsApiModel):
-    """Versioned exceptional polygon that constrains delivery route feasibility."""
-
-    source_zone_id: UUID = Field(alias="sourceZoneId")
-    source_zone_version: int = Field(alias="sourceZoneVersion", ge=1)
-    kind: Literal["FORBIDDEN", "NO_TRAILER"]
-    geometry: GeoJsonGeometry
-
-    @field_validator("geometry")
-    @classmethod
-    def require_multipolygon(cls, value: GeoJsonGeometry) -> GeoJsonGeometry:
-        """Publish one canonical MultiPolygon shape for every restriction zone."""
-
-        if value.type != "MultiPolygon":
-            raise ValueError("restriction-zone geometry must be a GeoJSON MultiPolygon")
-        return value
+    travel_minutes: int = Field(alias="travelMinutes", ge=60, le=720, multiple_of=60)
+    price_rubles: int = Field(alias="priceRubles", ge=0)
 
 
 class RwmsCapacitySnapshotCommand(RwmsApiModel):
@@ -1244,21 +1124,10 @@ class RwmsCapacitySnapshotCommand(RwmsApiModel):
     source_revision: str = Field(alias="sourceRevision", pattern=r"^[0-9a-f]{64}$")
     jobs: list[RwmsPlanningCapacityJob] = Field(max_length=1_000)
     shifts: list[RwmsPlanningCapacityShift] = Field(max_length=2_000)
-    price_zones: list[RwmsPlanningPriceZone] = Field(alias="priceZones", max_length=500)
-    isochrone_price_60_minutes: int = Field(
-        default=10_000, alias="isochronePrice60Minutes", ge=0
-    )
-    isochrone_price_120_minutes: int = Field(
-        default=15_000, alias="isochronePrice120Minutes", ge=0
-    )
-    isochrone_price_180_minutes: int = Field(
-        default=20_000, alias="isochronePrice180Minutes", ge=0
-    )
-    isochrone_price_240_minutes: int = Field(
-        default=25_000, alias="isochronePrice240Minutes", ge=0
-    )
-    restriction_zones: list[RwmsPlanningRestrictionZone] = Field(
-        default_factory=list, alias="restrictionZones", max_length=500
+    isochrone_tariffs: list[RwmsIsochroneTariff] = Field(
+        alias="isochroneTariffs",
+        min_length=1,
+        max_length=12,
     )
 
     @field_validator("jobs")
@@ -1285,39 +1154,17 @@ class RwmsCapacitySnapshotCommand(RwmsApiModel):
             raise ValueError("sourceShiftId values must be unique")
         return value
 
-    @field_validator("price_zones")
+    @field_validator("isochrone_tariffs")
     @classmethod
-    def validate_unique_source_zones(
-        cls, value: list[RwmsPlanningPriceZone]
-    ) -> list[RwmsPlanningPriceZone]:
-        """Reject duplicate zone identities in one full replacement."""
+    def validate_tariffs(
+        cls, value: list[RwmsIsochroneTariff]
+    ) -> list[RwmsIsochroneTariff]:
+        """Require the same contiguous hourly tier sequence as the public warehouse API."""
 
-        identifiers = [zone.source_zone_id for zone in value]
-        if len(set(identifiers)) != len(identifiers):
-            raise ValueError("sourceZoneId values must be unique")
+        expected = list(range(60, 60 * (len(value) + 1), 60))
+        if [tariff.travel_minutes for tariff in value] != expected:
+            raise ValueError("isochroneTariffs must be contiguous hourly tiers starting at 60")
         return value
-
-    @field_validator("restriction_zones")
-    @classmethod
-    def validate_unique_restriction_zones(
-        cls, value: list[RwmsPlanningRestrictionZone]
-    ) -> list[RwmsPlanningRestrictionZone]:
-        """Reject duplicate restriction identities in one full replacement."""
-
-        identifiers = [zone.source_zone_id for zone in value]
-        if len(set(identifiers)) != len(identifiers):
-            raise ValueError("restriction sourceZoneId values must be unique")
-        return value
-
-    @model_validator(mode="after")
-    def validate_zone_scopes(self) -> RwmsCapacitySnapshotCommand:
-        """Keep one source zone in exactly one exceptional-policy scope."""
-
-        price_ids = {zone.source_zone_id for zone in self.price_zones}
-        restriction_ids = {zone.source_zone_id for zone in self.restriction_zones}
-        if price_ids & restriction_ids:
-            raise ValueError("sourceZoneId values must be unique across all zone scopes")
-        return self
 
 
 class RwmsCapacitySnapshotResult(RwmsApiModel):
@@ -1329,8 +1176,7 @@ class RwmsCapacitySnapshotResult(RwmsApiModel):
     source_revision: str = Field(alias="sourceRevision", pattern=r"^[0-9a-f]{64}$")
     job_count: int = Field(alias="jobCount", ge=0)
     shift_count: int = Field(alias="shiftCount", ge=0)
-    price_zone_count: int = Field(alias="priceZoneCount", ge=0)
-    restriction_zone_count: int = Field(default=0, alias="restrictionZoneCount", ge=0)
+    isochrone_tariff_count: int = Field(alias="isochroneTariffCount", ge=1, le=12)
     replayed: bool
     updated_at: AwareDatetime = Field(alias="updatedAt")
 

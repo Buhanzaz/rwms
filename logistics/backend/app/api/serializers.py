@@ -2,45 +2,18 @@
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.geo import geometry_to_geojson
-from app.models import LogisticsRequest, Zone
+from app.models import LogisticsRequest
 from app.schemas.domain import (
-    GeoJsonGeometry,
     LogisticsRequestRead,
     PlanningTaskRead,
     RequestDateOptionRead,
-    ZoneRead,
 )
-from app.services.catalog import count_stale_requests
-
-
-async def zone_read(session: AsyncSession, zone: Zone) -> ZoneRead:
-    """Serialize a zone with GeoJSON geometry and its stale-request count."""
-
-    return ZoneRead(
-        id=zone.id,
-        warehouse_id=zone.warehouse_id,
-        name=zone.name,
-        kind=zone.kind,
-        color=zone.color,
-        geometry=GeoJsonGeometry.model_validate(geometry_to_geojson(zone.geometry)),
-        version=zone.version,
-        delivery_price=zone.delivery_price,
-        pickup_price=zone.pickup_price,
-        locked=zone.locked,
-        stale_request_count=await count_stale_requests(session, zone),
-        created_at=zone.created_at,
-        updated_at=zone.updated_at,
-    )
 
 
 async def request_read(session: AsyncSession, request: LogisticsRequest) -> LogisticsRequestRead:
-    """Serialize a request and derive whether its stored zone snapshot is stale."""
+    """Serialize a request without triggering hidden ORM relationship access."""
 
-    zone_is_stale = False
-    if request.zone_id is not None:
-        zone = await session.get(Zone, request.zone_id)
-        zone_is_stale = zone is None or zone.version != request.zone_version
+    del session
     return LogisticsRequestRead(
         id=request.id,
         warehouse_id=request.warehouse_id,
@@ -60,10 +33,6 @@ async def request_read(session: AsyncSession, request: LogisticsRequest) -> Logi
         priority=request.priority,
         status=request.status,
         scheduled_date=request.scheduled_date,
-        zone_id=request.zone_id,
-        zone_version=request.zone_version,
-        zone_classification_status=request.zone_classification_status,
-        zone_is_stale=zone_is_stale,
         split_allowed=request.split_allowed,
         mandatory=request.mandatory,
         trailer_access_allowed=request.trailer_access_allowed,

@@ -8,6 +8,7 @@ import {
   TASK_TRAVEL_TIME_CONTOUR_LAYER_IDS,
   WAREHOUSE_TRAVEL_TIME_CONTOUR_LAYER_IDS,
   deriveTravelTimeContourOrigins,
+  travelTimeContourStyles,
   travelTimeContourFeaturesForOrigin,
   travelTimeContourLayerSpecifications,
 } from '../src/map/TravelTimeContours';
@@ -58,26 +59,20 @@ describe('travel-time contour transport', () => {
 });
 
 describe('travel-time contour map layers', () => {
-  it('renders fixed translucent fills from outer to inner behind later overlays', () => {
+  it('renders all supported dynamic hourly fills from outer to inner behind later overlays', () => {
     const layers = travelTimeContourLayerSpecifications();
 
-    expect(layers.map((layer) => layer.id)).toEqual([
-      `${TRAVEL_TIME_CONTOUR_SOURCE_ID}-depot-240`,
-      `${TRAVEL_TIME_CONTOUR_SOURCE_ID}-task-240`,
-      `${TRAVEL_TIME_CONTOUR_SOURCE_ID}-depot-180`,
-      `${TRAVEL_TIME_CONTOUR_SOURCE_ID}-task-180`,
-      `${TRAVEL_TIME_CONTOUR_SOURCE_ID}-depot-120`,
-      `${TRAVEL_TIME_CONTOUR_SOURCE_ID}-task-120`,
-      `${TRAVEL_TIME_CONTOUR_SOURCE_ID}-depot-60`,
-      `${TRAVEL_TIME_CONTOUR_SOURCE_ID}-task-60`,
-    ]);
+    expect(layers).toHaveLength(24);
+    expect(layers[0]?.id).toBe(`${TRAVEL_TIME_CONTOUR_SOURCE_ID}-depot-720`);
+    expect(layers.at(-1)?.id).toBe(`${TRAVEL_TIME_CONTOUR_SOURCE_ID}-task-60`);
     expect(WAREHOUSE_TRAVEL_TIME_CONTOUR_LAYER_IDS).toEqual(layers.filter((layer) => layer.id.includes('-depot-')).map((layer) => layer.id));
     expect(TASK_TRAVEL_TIME_CONTOUR_LAYER_IDS).toEqual(layers.filter((layer) => layer.id.includes('-task-')).map((layer) => layer.id));
     expect(layers.every((layer) => layer.type === 'fill')).toBe(true);
     expect(layers.every((layer) => layer.source === TRAVEL_TIME_CONTOUR_SOURCE_ID)).toBe(true);
-    expect(layers[0]?.filter).toEqual(['all', ['==', ['get', 'contour_minutes'], 240], ['==', ['get', 'origin_kind'], 'DEPOT']]);
-    expect(layers[1]?.filter).toEqual(['all', ['==', ['get', 'contour_minutes'], 240], ['==', ['get', 'origin_kind'], 'TASK']]);
+    expect(layers[0]?.filter).toEqual(['all', ['==', ['get', 'contour_minutes'], 720], ['==', ['get', 'origin_kind'], 'DEPOT']]);
+    expect(layers[1]?.filter).toEqual(['all', ['==', ['get', 'contour_minutes'], 720], ['==', ['get', 'origin_kind'], 'TASK']]);
     expect(layers.every((layer) => layer.layout?.visibility === 'none')).toBe(true);
+    expect(travelTimeContourStyles([60, 120, 300]).map((style) => style.label)).toEqual(['1 час', '2 часа', '5 часов']);
   });
 
   it('derives origins only for enabled warehouse and selected-task layers', () => {

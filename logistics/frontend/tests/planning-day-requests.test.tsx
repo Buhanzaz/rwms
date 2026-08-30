@@ -5,6 +5,17 @@ import { PlanningDayRequests } from '../src/features/planning/PlanningDayRequest
 import { requestFixture, workspaceFixture } from './fixtures';
 
 describe('planning-day request preparation', () => {
+  it('navigates adjacent dates through the shared planning-date handler', async () => {
+    const user = userEvent.setup();
+    const onPlanningDateChange = vi.fn();
+    render(<PlanningDayRequests workspace={workspaceFixture()} planningDate="2026-08-30" busy={false} onPlanningDateChange={onPlanningDateChange} onSave={() => Promise.resolve()} onSplit={() => Promise.resolve()} onSelect={() => undefined} />);
+
+    expect(screen.queryByText('Планируемый день')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Предыдущая дата/ }));
+    await user.click(screen.getByRole('button', { name: /Следующая дата/ }));
+    expect(onPlanningDateChange.mock.calls).toEqual([['2026-08-29'], ['2026-08-31']]);
+  });
+
   it('saves an explicit mandatory delivery together with its operational conditions', async () => {
     const user = userEvent.setup();
     const onSave = vi.fn(() => Promise.resolve());

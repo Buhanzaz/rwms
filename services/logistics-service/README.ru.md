@@ -66,8 +66,9 @@ terminal-session и её booking не переоткрываются и не п�
 и `15:00-18:00`, а также один вариант `DURING_DAY` на весь настроенный день доставки.
 [`CustomerDeliverySlotService`](src/main/java/dev/buhanzaz/rwms/logistics/customer/service/CustomerDeliverySlotService.java)
 сохраняет предложенную и удержанную ёмкость и через private Valhalla truck matrix рассчитывает
-точное дорожное время. `travelZoneHours` остаётся информационной неограниченной полосой от склада;
-ни эта полоса, ни тарифный полигон не участвуют в допустимости. Каждый фиксированный или дневной
+точное дорожное время. `travelZoneHours` остаётся информационной неограниченной полосой от склада и
+не определяет ни допустимость, ни цену. Настроенные tiers изохрон ограничивают покрытие доставки
+только после нахождения точного дорожного маршрута. Каждый фиксированный или дневной
 вариант проверяется по маршруту и ёмкости до выдачи клиенту. `kind`, `window_start` и `window_end`
 хранятся вместе: фиксированные границы остаются точным обещанием прибытия, а границы полного дня
 остаются ненулевыми и ограничивают повторную проверку при hold, не обещая конкретный час.
@@ -88,10 +89,11 @@ terminal-session и её booking не переоткрываются и не п�
 последовательные заезды машины без прицепа, двойка разрешает прицеп только при наличии точного truck
 route. Любое изменение бытовок, вместимости объекта или мебели отвязывает старый slot от корзины.
 Каждый offer также замораживает применимые высоту, ширину, длину, массу, нагрузку на ось и число
-осей одиночной машины или автопоезда, с которыми Valhalla проверила truck-route. Независимо
-подобранный тарифный полигон добавляет цену доставки и стабильный UUID источника (`priceZoneId`) в
-offer/hold, но никогда не влияет
-на доступность. Transport
+осей одиночной машины или автопоезда, с которыми Valhalla проверила truck-route. Одностороннее
+дорожное время выбирает первый настроенный часовой тариф изохроны, который его покрывает; самый
+дальний настроенный tier является границей доставки, поэтому за его пределами offer не создаётся.
+Новые offers публикуют выбранный tier в `priceIsochroneMinutes` и оставляют `priceZoneId=null`;
+исторические quotes спецзон сохраняют записанную цену и nullable zone ID. Transport
 contract сохраняет возможность `false` search-time подтверждений для совместимых клиентов, которым
 нужны только предварительные даты; текущий CustomerApp собирает оба факта и, когда требуется,
 вместимость объекта в модальном окне после связки адреса/точки и до запроса слотов. Финальный hold объединяет совместимые search-time
@@ -350,11 +352,12 @@ source conflict.
 склада, а response не публикует устаревшую source identity. Команда содержит типизированные
 координаты сгенерированных доставок и вывозов, жёсткие локальные окна, количество бытовок, время
 обслуживания, priority, mandatory/trailer-факты, анонимные датированные смены с локальными
-началом/концом, перерывом и вместимостью одна или две бытовки, а также versioned GeoJSON тарифные
-полигоны. Тарифный полигон содержит только `sourceZoneId`, `sourceZoneVersion`, цены
-доставки/вывоза и geometry. Покрывающие полигоны классифицируются по наименьшей geometry, затем по
-source UUID; новая customer quote публикует этот UUID как `priceZoneId`. В активной модели нет ни
-кода, ни приоритета зоны, а тарифные полигоны не участвуют в route feasibility.
+началом/концом, перерывом и вместимостью одна или две бытовки, а также от одного до двенадцати
+упорядоченных тарифов изохрон. Tariffs начинаются с 60 минут и идут без пропусков с шагом 60 минут
+до максимум 720 минут; каждый tier хранит фактическую неотрицательную цену в рублях. Цену и
+дальнюю границу доставки определяет дорожное время Valhalla, а не принадлежность полигону или
+расстояние по прямой. Допустимость прицепа остаётся фактом точного vehicle route и ёмкости задания,
+а не политикой тарифной зоны.
 
 Identity заказа, клиента, бытовки и персональные данные водителя не передаются. Idempotency key,
 64-символьная source revision и warehouse-local монотонный `sourceGeneration` защищают exact replay
@@ -367,7 +370,7 @@ Apply назначений принимает только доставки с s
 остаются в симуляторе. См.
 [`WarehouseCapacitySnapshotService`](src/main/java/dev/buhanzaz/rwms/logistics/customer/capacity/service/WarehouseCapacitySnapshotService.java)
 и
-[`V65__warehouse_capacity_identity_and_tariff_zones.sql`](src/main/resources/db/migration/V65__warehouse_capacity_identity_and_tariff_zones.sql).
+[`V74__normalize_warehouse_isochrone_tariffs.sql`](src/main/resources/db/migration/V74__normalize_warehouse_isochrone_tariffs.sql).
 
 Replacement повторно использует те же presentation/booking или прямую команду заказа. Warehouse
 manager может заменить только запрошенные бытовки до старта с точным количеством client selection;
@@ -509,7 +512,7 @@ port. Его неизменённый constructor собирает шесть ow
 | `RentalOrderUnitReplacementService` | Direct и presentation replacement через ordered batch checkpoints, pre-start отмену driver task и сходимость order/document members |
 | `RentalOrderPlanningIntegrationService` | Минимальный versioned feed планировщика и idempotent применение через существующего владельца rental shipment без общего состояния БД |
 | `PlanningResourceDirectoryService` | Проверенные least-privilege warehouse и active primary-driver resources от их exact domain owners без local projection |
-| `WarehouseCapacitySnapshotService` | Per-warehouse idempotent замена capacity, monotonic generation fencing и persistence canonical UUID тарифной зоны |
+| `WarehouseCapacitySnapshotService` | Per-warehouse idempotent замена capacity, monotonic generation fencing и canonical persistence упорядоченных часовых тарифов изохрон |
 | `FutureDriverTaskClaimService` | Future-only preview/claim общего задания с проверкой квалификации и versions в task-board; выполнение не запускается |
 | `ClientDeliveryDatePolicy` | Warehouse-local окно обычного public confirmation со второго по пятый день |
 | `ShipmentFurnitureTaskService` | Полный состав мебели всех active units заказа, readiness существующих movement tasks и replacement recovery checkpoints |
@@ -707,7 +710,7 @@ document не переписываются, все ранее разрешённ
 priority тарифной зоны. Customer slot quote теперь хранит UUID `price_zone_id`: parseable UUID и
 code, всё ещё совпадающий ровно с одной активной зоной склада, переносятся до удаления старой колонки;
 сохранённая цена без доступного соответствия честно остаётся с null identity зоны, а не получает
-выдуманный UUID. Новые offers требуют цену и UUID зоны вместе.
+выдуманный UUID. V74 позже удаляет активный расчёт зон, сохраняя эти исторические поля quote.
 
 Миграции
 [`V67__interwarehouse_transfer_planning.sql`](src/main/resources/db/migration/V67__interwarehouse_transfer_planning.sql)
@@ -731,6 +734,11 @@ opaque IDs.
 [`V73__driver_task_worker_content.sql`](src/main/resources/db/migration/V73__driver_task_worker_content.sql)
 добавляет object-shaped structured worker snapshot без складских effects и с обратно совместимым
 значением `{}` для всех исторических заданий.
+[`V74__normalize_warehouse_isochrone_tariffs.sql`](src/main/resources/db/migration/V74__normalize_warehouse_isochrone_tariffs.sql)
+переносит четыре фиксированные цены snapshot в нормализованные дочерние часовые tariffs, разрешает
+непрерывные tiers с пятого по двенадцатый и удаляет фиксированные price columns вместе с активными
+таблицами price/restriction zones. Исторические цена customer slot и `price_zone_id` сохраняются;
+новые quotes всегда используют настроенный tier от 60 до 720 минут.
 
 Logistics вместе фиксирует facts, projection checkpoints и transactional outbox. Kafka delivery —
 at-least-once: aggregate IDs являются record keys, event IDs — dedupe identities, а consumers хранят

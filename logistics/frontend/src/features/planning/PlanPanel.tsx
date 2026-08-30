@@ -10,12 +10,10 @@ import {
 } from '@dnd-kit/core';
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Lock, LockOpen, MoveRight, TriangleAlert } from 'lucide-react';
+import { GripVertical, Lock, LockOpen, TriangleAlert } from 'lucide-react';
 import type { RouteCycle, RoutePlan, RouteStop, UnassignedTask, UUID } from '../../domain/types';
 import { Badge, Button, EmptyState } from '../../components/ui';
 import { formatDistance, formatDuration, formatTime, shortId } from '../../utils/format';
-
-const integerFormatter = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
 
 interface DragData {
   taskId: UUID;
@@ -111,7 +109,7 @@ function CycleCard({ cycle, timeZone, readOnly, onSelect, onToggleLock }: {
   );
 }
 
-function DraggableUnassigned({ item, readOnly }: { item: UnassignedTask; readOnly: boolean }) {
+function DraggableUnassigned({ item, readOnly, onReschedule }: { item: UnassignedTask; readOnly: boolean; onReschedule: (requestId: UUID) => void }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useSortable({
     id: `unassigned-${item.task.id}`,
     disabled: readOnly,
@@ -124,7 +122,7 @@ function DraggableUnassigned({ item, readOnly }: { item: UnassignedTask; readOnl
       <ul>{item.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
       {item.closest_option ? <p>Ближайший вариант: {item.closest_option}</p> : null}
       {item.recommendations.length ? <div className="recommendation">{item.recommendations.join(' · ')}</div> : null}
-      <small><MoveRight size={11} /> Перетащите в допустимый цикл</small>
+      <Button type="button" size="sm" disabled={readOnly} onClick={(event) => { event.stopPropagation(); onReschedule(item.request?.id ?? item.task.request_id); }}>Перенести на другой день</Button>
     </article>
   );
 }
@@ -137,7 +135,7 @@ export interface PlanMove {
   kind: 'MOVE_TASK' | 'REORDER_TASK';
 }
 
-export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, readOnly = false, onSelectCycle, onSelectDriverRoute, onMove, onToggleLock, onCreateTransfer = () => undefined }: {
+export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, readOnly = false, onSelectCycle, onSelectDriverRoute, onMove, onToggleLock, onCreateTransfer = () => undefined, onRescheduleUnassigned = () => undefined }: {
   plan: RoutePlan | null;
   timeZone: string;
   showUnassignedOnly?: boolean;
@@ -147,16 +145,13 @@ export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, readOnly
   onMove: (move: PlanMove) => void;
   onToggleLock: (cycle: RouteCycle) => void;
   onCreateTransfer?: (sourceWarehouseId: UUID, destinationWarehouseId: UUID) => void;
+  onRescheduleUnassigned?: (requestId: UUID) => void;
 }) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
   if (!plan) return <EmptyState title="Автоплан пока не готов" description="Заполните для доставок и вывозов время, количество и проезд с прицепом. После этого рейсы появятся автоматически." />;
-  const firstCycles = plan.driver_routes.flatMap((route) => route.cycles[0] ? [route.cycles[0]] : []);
-  const earliestStart = firstCycles.reduce<string | null>((earliest, cycle) => !earliest || cycle.planned_start < earliest ? cycle.planned_start : earliest, null);
-  const parallelStarts = earliestStart ? firstCycles.filter((cycle) => cycle.planned_start === earliestStart).length : 0;
-
   const onDragEnd = (event: DragEndEvent) => {
     if (readOnly) return;
     if (!isDragData(event.active.data.current) || !event.over) return;
@@ -186,26 +181,23 @@ export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, readOnly
       {showUnassignedOnly ? (
         <>
           <h2 className="section-title">Нераспределённые</h2>
-          <p className="section-subtitle">Причины сформированы планировщиком. Перетаскивание запускает серверную валидацию.</p>
+          <p className="section-subtitle">Причины сформированы планировщиком. Измените условия или перенесите задачу на подходящий день.</p>
           <SortableContext items={plan.unassigned.map((item) => `unassigned-${item.task.id}`)} strategy={verticalListSortingStrategy}>
             <div className="entity-list">
-              {plan.unassigned.map((item) => <DraggableUnassigned item={item} readOnly={readOnly} key={item.task.id} />)}
+              {plan.unassigned.map((item) => <DraggableUnassigned item={item} readOnly={readOnly} onReschedule={onRescheduleUnassigned} key={item.task.id} />)}
               {!plan.unassigned.length ? <EmptyState title="Все задачи распределены" description="Для выбранной даты необработанных задач нет." /> : null}
             </div>
           </SortableContext>
         </>
       ) : (
         <>
-          <h2 className="section-title">План · версия {plan.version}</h2>
-          <p className="section-subtitle">{readOnly ? 'План утверждён и доступен только для просмотра.' : 'Перетаскивайте транспортные части между циклами. Ошибочные изменения backend отклонит.'}</p>
-          {earliestStart ? <div className="parallel-start-summary"><strong>Параллельный старт</strong><span>{parallelStarts} из {firstCycles.length} первых рейсов начинаются в {formatTime(earliestStart, timeZone)}. Остальные могут стартовать позже только из-за окна или занятости своей смены.</span></div> : null}
           {plan.driver_routes.map((route) => (
             <section className="route-driver" key={route.driver_shift_id} data-testid="driver-route">
               <header className="route-driver__head">
                 <button type="button" className="route-driver__select" onClick={() => onSelectDriverRoute(route.driver_shift_id)}>
                   <strong>{route.driver_name}</strong>
                   <p>{route.vehicle_name} · {route.registration_number}</p>
-                  <p className="route-driver__workload">Нагрузка смены: {integerFormatter.format(route.metrics.shift_utilization_percent)}% · циклов: {integerFormatter.format(route.cycles.length)}</p>
+                  {route.cycles.length ? <p className="route-driver__workload">Старт со склада {formatTime(route.cycles[0]!.planned_start, timeZone)} · возврат на склад {formatTime(route.cycles.at(-1)!.planned_finish, timeZone)}</p> : null}
                 </button>
                 <Badge tone={plan.status === 'CONFIRMED' ? 'success' : 'accent'}>{plan.status === 'CONFIRMED' ? 'утверждён' : `${route.cycles.length} рейс.`}</Badge>
               </header>

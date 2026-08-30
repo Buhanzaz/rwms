@@ -1,4 +1,4 @@
-"""HTTP integration tests for atomic warehouse binding and owner-scoped zones."""
+"""HTTP integration tests for canonical warehouse projection and tariffs."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from app.main import create_app
 from app.models import RoutePlan
 from app.schemas.domain import RwmsWarehouseIdentity
 from app.schemas.geocoding import ResolvedAddress
-from tests.factories import make_warehouse, make_zone
+from tests.factories import make_warehouse
 
 pytestmark = pytest.mark.integration
 
@@ -46,25 +46,8 @@ def _application(
     return application
 
 
-def _zone_payload() -> dict[str, object]:
-    """Return one initial owner zone covering the canonical warehouse address."""
-
-    return {
-        "name": "Санкт-Петербург",
-        "color": "#3B82F6",
-        "delivery_price": 5_000,
-        "pickup_price": 3_000,
-        "geometry": {
-            "type": "Polygon",
-            "coordinates": [
-                [[29.0, 59.0], [32.0, 59.0], [32.0, 61.0], [29.0, 61.0], [29.0, 59.0]]
-            ],
-        },
-    }
-
-
 @pytest.mark.asyncio
-async def test_binding_atomically_creates_first_zone_from_canonical_identity(
+async def test_binding_atomically_creates_default_tariffs_from_canonical_identity(
     db_session: AsyncSession,
 ) -> None:
     """Directory discovery materializes coordinates and invalidates only changed route plans."""
@@ -102,6 +85,12 @@ async def test_binding_atomically_creates_first_zone_from_canonical_identity(
         assert body["external_warehouse_id"] == str(external_id)
         assert body["external_warehouse_version"] == 1
         assert body["representative"] is True
+        assert body["isochrone_tariffs"] == [
+            {"travel_minutes": 60, "price_rubles": 10_000},
+            {"travel_minutes": 120, "price_rubles": 15_000},
+            {"travel_minutes": 180, "price_rubles": 20_000},
+            {"travel_minutes": 240, "price_rubles": 25_000},
+        ]
 
         route_plan = RoutePlan(
             warehouse_id=body["id"],
@@ -152,7 +141,7 @@ async def test_binding_atomically_creates_first_zone_from_canonical_identity(
         assert workspace.status_code == 200, workspace.text
         workspace_body = workspace.json()
         assert workspace_body["warehouse"]["id"] == body["id"]
-        assert workspace_body["zones"] == []
+        assert "zones" not in workspace_body
         assert workspace_body["drivers"] == []
         assert workspace_body["requests"] == []
 
@@ -161,7 +150,7 @@ async def test_binding_atomically_creates_first_zone_from_canonical_identity(
 
 
 @pytest.mark.asyncio
-async def test_http_warehouse_binding_accepts_no_initial_zone(
+async def test_http_warehouse_binding_keeps_coordinate_less_identity_available(
     db_session: AsyncSession,
 ) -> None:
     """A directory warehouse without coordinates stays visible but is not routed or projected."""
@@ -319,77 +308,6 @@ async def test_warehouse_geocoding_failure_does_not_hide_routing_ready_siblings(
 
 
 @pytest.mark.asyncio
-async def test_nested_zone_paths_hide_other_warehouse_zones(
-    db_session: AsyncSession,
-) -> None:
-    """Lists are owner-scoped and a foreign zone UUID returns the normal not-found response."""
-
-    first = await make_warehouse(db_session, name="First")
-    second = await make_warehouse(db_session, name="Second")
-    first_zone = await make_zone(db_session, first, name="First zone")
-    second_zone = await make_zone(db_session, second, name="Second zone")
-    app = _application(db_session, AsyncMock(), AsyncMock())
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        listed = await client.get(f"/api/warehouses/{first.id}/zones")
-        hidden = await client.get(
-            f"/api/warehouses/{first.id}/zones/{second_zone.id}"
-        )
-
-    assert listed.status_code == 200
-    assert [item["id"] for item in listed.json()] == [str(first_zone.id)]
-    assert hidden.status_code == 404
-    assert hidden.json()["code"] == "ZONE_NOT_FOUND"
-
-
-@pytest.mark.asyncio
-async def test_capacity_mutations_advance_owner_generation_but_lock_does_not(
-    db_session: AsyncSession,
-) -> None:
-    """Every geometry/tariff mutation is fenced once while the editor lock is metadata only."""
-
-    warehouse = await make_warehouse(db_session)
-    await make_zone(db_session, warehouse, name="Covering zone")
-    app = _application(db_session, AsyncMock(), AsyncMock())
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        created = await client.post(
-            f"/api/warehouses/{warehouse.id}/zones",
-            json={**_zone_payload(), "name": "Mutable zone"},
-        )
-        assert created.status_code == 201, created.text
-        zone_id = created.json()["id"]
-        await db_session.refresh(warehouse)
-        after_create = warehouse.capacity_generation
-
-        locked = await client.post(
-            f"/api/warehouses/{warehouse.id}/zones/{zone_id}/lock",
-            json={"locked": True},
-        )
-        assert locked.status_code == 200, locked.text
-        await db_session.refresh(warehouse)
-        after_lock = warehouse.capacity_generation
-
-        assert (
-            await client.post(
-                f"/api/warehouses/{warehouse.id}/zones/{zone_id}/lock",
-                json={"locked": False},
-            )
-        ).status_code == 200
-        updated = await client.patch(
-            f"/api/warehouses/{warehouse.id}/zones/{zone_id}",
-            json={"delivery_price": 7_500},
-        )
-        assert updated.status_code == 200, updated.text
-        await db_session.refresh(warehouse)
-        after_update = warehouse.capacity_generation
-
-    assert after_create > 0
-    assert after_lock == after_create
-    assert after_update > after_lock
-
-
-@pytest.mark.asyncio
 async def test_warehouse_create_rejects_browser_owned_identity_fields(
     db_session: AsyncSession,
 ) -> None:
@@ -404,7 +322,6 @@ async def test_warehouse_create_rejects_browser_owned_identity_fields(
             "/api/warehouses",
             json={
                 "external_warehouse_id": str(uuid4()),
-                "initial_zone": _zone_payload(),
                 "name": "Browser depot",
                 "address": "Browser address",
                 "latitude": 59.9,

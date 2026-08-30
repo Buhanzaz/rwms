@@ -7,7 +7,7 @@ import type {
 } from '../api/client';
 import type { UUID, Warehouse } from '../domain/types';
 
-/** Map source shared by the fixed one-to-four-hour contour layers. */
+/** Map source shared by the configurable hourly contour layers. */
 export const TRAVEL_TIME_CONTOUR_SOURCE_ID = 'rwms-travel-time-contours' as const;
 
 /** Presentation of one travel-time contour in the map and legend. */
@@ -18,21 +18,32 @@ export interface TravelTimeContourStyle {
   opacity: number;
 }
 
-/** Inner-to-outer legend order for the four fixed visual truck estimates. */
-export const TRAVEL_TIME_CONTOUR_STYLES: readonly TravelTimeContourStyle[] = [
-  { minutes: 60, label: '1 час', color: '#45d6b0', opacity: 0.22 },
-  { minutes: 120, label: '2 часа', color: '#38a7c7', opacity: 0.17 },
-  { minutes: 180, label: '3 часа', color: '#3b82b8', opacity: 0.13 },
-  { minutes: 240, label: '4 часа', color: '#315f96', opacity: 0.1 },
-];
+export const SUPPORTED_TRAVEL_TIME_CONTOUR_MINUTES = Array.from({ length: 12 }, (_, index) => (index + 1) * 60);
+
+/** Build stable inner-to-outer visual styles for the configured hourly tiers. */
+export function travelTimeContourStyles(minutes: readonly number[]): TravelTimeContourStyle[] {
+  return [...new Set(minutes)].sort((left, right) => left - right).map((value, index, values) => {
+    const ratio = values.length <= 1 ? 0 : index / (values.length - 1);
+    const hue = Math.round(160 + ratio * 55);
+    const hours = value / 60;
+    return {
+      minutes: value,
+      label: `${hours} ${hours === 1 ? 'час' : hours < 5 ? 'часа' : 'часов'}`,
+      color: `hsl(${hue} 62% ${Math.round(58 - ratio * 18)}%)`,
+      opacity: Math.max(0.07, 0.22 - ratio * 0.13),
+    };
+  });
+}
+
+const ALL_TRAVEL_TIME_CONTOUR_STYLES = travelTimeContourStyles(SUPPORTED_TRAVEL_TIME_CONTOUR_MINUTES);
 
 /** Warehouse layer IDs in outer-to-inner render order, behind operational overlays. */
-export const WAREHOUSE_TRAVEL_TIME_CONTOUR_LAYER_IDS = [...TRAVEL_TIME_CONTOUR_STYLES]
+export const WAREHOUSE_TRAVEL_TIME_CONTOUR_LAYER_IDS = [...ALL_TRAVEL_TIME_CONTOUR_STYLES]
   .reverse()
   .map((style) => `${TRAVEL_TIME_CONTOUR_SOURCE_ID}-depot-${style.minutes}`);
 
 /** Selected-task layer IDs in outer-to-inner render order, behind operational overlays. */
-export const TASK_TRAVEL_TIME_CONTOUR_LAYER_IDS = [...TRAVEL_TIME_CONTOUR_STYLES]
+export const TASK_TRAVEL_TIME_CONTOUR_LAYER_IDS = [...ALL_TRAVEL_TIME_CONTOUR_STYLES]
   .reverse()
   .map((style) => `${TRAVEL_TIME_CONTOUR_SOURCE_ID}-task-${style.minutes}`);
 
@@ -104,7 +115,7 @@ export function deriveTravelTimeContourOrigins(
 
 /** Build separately switchable warehouse/task fills from outer to inner. */
 export function travelTimeContourLayerSpecifications(): maplibregl.FillLayerSpecification[] {
-  return [...TRAVEL_TIME_CONTOUR_STYLES].reverse().flatMap((style) => ([
+  return [...ALL_TRAVEL_TIME_CONTOUR_STYLES].reverse().flatMap((style) => ([
     {
       id: `${TRAVEL_TIME_CONTOUR_SOURCE_ID}-depot-${style.minutes}`,
       type: 'fill' as const,

@@ -18,7 +18,6 @@ from sqlalchemy.orm import selectinload
 from app.config import Settings
 from app.db import utc_now
 from app.errors import ApiError, not_found
-from app.geo.classification import classify_zone_policies
 from app.integrations.rwms import RwmsPlanningClient, get_rwms_planning_client
 from app.models import (
     DriverShift,
@@ -97,9 +96,6 @@ class SlotPlanningContext:
     source_revision: str
     delivery_price_rubles: int | None
     price_isochrone_minutes: int | None
-    price_zone_id: UUID | None
-    price_zone_version: int | None
-    price_zone_name: str | None
     trailer_access_allowed: bool
     support_facts: SupportResourceFacts | None
 
@@ -224,7 +220,6 @@ class SlotPlanningApplication:
             candidate_snapshot=self._candidate_snapshot(selected.best_candidate),
             delivery_price_rubles=context.delivery_price_rubles,
             price_isochrone_minutes=context.price_isochrone_minutes,
-            price_zone_id=context.price_zone_id,
         )
         session.add(hold)
         await session.flush()
@@ -237,7 +232,6 @@ class SlotPlanningApplication:
             slot_end=command.slot_end,
             delivery_price_rubles=hold.delivery_price_rubles,
             price_isochrone_minutes=hold.price_isochrone_minutes,
-            price_zone_id=hold.price_zone_id,
             trailer_access_allowed=context.trailer_access_allowed,
         )
 
@@ -305,7 +299,6 @@ class SlotPlanningApplication:
             if (
                 context.delivery_price_rubles != hold.delivery_price_rubles
                 or context.price_isochrone_minutes != hold.price_isochrone_minutes
-                or context.price_zone_id != hold.price_zone_id
             ):
                 raise ApiError(
                     409,
@@ -409,23 +402,6 @@ class SlotPlanningApplication:
                 "The selected planning date no longer accepts customer delivery requests",
             )
         configuration = warehouse_slot_configuration(warehouse)
-        policies = await classify_zone_policies(
-            session,
-            warehouse.id,
-            command.latitude,
-            command.longitude,
-        )
-        if policies.forbidden is not None:
-            raise ApiError(
-                422,
-                "DELIVERY_FORBIDDEN_ZONE",
-                "Delivery is prohibited for this address",
-                extra={
-                    "zone_id": str(policies.forbidden.id),
-                    "zone_name": policies.forbidden.name,
-                },
-            )
-        price_zone = policies.special_price
         active_holds = list(
             await session.scalars(
                 select(SlotHold)
@@ -475,12 +451,9 @@ class SlotPlanningApplication:
             day_plan=day_plan,
             equipment=equipment,
             source_revision=revision,
-            delivery_price_rubles=(price_zone.delivery_price if price_zone is not None else None),
+            delivery_price_rubles=None,
             price_isochrone_minutes=None,
-            price_zone_id=(price_zone.id if price_zone is not None else None),
-            price_zone_version=(price_zone.version if price_zone is not None else None),
-            price_zone_name=(price_zone.name if price_zone is not None else None),
-            trailer_access_allowed=policies.no_trailer is None,
+            trailer_access_allowed=True,
             support_facts=support_facts,
         )
 
@@ -846,10 +819,7 @@ class SlotPlanningApplication:
         provider: CachedTruckTravelTimeProvider,
         destination: GeoPoint,
     ) -> SlotPlanningContext:
-        """Classify the direct warehouse travel band unless a special zone overrides it."""
-
-        if context.price_zone_id is not None:
-            return context
+        """Price direct travel by the first configured tier that covers road time."""
         travel_seconds: list[int] = []
         seen_vehicles: set[str] = set()
         for driver in context.day_plan.drivers:
@@ -873,15 +843,18 @@ class SlotPlanningApplication:
             travel_seconds.append(metric.travel_seconds)
         if not travel_seconds:
             return context
-        tier = self._isochrone_tier(min(travel_seconds))
+        tier = self._isochrone_tier(context.warehouse, min(travel_seconds))
         if tier is None:
-            return context
-        price = {
-            60: context.warehouse.isochrone_price_60_minutes,
-            120: context.warehouse.isochrone_price_120_minutes,
-            180: context.warehouse.isochrone_price_180_minutes,
-            240: context.warehouse.isochrone_price_240_minutes,
-        }[tier]
+            raise ApiError(
+                422,
+                "DELIVERY_OUTSIDE_ISOCHRONE",
+                "Road travel time exceeds the warehouse's maximum configured tariff tier",
+            )
+        price = next(
+            tariff.price_rubles
+            for tariff in context.warehouse.isochrone_tariffs
+            if tariff.travel_minutes == tier
+        )
         return replace(
             context,
             delivery_price_rubles=price,
@@ -889,14 +862,14 @@ class SlotPlanningApplication:
         )
 
     @staticmethod
-    def _isochrone_tier(travel_seconds: int) -> int | None:
-        """Return the first inclusive one-to-four-hour price band."""
+    def _isochrone_tier(warehouse: Warehouse, travel_seconds: int) -> int | None:
+        """Return the first configured inclusive hourly price tier."""
 
         if travel_seconds < 0:
             raise ValueError("travel_seconds cannot be negative")
-        for minutes in (60, 120, 180, 240):
-            if travel_seconds <= minutes * 60:
-                return minutes
+        for tariff in warehouse.isochrone_tariffs:
+            if travel_seconds <= tariff.travel_minutes * 60:
+                return tariff.travel_minutes
         return None
 
     async def _read_result(
@@ -931,8 +904,6 @@ class SlotPlanningApplication:
             plan_version=result.plan_version,
             delivery_price_rubles=context.delivery_price_rubles,
             price_isochrone_minutes=context.price_isochrone_minutes,
-            price_zone_id=context.price_zone_id,
-            price_zone_name=context.price_zone_name,
             trailer_access_allowed=context.trailer_access_allowed,
             slots=slots,
         )
@@ -1205,11 +1176,6 @@ class SlotPlanningApplication:
             mandatory=True,
             status=RequestStatus.READY,
             scheduled_date=command.date,
-            zone_id=context.price_zone_id,
-            zone_version=context.price_zone_version,
-            zone_classification_status=(
-                "CLASSIFIED" if context.price_zone_id is not None else "OUTSIDE_ZONES"
-            ),
             split_allowed=len(task_quantities) > 1,
             trailer_access_allowed=(
                 context.trailer_access_allowed and command.site_cabin_capacity == 2
@@ -1244,8 +1210,6 @@ class SlotPlanningApplication:
                 type=RequestType.DELIVERY,
                 latitude=command.latitude,
                 longitude=command.longitude,
-                zone_id=request.zone_id,
-                zone_version=request.zone_version,
                 service_minutes=(
                     command.service_duration_minutes
                     or context.configuration.delivery_service_minutes
@@ -1327,12 +1291,10 @@ class SlotPlanningApplication:
                 "unloading": warehouse.unloading_minutes,
                 "turnaround": warehouse.turnaround_minutes,
                 "capacity_generation": warehouse.capacity_generation,
-                "isochrone_prices": {
-                    "60": warehouse.isochrone_price_60_minutes,
-                    "120": warehouse.isochrone_price_120_minutes,
-                    "180": warehouse.isochrone_price_180_minutes,
-                    "240": warehouse.isochrone_price_240_minutes,
-                },
+                "isochrone_tariffs": [
+                    (tariff.travel_minutes, tariff.price_rubles)
+                    for tariff in warehouse.isochrone_tariffs
+                ],
             },
             "date": planning_date.isoformat(),
             "settings": warehouse.settings,

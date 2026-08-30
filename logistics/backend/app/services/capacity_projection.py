@@ -1,4 +1,4 @@
-"""Deterministic warehouse-capacity projection published to RWMS logistics-service."""
+"""Deterministic warehouse capacity and isochrone tariffs published to RWMS."""
 
 from __future__ import annotations
 
@@ -14,25 +14,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.errors import ApiError, not_found
-from app.geo.classification import geometry_to_geojson
 from app.integrations.rwms import RwmsPlanningClient
 from app.models import (
     DriverShift,
     LogisticsRequest,
     PlanningDayClosure,
     Warehouse,
-    Zone,
 )
-from app.models.domain import RequestStatus, ZoneKind
+from app.models.domain import RequestStatus
 from app.schemas.domain import (
-    GeoJsonGeometry,
     PlanningSettings,
     RwmsCapacitySnapshotCommand,
     RwmsCapacitySnapshotResult,
+    RwmsIsochroneTariff,
     RwmsPlanningCapacityJob,
     RwmsPlanningCapacityShift,
-    RwmsPlanningPriceZone,
-    RwmsPlanningRestrictionZone,
 )
 from app.services.workload_generator import GENERATOR_SOURCE_SYSTEM
 
@@ -81,21 +77,20 @@ def _revision(
     capacity_generation: int,
     jobs: list[RwmsPlanningCapacityJob],
     shifts: list[RwmsPlanningCapacityShift],
-    price_zones: list[RwmsPlanningPriceZone],
-    restriction_zones: list[RwmsPlanningRestrictionZone],
-    isochrone_prices: tuple[int, int, int, int],
+    isochrone_tariffs: list[RwmsIsochroneTariff],
 ) -> str:
     """Hash one durable workload generation and its sorted capacity facts."""
 
     facts = {
         "warehouseId": str(warehouse_id),
         "capacityGeneration": capacity_generation,
-        "isochronePrices": {
-            "60": isochrone_prices[0],
-            "120": isochrone_prices[1],
-            "180": isochrone_prices[2],
-            "240": isochrone_prices[3],
-        },
+        "isochroneTariffs": [
+            {
+                "travelMinutes": tariff.travel_minutes,
+                "priceRubles": tariff.price_rubles,
+            }
+            for tariff in isochrone_tariffs
+        ],
         "jobs": [
             {
                 "sourceJobId": str(job.source_job_id),
@@ -112,25 +107,6 @@ def _revision(
                 "mandatory": job.mandatory,
             }
             for job in jobs
-        ],
-        "priceZones": [
-            {
-                "sourceZoneId": str(zone.source_zone_id),
-                "sourceZoneVersion": zone.source_zone_version,
-                "deliveryPriceRubles": zone.delivery_price_rubles,
-                "pickupPriceRubles": zone.pickup_price_rubles,
-                "geometry": zone.geometry.model_dump(mode="json"),
-            }
-            for zone in price_zones
-        ],
-        "restrictionZones": [
-            {
-                "sourceZoneId": str(zone.source_zone_id),
-                "sourceZoneVersion": zone.source_zone_version,
-                "kind": zone.kind,
-                "geometry": zone.geometry.model_dump(mode="json"),
-            }
-            for zone in restriction_zones
         ],
         "shifts": [
             {
@@ -157,7 +133,7 @@ async def build_capacity_projection(
     session: AsyncSession,
     warehouse_id: UUID,
 ) -> CapacityProjection:
-    """Read generated route capacity and tariff polygons for one linked warehouse."""
+    """Read generated route capacity and ordered tariffs for one linked warehouse."""
 
     warehouse = await session.scalar(
         select(Warehouse).where(Warehouse.id == warehouse_id).with_for_update()
@@ -307,62 +283,19 @@ async def build_capacity_projection(
             str(shift.source_shift_id),
         )
     )
-    zones = list(
-        await session.scalars(
-            select(Zone)
-            .where(Zone.warehouse_id == warehouse_id)
-            .order_by(Zone.name, Zone.id)
+    isochrone_tariffs = [
+        RwmsIsochroneTariff(
+            travel_minutes=tariff.travel_minutes,
+            price_rubles=tariff.price_rubles,
         )
-    )
-    price_zones = [
-        RwmsPlanningPriceZone(
-            source_zone_id=zone.id,
-            source_zone_version=zone.version,
-            delivery_price_rubles=zone.delivery_price,
-            pickup_price_rubles=zone.pickup_price,
-            geometry=GeoJsonGeometry.model_validate(geometry_to_geojson(zone.geometry)),
-        )
-        for zone in zones
-        if zone.kind == ZoneKind.SPECIAL_PRICE
+        for tariff in warehouse.isochrone_tariffs
     ]
-    restriction_zones = [
-        RwmsPlanningRestrictionZone(
-            source_zone_id=zone.id,
-            source_zone_version=zone.version,
-            kind=zone.kind,
-            geometry=GeoJsonGeometry.model_validate(geometry_to_geojson(zone.geometry)),
-        )
-        for zone in zones
-        if zone.kind in (ZoneKind.FORBIDDEN, ZoneKind.NO_TRAILER)
-    ]
-    price_zones.sort(key=lambda zone: str(zone.source_zone_id))
-    restriction_zones.sort(key=lambda zone: str(zone.source_zone_id))
-    if len(price_zones) > 500:
-        raise ApiError(
-            422,
-            "RWMS_CAPACITY_TOO_MANY_PRICE_ZONES",
-            "A capacity snapshot cannot contain more than 500 price zones",
-        )
-    if len(restriction_zones) > 500:
-        raise ApiError(
-            422,
-            "RWMS_CAPACITY_TOO_MANY_RESTRICTION_ZONES",
-            "A capacity snapshot cannot contain more than 500 restriction zones",
-        )
-    isochrone_prices = (
-        warehouse.isochrone_price_60_minutes,
-        warehouse.isochrone_price_120_minutes,
-        warehouse.isochrone_price_180_minutes,
-        warehouse.isochrone_price_240_minutes,
-    )
     source_revision = _revision(
         external_warehouse_id,
         warehouse.capacity_generation,
         jobs,
         shifts,
-        price_zones,
-        restriction_zones,
-        isochrone_prices,
+        isochrone_tariffs,
     )
     return CapacityProjection(
         command=RwmsCapacitySnapshotCommand(
@@ -370,12 +303,7 @@ async def build_capacity_projection(
             source_revision=source_revision,
             jobs=jobs,
             shifts=shifts,
-            price_zones=price_zones,
-            isochrone_price_60_minutes=isochrone_prices[0],
-            isochrone_price_120_minutes=isochrone_prices[1],
-            isochrone_price_180_minutes=isochrone_prices[2],
-            isochrone_price_240_minutes=isochrone_prices[3],
-            restriction_zones=restriction_zones,
+            isochrone_tariffs=isochrone_tariffs,
         ),
         idempotency_key=uuid5(
             _CAPACITY_IDEMPOTENCY_NAMESPACE,
@@ -408,8 +336,7 @@ async def publish_warehouse_capacity(
         or result.source_revision != projection.command.source_revision
         or result.job_count != len(projection.command.jobs)
         or result.shift_count != len(projection.command.shifts)
-        or result.price_zone_count != len(projection.command.price_zones)
-        or result.restriction_zone_count != len(projection.command.restriction_zones)
+        or result.isochrone_tariff_count != len(projection.command.isochrone_tariffs)
     ):
         raise ApiError(
             502,

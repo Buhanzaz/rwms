@@ -4,7 +4,7 @@
 
 This FastAPI/PostGIS application owns the standalone warehouse planning
 workspace. `Warehouse` is the planning root; its identity and timezone come
-from the authenticated RWMS warehouse directory. Tariff zones, drivers,
+from the authenticated RWMS warehouse directory. Isochrone tariffs, drivers,
 vehicles, trailers, shifts, requests, runs and plans all belong to one local
 warehouse UUID. The implementation sources are
 [`app/models/domain.py`](app/models/domain.py),
@@ -14,27 +14,25 @@ warehouse UUID. The implementation sources are
 ## Workspace and data rules
 
 - `GET /api/warehouses/{warehouse_id}/workspace` returns the selected warehouse,
-  all warehouse selectors, that warehouse's zones and its resources.
+  all routable warehouse markers and that warehouse's resources.
   With RWMS enabled it performs one automatic 31-day demand refresh. A partial
   refresh commits valid siblings and returns `RWMS_WORKSPACE_SYNC_INCOMPLETE`;
   `?refresh_rwms=false` is the explicit persisted-state recovery read.
 - Workspace vehicles embed their complete `load_profiles`; workspace trailers
   are the only trailer list. Vehicle configuration commands atomically replace
   vehicle fields and profiles, while trailer mutations remain separate.
-- Warehouse binding accepts an RWMS external UUID plus depot timing and
-  isochrone tariffs; an initial exceptional zone is optional. The server loads
+- Warehouse binding accepts an RWMS external UUID plus depot timing and a
+  one-to-twelve-entry contiguous hourly isochrone tariff list. The server loads
   canonical name/address/timezone and always prefers owner-held coordinates.
   When RWMS has only an address, the existing server geocoder qualifies a
   street-only value with the canonical city and stores a derived planning
   point. Automatic directory reads retain that point while the canonical
   address is unchanged; later RWMS coordinates replace it and invalidate
   affected mutable plans. There is no manual identity-refresh command.
-- Warehouse-owned zones carry UUID, name, color, geometry version,
-  delivery/pickup prices and lock state. Their endpoints are nested under
-  `/api/warehouses/{warehouse_id}/zones`; cross-warehouse zone IDs are rejected.
-  Overlap classification selects the smallest same-warehouse covering area and
-  then UUID. A mutation cannot leave the owning warehouse outside all its
-  zones. Zone polygons price work but never decide route feasibility.
+- The tariff list starts at 60 minutes and advances in one-hour steps. Exact
+  one-way Valhalla time selects its first covering price, and the last entry is
+  the hard order-acceptance boundary. No active zone CRUD or request-owned zone
+  identity remains.
 - Drivers use `ASSIGNED_DRIVER` with one validated worker UUID or
   `WAREHOUSE_DRIVERS` with a null worker UUID. Shifts repeat one daily interval
   over an inclusive, single-month range of at most 31 days.
@@ -58,14 +56,14 @@ warehouse UUID. The implementation sources are
 
 Dynamic slot availability performs complete multi-driver/multi-trip day
 resimulation and exact directed route checks. Tariff classification returns
-`price_zone_id` and `price_zone_name`; visual contours are not planning input.
+`price_isochrone_minutes`; visual contours are not planning input.
 A ten-minute hold is version-fenced, confirmation re-simulates without the
 hold itself, creates a mandatory request/tasks and is idempotent by confirmation
 key. See [`app/slot_planning`](app/slot_planning) and
 [`app/api/slot_planning.py`](app/api/slot_planning.py).
 
-Valhalla uses truck costing for exact legs and for read-only 60/120/180/240
-minute contours. Provider failure is explicit; there is no passenger-car or
+Valhalla uses truck costing for exact legs and read-only contours at every
+configured hourly boundary. Provider failure is explicit; there is no passenger-car or
 OSRM fallback. Open-day planning already considers compatible return and
 pickup-only work after delivery-priority candidates. Configured soft overtime
 extends exact routing and published shifts only by its bounded minute limit and

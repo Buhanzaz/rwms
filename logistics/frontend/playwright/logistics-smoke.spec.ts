@@ -37,19 +37,19 @@ const planSchema = z.object({
 });
 
 async function availableWarehouses(request: APIRequestContext) {
-  const response = await request.get('/api/warehouses');
+  const response = await request.get('api/warehouses');
   expect(response.ok()).toBe(true);
   return z.array(warehouseSchema).parse(await response.json());
 }
 
 async function selectWarehouse(page: Page, warehouse: z.infer<typeof warehouseSchema>) {
-  const picker = page.getByRole('combobox', { name: 'Текущий склад' });
-  await expect(picker).toBeVisible();
-  await picker.click();
-  const option = page.getByRole('option').filter({ hasText: warehouse.name });
-  await expect(option).toBeVisible();
-  await option.click();
-  await expect(picker).toContainText(warehouse.name);
+  const context = page.locator('.topbar__warehouse-context');
+  if (await context.filter({ hasText: warehouse.name }).isVisible().catch(() => false)) return;
+  const marker = page.getByRole('button', { name: `Склад: ${warehouse.name}` });
+  await expect(marker).toBeVisible();
+  await marker.click();
+  await page.getByRole('button', { name: `Перейти к складу ${warehouse.name}` }).click();
+  await expect(context).toContainText(warehouse.name);
 }
 
 test('рабочая область привязана к складу и не содержит сценарного legacy UI', async ({ page, request }) => {
@@ -71,18 +71,13 @@ test('рабочая область привязана к складу и не �
   await expect(page.getByText(/Map mode · MapLibre|Grid mode/)).toHaveCount(0);
 
   const sidebar = page.getByLabel('Разделы логистического стенда');
+  await expect(sidebar.getByRole('button', { name: /^Зоны/ })).toHaveCount(0);
   await sidebar.getByRole('button', { name: 'Склад' }).click();
   await expect(page.getByRole('heading', { name: warehouse.name })).toBeVisible();
   await expect(page.getByText('RWMS', { exact: true })).toBeVisible();
   await expect(page.getByText('подключён автоматически')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Тест на 3 дня' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Создать нагрузку' })).toBeVisible();
-
-  await sidebar.getByRole('button', { name: /^Зоны/ }).click();
-  await expect(page.getByRole('heading', { name: 'Особые зоны доставки' })).toBeVisible();
-  await expect(page.getByText('Вершины', { exact: true })).toHaveCount(0);
-  await expect(page.getByText('Код', { exact: true })).toHaveCount(0);
-  await expect(page.getByText('Приоритет', { exact: true })).toHaveCount(0);
 
   await sidebar.getByRole('button', { name: /^Смены/ }).click();
   await expect(page.getByText('Одна запись задаёт повторяющийся рабочий интервал водителя на период внутри месяца.')).toBeVisible();
@@ -105,7 +100,7 @@ test('рабочая область привязана к складу и не �
   await notificationButton.click();
 
   await sidebar.getByRole('button', { name: 'План дня' }).click();
-  await expect(page.getByText('Здесь только итоговый план и его показатели. Время, прицеп и обязательность редактируются в разделе «Доставки».')).toBeVisible();
+  await expect(page.getByRole('heading', { name: /^План на / })).toBeVisible();
   await expect(page.getByLabel('Доставка/вывоз с')).toHaveCount(0);
   await expect(page.getByLabel('Машина с прицепом проедет к адресу')).toHaveCount(0);
 
@@ -129,6 +124,7 @@ test('рабочая область привязана к складу и не �
   await slotPanel.getByRole('button', { name: 'Закрыть проверку слотов' }).click();
 
   await sidebar.getByRole('button', { name: 'Настройки' }).click();
+  await expect(page.getByRole('button', { name: 'Настройки изохронов' })).toBeVisible();
   await expect(page.getByLabel('Показывать уведомление, секунд')).toHaveValue('8');
 });
 
@@ -169,7 +165,7 @@ test('настраиваемая трёхдневная нагрузка авт�
     await expect(page.getByText(/Нагрузка (создана|заменена):/)).toBeVisible();
 
     for (const planId of generated.auto_plan_ids ?? []) {
-      const planResponse = await request.get('/api/plans/' + planId);
+      const planResponse = await request.get('api/plans/' + planId);
       expect(planResponse.ok()).toBe(true);
       const plan = planSchema.parse(await planResponse.json());
       expect(plan.warehouse_id).toBe(warehouse.id);

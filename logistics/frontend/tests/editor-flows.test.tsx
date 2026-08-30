@@ -1,20 +1,31 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import type { DriverInput, LogisticsRequestInput, ShiftInput, WarehouseUpdateInput, ZoneInput } from '../src/api/client';
+import type { DriverInput, LogisticsRequestInput, ShiftInput, WarehouseUpdateInput } from '../src/api/client';
 import {
   CatalogDialog,
   RequestDialog,
   ShiftDialog,
   WarehouseDialog,
-  ZoneDialog,
 } from '../src/components/EntityDialogs';
 import { warehouseFixture, workspaceFixture } from './fixtures';
+import { DateRangePicker } from '../src/components/DatePicker';
 
-const polygon = {
-  type: 'Polygon' as const,
-  coordinates: [[[30, 59], [31, 59], [31, 60], [30, 59]]],
-};
+describe('hotel date range', () => {
+  it('does not commit after the first click and commits the inclusive second endpoint', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<DateRangePicker from="" to="" label="Период смены" onChange={onChange} />);
+    await user.click(screen.getByRole('button', { name: 'Период смены' }));
+    const calendar = screen.getByRole('dialog', { name: 'Календарь: Период смены' });
+    await user.click(within(calendar).getByRole('button', { name: /11 августа 2026/ }));
+    expect(onChange).not.toHaveBeenCalled();
+    expect(within(calendar).getByRole('button', { name: 'Готово' })).toBeDisabled();
+    await user.click(within(calendar).getByRole('button', { name: /12 августа 2026/ }));
+    expect(onChange).toHaveBeenCalledWith('2026-08-11', '2026-08-12');
+    expect(within(calendar).getByRole('button', { name: 'Готово' })).toBeEnabled();
+  });
+});
 
 describe('warehouse editor', () => {
   it('edits planning settings without exposing canonical RWMS identity fields', async () => {
@@ -37,52 +48,6 @@ describe('warehouse editor', () => {
     await waitFor(() => expect(submit).toHaveBeenCalledOnce());
     expect(submit.mock.calls[0]?.[0]).toMatchObject({ loading_minutes: 45 });
     expect(submit.mock.calls[0]?.[0]).not.toHaveProperty('external_warehouse_id');
-  });
-});
-
-describe('zone editor', () => {
-  it('submits a selected gradient color and no removed metadata', async () => {
-    const user = userEvent.setup();
-    const submit = vi.fn<(input: ZoneInput) => Promise<void>>(() => Promise.resolve());
-    render(<ZoneDialog geometry={polygon} busy={false} onClose={() => undefined} onSubmit={submit} />);
-
-    await user.type(screen.getByLabelText('Название'), 'Север');
-    expect(screen.getByLabelText('Назначение зоны')).toHaveValue('SPECIAL_PRICE');
-    fireEvent.change(screen.getByLabelText('Цвет зоны'), { target: { value: '#3366ff' } });
-    fireEvent.change(screen.getByLabelText('Тариф доставки, ₽'), { target: { value: '20000' } });
-    fireEvent.change(screen.getByLabelText('Тариф вывоза, ₽'), { target: { value: '15000' } });
-    await user.click(screen.getByRole('button', { name: 'Сохранить зону' }));
-
-    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
-    expect(submit.mock.calls[0]?.[0]).toEqual({
-      name: 'Север',
-      kind: 'SPECIAL_PRICE',
-      color: '#3366FF',
-      delivery_price: 20000,
-      pickup_price: 15000,
-      locked: false,
-      geometry: polygon,
-    });
-    expect(submit.mock.calls[0]?.[0]).not.toHaveProperty('code');
-    expect(submit.mock.calls[0]?.[0]).not.toHaveProperty('priority');
-    expect(screen.queryByText('Вершины')).not.toBeInTheDocument();
-  });
-
-  it('stores no UI-only price when the polygon forbids trailer access', async () => {
-    const user = userEvent.setup();
-    const submit = vi.fn<(input: ZoneInput) => Promise<void>>(() => Promise.resolve());
-    render(<ZoneDialog geometry={polygon} busy={false} onClose={() => undefined} onSubmit={submit} />);
-
-    await user.type(screen.getByLabelText('Название'), 'Без прицепа');
-    await user.selectOptions(screen.getByLabelText('Назначение зоны'), 'NO_TRAILER');
-    expect(screen.queryByLabelText('Тариф доставки, ₽')).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Сохранить зону' }));
-
-    await waitFor(() => expect(submit).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'NO_TRAILER',
-      delivery_price: 0,
-      pickup_price: 0,
-    })));
   });
 });
 
@@ -116,33 +81,37 @@ describe('driver assignment', () => {
   });
 });
 
-describe('monthly driver shift', () => {
-  it('submits a period inside one month instead of a single calendar day', async () => {
+describe('driver shift range', () => {
+  it('submits an inclusive period selected in one calendar', async () => {
     const user = userEvent.setup();
     const submit = vi.fn<(input: ShiftInput) => Promise<void>>(() => Promise.resolve());
     const workspace = workspaceFixture();
     render(<ShiftDialog warehouse={workspace.warehouse} drivers={workspace.drivers} vehicles={workspace.vehicles} busy={false} onClose={() => undefined} onSubmit={submit} />);
 
-    fireEvent.change(screen.getByLabelText('Работает с'), { target: { value: '2026-08-01' } });
-    fireEvent.change(screen.getByLabelText('Работает по'), { target: { value: '2026-08-15' } });
+    await user.click(screen.getByRole('button', { name: 'Период смены' }));
+    const calendar = screen.getByRole('dialog', { name: 'Календарь: Период смены' });
+    await user.click(within(calendar).getByRole('button', { name: /11 августа/ }));
+    await user.click(within(calendar).getByRole('button', { name: /12 августа/ }));
+    await user.click(within(calendar).getByRole('button', { name: 'Готово' }));
     await user.click(screen.getByRole('button', { name: 'Сохранить смену' }));
 
     await waitFor(() => expect(submit).toHaveBeenCalledOnce());
-    expect(submit.mock.calls[0]?.[0]).toMatchObject({ date_from: '2026-08-01', date_to: '2026-08-15', start_time: '08:00', end_time: '20:00' });
-  });
-
-  it('rejects a period crossing a month boundary', async () => {
-    const user = userEvent.setup();
-    const workspace = workspaceFixture();
-    render(<ShiftDialog warehouse={warehouseFixture()} drivers={workspace.drivers} vehicles={workspace.vehicles} busy={false} onClose={() => undefined} onSubmit={() => Promise.resolve()} />);
-    fireEvent.change(screen.getByLabelText('Работает с'), { target: { value: '2026-08-15' } });
-    fireEvent.change(screen.getByLabelText('Работает по'), { target: { value: '2026-09-01' } });
-    await user.click(screen.getByRole('button', { name: 'Сохранить смену' }));
-    expect(await screen.findByText('Период смены должен находиться внутри одного месяца')).toBeVisible();
+    expect(submit.mock.calls[0]?.[0]).toMatchObject({ date_from: '2026-08-11', date_to: '2026-08-12', start_time: '08:00', end_time: '20:00' });
   });
 });
 
 describe('request editor', () => {
+  it('retains every planning rule when opened for rescheduling an existing request', () => {
+    const request = workspaceFixture().requests[0]!;
+    render(<RequestDialog request={request} type={request.type} defaultDate="2026-08-30" busy={false} onClose={() => undefined} onSubmit={() => Promise.resolve()} />);
+
+    expect(screen.getByLabelText('Дата')).toHaveValue('2026-08-30');
+    expect(screen.getByLabelText('Жёсткое окно')).toBeChecked();
+    expect(screen.getByLabelText('Машина с прицепом проедет к адресу')).toHaveValue('true');
+    expect(screen.getByLabelText('Обязательная доставка')).not.toBeChecked();
+    expect(screen.getByLabelText('Оповещение с паспортными данными водителя')).not.toBeChecked();
+  });
+
   it('uses only delivery/pickup, preserves reverse-geocoded address and submits the mandatory flag', async () => {
     const user = userEvent.setup();
     const submit = vi.fn<(input: LogisticsRequestInput) => Promise<void>>(() => Promise.resolve());

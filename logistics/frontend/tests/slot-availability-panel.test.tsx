@@ -11,8 +11,7 @@ const calculated: SlotAvailabilityResponse = {
   date: '2026-08-29',
   plan_version: 17,
   delivery_price_rubles: 12500,
-  price_zone_id: '22222222-2222-4222-8222-222222222222',
-  price_zone_name: 'СПб · ближняя зона',
+  price_isochrone_minutes: 300,
   trailer_access_allowed: true,
   slots: [
     {
@@ -113,7 +112,7 @@ describe('dispatcher slot availability panel', () => {
     expect(within(region).getAllByText('2').length).toBeGreaterThan(0);
   });
 
-  it('keeps zone price separate and renders the selected route timeline with load changes', async () => {
+  it('shows the dynamic isochrone price and selected route timeline with load changes', async () => {
     panel();
     fireEvent.change(screen.getByLabelText('Адрес нового клиента'), { target: { value: 'СПб, адрес 1' } });
     const available = await screen.findByRole('button', { name: /09:00–12:00.*Доступен/s });
@@ -121,9 +120,7 @@ describe('dispatcher slot availability panel', () => {
 
     const price = screen.getByRole('region', { name: 'Стоимость доставки' });
     expect(within(price).getByText(/12\s?500 ₽/)).toBeInTheDocument();
-    expect(within(price).getByText(/СПб · ближняя зона/)).toBeInTheDocument();
-    expect(within(price).queryByText('22222222-2222-4222-8222-222222222222')).not.toBeInTheDocument();
-    expect(within(price).getByText('Применена особая ценовая зона.')).toBeInTheDocument();
+    expect(within(price).getByText(/Цена рассчитана по времени пути от склада: до 5 ч/)).toBeInTheDocument();
     const timeline = screen.getByRole('region', { name: 'Временная шкала маршрута' });
     expect(within(timeline).getByText('Груз 0 → 2')).toBeInTheDocument();
     expect(within(timeline).getByText('Груз 2 → 1')).toBeInTheDocument();

@@ -18,7 +18,7 @@ function planFixture(): RoutePlan {
     created_at: '2026-08-24T00:00:00Z', updated_at: '2026-08-24T00:00:00Z', metrics: { ...EMPTY_METRICS, request_count: 5, assigned_count: 4, unassigned_count: 1, assignment_percent: 80, cycle_count: 1 },
     manually_changed: false,
     unassigned: [{
-      task: { id: 'task-5', request_id: 'request-5', part_number: 1, quantity: 2, type: 'DELIVERY', latitude: 55.8, longitude: 37.7, zone_id: 'z4', zone_version: 1, service_minutes: 30, priority: 5, mandatory: true, status: 'UNASSIGNED' },
+      task: { id: 'task-5', request_id: 'request-5', part_number: 1, quantity: 2, type: 'DELIVERY', latitude: 55.8, longitude: 37.7, service_minutes: 30, priority: 5, mandatory: true, status: 'UNASSIGNED' },
       reason_codes: ['TIME_WINDOW_CONFLICT'], reasons: ['временное окно 09:00–11:00 не помещается ни в одну смену'], closest_option: 'Можно назначить 30 августа 2026 г. в 18:19', recommendations: ['увеличить временное окно'],
     }],
     driver_routes: [{
@@ -29,10 +29,10 @@ function planFixture(): RoutePlan {
         explanation: ['окна доставок совместимы', 'дополнительный путь составляет 14 минут'], warnings: [], manually_changed: false,
         stops: [
           { id: 's0', route_cycle_id: 'cycle', sequence: 0, task_id: null, stop_type: 'DEPOT_LOAD', planned_arrival: '2026-08-25T05:00:00Z', planned_departure: '2026-08-25T05:30:00Z', service_seconds: 1800, quantity_delta: 2, load_before: 0, load_after: 2, latitude: 55.7, longitude: 37.6, label: 'Склад' },
-          { id: 's1', route_cycle_id: 'cycle', sequence: 1, task_id: 'task-1', stop_type: 'DELIVERY', planned_arrival: '2026-08-25T06:00:00Z', planned_departure: '2026-08-25T06:20:00Z', service_seconds: 1200, quantity_delta: -1, load_before: 2, load_after: 1, latitude: 55.8, longitude: 37.6, label: 'Москва, Тверская улица, 10', zone_id: 'zone-1' },
-          { id: 's2', route_cycle_id: 'cycle', sequence: 2, task_id: 'task-2', stop_type: 'DELIVERY', planned_arrival: '2026-08-25T07:00:00Z', planned_departure: '2026-08-25T07:20:00Z', service_seconds: 1200, quantity_delta: -1, load_before: 1, load_after: 0, latitude: 55.8, longitude: 37.7, label: 'Доставка 151', zone_id: 'zone-2' },
-          { id: 's3', route_cycle_id: 'cycle', sequence: 3, task_id: 'task-3', stop_type: 'PICKUP', planned_arrival: '2026-08-25T08:00:00Z', planned_departure: '2026-08-25T08:20:00Z', service_seconds: 1200, quantity_delta: 1, load_before: 0, load_after: 1, latitude: 55.8, longitude: 37.7, label: 'Вывоз 98', zone_id: 'zone-2' },
-          { id: 's4', route_cycle_id: 'cycle', sequence: 4, task_id: 'task-4', stop_type: 'PICKUP', planned_arrival: '2026-08-25T09:00:00Z', planned_departure: '2026-08-25T09:20:00Z', service_seconds: 1200, quantity_delta: 1, load_before: 1, load_after: 2, latitude: 55.8, longitude: 37.6, label: 'Вывоз 103', zone_id: 'zone-1' },
+          { id: 's1', route_cycle_id: 'cycle', sequence: 1, task_id: 'task-1', stop_type: 'DELIVERY', planned_arrival: '2026-08-25T06:00:00Z', planned_departure: '2026-08-25T06:20:00Z', service_seconds: 1200, quantity_delta: -1, load_before: 2, load_after: 1, latitude: 55.8, longitude: 37.6, label: 'Москва, Тверская улица, 10' },
+          { id: 's2', route_cycle_id: 'cycle', sequence: 2, task_id: 'task-2', stop_type: 'DELIVERY', planned_arrival: '2026-08-25T07:00:00Z', planned_departure: '2026-08-25T07:20:00Z', service_seconds: 1200, quantity_delta: -1, load_before: 1, load_after: 0, latitude: 55.8, longitude: 37.7, label: 'Доставка 151' },
+          { id: 's3', route_cycle_id: 'cycle', sequence: 3, task_id: 'task-3', stop_type: 'PICKUP', planned_arrival: '2026-08-25T08:00:00Z', planned_departure: '2026-08-25T08:20:00Z', service_seconds: 1200, quantity_delta: 1, load_before: 0, load_after: 1, latitude: 55.8, longitude: 37.7, label: 'Вывоз 98' },
+          { id: 's4', route_cycle_id: 'cycle', sequence: 4, task_id: 'task-4', stop_type: 'PICKUP', planned_arrival: '2026-08-25T09:00:00Z', planned_departure: '2026-08-25T09:20:00Z', service_seconds: 1200, quantity_delta: 1, load_before: 1, load_after: 2, latitude: 55.8, longitude: 37.6, label: 'Вывоз 103' },
           { id: 's5', route_cycle_id: 'cycle', sequence: 5, task_id: null, stop_type: 'DEPOT_RETURN', planned_arrival: '2026-08-25T10:00:00Z', planned_departure: '2026-08-25T10:00:00Z', service_seconds: 0, quantity_delta: -2, load_before: 2, load_after: 0, latitude: 55.7, longitude: 37.6, label: 'Склад' },
         ], legs: [],
       }],
@@ -75,7 +75,7 @@ function inspectorProps(plan: RoutePlan, simulation: SimulationDerivedState): Co
 }
 
 afterEach(() => {
-  useUiStore.setState({ mode: 'EDITOR', section: 'WAREHOUSE' });
+  useUiStore.setState({ mode: 'PLAN_DAY', section: 'WAREHOUSE' });
 });
 
 describe('application shell', () => {
@@ -84,6 +84,8 @@ describe('application shell', () => {
 
     expect(screen.queryByText('Valhalla · OpenStreetMap · грузовой граф')).not.toBeInTheDocument();
     expect(screen.queryByText(/OSRM/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Зоны/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Маршруты/ })).not.toBeInTheDocument();
   });
 
   it('keeps only the supported warehouse actions in one equal row', () => {
@@ -112,11 +114,8 @@ describe('application shell', () => {
   it('shows consistent empty states for warehouse planning collections', () => {
     const simulation: SimulationDerivedState = { timestamp: '2026-08-25T05:45:00Z', vehicles: [], events: [], completed_stop_ids: [], active_stop_ids: [], affected_task_ids: [], warnings: [] };
     const props = inspectorProps(planFixture(), simulation);
-    props.workspace = baseWorkspaceFixture({ zones: [], vehicles: [], trailers: [], shifts: [] });
+    props.workspace = baseWorkspaceFixture({ vehicles: [], trailers: [], shifts: [] });
     const view = render(<Inspector {...props} />);
-
-    act(() => useUiStore.setState({ section: 'ZONES' }));
-    expect(screen.getByText('Зоны не созданы')).toBeVisible();
 
     act(() => useUiStore.setState({ section: 'VEHICLES' }));
     expect(screen.getByText('Машины не созданы')).toBeVisible();
@@ -132,11 +131,43 @@ describe('application shell', () => {
     view.rerender(<Inspector {...props} plan={null} />);
     expect(screen.getByText('План дня не составлен')).toBeVisible();
 
-    act(() => useUiStore.setState({ section: 'ROUTES' }));
-    expect(screen.getByText('Маршруты не построены')).toBeVisible();
-
     act(() => useUiStore.setState({ section: 'UNASSIGNED' }));
     expect(screen.getByText('Нераспределённых заданий нет')).toBeVisible();
+  });
+
+  it('shows four truthful shift states for the selected planning date', () => {
+    const simulation: SimulationDerivedState = { timestamp: '2026-08-25T05:45:00Z', vehicles: [], events: [], completed_stop_ids: [], active_stop_ids: [], affected_task_ids: [], warnings: [] };
+    const props = inspectorProps(planFixture(), simulation);
+    const shift = props.workspace.shifts[0]!;
+    props.workspace = baseWorkspaceFixture({ shifts: [
+      { ...shift, id: 'shift-active', date_from: '2026-08-20', date_to: '2026-08-30', active: true },
+      { ...shift, id: 'shift-future', date_from: '2026-09-01', date_to: '2026-09-10', active: true },
+      { ...shift, id: 'shift-finished', date_from: '2026-08-01', date_to: '2026-08-10', active: true },
+      { ...shift, id: 'shift-disabled', date_from: '2026-08-20', date_to: '2026-08-30', active: false },
+    ] });
+    act(() => useUiStore.setState({ section: 'SHIFTS' }));
+    render(<Inspector {...props} />);
+
+    expect(screen.getByText('активна')).toBeVisible();
+    expect(screen.getByText('запланирована')).toBeVisible();
+    expect(screen.getByText('завершена')).toBeVisible();
+    expect(screen.getByText('неактивна')).toBeVisible();
+  });
+
+  it('opens the existing full request editor when an unassigned task is rescheduled', async () => {
+    const user = userEvent.setup();
+    const simulation: SimulationDerivedState = { timestamp: '2026-08-25T05:45:00Z', vehicles: [], events: [], completed_stop_ids: [], active_stop_ids: [], affected_task_ids: [], warnings: [] };
+    const request = requestFixture({ id: 'request-5' });
+    const props = inspectorProps(planFixture(), simulation);
+    const onEdit = vi.fn();
+    props.workspace = baseWorkspaceFixture({ requests: [request] });
+    props.onEdit = onEdit;
+    act(() => useUiStore.setState({ section: 'UNASSIGNED' }));
+    render(<Inspector {...props} />);
+
+    await user.click(screen.getByRole('button', { name: 'Перенести на другой день' }));
+
+    expect(onEdit).toHaveBeenCalledWith('request', request);
   });
 });
 
@@ -147,16 +178,19 @@ describe('built plan UI', () => {
     const onSelectDriverRoute = vi.fn<(driverShiftId: string) => void>();
     const { rerender } = render(<PlanPanel plan={plan} timeZone="Europe/Moscow" onSelectCycle={() => undefined} onSelectDriverRoute={onSelectDriverRoute} onMove={() => undefined} onToggleLock={() => undefined} />);
     expect(screen.getByText('Водитель 1')).toBeVisible();
-    expect(screen.getByText(/Нагрузка смены: 67%/)).toBeVisible();
+    expect(screen.getByText(/Старт со склада/)).toBeVisible();
     await user.click(screen.getByRole('button', { name: /Водитель 1/i }));
     expect(onSelectDriverRoute).toHaveBeenCalledWith('shift');
     expect(screen.getByLabelText('Цепочка загрузки цикла 1')).toHaveTextContent('2 → 1 → 0 → 1 → 2 → 0');
     expect(screen.getByText(/окна доставок совместимы/)).toBeVisible();
-    rerender(<PlanPanel plan={plan} timeZone="Europe/Moscow" showUnassignedOnly onSelectCycle={() => undefined} onSelectDriverRoute={() => undefined} onMove={() => undefined} onToggleLock={() => undefined} />);
+    const onReschedule = vi.fn();
+    rerender(<PlanPanel plan={plan} timeZone="Europe/Moscow" showUnassignedOnly onSelectCycle={() => undefined} onSelectDriverRoute={() => undefined} onMove={() => undefined} onToggleLock={() => undefined} onRescheduleUnassigned={onReschedule} />);
     expect(screen.getByText(/временное окно 09:00–11:00/)).toBeVisible();
     expect(screen.getByText('обязательно')).toBeVisible();
     expect(screen.getByText(/Можно назначить.*18:19/)).toBeVisible();
     expect(screen.getByText('увеличить временное окно')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Перенести на другой день' }));
+    expect(onReschedule).toHaveBeenCalledWith('request-5');
   });
 
   it('shows one-off support warehouse service without presenting it as a reposition', () => {
@@ -380,7 +414,7 @@ describe('simulation plan inspector', () => {
       warnings: [],
     };
     const onSelect = vi.fn<ComponentProps<typeof Inspector>['onSelect']>();
-    useUiStore.setState({ mode: 'SIMULATION', section: 'ROUTES' });
+    useUiStore.setState({ mode: 'SIMULATION', section: 'PLAN_DAY' });
 
     render(<Inspector {...inspectorProps(plan, simulation)} onSelect={onSelect} />);
 
@@ -388,7 +422,7 @@ describe('simulation plan inspector', () => {
     expect(within(currentRoute).getByText('Москва, Тверская улица, 10')).toBeVisible();
     expect(within(currentRoute).getByText(/ETA: 09:00/)).toBeVisible();
     expect(within(currentRoute).getByText('DRIVING')).toBeVisible();
-    expect(screen.getByText('План · версия 3')).toBeVisible();
+    expect(screen.getByText('План на 25 августа 2026 г.')).toBeVisible();
     expect(screen.getByText('Пары вывозов')).toBeVisible();
     expect(screen.getByTestId('cycle-cycle')).toBeVisible();
     expect(screen.getByLabelText('Цепочка загрузки цикла 1')).toHaveTextContent('2 → 1 → 0 → 1 → 2 → 0');

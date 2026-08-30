@@ -28,15 +28,4 @@ describe('action error feedback', () => {
     });
   });
 
-  it('uses a domain-conflict warning without pretending the plan is stale', () => {
-    expect(actionErrorFeedback(new ApiError(409, {
-      code: 'ZONE_LOCKED',
-      detail: 'Unlock the zone before editing it',
-    }, 'HTTP 409'))).toMatchObject({
-      tone: 'warning',
-      title: 'Зона заблокирована',
-      detail: 'Unlock the zone before editing it',
-      refreshPlan: false,
-    });
-  });
 });

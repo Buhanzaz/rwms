@@ -46,8 +46,6 @@ def source_request(quantity: int) -> LogisticsRequest:
         5,
         1,
         RequestStatus.READY,
-        "zone",
-        1,
         (RequestDateOption(DAY, 1, at(8), at(20), True),),
         at(7),
     )
@@ -96,8 +94,6 @@ def test_generated_plans_preserve_all_hard_route_invariants(
             service_minutes=3,
             priority=index % 3,
             status=RequestStatus.READY,
-            zone_id="zone",
-            zone_version=1,
             date_options=(
                 RequestDateOption(
                     DAY,

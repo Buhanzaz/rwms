@@ -41,8 +41,7 @@ describe('planner resource settings', () => {
     expect(screen.getByLabelText('Показывать уведомление, секунд')).toHaveValue(8);
     expect(screen.getByRole('switch', { name: 'Разрешить переработку' })).toHaveAttribute('aria-checked', 'false');
     expect(screen.getByLabelText('Максимальная переработка, ч')).toBeDisabled();
-    expect(screen.getByLabelText('До 1 часа, ₽')).toHaveValue(10_000);
-    expect(screen.getByLabelText('До 4 часов, ₽')).toHaveValue(25_000);
+    expect(screen.getByRole('button', { name: 'Настройки изохронов' })).toBeVisible();
 
     await user.clear(input);
     await user.type(input, '240');
@@ -57,17 +56,10 @@ describe('planner resource settings', () => {
     expect(overtime).toBeEnabled();
     await user.clear(overtime);
     await user.type(overtime, '2.5');
-    const oneHourPrice = screen.getByLabelText('До 1 часа, ₽');
-    await user.clear(oneHourPrice);
-    await user.type(oneHourPrice, '11000');
     await user.click(screen.getByRole('button', { name: 'Сохранить настройки' }));
 
     await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
     expect(onSave.mock.calls[0]?.[0]).toMatchObject({
-      isochrone_price_60_minutes: 11_000,
-      isochrone_price_120_minutes: 15_000,
-      isochrone_price_180_minutes: 20_000,
-      isochrone_price_240_minutes: 25_000,
       settings: {
         additional_resource_activation_penalty: 240,
         preferred_shift_utilization_percent: 75,
@@ -81,5 +73,28 @@ describe('planner resource settings', () => {
         soft_overtime_limit_minutes: 150,
       },
     });
+  });
+
+  it('saves a dynamic contiguous tariff ladder and exposes the delivery limit', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn<(input: WarehouseUpdateInput) => Promise<void>>().mockResolvedValue(undefined);
+    render(<SettingsEditor warehouse={warehouseFixture()} busy={false} onSave={onSave} />);
+
+    await user.click(screen.getByRole('button', { name: 'Настройки изохронов' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('Заказы дальше 4 ч от склада недоступны');
+    await user.click(screen.getByRole('button', { name: 'Добавить 5-й час' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('Заказы дальше 5 ч от склада недоступны');
+    const prices = screen.getAllByLabelText('Цена, ₽');
+    await user.clear(prices[4]!);
+    await user.type(prices[4]!, '30000');
+    await user.click(screen.getByRole('button', { name: 'Сохранить' }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith({ isochrone_tariffs: [
+      { travel_minutes: 60, price_rubles: 10_000 },
+      { travel_minutes: 120, price_rubles: 15_000 },
+      { travel_minutes: 180, price_rubles: 20_000 },
+      { travel_minutes: 240, price_rubles: 25_000 },
+      { travel_minutes: 300, price_rubles: 30_000 },
+    ] }));
   });
 });

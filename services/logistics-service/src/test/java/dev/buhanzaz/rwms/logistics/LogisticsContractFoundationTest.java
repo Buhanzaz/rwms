@@ -485,7 +485,10 @@ class LogisticsContractFoundationTest {
     assertThat(child(child(deliverySlot, "properties"), "priceZoneId"))
         .containsEntry("format", "uuid");
     assertThat(child(child(deliverySlot, "properties"), "priceIsochroneMinutes"))
-        .containsEntry("enum", java.util.Arrays.asList(60, 120, 180, 240, null));
+        .containsEntry("minimum", 60)
+        .containsEntry("maximum", 720)
+        .containsEntry("multipleOf", 60)
+        .doesNotContainKey("enum");
     assertThat((List<Object>) deliverySlot.get("required")).contains("kind", "start", "end");
     assertThat(child(child(deliverySlot, "properties"), "kind"))
         .containsEntry("enum", List.of("FIXED_WINDOW", "DURING_DAY"));
@@ -981,7 +984,8 @@ class LogisticsContractFoundationTest {
   }
 
   @Test
-  void plannerCapacityContractCarriesAnonymousScheduleAndTariffFacts() throws Exception {
+  void plannerCapacityContractCarriesAnonymousScheduleAndDynamicIsochroneTariffs()
+      throws Exception {
     Map<String, Object> document = openApi();
     Map<String, Object> endpoint =
         child(
@@ -1019,14 +1023,21 @@ class LogisticsContractFoundationTest {
                 "sourceRevision",
                 "jobs",
                 "shifts",
-                "priceZones"));
+                "isochroneTariffs"));
     assertThat(child(child(schemas, "ReplacePlanningCapacitySnapshotRequest"), "properties"))
-        .containsKeys(
-            "isochronePrice60Minutes",
-            "isochronePrice120Minutes",
-            "isochronePrice180Minutes",
-            "isochronePrice240Minutes",
-            "restrictionZones");
+        .containsOnlyKeys(
+            "sourceGeneration", "sourceRevision", "jobs", "shifts", "isochroneTariffs");
+    Map<String, Object> tariffs =
+        child(
+            child(child(schemas, "ReplacePlanningCapacitySnapshotRequest"), "properties"),
+            "isochroneTariffs");
+    assertThat(tariffs).containsEntry("minItems", 1).containsEntry("maxItems", 12);
+    Map<String, Object> tariff = child(schemas, "PlanningCapacityIsochroneTariff");
+    assertThat(child(tariff, "properties")).containsOnlyKeys("travelMinutes", "priceRubles");
+    assertThat(child(child(tariff, "properties"), "travelMinutes"))
+        .containsEntry("minimum", 60)
+        .containsEntry("maximum", 720)
+        .containsEntry("multipleOf", 60);
     Map<String, Object> shift = child(schemas, "PlanningCapacityShift");
     assertThat(child(shift, "properties"))
         .containsOnlyKeys(
@@ -1040,24 +1051,14 @@ class LogisticsContractFoundationTest {
     assertThat(
             (List<Object>)
                 child(schemas, "PlanningCapacitySnapshotResponse").get("required"))
-        .containsAll(List.of("warehouseId", "shiftCount", "priceZoneCount"))
-        .contains("restrictionZoneCount")
+        .containsAll(List.of("warehouseId", "shiftCount", "isochroneTariffCount"))
+        .doesNotContain("priceZoneCount", "restrictionZoneCount")
         .doesNotContain("sourceScenarioId");
-    Map<String, Object> priceZone = child(schemas, "PlanningCapacityPriceZone");
-    assertThat(child(priceZone, "properties"))
-        .containsOnlyKeys(
-            "sourceZoneId",
-            "sourceZoneVersion",
-            "deliveryPriceRubles",
-            "pickupPriceRubles",
-            "geometry")
-        .doesNotContainKeys("routeGroup", "relation", "travelTime");
-    assertThat(child(child(schemas, "PlanningCapacityRestrictionZone"), "properties"))
-        .containsOnlyKeys("sourceZoneId", "sourceZoneVersion", "kind", "geometry");
-    assertThat(child(child(child(schemas, "PlanningCapacityRestrictionZone"), "properties"), "kind"))
-        .containsEntry("enum", List.of("FORBIDDEN", "NO_TRAILER"));
-    assertThat(child(child(schemas, "GeoJsonMultiPolygon"), "properties"))
-        .containsOnlyKeys("type", "coordinates");
+    assertThat(schemas)
+        .doesNotContainKeys(
+            "PlanningCapacityPriceZone",
+            "PlanningCapacityRestrictionZone",
+            "GeoJsonMultiPolygon");
     Map<String, Object> dateOptionProperties =
         child(child(schemas, "PlanningDateOption"), "properties");
     for (String property : List.of("windowStart", "windowEnd", "travelZoneHours")) {

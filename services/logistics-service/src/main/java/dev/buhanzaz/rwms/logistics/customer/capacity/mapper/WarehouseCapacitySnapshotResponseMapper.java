@@ -17,10 +17,9 @@ import org.mapstruct.ReportingPolicy;
 public interface WarehouseCapacitySnapshotResponseMapper {
   @Mapping(target = "jobCount", expression = "java(snapshot.getJobs().size())")
   @Mapping(target = "shiftCount", expression = "java(snapshot.getShifts().size())")
-  @Mapping(target = "priceZoneCount", expression = "java(snapshot.getPriceZones().size())")
   @Mapping(
-      target = "restrictionZoneCount",
-      expression = "java(snapshot.getRestrictionZones().size())")
+      target = "isochroneTariffCount",
+      expression = "java(snapshot.getIsochroneTariffs().size())")
   PlanningCapacitySnapshotResponse toResponse(
       WarehouseCapacitySnapshot snapshot, boolean replayed);
 

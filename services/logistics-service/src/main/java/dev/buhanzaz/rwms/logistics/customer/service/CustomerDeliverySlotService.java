@@ -6,15 +6,13 @@ import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.Deliver
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.HeldCustomerDeliverySlotResponse;
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.HoldCustomerDeliverySlotRequest;
 
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityIsochroneTariff;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityJob;
-import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityPriceZone;
-import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityRestrictionZone;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityShift;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacitySnapshot;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityTaskType;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityIsochroneTariffRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityJobRepository;
-import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityPriceZoneRepository;
-import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityRestrictionZoneRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityShiftRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacitySnapshotRepository;
 import dev.buhanzaz.rwms.logistics.customer.config.CustomerDeliveryProperties;
@@ -30,8 +28,6 @@ import dev.buhanzaz.rwms.logistics.customer.routing.CustomerTravelTimeMatrix;
 import dev.buhanzaz.rwms.logistics.customer.routing.CustomerTravelTimeMatrix.GeoPoint;
 import dev.buhanzaz.rwms.logistics.customer.routing.CustomerVehicleRouteProfile;
 import dev.buhanzaz.rwms.logistics.customer.routing.ValhallaCustomerTravelTimeClient;
-import dev.buhanzaz.rwms.logistics.customer.service.CustomerDeliveryPriceClassifier.PriceQuote;
-import dev.buhanzaz.rwms.logistics.customer.service.CustomerDeliveryPriceClassifier.DeliveryPolicy;
 import dev.buhanzaz.rwms.logistics.customer.security.CustomerIdentity;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
@@ -68,10 +64,8 @@ public class CustomerDeliverySlotService {
   private final CustomerDeliverySlotHoldStore holdStore;
   private final WarehouseCapacityJobRepository warehouseCapacityJobs;
   private final WarehouseCapacityShiftRepository warehouseCapacityShifts;
-  private final WarehouseCapacityPriceZoneRepository warehouseCapacityPriceZones;
-  private final WarehouseCapacityRestrictionZoneRepository warehouseCapacityRestrictionZones;
+  private final WarehouseCapacityIsochroneTariffRepository warehouseCapacityIsochroneTariffs;
   private final WarehouseCapacitySnapshotRepository warehouseCapacitySnapshots;
-  private final CustomerDeliveryPriceClassifier prices;
   private final ValhallaCustomerTravelTimeClient travelTimes;
   private final CustomerRouteCapacityPlanner capacity;
   private final DriverLogisticsTaskRepository driverTasks;
@@ -140,7 +134,6 @@ public class CustomerDeliverySlotService {
                 decision.capacity().capacityRemaining(),
                 siteCabinCapacity,
                 price.deliveryPriceRubles(),
-                price.priceZoneId(),
                 price.priceIsochroneMinutes(),
                 request.privateSiteAccessConfirmed(),
                 request.failedTripChargeAcknowledged(),
@@ -231,7 +224,7 @@ public class CustomerDeliverySlotService {
     if (recalculatedPrice == null
         || !Objects.equals(
             offered.getDeliveryPriceRubles(), recalculatedPrice.deliveryPriceRubles())
-        || !Objects.equals(offered.getPriceZoneId(), recalculatedPrice.priceZoneId())
+        || offered.getPriceZoneId() != null
         || !Objects.equals(
             offered.getPriceIsochroneMinutes(), recalculatedPrice.priceIsochroneMinutes())) {
       throw new OrderProblemException(
@@ -315,14 +308,10 @@ public class CustomerDeliverySlotService {
             .toList();
     List<WarehouseCapacityShift> shifts =
         warehouseCapacityShifts.findCapacityShifts(session.getWarehouseId(), date);
-    List<WarehouseCapacityPriceZone> priceZones =
-        warehouseCapacityPriceZones.findTariffZones(session.getWarehouseId());
-    List<WarehouseCapacityRestrictionZone> restrictionZones =
-        warehouseCapacityRestrictionZones.findRestrictionZones(session.getWarehouseId());
+    List<WarehouseCapacityIsochroneTariff> isochroneTariffs =
+        warehouseCapacityIsochroneTariffs.findTariffs(session.getWarehouseId());
     WarehouseCapacitySnapshot snapshot =
         warehouseCapacitySnapshots.findByWarehouseId(session.getWarehouseId()).orElse(null);
-    DeliveryPolicy policy =
-        prices.classifyPolicy(priceZones, restrictionZones, latitude, longitude);
     long wholeDayReservations =
         driverTasks.countWholeDayDeliveryReservations(session.getWarehouseId(), date);
     String workloadSha256 =
@@ -331,36 +320,27 @@ public class CustomerDeliverySlotService {
             generated,
             shifts,
             snapshot,
-            priceZones,
-            restrictionZones,
+            isochroneTariffs,
             wholeDayReservations);
-    if (policy.forbidden()) {
-      return new RouteContext(
-          List.of(),
-          0,
-          List.of(),
-          workloadSha256,
-          wholeDayReservations,
-          List.of(),
-          1,
-          snapshot,
-          policy);
-    }
     List<GeoPoint> points = new ArrayList<>(existing.size() + generated.size() + 2);
     points.add(
         new GeoPoint(
             configuration.depotLatitude().doubleValue(),
             configuration.depotLongitude().doubleValue()));
     existing.forEach(
-        slot -> points.add(new GeoPoint(slot.getLatitude().doubleValue(), slot.getLongitude().doubleValue())));
+        slot ->
+            points.add(
+                new GeoPoint(
+                    slot.getLatitude().doubleValue(), slot.getLongitude().doubleValue())));
     generated.forEach(
-        job -> points.add(new GeoPoint(job.getLatitude().doubleValue(), job.getLongitude().doubleValue())));
+        job ->
+            points.add(
+                new GeoPoint(job.getLatitude().doubleValue(), job.getLongitude().doubleValue())));
     int candidateIndex = points.size();
     points.add(new GeoPoint(latitude.doubleValue(), longitude.doubleValue()));
     int maximumShiftCapacity =
         shifts.stream().mapToInt(WarehouseCapacityShift::getCabinCapacity).max().orElse(1);
     int conservativeTripCapacity = Math.min(siteCabinCapacity, maximumShiftCapacity);
-    if (!policy.trailerAccessAllowed()) conservativeTripCapacity = 1;
     for (CustomerDeliverySlot slot : existing) {
       conservativeTripCapacity =
           Math.min(conservativeTripCapacity, slot.getSiteCabinCapacity());
@@ -377,8 +357,7 @@ public class CustomerDeliverySlotService {
           wholeDayReservations,
           List.of(),
           conservativeTripCapacity,
-          snapshot,
-          policy);
+          isochroneTariffs);
     }
     List<DeliveryJob> baseJobs = new ArrayList<>();
     for (int index = 0; index < existing.size(); index++) {
@@ -421,8 +400,7 @@ public class CustomerDeliverySlotService {
                         shift.getCabinCapacity()))
             .toList(),
         conservativeTripCapacity,
-        snapshot,
-        policy);
+        isochroneTariffs);
   }
 
   private OfferDecision evaluate(
@@ -450,7 +428,7 @@ public class CustomerDeliverySlotService {
             window.end(),
             configuration.serviceMinutes(),
             true,
-            context.policy().trailerAccessAllowed() && siteCabinCapacity >= 2));
+            siteCabinCapacity >= 2));
     int reservedDrivers =
         (int) Math.min(context.shifts().size(), context.wholeDayDriverReservations());
     return new OfferDecision(
@@ -512,35 +490,16 @@ public class CustomerDeliverySlotService {
   }
 
   private static PriceDecision price(RouteContext context, long oneWayTravelSeconds) {
-    PriceQuote special = context.policy().specialPrice();
-    if (special.deliveryPriceRubles() != null) {
-      return new PriceDecision(special.deliveryPriceRubles(), special.priceZoneId(), null);
+    if (oneWayTravelSeconds < 0) {
+      throw new IllegalArgumentException("One-way travel time must be non-negative");
     }
-    Integer tier = isochroneTier(oneWayTravelSeconds);
-    if (tier == null) return null;
-    long deliveryPrice =
-        context.snapshot() == null
-            ? defaultIsochronePrice(tier)
-            : context.snapshot().deliveryPriceForIsochroneMinutes(tier);
-    return new PriceDecision(deliveryPrice, null, tier);
-  }
-
-  private static Integer isochroneTier(long oneWayTravelSeconds) {
-    if (oneWayTravelSeconds <= 3_600) return 60;
-    if (oneWayTravelSeconds <= 7_200) return 120;
-    if (oneWayTravelSeconds <= 10_800) return 180;
-    if (oneWayTravelSeconds <= 14_400) return 240;
-    return null;
-  }
-
-  private static long defaultIsochronePrice(int tier) {
-    return switch (tier) {
-      case 60 -> WarehouseCapacitySnapshot.DEFAULT_ISOCHRONE_PRICE_60_MINUTES;
-      case 120 -> WarehouseCapacitySnapshot.DEFAULT_ISOCHRONE_PRICE_120_MINUTES;
-      case 180 -> WarehouseCapacitySnapshot.DEFAULT_ISOCHRONE_PRICE_180_MINUTES;
-      case 240 -> WarehouseCapacitySnapshot.DEFAULT_ISOCHRONE_PRICE_240_MINUTES;
-      default -> throw new IllegalArgumentException("Unsupported isochrone price tier");
-    };
+    long requiredMinutes = Math.max(60L, ((oneWayTravelSeconds + 3_599L) / 3_600L) * 60L);
+    return context.isochroneTariffs().stream()
+        .filter(tariff -> tariff.getTravelMinutes() >= requiredMinutes)
+        .findFirst()
+        .map(
+            tariff -> new PriceDecision(tariff.getPriceRubles(), tariff.getTravelMinutes()))
+        .orElse(null);
   }
 
   private static OrderProblemException slotNotFound() {
@@ -565,9 +524,8 @@ public class CustomerDeliverySlotService {
       CapacityDecision capacity,
       CustomerVehicleRouteProfile profile) {}
 
-  /** Exactly one special-zone or ordinary-isocrone price explanation for an offered slot. */
-  private record PriceDecision(
-      long deliveryPriceRubles, UUID priceZoneId, Integer priceIsochroneMinutes) {}
+  /** Actual price and configured road-time isochrone used by a newly offered slot. */
+  private record PriceDecision(long deliveryPriceRubles, int priceIsochroneMinutes) {}
 
   /** Exact local workload facts shared by all configured windows of one day. */
   private record RouteContext(
@@ -578,6 +536,5 @@ public class CustomerDeliverySlotService {
       long wholeDayDriverReservations,
       List<CapacityShift> shifts,
       int conservativeTripCapacity,
-      WarehouseCapacitySnapshot snapshot,
-      DeliveryPolicy policy) {}
+      List<WarehouseCapacityIsochroneTariff> isochroneTariffs) {}
 }

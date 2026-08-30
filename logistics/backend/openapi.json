@@ -556,37 +556,6 @@
         "title": "ExpectedVersionRequest",
         "type": "object"
       },
-      "GeoJsonGeometry": {
-        "additionalProperties": false,
-        "description": "GeoJSON Polygon or MultiPolygon accepted by the zone editor.",
-        "properties": {
-          "coordinates": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PolygonCoordinates"
-              },
-              {
-                "$ref": "#/components/schemas/MultiPolygonCoordinates"
-              }
-            ],
-            "title": "Coordinates"
-          },
-          "type": {
-            "enum": [
-              "Polygon",
-              "MultiPolygon"
-            ],
-            "title": "Type",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "coordinates"
-        ],
-        "title": "GeoJsonGeometry",
-        "type": "object"
-      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -632,11 +601,29 @@
         "title": "HealthRead",
         "type": "object"
       },
-      "LinearRing": {
-        "items": {
-          "$ref": "#/components/schemas/Position"
+      "IsochroneTariff": {
+        "additionalProperties": false,
+        "description": "One contiguous hourly road-travel price tier.",
+        "properties": {
+          "price_rubles": {
+            "minimum": 0.0,
+            "title": "Price Rubles",
+            "type": "integer"
+          },
+          "travel_minutes": {
+            "maximum": 720.0,
+            "minimum": 60.0,
+            "multipleOf": 60.0,
+            "title": "Travel Minutes",
+            "type": "integer"
+          }
         },
-        "type": "array"
+        "required": [
+          "travel_minutes",
+          "price_rubles"
+        ],
+        "title": "IsochroneTariff",
+        "type": "object"
       },
       "LogisticsRequestCreate": {
         "additionalProperties": false,
@@ -796,7 +783,7 @@
       },
       "LogisticsRequestRead": {
         "additionalProperties": false,
-        "description": "Request with backend classification, date options, and split parts.",
+        "description": "Warehouse request with date options and vehicle-sized split parts.",
         "properties": {
           "address_label": {
             "title": "Address Label",
@@ -979,37 +966,6 @@
             "format": "uuid",
             "title": "Warehouse Id",
             "type": "string"
-          },
-          "zone_classification_status": {
-            "$ref": "#/components/schemas/ZoneClassificationStatus"
-          },
-          "zone_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Zone Id"
-          },
-          "zone_is_stale": {
-            "default": false,
-            "title": "Zone Is Stale",
-            "type": "boolean"
-          },
-          "zone_version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Zone Version"
           }
         },
         "required": [
@@ -1027,9 +983,6 @@
           "priority",
           "status",
           "scheduled_date",
-          "zone_id",
-          "zone_version",
-          "zone_classification_status",
           "split_allowed",
           "mandatory",
           "trailer_access_allowed",
@@ -1327,12 +1280,6 @@
         ],
         "title": "ManualChangeRequest",
         "type": "object"
-      },
-      "MultiPolygonCoordinates": {
-        "items": {
-          "$ref": "#/components/schemas/PolygonCoordinates"
-        },
-        "type": "array"
       },
       "NearestOptionRead": {
         "additionalProperties": false,
@@ -1966,29 +1913,6 @@
           },
           "type": {
             "$ref": "#/components/schemas/RequestType"
-          },
-          "zone_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Zone Id"
-          },
-          "zone_version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Zone Version"
           }
         },
         "required": [
@@ -1999,8 +1923,6 @@
           "type",
           "latitude",
           "longitude",
-          "zone_id",
-          "zone_version",
           "service_minutes",
           "priority",
           "mandatory",
@@ -2009,25 +1931,6 @@
         ],
         "title": "PlanningTaskRead",
         "type": "object"
-      },
-      "PolygonCoordinates": {
-        "items": {
-          "$ref": "#/components/schemas/LinearRing"
-        },
-        "type": "array"
-      },
-      "Position": {
-        "maxItems": 2,
-        "minItems": 2,
-        "prefixItems": [
-          {
-            "type": "number"
-          },
-          {
-            "type": "number"
-          }
-        ],
-        "type": "array"
       },
       "RequestDateOptionInput": {
         "additionalProperties": false,
@@ -2899,25 +2802,20 @@
         "additionalProperties": false,
         "description": "Versioned capacity revision accepted or idempotently replayed by RWMS.",
         "properties": {
+          "isochroneTariffCount": {
+            "maximum": 12.0,
+            "minimum": 1.0,
+            "title": "Isochronetariffcount",
+            "type": "integer"
+          },
           "jobCount": {
             "minimum": 0.0,
             "title": "Jobcount",
             "type": "integer"
           },
-          "priceZoneCount": {
-            "minimum": 0.0,
-            "title": "Pricezonecount",
-            "type": "integer"
-          },
           "replayed": {
             "title": "Replayed",
             "type": "boolean"
-          },
-          "restrictionZoneCount": {
-            "default": 0,
-            "minimum": 0.0,
-            "title": "Restrictionzonecount",
-            "type": "integer"
           },
           "shiftCount": {
             "minimum": 0.0,
@@ -2957,7 +2855,7 @@
           "sourceRevision",
           "jobCount",
           "shiftCount",
-          "priceZoneCount",
+          "isochroneTariffCount",
           "replayed",
           "updatedAt"
         ],
@@ -3608,12 +3506,9 @@
           "price_isochrone_minutes": {
             "anyOf": [
               {
-                "enum": [
-                  60,
-                  120,
-                  180,
-                  240
-                ],
+                "maximum": 720.0,
+                "minimum": 60.0,
+                "multipleOf": 60.0,
                 "type": "integer"
               },
               {
@@ -3621,29 +3516,6 @@
               }
             ],
             "title": "Price Isochrone Minutes"
-          },
-          "price_zone_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Price Zone Id"
-          },
-          "price_zone_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Price Zone Name"
           },
           "slots": {
             "items": {
@@ -4123,12 +3995,9 @@
           "price_isochrone_minutes": {
             "anyOf": [
               {
-                "enum": [
-                  60,
-                  120,
-                  180,
-                  240
-                ],
+                "maximum": 720.0,
+                "minimum": 60.0,
+                "multipleOf": 60.0,
                 "type": "integer"
               },
               {
@@ -4136,18 +4005,6 @@
               }
             ],
             "title": "Price Isochrone Minutes"
-          },
-          "price_zone_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Price Zone Id"
           },
           "slot_end": {
             "format": "time",
@@ -5078,7 +4935,7 @@
       },
       "TravelTimeContourFeatureCollection": {
         "additionalProperties": false,
-        "description": "Four validated Valhalla truck isochrones rendered as visual map estimates.",
+        "description": "Configured Valhalla truck isochrones rendered as visual map estimates.",
         "properties": {
           "features": {
             "items": {
@@ -5135,8 +4992,10 @@
         "properties": {
           "contours_minutes": {
             "items": {
-              "$ref": "#/components/schemas/TravelTimeContourMinutes"
+              "type": "integer"
             },
+            "maxItems": 12,
+            "minItems": 1,
             "title": "Contours Minutes",
             "type": "array"
           },
@@ -5168,17 +5027,6 @@
         "title": "TravelTimeContourMetadata",
         "type": "object"
       },
-      "TravelTimeContourMinutes": {
-        "description": "Supported fixed truck-travel contour durations in minutes.",
-        "enum": [
-          60,
-          120,
-          180,
-          240
-        ],
-        "title": "TravelTimeContourMinutes",
-        "type": "integer"
-      },
       "TravelTimeContourOrigin": {
         "additionalProperties": false,
         "description": "WGS84 depot or route-front origin echoed in contour response metadata.",
@@ -5205,10 +5053,14 @@
       },
       "TravelTimeContourProperties": {
         "additionalProperties": false,
-        "description": "Stable styling key for one fixed travel-time contour.",
+        "description": "Stable styling key for one configured travel-time contour.",
         "properties": {
           "contour_minutes": {
-            "$ref": "#/components/schemas/TravelTimeContourMinutes"
+            "maximum": 720.0,
+            "minimum": 60.0,
+            "multipleOf": 60.0,
+            "title": "Contour Minutes",
+            "type": "integer"
           }
         },
         "required": [
@@ -6700,46 +6552,21 @@
       },
       "WarehouseCreate": {
         "additionalProperties": false,
-        "description": "Input that binds one RWMS warehouse and optional first exceptional zone.",
+        "description": "Input that binds one RWMS warehouse and its ordered road-travel tariffs.",
         "properties": {
           "external_warehouse_id": {
             "format": "uuid",
             "title": "External Warehouse Id",
             "type": "string"
           },
-          "initial_zone": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ZoneCreate"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "isochrone_price_120_minutes": {
-            "default": 15000,
-            "minimum": 0.0,
-            "title": "Isochrone Price 120 Minutes",
-            "type": "integer"
-          },
-          "isochrone_price_180_minutes": {
-            "default": 20000,
-            "minimum": 0.0,
-            "title": "Isochrone Price 180 Minutes",
-            "type": "integer"
-          },
-          "isochrone_price_240_minutes": {
-            "default": 25000,
-            "minimum": 0.0,
-            "title": "Isochrone Price 240 Minutes",
-            "type": "integer"
-          },
-          "isochrone_price_60_minutes": {
-            "default": 10000,
-            "minimum": 0.0,
-            "title": "Isochrone Price 60 Minutes",
-            "type": "integer"
+          "isochrone_tariffs": {
+            "items": {
+              "$ref": "#/components/schemas/IsochroneTariff"
+            },
+            "maxItems": 12,
+            "minItems": 1,
+            "title": "Isochrone Tariffs",
+            "type": "array"
           },
           "loading_minutes": {
             "default": 30,
@@ -6839,21 +6666,12 @@
             "title": "Id",
             "type": "string"
           },
-          "isochrone_price_120_minutes": {
-            "title": "Isochrone Price 120 Minutes",
-            "type": "integer"
-          },
-          "isochrone_price_180_minutes": {
-            "title": "Isochrone Price 180 Minutes",
-            "type": "integer"
-          },
-          "isochrone_price_240_minutes": {
-            "title": "Isochrone Price 240 Minutes",
-            "type": "integer"
-          },
-          "isochrone_price_60_minutes": {
-            "title": "Isochrone Price 60 Minutes",
-            "type": "integer"
+          "isochrone_tariffs": {
+            "items": {
+              "$ref": "#/components/schemas/IsochroneTariff"
+            },
+            "title": "Isochrone Tariffs",
+            "type": "array"
           },
           "latitude": {
             "title": "Latitude",
@@ -6933,10 +6751,7 @@
           "turnaround_minutes",
           "working_day_start",
           "working_day_end",
-          "isochrone_price_60_minutes",
-          "isochrone_price_120_minutes",
-          "isochrone_price_180_minutes",
-          "isochrone_price_240_minutes",
+          "isochrone_tariffs",
           "default_planning_date",
           "seed",
           "settings",
@@ -6963,53 +6778,21 @@
             ],
             "title": "Default Planning Date"
           },
-          "isochrone_price_120_minutes": {
+          "isochrone_tariffs": {
             "anyOf": [
               {
-                "minimum": 0.0,
-                "type": "integer"
+                "items": {
+                  "$ref": "#/components/schemas/IsochroneTariff"
+                },
+                "maxItems": 12,
+                "minItems": 1,
+                "type": "array"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Isochrone Price 120 Minutes"
-          },
-          "isochrone_price_180_minutes": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Isochrone Price 180 Minutes"
-          },
-          "isochrone_price_240_minutes": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Isochrone Price 240 Minutes"
-          },
-          "isochrone_price_60_minutes": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Isochrone Price 60 Minutes"
+            "title": "Isochrone Tariffs"
           },
           "loading_minutes": {
             "anyOf": [
@@ -7144,19 +6927,11 @@
             },
             "title": "Warehouses",
             "type": "array"
-          },
-          "zones": {
-            "items": {
-              "$ref": "#/components/schemas/ZoneRead"
-            },
-            "title": "Zones",
-            "type": "array"
           }
         },
         "required": [
           "warehouse",
           "warehouses",
-          "zones",
           "drivers",
           "vehicles",
           "trailers",
@@ -7377,311 +7152,6 @@
           "seed"
         ],
         "title": "WorkloadGeneratorInput",
-        "type": "object"
-      },
-      "ZoneClassificationStatus": {
-        "description": "Result of authoritative server-side point classification.",
-        "enum": [
-          "CLASSIFIED",
-          "OUTSIDE_ZONES"
-        ],
-        "title": "ZoneClassificationStatus",
-        "type": "string"
-      },
-      "ZoneCreate": {
-        "additionalProperties": false,
-        "description": "Input for a version-one forbidden, no-trailer, or special-price polygon.",
-        "properties": {
-          "color": {
-            "default": "#22C55E",
-            "pattern": "^#[0-9A-Fa-f]{6}$",
-            "title": "Color",
-            "type": "string"
-          },
-          "delivery_price": {
-            "default": 0,
-            "minimum": 0.0,
-            "title": "Delivery Price",
-            "type": "integer"
-          },
-          "geometry": {
-            "$ref": "#/components/schemas/GeoJsonGeometry"
-          },
-          "kind": {
-            "$ref": "#/components/schemas/ZoneKind",
-            "default": "SPECIAL_PRICE"
-          },
-          "locked": {
-            "default": false,
-            "title": "Locked",
-            "type": "boolean"
-          },
-          "name": {
-            "$ref": "#/components/schemas/NonBlank"
-          },
-          "pickup_price": {
-            "default": 0,
-            "minimum": 0.0,
-            "title": "Pickup Price",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "name",
-          "geometry"
-        ],
-        "title": "ZoneCreate",
-        "type": "object"
-      },
-      "ZoneCutoutInnerZone": {
-        "additionalProperties": false,
-        "description": "Required metadata for the operational zone occupying a new cutout.",
-        "properties": {
-          "color": {
-            "default": "#22C55E",
-            "pattern": "^#[0-9A-Fa-f]{6}$",
-            "title": "Color",
-            "type": "string"
-          },
-          "delivery_price": {
-            "default": 0,
-            "minimum": 0.0,
-            "title": "Delivery Price",
-            "type": "integer"
-          },
-          "kind": {
-            "$ref": "#/components/schemas/ZoneKind",
-            "default": "SPECIAL_PRICE"
-          },
-          "locked": {
-            "title": "Locked",
-            "type": "boolean"
-          },
-          "name": {
-            "$ref": "#/components/schemas/NonBlank"
-          },
-          "pickup_price": {
-            "default": 0,
-            "minimum": 0.0,
-            "title": "Pickup Price",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "name",
-          "locked"
-        ],
-        "title": "ZoneCutoutInnerZone",
-        "type": "object"
-      },
-      "ZoneCutoutRead": {
-        "additionalProperties": false,
-        "description": "Both atomic outcomes of cutting a source zone and creating its inner zone.",
-        "properties": {
-          "inner_zone": {
-            "$ref": "#/components/schemas/ZoneRead"
-          },
-          "source_zone": {
-            "$ref": "#/components/schemas/ZoneRead"
-          }
-        },
-        "required": [
-          "source_zone",
-          "inner_zone"
-        ],
-        "title": "ZoneCutoutRead",
-        "type": "object"
-      },
-      "ZoneCutoutRequest": {
-        "additionalProperties": false,
-        "description": "Strictly internal geometry plus metadata for its new operational zone.",
-        "properties": {
-          "geometry": {
-            "$ref": "#/components/schemas/GeoJsonGeometry"
-          },
-          "inner_zone": {
-            "$ref": "#/components/schemas/ZoneCutoutInnerZone"
-          }
-        },
-        "required": [
-          "geometry",
-          "inner_zone"
-        ],
-        "title": "ZoneCutoutRequest",
-        "type": "object"
-      },
-      "ZoneKind": {
-        "description": "Operational meaning of a warehouse-owned exceptional polygon.",
-        "enum": [
-          "FORBIDDEN",
-          "NO_TRAILER",
-          "SPECIAL_PRICE"
-        ],
-        "title": "ZoneKind",
-        "type": "string"
-      },
-      "ZoneLockRequest": {
-        "additionalProperties": false,
-        "description": "Explicit desired editing-lock state.",
-        "properties": {
-          "locked": {
-            "default": true,
-            "title": "Locked",
-            "type": "boolean"
-          }
-        },
-        "title": "ZoneLockRequest",
-        "type": "object"
-      },
-      "ZoneRead": {
-        "additionalProperties": false,
-        "description": "Versioned warehouse-owned exceptional zone and stale-request count.",
-        "properties": {
-          "color": {
-            "title": "Color",
-            "type": "string"
-          },
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "delivery_price": {
-            "title": "Delivery Price",
-            "type": "integer"
-          },
-          "geometry": {
-            "$ref": "#/components/schemas/GeoJsonGeometry"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "kind": {
-            "$ref": "#/components/schemas/ZoneKind"
-          },
-          "locked": {
-            "title": "Locked",
-            "type": "boolean"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "pickup_price": {
-            "title": "Pickup Price",
-            "type": "integer"
-          },
-          "stale_request_count": {
-            "default": 0,
-            "title": "Stale Request Count",
-            "type": "integer"
-          },
-          "updated_at": {
-            "format": "date-time",
-            "title": "Updated At",
-            "type": "string"
-          },
-          "version": {
-            "title": "Version",
-            "type": "integer"
-          },
-          "warehouse_id": {
-            "format": "uuid",
-            "title": "Warehouse Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "warehouse_id",
-          "name",
-          "kind",
-          "color",
-          "geometry",
-          "version",
-          "delivery_price",
-          "pickup_price",
-          "locked",
-          "created_at",
-          "updated_at"
-        ],
-        "title": "ZoneRead",
-        "type": "object"
-      },
-      "ZoneUpdate": {
-        "additionalProperties": false,
-        "description": "Partial zone update; geometry changes increment version server-side.",
-        "properties": {
-          "color": {
-            "anyOf": [
-              {
-                "pattern": "^#[0-9A-Fa-f]{6}$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Color"
-          },
-          "delivery_price": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Delivery Price"
-          },
-          "geometry": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/GeoJsonGeometry"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "kind": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ZoneKind"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "name": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/NonBlank"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "pickup_price": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Pickup Price"
-          }
-        },
-        "title": "ZoneUpdate",
         "type": "object"
       }
     }
@@ -9462,6 +8932,20 @@
               "title": "Longitude",
               "type": "number"
             }
+          },
+          {
+            "in": "query",
+            "name": "contours_minutes",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "integer"
+              },
+              "maxItems": 12,
+              "minItems": 1,
+              "title": "Contours Minutes",
+              "type": "array"
+            }
           }
         ],
         "responses": {
@@ -10878,395 +10362,6 @@
           }
         },
         "summary": "Get Warehouse Workspace",
-        "tags": [
-          "catalog"
-        ]
-      }
-    },
-    "/api/warehouses/{warehouse_id}/zones": {
-      "get": {
-        "description": "List only the zones belonging to one warehouse workspace.",
-        "operationId": "list_zones_api_warehouses__warehouse_id__zones_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "warehouse_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Warehouse Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/ZoneRead"
-                  },
-                  "title": "Response List Zones Api Warehouses  Warehouse Id  Zones Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Zones",
-        "tags": [
-          "catalog"
-        ]
-      },
-      "post": {
-        "description": "Create and publish a validated warehouse-owned version-one zone.",
-        "operationId": "create_zone_api_warehouses__warehouse_id__zones_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "warehouse_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Warehouse Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ZoneCreate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ZoneRead"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Create Zone",
-        "tags": [
-          "catalog"
-        ]
-      }
-    },
-    "/api/warehouses/{warehouse_id}/zones/{zone_id}": {
-      "delete": {
-        "description": "Delete and publish an owner zone without uncovering its warehouse.",
-        "operationId": "delete_zone_api_warehouses__warehouse_id__zones__zone_id__delete",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "warehouse_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Warehouse Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "zone_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Zone Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Delete Zone",
-        "tags": [
-          "catalog"
-        ]
-      },
-      "get": {
-        "description": "Read an owner zone and its current stale-request count.",
-        "operationId": "get_zone_api_warehouses__warehouse_id__zones__zone_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "warehouse_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Warehouse Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "zone_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Zone Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ZoneRead"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Zone",
-        "tags": [
-          "catalog"
-        ]
-      },
-      "patch": {
-        "description": "Update and publish an unlocked owner zone and version geometry changes.",
-        "operationId": "update_zone_api_warehouses__warehouse_id__zones__zone_id__patch",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "warehouse_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Warehouse Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "zone_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Zone Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ZoneUpdate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ZoneRead"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Update Zone",
-        "tags": [
-          "catalog"
-        ]
-      }
-    },
-    "/api/warehouses/{warehouse_id}/zones/{zone_id}/cutouts": {
-      "post": {
-        "description": "Atomically cut and publish two zones owned by the same warehouse.",
-        "operationId": "cut_zone_api_warehouses__warehouse_id__zones__zone_id__cutouts_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "warehouse_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Warehouse Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "zone_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Zone Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ZoneCutoutRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ZoneCutoutRead"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Cut Zone",
-        "tags": [
-          "catalog"
-        ]
-      }
-    },
-    "/api/warehouses/{warehouse_id}/zones/{zone_id}/lock": {
-      "post": {
-        "description": "Set or clear an owner zone's editor lock without capacity publication.",
-        "operationId": "lock_zone_api_warehouses__warehouse_id__zones__zone_id__lock_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "warehouse_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Warehouse Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "zone_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Zone Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ZoneLockRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ZoneRead"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Lock Zone",
         "tags": [
           "catalog"
         ]

@@ -16,7 +16,6 @@ from tests.factories import (
     make_shift,
     make_vehicle,
     make_warehouse,
-    make_zone,
 )
 
 pytestmark = pytest.mark.integration
@@ -30,7 +29,6 @@ async def test_complete_warehouse_day_is_automatically_requested_once(
 
     planning_date = date(2026, 8, 29)
     warehouse = await make_warehouse(db_session, default_planning_date=planning_date)
-    await make_zone(db_session, warehouse)
     await make_request(db_session, warehouse, planning_date=planning_date)
     run = OptimizationRun(
         warehouse_id=warehouse.id,
@@ -96,7 +94,6 @@ async def test_ensure_refreshes_a_marked_plan_in_place_instead_of_regenerating(
 
     planning_date = date(2026, 8, 30)
     warehouse = await make_warehouse(db_session, default_planning_date=planning_date)
-    await make_zone(db_session, warehouse)
     plan = RoutePlan(
         warehouse_id=warehouse.id,
         date=planning_date,

@@ -62,21 +62,6 @@ class TaskStatus(StrEnum):
     UNASSIGNED = "UNASSIGNED"
 
 
-class ZoneClassificationStatus(StrEnum):
-    """Result of authoritative server-side point classification."""
-
-    CLASSIFIED = "CLASSIFIED"
-    OUTSIDE_ZONES = "OUTSIDE_ZONES"
-
-
-class ZoneKind(StrEnum):
-    """Operational meaning of a warehouse-owned exceptional polygon."""
-
-    FORBIDDEN = "FORBIDDEN"
-    NO_TRAILER = "NO_TRAILER"
-    SPECIAL_PRICE = "SPECIAL_PRICE"
-
-
 class PlanStatus(StrEnum):
     """Persistence lifecycle of a dated route plan."""
 
@@ -226,8 +211,9 @@ class SlotHold(UuidPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint("expires_at > created_at", name="positive_expiration"),
         CheckConstraint("length(source_revision) = 64", name="valid_source_revision"),
         CheckConstraint(
-            "price_isochrone_minutes IS NULL OR "
-            "price_isochrone_minutes IN (60, 120, 180, 240)",
+            "price_isochrone_minutes IS NULL OR ("
+            "price_isochrone_minutes BETWEEN 60 AND 720 AND "
+            "price_isochrone_minutes % 60 = 0)",
             name="supported_price_isochrone",
         ),
         UniqueConstraint("confirmation_key", name="uq_slot_holds_confirmation_key"),
@@ -250,9 +236,6 @@ class SlotHold(UuidPrimaryKeyMixin, TimestampMixin, Base):
     )
     delivery_price_rubles: Mapped[int | None] = mapped_column(Integer)
     price_isochrone_minutes: Mapped[int | None] = mapped_column(Integer)
-    price_zone_id: Mapped[UUID | None] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("zones.id", ondelete="SET NULL")
-    )
     confirmation_key: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     confirmed_request_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("logistics_requests.id", ondelete="SET NULL")
@@ -274,13 +257,6 @@ class Warehouse(UuidPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint("loading_minutes >= 0", name="nonnegative_loading"),
         CheckConstraint("unloading_minutes >= 0", name="nonnegative_unloading"),
         CheckConstraint("turnaround_minutes >= 0", name="nonnegative_turnaround"),
-        CheckConstraint(
-            "isochrone_price_60_minutes >= 0 AND "
-            "isochrone_price_120_minutes >= 0 AND "
-            "isochrone_price_180_minutes >= 0 AND "
-            "isochrone_price_240_minutes >= 0",
-            name="nonnegative_isochrone_prices",
-        ),
     )
 
     external_warehouse_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -306,19 +282,6 @@ class Warehouse(UuidPrimaryKeyMixin, TimestampMixin, Base):
     turnaround_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=15)
     working_day_start: Mapped[time] = mapped_column(Time, nullable=False, default=time(8))
     working_day_end: Mapped[time] = mapped_column(Time, nullable=False, default=time(20))
-    isochrone_price_60_minutes: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=10_000
-    )
-    isochrone_price_120_minutes: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=15_000
-    )
-    isochrone_price_180_minutes: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=20_000
-    )
-    isochrone_price_240_minutes: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=25_000
-    )
-
     plans: Mapped[list[RoutePlan]] = relationship(back_populates="warehouse")
     drivers: Mapped[list[Driver]] = relationship(
         back_populates="warehouse", cascade="all, delete-orphan", passive_deletes=True
@@ -338,47 +301,36 @@ class Warehouse(UuidPrimaryKeyMixin, TimestampMixin, Base):
     optimization_runs: Mapped[list[OptimizationRun]] = relationship(
         back_populates="warehouse", cascade="all, delete-orphan", passive_deletes=True
     )
-    zones: Mapped[list[Zone]] = relationship(
-        back_populates="warehouse", cascade="all, delete-orphan", passive_deletes=True
+    isochrone_tariffs: Mapped[list[WarehouseIsochroneTariff]] = relationship(
+        back_populates="warehouse",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="selectin",
+        order_by="WarehouseIsochroneTariff.travel_minutes",
     )
 
 
-class Zone(UuidPrimaryKeyMixin, TimestampMixin, Base):
-    """Warehouse-owned exceptional polygon for access or a special tariff."""
+class WarehouseIsochroneTariff(Base):
+    """One ordered hourly road-travel price tier owned by a warehouse."""
 
-    __tablename__ = "zones"
+    __tablename__ = "warehouse_isochrone_tariffs"
     __table_args__ = (
-        CheckConstraint("version >= 1", name="positive_version"),
-        CheckConstraint("color ~ '^#[0-9A-Fa-f]{6}$'", name="valid_color"),
-        CheckConstraint("delivery_price >= 0", name="nonnegative_delivery_price"),
-        CheckConstraint("pickup_price >= 0", name="nonnegative_pickup_price"),
         CheckConstraint(
-            "kind IN ('FORBIDDEN', 'NO_TRAILER', 'SPECIAL_PRICE')",
-            name="supported_kind",
+            "travel_minutes BETWEEN 60 AND 720 AND travel_minutes % 60 = 0",
+            name="valid_travel_minutes",
         ),
-        Index("ix_zones_warehouse_id", "warehouse_id"),
-        Index("ix_zones_geometry_gist", "geometry", postgresql_using="gist"),
+        CheckConstraint("price_rubles >= 0", name="nonnegative_price"),
     )
 
     warehouse_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("warehouses.id", ondelete="CASCADE"), nullable=False
+        Uuid(as_uuid=True),
+        ForeignKey("warehouses.id", ondelete="CASCADE"),
+        primary_key=True,
     )
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    kind: Mapped[str] = mapped_column(
-        String(32), nullable=False, default=ZoneKind.SPECIAL_PRICE
-    )
-    color: Mapped[str] = mapped_column(String(7), nullable=False, default="#22C55E")
-    geometry: Mapped[Any] = mapped_column(
-        Geometry("MULTIPOLYGON", srid=4326, spatial_index=False), nullable=False
-    )
-    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    delivery_price: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    pickup_price: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    travel_minutes: Mapped[int] = mapped_column(Integer, primary_key=True)
+    price_rubles: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    warehouse: Mapped[Warehouse] = relationship(back_populates="zones")
-    requests: Mapped[list[LogisticsRequest]] = relationship(back_populates="zone")
-    tasks: Mapped[list[PlanningTask]] = relationship(back_populates="zone")
+    warehouse: Mapped[Warehouse] = relationship(back_populates="isochrone_tariffs")
 
 
 class Driver(UuidPrimaryKeyMixin, Base):
@@ -675,7 +627,6 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
             "warehouse_id",
             "scheduled_date",
         ),
-        Index("ix_logistics_requests_zone_version", "zone_id", "zone_version"),
     )
 
     warehouse_id: Mapped[UUID] = mapped_column(
@@ -699,13 +650,6 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=RequestStatus.READY)
     scheduled_date: Mapped[date | None] = mapped_column(Date)
-    zone_id: Mapped[UUID | None] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("zones.id", ondelete="SET NULL")
-    )
-    zone_version: Mapped[int | None] = mapped_column(Integer)
-    zone_classification_status: Mapped[str] = mapped_column(
-        String(32), nullable=False, default=ZoneClassificationStatus.OUTSIDE_ZONES
-    )
     split_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     mandatory: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     trailer_access_allowed: Mapped[bool | None] = mapped_column(Boolean)
@@ -717,7 +661,6 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     warehouse: Mapped[Warehouse] = relationship(back_populates="requests")
-    zone: Mapped[Zone | None] = relationship(back_populates="requests")
     date_options: Mapped[list[RequestDateOption]] = relationship(
         back_populates="request",
         cascade="all, delete-orphan",
@@ -782,7 +725,6 @@ class PlanningTask(UuidPrimaryKeyMixin, Base):
             "cargo_height_mm > 0 AND cargo_weight_kg > 0)",
             name="complete_positive_cargo_dimensions",
         ),
-        Index("ix_planning_tasks_zone_status", "zone_id", "status"),
     )
 
     request_id: Mapped[UUID] = mapped_column(
@@ -799,10 +741,6 @@ class PlanningTask(UuidPrimaryKeyMixin, Base):
     type: Mapped[str] = mapped_column(String(16), nullable=False)
     latitude: Mapped[float] = mapped_column(Float, nullable=False)
     longitude: Mapped[float] = mapped_column(Float, nullable=False)
-    zone_id: Mapped[UUID | None] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("zones.id", ondelete="SET NULL")
-    )
-    zone_version: Mapped[int | None] = mapped_column(Integer)
     service_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, nullable=False)
     mandatory: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -810,7 +748,6 @@ class PlanningTask(UuidPrimaryKeyMixin, Base):
     locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     request: Mapped[LogisticsRequest] = relationship(back_populates="tasks")
-    zone: Mapped[Zone | None] = relationship(back_populates="tasks")
     route_stops: Mapped[list[RouteStop]] = relationship(back_populates="task")
 
 

@@ -1,11 +1,12 @@
-import { CalendarCheck2, Clock3, Scissors, ShieldCheck, Truck } from 'lucide-react';
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { CalendarCheck2, ChevronLeft, ChevronRight, Clock3, Scissors, ShieldCheck, Truck } from 'lucide-react';
+import { useEffect, useState, type FormEvent } from 'react';
 import type { RequestPlanningDetailsInput } from '../../api/client';
 import { Badge, Button, CheckboxField, EmptyState, Field, SelectField } from '../../components/ui';
 import { requestPlanningMissingFields } from '../../domain/planning-readiness';
-import { isRequestVisibleOnDate, requestPlanningDates } from '../../domain/request-dates';
+import { isRequestVisibleOnDate } from '../../domain/request-dates';
 import type { LogisticsRequest, WarehouseWorkspace, UUID } from '../../domain/types';
 import { formatDate } from '../../utils/format';
+import { formatIsoDate, parseIsoDate } from '../../components/date-value';
 
 /** Tri-state operator answer before trailer access has been explicitly confirmed. */
 type TrailerAgreement = '' | 'true' | 'false';
@@ -30,7 +31,7 @@ function RequestPlanningCard({ request, planningDate, busy, onSave, onSplit, onS
     && option?.is_hard === true
     && option.window_start != null
     && option.window_end != null;
-  const sourceRequiresHardWindow = sourceFixedWindow || option?.travel_zone_hours != null;
+  const sourceRequiresHardWindow = sourceFixedWindow;
   const flexibleDay = Boolean(
     option && !option.is_hard && option.window_start == null && option.window_end == null,
   );
@@ -107,7 +108,6 @@ function RequestPlanningCard({ request, planningDate, busy, onSave, onSplit, onS
       <div className="planning-request-card__facts">
         <span><Truck size={13} /> <strong>{request.quantity}</strong> БК</span>
         <span><CalendarCheck2 size={13} /> {formatDate(planningDate)}</span>
-        {option?.travel_zone_hours ? <span><Clock3 size={13} /> зона {option.travel_zone_hours} ч</span> : null}
         <span><ShieldCheck size={13} /> {request.status}</span>
       </div>
       {missing.length ? <p className="planning-request-card__missing">{missing.join(' · ')}</p> : null}
@@ -164,23 +164,22 @@ export function PlanningDayRequests({ workspace, planningDate, busy, onPlanningD
   onSplit: (requestId: UUID, quantities: number[]) => Promise<void>;
   onSelect: (requestId: UUID) => void;
 }) {
-  const dates = useMemo(
-    () => [...new Set([planningDate, ...workspace.requests.flatMap(requestPlanningDates)])].sort(),
-    [planningDate, workspace.requests],
-  );
   const requests = workspace.requests.filter((request) => isRequestVisibleOnDate(request, planningDate));
-  const prepared = requests.filter((request) => request.status === 'READY' && requestPlanningMissingFields(request, planningDate).length === 0).length;
-  const ready = requests.filter((request) => request.status === 'READY').length;
+  const adjacentDate = (offset: number) => {
+    const current = parseIsoDate(planningDate);
+    if (!current) return planningDate;
+    current.setDate(current.getDate() + offset);
+    return formatIsoDate(current);
+  };
+  const previousDate = adjacentDate(-1);
+  const nextDate = adjacentDate(1);
 
   return (
     <section className="planning-day-requests" aria-label="Подготовка доставок и вывозов на день">
-      <div className="date-board">
-        <strong>Планируемый день</strong>
-        <div>{dates.map((date) => {
-          const count = workspace.requests.filter((request) => isRequestVisibleOnDate(request, date)).length;
-          return <button type="button" key={date} aria-pressed={date === planningDate} onClick={() => onPlanningDateChange(date)}>{formatDate(date)} <small>{count}</small></button>;
-        })}</div>
-        <p>К маршрутизации готовы {prepared} из {ready} доставок и вывозов со статусом «Готово». Сначала сохраните окно времени и фактический допуск прицепа для каждой доставки или вывоза.</p>
+      <div className="planning-date-nav" aria-label="Навигация по датам доставок">
+        <button type="button" onClick={() => onPlanningDateChange(previousDate)} aria-label={`Предыдущая дата: ${formatDate(previousDate)}`}><ChevronLeft size={15} aria-hidden="true" /><span>{formatDate(previousDate)}</span></button>
+        <strong>{formatDate(planningDate)}</strong>
+        <button type="button" onClick={() => onPlanningDateChange(nextDate)} aria-label={`Следующая дата: ${formatDate(nextDate)}`}><span>{formatDate(nextDate)}</span><ChevronRight size={15} aria-hidden="true" /></button>
       </div>
       <div className="entity-list">
         {requests.map((request) => (

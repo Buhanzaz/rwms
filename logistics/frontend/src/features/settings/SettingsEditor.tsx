@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import type { PlanningSettings, Warehouse } from '../../domain/types';
+import { Plus, Trash2 } from 'lucide-react';
+import type { IsochroneTariff, PlanningSettings, Warehouse } from '../../domain/types';
 import type { WarehouseUpdateInput } from '../../api/client';
-import { Button, CheckboxField, Field, SwitchField } from '../../components/ui';
+import { Button, CheckboxField, Field, Modal, SwitchField } from '../../components/ui';
 import { useUiStore } from '../../stores/ui-store';
 
 interface NumericSetting {
@@ -12,14 +13,6 @@ interface NumericSetting {
   max?: number;
   disabled?: boolean;
   hint?: string;
-}
-
-/** Editable warehouse tariff values keyed by their inclusive travel-time boundary. */
-interface IsochroneTariffs {
-  isochrone_price_60_minutes: number;
-  isochrone_price_120_minutes: number;
-  isochrone_price_180_minutes: number;
-  isochrone_price_240_minutes: number;
 }
 
 const routingFields: NumericSetting[] = [
@@ -127,22 +120,11 @@ export function SettingsEditor({ warehouse, busy, onSave }: {
   onSave: (input: WarehouseUpdateInput) => Promise<void>;
 }) {
   const [draft, setDraft] = useState(warehouse.settings);
-  const [tariffs, setTariffs] = useState<IsochroneTariffs>({
-    isochrone_price_60_minutes: warehouse.isochrone_price_60_minutes,
-    isochrone_price_120_minutes: warehouse.isochrone_price_120_minutes,
-    isochrone_price_180_minutes: warehouse.isochrone_price_180_minutes,
-    isochrone_price_240_minutes: warehouse.isochrone_price_240_minutes,
-  });
+  const [tariffDialogOpen, setTariffDialogOpen] = useState(false);
   const notificationDurationSeconds = useUiStore((state) => state.notificationDurationSeconds);
   const setNotificationDurationSeconds = useUiStore((state) => state.setNotificationDurationSeconds);
   useEffect(() => {
     setDraft(warehouse.settings);
-    setTariffs({
-      isochrone_price_60_minutes: warehouse.isochrone_price_60_minutes,
-      isochrone_price_120_minutes: warehouse.isochrone_price_120_minutes,
-      isochrone_price_180_minutes: warehouse.isochrone_price_180_minutes,
-      isochrone_price_240_minutes: warehouse.isochrone_price_240_minutes,
-    });
   }, [warehouse]);
   const onNumber = (key: NumericSetting['key'], value: number) => setDraft((current) => ({ ...current, [key]: value }));
   return (
@@ -165,26 +147,8 @@ export function SettingsEditor({ warehouse, busy, onSave }: {
       </section>
       <section style={{ marginBottom: 16 }}>
         <h3>Стоимость доставки по изохронам</h3>
-        <p className="section-subtitle">Используется первая достигнутая граница времени пути от склада. Полигон «Особая цена» переопределяет этот тариф.</p>
-        <div className="form-grid">
-          {([
-            ['isochrone_price_60_minutes', 'До 1 часа, ₽'],
-            ['isochrone_price_120_minutes', 'До 2 часов, ₽'],
-            ['isochrone_price_180_minutes', 'До 3 часов, ₽'],
-            ['isochrone_price_240_minutes', 'До 4 часов, ₽'],
-          ] as const).map(([key, label]) => <Field
-            key={key}
-            label={label}
-            type="number"
-            min="0"
-            step="1"
-            value={tariffs[key]}
-            onChange={(event) => setTariffs((current) => ({
-              ...current,
-              [key]: Number(event.target.value),
-            }))}
-          />)}
-        </div>
+        <p className="section-subtitle">Последняя настроенная изохрона определяет максимальную дальность приёма заказов.</p>
+        <Button type="button" onClick={() => setTariffDialogOpen(true)}>Настройки изохронов</Button>
       </section>
       <SettingGroup title="Маршрутизация" fields={routingFields} settings={draft} onNumber={onNumber} />
       <SettingGroup title="Операции" fields={operationFields} settings={draft} onNumber={onNumber} />
@@ -216,7 +180,59 @@ export function SettingsEditor({ warehouse, busy, onSave }: {
         <CheckboxField label="Показывать процесс поиска маршрута" checked={draft.trace_enabled ?? false} onChange={(value) => setDraft((current) => ({ ...current, trace_enabled: value }))} />
       </div>
       <div className="divider" />
-      <Button variant="primary" disabled={busy} onClick={() => void onSave({ settings: draft, ...tariffs })}>{busy ? 'Сохраняем…' : 'Сохранить настройки'}</Button>
+      <Button variant="primary" disabled={busy} onClick={() => void onSave({ settings: draft })}>{busy ? 'Сохраняем…' : 'Сохранить настройки'}</Button>
+      {tariffDialogOpen ? <IsochroneTariffDialog
+        tariffs={warehouse.isochrone_tariffs}
+        busy={busy}
+        onClose={() => setTariffDialogOpen(false)}
+        onSave={async (isochroneTariffs) => {
+          await onSave({ isochrone_tariffs: isochroneTariffs });
+          setTariffDialogOpen(false);
+        }}
+      /> : null}
     </div>
   );
+}
+
+/** Dialog for the contiguous one-to-twelve-hour warehouse price ladder. */
+export function IsochroneTariffDialog({ tariffs, busy, onClose, onSave }: {
+  tariffs: IsochroneTariff[];
+  busy: boolean;
+  onClose: () => void;
+  onSave: (tariffs: IsochroneTariff[]) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState<IsochroneTariff[]>(() => (
+    tariffs.length ? tariffs.map((tariff) => ({ ...tariff })) : [
+      { travel_minutes: 60, price_rubles: 10_000 },
+      { travel_minutes: 120, price_rubles: 15_000 },
+      { travel_minutes: 180, price_rubles: 20_000 },
+      { travel_minutes: 240, price_rubles: 25_000 },
+    ]
+  ));
+  const last = draft[draft.length - 1];
+  return <Modal title="Настройки изохронов" description="Стоимость применяется по первой достигнутой границе времени пути от склада." onClose={onClose}>
+    <form className="isochrone-tariff-editor" onSubmit={(event) => { event.preventDefault(); void onSave(draft); }}>
+      <div className="entity-list">
+        {draft.map((tariff, index) => <div className="isochrone-tariff-row" key={tariff.travel_minutes}>
+          <strong>{index + 1} {index === 0 ? 'час' : index < 4 ? 'часа' : 'часов'}</strong>
+          <Field
+            label="Цена, ₽"
+            type="number"
+            min="0"
+            step="1"
+            value={tariff.price_rubles}
+            onChange={(event) => setDraft((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, price_rubles: Math.max(0, Number(event.target.value)) } : item))}
+          />
+          {index === draft.length - 1 && draft.length > 1 ? <Button type="button" size="sm" variant="ghost" aria-label={`Удалить ступень ${index + 1} час`} onClick={() => setDraft((current) => current.slice(0, -1))}><Trash2 size={14} aria-hidden="true" /></Button> : <span />}
+        </div>)}
+      </div>
+      <p className="explanation">Заказы дальше {last ? last.travel_minutes / 60 : 0} ч от склада недоступны. Последняя ступень — предел приёма заказов.</p>
+      <div className="toolbar-row">
+        <Button type="button" disabled={draft.length >= 12} onClick={() => setDraft((current) => [...current, { travel_minutes: (current.length + 1) * 60, price_rubles: current.at(-1)?.price_rubles ?? 0 }])}><Plus size={14} aria-hidden="true" />Добавить {draft.length + 1}-й час</Button>
+        <span style={{ flex: 1 }} />
+        <Button type="button" onClick={onClose}>Отмена</Button>
+        <Button type="submit" variant="primary" disabled={busy}>{busy ? 'Сохраняем…' : 'Сохранить'}</Button>
+      </div>
+    </form>
+  </Modal>;
 }

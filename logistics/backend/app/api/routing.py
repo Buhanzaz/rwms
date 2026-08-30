@@ -56,7 +56,8 @@ async def get_travel_time_contours(
     )
     try:
         features = await provider.get_truck_travel_time_contours(
-            GeoPoint(lon=query.longitude, lat=query.latitude)
+            GeoPoint(lon=query.longitude, lat=query.latitude),
+            contour_minutes=tuple(query.contours_minutes),
         )
     except ValhallaRoutingError as exc:
         raise ApiError(503, exc.code, str(exc)) from exc
@@ -69,7 +70,7 @@ async def get_travel_time_contours(
                 latitude=query.latitude,
                 longitude=query.longitude,
             ),
-            contours_minutes=[60, 120, 180, 240],
+            contours_minutes=query.contours_minutes,
             osm_data_version=settings.osm_data_version,
         ),
     )

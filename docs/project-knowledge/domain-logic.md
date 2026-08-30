@@ -770,10 +770,10 @@ inside its broad non-null hold bounds rather than creating a hard sub-window.
 Logistics asks private Valhalla
 for a directed truck matrix from the selected depot. It stores
 `ceil(oneWayTravelSeconds / 3600)` as an informational travel band and prices
-ordinary delivery by the first inclusive 60/120/180/240-minute warehouse
-tariff. A `SPECIAL_PRICE` polygon overrides that amount. `FORBIDDEN` rejects
-the customer point and `NO_TRAILER` rejects a trailer-attached alternative;
-none of those polygons replaces exact road routing. The planner evaluates the
+ordinary delivery by the first configured contiguous hourly warehouse tariff
+that covers exact one-way travel. The last configured tariff is also the hard
+delivery-acceptance boundary. No polygon or straight-line approximation
+replaces exact road routing. The planner evaluates the
 complete local day rather than each window in isolation.
 Available drivers and one- or two-cabin transport capacity come only from the
 planner's anonymous active period shifts covering the exact warehouse-local date,
@@ -804,11 +804,10 @@ capacity writers are observed in one deterministic order.
 
 Every searched offer also freezes successful Valhalla public-road truck
 routing, `siteCabinCapacity=1|2`, the applicable solo or trailer dimensions,
-weight and axle profile, the resolved isochrone tariff, and any exceptional
-zone decision.
+weight and axle profile, and the resolved isochrone tariff.
 Site capacity one splits a multi-cabin order into sequential solo-truck visits;
 site capacity two merely permits a trailer and cannot override an absent truck
-route. Exceptional geometry never substitutes for route feasibility.
+route.
 The transport can retain provisional-date searches with `false` attestations for compatible
 clients, but the current CustomerApp collects truck-and-trailer access on the private site and the
 possible failed-trip acknowledgement in a modal before search. The final hold merges compatible
@@ -988,12 +987,12 @@ exchange dialog.
 When separately enabled, the planner publishes one complete active capacity
 snapshot for the selected warehouse after its local capacity mutation commits.
 It contains generated delivery and return-pickup jobs, active period shifts and
-that warehouse's exceptional polygons. Jobs carry exact window, service, quantity,
+that warehouse's complete hourly isochrone tariff list. Jobs carry exact window, service, quantity,
 mandatory
 and trailer-access facts; shifts carry stable identity, date range, local
-start/end, break and vehicle capacity. `SPECIAL_PRICE` polygons carry prices;
-`FORBIDDEN` and `NO_TRAILER` polygons carry access policy. Each carries a source UUID,
-version and geometry, while exact truck legs remain authoritative. The URL
+start/end, break and vehicle capacity. Tariffs start at 60 minutes, advance in
+contiguous 60-minute steps and carry one non-negative whole-ruble price each,
+while exact truck legs remain authoritative. The URL
 owns warehouse identity and the body carries no duplicate workspace identity.
 Logistics-service replaces the projection idempotently and keeps it separate
 from real slots and orders. A monotonic per-warehouse `sourceGeneration`
@@ -1049,7 +1048,7 @@ changed plan versions are archived rather than deleted. For every state, one
 driver's later trip starts only after the prior depot return plus warehouse
 turnaround and the configured route buffer.
 
-The visual map has separate default-off 60/120/180/240-minute truck-road layers
+The visual map has separate default-off truck-road layers for every configured hourly tariff
 for connected warehouses and for the one explicitly selected request or
 slot-check point. A disabled layer makes no contour request. Exact directed matrix legs,
 not polygon containment or an isochrone intersection, determine delivery and
@@ -1060,10 +1059,8 @@ Federal District extracts; the derived restriction overlay deduplicates any OSM
 object shared by their boundaries under the same `OSM_DATA_VERSION`. Switching
 the selected warehouse does not move the common map. The explicit “go to
 warehouse” control recentres it when requested, so several depot markers can be
-compared without forced zoom. Only the selected warehouse's exceptional zones
-are visible and mutable; other warehouse markers remain available for
-navigation. Zone membership may forbid the stop, forbid a trailer, or override
-the isochrone price. Capacity, hard windows, truck-road availability, load
+compared without forced zoom. Other warehouse markers remain available for
+navigation. Capacity, hard windows, truck-road availability, load
 state, warehouse operations, later trips and shift end remain decisive. This
 planner-only rule does not change RWMS order or assignment ownership.
 
@@ -1122,17 +1119,16 @@ a bounded in-memory history under the bell with an unread count, and can be
 cleared together. The operator may change the duration in Settings.
 
 The planner can atomically replace a bounded deterministic workload for one
-warehouse. **Test for 3 days** uses the warehouse planning date and seed and
-creates four deliveries plus two pickups per day for three days with one
-additional accepted date. The generic generator supports a one-to-31-day
-horizon. Replacement removes only generated requests whose preferred date is
+warehouse. **Create workload** uses the explicit warehouse planning date and
+generator settings. The generic generator supports a one-to-31-day horizon.
+Replacement removes only generated requests whose preferred date is
 inside the horizon and saved plans for those dates; manual/RWMS requests,
 other dates and other warehouses remain unchanged. Any generation or road-snap
 failure restores the previous complete state.
 
-Generation uses stable external source IDs, and all point creation passes
-through the global PostGIS tariff-zone classifier. Nested matches choose the
-smallest polygon area, then UUID for a deterministic tie. Generated deliveries
+Generation uses stable external source IDs, and all point creation must produce
+an exact truck route covered by the warehouse's farthest configured isochrone.
+Generated deliveries
 use hard windows round-robin `09:00-12:00`, `12:00-15:00` and `15:00-18:00`;
 pickups use the warehouse workday and remain optional return-leg work. A request
 stores its mandatory delivery/pickup choice; preparation details stay with the
@@ -1148,10 +1144,9 @@ never overwritten. New or changed demand invalidates route plans only on the
 union of its prior and current dates; exact replay is a no-op.
 
 Large matrices are reconstructed from bounded directed blocks rather than
-falling back to mock distance. Each warehouse owns non-negative whole-ruble
-60/120/180/240-minute isochrone prices. Only a `SPECIAL_PRICE` zone overrides
-that price; `FORBIDDEN` and `NO_TRAILER` are access policies and cannot carry a
-tariff.
+falling back to mock distance. Each warehouse owns one to twelve non-negative
+whole-ruble hourly isochrone tariffs; their minute boundaries start at 60 and
+remain contiguous. No active zone state overrides that price or route result.
 
 A distinct explicit operator choice may publish one selected unassigned
 delivery as future `WAREHOUSE_DRIVERS` work. It carries no concrete driver, may

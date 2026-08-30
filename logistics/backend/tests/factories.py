@@ -7,10 +7,16 @@ from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Driver, DriverShift, LogisticsRequest, Vehicle, Warehouse, Zone, ZoneKind
+from app.models import (
+    Driver,
+    DriverShift,
+    LogisticsRequest,
+    Vehicle,
+    Warehouse,
+    WarehouseIsochroneTariff,
+)
 from app.schemas.domain import (
     DriverCreate,
-    GeoJsonGeometry,
     LogisticsRequestCreate,
     PlanningSettings,
     RequestDateOptionInput,
@@ -18,7 +24,6 @@ from app.schemas.domain import (
     VehicleConfigurationCreate,
     VehicleCreate,
     VehicleLoadProfileCreate,
-    ZoneCreate,
 )
 from app.services import catalog
 
@@ -51,49 +56,16 @@ async def make_warehouse(
         turnaround_minutes=15,
         working_day_start=time(8),
         working_day_end=time(20),
+        isochrone_tariffs=[
+            WarehouseIsochroneTariff(travel_minutes=60, price_rubles=10_000),
+            WarehouseIsochroneTariff(travel_minutes=120, price_rubles=15_000),
+            WarehouseIsochroneTariff(travel_minutes=180, price_rubles=20_000),
+            WarehouseIsochroneTariff(travel_minutes=240, price_rubles=25_000),
+        ],
     )
     session.add(warehouse)
     await session.flush()
     return warehouse
-
-
-async def make_zone(
-    session: AsyncSession,
-    warehouse: Warehouse,
-    *,
-    name: str = "Test zone",
-    color: str = "#22C55E",
-    kind: ZoneKind = ZoneKind.SPECIAL_PRICE,
-    west: float = 29.0,
-    south: float = 59.0,
-    east: float = 32.0,
-    north: float = 61.0,
-) -> Zone:
-    """Persist a rectangular tariff zone owned by the supplied warehouse."""
-
-    return await catalog.create_zone(
-        session,
-        warehouse.id,
-        ZoneCreate(
-            name=name,
-            kind=kind,
-            color=color,
-            delivery_price=2_000 if kind is ZoneKind.SPECIAL_PRICE else 0,
-            pickup_price=1_000 if kind is ZoneKind.SPECIAL_PRICE else 0,
-            geometry=GeoJsonGeometry(
-                type="Polygon",
-                coordinates=[
-                    [
-                        [west, south],
-                        [east, south],
-                        [east, north],
-                        [west, north],
-                        [west, south],
-                    ]
-                ],
-            ),
-        ),
-    )
 
 
 async def make_driver(session: AsyncSession, warehouse: Warehouse) -> Driver:

@@ -10,7 +10,6 @@ export interface ActionErrorFeedback {
 const conflictTitles: Readonly<Record<string, string>> = {
   GENERATED_WORKLOAD_ALREADY_EXISTS: 'Такая нагрузка уже существует',
   GENERATED_REQUESTS_ALREADY_PLANNED: 'Перегенерация заблокирована сохранённым планом',
-  ZONE_LOCKED: 'Зона заблокирована',
   CYCLE_LOCKED: 'Рейс заблокирован',
   TASK_LOCKED: 'Задача заблокирована',
 };

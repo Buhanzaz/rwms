@@ -1120,98 +1120,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/warehouses/{warehouse_id}/zones": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Zones
-         * @description List only the zones belonging to one warehouse workspace.
-         */
-        get: operations["list_zones_api_warehouses__warehouse_id__zones_get"];
-        put?: never;
-        /**
-         * Create Zone
-         * @description Create and publish a validated warehouse-owned version-one zone.
-         */
-        post: operations["create_zone_api_warehouses__warehouse_id__zones_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/warehouses/{warehouse_id}/zones/{zone_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Zone
-         * @description Read an owner zone and its current stale-request count.
-         */
-        get: operations["get_zone_api_warehouses__warehouse_id__zones__zone_id__get"];
-        put?: never;
-        post?: never;
-        /**
-         * Delete Zone
-         * @description Delete and publish an owner zone without uncovering its warehouse.
-         */
-        delete: operations["delete_zone_api_warehouses__warehouse_id__zones__zone_id__delete"];
-        options?: never;
-        head?: never;
-        /**
-         * Update Zone
-         * @description Update and publish an unlocked owner zone and version geometry changes.
-         */
-        patch: operations["update_zone_api_warehouses__warehouse_id__zones__zone_id__patch"];
-        trace?: never;
-    };
-    "/api/warehouses/{warehouse_id}/zones/{zone_id}/cutouts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Cut Zone
-         * @description Atomically cut and publish two zones owned by the same warehouse.
-         */
-        post: operations["cut_zone_api_warehouses__warehouse_id__zones__zone_id__cutouts_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/warehouses/{warehouse_id}/zones/{zone_id}/lock": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Lock Zone
-         * @description Set or clear an owner zone's editor lock without capacity publication.
-         */
-        post: operations["lock_zone_api_warehouses__warehouse_id__zones__zone_id__lock_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1454,19 +1362,6 @@ export interface components {
             /** Expected Version */
             expected_version: number;
         };
-        /**
-         * GeoJsonGeometry
-         * @description GeoJSON Polygon or MultiPolygon accepted by the zone editor.
-         */
-        GeoJsonGeometry: {
-            /** Coordinates */
-            coordinates: components["schemas"]["PolygonCoordinates"] | components["schemas"]["MultiPolygonCoordinates"];
-            /**
-             * Type
-             * @enum {string}
-             */
-            type: "Polygon" | "MultiPolygon";
-        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -1492,7 +1387,16 @@ export interface components {
              */
             status: "ok";
         };
-        LinearRing: components["schemas"]["Position"][];
+        /**
+         * IsochroneTariff
+         * @description One contiguous hourly road-travel price tier.
+         */
+        IsochroneTariff: {
+            /** Price Rubles */
+            price_rubles: number;
+            /** Travel Minutes */
+            travel_minutes: number;
+        };
         /**
          * LogisticsRequestCreate
          * @description Source request input intentionally excluding any client-supplied zone.
@@ -1568,7 +1472,7 @@ export interface components {
         };
         /**
          * LogisticsRequestRead
-         * @description Request with backend classification, date options, and split parts.
+         * @description Warehouse request with date options and vehicle-sized split parts.
          */
         LogisticsRequestRead: {
             /** Address Label */
@@ -1639,16 +1543,6 @@ export interface components {
              * Format: uuid
              */
             warehouse_id: string;
-            zone_classification_status: components["schemas"]["ZoneClassificationStatus"];
-            /** Zone Id */
-            zone_id: string | null;
-            /**
-             * Zone Is Stale
-             * @default false
-             */
-            zone_is_stale: boolean;
-            /** Zone Version */
-            zone_version: number | null;
         };
         /**
          * LogisticsRequestUpdate
@@ -1711,7 +1605,6 @@ export interface components {
             };
             reason: components["schemas"]["NonBlank"];
         };
-        MultiPolygonCoordinates: components["schemas"]["PolygonCoordinates"][];
         /**
          * NearestOptionRead
          * @description Earliest typed scheduling alternative for one unassigned task.
@@ -2082,16 +1975,7 @@ export interface components {
             service_minutes: number;
             status: components["schemas"]["TaskStatus"];
             type: components["schemas"]["RequestType"];
-            /** Zone Id */
-            zone_id: string | null;
-            /** Zone Version */
-            zone_version: number | null;
         };
-        PolygonCoordinates: components["schemas"]["LinearRing"][];
-        Position: [
-            number,
-            number
-        ];
         /**
          * RequestDateOptionInput
          * @description Acceptable request date with a hard or soft local time window.
@@ -2500,17 +2384,12 @@ export interface components {
          * @description Versioned capacity revision accepted or idempotently replayed by RWMS.
          */
         RwmsCapacitySnapshotResult: {
+            /** Isochronetariffcount */
+            isochroneTariffCount: number;
             /** Jobcount */
             jobCount: number;
-            /** Pricezonecount */
-            priceZoneCount: number;
             /** Replayed */
             replayed: boolean;
-            /**
-             * Restrictionzonecount
-             * @default 0
-             */
-            restrictionZoneCount: number;
             /** Shiftcount */
             shiftCount: number;
             /** Sourcegeneration */
@@ -2862,11 +2741,7 @@ export interface components {
             /** Plan Version */
             plan_version: number;
             /** Price Isochrone Minutes */
-            price_isochrone_minutes?: (60 | 120 | 180 | 240) | null;
-            /** Price Zone Id */
-            price_zone_id?: string | null;
-            /** Price Zone Name */
-            price_zone_name?: string | null;
+            price_isochrone_minutes?: number | null;
             /** Slots */
             slots: components["schemas"]["CustomerSlotRead"][];
             /**
@@ -3078,9 +2953,7 @@ export interface components {
             /** Plan Version */
             plan_version: number;
             /** Price Isochrone Minutes */
-            price_isochrone_minutes?: (60 | 120 | 180 | 240) | null;
-            /** Price Zone Id */
-            price_zone_id?: string | null;
+            price_isochrone_minutes?: number | null;
             /**
              * Slot End
              * Format: time
@@ -3362,7 +3235,7 @@ export interface components {
         };
         /**
          * TravelTimeContourFeatureCollection
-         * @description Four validated Valhalla truck isochrones rendered as visual map estimates.
+         * @description Configured Valhalla truck isochrones rendered as visual map estimates.
          */
         TravelTimeContourFeatureCollection: {
             /** Features */
@@ -3394,7 +3267,7 @@ export interface components {
          */
         TravelTimeContourMetadata: {
             /** Contours Minutes */
-            contours_minutes: components["schemas"]["TravelTimeContourMinutes"][];
+            contours_minutes: number[];
             /**
              * Costing
              * @default truck
@@ -3412,12 +3285,6 @@ export interface components {
             source: "valhalla";
         };
         /**
-         * TravelTimeContourMinutes
-         * @description Supported fixed truck-travel contour durations in minutes.
-         * @enum {integer}
-         */
-        TravelTimeContourMinutes: 60 | 120 | 180 | 240;
-        /**
          * TravelTimeContourOrigin
          * @description WGS84 depot or route-front origin echoed in contour response metadata.
          */
@@ -3429,10 +3296,11 @@ export interface components {
         };
         /**
          * TravelTimeContourProperties
-         * @description Stable styling key for one fixed travel-time contour.
+         * @description Stable styling key for one configured travel-time contour.
          */
         TravelTimeContourProperties: {
-            contour_minutes: components["schemas"]["TravelTimeContourMinutes"];
+            /** Contour Minutes */
+            contour_minutes: number;
         };
         /**
          * TruckRestrictionCategory
@@ -3866,7 +3734,7 @@ export interface components {
         };
         /**
          * WarehouseCreate
-         * @description Input that binds one RWMS warehouse and optional first exceptional zone.
+         * @description Input that binds one RWMS warehouse and its ordered road-travel tariffs.
          */
         WarehouseCreate: {
             /**
@@ -3874,27 +3742,8 @@ export interface components {
              * Format: uuid
              */
             external_warehouse_id: string;
-            initial_zone?: components["schemas"]["ZoneCreate"] | null;
-            /**
-             * Isochrone Price 120 Minutes
-             * @default 15000
-             */
-            isochrone_price_120_minutes: number;
-            /**
-             * Isochrone Price 180 Minutes
-             * @default 20000
-             */
-            isochrone_price_180_minutes: number;
-            /**
-             * Isochrone Price 240 Minutes
-             * @default 25000
-             */
-            isochrone_price_240_minutes: number;
-            /**
-             * Isochrone Price 60 Minutes
-             * @default 10000
-             */
-            isochrone_price_60_minutes: number;
+            /** Isochrone Tariffs */
+            isochrone_tariffs?: components["schemas"]["IsochroneTariff"][];
             /**
              * Loading Minutes
              * @default 30
@@ -3953,14 +3802,8 @@ export interface components {
              * Format: uuid
              */
             id: string;
-            /** Isochrone Price 120 Minutes */
-            isochrone_price_120_minutes: number;
-            /** Isochrone Price 180 Minutes */
-            isochrone_price_180_minutes: number;
-            /** Isochrone Price 240 Minutes */
-            isochrone_price_240_minutes: number;
-            /** Isochrone Price 60 Minutes */
-            isochrone_price_60_minutes: number;
+            /** Isochrone Tariffs */
+            isochrone_tariffs: components["schemas"]["IsochroneTariff"][];
             /** Latitude */
             latitude: number;
             /** Loading Minutes */
@@ -4008,14 +3851,8 @@ export interface components {
         WarehouseUpdate: {
             /** Default Planning Date */
             default_planning_date?: string | null;
-            /** Isochrone Price 120 Minutes */
-            isochrone_price_120_minutes?: number | null;
-            /** Isochrone Price 180 Minutes */
-            isochrone_price_180_minutes?: number | null;
-            /** Isochrone Price 240 Minutes */
-            isochrone_price_240_minutes?: number | null;
-            /** Isochrone Price 60 Minutes */
-            isochrone_price_60_minutes?: number | null;
+            /** Isochrone Tariffs */
+            isochrone_tariffs?: components["schemas"]["IsochroneTariff"][] | null;
             /** Loading Minutes */
             loading_minutes?: number | null;
             /** Seed */
@@ -4048,8 +3885,6 @@ export interface components {
             warehouse: components["schemas"]["WarehouseRead"];
             /** Warehouses */
             warehouses: components["schemas"]["WarehouseRead"][];
-            /** Zones */
-            zones: components["schemas"]["ZoneRead"][];
         };
         /**
          * WorkloadDeletionResult
@@ -4180,161 +4015,6 @@ export interface components {
              * Format: date
              */
             start_date: string;
-        };
-        /**
-         * ZoneClassificationStatus
-         * @description Result of authoritative server-side point classification.
-         * @enum {string}
-         */
-        ZoneClassificationStatus: "CLASSIFIED" | "OUTSIDE_ZONES";
-        /**
-         * ZoneCreate
-         * @description Input for a version-one forbidden, no-trailer, or special-price polygon.
-         */
-        ZoneCreate: {
-            /**
-             * Color
-             * @default #22C55E
-             */
-            color: string;
-            /**
-             * Delivery Price
-             * @default 0
-             */
-            delivery_price: number;
-            geometry: components["schemas"]["GeoJsonGeometry"];
-            /** @default SPECIAL_PRICE */
-            kind: components["schemas"]["ZoneKind"];
-            /**
-             * Locked
-             * @default false
-             */
-            locked: boolean;
-            name: components["schemas"]["NonBlank"];
-            /**
-             * Pickup Price
-             * @default 0
-             */
-            pickup_price: number;
-        };
-        /**
-         * ZoneCutoutInnerZone
-         * @description Required metadata for the operational zone occupying a new cutout.
-         */
-        ZoneCutoutInnerZone: {
-            /**
-             * Color
-             * @default #22C55E
-             */
-            color: string;
-            /**
-             * Delivery Price
-             * @default 0
-             */
-            delivery_price: number;
-            /** @default SPECIAL_PRICE */
-            kind: components["schemas"]["ZoneKind"];
-            /** Locked */
-            locked: boolean;
-            name: components["schemas"]["NonBlank"];
-            /**
-             * Pickup Price
-             * @default 0
-             */
-            pickup_price: number;
-        };
-        /**
-         * ZoneCutoutRead
-         * @description Both atomic outcomes of cutting a source zone and creating its inner zone.
-         */
-        ZoneCutoutRead: {
-            inner_zone: components["schemas"]["ZoneRead"];
-            source_zone: components["schemas"]["ZoneRead"];
-        };
-        /**
-         * ZoneCutoutRequest
-         * @description Strictly internal geometry plus metadata for its new operational zone.
-         */
-        ZoneCutoutRequest: {
-            geometry: components["schemas"]["GeoJsonGeometry"];
-            inner_zone: components["schemas"]["ZoneCutoutInnerZone"];
-        };
-        /**
-         * ZoneKind
-         * @description Operational meaning of a warehouse-owned exceptional polygon.
-         * @enum {string}
-         */
-        ZoneKind: "FORBIDDEN" | "NO_TRAILER" | "SPECIAL_PRICE";
-        /**
-         * ZoneLockRequest
-         * @description Explicit desired editing-lock state.
-         */
-        ZoneLockRequest: {
-            /**
-             * Locked
-             * @default true
-             */
-            locked: boolean;
-        };
-        /**
-         * ZoneRead
-         * @description Versioned warehouse-owned exceptional zone and stale-request count.
-         */
-        ZoneRead: {
-            /** Color */
-            color: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Delivery Price */
-            delivery_price: number;
-            geometry: components["schemas"]["GeoJsonGeometry"];
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            kind: components["schemas"]["ZoneKind"];
-            /** Locked */
-            locked: boolean;
-            /** Name */
-            name: string;
-            /** Pickup Price */
-            pickup_price: number;
-            /**
-             * Stale Request Count
-             * @default 0
-             */
-            stale_request_count: number;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /** Version */
-            version: number;
-            /**
-             * Warehouse Id
-             * Format: uuid
-             */
-            warehouse_id: string;
-        };
-        /**
-         * ZoneUpdate
-         * @description Partial zone update; geometry changes increment version server-side.
-         */
-        ZoneUpdate: {
-            /** Color */
-            color?: string | null;
-            /** Delivery Price */
-            delivery_price?: number | null;
-            geometry?: components["schemas"]["GeoJsonGeometry"] | null;
-            kind?: components["schemas"]["ZoneKind"] | null;
-            name?: components["schemas"]["NonBlank"] | null;
-            /** Pickup Price */
-            pickup_price?: number | null;
         };
     };
     responses: never;
@@ -5474,6 +5154,7 @@ export interface operations {
             query: {
                 latitude: number;
                 longitude: number;
+                contours_minutes?: number[];
             };
             header?: never;
             path?: never;
@@ -6390,242 +6071,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WarehouseWorkspaceRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_zones_api_warehouses__warehouse_id__zones_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                warehouse_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ZoneRead"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_zone_api_warehouses__warehouse_id__zones_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                warehouse_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ZoneCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ZoneRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_zone_api_warehouses__warehouse_id__zones__zone_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                warehouse_id: string;
-                zone_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ZoneRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_zone_api_warehouses__warehouse_id__zones__zone_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                warehouse_id: string;
-                zone_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_zone_api_warehouses__warehouse_id__zones__zone_id__patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                warehouse_id: string;
-                zone_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ZoneUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ZoneRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cut_zone_api_warehouses__warehouse_id__zones__zone_id__cutouts_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                warehouse_id: string;
-                zone_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ZoneCutoutRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ZoneCutoutRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    lock_zone_api_warehouses__warehouse_id__zones__zone_id__lock_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                warehouse_id: string;
-                zone_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ZoneLockRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ZoneRead"];
                 };
             };
             /** @description Validation Error */

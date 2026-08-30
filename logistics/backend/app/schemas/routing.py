@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from enum import IntEnum
 from typing import Any, Literal
 
 from pydantic import AwareDatetime, Field, model_validator
@@ -75,20 +74,25 @@ class TruckRestrictionFeatureCollection(ApiModel):
     metadata: TruckRestrictionMetadata
 
 
-class TravelTimeContourMinutes(IntEnum):
-    """Supported fixed truck-travel contour durations in minutes."""
-
-    ONE_HOUR = 60
-    TWO_HOURS = 120
-    THREE_HOURS = 180
-    FOUR_HOURS = 240
-
-
 class TravelTimeContourQuery(ApiModel):
-    """Validated WGS84 depot or route-front coordinate used as the isochrone origin."""
+    """WGS84 origin and configured contiguous hourly contour minutes."""
 
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
+    contours_minutes: list[int] = Field(
+        default_factory=lambda: [60, 120, 180, 240],
+        min_length=1,
+        max_length=12,
+    )
+
+    @model_validator(mode="after")
+    def validate_contours(self) -> TravelTimeContourQuery:
+        """Require contiguous hourly tiers starting at sixty and ending by twelve hours."""
+
+        expected = list(range(60, 60 * (len(self.contours_minutes) + 1), 60))
+        if self.contours_minutes != expected:
+            raise ValueError("contours_minutes must be contiguous hourly tiers starting at 60")
+        return self
 
 
 class TravelTimeContourGeometry(ApiModel):
@@ -99,9 +103,9 @@ class TravelTimeContourGeometry(ApiModel):
 
 
 class TravelTimeContourProperties(ApiModel):
-    """Stable styling key for one fixed travel-time contour."""
+    """Stable styling key for one configured travel-time contour."""
 
-    contour_minutes: TravelTimeContourMinutes
+    contour_minutes: int = Field(ge=60, le=720, multiple_of=60)
 
 
 class TravelTimeContourFeature(ApiModel):
@@ -125,12 +129,12 @@ class TravelTimeContourMetadata(ApiModel):
     source: Literal["valhalla"] = "valhalla"
     costing: Literal["truck"] = "truck"
     origin: TravelTimeContourOrigin
-    contours_minutes: list[TravelTimeContourMinutes]
+    contours_minutes: list[int] = Field(min_length=1, max_length=12)
     osm_data_version: str
 
 
 class TravelTimeContourFeatureCollection(ApiModel):
-    """Four validated Valhalla truck isochrones rendered as visual map estimates."""
+    """Configured Valhalla truck isochrones rendered as visual map estimates."""
 
     type: Literal["FeatureCollection"] = "FeatureCollection"
     features: list[TravelTimeContourFeature]

@@ -291,8 +291,8 @@ class ValhallaRoutingProvider:
         """Return time/profile-aware truck isochrones with validated GeoJSON areas."""
 
         require_aware(departure_at, "departure_at")
-        if not contour_minutes or any(value < 1 or value > 240 for value in contour_minutes):
-            raise ValueError("isochrone contours must contain minutes in [1, 240]")
+        if not contour_minutes or any(value < 1 or value > 720 for value in contour_minutes):
+            raise ValueError("isochrone contours must contain minutes in [1, 720]")
         if len(set(contour_minutes)) != len(contour_minutes):
             raise ValueError("isochrone contour minutes must be unique")
         payload: dict[str, object] = {

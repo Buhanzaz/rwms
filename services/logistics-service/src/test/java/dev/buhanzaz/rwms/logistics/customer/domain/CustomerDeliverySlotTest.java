@@ -11,7 +11,7 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
-/** Verifies persisted delivery feasibility and price-only zone facts at the domain boundary. */
+/** Verifies persisted delivery feasibility and configured isochrone prices at the domain boundary. */
 class CustomerDeliverySlotTest {
 
   @Test
@@ -55,8 +55,8 @@ class CustomerDeliverySlotTest {
             1,
             0,
             2,
-            null,
-            null,
+            10_000L,
+            60,
             true,
             true,
             4.0,
@@ -75,20 +75,12 @@ class CustomerDeliverySlotTest {
   }
 
   @Test
-  void keepsSpecialZoneAndIsochroneTierMutuallyExclusive() {
-    UUID specialZone = UUID.randomUUID();
-    CustomerDeliverySlot special =
-        offerWithPrice(7_500L, specialZone, null);
-    CustomerDeliverySlot ordinary =
-        offerWithPrice(15_000L, null, 120);
+  void acceptsConfiguredHourlyTierAndRejectsNonHourlyTier() {
+    CustomerDeliverySlot ordinary = offerWithPrice(30_000L, 300);
 
-    assertEquals(specialZone, special.getPriceZoneId());
-    assertEquals(null, special.getPriceIsochroneMinutes());
-    assertEquals(120, ordinary.getPriceIsochroneMinutes());
+    assertEquals(300, ordinary.getPriceIsochroneMinutes());
     assertEquals(null, ordinary.getPriceZoneId());
-    assertThrows(
-        IllegalArgumentException.class,
-        () -> offerWithPrice(7_500L, specialZone, 120));
+    assertThrows(IllegalArgumentException.class, () -> offerWithPrice(7_500L, 90));
   }
 
   private static CustomerDeliverySlot offer(int travelZoneHours) {
@@ -115,8 +107,8 @@ class CustomerDeliverySlotTest {
         travelZoneHours,
         0,
         2,
-        null,
-        null,
+        10_000L,
+        60,
         privateSiteAccessConfirmed,
         failedTripChargeAcknowledged,
         4.0,
@@ -129,7 +121,7 @@ class CustomerDeliverySlotTest {
   }
 
   private static CustomerDeliverySlot offerWithPrice(
-      Long deliveryPriceRubles, UUID priceZoneId, Integer priceIsochroneMinutes) {
+      Long deliveryPriceRubles, Integer priceIsochroneMinutes) {
     return CustomerDeliverySlot.offer(
         UUID.randomUUID(),
         UUID.randomUUID(),
@@ -147,7 +139,6 @@ class CustomerDeliverySlotTest {
         0,
         2,
         deliveryPriceRubles,
-        priceZoneId,
         priceIsochroneMinutes,
         true,
         true,

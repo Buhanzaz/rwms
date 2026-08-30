@@ -3,10 +3,7 @@ import {
   CalendarPlus,
   CircleAlert,
   Edit3,
-  Lock,
-  LockOpen,
   Plus,
-  Scissors,
   Trash2,
   MapPinPlus,
 } from 'lucide-react';
@@ -25,7 +22,6 @@ import type {
   ValidationResult,
   Vehicle,
   Warehouse,
-  Zone,
 } from '../domain/types';
 import type { RequestPlanningDetailsInput, WarehouseUpdateInput } from '../api/client';
 import { Badge, Button, EmptyState, ErrorPanel } from '../components/ui';
@@ -35,8 +31,8 @@ import { PlanPanel, type PlanMove } from '../features/planning/PlanPanel';
 import { PlanningDayRequests } from '../features/planning/PlanningDayRequests';
 import { SettingsEditor } from '../features/settings/SettingsEditor';
 
-export type EntityKind = 'warehouse' | 'zone' | 'driver' | 'vehicle' | 'trailer' | 'shift' | 'request';
-export type EditableEntity = Warehouse | Zone | Driver | Vehicle | Trailer | DriverShift | LogisticsRequest;
+export type EntityKind = 'warehouse' | 'driver' | 'vehicle' | 'trailer' | 'shift' | 'request';
+export type EditableEntity = Warehouse | Driver | Vehicle | Trailer | DriverShift | LogisticsRequest;
 
 interface InspectorProps {
   workspace: WarehouseWorkspace;
@@ -50,7 +46,7 @@ interface InspectorProps {
   onGenerateWorkload: () => void;
   onDeleteGeneratedWorkload: () => void;
   onSetMapTool: (tool: MapTool) => void;
-  onSelect: (kind: 'warehouse' | 'zone' | 'request' | 'driver' | 'vehicle' | 'shift' | 'cycle', id: UUID) => void;
+  onSelect: (kind: 'warehouse' | 'request' | 'driver' | 'vehicle' | 'shift' | 'cycle', id: UUID) => void;
   onMoveTask: (move: PlanMove) => void;
   onToggleCycleLock: (cycle: RouteCycle) => void;
   onSaveSettings: (input: WarehouseUpdateInput) => Promise<void>;
@@ -125,21 +121,6 @@ function WarehouseSection({ props }: { props: InspectorProps }) {
         <Button variant="danger" onClick={props.onDeleteGeneratedWorkload} disabled={props.busy}><Trash2 size={14} aria-hidden="true" />Удалить нагрузку</Button>
       </div>
     </div>
-    <div className="explanation">Выбор склада в верхнем левом углу переключает его доставки, вывозы, зоны, водителей, машины, смены и планы. На общей карте остальные склады остаются доступными для быстрого перехода.</div>
-  </>;
-}
-
-function ZonesSection({ props }: { props: InspectorProps }) {
-  const labels = {
-    FORBIDDEN: 'доставка запрещена',
-    NO_TRAILER: 'проезд с прицепом запрещён',
-    SPECIAL_PRICE: 'особая цена',
-  } as const;
-  return <>
-    <h2 className="section-title">Особые зоны доставки</h2><p className="section-subtitle">Обычная стоимость считается по изохронам склада. Полигон нужен только для запрета доставки, запрета прицепа или специальной цены.</p>
-    <div className="toolbar-row"><Button variant="primary" onClick={() => props.onSetMapTool('DRAW_ZONE')}><Plus size={14} />Нарисовать</Button><Button onClick={() => props.onSetMapTool('CUT_ZONE')}><Scissors size={14} aria-hidden="true" />Сделать вырез</Button></div>
-    <div className="entity-list">{props.workspace.zones.map((zone) => <EntityCard key={zone.id} title={zone.name} subtitle={`${labels[zone.kind]}${zone.kind === 'SPECIAL_PRICE' ? ` · доставка ${zone.delivery_price} ₽ · вывоз ${zone.pickup_price} ₽` : ''} · версия ${zone.version}`} badges={<><span className="zone-color-dot" style={{ backgroundColor: zone.color }} aria-label={`Цвет ${zone.color}`} /><Badge tone={zone.kind === 'FORBIDDEN' ? 'danger' : zone.kind === 'NO_TRAILER' ? 'warning' : 'neutral'}>{labels[zone.kind]}</Badge>{zone.locked ? <Badge tone="warning"><Lock size={10} />заблокирована</Badge> : <Badge tone="neutral"><LockOpen size={10} />доступна</Badge>}</>} onClick={() => props.onSelect('zone', zone.id)} onEdit={() => props.onEdit('zone', zone)} onDelete={() => props.onDelete('zone', zone.id, zone.name)} />)}</div>
-    {!props.workspace.zones.length ? <EmptyState title="Зоны не созданы" description="Нарисуйте зону, когда для склада потребуется отдельный тариф или ограничение проезда." /> : null}
   </>;
 }
 
@@ -182,8 +163,8 @@ function ShiftsSection({ props }: { props: InspectorProps }) {
     <Button variant="primary" disabled={!props.workspace.drivers.length || !props.workspace.vehicles.length} onClick={() => props.onCreate('shift')}><CalendarPlus size={14} />Добавить смену</Button><div className="divider" />
     <div className="entity-list">{props.workspace.shifts.map((shift) => {
       const driver = props.workspace.drivers.find((item) => item.id === shift.driver_id);
-      const vehicle = props.workspace.vehicles.find((item) => item.id === shift.vehicle_id);
-      return <EntityCard key={shift.id} title={`${driver?.name ?? 'Водитель'} · ${vehicle?.registration_number ?? 'машина'}`} subtitle={`${formatDate(shift.date_from)}–${formatDate(shift.date_to)} · ежедневно ${shift.start_time.slice(0, 5)}–${shift.end_time.slice(0, 5)} · перерыв ${shift.break_minutes} мин`} badges={<Badge tone={shift.active ? 'success' : 'neutral'}>{shift.active ? 'активна' : 'выкл.'}</Badge>} onClick={() => props.onSelect('shift', shift.id)} onEdit={() => props.onEdit('shift', shift)} onDelete={() => props.onDelete('shift', shift.id, `смену ${driver?.name ?? ''}`)} />;
+      const state = !shift.active ? 'неактивна' : shift.date_to < props.planningDate ? 'завершена' : shift.date_from > props.planningDate ? 'запланирована' : 'активна';
+      return <EntityCard key={shift.id} title={driver?.name ?? 'Водитель'} subtitle={`${formatDate(shift.date_from)}–${formatDate(shift.date_to)} · ${shift.start_time.slice(0, 5)}–${shift.end_time.slice(0, 5)} · перерыв ${shift.break_minutes} мин`} badges={<Badge tone={state === 'активна' ? 'success' : state === 'запланирована' ? 'accent' : 'neutral'}>{state}</Badge>} onClick={() => props.onSelect('shift', shift.id)} onEdit={() => props.onEdit('shift', shift)} onDelete={() => props.onDelete('shift', shift.id, `смену ${driver?.name ?? ''}`)} />;
     })}</div>
     {!props.workspace.shifts.length ? <EmptyState title="Смены не добавлены" description="Добавьте смену после создания водителя и машины." /> : null}
   </>;
@@ -191,7 +172,7 @@ function ShiftsSection({ props }: { props: InspectorProps }) {
 
 function DeliveriesSection({ props }: { props: InspectorProps }) {
   return <>
-    <h2 className="section-title">Доставки и вывозы</h2><p className="section-subtitle">Здесь задаются время, допуск прицепа и обязательность. Количество больше двух backend разбивает на транспортные части 2 + 2 + 1.</p>
+    <h2 className="section-title">Доставки и вывозы</h2>
     <div className="toolbar-row"><Button variant="primary" onClick={() => props.onSetMapTool('ADD_DELIVERY')}><MapPinPlus size={14} />Доставка</Button><Button onClick={() => props.onSetMapTool('ADD_PICKUP')}><MapPinPlus size={14} />Вывоз</Button></div>
     <div className="divider" />
     <PlanningDayRequests
@@ -237,22 +218,16 @@ export function Inspector(props: InspectorProps) {
   let content: React.ReactNode;
   switch (section) {
     case 'WAREHOUSE': content = <WarehouseSection props={props} />; break;
-    case 'ZONES': content = <ZonesSection props={props} />; break;
     case 'DRIVERS': content = <CatalogSection props={props} kind="driver" />; break;
     case 'VEHICLES': content = <CatalogSection props={props} kind="vehicle" />; break;
     case 'SHIFTS': content = <ShiftsSection props={props} />; break;
     case 'REQUESTS': content = <DeliveriesSection props={props} />; break;
     case 'PLAN_DAY': content = <>
-      <div className="entity-card__row"><span><h2 className="section-title">План на {formatDate(props.planningDate)}</h2><p className="section-subtitle">Здесь только итоговый план и его показатели. Время, прицеп и обязательность редактируются в разделе «Доставки».</p></span><span className="toolbar-row">{props.plan?.manually_changed && props.plan.status !== 'CONFIRMED' ? <Button size="sm" onClick={props.onResetManualChanges} disabled={props.busy}>Отменить изменения</Button> : null}{props.plan && props.plan.status !== 'CONFIRMED' ? <Button size="sm" variant="primary" onClick={props.onConfirmPlan} disabled={props.busy}>Утвердить</Button> : null}</span></div>
-      {props.plan ? <><Metrics metrics={props.plan.metrics} /><div className="divider" /><PlanPanel plan={props.plan} timeZone={props.workspace.warehouse.timezone} readOnly={props.plan.status === 'CONFIRMED'} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} onCreateTransfer={props.onCreateTransfer} /></> : <EmptyState title="План дня не составлен" description="Заполните условия доставок и вывозов — план пересчитается автоматически." />}
-    </>; break;
-    case 'ROUTES': content = <>
-      <div className="entity-card__row"><span><h2 className="section-title">Маршруты</h2><p className="section-subtitle">Нажмите водителя, чтобы выделить все его рейсы на карте; цикл — чтобы выделить один рейс.</p></span></div>
-      {props.plan ? <><Metrics metrics={props.plan.metrics} /><div className="divider" /></> : null}
+      <div className="entity-card__row"><h2 className="section-title">План на {formatDate(props.planningDate)}</h2><span className="toolbar-row">{props.plan?.manually_changed && props.plan.status !== 'CONFIRMED' ? <Button size="sm" onClick={props.onResetManualChanges} disabled={props.busy}>Отменить изменения</Button> : null}{props.plan && props.plan.status !== 'CONFIRMED' ? <Button size="sm" variant="primary" onClick={props.onConfirmPlan} disabled={props.busy}>Утвердить</Button> : null}</span></div>
       {mode === 'SIMULATION' && props.simulation ? <><SimulationDrivers props={props} /><div className="divider" /></> : null}
-      {props.plan?.driver_routes.some((route) => route.cycles.length) ? <PlanPanel plan={props.plan} timeZone={props.workspace.warehouse.timezone} readOnly={props.plan.status === 'CONFIRMED'} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} onCreateTransfer={props.onCreateTransfer} /> : <EmptyState title="Маршруты не построены" description="После расчёта допустимые рейсы появятся здесь." />}
+      {props.plan ? <><Metrics metrics={props.plan.metrics} /><div className="divider" /><PlanPanel plan={props.plan} timeZone={props.workspace.warehouse.timezone} readOnly={props.plan.status === 'CONFIRMED'} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} onCreateTransfer={props.onCreateTransfer} onRescheduleUnassigned={(id) => { const request = props.workspace.requests.find((item) => item.id === id); if (request) props.onEdit('request', request); }} /></> : <EmptyState title="План дня не составлен" description="Заполните условия доставок и вывозов — план пересчитается автоматически." />}
     </>; break;
-    case 'UNASSIGNED': content = props.plan?.unassigned.length ? <PlanPanel plan={props.plan} timeZone={props.workspace.warehouse.timezone} showUnassignedOnly readOnly={props.plan.status === 'CONFIRMED'} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} onCreateTransfer={props.onCreateTransfer} /> : <EmptyState title="Нераспределённых заданий нет" description={props.plan ? 'Все задачи выбранного дня распределены.' : 'После расчёта плана здесь появятся задачи без назначенного маршрута.'} />; break;
+    case 'UNASSIGNED': content = props.plan?.unassigned.length ? <PlanPanel plan={props.plan} timeZone={props.workspace.warehouse.timezone} showUnassignedOnly readOnly={props.plan.status === 'CONFIRMED'} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} onCreateTransfer={props.onCreateTransfer} onRescheduleUnassigned={(id) => { const request = props.workspace.requests.find((item) => item.id === id); if (request) props.onEdit('request', request); }} /> : <EmptyState title="Нераспределённых заданий нет" description={props.plan ? 'Все задачи выбранного дня распределены.' : 'После расчёта плана здесь появятся задачи без назначенного маршрута.'} />; break;
     case 'SETTINGS': content = <SettingsEditor warehouse={props.workspace.warehouse} busy={props.busy} onSave={props.onSaveSettings} />; break;
   }
   return <aside className="inspector" aria-label="Инспектор">

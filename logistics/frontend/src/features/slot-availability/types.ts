@@ -76,9 +76,7 @@ export interface SlotAvailabilityResponse {
   date: string;
   plan_version: number;
   delivery_price_rubles?: number;
-  price_isochrone_minutes?: 60 | 120 | 180 | 240;
-  price_zone_id?: UUID;
-  price_zone_name?: string;
+  price_isochrone_minutes?: number;
   trailer_access_allowed: boolean;
   slots: SlotAvailabilityOption[];
 }
@@ -236,18 +234,14 @@ export function normalizeSlotAvailabilityResponse(value: unknown): SlotAvailabil
   });
   const deliveryPriceRubles = optionalNumber(raw.delivery_price_rubles);
   const rawIsochroneMinutes = optionalNumber(raw.price_isochrone_minutes);
-  const priceIsochroneMinutes = [60, 120, 180, 240].includes(rawIsochroneMinutes ?? -1)
-    ? rawIsochroneMinutes as 60 | 120 | 180 | 240
+  const priceIsochroneMinutes = rawIsochroneMinutes !== undefined && rawIsochroneMinutes >= 60 && rawIsochroneMinutes <= 720 && rawIsochroneMinutes % 60 === 0
+    ? rawIsochroneMinutes
     : undefined;
-  const priceZoneId = optionalString(raw.price_zone_id);
-  const priceZoneName = optionalString(raw.price_zone_name);
   return {
     date: raw.date,
     plan_version: raw.plan_version,
     ...(deliveryPriceRubles !== undefined ? { delivery_price_rubles: deliveryPriceRubles } : {}),
     ...(priceIsochroneMinutes ? { price_isochrone_minutes: priceIsochroneMinutes } : {}),
-    ...(priceZoneId ? { price_zone_id: priceZoneId } : {}),
-    ...(priceZoneName ? { price_zone_name: priceZoneName } : {}),
     trailer_access_allowed: raw.trailer_access_allowed !== false,
     slots,
   };

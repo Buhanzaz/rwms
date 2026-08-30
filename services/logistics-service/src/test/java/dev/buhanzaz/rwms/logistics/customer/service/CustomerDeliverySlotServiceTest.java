@@ -12,9 +12,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.DeliverySlotSearchRequest;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityIsochroneTariff;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityIsochroneTariffRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityJobRepository;
-import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityPriceZoneRepository;
-import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityRestrictionZoneRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityShiftRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacitySnapshotRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityShift;
@@ -28,8 +28,6 @@ import dev.buhanzaz.rwms.logistics.customer.routing.CustomerTravelTimeMatrix;
 import dev.buhanzaz.rwms.logistics.customer.routing.CustomerTravelTimeMatrix.GeoPoint;
 import dev.buhanzaz.rwms.logistics.customer.routing.CustomerVehicleRouteProfile;
 import dev.buhanzaz.rwms.logistics.customer.routing.ValhallaCustomerTravelTimeClient;
-import dev.buhanzaz.rwms.logistics.customer.service.CustomerDeliveryPriceClassifier.PriceQuote;
-import dev.buhanzaz.rwms.logistics.customer.service.CustomerDeliveryPriceClassifier.DeliveryPolicy;
 import dev.buhanzaz.rwms.logistics.customer.security.CustomerIdentity;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseIdentity;
@@ -66,12 +64,9 @@ class CustomerDeliverySlotServiceTest {
     CustomerDeliverySlotHoldStore holdStore = mock(CustomerDeliverySlotHoldStore.class);
     WarehouseCapacityJobRepository generated = mock(WarehouseCapacityJobRepository.class);
     WarehouseCapacityShiftRepository shifts = mock(WarehouseCapacityShiftRepository.class);
-    WarehouseCapacityPriceZoneRepository priceZones =
-        mock(WarehouseCapacityPriceZoneRepository.class);
-    WarehouseCapacityRestrictionZoneRepository restrictionZones =
-        mock(WarehouseCapacityRestrictionZoneRepository.class);
+    WarehouseCapacityIsochroneTariffRepository isochroneTariffs =
+        mock(WarehouseCapacityIsochroneTariffRepository.class);
     WarehouseCapacitySnapshotRepository snapshots = mock(WarehouseCapacitySnapshotRepository.class);
-    CustomerDeliveryPriceClassifier prices = mock(CustomerDeliveryPriceClassifier.class);
     ValhallaCustomerTravelTimeClient travelTimes =
         mock(ValhallaCustomerTravelTimeClient.class);
     CustomerRouteCapacityPlanner capacity = mock(CustomerRouteCapacityPlanner.class);
@@ -85,10 +80,8 @@ class CustomerDeliverySlotServiceTest {
             holdStore,
             generated,
             shifts,
-            priceZones,
-            restrictionZones,
+            isochroneTariffs,
             snapshots,
-            prices,
             travelTimes,
             capacity,
             driverTasks,
@@ -107,16 +100,9 @@ class CustomerDeliverySlotServiceTest {
     when(slotStore.workload(eq(WAREHOUSE), any(), any())).thenReturn(List.of());
     when(generated.findCapacityWorkload(eq(WAREHOUSE), any())).thenReturn(List.of());
     when(shifts.findCapacityShifts(eq(WAREHOUSE), any())).thenReturn(List.of());
-    when(priceZones.findTariffZones(WAREHOUSE)).thenReturn(List.of());
-    when(restrictionZones.findRestrictionZones(WAREHOUSE)).thenReturn(List.of());
-    when(snapshots.findByWarehouseId(WAREHOUSE)).thenReturn(Optional.empty());
-    when(prices.classifyPolicy(anyList(), anyList(), any(), any()))
-        .thenReturn(
-            new DeliveryPolicy(
-                new PriceQuote(
-                    2_500L, UUID.fromString("00000000-0000-0000-0000-000000000741")),
-                false,
-                true));
+    WarehouseCapacitySnapshot snapshot = snapshot(4);
+    when(isochroneTariffs.findTariffs(WAREHOUSE)).thenReturn(snapshot.getIsochroneTariffs());
+    when(snapshots.findByWarehouseId(WAREHOUSE)).thenReturn(Optional.of(snapshot));
     when(travelTimes.matrix(
             anyList(),
             any(),
@@ -167,31 +153,16 @@ class CustomerDeliverySlotServiceTest {
               assertThat(offer.privateSiteAccessConfirmed()).isFalse();
               assertThat(offer.failedTripChargeAcknowledged()).isFalse();
               assertThat(offer.siteCabinCapacity()).isEqualTo(1);
-              assertThat(offer.deliveryPriceRubles()).isEqualTo(2_500L);
-              assertThat(offer.priceZoneId())
-                  .isEqualTo(UUID.fromString("00000000-0000-0000-0000-000000000741"));
-              assertThat(offer.priceIsochroneMinutes()).isNull();
+              assertThat(offer.deliveryPriceRubles()).isEqualTo(10_000L);
+              assertThat(offer.priceZoneId()).isNull();
+              assertThat(offer.priceIsochroneMinutes()).isEqualTo(60);
             });
   }
 
   @Test
-  void ordinaryPriceUsesConfiguredCeilHourTierAndStopsBeyondFourHours() {
-    WarehouseCapacitySnapshot tariffs =
-        WarehouseCapacitySnapshot.create(
-            WAREHOUSE,
-            1,
-            "a".repeat(64),
-            List.of(),
-            List.of(),
-            List.of(),
-            11_000,
-            16_000,
-            21_000,
-            26_000,
-            List.of(),
-            OffsetDateTime.parse("2026-08-27T05:00:00Z"));
-    DeliveryPolicy ordinary = new DeliveryPolicy(new PriceQuote(null, null), false, true);
-    SlotHarness withinTier = new SlotHarness(1, ordinary, 3_601, tariffs);
+  void priceUsesConfiguredCeilHourTierAndFifthIsochroneExtendsTheBoundary() {
+    WarehouseCapacitySnapshot tariffs = snapshot(5);
+    SlotHarness withinTier = new SlotHarness(1, 14_401, tariffs);
 
     var offers = withinTier.search();
 
@@ -199,34 +170,26 @@ class CustomerDeliverySlotServiceTest {
         .isNotEmpty()
         .allSatisfy(
             offer -> {
-              assertThat(offer.deliveryPriceRubles()).isEqualTo(16_000);
-              assertThat(offer.priceIsochroneMinutes()).isEqualTo(120);
+              assertThat(offer.deliveryPriceRubles()).isEqualTo(30_000);
+              assertThat(offer.priceIsochroneMinutes()).isEqualTo(300);
               assertThat(offer.priceZoneId()).isNull();
             });
-    assertThat(new SlotHarness(1, ordinary, 14_401, tariffs).search()).isEmpty();
+    assertThat(new SlotHarness(1, 18_001, tariffs).search()).isEmpty();
   }
 
   @Test
-  void forbiddenSuppressesOffersAndNoTrailerUsesTheSoloTruckProfile() {
-    DeliveryPolicy forbidden = new DeliveryPolicy(new PriceQuote(null, null), true, true);
-    SlotHarness forbiddenHarness = new SlotHarness(1, forbidden, 1_800, null);
-
-    assertThat(forbiddenHarness.search()).isEmpty();
-    verify(forbiddenHarness.travelTimes, times(0))
-        .matrix(anyList(), any(), any(), any(), any(CustomerVehicleRouteProfile.class));
-
-    DeliveryPolicy noTrailer = new DeliveryPolicy(new PriceQuote(null, null), false, false);
-    SlotHarness noTrailerHarness = new SlotHarness(2, noTrailer, 1_800, null);
-    assertThat(noTrailerHarness.search())
+  void twoCabinDeliveryUsesTheExactTruckAndTrailerRouteProfile() {
+    SlotHarness trailerHarness = new SlotHarness(2, 1_800, snapshot(4));
+    assertThat(trailerHarness.search())
         .isNotEmpty()
         .allSatisfy(
             offer -> {
-              assertThat(offer.routeProfile().combinationLengthMeters()).isEqualTo(10.0);
-              assertThat(offer.routeProfile().axleCount()).isEqualTo(2);
+              assertThat(offer.routeProfile().combinationLengthMeters()).isEqualTo(12.0);
+              assertThat(offer.routeProfile().axleCount()).isEqualTo(3);
             });
   }
 
-  /** Minimal deterministic collaborator set for tariff and restriction search cases. */
+  /** Minimal deterministic collaborator set for dynamic isochrone search cases. */
   private static final class SlotHarness {
     private final CustomerRentalService rentals = mock(CustomerRentalService.class);
     private final CustomerWarehouseService warehouses = mock(CustomerWarehouseService.class);
@@ -237,14 +200,10 @@ class CustomerDeliverySlotServiceTest {
         mock(WarehouseCapacityJobRepository.class);
     private final WarehouseCapacityShiftRepository shifts =
         mock(WarehouseCapacityShiftRepository.class);
-    private final WarehouseCapacityPriceZoneRepository priceZones =
-        mock(WarehouseCapacityPriceZoneRepository.class);
-    private final WarehouseCapacityRestrictionZoneRepository restrictionZones =
-        mock(WarehouseCapacityRestrictionZoneRepository.class);
+    private final WarehouseCapacityIsochroneTariffRepository isochroneTariffs =
+        mock(WarehouseCapacityIsochroneTariffRepository.class);
     private final WarehouseCapacitySnapshotRepository snapshots =
         mock(WarehouseCapacitySnapshotRepository.class);
-    private final CustomerDeliveryPriceClassifier prices =
-        mock(CustomerDeliveryPriceClassifier.class);
     private final ValhallaCustomerTravelTimeClient travelTimes =
         mock(ValhallaCustomerTravelTimeClient.class);
     private final CustomerRouteCapacityPlanner capacity = mock(CustomerRouteCapacityPlanner.class);
@@ -254,7 +213,6 @@ class CustomerDeliverySlotServiceTest {
 
     private SlotHarness(
         int cabinCount,
-        DeliveryPolicy policy,
         long oneWayTravelSeconds,
         WarehouseCapacitySnapshot snapshot) {
       CustomerRentalSession session = CustomerRentalSession.create(INQUIRY, SUBJECT, WAREHOUSE);
@@ -284,10 +242,9 @@ class CustomerDeliverySlotServiceTest {
       when(slotStore.workload(eq(WAREHOUSE), any(), any())).thenReturn(List.of());
       when(generated.findCapacityWorkload(eq(WAREHOUSE), any())).thenReturn(List.of());
       when(shifts.findCapacityShifts(eq(WAREHOUSE), any())).thenReturn(List.of(shift));
-      when(priceZones.findTariffZones(WAREHOUSE)).thenReturn(List.of());
-      when(restrictionZones.findRestrictionZones(WAREHOUSE)).thenReturn(List.of());
+      when(isochroneTariffs.findTariffs(WAREHOUSE))
+          .thenReturn(snapshot.getIsochroneTariffs());
       when(snapshots.findByWarehouseId(WAREHOUSE)).thenReturn(Optional.ofNullable(snapshot));
-      when(prices.classifyPolicy(anyList(), anyList(), any(), any())).thenReturn(policy);
       when(travelTimes.matrix(
               anyList(),
               any(),
@@ -308,10 +265,8 @@ class CustomerDeliverySlotServiceTest {
               holdStore,
               generated,
               shifts,
-              priceZones,
-              restrictionZones,
+              isochroneTariffs,
               snapshots,
-              prices,
               travelTimes,
               capacity,
               driverTasks,
@@ -331,6 +286,24 @@ class CustomerDeliverySlotServiceTest {
               false,
               false));
     }
+  }
+
+  private static WarehouseCapacitySnapshot snapshot(int tierCount) {
+    List<WarehouseCapacityIsochroneTariff.Facts> tariffs =
+        java.util.stream.IntStream.rangeClosed(1, tierCount)
+            .mapToObj(
+                hour ->
+                    new WarehouseCapacityIsochroneTariff.Facts(
+                        hour * 60, 5_000L + hour * 5_000L))
+            .toList();
+    return WarehouseCapacitySnapshot.create(
+        WAREHOUSE,
+        1,
+        "a".repeat(64),
+        List.of(),
+        List.of(),
+        tariffs,
+        OffsetDateTime.parse("2026-08-27T05:00:00Z"));
   }
 
   private static CustomerDeliveryProperties.Validated configuration() {

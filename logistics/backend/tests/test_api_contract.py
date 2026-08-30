@@ -19,7 +19,6 @@ from app.schemas.domain import (
     VehicleCreate,
     WarehouseCreate,
     WorkloadGeneratorInput,
-    ZoneCreate,
 )
 from app.services.catalog import split_quantities
 from app.services.planner_runtime import request_is_available_on_date
@@ -34,10 +33,7 @@ def test_openapi_exposes_only_warehouse_rooted_product_operations() -> None:
     assert "/api/warehouses" in paths
     assert "/api/warehouses/available" in paths
     assert "/api/warehouses/{warehouse_id}/workspace" in paths
-    assert "/api/warehouses/{warehouse_id}/zones" in paths
-    assert "/api/warehouses/{warehouse_id}/zones/{zone_id}" in paths
-    assert "/api/warehouses/{warehouse_id}/zones/{zone_id}/cutouts" in paths
-    assert "/api/warehouses/{warehouse_id}/zones/{zone_id}/lock" in paths
+    assert "/api/warehouses/{warehouse_id}/zones" not in paths
     assert "/api/zones" not in paths
     assert "/api/zones/{zone_id}" not in paths
     assert "/api/warehouses/{warehouse_id}/generate-three-day-test" not in paths
@@ -60,7 +56,6 @@ def test_openapi_exposes_only_warehouse_rooted_product_operations() -> None:
     assert set(workspace["required"]) == {
         "warehouse",
         "warehouses",
-        "zones",
         "drivers",
         "vehicles",
         "trailers",
@@ -86,8 +81,8 @@ def test_openapi_exposes_only_warehouse_rooted_product_operations() -> None:
     assert response.json()["info"]["title"] == "RWMS Logistics Planning"
 
 
-def test_slot_planning_openapi_exposes_warehouse_and_named_tariff_zone() -> None:
-    """Slot availability exposes isochrone pricing and exceptional-zone policy."""
+def test_slot_planning_openapi_exposes_dynamic_isochrone_tariff() -> None:
+    """Slot availability exposes the selected configured hourly price tier."""
 
     schemas = openapi_document()["components"]["schemas"]
     request = schemas["SlotAvailabilityRequest"]
@@ -101,12 +96,9 @@ def test_slot_planning_openapi_exposes_warehouse_and_named_tariff_zone() -> None
         "site_cabin_capacity",
     }
     response = schemas["SlotAvailabilityRead"]
-    assert {
-        "price_isochrone_minutes",
-        "price_zone_id",
-        "price_zone_name",
-        "trailer_access_allowed",
-    } <= set(response["properties"])
+    assert "price_isochrone_minutes" in response["properties"]
+    assert "price_zone_id" not in response["properties"]
+    assert "price_zone_name" not in response["properties"]
     unassigned = schemas["UnassignedTaskRead"]
     nearest = unassigned["properties"]["nearest_option"]
     assert nearest["anyOf"][0]["$ref"].endswith("/NearestOptionRead")
@@ -136,40 +128,30 @@ def test_request_input_forbids_zone_override_and_carries_mandatory() -> None:
         LogisticsRequestCreate.model_validate({**payload, "zone_id": str(uuid4())})
 
 
-def test_zone_contract_types_only_exceptional_delivery_policies() -> None:
-    """Polygons represent access restrictions or an explicit special-price override."""
-
-    geometry = {
-        "type": "Polygon",
-        "coordinates": [[[37, 55], [38, 55], [38, 56], [37, 56], [37, 55]]],
-    }
-    zone = ZoneCreate(
-        name="Тарифная зона",
-        color="#A855F7",
-        geometry=geometry,
-        delivery_price=12_500,
-        pickup_price=9_000,
-    )
-    assert zone.color == "#A855F7"
-    assert zone.kind == "SPECIAL_PRICE"
-    with pytest.raises(ValidationError):
-        ZoneCreate(name="Ошибка", color="purple", geometry=geometry)
-    with pytest.raises(ValidationError, match="code"):
-        ZoneCreate.model_validate({"name": "Old", "code": "OLD", "geometry": geometry})
+def test_warehouse_contract_uses_contiguous_dynamic_isochrone_tariffs() -> None:
+    """Warehouse tariffs default safely and reject gaps or more than twelve hours."""
 
     warehouse = WarehouseCreate(external_warehouse_id=uuid4())
-    assert warehouse.initial_zone is None
-    assert warehouse.isochrone_price_60_minutes == 10_000
-    assert warehouse.isochrone_price_120_minutes == 15_000
-    assert warehouse.isochrone_price_180_minutes == 20_000
-    assert warehouse.isochrone_price_240_minutes == 25_000
-    warehouse = WarehouseCreate(external_warehouse_id=uuid4(), initial_zone=zone)
-    assert warehouse.initial_zone == zone
+    assert [item.model_dump() for item in warehouse.isochrone_tariffs] == [
+        {"travel_minutes": 60, "price_rubles": 10_000},
+        {"travel_minutes": 120, "price_rubles": 15_000},
+        {"travel_minutes": 180, "price_rubles": 20_000},
+        {"travel_minutes": 240, "price_rubles": 25_000},
+    ]
+    with pytest.raises(ValidationError, match="contiguous hourly"):
+        WarehouseCreate.model_validate(
+            {
+                "external_warehouse_id": str(uuid4()),
+                "isochrone_tariffs": [
+                    {"travel_minutes": 60, "price_rubles": 1},
+                    {"travel_minutes": 180, "price_rubles": 2},
+                ],
+            }
+        )
     schemas = openapi_document()["components"]["schemas"]
-    assert "initial_zone" not in schemas["WarehouseCreate"]["required"]
-    assert "initial_zone" not in schemas["WarehouseRead"]["properties"]
-    assert "warehouse_id" in schemas["ZoneRead"]["required"]
-    assert "kind" in schemas["ZoneRead"]["required"]
+    assert "isochrone_tariffs" in schemas["WarehouseCreate"]["properties"]
+    assert "isochrone_tariffs" in schemas["WarehouseRead"]["required"]
+    assert "ZoneRead" not in schemas
 
 
 def test_monthly_shift_requires_one_bounded_calendar_range() -> None:

@@ -1017,8 +1017,6 @@ class RuntimePlannerFacade:
             service_minutes=request.service_minutes,
             priority=request.priority,
             status=RequestStatus(request.status),
-            zone_id=str(request.zone_id) if request.zone_id is not None else None,
-            zone_version=request.zone_version,
             date_options=options,
             created_at=request.created_at.astimezone(zone_info),
             split_allowed=request.split_allowed,
@@ -1159,8 +1157,6 @@ class RuntimePlannerFacade:
             name=request.name,
             address_label=request.address_label,
             point=request.point,
-            zone_id=str(task.zone_id) if task.zone_id is not None else None,
-            zone_version=task.zone_version,
             service_minutes=task.service_minutes,
             priority=task.priority,
             status=RequestStatus(request.status),
@@ -1899,7 +1895,6 @@ class RuntimePlannerFacade:
                         if core_task is not None
                         else snapshot.input_data.warehouse.name
                     ),
-                    zone_id=core_task.zone_id if core_task is not None else None,
                     window_start=(
                         core_task.selected_option.window_start if core_task is not None else None
                     ),

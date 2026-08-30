@@ -1,14 +1,12 @@
 package dev.buhanzaz.rwms.logistics.customer.service;
 
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityIsochroneTariff;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityJob;
-import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityPriceZone;
-import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityRestrictionZone;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityShift;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacitySnapshot;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityTaskType;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityIsochroneTariffRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityJobRepository;
-import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityPriceZoneRepository;
-import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityRestrictionZoneRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityShiftRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacitySnapshotRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.service.CustomerDeliveryCapacityFence;
@@ -43,8 +41,7 @@ class CustomerDeliverySlotHoldStore {
   private final CustomerDeliverySlotRepository slots;
   private final WarehouseCapacityJobRepository warehouseCapacityJobs;
   private final WarehouseCapacityShiftRepository warehouseCapacityShifts;
-  private final WarehouseCapacityPriceZoneRepository warehouseCapacityPriceZones;
-  private final WarehouseCapacityRestrictionZoneRepository warehouseCapacityRestrictionZones;
+  private final WarehouseCapacityIsochroneTariffRepository warehouseCapacityIsochroneTariffs;
   private final WarehouseCapacitySnapshotRepository warehouseCapacitySnapshots;
   private final DriverLogisticsTaskRepository driverTasks;
   private final CustomerDeliveryCapacityFence capacityFence;
@@ -86,15 +83,15 @@ class CustomerDeliverySlotHoldStore {
             command.subjectId(),
             command.inquiryId());
     List<WarehouseCapacityJob> generated =
-        warehouseCapacityJobs.findCapacityWorkload(command.warehouseId(), command.deliveryDate()).stream()
+        warehouseCapacityJobs
+            .findCapacityWorkload(command.warehouseId(), command.deliveryDate())
+            .stream()
             .filter(job -> job.getTaskType() == WarehouseCapacityTaskType.DELIVERY)
             .toList();
     List<WarehouseCapacityShift> shifts =
         warehouseCapacityShifts.findCapacityShifts(command.warehouseId(), command.deliveryDate());
-    List<WarehouseCapacityPriceZone> priceZones =
-        warehouseCapacityPriceZones.findTariffZones(command.warehouseId());
-    List<WarehouseCapacityRestrictionZone> restrictionZones =
-        warehouseCapacityRestrictionZones.findRestrictionZones(command.warehouseId());
+    List<WarehouseCapacityIsochroneTariff> isochroneTariffs =
+        warehouseCapacityIsochroneTariffs.findTariffs(command.warehouseId());
     WarehouseCapacitySnapshot snapshot =
         warehouseCapacitySnapshots.findByWarehouseId(command.warehouseId()).orElse(null);
     long reservations =
@@ -106,8 +103,7 @@ class CustomerDeliverySlotHoldStore {
             generated,
             shifts,
             snapshot,
-            priceZones,
-            restrictionZones,
+            isochroneTariffs,
             reservations);
     if (!command.workloadSha256().equals(currentFingerprint)) throw taken();
 

@@ -40,8 +40,8 @@ def _polygon(offset: float) -> dict[str, object]:
     }
 
 
-def _provider_response() -> dict[str, object]:
-    """Return all four requested contours in deliberately non-canonical order."""
+def _provider_response(contours: tuple[int, ...] = (60, 120, 180, 240)) -> dict[str, object]:
+    """Return requested contours in deliberately non-canonical order."""
 
     return {
         "type": "FeatureCollection",
@@ -51,7 +51,7 @@ def _provider_response() -> dict[str, object]:
                 "properties": {"contour": minutes, "fillColor": "ignored"},
                 "geometry": _polygon(minutes / 10_000),
             }
-            for minutes in (120, 60, 240, 180)
+            for minutes in reversed(contours)
         ],
     }
 
@@ -272,16 +272,24 @@ def test_read_only_endpoint_echoes_provenance_and_maps_provider_failure(
         def __init__(self, *_: object, **__: object) -> None:
             """Accept the same constructor surface as the production provider."""
 
-        async def get_truck_travel_time_contours(self, origin: GeoPoint) -> list[dict[str, object]]:
+        async def get_truck_travel_time_contours(
+            self,
+            origin: GeoPoint,
+            *,
+            contour_minutes: tuple[int, ...],
+        ) -> list[dict[str, object]]:
             """Return canonical areas or the typed unavailable failure requested by the test."""
 
             assert origin == GeoPoint(37.6, 55.7)
             if self.fail:
                 raise RoutingProviderUnavailableError("Valhalla test failure.")
-            raw = _provider_response()
+            raw = _provider_response(contour_minutes)
             provider = _provider(httpx.MockTransport(lambda _: httpx.Response(200, json=raw)))
             try:
-                return await provider.get_truck_travel_time_contours(origin)
+                return await provider.get_truck_travel_time_contours(
+                    origin,
+                    contour_minutes=contour_minutes,
+                )
             finally:
                 await provider.aclose()
 
@@ -315,6 +323,20 @@ def test_read_only_endpoint_echoes_provenance_and_maps_provider_failure(
         "contours_minutes": [60, 120, 180, 240],
         "osm_data_version": "central-2026-08-26",
     }
+
+    dynamic = client.get(
+        "/api/routing/travel-time-contours",
+        params=[
+            ("latitude", "55.7"),
+            ("longitude", "37.6"),
+            *(('contours_minutes', str(minutes)) for minutes in (60, 120, 180, 240, 300)),
+        ],
+    )
+    assert dynamic.status_code == 200, dynamic.text
+    assert dynamic.json()["metadata"]["contours_minutes"] == [60, 120, 180, 240, 300]
+    assert [
+        feature["properties"]["contour_minutes"] for feature in dynamic.json()["features"]
+    ] == [300, 240, 180, 120, 60]
 
     FakeProvider.fail = True
     failure = client.get("/api/routing/travel-time-contours?latitude=55.7&longitude=37.6")

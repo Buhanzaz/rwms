@@ -4,8 +4,8 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Digits;
-import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
@@ -46,12 +46,6 @@ public final class PlanningIntegrationApiModels {
   public enum PlanningCapacityTaskType {
     DELIVERY,
     PICKUP
-  }
-
-  /** Exceptional polygon semantics accepted by customer delivery planning. */
-  public enum PlanningCapacityRestrictionKind {
-    FORBIDDEN,
-    NO_TRAILER
   }
 
   /**
@@ -140,66 +134,19 @@ public final class PlanningIntegrationApiModels {
     }
   }
 
-  /** Strict GeoJSON MultiPolygon shared by tariff and route-restriction facts. */
-  public record PlanningGeoJsonMultiPolygon(
-      @NotBlank String type,
-      @NotNull List<List<List<List<Double>>>> coordinates) {
-    public PlanningGeoJsonMultiPolygon {
-      if (!"MultiPolygon".equals(type)) {
-        throw new IllegalArgumentException("Planning zone geometry must be a MultiPolygon");
+  /** One configured hourly road-time tariff; the greatest tier is the delivery boundary. */
+  public record PlanningCapacityIsochroneTariff(
+      @Min(60) @Max(720) int travelMinutes, @Min(0) long priceRubles) {
+    public PlanningCapacityIsochroneTariff {
+      if (travelMinutes < 60 || travelMinutes > 720 || travelMinutes % 60 != 0) {
+        throw new IllegalArgumentException(
+            "Planning isochrone travel minutes must be a whole hour from 60 to 720");
       }
-      validateCoordinates(coordinates);
-    }
-
-    private static void validateCoordinates(List<List<List<List<Double>>>> polygons) {
-      if (polygons == null || polygons.isEmpty()) {
-        throw new IllegalArgumentException("Planning zone geometry is empty");
-      }
-      for (List<List<List<Double>>> polygon : polygons) {
-        if (polygon == null || polygon.isEmpty()) {
-          throw new IllegalArgumentException("Planning zone polygon is empty");
-        }
-        for (List<List<Double>> ring : polygon) {
-          if (ring == null || ring.size() < 4) {
-            throw new IllegalArgumentException("Planning zone ring is invalid");
-          }
-          for (List<Double> position : ring) {
-            if (position == null || position.size() != 2) {
-              throw new IllegalArgumentException("Planning zone position is invalid");
-            }
-            double longitude = position.get(0);
-            double latitude = position.get(1);
-            if (!Double.isFinite(longitude)
-                || !Double.isFinite(latitude)
-                || longitude < -180
-                || longitude > 180
-                || latitude < -90
-                || latitude > 90) {
-              throw new IllegalArgumentException("Planning zone coordinate is invalid");
-            }
-          }
-          if (!ring.get(0).equals(ring.get(ring.size() - 1))) {
-            throw new IllegalArgumentException("Planning zone ring must be closed");
-          }
-        }
+      if (priceRubles < 0) {
+        throw new IllegalArgumentException("Planning isochrone price must be non-negative");
       }
     }
   }
-
-  /** One versioned tariff polygon; it is deliberately absent from route-feasibility inputs. */
-  public record PlanningCapacityPriceZoneRequest(
-      @NotNull UUID sourceZoneId,
-      @Min(0) long sourceZoneVersion,
-      @Min(0) long deliveryPriceRubles,
-      @Min(0) long pickupPriceRubles,
-      @NotNull @Valid PlanningGeoJsonMultiPolygon geometry) {}
-
-  /** One versioned route-restriction polygon copied from the warehouse planner. */
-  public record PlanningCapacityRestrictionZoneRequest(
-      @NotNull UUID sourceZoneId,
-      @Min(0) long sourceZoneVersion,
-      @NotNull PlanningCapacityRestrictionKind kind,
-      @NotNull @Valid PlanningGeoJsonMultiPolygon geometry) {}
 
   /** Complete replacement of one warehouse's active, simulator-only capacity projection. */
   public record ReplacePlanningCapacitySnapshotRequest(
@@ -207,29 +154,9 @@ public final class PlanningIntegrationApiModels {
       @NotBlank @Pattern(regexp = "[0-9a-f]{64}") String sourceRevision,
       @NotNull @Size(max = 1_000) List<@NotNull @Valid PlanningCapacityJobRequest> jobs,
       @NotNull @Size(max = 2_000) List<@NotNull @Valid PlanningCapacityShiftRequest> shifts,
-      @NotNull @Size(max = 500) List<@NotNull @Valid PlanningCapacityPriceZoneRequest> priceZones,
-      @Min(0) Long isochronePrice60Minutes,
-      @Min(0) Long isochronePrice120Minutes,
-      @Min(0) Long isochronePrice180Minutes,
-      @Min(0) Long isochronePrice240Minutes,
-      @Size(max = 500)
-          List<@NotNull @Valid PlanningCapacityRestrictionZoneRequest> restrictionZones) {
+      @NotNull @Size(min = 1, max = 12)
+          List<@NotNull @Valid PlanningCapacityIsochroneTariff> isochroneTariffs) {
     public ReplacePlanningCapacitySnapshotRequest {
-      isochronePrice60Minutes =
-          isochronePrice60Minutes == null ? 10_000L : isochronePrice60Minutes;
-      isochronePrice120Minutes =
-          isochronePrice120Minutes == null ? 15_000L : isochronePrice120Minutes;
-      isochronePrice180Minutes =
-          isochronePrice180Minutes == null ? 20_000L : isochronePrice180Minutes;
-      isochronePrice240Minutes =
-          isochronePrice240Minutes == null ? 25_000L : isochronePrice240Minutes;
-      if (isochronePrice60Minutes < 0
-          || isochronePrice120Minutes < 0
-          || isochronePrice180Minutes < 0
-          || isochronePrice240Minutes < 0) {
-        throw new IllegalArgumentException("Planning isochrone prices must be non-negative");
-      }
-      restrictionZones = restrictionZones == null ? List.of() : List.copyOf(restrictionZones);
       if (jobs != null
           && jobs.stream().map(PlanningCapacityJobRequest::sourceJobId).distinct().count()
               != jobs.size()) {
@@ -240,54 +167,20 @@ public final class PlanningIntegrationApiModels {
               != shifts.size()) {
         throw new IllegalArgumentException("Planning capacity source shift IDs must be unique");
       }
-      if (priceZones != null
-          && priceZones.stream()
-                  .map(PlanningCapacityPriceZoneRequest::sourceZoneId)
-                  .distinct()
-                  .count()
-              != priceZones.size()) {
-        throw new IllegalArgumentException("Planning capacity source zone IDs must be unique");
+      if (isochroneTariffs == null) {
+        throw new IllegalArgumentException("Planning requires isochrone tariffs");
       }
-      if (restrictionZones.stream()
-              .map(PlanningCapacityRestrictionZoneRequest::sourceZoneId)
-              .distinct()
-              .count()
-          != restrictionZones.size()) {
-        throw new IllegalArgumentException(
-            "Planning capacity restriction source zone IDs must be unique");
+      if (isochroneTariffs.isEmpty() || isochroneTariffs.size() > 12) {
+        throw new IllegalArgumentException("Planning requires between one and twelve tariffs");
       }
-      if (priceZones != null) {
-        java.util.Set<UUID> priceZoneIds =
-            priceZones.stream()
-                .map(PlanningCapacityPriceZoneRequest::sourceZoneId)
-                .collect(java.util.stream.Collectors.toSet());
-        if (restrictionZones.stream()
-            .map(PlanningCapacityRestrictionZoneRequest::sourceZoneId)
-            .anyMatch(priceZoneIds::contains)) {
+      for (int index = 0; index < isochroneTariffs.size(); index++) {
+        PlanningCapacityIsochroneTariff tariff = isochroneTariffs.get(index);
+        if (tariff == null || tariff.travelMinutes() != (index + 1) * 60) {
           throw new IllegalArgumentException(
-              "Planning capacity source zone IDs must be unique across policy scopes");
+              "Planning isochrone tariffs must be contiguous hourly tiers starting at 60 minutes");
         }
       }
-    }
-
-    /** Preserves requests produced before isochrone tariffs and restriction polygons were added. */
-    public ReplacePlanningCapacitySnapshotRequest(
-        long sourceGeneration,
-        String sourceRevision,
-        List<PlanningCapacityJobRequest> jobs,
-        List<PlanningCapacityShiftRequest> shifts,
-        List<PlanningCapacityPriceZoneRequest> priceZones) {
-      this(
-          sourceGeneration,
-          sourceRevision,
-          jobs,
-          shifts,
-          priceZones,
-          null,
-          null,
-          null,
-          null,
-          List.of());
+      isochroneTariffs = List.copyOf(isochroneTariffs);
     }
   }
 
@@ -299,34 +192,9 @@ public final class PlanningIntegrationApiModels {
       String sourceRevision,
       int jobCount,
       int shiftCount,
-      int priceZoneCount,
-      int restrictionZoneCount,
+      int isochroneTariffCount,
       boolean replayed,
-      OffsetDateTime updatedAt) {
-    /** Preserves source compatibility for callers that predate restriction-zone result counts. */
-    public PlanningCapacitySnapshotResponse(
-        UUID warehouseId,
-        long sourceGeneration,
-        long version,
-        String sourceRevision,
-        int jobCount,
-        int shiftCount,
-        int priceZoneCount,
-        boolean replayed,
-        OffsetDateTime updatedAt) {
-      this(
-          warehouseId,
-          sourceGeneration,
-          version,
-          sourceRevision,
-          jobCount,
-          shiftCount,
-          priceZoneCount,
-          0,
-          replayed,
-          updatedAt);
-    }
-  }
+      OffsetDateTime updatedAt) {}
 
   /** Active RWMS warehouse identity available to the standalone planner. */
   public record PlanningWarehouseResource(

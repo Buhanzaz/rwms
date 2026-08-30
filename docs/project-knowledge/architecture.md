@@ -68,14 +68,14 @@ the same renderer-neutral evaluator to Master Setup and ordinary CAD. See the
 [`application shell`](../../cabin-cad/src/app/App.tsx).
 
 `logistics/` is a separate React/FastAPI/PostGIS warehouse-planning deployable
-with one common map and warehouse-scoped resources, requests, plans, isochrone
-tariffs and exceptional zones. It automatically reconciles active canonical
+with one common map and warehouse-scoped resources, requests, plans and ordered
+hourly isochrone tariffs. It automatically reconciles active canonical
 RWMS warehouses under the same UUID: owner-held coordinates win, while an
 address-only identity is automatically resolved by the existing server
 geocoder and retained until its address or city changes. One failed resolution
 leaves that identity unavailable without hiding routable siblings. There is no
 second create/connect lifecycle or required first polygon. Selecting a
-warehouse scopes zones, drivers, vehicles, shifts, requests and plans without
+warehouse scopes drivers, vehicles, shifts, requests and plans without
 moving the viewport. An explicit “go to warehouse” control recentres the map;
 markers for other routable warehouses remain available for comparison.
 
@@ -96,13 +96,15 @@ dates. RWMS remains the owner of warehouses, orders, shipments, worker identity
 and assignment validation.
 
 A separate opt-in publishes one active anonymous workload, period-shift and
-warehouse-scoped tariff-zone snapshot per warehouse. The URL path owns
+warehouse-scoped isochrone-tariff snapshot per warehouse. The URL path owns
 warehouse
 identity; the body contains no duplicate warehouse or workspace identity.
-Tariff polygons are identified by UUID, classify price only and never decide
-route feasibility. Immutable receipts and a monotonic per-warehouse generation
-make exact retries idempotent and reject delayed older state. Replacement can
-change slot feasibility but never deletes a real booking. See the
+The tariff list starts at one hour, advances in contiguous one-hour steps and
+contains at most twelve entries. Exact Valhalla road time selects the first
+covering entry; the last entry is also the hard delivery-acceptance boundary.
+Immutable receipts and a monotonic per-warehouse generation make exact retries
+idempotent and reject delayed older state. Replacement can change slot
+feasibility but never deletes a real booking. See the
 [`planner architecture`](../../logistics/docs/ARCHITECTURE.md),
 [`planning controller`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/planning/api/PlanningIntegrationController.java),
 [`planning directory`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/planning/service/PlanningResourceDirectoryService.java),
@@ -111,6 +113,7 @@ change slot feasibility but never deletes a real booking. See the
 [`V61`](../../services/logistics-service/src/main/resources/db/migration/V61__customer_terms_capacity_shifts_and_reception.sql),
 [`V64`](../../services/logistics-service/src/main/resources/db/migration/V64__dynamic_delivery_slots_and_tariff_zones.sql),
 [`V65`](../../services/logistics-service/src/main/resources/db/migration/V65__warehouse_capacity_identity_and_tariff_zones.sql),
+[`V74`](../../services/logistics-service/src/main/resources/db/migration/V74__normalize_warehouse_isochrone_tariffs.sql),
 [`RWMS adapter`](../../logistics/backend/app/integrations/rwms.py), and
 [`dynamic-slot design`](../isochrone-slot-planning.md).
 

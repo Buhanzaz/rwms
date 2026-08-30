@@ -387,9 +387,6 @@ async def test_local_incoming_contractor_is_not_available_before_operations_fini
         source_revision="c" * 64,
         delivery_price_rubles=None,
         price_isochrone_minutes=None,
-        price_zone_id=None,
-        price_zone_version=None,
-        price_zone_name=None,
         trailer_access_allowed=True,
         support_facts=facts,
     )

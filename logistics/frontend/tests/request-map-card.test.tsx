@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { isRequestVisibleOnDate, requestPlanningDates } from '../src/domain/request-dates';
 import { EMPTY_METRICS } from '../src/domain/defaults';
-import type { LogisticsRequest, RouteCycle, Zone } from '../src/domain/types';
+import type { LogisticsRequest, RouteCycle } from '../src/domain/types';
 import { RequestMapCard, RequestMapPopup } from '../src/map/RequestMapCard';
 import { planFixture, requestFixture } from './fixtures';
 
@@ -56,31 +56,13 @@ const request: LogisticsRequest = requestFixture({
   latitude: 55.8,
   longitude: 37.6,
   service_minutes: 35,
-  zone_id: 'zone-z1',
-  zone_version: 3,
   notes: 'Позвонить за час',
   scheduled_date: null,
   date_options: [
-    { date: '2026-08-25', priority: 20, window_start: '09:00', window_end: '11:00', is_hard: true, travel_zone_hours: 2 },
+    { date: '2026-08-25', priority: 20, window_start: '09:00', window_end: '11:00', is_hard: true },
     { date: '2026-08-26', priority: 10, window_start: null, window_end: null, is_hard: false },
   ],
-  zone_status: 'CURRENT',
 });
-
-const zone: Zone = {
-  id: 'zone-z1',
-  warehouse_id: 'warehouse-1',
-  name: 'Запад',
-  kind: 'SPECIAL_PRICE',
-  color: '#3366FF',
-  delivery_price: 125,
-  pickup_price: 75,
-  geometry: { type: 'Polygon', coordinates: [[[37, 55], [38, 55], [38, 56], [37, 55]]] },
-  version: 3,
-  locked: false,
-  created_at: '2026-08-20T08:00:00Z',
-  updated_at: '2026-08-22T08:00:00Z',
-};
 
 function cycle(id: string, shiftId: string, taskId: string | null): RouteCycle {
   return {
@@ -119,7 +101,6 @@ describe('request map card', () => {
       <RequestMapPopup
         map={map as never}
         request={request}
-        zone={zone}
         planningDate="2026-08-25"
         busy={false}
         onSchedule={() => undefined}
@@ -144,7 +125,6 @@ describe('request map card', () => {
       <RequestMapPopup
         map={map as never}
         request={{ ...request, longitude: 37.72, latitude: 55.91 }}
-        zone={zone}
         planningDate="2026-08-25"
         busy={false}
         onSchedule={() => undefined}
@@ -168,7 +148,6 @@ describe('request map card', () => {
     render(
       <RequestMapCard
         request={request}
-        zone={zone}
         planningDate="2026-08-25"
         busy={false}
         onSchedule={onSchedule}
@@ -180,19 +159,17 @@ describe('request map card', () => {
     expect(screen.getByText('Доставка №142')).toBeVisible();
     expect(screen.getByText('Москва, Тестовая улица, 25')).toBeVisible();
     expect(screen.getByText('2 бытов. · обслуживание 35 мин')).toBeVisible();
-    expect(screen.getByText('Особая зона «Запад» · версия 3')).toBeVisible();
-    expect(screen.getByText('Доставка · 125 ₽')).toBeVisible();
-    expect(screen.getByText(/25 августа 2026.*09:00–11:00.*зона 2 ч.*жёстко/)).toBeVisible();
+    expect(screen.getByText(/рассчитывается по времени пути в изохроне склада/)).toBeVisible();
+    expect(screen.getByText(/25 августа 2026.*09:00–11:00.*жёстко/)).toBeVisible();
 
     await user.click(screen.getByRole('button', { name: 'Выставить на 25 августа 2026 г.' }));
     expect(onSchedule).toHaveBeenCalledWith('request-142', '2026-08-25', false);
   });
 
-  it('shows the pickup tariff from the current zone', () => {
+  it('shows the warehouse isochrone tariff for a pickup', () => {
     render(
       <RequestMapCard
         request={{ ...request, type: 'PICKUP', name: 'Вывоз №142' }}
-        zone={zone}
         planningDate="2026-08-25"
         busy={false}
         onSchedule={() => undefined}
@@ -201,7 +178,7 @@ describe('request map card', () => {
       />,
     );
 
-    expect(screen.getByText('Вывоз · 75 ₽')).toBeVisible();
+    expect(screen.getByText(/рассчитывается по времени пути в изохроне склада/)).toBeVisible();
   });
 
   it('marks a manually chosen date as an explicit agreement', async () => {
@@ -210,7 +187,6 @@ describe('request map card', () => {
     render(
       <RequestMapCard
         request={request}
-        zone={zone}
         planningDate="2026-08-25"
         busy={false}
         onSchedule={onSchedule}
@@ -232,7 +208,6 @@ describe('request map card', () => {
     render(
       <RequestMapCard
         request={{ ...request, scheduled_date: '2026-08-26' }}
-        zone={zone}
         planningDate="2026-08-26"
         busy={false}
         onSchedule={() => undefined}
@@ -253,7 +228,7 @@ describe('request map card', () => {
       ...request,
       tasks: [{
         id: 'task-142', request_id: request.id, part_number: 1, quantity: 2, type: 'DELIVERY' as const,
-        latitude: request.latitude, longitude: request.longitude, zone_id: zone.id, zone_version: zone.version,
+        latitude: request.latitude, longitude: request.longitude,
         service_minutes: request.service_minutes, priority: 10, mandatory: false, status: 'READY',
       }],
     };
@@ -279,7 +254,6 @@ describe('request map card', () => {
     render(
       <RequestMapCard
         request={requestWithTask}
-        zone={zone}
         plan={plan}
         planningDate="2026-08-25"
         busy={false}

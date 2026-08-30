@@ -98,26 +98,6 @@ vi.mock('maplibre-gl', () => {
   return { default: maplibre, ...maplibre };
 });
 
-vi.mock('terra-draw', () => ({
-  TerraDraw: class TerraDrawMock {
-    start() { return undefined; }
-    stop() { return undefined; }
-    setMode() { return undefined; }
-    on() { return undefined; }
-    off() { return undefined; }
-    clear() { return undefined; }
-    getSnapshotFeature() { return null; }
-    removeFeatures() { return undefined; }
-  },
-  TerraDrawPolygonMode: class TerraDrawPolygonModeMock {},
-  TerraDrawSelectMode: class TerraDrawSelectModeMock {},
-  ValidateNotSelfIntersecting: vi.fn(),
-}));
-
-vi.mock('terra-draw-maplibre-gl-adapter', () => ({
-  TerraDrawMapLibreGLAdapter: class TerraDrawMapLibreGLAdapterMock {},
-}));
-
 describe('warehouse selection on the shared map', () => {
   beforeEach(() => {
     mapState.markers.length = 0;
@@ -160,8 +140,6 @@ describe('warehouse selection on the shared map', () => {
       onSelect,
       onPlacePoint: vi.fn(),
       onWarehouseActivate,
-      onZoneDrawn: vi.fn(),
-      onZoneCutout: vi.fn(),
       onMapError: vi.fn(),
       optimizationRun: null,
       onRequestMoveDraft: vi.fn(),
@@ -175,6 +153,9 @@ describe('warehouse selection on the shared map', () => {
       pendingWarehousePoint: null,
     };
     const view = render(<MapCanvas {...commonProps} selected={null} />);
+
+    expect(screen.queryByRole('button', { name: 'Нарисовать зону' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Вырезать область внутри зоны' })).not.toBeInTheDocument();
 
     await waitFor(() => expect(mapState.markers.some((marker) => marker.getAttribute('aria-label') === 'Склад: Склад Великий Новгород')).toBe(true));
     const targetMarker = mapState.markers.find((marker) => marker.getAttribute('aria-label') === 'Склад: Склад Великий Новгород');

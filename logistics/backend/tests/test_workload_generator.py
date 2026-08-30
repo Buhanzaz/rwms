@@ -6,7 +6,6 @@ from uuid import UUID
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.errors import ApiError
 from app.models import RoutePlan
 from app.routing import MockRoutingProvider
 from app.schemas.domain import WorkloadGenerationResult, WorkloadGeneratorInput
@@ -16,7 +15,7 @@ from app.services.workload_generator import (
     delete_generated_workload,
     generate_warehouse_workload,
 )
-from tests.factories import make_request, make_warehouse, make_zone
+from tests.factories import make_request, make_warehouse
 
 pytestmark = pytest.mark.integration
 
@@ -52,7 +51,6 @@ async def test_configurable_generator_creates_three_day_deterministic_load(
     """A configurable three-day run produces six jobs per date and advances generation once."""
 
     warehouse = await make_warehouse(db_session)
-    await make_zone(db_session, warehouse)
 
     result = await _generate(db_session, warehouse.id)
     requests = await catalog.list_requests(db_session, warehouse.id)
@@ -82,7 +80,6 @@ async def test_same_seed_replaces_generated_rows_but_preserves_business_facts(
     """A rerun is deterministic and replaces only generator-owned rows in its horizon."""
 
     warehouse = await make_warehouse(db_session)
-    await make_zone(db_session, warehouse)
     manual = await make_request(db_session, warehouse, planning_date=date(2026, 8, 29))
     await _generate(db_session, warehouse.id, days=1)
     first = sorted(
@@ -129,7 +126,6 @@ async def test_regeneration_deletes_only_affected_date_plans(db_session: AsyncSe
     """Replacing one generated date invalidates that plan and leaves another date intact."""
 
     warehouse = await make_warehouse(db_session)
-    await make_zone(db_session, warehouse)
     target = date(2026, 8, 29)
     other = date(2026, 8, 30)
     await _generate(db_session, warehouse.id, start_date=target, days=1)
@@ -146,25 +142,12 @@ async def test_regeneration_deletes_only_affected_date_plans(db_session: AsyncSe
 
 
 @pytest.mark.asyncio
-async def test_generation_requires_an_owned_zone(db_session: AsyncSession) -> None:
-    """A warehouse cannot use another workspace's otherwise usable polygon."""
-
-    warehouse = await make_warehouse(db_session)
-    other_warehouse = await make_warehouse(db_session, name="Other warehouse")
-    await make_zone(db_session, other_warehouse)
-    with pytest.raises(ApiError) as rejected:
-        await _generate(db_session, warehouse.id, days=1)
-    assert rejected.value.code == "NO_ZONES"
-
-
-@pytest.mark.asyncio
 async def test_delete_generated_workload_is_exact_date_and_idempotent(
     db_session: AsyncSession,
 ) -> None:
     """Deleting one date removes only generated demand and a repeated command is empty."""
 
     warehouse = await make_warehouse(db_session)
-    await make_zone(db_session, warehouse)
     target = date(2026, 8, 29)
     await _generate(db_session, warehouse.id, start_date=target, days=1)
 

@@ -56,8 +56,6 @@ def generated_cycle(
             service_minutes=10,
             priority=1,
             status=RequestStatus.READY,
-            zone_id="z",
-            zone_version=1,
             date_options=(RequestDateOption(DAY, 1, at(8), at(19), True),),
             created_at=at(7),
         )

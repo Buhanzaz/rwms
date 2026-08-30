@@ -65,15 +65,11 @@ and no required first delivery polygon. See
 [`catalog.py`](../backend/app/api/catalog.py) and
 [`catalog.py`](../backend/app/services/catalog.py).
 
-Every zone has one non-null warehouse owner and contains UUID, name, validated
-hex color, geometry/version, delivery/pickup prices and lock state. The first
-zone is optional; commands are nested under that warehouse and reject cross-owner
-IDs. `ST_Covers` selects same-warehouse
-candidates ordered by smallest area and then UUID, so overlaps are deterministic
-without operator ordering metadata. Zone snapshots on existing requests may
-become stale after geometry edits; they remain pricing history and never block route
-generation. See
-[`classification.py`](../backend/app/geo/classification.py).
+Every warehouse owns one to twelve `WarehouseIsochroneTariff` rows. Boundaries
+start at 60 minutes, advance in contiguous 60-minute steps and carry one
+non-negative whole-ruble price. Exact one-way Valhalla time selects the first
+covering row; the final row is the hard order-acceptance boundary. The active
+aggregate contains no delivery-zone geometry or request-zone identity.
 
 Driver identity is explicit. `ASSIGNED_DRIVER` requires a worker UUID that is
 currently present in the selected RWMS warehouse directory; its local display
@@ -102,8 +98,8 @@ planning-day closing with the same stable error.
 
 The aggregate read is
 `GET /api/warehouses/{warehouse_id}/workspace`. It returns the selected root,
-the common warehouse selector, only the selected warehouse's zones, and only
-that warehouse's resources and requests.
+the common routable warehouse marker list and only that warehouse's resources
+and requests.
 
 When synchronization is configured, a normal workspace read performs one
 automatic request refresh for the warehouse-local current date through day
@@ -173,8 +169,9 @@ one-or-two-cabin split work, delivery-first return pickups, site/trailer
 capacity, waiting, later trips and final warehouse operations. It uses exact
 directed road geometry for the selected candidate. The response exposes only
 the selected trip's route before/after and pickup candidates; it deliberately
-does not produce contour/intersection geometry. A tariff zone supplies price
-UUID/name/amount independently of feasibility.
+does not produce contour/intersection geometry. The first configured hourly
+isochrone tier covering exact one-way travel supplies price; its farthest tier
+is the hard acceptance boundary.
 
 Every hold references one warehouse/date day-plan version, immutable source
 revision, candidate, client session and expiry. Confirmation locks the hold and
@@ -202,10 +199,12 @@ being replaced with local success.
 
 [`capacity_projection.py`](../backend/app/services/capacity_projection.py)
 derives one sorted anonymous replacement snapshot from active generated
-deliveries/pickups, active shift dates and the selected warehouse's tariff zones. Jobs carry type,
+deliveries/pickups, active shift dates and the selected warehouse's complete
+hourly isochrone tariff list. Jobs carry type,
 date/window, point, service, quantity, priority, mandatory and access facts.
-Shifts omit personal driver data and concrete vehicle identity. Tariff-zone
-items contain only source UUID/version, direction prices and geometry.
+Shifts omit personal driver data and concrete vehicle identity. Tariff items
+contain only contiguous `travelMinutes` boundaries and non-negative
+`priceRubles` values.
 
 The RWMS external warehouse UUID is authoritative in the capacity PUT path;
 the request does not duplicate it. A database-global monotonic warehouse
@@ -230,8 +229,8 @@ Valhalla adapter and an explicitly selected OSRM adapter for local testing
 only. Production Valhalla uses `costing=truck`; failure never falls back
 to passenger-car routing.
 
-Travel-time contours are ephemeral read-only Valhalla estimates for
-60/120/180/240 minutes. Independent warehouse and selected-task layers default
+Travel-time contours are ephemeral read-only Valhalla estimates for every
+configured hourly tariff boundary. Independent warehouse and selected-task layers default
 off. The task origin is only the explicitly selected request or slot-check
 point; duplicate origins prefer the warehouse. The UI runs no more than four
 calls concurrently and cancels siblings on the first failure. Routes render
@@ -271,10 +270,17 @@ checks.
 
 Migration
 [`20260828_0017_warehouse_owned_zones.py`](../backend/migrations/versions/20260828_0017_warehouse_owned_zones.py)
-assigns legacy zones to a unique nearest warehouse and then makes
+is retained as immutable upgrade history. It assigned legacy zones to a unique nearest warehouse and made
 `zones.warehouse_id` non-null with a cascade foreign key. It validates existing
 request/task/stop references and warehouse coverage, and aborts on no warehouse,
 a nearest-distance tie or cross-owner data rather than guessing.
+
+Migration
+[`20260830_0020_normalize_isochrone_tariffs.py`](../backend/migrations/versions/20260830_0020_normalize_isochrone_tariffs.py)
+backfills the former four fixed prices into normalized hourly rows, removes the
+four columns and deletes all active zone tables/references. Calculated request
+and hold prices remain; the migration refuses downgrade because deleted polygon
+geometry cannot be truthfully reconstructed.
 
 ## Consistency and recovery
 

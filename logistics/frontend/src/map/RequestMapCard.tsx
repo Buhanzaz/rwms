@@ -2,14 +2,13 @@ import { CalendarCheck2, CalendarX2, Clock3, MapPin, PackageOpen, Route, UserRou
 import maplibregl, { type Map as MapLibreMap } from 'maplibre-gl';
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { LogisticsRequest, PlanningTask, RouteCycle, RoutePlan, UUID, Zone } from '../domain/types';
+import type { LogisticsRequest, PlanningTask, RouteCycle, RoutePlan, UUID } from '../domain/types';
 import type { PlanMove } from '../features/planning/PlanPanel';
 import { formatDate, formatTime } from '../utils/format';
 import { DatePicker } from '../components/DatePicker';
 
 interface RequestMapCardProps {
   request: LogisticsRequest;
-  zone: Zone | null;
   plan?: RoutePlan | null;
   planningDate: string;
   busy: boolean;
@@ -53,7 +52,6 @@ interface TaskAssignment {
 /** Request inspector with an explicit logistics date command. */
 export function RequestMapCard({
   request,
-  zone,
   plan = null,
   planningDate,
   busy,
@@ -71,13 +69,6 @@ export function RequestMapCard({
   );
   const selectedOption = dateOptions.find((option) => option.date === selectedDate) ?? null;
   const alreadyScheduled = request.scheduled_date === selectedDate;
-  const zoneState = request.zone_status === 'OUTSIDE_ZONES'
-    ? 'Обычный тариф по изохроне'
-    : request.zone_status === 'STALE'
-      ? `Особая зона «${zone?.name ?? 'не определена'}» требует пересчёта`
-      : `Особая зона «${zone?.name ?? 'не определена'}» · версия ${request.zone_version ?? '—'}`;
-  const zonePrice = zone ? request.type === 'DELIVERY' ? zone.delivery_price : zone.pickup_price : null;
-  const priceLabel = request.type === 'DELIVERY' ? 'Доставка' : 'Вывоз';
   const routeOptions = useMemo(
     () => plan?.driver_routes.flatMap((route) => route.cycles.map((cycle) => ({ route, cycle }))) ?? [],
     [plan],
@@ -128,8 +119,7 @@ export function RequestMapCard({
       <dl className="request-map-menu__details">
         <div><dt><MapPin size={12} aria-hidden="true" />Адрес</dt><dd>{request.address_label}</dd></div>
         <div><dt><PackageOpen size={12} aria-hidden="true" />Объём</dt><dd>{request.quantity} бытов. · обслуживание {request.service_minutes} мин</dd></div>
-        <div><dt><Clock3 size={12} aria-hidden="true" />Классификация</dt><dd>{zoneState}</dd></div>
-        <div><dt>Тариф</dt><dd>{zonePrice === null ? 'рассчитывается по изохроне' : `${priceLabel} · ${zonePrice} ₽`}</dd></div>
+        <div><dt><Clock3 size={12} aria-hidden="true" />Тариф</dt><dd>рассчитывается по времени пути в изохроне склада</dd></div>
       </dl>
       {request.notes ? <p className="request-map-menu__notes">{request.notes}</p> : null}
 
@@ -176,7 +166,7 @@ export function RequestMapCard({
               className={option.date === request.scheduled_date ? 'request-map-menu__date--scheduled' : undefined}
               onClick={() => setSelectedDate(option.date)}
             >
-              {formatDate(option.date)} · {formatWindow(option.window_start, option.window_end)}{option.travel_zone_hours ? ` · зона ${option.travel_zone_hours} ч` : ''}{option.is_hard ? ' · жёстко' : ''}
+              {formatDate(option.date)} · {formatWindow(option.window_start, option.window_end)}{option.is_hard ? ' · жёстко' : ''}
             </button>
           ))}
         </div>
@@ -225,7 +215,6 @@ export function RequestMapCard({
 export function RequestMapPopup({
   map,
   request,
-  zone,
   plan = null,
   planningDate,
   busy,
@@ -263,7 +252,6 @@ export function RequestMapPopup({
   return createPortal(
     <RequestMapCard
       request={request}
-      zone={zone}
       plan={plan}
       planningDate={planningDate}
       busy={busy}

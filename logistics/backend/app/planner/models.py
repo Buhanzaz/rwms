@@ -185,8 +185,6 @@ class LogisticsRequest:
     service_minutes: int
     priority: int
     status: RequestStatus
-    zone_id: str | None
-    zone_version: int | None
     date_options: tuple[RequestDateOption, ...]
     created_at: datetime
     split_allowed: bool = True
@@ -203,8 +201,6 @@ class LogisticsRequest:
             raise ValueError("request quantity must be positive")
         if self.service_minutes < 0:
             raise ValueError("service_minutes cannot be negative")
-        if self.zone_version is not None and self.zone_version < 1:
-            raise ValueError("zone_version must be positive")
         if self.task_quantities is not None:
             if not self.task_quantities or any(
                 quantity < 1 or quantity > 2 for quantity in self.task_quantities
@@ -232,8 +228,6 @@ class PlanningTask:
     name: str
     address_label: str
     point: GeoPoint
-    zone_id: str | None
-    zone_version: int | None
     service_minutes: int
     priority: int
     status: RequestStatus
@@ -368,7 +362,6 @@ class RouteStop:
     task_id: str | None = None
     request_id: str | None = None
     address_label: str = ""
-    zone_id: str | None = None
     window_start: datetime | None = None
     window_end: datetime | None = None
     window_is_hard: bool = False

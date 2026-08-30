@@ -1,4 +1,4 @@
-"""REST endpoints for warehouse workspaces, zones, resources, and requests."""
+"""REST endpoints for warehouse workspaces, resources, and requests."""
 
 from datetime import date, datetime, timedelta
 from typing import Annotated
@@ -16,7 +16,7 @@ from app.api.dependencies import (
     SettingsDep,
 )
 from app.api.geocoding import GeocodingClientDep
-from app.api.serializers import request_read, zone_read
+from app.api.serializers import request_read
 from app.errors import ApiError
 from app.integrations.rwms_sync import refresh_warehouse_directory, refresh_warehouse_requests
 from app.models import (
@@ -27,7 +27,6 @@ from app.models import (
     Trailer,
     Vehicle,
     Warehouse,
-    Zone,
 )
 from app.repositories import get_required
 from app.schemas.domain import (
@@ -63,12 +62,6 @@ from app.schemas.domain import (
     WorkloadDeletionResult,
     WorkloadGenerationResult,
     WorkloadGeneratorInput,
-    ZoneCreate,
-    ZoneCutoutRead,
-    ZoneCutoutRequest,
-    ZoneLockRequest,
-    ZoneRead,
-    ZoneUpdate,
 )
 from app.services import catalog as service
 from app.services.auto_planning import generate_missing_draft_plans
@@ -345,18 +338,10 @@ async def get_warehouse_workspace(
             .order_by(Warehouse.name)
         )
     )
-    zones = list(
-        await session.scalars(
-            select(Zone)
-            .where(Zone.warehouse_id == warehouse_id)
-            .order_by(Zone.name, Zone.id)
-        )
-    )
     requests = await service.list_requests(session, warehouse_id)
     return WarehouseWorkspaceRead(
         warehouse=WarehouseRead.model_validate(warehouse),
         warehouses=[WarehouseRead.model_validate(item) for item in warehouses],
-        zones=[await zone_read(session, item) for item in zones],
         drivers=[
             DriverRead.model_validate(item)
             for item in await service.list_catalog(session, Driver, warehouse_id)
@@ -390,124 +375,6 @@ async def update_warehouse(
     entity = await service.update_warehouse(session, warehouse_id, payload)
     await _publish_resource_capacity(session, entity.id, settings, client)
     return entity
-
-
-@router.get("/warehouses/{warehouse_id}/zones", response_model=list[ZoneRead])
-async def list_zones(warehouse_id: UUID, session: SessionDep) -> list[ZoneRead]:
-    """List only the zones belonging to one warehouse workspace."""
-
-    await service.require_warehouse(session, warehouse_id)
-    zones = list(
-        await session.scalars(
-            select(Zone)
-            .where(Zone.warehouse_id == warehouse_id)
-            .order_by(Zone.name, Zone.id)
-        )
-    )
-    return [await zone_read(session, zone) for zone in zones]
-
-
-@router.post("/warehouses/{warehouse_id}/zones", response_model=ZoneRead, status_code=201)
-async def create_zone(
-    warehouse_id: UUID,
-    payload: ZoneCreate,
-    session: SessionDep,
-    settings: SettingsDep,
-    client: CapacityRwmsClientDep,
-) -> ZoneRead:
-    """Create and publish a validated warehouse-owned version-one zone."""
-
-    entity = await service.create_zone(session, warehouse_id, payload)
-    await _publish_resource_capacity(session, warehouse_id, settings, client)
-    return await zone_read(session, entity)
-
-
-@router.get("/warehouses/{warehouse_id}/zones/{zone_id}", response_model=ZoneRead)
-async def get_zone(warehouse_id: UUID, zone_id: UUID, session: SessionDep) -> ZoneRead:
-    """Read an owner zone and its current stale-request count."""
-
-    return await zone_read(
-        session,
-        await service.require_zone(session, warehouse_id, zone_id),
-    )
-
-
-@router.patch("/warehouses/{warehouse_id}/zones/{zone_id}", response_model=ZoneRead)
-async def update_zone(
-    warehouse_id: UUID,
-    zone_id: UUID,
-    payload: ZoneUpdate,
-    session: SessionDep,
-    settings: SettingsDep,
-    client: CapacityRwmsClientDep,
-) -> ZoneRead:
-    """Update and publish an unlocked owner zone and version geometry changes."""
-
-    entity = await service.update_zone(session, warehouse_id, zone_id, payload)
-    await _publish_resource_capacity(session, warehouse_id, settings, client)
-    return await zone_read(session, entity)
-
-
-@router.post(
-    "/warehouses/{warehouse_id}/zones/{zone_id}/cutouts",
-    response_model=ZoneCutoutRead,
-)
-async def cut_zone(
-    warehouse_id: UUID,
-    zone_id: UUID,
-    payload: ZoneCutoutRequest,
-    session: SessionDep,
-    settings: SettingsDep,
-    client: CapacityRwmsClientDep,
-) -> ZoneCutoutRead:
-    """Atomically cut and publish two zones owned by the same warehouse."""
-
-    source_zone, inner_zone = await service.cut_zone(
-        session,
-        warehouse_id,
-        zone_id,
-        payload,
-    )
-    await _publish_resource_capacity(session, warehouse_id, settings, client)
-    return ZoneCutoutRead(
-        source_zone=await zone_read(session, source_zone),
-        inner_zone=await zone_read(session, inner_zone),
-    )
-
-
-@router.delete("/warehouses/{warehouse_id}/zones/{zone_id}", status_code=204)
-async def delete_zone(
-    warehouse_id: UUID,
-    zone_id: UUID,
-    session: SessionDep,
-    settings: SettingsDep,
-    client: CapacityRwmsClientDep,
-) -> Response:
-    """Delete and publish an owner zone without uncovering its warehouse."""
-
-    await service.delete_zone(session, warehouse_id, zone_id)
-    await _publish_resource_capacity(session, warehouse_id, settings, client)
-    return Response(status_code=204)
-
-
-@router.post("/warehouses/{warehouse_id}/zones/{zone_id}/lock", response_model=ZoneRead)
-async def lock_zone(
-    warehouse_id: UUID,
-    zone_id: UUID,
-    payload: ZoneLockRequest,
-    session: SessionDep,
-) -> ZoneRead:
-    """Set or clear an owner zone's editor lock without capacity publication."""
-
-    return await zone_read(
-        session,
-        await service.set_zone_lock(
-            session,
-            warehouse_id,
-            zone_id,
-            payload.locked,
-        ),
-    )
 
 
 @router.get(

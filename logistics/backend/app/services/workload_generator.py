@@ -6,8 +6,6 @@ import random
 from datetime import date, time, timedelta
 from uuid import UUID, uuid5
 
-from geoalchemy2.shape import to_shape
-from shapely.geometry import MultiPolygon, Point, Polygon
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,7 +15,6 @@ from app.models import (
     RequestDateOption,
     RoutePlan,
     Warehouse,
-    Zone,
 )
 from app.models.domain import RequestStatus, RequestType
 from app.routing import GeoPoint, RoadSnapNotFoundError, RoadSnapper, SnappedPoint
@@ -33,7 +30,6 @@ from app.schemas.domain import (
 from app.services import catalog
 from app.services.capacity_generation import advance_warehouse_capacity_generation
 
-_POINT_ATTEMPTS = 256
 _ROAD_SNAP_ATTEMPTS = 24
 GENERATOR_SOURCE_SYSTEM = "WAREHOUSE_WORKLOAD_GENERATOR"
 _GENERATOR_EXTERNAL_ID_NAMESPACE = UUID("64bf4fc6-a798-4a4d-9d4a-75a10c708dbb")
@@ -45,73 +41,28 @@ _DELIVERY_WINDOWS = (
 _PICKUP_WINDOW = (time(9), time(18))
 
 
-def _stable_zones(zones: list[Zone]) -> list[Zone]:
-    """Order one warehouse's zones deterministically for seeded generation."""
-
-    return sorted(zones, key=lambda zone: (zone.name, str(zone.id)))
-
-
-def _weighted_component(rng: random.Random, geometry: Polygon | MultiPolygon) -> Polygon:
-    """Choose a stable polygon component proportionally to its usable area."""
-
-    components = (
-        [geometry]
-        if isinstance(geometry, Polygon)
-        else sorted(
-            geometry.geoms,
-            key=lambda polygon: (polygon.bounds, polygon.wkb_hex),
-        )
-    )
-    return rng.choices(components, weights=[polygon.area for polygon in components], k=1)[0]
-
-
-def _point_inside_zone(rng: random.Random, zone: Zone) -> Point:
-    """Sample a point strictly inside a polygonal zone, excluding all interior holes."""
-
-    geometry = to_shape(zone.geometry)
-    if not isinstance(geometry, (Polygon, MultiPolygon)):
-        raise ValueError("zone geometry must be Polygon or MultiPolygon")
-    component = _weighted_component(rng, geometry)
-    min_x, min_y, max_x, max_y = component.bounds
-    for _ in range(_POINT_ATTEMPTS):
-        candidate = Point(
-            rng.uniform(min_x, max_x),
-            rng.uniform(min_y, max_y),
-        )
-        if component.contains(candidate):
-            return candidate
-    fallback = component.representative_point()
-    if not component.contains(fallback):
-        raise ValueError("zone has no strictly interior representative point")
-    return fallback
-
-
-async def _routable_point_inside_zone(
+async def _routable_point_near_warehouse(
     rng: random.Random,
-    zone: Zone,
+    warehouse: Warehouse,
     snapper: RoadSnapper,
 ) -> SnappedPoint:
-    """Sample and snap a bounded number of candidates covered by the selected zone."""
+    """Sample and snap bounded deterministic candidates around the warehouse point."""
 
-    geometry = to_shape(zone.geometry)
-    if not isinstance(geometry, (Polygon, MultiPolygon)):
-        raise ValueError("zone geometry must be Polygon or MultiPolygon")
     for _ in range(_ROAD_SNAP_ATTEMPTS):
-        candidate = _point_inside_zone(rng, zone)
         try:
-            snapped = await snapper.snap_point(
-                GeoPoint(lon=candidate.x, lat=candidate.y, is_city=True)
+            return await snapper.snap_point(
+                GeoPoint(
+                    lon=warehouse.longitude + rng.uniform(-0.25, 0.25),
+                    lat=warehouse.latitude + rng.uniform(-0.18, 0.18),
+                    is_city=True,
+                )
             )
         except RoadSnapNotFoundError:
             continue
-        snapped_geometry = Point(snapped.point.lon, snapped.point.lat)
-        if geometry.covers(snapped_geometry):
-            return snapped
     raise ApiError(
         422,
-        "NO_ROUTABLE_POINT_IN_ZONE",
-        f"Не удалось найти доступную для автомобиля точку в зоне {zone.name}.",  # noqa: RUF001
-        extra={"zone_id": str(zone.id)},
+        "NO_ROUTABLE_POINT_NEAR_WAREHOUSE",
+        "Не удалось найти доступную для автомобиля точку рядом со складом.",  # noqa: RUF001
     )
 
 
@@ -231,19 +182,6 @@ async def generate_warehouse_workload(
     )
     if warehouse is None:
         raise not_found("warehouse", warehouse_id)
-    zones = _stable_zones(
-        list(
-            await session.scalars(
-                select(Zone).where(Zone.warehouse_id == warehouse_id)
-            )
-        )
-    )
-    if not zones:
-        raise ApiError(
-            422,
-            "NO_ZONES",
-            "Для генерации нагрузки требуется хотя бы одна логистическая зона.",
-        )
     pickup_window = (_PICKUP_WINDOW[0], warehouse.working_day_end)
     if pickup_window[1] <= pickup_window[0]:
         raise ApiError(
@@ -278,8 +216,7 @@ async def generate_warehouse_workload(
             (RequestType.PICKUP, payload.pickups_per_day),
         ):
             for sequence in range(1, count + 1):
-                zone = rng.choice(zones)
-                snapped = await _routable_point_inside_zone(rng, zone, snapper)
+                snapped = await _routable_point_near_warehouse(rng, warehouse, snapper)
                 point = snapped.point
                 road_label = f", дорога: {snapped.name}" if snapped.name else ""
                 generated_request = await catalog.create_request(
@@ -289,7 +226,7 @@ async def generate_warehouse_workload(
                         type=request_type,
                         name=f"№{sequence}",
                         address_label=(
-                            f"Сгенерированная дорожная точка {zone.name}{road_label}: "
+                            f"Сгенерированная дорожная точка {warehouse.name}{road_label}: "
                             f"{point.lat:.6f}, {point.lon:.6f}"
                         ),
                         latitude=point.lat,

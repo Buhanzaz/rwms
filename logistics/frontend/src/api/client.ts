@@ -4,6 +4,7 @@ import type {
   DriverShift,
   LogisticsRequest,
   PlanningSettings,
+  IsochroneTariff,
   RequestDateOption,
   RoutePlan,
   RoutingCargoPlacementSnapshot,
@@ -14,7 +15,6 @@ import type {
   Vehicle,
   VehicleLoadConfigurationType,
   WarehouseWorkspace,
-  Zone,
 } from '../domain/types';
 import {
   normalizeOptimizationRun,
@@ -147,7 +147,7 @@ export interface TruckRestrictionBounds {
 }
 
 /** One of the fixed Valhalla truck travel-time contours exposed by the backend. */
-export type TravelTimeContourMinutes = 60 | 120 | 180 | 240;
+export type TravelTimeContourMinutes = number;
 
 /** Stable properties attached to one validated travel-time area. */
 export interface TravelTimeContourProperties {
@@ -210,20 +210,7 @@ export interface WarehouseUpdateInput {
   default_planning_date?: string;
   seed?: number;
   settings?: Partial<PlanningSettings>;
-  isochrone_price_60_minutes?: number;
-  isochrone_price_120_minutes?: number;
-  isochrone_price_180_minutes?: number;
-  isochrone_price_240_minutes?: number;
-}
-
-export interface ZoneInput {
-  name: string;
-  kind: Zone['kind'];
-  color: string;
-  delivery_price: number;
-  pickup_price: number;
-  geometry: Zone['geometry'];
-  locked: boolean;
+  isochrone_tariffs?: IsochroneTariff[];
 }
 
 /** Request body for generating reproducible workload in one warehouse. */
@@ -269,11 +256,6 @@ export interface GeneratedWorkloadDeletionResult {
   date: string;
   deleted_requests: number;
   deleted_plans: number;
-}
-
-export interface ZoneCutoutResult {
-  source_zone: Zone;
-  inner_zone: Zone;
 }
 
 export interface DriverInput {
@@ -665,21 +647,6 @@ export const api = {
   closePlanningDay: (warehouseId: UUID, date: string) =>
     request<PlanningDayStatus>(`/warehouses/${warehouseId}/planning-days/${encodeURIComponent(date)}/close`, { method: 'POST' }),
 
-  listZones: (warehouseId: UUID) => request<Zone[]>(`/warehouses/${warehouseId}/zones`),
-  createZone: (warehouseId: UUID, input: ZoneInput) =>
-    request<Zone>(`/warehouses/${warehouseId}/zones`, { method: 'POST', body: jsonBody(input) }),
-  updateZone: (warehouseId: UUID, id: UUID, input: Partial<Omit<ZoneInput, 'locked'>>) =>
-    request<Zone>(`/warehouses/${warehouseId}/zones/${id}`, { method: 'PATCH', body: jsonBody(input) }),
-  cutZone: (warehouseId: UUID, id: UUID, input: ZoneInput) => {
-    const { geometry, ...innerZone } = input;
-    return request<ZoneCutoutResult>(`/warehouses/${warehouseId}/zones/${id}/cutouts`, {
-      method: 'POST',
-      body: jsonBody({ geometry, inner_zone: innerZone }),
-    });
-  },
-  deleteZone: (warehouseId: UUID, id: UUID) => request<void>(`/warehouses/${warehouseId}/zones/${id}`, { method: 'DELETE' }),
-  setZoneLocked: (warehouseId: UUID, id: UUID, locked: boolean) =>
-    request<Zone>(`/warehouses/${warehouseId}/zones/${id}/lock`, { method: 'POST', body: jsonBody({ locked }) }),
   listAvailableDrivers: (warehouseId: UUID) => request<AvailableDriver[]>(`/warehouses/${warehouseId}/available-drivers`),
   createDriver: (warehouseId: UUID, input: DriverInput) =>
     request<Driver>(`/warehouses/${warehouseId}/drivers`, { method: 'POST', body: jsonBody(input) }),

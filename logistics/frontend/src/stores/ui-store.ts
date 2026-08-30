@@ -1,25 +1,21 @@
 import { create } from 'zustand';
 import type { MapClickDraft, MapSelection, OptimizationTraceEvent, SimulationOverride } from '../domain/types';
 
-export type AppMode = 'EDITOR' | 'PLAN' | 'SIMULATION';
+export type AppMode = 'PLAN_DAY' | 'SIMULATION';
 export type ThemeMode = 'light' | 'dark';
 export type LeftSection =
   | 'WAREHOUSE'
-  | 'ZONES'
   | 'DRIVERS'
   | 'VEHICLES'
   | 'SHIFTS'
   | 'REQUESTS'
   | 'PLAN_DAY'
-  | 'ROUTES'
   | 'UNASSIGNED'
   | 'SETTINGS';
-export type MapTool = 'SELECT' | 'ADD_DELIVERY' | 'ADD_PICKUP' | 'DRAW_ZONE' | 'CUT_ZONE';
+export type MapTool = 'SELECT' | 'ADD_DELIVERY' | 'ADD_PICKUP';
 
 export interface LayerVisibility {
   base: boolean;
-  zones: boolean;
-  zoneBorders: boolean;
   warehouse: boolean;
   warehouseIsochrones: boolean;
   taskIsochrones: boolean;
@@ -88,8 +84,6 @@ interface UiState {
 
 const initialLayers: LayerVisibility = {
   base: true,
-  zones: true,
-  zoneBorders: true,
   warehouse: true,
   warehouseIsochrones: false,
   taskIsochrones: false,
@@ -160,7 +154,7 @@ function writeNotificationDuration(seconds: number): void {
 
 export const useUiStore = create<UiState>((set) => ({
   theme: initialTheme,
-  mode: 'EDITOR',
+  mode: 'PLAN_DAY',
   section: 'WAREHOUSE',
   mapTool: 'SELECT',
   selected: null,
